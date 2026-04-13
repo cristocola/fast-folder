@@ -76,6 +76,8 @@ fn menu_templates() -> Result<()> {
         let choice = Select::new()
             .with_prompt("Templates")
             .items(&[
+                "Create new template",
+                "Edit a template",
                 "List templates",
                 "Show template details",
                 "Delete a template",
@@ -87,27 +89,36 @@ fn menu_templates() -> Result<()> {
 
         match choice {
             0 => {
-                template::list()?;
+                template::new_interactive()?;
                 println!();
             }
             1 => {
+                let slug = prompt_template_slug("Edit template")?;
+                template::edit(&slug)?;
+                println!();
+            }
+            2 => {
+                template::list()?;
+                println!();
+            }
+            3 => {
                 let slug = prompt_template_slug("Show template")?;
                 template::show(&slug)?;
                 println!();
             }
-            2 => {
+            4 => {
                 let slug = prompt_template_slug("Delete template")?;
                 template::delete(&slug)?;
                 println!();
             }
-            3 => {
+            5 => {
                 let path: String = dialoguer::Input::new()
                     .with_prompt("Path to .yaml file")
                     .interact_text()?;
                 template::import(&path)?;
                 println!();
             }
-            4 => break,
+            6 => break,
             _ => unreachable!(),
         }
     }

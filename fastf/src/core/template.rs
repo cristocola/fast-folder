@@ -10,6 +10,7 @@ use crate::util::paths;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Default)]
 pub struct Template {
     pub name: String,
     pub slug: String,

@@ -71,11 +71,13 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum TemplateAction {
+    /// Create a new template interactively
+    New,
     /// List all available templates
     List,
     /// Show details of a template
     Show { slug: String },
-    /// Open a template in $EDITOR
+    /// Edit a template interactively
     Edit { slug: String },
     /// Delete a template
     Delete { slug: String },
@@ -139,6 +141,7 @@ fn run() -> Result<()> {
         }
 
         Some(Commands::Template { action }) => match action {
+            TemplateAction::New              => cli::template::new_interactive(),
             TemplateAction::List             => cli::template::list(),
             TemplateAction::Show { slug }    => cli::template::show(&slug),
             TemplateAction::Edit { slug }    => cli::template::edit(&slug),

@@ -2,9 +2,7 @@ use anyhow::{bail, Result};
 use colored::Colorize;
 use dialoguer::Confirm;
 use std::fs;
-use std::process::Command;
 
-use crate::core::config::Config;
 use crate::core::template::{self, Template};
 use crate::util::paths;
 
@@ -51,7 +49,7 @@ pub fn show(slug: &str) -> Result<()> {
     }
 
     println!("\n{}", "Folder structure:".bold());
-    print_tree(&t.structure, "");
+    show_node(&t.structure, "");
 
     if !t.files.is_empty() {
         println!("\n{}", "Files:".bold());
@@ -63,33 +61,31 @@ pub fn show(slug: &str) -> Result<()> {
     Ok(())
 }
 
-fn print_tree(nodes: &[crate::core::template::FolderNode], indent: &str) {
+pub fn show_node(nodes: &[crate::core::template::FolderNode], indent: &str) {
     for (i, node) in nodes.iter().enumerate() {
         let is_last = i == nodes.len() - 1;
         let connector = if is_last { "└── " } else { "├── " };
         println!("{}{}{}/", indent, connector, node.name.cyan());
         if !node.children.is_empty() {
             let child_indent = format!("{}{}", indent, if is_last { "    " } else { "│   " });
-            print_tree(&node.children, &child_indent);
+            show_node(&node.children, &child_indent);
         }
     }
 }
 
+/// Create a new template using the interactive builder.
+pub fn new_interactive() -> Result<()> {
+    crate::tui::template_builder::build_template(None)
+}
+
+/// Edit an existing template using the interactive builder.
 pub fn edit(slug: &str) -> Result<()> {
     let path = paths::templates_dir().join(format!("{}.yaml", slug));
     if !path.exists() {
         bail!("template '{}' not found", slug);
     }
-    let config = Config::load()?;
-    let editor = config.resolve_editor();
-    let status = Command::new(&editor)
-        .arg(&path)
-        .status()
-        .map_err(|e| anyhow::anyhow!("failed to launch editor '{}': {}", editor, e))?;
-    if !status.success() {
-        bail!("editor exited with error");
-    }
-    Ok(())
+    let existing = Template::load_from_file(&path)?;
+    crate::tui::template_builder::build_template(Some(existing))
 }
 
 pub fn delete(slug: &str) -> Result<()> {

@@ -1,0 +1,5 @@
+# Rust build artifacts
+fastf/target/
+
+# Install/dist directory (binary, user config, counters, generated templates)
+fastf/dist/

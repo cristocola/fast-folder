@@ -1,55 +1,128 @@
 # fastf — Fast Folder Creator
 
-A template-driven CLI tool for instantly creating organized project folders with auto-incremented IDs, variable prompts, and file stubs.
-
-## Install
-
-```bash
-cargo build --release
-cp target/release/fastf /usr/local/bin/fastf   # or any directory on your PATH
+```
+  ___        _      ___    _    _
+ | __|_ _ __| |_   | __|__| |__| |___ _ _
+ | _/ _` (_-<  _|  | _/ _ \ / _` / -_) '_|
+ |_|\__,_/__/\__|  |_|\___/_\__,_\___|_|
+                       by Cristo Cola
 ```
 
-On first run, `fastf` bootstraps itself next to the binary: it creates `config.toml`, a `templates/` directory, and writes three default templates (Music Video, Photography, Video Production).
+A template-driven CLI tool for creating structured project folders for creative work — music videos, photography shoots, film production, and anything else you repeat. Portable single-folder distribution, like ffmpeg. Cross-platform (Linux, macOS, Windows).
+
+---
+
+## Features
+
+- **Template-based** — define folder trees, placeholder files, and naming patterns in YAML
+- **Interactive builder** — create and edit templates step-by-step from within the app, no YAML knowledge needed
+- **Auto-incrementing global ID** — every project gets a unique ID (`ID0047`) shared across all templates
+- **Variable substitution** — fill in artist, title, client, etc. interactively or via CLI flags
+- **Naming patterns** — `{date}_{artist}_{title}_{client_type}_{id}` with configurable transforms
+- **Dry-run preview** — see the full folder tree before committing
+- **Non-interactive mode** — fully scriptable via flags
+- **Portable** — config, templates, and counters live next to the binary. Move the folder, everything moves with it
+- **Shell completions** — bash, zsh, fish, PowerShell
+
+---
+
+## Installation
+
+### Build from source
+
+```bash
+git clone https://github.com/cristocola/fast-folder.git
+cd fast-folder && cargo build --release
+```
+
+Binary is at `target/release/fastf`. Create your portable installation folder:
+
+```bash
+mkdir -p ~/tools/fastf
+cp target/release/fastf ~/tools/fastf/
+```
+
+Add to PATH (add to your `.bashrc` / `.zshrc`):
+
+```bash
+export PATH="$HOME/tools/fastf:$PATH"
+```
+
+On first run, `fastf` bootstraps `config.toml`, `counters.toml`, and a `templates/` folder next to the binary.
+
+### Cross-compile for Windows (from Linux/macOS)
+
+```bash
+rustup target add x86_64-pc-windows-gnu
+# Arch/CachyOS: sudo pacman -S mingw-w64-gcc
+# Ubuntu: sudo apt install gcc-mingw-w64-x86-64
+cargo build --release --target x86_64-pc-windows-gnu
+# Output: target/x86_64-pc-windows-gnu/release/fastf.exe
+```
+
+---
 
 ## Usage
 
+### Interactive mode (no arguments)
+
+```
+fastf
+```
+
+Launches a full step-by-step menu — create projects, manage templates, configure settings.
+
+### Create a project
+
 ```bash
-fastf                          # interactive TUI menu
-fastf new                      # pick template interactively
-fastf new music-video          # use a specific template
+# Pick template interactively, fill variables step-by-step
+fastf new
+
+# Named template, fill variables interactively
+fastf new music-video
+
+# Fully non-interactive (scriptable)
 fastf new music-video \
   --artist="Ariana Grande" \
   --title="Lullaby" \
-  --dry-run                    # preview without creating
+  --client-type="Client"
+
+# Preview without creating anything
+fastf new music-video --dry-run
+
+# Override base directory for this run only
+fastf new music-video --base-dir=/tmp/projects
 ```
 
-### Templates
+### Manage templates
 
 ```bash
-fastf template list
-fastf template show <slug>
-fastf template edit <slug>
-fastf template import path/to/template.yaml
-fastf template export <slug>
-fastf template delete <slug>
+fastf template new              # interactive step-by-step builder
+fastf template edit <slug>      # edit existing template (values pre-filled)
+fastf template list             # list all templates
+fastf template show <slug>      # show template structure and variables
+fastf template delete <slug>    # delete with confirmation
+fastf template import <file>    # import a .yaml template file
+fastf template export <slug>    # print template YAML to stdout
+fastf template export <slug> -o my-template.yaml
 ```
 
-### Config
+### Settings
 
 ```bash
 fastf config show
-fastf config set base-dir /path/to/projects
-fastf config set default-template music-video
+fastf config set base-dir /path/to/projects   # default project directory
+fastf config set default-template music-video  # skip template selection step
 fastf config set date-format "%Y-%m-%d"
 fastf config set editor nvim
 ```
 
-### ID Counter
+### ID counter
 
 ```bash
-fastf id show
-fastf id set 100
-fastf id reset
+fastf id show          # show current global counter
+fastf id set 46        # set counter (next project will be ID0047)
+fastf id reset         # reset to 0
 ```
 
 ### Shell completions
@@ -57,54 +130,121 @@ fastf id reset
 ```bash
 fastf completions bash >> ~/.bashrc
 fastf completions zsh  >> ~/.zshrc
-fastf completions fish > ~/.config/fish/completions/fastf.fish
+fastf completions fish >> ~/.config/fish/completions/fastf.fish
 ```
 
-## Template format
+---
 
-Templates are YAML files stored next to the binary in `templates/<slug>.yaml`.
+## Template schema
+
+Templates are YAML files in the `templates/` folder next to the binary.
 
 ```yaml
-name: "My Template"
-slug: "my-template"
-description: "Optional description"
-naming_pattern: "{date}_{project}_{client}_{id}"
+name: "Music Video"
+slug: "music-video"
+description: "Music video production project folder"
+version: "1"
+
+# Naming pattern for the project root folder.
+# Built-in tokens: {date} {YYYY} {MM} {DD} {id}
+# Variable tokens: any {slug} defined below
+naming_pattern: "{date}_{artist}_{title}_{client_type}_{id}"
 
 id:
   prefix: "ID"
-  digits: 4
+  digits: 4           # ID0047
 
 variables:
-  - slug: project
-    label: "Project Name"
+  - slug: artist
+    label: "Artist / Band Name"
     type: text          # text | select
     required: true
-    transform: title_underscore   # none | title_underscore | upper_underscore | lower_underscore
+    transform: title_underscore  # none | title_underscore | upper_underscore | lower_underscore
 
-  - slug: client
+  - slug: client_type
     label: "Client Type"
     type: select
-    options: ["Client", "Personal", "Spec"]
+    options: ["Client", "Personal", "Collab", "Spec"]
     default: "Client"
 
 structure:
   - name: "01_Assets"
     children:
-      - name: "01_Footage"
-      - name: "02_Audio"
-  - name: "02_Delivery"
+      - name: "01_Audio"
+      - name: "02_Footage"
+      - name: "03_Images"
+  - name: "02_Export"
+  - name: "03_Project_Files"
 
 files:
   - path: "PROJECT_INFO.md"
     template: |
-      # {project}
-      **Client:** {client}
+      # {title}
+      **Artist:** {artist}
       **Date:** {date}
-      **ID:** {id}
+      **Project ID:** {id}
+  - path: ".gitignore"
+    content: |
+      *.tmp
+      .DS_Store
 ```
 
-**Built-in tokens:** `{date}`, `{YYYY}`, `{MM}`, `{DD}`, `{id}` — plus any variable slug.
+### Variable transforms
 
-## How it works
+| Transform | Input | Output |
+|---|---|---|
+| `none` | `Ariana Grande` | `Ariana Grande` |
+| `title_underscore` | `ariana grande` | `Ariana_Grande` |
+| `upper_underscore` | `ariana grande` | `ARIANA_GRANDE` |
+| `lower_underscore` | `Ariana Grande` | `ariana_grande` |
 
-All data (config, counters, templates) lives in the same directory as the binary, making the tool fully portable. The global counter increments by 1 each time a project is created, across all templates.
+### Name tokens
+
+| Token | Example output |
+|---|---|
+| `{date}` | `2026-04-13` (respects `date_format` config) |
+| `{YYYY}` | `2026` |
+| `{MM}` | `04` |
+| `{DD}` | `13` |
+| `{id}` | `ID0047` |
+| `{slug}` | value of any defined variable |
+
+---
+
+## Portability
+
+The entire installation is one folder:
+
+```
+fastf/
+├── fastf           (fastf.exe on Windows)
+├── config.toml
+├── counters.toml
+└── templates/
+    ├── music-video.yaml
+    ├── photography.yaml
+    └── video-production.yaml
+```
+
+The binary resolves its own location at runtime (`std::env::current_exe()` + `canonicalize()`), so symlinking the binary still works — it finds the real folder.
+
+---
+
+## Built with
+
+| Crate | Purpose |
+|---|---|
+| `clap` | CLI commands and flags |
+| `dialoguer` | Interactive prompts and menus |
+| `serde` + `serde_yaml` | Template YAML parsing |
+| `serde` + `toml` | Config file |
+| `chrono` | Date tokens |
+| `anyhow` | Error handling |
+| `colored` | Terminal color output |
+| `clap_complete` | Shell completion generation |
+
+---
+
+## License
+
+MIT

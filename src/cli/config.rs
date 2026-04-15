@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use chrono::Local;
 use colored::Colorize;
 
 use crate::core::config::Config;
@@ -50,8 +51,12 @@ pub fn set(key: &str, value: &str) -> Result<()> {
             println!("Set default_template = {}", value);
         }
         "date-format" | "date_format" => {
+            let preview = Local::now().format(value).to_string();
+            if preview.is_empty() {
+                bail!("invalid date format '{}' — must be a valid strftime string (e.g. %Y-%m-%d)", value);
+            }
             config.date_format = value.to_string();
-            println!("Set date_format = {}", value);
+            println!("Set date_format = {}  (today: {})", value, preview);
         }
         other => bail!(
             "unknown config key '{}'. Valid keys: base-dir, editor, default-template, date-format",

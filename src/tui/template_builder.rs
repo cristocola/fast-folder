@@ -137,7 +137,7 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
     // -----------------------------------------------------------------------
     println!("\n{}", "Step 4/6  Folder structure".bold());
     println!(
-        "  {}  enter one path per line, use / for nesting (e.g. 01_Assets/01_Audio)",
+        "  {}  one path per line  ·  use / for nesting on all platforms (e.g. 01_Assets/01_Audio)",
         "Hint:".yellow()
     );
 
@@ -195,7 +195,7 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
     loop {
         let add = Confirm::new()
             .with_prompt(if files.is_empty() {
-                "Add a file to create in the project root?"
+                "Add a placeholder file?"
             } else {
                 "Add another file?"
             })
@@ -221,7 +221,6 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
         id: IdConfig {
             prefix: id_prefix,
             digits: id_digits,
-            auto_increment: true,
         },
         variables,
         structure,
@@ -345,8 +344,12 @@ fn collect_variable() -> Result<Variable> {
 // Collect a single file entry interactively
 // ---------------------------------------------------------------------------
 fn collect_file() -> Result<FileEntry> {
+    println!(
+        "  {}  use / for subfolders on all platforms (e.g. 01_Assets/notes.md)",
+        "Hint:".yellow()
+    );
     let path: String = Input::new()
-        .with_prompt("  File path (e.g. PROJECT_INFO.md)")
+        .with_prompt("  File path (e.g. PROJECT_INFO.md or 01_Assets/notes.md)")
         .interact_text()?;
 
     let mode_idx = Select::new()
@@ -440,7 +443,7 @@ fn flatten_tree(nodes: &[FolderNode], prefix: &str) -> Vec<String> {
 
 /// Print a template summary without needing it saved to disk.
 fn print_template_summary(t: &Template) {
-    use crate::cli::template::show_node;
+    use crate::core::project;
     println!("\n{} {}", "Template:".bold(), t.name.green().bold());
     println!("  Slug:    {}", t.slug);
     println!("  Pattern: {}", t.naming_pattern);
@@ -467,7 +470,7 @@ fn print_template_summary(t: &Template) {
 
     if !t.structure.is_empty() {
         println!("\n{}", "Folder structure:".bold());
-        show_node(&t.structure, "");
+        project::print_tree(&t.structure, "");
     }
 
     if !t.files.is_empty() {

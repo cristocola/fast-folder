@@ -16,6 +16,18 @@ use std::collections::HashMap;
 #[command(
     name = "fastf",
     about = "Fast Folder Creator — template-driven project folder generator",
+    long_about = "fastf creates structured project folders from YAML templates.\n\
+\n\
+Templates define a folder structure, placeholder files, and variables (text inputs\n\
+or select menus). Each project gets an auto-incrementing ID. Templates, config, and\n\
+counters live next to the binary — fully portable, no home directory required.\n\
+\n\
+Getting started:\n\
+  fastf                        # interactive menu\n\
+  fastf new                    # pick a template and fill in variables\n\
+  fastf template list          # see available templates\n\
+  fastf template new           # create a new template interactively\n\
+  fastf config show            # view current settings",
     version,
     propagate_version = true
 )]
@@ -27,65 +39,95 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Create a new project from a template
+    #[command(
+        after_help = "Examples:\n  \
+            fastf new                                    # interactive: pick template, fill vars\n  \
+            fastf new music-video                        # use named template, fill vars interactively\n  \
+            fastf new music-video --dry-run              # preview without creating anything\n  \
+            fastf new music-video --artist=\"Ariana Grande\" --title=Lullaby\n  \
+            fastf new music-video --base-dir=/Volumes/Drive/Projects\n\n\
+            Variable flags must use = syntax: --artist=\"Bad Bunny\" not --artist \"Bad Bunny\""
+    )]
     New {
-        /// Template slug (e.g. music-video). Prompts if omitted.
+        /// Template slug to use. Run 'fastf template list' to see available templates.
+        /// Prompts interactively if omitted and no default-template is configured.
         template: Option<String>,
 
-        /// Preview what would be created without writing anything
+        /// Show what would be created without writing anything to disk
         #[arg(long)]
         dry_run: bool,
 
-        /// Override base directory for this project only
+        /// Override the base directory for this project only (ignores config base-dir)
         #[arg(long)]
         base_dir: Option<String>,
 
-        /// Variable values: --var-slug=value (e.g. --artist="Ariana Grande")
+        /// Variable values as --slug=value flags (e.g. --artist="Ariana Grande" --title=Lullaby).
+        /// Run 'fastf template show <slug>' to see a template's variables.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
     },
 
-    /// Manage templates
+    /// Manage templates (list, create, edit, delete, import, export)
     Template {
         #[command(subcommand)]
         action: TemplateAction,
     },
 
-    /// View and edit settings
+    /// View and edit fastf configuration
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
 
-    /// Manage auto-increment ID counters
+    /// Manage the global auto-increment project ID counter
     Id {
         #[command(subcommand)]
         action: IdAction,
     },
 
-    /// Generate shell completion scripts
+    /// Print a shell completion script to stdout
+    #[command(after_help = "Pipe the output into your shell's completion directory.\n\n\
+        Examples:\n  \
+            fastf completions bash > /etc/bash_completion.d/fastf\n  \
+            fastf completions zsh > ~/.zfunc/_fastf\n  \
+            fastf completions fish > ~/.config/fish/completions/fastf.fish")]
     Completions {
-        /// Shell: bash, zsh, fish, powershell
+        /// Target shell: bash, zsh, fish, or powershell
         shell: String,
     },
 }
 
 #[derive(Subcommand)]
 enum TemplateAction {
-    /// Create a new template interactively
+    /// Create a new template step-by-step with an interactive builder
     New,
-    /// List all available templates
+    /// List all available templates with their slugs and descriptions
     List,
-    /// Show details of a template
-    Show { slug: String },
-    /// Edit a template interactively
-    Edit { slug: String },
-    /// Delete a template
-    Delete { slug: String },
-    /// Import a template from a YAML file
-    Import { file: String },
-    /// Export a template to stdout or a file
-    Export {
+    /// Show full details of a template: variables, folder structure, and placeholder files
+    Show {
+        /// Template slug (see 'fastf template list')
         slug: String,
+    },
+    /// Edit an existing template interactively — existing values are pre-filled, press Enter to keep them
+    Edit {
+        /// Template slug (see 'fastf template list')
+        slug: String,
+    },
+    /// Permanently delete a template (asks for confirmation)
+    Delete {
+        /// Template slug (see 'fastf template list')
+        slug: String,
+    },
+    /// Import a template from a YAML file into the templates directory
+    Import {
+        /// Path to the YAML template file to import
+        file: String,
+    },
+    /// Export a template as YAML — to stdout or to a file for sharing or backup
+    Export {
+        /// Template slug (see 'fastf template list')
+        slug: String,
+        /// Write output to this file instead of stdout
         #[arg(short, long)]
         output: Option<String>,
     },
@@ -93,20 +135,44 @@ enum TemplateAction {
 
 #[derive(Subcommand)]
 enum ConfigAction {
-    /// Display current configuration
+    /// Display current configuration and file locations
     Show,
-    /// Set a configuration value (keys: base-dir, editor, default-template, date-format)
-    Set { key: String, value: String },
+    /// Set a configuration value
+    #[command(
+        after_help = "Valid keys:\n  \
+            base-dir           Directory where new projects are created (default: current directory)\n  \
+            editor             Editor command for opening templates (default: $EDITOR)\n  \
+            default-template   Slug of template to use without prompting (e.g. music-video)\n  \
+            date-format        strftime format for the {date} token (default: %Y-%m-%d)\n\n\
+            Path format for base-dir:\n  \
+            Linux / macOS      /home/user/Projects  or  /Volumes/Drive/Projects\n  \
+            Windows            C:\\Users\\user\\Projects  or  C:/Users/user/Projects\n  \
+            (Both slash styles work on Windows)\n\n\
+            Examples:\n  \
+            fastf config set base-dir /Volumes/Drive/Projects\n  \
+            fastf config set base-dir \"C:/Users/Cristo/Projects\"\n  \
+            fastf config set default-template music-video\n  \
+            fastf config set date-format %d-%m-%Y"
+    )]
+    Set {
+        /// Config key: base-dir, editor, default-template, or date-format
+        key: String,
+        /// New value to set
+        value: String,
+    },
 }
 
 #[derive(Subcommand)]
 enum IdAction {
-    /// Show the global ID counter
+    /// Show the current global ID counter value and what the next project ID will be
     Show,
-    /// Reset the global counter to 0
+    /// Reset the global counter back to 0 (next project will be ID0001)
     Reset,
-    /// Set the global counter to a specific value
-    Set { value: u64 },
+    /// Set the counter to a specific value (next project will be that value + 1)
+    Set {
+        /// Counter value to set (e.g. 46 means next project gets ID0047)
+        value: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------

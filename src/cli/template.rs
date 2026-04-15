@@ -4,6 +4,7 @@ use dialoguer::Confirm;
 use std::fs;
 
 use crate::core::template::{self, Template};
+use crate::core::project;
 use crate::util::paths;
 
 pub fn list() -> Result<()> {
@@ -48,8 +49,10 @@ pub fn show(slug: &str) -> Result<()> {
         }
     }
 
-    println!("\n{}", "Folder structure:".bold());
-    show_node(&t.structure, "");
+    if !t.structure.is_empty() {
+        println!("\n{}", "Folder structure:".bold());
+        project::print_tree(&t.structure, "");
+    }
 
     if !t.files.is_empty() {
         println!("\n{}", "Files:".bold());
@@ -59,18 +62,6 @@ pub fn show(slug: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-pub fn show_node(nodes: &[crate::core::template::FolderNode], indent: &str) {
-    for (i, node) in nodes.iter().enumerate() {
-        let is_last = i == nodes.len() - 1;
-        let connector = if is_last { "└── " } else { "├── " };
-        println!("{}{}{}/", indent, connector, node.name.cyan());
-        if !node.children.is_empty() {
-            let child_indent = format!("{}{}", indent, if is_last { "    " } else { "│   " });
-            show_node(&node.children, &child_indent);
-        }
-    }
 }
 
 /// Create a new template using the interactive builder.

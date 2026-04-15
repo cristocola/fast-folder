@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use colored::Colorize;
 use dialoguer::{Confirm, Input, Select};
 use std::collections::HashMap;
 
@@ -23,6 +24,20 @@ pub fn run(args: NewArgs) -> Result<()> {
 
     // Resolve template
     let tmpl = resolve_template(args.template_slug.as_deref(), &config)?;
+
+    // Warn about CLI var keys that don't match any template variable
+    let known_slugs: std::collections::HashSet<&str> =
+        tmpl.variables.iter().map(|v| v.slug.as_str()).collect();
+    for key in args.vars.keys() {
+        if !known_slugs.contains(key.as_str()) {
+            eprintln!(
+                "{} unknown variable '--{}' — not defined in template '{}'",
+                "warning:".yellow().bold(),
+                key,
+                tmpl.slug
+            );
+        }
+    }
 
     // Collect variable values (flags → interactive fallback)
     let raw_vars = collect_vars(&tmpl, &args.vars)?;

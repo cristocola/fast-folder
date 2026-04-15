@@ -69,30 +69,52 @@ pub fn plan(
 
 /// Print a dry-run preview tree without creating anything.
 pub fn print_dry_run(plan: &ProjectPlan, template: &Template) {
-    println!("\n{}", "Preview (dry run — nothing will be created):".yellow().bold());
-    println!("{}/", plan.folder_name.cyan().bold());
+    println!("\n{}", "Preview  ·  dry run — nothing will be created".yellow().bold());
+    println!();
 
-    // Combine structure dirs and files into one top-level list for correct connectors
-    let total = template.structure.len() + template.files.len();
-    for (i, node) in template.structure.iter().enumerate() {
-        let is_last = i + 1 == total;
-        let connector = if is_last { "└── " } else { "├── " };
-        println!("{}{}/", connector, node.name.cyan());
-        if !node.children.is_empty() {
-            let child_indent = if is_last { "    " } else { "│   " };
-            print_tree(&node.children, child_indent);
+    // Tree with a 2-space indent for visual breathing room
+    println!("  {}/", plan.folder_name.cyan().bold());
+    print_tree(&template.structure, "  ");
+
+    // Placeholder files as a separate section
+    if !template.files.is_empty() {
+        println!("\n  {}", "Files:".bold());
+        for f in &template.files {
+            println!("    {} {}", "•".cyan(), f.path.green());
         }
     }
-    for (j, file) in template.files.iter().enumerate() {
-        let is_last = template.structure.len() + j + 1 == total;
-        let connector = if is_last { "└── " } else { "├── " };
-        println!("{}{}", connector, file.path.green());
-    }
 
-    println!("\n{} {}", "Project path:".dimmed(), plan.root_path.display());
+    // Full path: parent dimmed, project folder name bold
+    println!();
+    print_project_path(&plan.root_path, &plan.folder_name);
 }
 
-fn print_tree(nodes: &[FolderNode], indent: &str) {
+/// Print what was created (success summary).
+pub fn print_success(plan: &ProjectPlan, template: &Template) {
+    println!("\n{}  {}", "✓".green().bold(), "Project created".bold());
+    println!("  {} {}", "Template:".dimmed(), template.name);
+    println!("  {} {}", "ID:".dimmed(), plan.id_str);
+    println!();
+    // Canonicalize now that the folder exists, for the real absolute path
+    let resolved = plan.root_path.canonicalize().unwrap_or_else(|_| plan.root_path.clone());
+    print_project_path(&resolved, &plan.folder_name);
+}
+
+/// Display a project path with the parent directory dimmed and the folder name bold.
+fn print_project_path(path: &std::path::Path, folder_name: &str) {
+    let parent = path
+        .parent()
+        .map(|p| format!("{}{}", p.display(), std::path::MAIN_SEPARATOR))
+        .unwrap_or_default();
+    println!(
+        "  {} {}{}",
+        "→".cyan().bold(),
+        parent.dimmed(),
+        folder_name.bold().white()
+    );
+}
+
+pub fn print_tree(nodes: &[FolderNode], indent: &str) {
     for (i, node) in nodes.iter().enumerate() {
         let is_last = i == nodes.len() - 1;
         let connector = if is_last { "└── " } else { "├── " };
@@ -175,9 +197,3 @@ fn create_file(
     Ok(())
 }
 
-/// Print what was created (success summary).
-pub fn print_success(plan: &ProjectPlan, template: &Template) {
-    println!("\n{} {}", "Created:".green().bold(), plan.root_path.display());
-    println!("  {} {}", "Template:".dimmed(), template.name);
-    println!("  {} {}", "ID:".dimmed(), plan.id_str);
-}

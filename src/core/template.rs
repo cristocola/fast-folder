@@ -46,20 +46,16 @@ pub struct IdConfig {
     pub prefix: String,
     #[serde(default = "default_id_digits")]
     pub digits: usize,
-    #[serde(default = "default_true")]
-    pub auto_increment: bool,
 }
 
 fn default_id_prefix() -> String { "ID".to_string() }
 fn default_id_digits() -> usize  { 4 }
-fn default_true() -> bool        { true }
 
 impl Default for IdConfig {
     fn default() -> Self {
         Self {
             prefix: default_id_prefix(),
             digits: default_id_digits(),
-            auto_increment: default_true(),
         }
     }
 }
@@ -194,7 +190,7 @@ pub fn load_all() -> Result<Vec<Template>> {
 pub fn find_by_slug(slug: &str) -> Result<Template> {
     let path = paths::templates_dir().join(format!("{}.yaml", slug));
     if !path.exists() {
-        bail!("template '{}' not found", slug);
+        bail!("template '{}' not found — run `fastf template list` to see available templates", slug);
     }
     Template::load_from_file(&path)
 }

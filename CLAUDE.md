@@ -51,17 +51,17 @@ fast-folder/
     │   ├── config.rs         — Config struct, base_dir, editor, date_format, default_template
     │   ├── counter.rs        — Global auto-increment ID (single 'global' field in counters.toml)
     │   ├── naming.rs         — apply_transform(), interpolate() for {token} substitution
-    │   ├── project.rs        — ProjectPlan, plan(), print_dry_run(), create()
+    │   ├── project.rs        — ProjectPlan, plan(), print_dry_run(), print_success(), create(), print_tree()
     │   └── template.rs       — Template, Variable, FolderNode, FileEntry, IdConfig, Transform
     ├── cli/
     │   ├── mod.rs
-    │   ├── new.rs            — `fastf new` — collect vars, create project
+    │   ├── new.rs            — `fastf new` — collect vars, warn on unknown flags, create project
     │   ├── template.rs       — template list/show/edit/delete/import/export
-    │   ├── config.rs         — config show/set
+    │   ├── config.rs         — config show/set (date_format validated at set time)
     │   └── id.rs             — id show/reset/set
     └── tui/
         ├── mod.rs
-        ├── menu.rs           — Interactive TUI menu (no-args mode), ASCII banner
+        ├── menu.rs           — Interactive TUI menu (no-args mode), ASCII banner, live base dir display
         └── template_builder.rs — Step-by-step interactive template create/edit
 ```
 
@@ -70,6 +70,9 @@ fast-folder/
 ### Portability
 `paths::install_dir()` uses `std::env::current_exe().canonicalize().parent()` — the binary finds its own location at runtime. Config and templates always live next to the binary regardless of how it's invoked (PATH, symlink, etc.). No `~/.config/` or OS-specific paths.
 
+### Cross-platform paths
+Folder paths in templates (structure names, file paths) always use `/` as the separator in YAML — Rust's `PathBuf::join()` handles conversion to `\` on Windows at runtime. Users should always enter `/` in templates and `base-dir` config, though Windows also accepts backslashes in config values.
+
 ### Global ID counter
 One counter for all templates: `counters.toml` with a single `global` field. Every project creation increments it. `fastf id set 46` → next project gets ID0047. This is intentional — IDs are unique across all project types.
 
@@ -77,8 +80,8 @@ One counter for all templates: `counters.toml` with a single `global` field. Eve
 - `naming_pattern`: tokens `{date}`, `{YYYY}`, `{MM}`, `{DD}`, `{id}`, plus any variable slug
 - Variables: `type: text` (free input) or `type: select` (pick from list)
 - Transforms: `none`, `title_underscore`, `upper_underscore`, `lower_underscore`
-- `structure`: nested `FolderNode` list (name + children)
-- `files`: `template` (with `{token}` interpolation) or `content` (raw, no substitution)
+- `structure`: nested `FolderNode` list (name + children). Names support forward slashes when entered via the builder — parsed via `parse_paths_to_tree()`.
+- `files`: `template` (with `{token}` interpolation) or `content` (raw, no substitution). `path` supports subfolders using `/` — parent dirs are created automatically.
 
 ### Template builder (`tui/template_builder.rs`)
 `build_template(existing: Option<Template>)` handles both create and edit:
@@ -86,6 +89,24 @@ One counter for all templates: `counters.toml` with a single `global` field. Eve
 - `Some(t)` → all prompts pre-filled with existing values
 
 Flat path strings like `01_Assets/01_Audio` are parsed into nested `FolderNode` trees via `parse_paths_to_tree()`. Edit mode shows current structure/variables/files and asks "Replace?" before collecting new ones.
+
+### Output display (`core/project.rs`)
+`print_tree(nodes, indent)` is the single shared tree renderer — used by dry-run, `template show`, and the template builder summary. Call it with `"  "` indent for breathing room in dry-run, `""` for compact display in `template show`.
+
+`print_project_path(path, folder_name)` renders a full path with the parent directory dimmed and the project/folder name bold white, prefixed by a cyan `→`. Used in both dry-run and success output. In success output, `canonicalize()` is called first since the folder exists.
+
+## CLI help quality
+All subcommands have thorough `about` strings and `after_help` examples. Key places:
+- `fastf new --help` — shows variable flag syntax, `=` requirement, examples
+- `fastf config set --help` — lists all valid keys with descriptions and path format notes for both Linux/macOS and Windows
+- `fastf --help` — `long_about` with tool overview and getting-started commands
+
+## TUI main menu (`tui/menu.rs`)
+Below the ASCII banner, the current project base directory is shown on every loop iteration (reloads config each time so it reflects settings changes immediately):
+```
+  project base  →  /home/user/  Projects
+```
+Parent path is dimmed, final directory name is bold cyan.
 
 ## Crates
 
@@ -96,7 +117,7 @@ Flat path strings like `01_Assets/01_Audio` are parsed into nested `FolderNode` 
 | `dialoguer` | Interactive prompts — Input, Select, Confirm, MultiSelect |
 | `serde` + `serde_yaml` | Template YAML parsing/serialization |
 | `serde` + `toml` | config.toml and counters.toml |
-| `chrono` | Date tokens in naming patterns |
+| `chrono` | Date tokens in naming patterns; also used to validate `date_format` at config set time |
 | `anyhow` | Error handling throughout |
 | `colored` | Terminal color output |
 
@@ -106,3 +127,5 @@ Flat path strings like `01_Assets/01_Audio` are parsed into nested `FolderNode` 
 - `Template` needs `#[derive(Default)]` because `build_template` calls `.unwrap_or_default()`.
 - The `save_to_file` and `file_path` methods on `Template` have `#[allow(dead_code)]` — they are called from the builder but Rust's lint fires because they're defined on a struct in a separate module.
 - Windows cross-compile requires pacman-installed `mingw-w64-gcc`, NOT rustup-managed Rust installed via pacman. Use rustup for the Rust toolchain: `sudo pacman -Rs rust && sudo pacman -S rustup mingw-w64-gcc && rustup default stable`.
+- `IdConfig` no longer has an `auto_increment` field — it was defined but never read. If per-template ID disable is needed in the future, add it back and check it in `project::plan()`.
+- `print_tree` is in `core/project.rs` (pub). Do not add a duplicate in `cli/template.rs` or `tui/template_builder.rs` — import it from `project`.

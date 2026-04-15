@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use crate::cli::new::{self, NewArgs};
 use crate::cli::{config, id, template};
+use crate::core::config::Config;
 
 const BANNER: &str = r#"
   ___        _      ___    _    _
@@ -18,6 +19,27 @@ pub fn run() -> Result<()> {
     println!("{}", BANNER.cyan().bold());
 
     loop {
+        // Reload config each iteration so changes in settings are reflected immediately
+        let cfg = Config::load().unwrap_or_default();
+        let base = cfg.resolve_base_dir();
+
+        let parent = base
+            .parent()
+            .map(|p| format!("{}{}", p.display(), std::path::MAIN_SEPARATOR))
+            .unwrap_or_default();
+        let name = base
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| base.to_string_lossy().into_owned());
+
+        println!(
+            "  {}  {}{}",
+            "project base  →".dimmed(),
+            parent.dimmed(),
+            name.cyan().bold()
+        );
+        println!();
+
         let choice = Select::new()
             .with_prompt("What would you like to do?")
             .items(&[
@@ -143,6 +165,10 @@ fn menu_settings() -> Result<()> {
 
         match choice {
             0 => {
+                println!(
+                    "  {}  Linux/macOS: /home/user/Projects  ·  Windows: C:\\Users\\user\\Projects or C:/Users/user/Projects",
+                    "Hint:".yellow()
+                );
                 let val: String = dialoguer::Input::new()
                     .with_prompt("Base directory (empty = current dir)")
                     .allow_empty(true)

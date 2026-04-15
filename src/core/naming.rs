@@ -55,6 +55,12 @@ pub fn interpolate(
         result = result.replace(&format!("{{{}}}", key), value);
     }
 
+    // Collapse consecutive underscores left by empty tokens, then trim edges.
+    while result.contains("__") {
+        result = result.replace("__", "_");
+    }
+    result = result.trim_matches('_').to_string();
+
     result
 }
 
@@ -79,6 +85,17 @@ mod tests {
         assert_eq!(to_title_underscore("Ariana Grande"), "Ariana_Grande");
         assert_eq!(to_title_underscore("ARIANA GRANDE"), "Ariana_Grande");
         assert_eq!(to_title_underscore("single"), "Single");
+    }
+
+    #[test]
+    fn test_empty_token_collapses_underscores() {
+        use std::collections::HashMap;
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Project".to_string());
+        vars.insert("title".to_string(), "".to_string());
+        vars.insert("id".to_string(), "001".to_string());
+        let result = interpolate("{name}_{title}_{id}", &vars, "%Y-%m-%d");
+        assert_eq!(result, "Project_001");
     }
 
     #[test]

@@ -1,12 +1,13 @@
 use anyhow::{bail, Result};
 use colored::Colorize;
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, Select};
 use std::collections::HashMap;
 
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::project;
-use crate::core::template::{self, Template, VarType};
+use crate::core::template::{self, Template};
+use crate::core::vars::collect_vars;
 
 /// Arguments passed to `fastf new`.
 pub struct NewArgs {
@@ -14,12 +15,18 @@ pub struct NewArgs {
     pub vars: HashMap<String, String>,
     pub dry_run: bool,
     pub base_dir_override: Option<String>,
+    pub no_preview: bool,
+    pub no_post: bool,
+    pub yes: bool,
 }
 
 pub fn run(args: NewArgs) -> Result<()> {
     let mut config = Config::load()?;
     if let Some(ref dir) = args.base_dir_override {
         config.base_dir = dir.clone();
+    }
+    if args.no_preview {
+        config.preview_lines = 0;
     }
 
     // Resolve template
@@ -49,24 +56,26 @@ pub fn run(args: NewArgs) -> Result<()> {
     let plan = project::plan(&tmpl, &raw_vars, &config, &counters)?;
 
     if args.dry_run {
-        project::print_dry_run(&plan, &tmpl);
+        project::print_dry_run(&plan, &tmpl, &config);
         return Ok(());
     }
 
-    // Show preview and confirm
-    project::print_dry_run(&plan, &tmpl);
-    println!();
-    let ok = Confirm::new()
-        .with_prompt("Create this project?")
-        .default(true)
-        .interact()?;
+    // Show preview and confirm (unless --yes)
+    project::print_dry_run(&plan, &tmpl, &config);
+    if !args.yes {
+        println!();
+        let ok = Confirm::new()
+            .with_prompt("Create this project?")
+            .default(true)
+            .interact()?;
 
-    if !ok {
-        println!("Aborted.");
-        return Ok(());
+        if !ok {
+            println!("Aborted.");
+            return Ok(());
+        }
     }
 
-    project::create(&plan, &tmpl, &mut counters, &config)?;
+    project::create(&plan, &tmpl, &mut counters, &config, !args.no_post)?;
     project::print_success(&plan, &tmpl);
 
     Ok(())
@@ -113,61 +122,3 @@ pub fn pick_template_interactively() -> Result<Template> {
     Ok(templates[idx].clone())
 }
 
-/// Collect variable values, preferring CLI-provided values, falling back to prompts.
-fn collect_vars(tmpl: &Template, cli_vars: &HashMap<String, String>) -> Result<HashMap<String, String>> {
-    let mut result = HashMap::new();
-
-    for var in &tmpl.variables {
-        // If provided via CLI flag, use it directly
-        if let Some(val) = cli_vars.get(&var.slug) {
-            result.insert(var.slug.clone(), val.clone());
-            continue;
-        }
-
-        // Otherwise prompt interactively
-        let value = match var.var_type {
-            VarType::Text => {
-                if var.required {
-                    loop {
-                        let mut input = Input::<String>::new().with_prompt(&var.label);
-                        if !var.default.is_empty() {
-                            input = input.default(var.default.clone());
-                        }
-                        let v: String = input.interact_text()?;
-                        if !v.is_empty() {
-                            break v;
-                        }
-                        eprintln!("  '{}' is required — please enter a value", var.label);
-                    }
-                } else {
-                    let mut input = Input::<String>::new()
-                        .with_prompt(&var.label)
-                        .allow_empty(true);
-                    if !var.default.is_empty() {
-                        input = input.default(var.default.clone());
-                    }
-                    input.interact_text()?
-                }
-            }
-            VarType::Select => {
-                if var.options.is_empty() {
-                    bail!("variable '{}' is type 'select' but has no options", var.slug);
-                }
-                let default_idx = var.options
-                    .iter()
-                    .position(|o| o == &var.default)
-                    .unwrap_or(0);
-                let idx = Select::new()
-                    .with_prompt(&var.label)
-                    .items(&var.options)
-                    .default(default_idx)
-                    .interact()?;
-                var.options[idx].clone()
-            }
-        };
-
-        result.insert(var.slug.clone(), value);
-    }
-
-    Ok(result)
-}

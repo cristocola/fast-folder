@@ -21,11 +21,23 @@ pub struct Config {
     /// strftime format for the {date} token. Default: %Y-%m-%d
     #[serde(default = "default_date_format")]
     pub date_format: String,
+
+    /// How many lines of each templated file to show in the rich dry-run preview.
+    /// Set to 0 to suppress file-content previews entirely.
+    #[serde(default = "default_preview_lines")]
+    pub preview_lines: usize,
+
+    /// Default post-create actions applied to every project unless a template
+    /// overrides them with its own `post_create` block.
+    #[serde(default)]
+    pub post_create: crate::core::post_create::PostCreate,
 }
 
 fn default_date_format() -> String {
     "%Y-%m-%d".to_string()
 }
+
+fn default_preview_lines() -> usize { 8 }
 
 impl Default for Config {
     fn default() -> Self {
@@ -34,6 +46,8 @@ impl Default for Config {
             editor: String::new(),
             default_template: String::new(),
             date_format: default_date_format(),
+            preview_lines: default_preview_lines(),
+            post_create: Default::default(),
         }
     }
 }

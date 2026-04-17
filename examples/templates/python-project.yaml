@@ -1,0 +1,87 @@
+name: Python Project
+slug: python-project
+description: Modern Python project with src-layout, pyproject.toml, and pytest. Rename `src/package` after creation.
+version: "1"
+naming_pattern: "{name}"
+id:
+  prefix: PY
+  digits: 3
+variables:
+  - slug: name
+    label: Package name (letters, digits, underscores)
+    type: text
+    required: true
+    transform: lower_underscore
+  - slug: author
+    label: Author name
+    type: text
+    required: false
+    default: ""
+    transform: none
+  - slug: python_version
+    label: Minimum Python version
+    type: select
+    required: true
+    options:
+      - "3.10"
+      - "3.11"
+      - "3.12"
+      - "3.13"
+    default: "3.12"
+    transform: none
+structure:
+  - name: src
+    children:
+      - name: package
+  - name: tests
+  - name: docs
+files:
+  - path: pyproject.toml
+    template: |
+      [project]
+      name = "{name}"
+      version = "0.1.0"
+      requires-python = ">={python_version}"
+      authors = [{{name = "{author}"}}]
+      description = ""
+      readme = "README.md"
+
+      [build-system]
+      requires = ["hatchling"]
+      build-backend = "hatchling.build"
+  - path: src/package/__init__.py
+    template: |
+      __version__ = "0.1.0"
+  - path: tests/test_smoke.py
+    template: |
+      def test_it_imports():
+          import package
+          assert package.__version__
+  - path: .gitignore
+    content: |
+      __pycache__/
+      *.py[cod]
+      .venv/
+      venv/
+      .pytest_cache/
+      dist/
+      build/
+      *.egg-info/
+      .DS_Store
+  - path: README.md
+    template: |
+      # {name}
+
+      Python {python_version}+ package by {author}.
+
+      ## Setup
+
+      ```
+      # 1. Rename src/package/ to src/{name}/ first.
+      python -m venv .venv
+      source .venv/bin/activate    # Windows: .venv\Scripts\activate
+      pip install -e ".[dev]"
+      pytest
+      ```
+post_create:
+  git_init: true

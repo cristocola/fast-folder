@@ -242,10 +242,11 @@ dependencies = [
  "clap",
  "clap_complete",
  "colored",
- "console",
  "dialoguer",
  "serde",
+ "serde_json",
  "serde_yaml",
+ "tempfile",
  "toml",
 ]
 

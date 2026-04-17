@@ -1,0 +1,56 @@
+name: Monthly Finance Report
+slug: finance-monthly
+description: Date-stamped monthly finance folder with INCOME/, EXPENSES/, RECEIPTS/, and a REPORT.md.
+version: "1"
+naming_pattern: "{YYYY}-{MM}_{entity}_Finance"
+id:
+  prefix: FIN
+  digits: 4
+variables:
+  - slug: entity
+    label: Entity / account name
+    type: text
+    required: true
+    transform: upper_underscore
+  - slug: preparer
+    label: Prepared by
+    type: text
+    required: false
+    default: ""
+    transform: none
+structure:
+  - name: INCOME
+  - name: EXPENSES
+    children:
+      - name: FIXED
+      - name: VARIABLE
+  - name: RECEIPTS
+  - name: RECONCILIATION
+  - name: STATEMENTS
+files:
+  - path: REPORT.md
+    template: |
+      # {entity} — {YYYY}-{MM} Finance Report
+
+      **ID:** {id}
+      **Prepared by:** {preparer}
+      **Period:** {YYYY}-{MM}-01 → {YYYY}-{MM}-(last)
+
+      ## Summary
+
+      | Category    | Amount |
+      |-------------|-------:|
+      | Income      |        |
+      | Expenses    |        |
+      | Net         |        |
+
+      ## Notes
+  - path: RECEIPTS/README.md
+    content: |
+      Drop scanned receipts here. Naming convention: YYYYMMDD_VENDOR_AMOUNT.pdf
+  - path: RECONCILIATION/checklist.md
+    content: |
+      - [ ] Bank statement downloaded
+      - [ ] Cards reconciled
+      - [ ] Receipts filed
+      - [ ] Net figure posted in REPORT.md

@@ -1,0 +1,68 @@
+name: Research Note
+slug: research-note
+description: Date-stamped research/study folder with notes, references, and assets.
+version: "1"
+naming_pattern: "{date}_{topic}"
+id:
+  prefix: RN
+  digits: 4
+variables:
+  - slug: topic
+    label: Topic / title
+    type: text
+    required: true
+    transform: title_underscore
+  - slug: author
+    label: Author
+    type: text
+    required: false
+    default: ""
+    transform: none
+  - slug: field
+    label: Field
+    type: select
+    required: true
+    options:
+      - Computer_Science
+      - Physics
+      - Biology
+      - Economics
+      - Humanities
+      - Design
+      - Other
+    default: Computer_Science
+    transform: none
+structure:
+  - name: notes
+  - name: references
+  - name: data
+  - name: figures
+  - name: drafts
+files:
+  - path: SUMMARY.md
+    template: |
+      # {topic}
+
+      **ID:** {id}
+      **Author:** {author}
+      **Field:** {field}
+      **Started:** {date}
+
+      ## Abstract
+
+      ## Key questions
+
+      - [ ] …
+      - [ ] …
+
+      ## Findings
+
+      ## Open threads
+  - path: references/README.md
+    content: |
+      Drop PDFs, bib files, and web-archive HTML here.
+      Name convention: AUTHOR_YEAR_SHORT-TITLE.ext
+  - path: data/README.md
+    content: |
+      Raw datasets go here — keep them read-only.
+      Derived outputs belong next to the notebook that produced them.

@@ -1,0 +1,94 @@
+name: Web Project
+slug: web-project
+description: Frontend starter (vanilla or framework-ready) with src/, public/, and a package.json.
+version: "1"
+naming_pattern: "{name}"
+id:
+  prefix: WEB
+  digits: 3
+variables:
+  - slug: name
+    label: Project name (kebab-case)
+    type: text
+    required: true
+    transform: lower_underscore
+  - slug: author
+    label: Author name
+    type: text
+    required: false
+    default: ""
+    transform: none
+  - slug: runtime
+    label: Package manager / runtime
+    type: select
+    required: true
+    options:
+      - npm
+      - pnpm
+      - yarn
+      - bun
+    default: pnpm
+    transform: none
+structure:
+  - name: src
+    children:
+      - name: components
+      - name: styles
+  - name: public
+  - name: tests
+files:
+  - path: package.json
+    template: |
+      {{
+        "name": "{name}",
+        "version": "0.1.0",
+        "description": "",
+        "author": "{author}",
+        "type": "module",
+        "scripts": {{
+          "dev": "{runtime} run dev",
+          "build": "{runtime} run build",
+          "test": "{runtime} test"
+        }}
+      }}
+  - path: src/index.html
+    template: |
+      <!doctype html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width,initial-scale=1" />
+          <title>{name}</title>
+          <link rel="stylesheet" href="/styles/main.css" />
+        </head>
+        <body>
+          <main id="app"></main>
+          <script type="module" src="/main.js"></script>
+        </body>
+      </html>
+  - path: src/main.js
+    template: |
+      document.getElementById("app").textContent = "Hello from {name}";
+  - path: src/styles/main.css
+    content: |
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { margin: 0; display: grid; place-items: center; min-height: 100vh; }
+  - path: .gitignore
+    content: |
+      node_modules/
+      dist/
+      .DS_Store
+      .env
+      .env.local
+  - path: README.md
+    template: |
+      # {name}
+
+      Frontend project by {author}. Uses {runtime}.
+
+      ```
+      {runtime} install
+      {runtime} run dev
+      ```
+post_create:
+  git_init: true

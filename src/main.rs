@@ -1,8 +1,4 @@
-mod bootstrap;
-mod cli;
-mod core;
-mod tui;
-mod util;
+use fastf::{bootstrap, cli, tui};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -61,6 +57,18 @@ enum Commands {
         #[arg(long)]
         base_dir: Option<String>,
 
+        /// Suppress file-content previews in the dry-run / confirm output
+        #[arg(long)]
+        no_preview: bool,
+
+        /// Skip post-create actions (git init / reveal / editor / custom commands)
+        #[arg(long)]
+        no_post: bool,
+
+        /// Skip the confirmation prompt (for scripts). Implies --no-preview is honored.
+        #[arg(short = 'y', long)]
+        yes: bool,
+
         /// Variable values as --slug=value flags (e.g. --artist="Ariana Grande" --title=Lullaby).
         /// Run 'fastf template show <slug>' to see a template's variables.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -83,6 +91,69 @@ enum Commands {
     Id {
         #[command(subcommand)]
         action: IdAction,
+    },
+
+    /// List recently created projects (newest first)
+    #[command(after_help = "Examples:\n  \
+            fastf recent                           # last 20 projects\n  \
+            fastf recent --limit 5\n  \
+            fastf recent --template music-video\n  \
+            fastf recent --since 2026-01-01\n  \
+            fastf recent --prune                   # remove index entries whose folder is gone")]
+    Recent {
+        /// Max number of projects to show (default 20)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Only show projects created from this template slug
+        #[arg(long)]
+        template: Option<String>,
+
+        /// Only show projects created on or after this date (YYYY-MM-DD)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Delete records whose folder no longer exists on disk (does not touch folders)
+        #[arg(long)]
+        prune: bool,
+    },
+
+    /// Open a previously created project folder in the system file manager
+    #[command(after_help = "The query is matched against (in order): exact ID, ID prefix,\n\
+        then case-insensitive substring of the project name.\n\n\
+        Examples:\n  \
+            fastf open ID0047\n  \
+            fastf open 0047                        # ID prefix match\n  \
+            fastf open lullaby                     # name substring match")]
+    Open {
+        /// Project ID (e.g. ID0047), ID prefix, or name substring
+        query: String,
+    },
+
+    /// Re-apply a template to an existing folder, adding missing folders/files
+    #[command(after_help = "Existing files are never overwritten — only missing\n\
+        folders and files are added.\n\n\
+        Examples:\n  \
+            fastf apply music-video ./old-project --dry-run\n  \
+            fastf apply rust-project ./my-crate --artist=\"\" -y")]
+    Apply {
+        /// Template slug (see 'fastf template list')
+        template: String,
+
+        /// Target folder to augment
+        target: String,
+
+        /// Preview what would be added without writing anything
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Variable values as --slug=value flags (only used when templated files need interpolation)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        extra: Vec<String>,
     },
 
     /// Print a shell completion script to stdout
@@ -130,6 +201,25 @@ enum TemplateAction {
         /// Write output to this file instead of stdout
         #[arg(short, long)]
         output: Option<String>,
+    },
+    /// Generate a template from an existing folder tree (structure + small file contents)
+    #[command(
+        after_help = "Walks the folder, turning every directory into a FolderNode and every\n\
+            text file ≤ 64 KB into a FileEntry with raw content. Common noise dirs\n\
+            (.git, node_modules, target, __pycache__, .venv, dist, build, .idea, .vscode)\n\
+            are skipped automatically.\n\n\
+            Examples:\n  \
+                fastf template from-folder ./my-crate rust-project\n  \
+                fastf template from-folder ./existing-video video-project --force"
+    )]
+    FromFolder {
+        /// Source folder to scan
+        path: String,
+        /// Slug for the new template (letters, digits, '-', '_')
+        slug: String,
+        /// Overwrite existing template with the same slug
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -196,13 +286,16 @@ fn run() -> Result<()> {
         // No subcommand → interactive TUI
         None => tui::menu::run(),
 
-        Some(Commands::New { template, dry_run, base_dir, extra }) => {
+        Some(Commands::New { template, dry_run, base_dir, no_preview, no_post, yes, extra }) => {
             let vars = parse_extra_vars(&extra);
             cli::new::run(cli::new::NewArgs {
                 template_slug: template,
                 vars,
                 dry_run,
                 base_dir_override: base_dir,
+                no_preview,
+                no_post,
+                yes,
             })
         }
 
@@ -216,6 +309,9 @@ fn run() -> Result<()> {
             TemplateAction::Export { slug, output } => {
                 cli::template::export(&slug, output.as_deref())
             }
+            TemplateAction::FromFolder { path, slug, force } => {
+                cli::template::from_folder(&path, &slug, force)
+            }
         },
 
         Some(Commands::Config { action }) => match action {
@@ -228,6 +324,23 @@ fn run() -> Result<()> {
             IdAction::Reset        => cli::id::reset(),
             IdAction::Set { value} => cli::id::set(value),
         },
+
+        Some(Commands::Recent { limit, template, since, prune }) => {
+            cli::recent::run(cli::recent::RecentArgs { limit, template, since, prune })
+        }
+
+        Some(Commands::Open { query }) => cli::recent::open(&query),
+
+        Some(Commands::Apply { template, target, dry_run, yes, extra }) => {
+            let vars = parse_extra_vars(&extra);
+            cli::apply::run(cli::apply::ApplyArgs {
+                template_slug: template,
+                target,
+                dry_run,
+                yes,
+                vars,
+            })
+        }
 
         Some(Commands::Completions { shell }) => generate_completions(&shell),
     }

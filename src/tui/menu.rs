@@ -4,7 +4,7 @@ use dialoguer::Select;
 use std::collections::HashMap;
 
 use crate::cli::new::{self, NewArgs};
-use crate::cli::{config, id, template};
+use crate::cli::{config, id, recent, template};
 use crate::core::config::Config;
 
 const BANNER: &str = r#"
@@ -44,6 +44,7 @@ pub fn run() -> Result<()> {
             .with_prompt("What would you like to do?")
             .items(&[
                 "Create new project",
+                "Recent projects",
                 "Manage templates",
                 "View / edit settings",
                 "View ID counters",
@@ -54,9 +55,10 @@ pub fn run() -> Result<()> {
 
         match choice {
             0 => menu_create()?,
-            1 => menu_templates()?,
-            2 => menu_settings()?,
-            3 => {
+            1 => menu_recent()?,
+            2 => menu_templates()?,
+            3 => menu_settings()?,
+            4 => {
                 id::show()?;
                 println!();
                 // Offer reset option
@@ -69,7 +71,7 @@ pub fn run() -> Result<()> {
                 }
                 println!();
             }
-            4 => {
+            5 => {
                 println!("Goodbye.");
                 break;
             }
@@ -87,8 +89,41 @@ fn menu_create() -> Result<()> {
         vars: HashMap::new(),
         dry_run: false,
         base_dir_override: None,
+        no_preview: false,
+        no_post: false,
+        yes: false,
     };
     new::run(args)?;
+    println!();
+    Ok(())
+}
+
+fn menu_recent() -> Result<()> {
+    recent::run(recent::RecentArgs {
+        limit: 20,
+        template: None,
+        since: None,
+        prune: false,
+    })?;
+    println!();
+
+    let records = crate::core::index::load_all()?;
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    let open_one = dialoguer::Confirm::new()
+        .with_prompt("Open one of them?")
+        .default(false)
+        .interact()?;
+    if !open_one {
+        return Ok(());
+    }
+
+    let query: String = dialoguer::Input::new()
+        .with_prompt("Project ID or name substring")
+        .interact_text()?;
+    recent::open(&query)?;
     println!();
     Ok(())
 }
@@ -99,6 +134,7 @@ fn menu_templates() -> Result<()> {
             .with_prompt("Templates")
             .items(&[
                 "Create new template",
+                "Generate template from existing folder",
                 "Edit a template",
                 "List templates",
                 "Show template details",
@@ -115,32 +151,46 @@ fn menu_templates() -> Result<()> {
                 println!();
             }
             1 => {
+                let path: String = dialoguer::Input::new()
+                    .with_prompt("Source folder to scan")
+                    .interact_text()?;
+                let slug: String = dialoguer::Input::new()
+                    .with_prompt("Slug for the new template")
+                    .interact_text()?;
+                let force = dialoguer::Confirm::new()
+                    .with_prompt("Overwrite if a template with this slug exists?")
+                    .default(false)
+                    .interact()?;
+                template::from_folder(&path, &slug, force)?;
+                println!();
+            }
+            2 => {
                 let slug = prompt_template_slug("Edit template")?;
                 template::edit(&slug)?;
                 println!();
             }
-            2 => {
+            3 => {
                 template::list()?;
                 println!();
             }
-            3 => {
+            4 => {
                 let slug = prompt_template_slug("Show template")?;
                 template::show(&slug)?;
                 println!();
             }
-            4 => {
+            5 => {
                 let slug = prompt_template_slug("Delete template")?;
                 template::delete(&slug)?;
                 println!();
             }
-            5 => {
+            6 => {
                 let path: String = dialoguer::Input::new()
                     .with_prompt("Path to .yaml file")
                     .interact_text()?;
                 template::import(&path)?;
                 println!();
             }
-            6 => break,
+            7 => break,
             _ => unreachable!(),
         }
     }

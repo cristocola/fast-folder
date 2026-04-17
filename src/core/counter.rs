@@ -4,8 +4,6 @@ use std::fs;
 
 use crate::util::paths;
 
-const GLOBAL_KEY: &str = "global";
-
 /// Single global counter shared across all templates.
 /// counters.toml contains one line: global = 47
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -38,12 +36,6 @@ impl Counters {
 
     /// Current global counter value (last used ID).
     pub fn get(&self) -> u64 {
-        self.global
-    }
-
-    /// Increment the global counter and return the NEW value.
-    pub fn increment(&mut self) -> u64 {
-        self.global += 1;
         self.global
     }
 

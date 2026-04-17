@@ -225,6 +225,7 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
         variables,
         structure,
         files,
+        post_create: None,
     };
 
     // Print summary before asking to save

@@ -1,0 +1,82 @@
+name: Rust Project
+slug: rust-project
+description: Cargo-style Rust project scaffold with src/, tests/, and a starter Cargo.toml.
+version: "1"
+naming_pattern: "{name}"
+id:
+  prefix: RS
+  digits: 3
+variables:
+  - slug: name
+    label: Crate name (letters, digits, hyphens)
+    type: text
+    required: true
+    transform: lower_underscore
+  - slug: author
+    label: Author name
+    type: text
+    required: false
+    default: ""
+    transform: none
+  - slug: license
+    label: License
+    type: select
+    required: true
+    options:
+      - MIT
+      - Apache-2.0
+      - GPL-3.0
+      - BSD-3-Clause
+      - Proprietary
+    default: MIT
+    transform: none
+structure:
+  - name: src
+  - name: tests
+  - name: benches
+  - name: examples
+files:
+  - path: Cargo.toml
+    template: |
+      [package]
+      name = "{name}"
+      version = "0.1.0"
+      edition = "2021"
+      authors = ["{author}"]
+      license = "{license}"
+      description = ""
+
+      [dependencies]
+  - path: src/main.rs
+    template: |
+      fn main() {
+          println!("Hello from {name}!");
+      }
+  - path: src/lib.rs
+    template: |
+      //! {name}
+  - path: tests/smoke.rs
+    template: |
+      #[test]
+      fn it_compiles() {
+          assert_eq!(2 + 2, 4);
+      }
+  - path: .gitignore
+    content: |
+      target/
+      Cargo.lock
+      .DS_Store
+  - path: README.md
+    template: |
+      # {name}
+
+      {license}-licensed crate by {author}.
+
+      ## Build
+
+      ```
+      cargo build
+      cargo test
+      ```
+post_create:
+  git_init: true

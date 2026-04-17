@@ -34,6 +34,11 @@ pub struct Template {
 
     #[serde(default)]
     pub files: Vec<FileEntry>,
+
+    /// Optional per-template post-create actions (override the global config).
+    /// `None` = fall back to `config.toml`'s `post_create` block.
+    #[serde(default)]
+    pub post_create: Option<crate::core::post_create::PostCreate>,
 }
 
 fn default_version() -> String {
@@ -127,7 +132,6 @@ impl Template {
         Ok(t)
     }
 
-    #[allow(dead_code)]
     pub fn save_to_file(&self, path: &PathBuf) -> Result<()> {
         let raw = serde_yaml::to_string(self)
             .context("serializing template")?;
@@ -136,7 +140,7 @@ impl Template {
         Ok(())
     }
 
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.slug.is_empty() {
             bail!("template 'slug' is required");
         }
@@ -151,6 +155,15 @@ impl Template {
         for v in &self.variables {
             if !seen.insert(&v.slug) {
                 bail!("duplicate variable slug '{}'", v.slug);
+            }
+        }
+        // Reject file paths that escape the project root (absolute, `..`, etc.).
+        let mut file_paths = std::collections::HashSet::new();
+        for f in &self.files {
+            crate::core::naming::ensure_relative_safe_path(&f.path)
+                .with_context(|| format!("template '{}' has invalid file path", self.slug))?;
+            if !file_paths.insert(&f.path) {
+                bail!("duplicate file path '{}' in template '{}'", f.path, self.slug);
             }
         }
         Ok(())

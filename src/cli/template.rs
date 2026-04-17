@@ -1,11 +1,34 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use dialoguer::Confirm;
 use std::fs;
+use std::path::{Path, PathBuf};
 
-use crate::core::template::{self, Template};
+use crate::core::template::{self, FileEntry, FolderNode, IdConfig, Template, Transform, VarType, Variable};
 use crate::core::project;
 use crate::util::paths;
+
+/// Files larger than this are skipped when generating a template from a folder —
+/// bundling big binaries into a YAML template is almost never what you want.
+const FROM_FOLDER_MAX_FILE_SIZE: u64 = 64 * 1024;
+
+/// Directory names that are skipped during `from-folder` scans. Keeping this
+/// list short and hardcoded is intentional — German-engineering lean, no config
+/// surface area for what are effectively noise directories.
+const FROM_FOLDER_IGNORE: &[&str] = &[
+    ".git",
+    ".DS_Store",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    ".idea",
+    ".vscode",
+];
 
 pub fn list() -> Result<()> {
     let templates = template::load_all()?;
@@ -129,5 +152,194 @@ pub fn export(slug: &str, output: Option<&str>) -> Result<()> {
         }
         None => print!("{}", content),
     }
+    Ok(())
+}
+
+/// Generate a YAML template from an existing folder tree.
+/// The generated template can be edited like any other — either via
+/// `fastf template edit <slug>` or by opening the YAML directly.
+pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
+    let root = PathBuf::from(source);
+    if !root.exists() {
+        bail!("source folder does not exist: {}", root.display());
+    }
+    if !root.is_dir() {
+        bail!("source is not a directory: {}", root.display());
+    }
+
+    validate_slug(slug)?;
+
+    let dest = paths::templates_dir().join(format!("{}.yaml", slug));
+    if dest.exists() && !force {
+        bail!(
+            "template '{}' already exists — re-run with --force to overwrite",
+            slug
+        );
+    }
+
+    // Ensure the templates dir itself exists (first-run safety).
+    fs::create_dir_all(paths::templates_dir())
+        .context("creating templates directory")?;
+
+    let mut structure: Vec<FolderNode> = Vec::new();
+    let mut files: Vec<FileEntry> = Vec::new();
+    let mut folder_count = 0usize;
+    let mut file_count = 0usize;
+    let mut skipped_large = 0usize;
+
+    scan_directory(
+        &root,
+        &root,
+        &mut structure,
+        &mut files,
+        &mut folder_count,
+        &mut file_count,
+        &mut skipped_large,
+    )?;
+
+    // Auto-add a `name` variable so the naming_pattern has something to bind.
+    let variables = vec![Variable {
+        slug: "name".to_string(),
+        label: "Project name".to_string(),
+        var_type: VarType::Text,
+        required: true,
+        options: vec![],
+        default: String::new(),
+        transform: Transform::TitleUnderscore,
+    }];
+
+    let template = Template {
+        name: humanize_slug(slug),
+        slug: slug.to_string(),
+        description: format!("Generated from {}", root.display()),
+        version: "1".to_string(),
+        naming_pattern: "{id}_{date}_{name}".to_string(),
+        id: IdConfig {
+            prefix: "ID".to_string(),
+            digits: 4,
+        },
+        variables,
+        structure,
+        files,
+        post_create: None,
+    };
+
+    template.save_to_file(&dest)?;
+
+    println!(
+        "{}  Generated template {} from {} folder{} and {} file{}{}.",
+        "✓".green().bold(),
+        slug.cyan().bold(),
+        folder_count,
+        if folder_count == 1 { "" } else { "s" },
+        file_count,
+        if file_count == 1 { "" } else { "s" },
+        if skipped_large == 0 {
+            String::new()
+        } else {
+            format!(" (skipped {} file{} larger than 64 KB)", skipped_large, if skipped_large == 1 { "" } else { "s" })
+        }
+    );
+    println!("   Review it:  {}", format!("fastf template show {}", slug).dimmed());
+    println!("   Edit it:    {}", format!("fastf template edit {}", slug).dimmed());
+    println!("   Use it:     {}", format!("fastf new {}", slug).dimmed());
+
+    Ok(())
+}
+
+fn validate_slug(slug: &str) -> Result<()> {
+    if slug.is_empty() {
+        bail!("slug must not be empty");
+    }
+    if !slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        bail!(
+            "slug '{}' contains invalid characters (allowed: letters, digits, '-', '_')",
+            slug
+        );
+    }
+    Ok(())
+}
+
+fn humanize_slug(slug: &str) -> String {
+    slug.split(['-', '_'])
+        .filter(|s| !s.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn scan_directory(
+    root: &Path,
+    current: &Path,
+    structure: &mut Vec<FolderNode>,
+    files: &mut Vec<FileEntry>,
+    folder_count: &mut usize,
+    file_count: &mut usize,
+    skipped_large: &mut usize,
+) -> Result<()> {
+    let entries = fs::read_dir(current)
+        .with_context(|| format!("reading {}", current.display()))?;
+
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if FROM_FOLDER_IGNORE.iter().any(|n| *n == name) {
+            continue;
+        }
+
+        let path = entry.path();
+        let ft = entry.file_type()?;
+
+        if ft.is_dir() {
+            *folder_count += 1;
+            let mut node = FolderNode { name: name.clone(), children: Vec::new() };
+            let mut sub_files: Vec<FileEntry> = Vec::new();
+            scan_directory(
+                root,
+                &path,
+                &mut node.children,
+                &mut sub_files,
+                folder_count,
+                file_count,
+                skipped_large,
+            )?;
+            files.extend(sub_files);
+            structure.push(node);
+        } else if ft.is_file() {
+            let meta = entry.metadata()?;
+            if meta.len() > FROM_FOLDER_MAX_FILE_SIZE {
+                *skipped_large += 1;
+                continue;
+            }
+            let content = match fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(_) => {
+                    // Probably binary. Skip silently — user can add it back with raw content if needed.
+                    *skipped_large += 1;
+                    continue;
+                }
+            };
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            *file_count += 1;
+            files.push(FileEntry {
+                path: relative,
+                template: String::new(),
+                content,
+            });
+        }
+        // symlinks, fifos, etc. are intentionally skipped
+    }
+
     Ok(())
 }

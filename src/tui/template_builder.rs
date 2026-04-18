@@ -1,17 +1,21 @@
 /// Interactive step-by-step template builder.
 /// Works for both creating new templates and editing existing ones.
 /// Existing values are used as defaults — press Enter to keep them.
+///
+/// In edit mode, a review menu at the end lets the user jump back into any
+/// section to correct mistakes without restarting the whole flow.
 use anyhow::{bail, Result};
 use colored::Colorize;
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, Input, Select, Sort};
 
-use crate::core::template::{
-    FileEntry, FolderNode, IdConfig, Template, Transform, VarType, Variable,
-};
+use crate::core::template::{FileEntry, FolderNode, Template, Transform, VarType, Variable};
 
 pub fn build_template(existing: Option<Template>) -> Result<()> {
     let is_edit = existing.is_some();
-    let base = existing.unwrap_or_default();
+    let mut tmpl = existing.unwrap_or_default();
+    if tmpl.version.is_empty() {
+        tmpl.version = "1".to_string();
+    }
 
     println!(
         "\n{}",
@@ -22,34 +26,161 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
         }
     );
 
-    // -----------------------------------------------------------------------
-    // Step 1: Metadata
-    // -----------------------------------------------------------------------
+    // Linear first pass through all six sections.
     println!("\n{}", "Step 1/6  Metadata".bold());
+    edit_metadata(&mut tmpl)?;
 
-    let name: String = Input::new()
-        .with_prompt("Template name")
-        .default(base.name.clone())
-        .interact_text()?;
+    println!("\n{}", "Step 2/6  ID".bold());
+    edit_id(&mut tmpl)?;
 
-    let suggested_slug = if base.slug.is_empty() {
-        slugify(&name)
+    println!("\n{}", "Step 3/6  Variables".bold());
+    edit_variables(&mut tmpl, !is_edit)?;
+
+    println!("\n{}", "Step 4/6  Folder structure".bold());
+    edit_structure(&mut tmpl, is_edit)?;
+
+    println!("\n{}", "Step 5/6  Files".bold());
+    edit_files(&mut tmpl, is_edit)?;
+
+    println!("\n{}", "Step 6/6  Review".bold());
+    print_template_summary(&tmpl);
+
+    // Edit mode: offer a review menu so the user can jump back into any
+    // section to fix mistakes. New-template mode keeps the original simple
+    // Save? Y/N prompt — no behaviour change for first-run users.
+    if is_edit {
+        loop {
+            println!();
+            let choice = Select::new()
+                .with_prompt("What next?")
+                .items(&[
+                    "Save template",
+                    "Edit metadata (name, slug, description, pattern)",
+                    "Edit ID config",
+                    "Edit variables",
+                    "Edit folder structure",
+                    "Edit files",
+                    "Discard",
+                ])
+                .default(0)
+                .interact()?;
+
+            match choice {
+                0 => {
+                    if let Err(e) = tmpl.validate() {
+                        eprintln!("\n{} {}\n", "Cannot save:".red().bold(), e);
+                        continue;
+                    }
+                    break;
+                }
+                1 => {
+                    edit_metadata(&mut tmpl)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                2 => {
+                    edit_id(&mut tmpl)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                3 => {
+                    edit_variables(&mut tmpl, false)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                4 => {
+                    edit_structure(&mut tmpl, true)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                5 => {
+                    edit_files(&mut tmpl, true)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                6 => {
+                    println!("Discarded.");
+                    return Ok(());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    // Save flow.
+    let dest = tmpl.file_path();
+    if dest.exists() && !is_edit {
+        let ok = Confirm::new()
+            .with_prompt(format!(
+                "Template '{}' already exists — overwrite?",
+                tmpl.slug
+            ))
+            .default(false)
+            .interact()?;
+        if !ok {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    // Edit mode already confirmed via the review menu's Save choice;
+    // only new-template mode shows a final Save? Y/N.
+    let save = if is_edit {
+        true
     } else {
-        base.slug.clone()
+        Confirm::new()
+            .with_prompt("Save template?")
+            .default(true)
+            .interact()?
     };
 
-    let slug: String = Input::new()
+    if save {
+        tmpl.save_to_file(&dest)?;
+        println!(
+            "\n{} template '{}' saved to {}",
+            "✓".green().bold(),
+            tmpl.slug.green(),
+            dest.display()
+        );
+    } else {
+        println!("Discarded.");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Section editors — each mutates the in-progress Template in place.
+// Called during the initial linear pass, and potentially again from the
+// edit-mode review menu. Current values become defaults so re-entry feels
+// the same as the first pass.
+// ---------------------------------------------------------------------------
+
+fn edit_metadata(tmpl: &mut Template) -> Result<()> {
+    tmpl.name = Input::new()
+        .with_prompt("Template name")
+        .default(tmpl.name.clone())
+        .interact_text()?;
+
+    let suggested_slug = if tmpl.slug.is_empty() {
+        slugify(&tmpl.name)
+    } else {
+        tmpl.slug.clone()
+    };
+
+    let new_slug: String = Input::new()
         .with_prompt("Slug (used as filename and CLI argument)")
         .default(suggested_slug)
         .interact_text()?;
 
-    if slug.is_empty() {
+    if new_slug.is_empty() {
         bail!("slug cannot be empty");
     }
+    tmpl.slug = new_slug;
 
-    let description: String = Input::new()
+    tmpl.description = Input::new()
         .with_prompt("Description (optional)")
-        .default(base.description.clone())
+        .default(tmpl.description.clone())
         .allow_empty(true)
         .interact_text()?;
 
@@ -57,58 +188,41 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
         "  {}  tokens: {{date}} {{YYYY}} {{MM}} {{DD}} {{id}} + any variable slug",
         "Hint:".yellow()
     );
-    let naming_pattern: String = Input::new()
+    tmpl.naming_pattern = Input::new()
         .with_prompt("Naming pattern")
-        .default(if base.naming_pattern.is_empty() {
+        .default(if tmpl.naming_pattern.is_empty() {
             "{date}_{id}".to_string()
         } else {
-            base.naming_pattern.clone()
+            tmpl.naming_pattern.clone()
         })
         .interact_text()?;
 
-    // -----------------------------------------------------------------------
-    // Step 2: ID config
-    // -----------------------------------------------------------------------
-    println!("\n{}", "Step 2/6  ID".bold());
+    Ok(())
+}
 
-    let id_prefix: String = Input::new()
+fn edit_id(tmpl: &mut Template) -> Result<()> {
+    tmpl.id.prefix = Input::new()
         .with_prompt("ID prefix")
-        .default(base.id.prefix.clone())
+        .default(tmpl.id.prefix.clone())
         .interact_text()?;
 
     let id_digits_str: String = Input::new()
         .with_prompt("ID digits (zero-padded width)")
-        .default(base.id.digits.to_string())
+        .default(tmpl.id.digits.to_string())
         .interact_text()?;
 
-    let id_digits: usize = id_digits_str
-        .trim()
-        .parse()
-        .unwrap_or(base.id.digits);
+    tmpl.id.digits = id_digits_str.trim().parse().unwrap_or(tmpl.id.digits);
 
-    // -----------------------------------------------------------------------
-    // Step 3: Variables
-    // -----------------------------------------------------------------------
-    println!("\n{}", "Step 3/6  Variables".bold());
+    Ok(())
+}
 
-    let mut variables: Vec<Variable> = base.variables.clone();
-
-    // In edit mode show existing and ask if user wants to replace them
-    if is_edit && !variables.is_empty() {
-        println!("  Current variables:");
-        for v in &variables {
-            println!("    {} {}", "•".cyan(), v.slug.green());
-        }
-        let replace = Confirm::new()
-            .with_prompt("Replace all variables? (No = keep existing)")
-            .default(false)
-            .interact()?;
-        if replace {
-            variables.clear();
-        }
-    }
-
-    if variables.is_empty() {
+/// Variables section. In the initial new-template pass with no variables yet,
+/// fall back to the original "Add a variable? Y/N" loop so first-run UX stays
+/// linear. Every other entry (edit mode, review-menu re-entry, or a new
+/// template that already has variables) uses the richer submenu with Add /
+/// Edit / Remove / Reorder.
+fn edit_variables(tmpl: &mut Template, is_initial_new_pass: bool) -> Result<()> {
+    if is_initial_new_pass && tmpl.variables.is_empty() {
         loop {
             let add = Confirm::new()
                 .with_prompt("Add a variable?")
@@ -117,32 +231,23 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
             if !add {
                 break;
             }
-            variables.push(collect_variable()?);
+            tmpl.variables.push(collect_variable(None)?);
         }
     } else {
-        loop {
-            let add = Confirm::new()
-                .with_prompt("Add another variable?")
-                .default(false)
-                .interact()?;
-            if !add {
-                break;
-            }
-            variables.push(collect_variable()?);
-        }
+        variable_submenu(&mut tmpl.variables)?;
     }
+    Ok(())
+}
 
-    // -----------------------------------------------------------------------
-    // Step 4: Folder structure
-    // -----------------------------------------------------------------------
-    println!("\n{}", "Step 4/6  Folder structure".bold());
+fn edit_structure(tmpl: &mut Template, is_edit_pass: bool) -> Result<()> {
     println!(
         "  {}  one path per line  ·  use / for nesting on all platforms (e.g. 01_Assets/01_Audio)",
         "Hint:".yellow()
     );
 
-    let existing_paths = if is_edit && !base.structure.is_empty() {
-        let flat = flatten_tree(&base.structure, "");
+    let mut collect_fresh = true;
+    if is_edit_pass && !tmpl.structure.is_empty() {
+        let flat = flatten_tree(&tmpl.structure, "");
         println!("  Current structure:");
         for p in &flat {
             println!("    {}", p.dimmed());
@@ -151,14 +256,12 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
             .with_prompt("Replace folder structure? (No = keep existing)")
             .default(false)
             .interact()?;
-        if replace { vec![] } else { flat }
-    } else {
-        vec![]
-    };
+        if !replace {
+            collect_fresh = false;
+        }
+    }
 
-    let structure = if !existing_paths.is_empty() {
-        parse_paths_to_tree(&existing_paths)
-    } else {
+    if collect_fresh {
         let mut paths: Vec<String> = vec![];
         loop {
             let path: String = Input::new()
@@ -170,141 +273,203 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
             }
             paths.push(path);
         }
-        parse_paths_to_tree(&paths)
-    };
+        tmpl.structure = parse_paths_to_tree(&paths);
+    }
 
-    // -----------------------------------------------------------------------
-    // Step 5: Files
-    // -----------------------------------------------------------------------
-    println!("\n{}", "Step 5/6  Files".bold());
+    Ok(())
+}
 
-    let mut files: Vec<FileEntry> = if is_edit && !base.files.is_empty() {
+fn edit_files(tmpl: &mut Template, is_edit_pass: bool) -> Result<()> {
+    if is_edit_pass && !tmpl.files.is_empty() {
         println!("  Current files:");
-        for f in &base.files {
+        for f in &tmpl.files {
             println!("    {} {}", "•".cyan(), f.path.green());
         }
         let replace = Confirm::new()
             .with_prompt("Replace all files? (No = keep existing)")
             .default(false)
             .interact()?;
-        if replace { vec![] } else { base.files.clone() }
-    } else {
-        vec![]
-    };
+        if replace {
+            tmpl.files.clear();
+        }
+    }
 
     loop {
         let add = Confirm::new()
-            .with_prompt(if files.is_empty() {
+            .with_prompt(if tmpl.files.is_empty() {
                 "Add a placeholder file?"
             } else {
                 "Add another file?"
             })
-            .default(files.is_empty())
+            .default(tmpl.files.is_empty())
             .interact()?;
         if !add {
             break;
         }
-        files.push(collect_file()?);
-    }
-
-    // -----------------------------------------------------------------------
-    // Step 6: Review & save
-    // -----------------------------------------------------------------------
-    println!("\n{}", "Step 6/6  Review".bold());
-
-    let tmpl = Template {
-        name: name.clone(),
-        slug: slug.clone(),
-        description,
-        version: "1".to_string(),
-        naming_pattern,
-        id: IdConfig {
-            prefix: id_prefix,
-            digits: id_digits,
-        },
-        variables,
-        structure,
-        files,
-        post_create: None,
-    };
-
-    // Print summary before asking to save
-    print_template_summary(&tmpl);
-
-    let dest = tmpl.file_path();
-    if dest.exists() && !is_edit {
-        let ok = Confirm::new()
-            .with_prompt(format!("Template '{}' already exists — overwrite?", slug))
-            .default(false)
-            .interact()?;
-        if !ok {
-            println!("Aborted.");
-            return Ok(());
-        }
-    }
-
-    let save = Confirm::new()
-        .with_prompt("Save template?")
-        .default(true)
-        .interact()?;
-
-    if save {
-        tmpl.save_to_file(&dest)?;
-        println!(
-            "\n{} template '{}' saved to {}",
-            "✓".green().bold(),
-            slug.green(),
-            dest.display()
-        );
-    } else {
-        println!("Discarded.");
+        tmpl.files.push(collect_file()?);
     }
 
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Collect a single variable interactively
-// ---------------------------------------------------------------------------
-fn collect_variable() -> Result<Variable> {
-    let slug: String = Input::new()
-        .with_prompt("  Variable slug (e.g. artist)")
-        .interact_text()?;
+/// Interactive Add / Edit / Remove / Reorder submenu for variables.
+/// Loops until the user picks "Done".
+fn variable_submenu(variables: &mut Vec<Variable>) -> Result<()> {
+    loop {
+        if variables.is_empty() {
+            println!("  No variables yet.");
+        } else {
+            println!("  Current variables:");
+            for (i, v) in variables.iter().enumerate() {
+                let type_tag = match v.var_type {
+                    VarType::Text => "text",
+                    VarType::Select => "select",
+                };
+                let req = if v.required { " (required)" } else { "" };
+                println!("    {}. {} [{}]{}", i + 1, v.slug.green(), type_tag, req,);
+            }
+        }
 
-    let label: String = Input::new()
-        .with_prompt("  Label shown to user")
-        .interact_text()?;
+        // Menu items depend on state — hide Edit/Remove when empty,
+        // hide Reorder when fewer than two variables.
+        let mut items: Vec<&str> = vec!["Add variable"];
+        if !variables.is_empty() {
+            items.push("Edit a variable");
+            items.push("Remove variable");
+            if variables.len() >= 2 {
+                items.push("Reorder variables");
+            }
+        }
+        items.push("Done");
+
+        let choice = Select::new()
+            .with_prompt("Variables")
+            .items(&items)
+            .default(0)
+            .interact()?;
+
+        match items[choice] {
+            "Add variable" => {
+                variables.push(collect_variable(None)?);
+            }
+            "Edit a variable" => {
+                let labels: Vec<String> = variables.iter().map(|v| v.slug.clone()).collect();
+                let idx = Select::new()
+                    .with_prompt("Which variable?")
+                    .items(&labels)
+                    .default(0)
+                    .interact()?;
+                variables[idx] = collect_variable(Some(&variables[idx]))?;
+            }
+            "Remove variable" => {
+                let labels: Vec<String> = variables.iter().map(|v| v.slug.clone()).collect();
+                let idx = Select::new()
+                    .with_prompt("Which variable?")
+                    .items(&labels)
+                    .default(0)
+                    .interact()?;
+                let confirm = Confirm::new()
+                    .with_prompt(format!("Remove '{}'?", variables[idx].slug))
+                    .default(false)
+                    .interact()?;
+                if confirm {
+                    variables.remove(idx);
+                }
+            }
+            "Reorder variables" => {
+                let labels: Vec<String> = variables.iter().map(|v| v.slug.clone()).collect();
+                println!(
+                    "  {}  ↑/↓ move cursor · space picks an item to drag · enter confirms",
+                    "Hint:".yellow()
+                );
+                let order = Sort::new()
+                    .with_prompt("New order")
+                    .items(&labels)
+                    .interact()?;
+                let reordered: Vec<Variable> =
+                    order.into_iter().map(|i| variables[i].clone()).collect();
+                *variables = reordered;
+            }
+            "Done" => break,
+            _ => unreachable!(),
+        }
+        println!();
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Collect a single variable interactively. When `existing` is Some, all prompts
+// are pre-filled with the current values so Enter keeps them.
+// ---------------------------------------------------------------------------
+fn collect_variable(existing: Option<&Variable>) -> Result<Variable> {
+    let base_slug = existing.map(|v| v.slug.clone()).unwrap_or_default();
+    let base_label = existing.map(|v| v.label.clone()).unwrap_or_default();
+    let base_type_idx = existing
+        .map(|v| if v.var_type == VarType::Text { 0 } else { 1 })
+        .unwrap_or(0);
+    let base_options = existing.map(|v| v.options.clone()).unwrap_or_default();
+    let base_default = existing.map(|v| v.default.clone()).unwrap_or_default();
+    let base_transform_idx = existing
+        .map(|v| match v.transform {
+            Transform::None => 0,
+            Transform::TitleUnderscore => 1,
+            Transform::UpperUnderscore => 2,
+            Transform::LowerUnderscore => 3,
+        })
+        .unwrap_or(0);
+    let base_required = existing.map(|v| v.required).unwrap_or(false);
+
+    let mut slug_input = Input::<String>::new().with_prompt("  Variable slug (e.g. artist)");
+    if !base_slug.is_empty() {
+        slug_input = slug_input.default(base_slug);
+    }
+    let slug: String = slug_input.interact_text()?;
+
+    let mut label_input = Input::<String>::new().with_prompt("  Label shown to user");
+    if !base_label.is_empty() {
+        label_input = label_input.default(base_label);
+    }
+    let label: String = label_input.interact_text()?;
 
     let type_idx = Select::new()
         .with_prompt("  Type")
         .items(&["Text (free input)", "Select (pick from list)"])
-        .default(0)
+        .default(base_type_idx)
         .interact()?;
 
-    let var_type = if type_idx == 0 { VarType::Text } else { VarType::Select };
+    let var_type = if type_idx == 0 {
+        VarType::Text
+    } else {
+        VarType::Select
+    };
 
     let options = if var_type == VarType::Select {
-        println!("  Enter options one per line, empty line to finish:");
-        let mut opts = vec![];
-        loop {
-            let opt: String = Input::new()
-                .with_prompt("  Option")
-                .allow_empty(true)
-                .interact_text()?;
-            if opt.is_empty() {
-                break;
+        if !base_options.is_empty() {
+            println!("  Current options: {}", base_options.join(", "));
+            let keep = Confirm::new()
+                .with_prompt("  Keep these options?")
+                .default(true)
+                .interact()?;
+            if keep {
+                base_options
+            } else {
+                collect_options()?
             }
-            opts.push(opt);
+        } else {
+            collect_options()?
         }
-        opts
     } else {
         vec![]
     };
 
-    let default: String = Input::new()
+    let mut default_input = Input::<String>::new()
         .with_prompt("  Default value (optional)")
-        .allow_empty(true)
-        .interact_text()?;
+        .allow_empty(true);
+    if !base_default.is_empty() {
+        default_input = default_input.default(base_default);
+    }
+    let default: String = default_input.interact_text()?;
 
     let transform_idx = Select::new()
         .with_prompt("  Transform")
@@ -314,7 +479,7 @@ fn collect_variable() -> Result<Variable> {
             "UpperUnderscore  e.g. ariana grande → ARIANA_GRANDE",
             "LowerUnderscore  e.g. Ariana Grande → ariana_grande",
         ])
-        .default(0)
+        .default(base_transform_idx)
         .interact()?;
 
     let transform = match transform_idx {
@@ -327,7 +492,7 @@ fn collect_variable() -> Result<Variable> {
 
     let required = Confirm::new()
         .with_prompt("  Required?")
-        .default(false)
+        .default(base_required)
         .interact()?;
 
     Ok(Variable {
@@ -339,6 +504,22 @@ fn collect_variable() -> Result<Variable> {
         default,
         transform,
     })
+}
+
+fn collect_options() -> Result<Vec<String>> {
+    println!("  Enter options one per line, empty line to finish:");
+    let mut opts = vec![];
+    loop {
+        let opt: String = Input::new()
+            .with_prompt("  Option")
+            .allow_empty(true)
+            .interact_text()?;
+        if opt.is_empty() {
+            break;
+        }
+        opts.push(opt);
+    }
+    Ok(opts)
 }
 
 // ---------------------------------------------------------------------------
@@ -377,9 +558,17 @@ fn collect_file() -> Result<FileEntry> {
     let content = lines.join("\n") + "\n";
 
     Ok(if mode_idx == 0 {
-        FileEntry { path, template: content, content: String::new() }
+        FileEntry {
+            path,
+            template: content,
+            content: String::new(),
+        }
     } else {
-        FileEntry { path, template: String::new(), content }
+        FileEntry {
+            path,
+            template: String::new(),
+            content,
+        }
     })
 }
 
@@ -421,7 +610,10 @@ fn insert_path(nodes: &mut Vec<FolderNode>, parts: &[&str]) {
     if let Some(node) = nodes.iter_mut().find(|n| n.name == head) {
         insert_path(&mut node.children, rest);
     } else {
-        let mut new_node = FolderNode { name: head.to_string(), children: vec![] };
+        let mut new_node = FolderNode {
+            name: head.to_string(),
+            children: vec![],
+        };
         insert_path(&mut new_node.children, rest);
         nodes.push(new_node);
     }
@@ -451,11 +643,7 @@ fn print_template_summary(t: &Template) {
     if !t.description.is_empty() {
         println!("  Desc:    {}", t.description);
     }
-    println!(
-        "  ID:      {}{}",
-        t.id.prefix,
-        "0".repeat(t.id.digits)
-    );
+    println!("  ID:      {}{}", t.id.prefix, "0".repeat(t.id.digits));
 
     if !t.variables.is_empty() {
         println!("\n{}", "Variables:".bold());

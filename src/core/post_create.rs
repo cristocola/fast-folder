@@ -63,7 +63,11 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result
 
     // git_init: idempotent. Silent on success; warn on failure.
     if actions.git_init {
-        match Command::new("git").arg("init").current_dir(project_path).status() {
+        match Command::new("git")
+            .arg("init")
+            .current_dir(project_path)
+            .status()
+        {
             Ok(s) if s.success() => {
                 println!("  {} git init", "✓".green());
             }
@@ -84,7 +88,11 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result
     if actions.reveal
         && let Err(e) = reveal_folder(project_path)
     {
-        eprintln!("{} could not reveal folder: {}", "warning:".yellow().bold(), e);
+        eprintln!(
+            "{} could not reveal folder: {}",
+            "warning:".yellow().bold(),
+            e
+        );
     }
 
     // open_in_editor: spawn the configured editor with the folder.
@@ -135,8 +143,25 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result
     Ok(())
 }
 
+/// Ask the user "Open project folder? [Y/n]" and reveal on Yes.
+///
+/// Caller is expected to have already filtered out cases where the prompt
+/// shouldn't fire (`--yes`, `--no-post`, `prompt_open_after_create=false`,
+/// reveal already in resolved post_create, non-TTY stdout). This helper
+/// just owns the prompt + reveal call.
+pub fn prompt_and_reveal(path: &Path) -> Result<()> {
+    let open = dialoguer::Confirm::new()
+        .with_prompt("Open project folder?")
+        .default(true)
+        .interact()?;
+    if open {
+        reveal_folder(path)?;
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
-fn reveal_folder(path: &Path) -> Result<()> {
+pub fn reveal_folder(path: &Path) -> Result<()> {
     // `start` is a cmd.exe builtin, not an executable.
     // The empty "" is the window title that `start` consumes as its first quoted arg.
     Command::new("cmd")
@@ -146,13 +171,13 @@ fn reveal_folder(path: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn reveal_folder(path: &Path) -> Result<()> {
+pub fn reveal_folder(path: &Path) -> Result<()> {
     Command::new("open").arg(path).status()?;
     Ok(())
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn reveal_folder(path: &Path) -> Result<()> {
+pub fn reveal_folder(path: &Path) -> Result<()> {
     Command::new("xdg-open").arg(path).status()?;
     Ok(())
 }
@@ -183,10 +208,17 @@ fn spawn_editor(editor: &str, path: &Path) -> Result<()> {
 
 #[cfg(windows)]
 fn run_shell(cmd: &str, cwd: &Path) -> std::io::Result<std::process::ExitStatus> {
-    Command::new("cmd").args(["/c", cmd]).current_dir(cwd).status()
+    Command::new("cmd")
+        .args(["/c", cmd])
+        .current_dir(cwd)
+        .status()
 }
 
 #[cfg(not(windows))]
 fn run_shell(cmd: &str, cwd: &Path) -> std::io::Result<std::process::ExitStatus> {
-    Command::new("sh").arg("-c").arg(cmd).current_dir(cwd).status()
+    Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(cwd)
+        .status()
 }

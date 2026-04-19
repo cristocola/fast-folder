@@ -49,17 +49,6 @@ structure:
   - name: "03_Project_Files"
 
 files:
-  - path: "PROJECT_INFO.md"
-    template: |
-      # {title}
-
-      **Artist:** {artist}
-      **Client:** {client_type}
-      **Date:** {date}
-      **Project ID:** {id}
-
-      ## Notes
-
   - path: ".gitignore"
     content: |
       *.tmp
@@ -103,19 +92,7 @@ structure:
       - name: "01_Web"
       - name: "02_Print"
 
-files:
-  - path: "PROJECT_INFO.md"
-    template: |
-      # {client} — {shoot_type}
-
-      **Client:** {client}
-      **Shoot Type:** {shoot_type}
-      **Date:** {date}
-      **Project ID:** {id}
-
-      ## Shot List
-
-      ## Notes
+files: []
 "#;
 
 static VIDEO_PRODUCTION_YAML: &str = r#"name: "Video Production"
@@ -163,20 +140,7 @@ structure:
       - name: "01_Finals"
       - name: "02_Review"
 
-files:
-  - path: "PROJECT_INFO.md"
-    template: |
-      # {project}
-
-      **Client:** {client}
-      **Date:** {date}
-      **Project ID:** {id}
-
-      ## Brief
-
-      ## Timeline
-
-      ## Notes
+files: []
 "#;
 
 /// Ensure the installation is bootstrapped:
@@ -202,8 +166,8 @@ pub fn ensure_bootstrapped() -> Result<()> {
     // Write bundled templates only if the directory is empty
     let is_empty = fs::read_dir(&templates_dir)?.next().is_none();
     if is_empty {
-        write_bundled_template("music-video.yaml",      MUSIC_VIDEO_YAML)?;
-        write_bundled_template("photography.yaml",      PHOTOGRAPHY_YAML)?;
+        write_bundled_template("music-video.yaml", MUSIC_VIDEO_YAML)?;
+        write_bundled_template("photography.yaml", PHOTOGRAPHY_YAML)?;
         write_bundled_template("video-production.yaml", VIDEO_PRODUCTION_YAML)?;
         println!(
             "fastf: initialized in {}\n       3 default templates written to templates/",

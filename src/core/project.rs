@@ -4,10 +4,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::core::counter::Counters;
-use crate::core::naming::{apply_transform, ensure_relative_safe_path, interpolate, interpolate_name, sanitize_name};
-use crate::core::template::{FileEntry, FolderNode, Template};
 use crate::core::config::Config;
+use crate::core::counter::Counters;
+use crate::core::naming::{
+    apply_transform, ensure_relative_safe_path, interpolate, interpolate_name, sanitize_name,
+};
+use crate::core::template::{FileEntry, FolderNode, Template};
 
 pub struct ProjectPlan {
     /// The resolved root folder name (after pattern interpolation).
@@ -41,20 +43,12 @@ pub fn plan(
 
     // Resolve ID — one global counter across all templates
     let counter_value = counters.get() + 1;
-    let id_str = Counters::format_id(
-        &template.id.prefix,
-        template.id.digits,
-        counter_value,
-    );
+    let id_str = Counters::format_id(&template.id.prefix, template.id.digits, counter_value);
     vars.insert("id".to_string(), id_str.clone());
 
     // Interpolate folder name. Use `interpolate_name` so empty variables don't
     // leave `__` gaps or leading/trailing underscores in the folder name.
-    let folder_name = interpolate_name(
-        &template.naming_pattern,
-        &vars,
-        &config.date_format,
-    );
+    let folder_name = interpolate_name(&template.naming_pattern, &vars, &config.date_format);
 
     let base = config.resolve_base_dir();
     let root_path = base.join(&folder_name);
@@ -70,7 +64,12 @@ pub fn plan(
 
 /// Print a dry-run preview tree without creating anything.
 pub fn print_dry_run(plan: &ProjectPlan, template: &Template, config: &Config) {
-    println!("\n{}", "Preview  ·  dry run — nothing will be created".yellow().bold());
+    println!(
+        "\n{}",
+        "Preview  ·  dry run — nothing will be created"
+            .yellow()
+            .bold()
+    );
     println!();
 
     // Tree with a 2-space indent for visual breathing room
@@ -108,14 +107,24 @@ fn print_resolved_values(plan: &ProjectPlan, template: &Template, config: &Confi
         let value = plan.vars.get(&var.slug).cloned().unwrap_or_default();
         let transform_note = match var.transform {
             crate::core::template::Transform::None => String::new(),
-            crate::core::template::Transform::TitleUnderscore => " (transform: title_underscore)".to_string(),
-            crate::core::template::Transform::UpperUnderscore => " (transform: upper_underscore)".to_string(),
-            crate::core::template::Transform::LowerUnderscore => " (transform: lower_underscore)".to_string(),
+            crate::core::template::Transform::TitleUnderscore => {
+                " (transform: title_underscore)".to_string()
+            }
+            crate::core::template::Transform::UpperUnderscore => {
+                " (transform: upper_underscore)".to_string()
+            }
+            crate::core::template::Transform::LowerUnderscore => {
+                " (transform: lower_underscore)".to_string()
+            }
         };
         println!(
             "    {:<16} {}{}",
             var.slug.cyan(),
-            if value.is_empty() { "(empty)".dimmed().to_string() } else { value.green().to_string() },
+            if value.is_empty() {
+                "(empty)".dimmed().to_string()
+            } else {
+                value.green().to_string()
+            },
             transform_note.dimmed()
         );
     }
@@ -125,7 +134,12 @@ fn print_resolved_values(plan: &ProjectPlan, template: &Template, config: &Confi
         "    {:<16} {}  {}",
         "{id}".cyan(),
         plan.id_str.green(),
-        format!("(counter {} → {})", plan.counter_value.saturating_sub(1), plan.counter_value).dimmed()
+        format!(
+            "(counter {} → {})",
+            plan.counter_value.saturating_sub(1),
+            plan.counter_value
+        )
+        .dimmed()
     );
 
     // Date tokens
@@ -162,7 +176,10 @@ fn print_file_previews(plan: &ProjectPlan, template: &Template, config: &Config)
         let hidden = lines.len().saturating_sub(shown);
 
         println!("    {} {}", "•".cyan(), entry.path.green().bold());
-        println!("    {}", "┌──────────────────────────────────────────".dimmed());
+        println!(
+            "    {}",
+            "┌──────────────────────────────────────────".dimmed()
+        );
         for line in lines.iter().take(shown) {
             println!("    {} {}", "│".dimmed(), line);
         }
@@ -170,10 +187,18 @@ fn print_file_previews(plan: &ProjectPlan, template: &Template, config: &Config)
             println!(
                 "    {} {}",
                 "│".dimmed(),
-                format!("… {} more line{} hidden", hidden, if hidden == 1 { "" } else { "s" }).dimmed()
+                format!(
+                    "… {} more line{} hidden",
+                    hidden,
+                    if hidden == 1 { "" } else { "s" }
+                )
+                .dimmed()
             );
         }
-        println!("    {}", "└──────────────────────────────────────────".dimmed());
+        println!(
+            "    {}",
+            "└──────────────────────────────────────────".dimmed()
+        );
     }
 }
 
@@ -184,7 +209,10 @@ pub fn print_success(plan: &ProjectPlan, template: &Template) {
     println!("  {} {}", "ID:".dimmed(), plan.id_str);
     println!();
     // Canonicalize now that the folder exists, for the real absolute path
-    let resolved = plan.root_path.canonicalize().unwrap_or_else(|_| plan.root_path.clone());
+    let resolved = plan
+        .root_path
+        .canonicalize()
+        .unwrap_or_else(|_| plan.root_path.clone());
     print_project_path(&resolved, &plan.folder_name);
 }
 
@@ -262,13 +290,29 @@ pub fn create(
         created_at: crate::core::index::now_iso8601(),
     });
 
+    // PROJECT_INFO.md — best-effort, never fails the create. Written before
+    // post-create so editors/file managers opened by reveal/open_in_editor see
+    // it immediately. Holds YAML frontmatter (the searchable metadata) plus a
+    // human-readable variables table and a Notes section the user owns.
+    if let Err(e) = crate::core::project_info::write(plan, template, config) {
+        eprintln!(
+            "{} could not write project metadata: {}",
+            "warning:".yellow().bold(),
+            e
+        );
+    }
+
     // Post-create actions (opt-in). Template override > config default.
     if run_post {
         let actions = resolve_post_create(template, config);
         if !actions.is_empty() {
             println!();
             if let Err(e) = crate::core::post_create::run(&actions, &abs_path, config) {
-                eprintln!("{} post-create step failed: {}", "warning:".yellow().bold(), e);
+                eprintln!(
+                    "{} post-create step failed: {}",
+                    "warning:".yellow().bold(),
+                    e
+                );
             }
         }
     }
@@ -276,7 +320,10 @@ pub fn create(
     Ok(())
 }
 
-fn resolve_post_create(template: &Template, config: &Config) -> crate::core::post_create::PostCreate {
+pub fn resolve_post_create(
+    template: &Template,
+    config: &Config,
+) -> crate::core::post_create::PostCreate {
     template
         .post_create
         .clone()
@@ -343,7 +390,11 @@ pub fn apply(
                 println!("  {} {}", "+ folder".green(), p.display());
             }
             ApplyAction::SkipFolder(p) => {
-                println!("  {} {}", "  folder".dimmed(), format!("{} (exists)", p.display()).dimmed());
+                println!(
+                    "  {} {}",
+                    "  folder".dimmed(),
+                    format!("{} (exists)", p.display()).dimmed()
+                );
             }
             ApplyAction::CreateFile(p) => {
                 let entry = find_entry_for_path(template, target, p);
@@ -363,7 +414,11 @@ pub fn apply(
                 }
             }
             ApplyAction::SkipFile(p) => {
-                println!("  {} {}", "  file  ".dimmed(), format!("{} (exists)", p.display()).dimmed());
+                println!(
+                    "  {} {}",
+                    "  file  ".dimmed(),
+                    format!("{} (exists)", p.display()).dimmed()
+                );
             }
         }
     }
@@ -371,7 +426,11 @@ pub fn apply(
     Ok(())
 }
 
-fn find_entry_for_path<'a>(template: &'a Template, target: &Path, absolute: &Path) -> Option<&'a FileEntry> {
+fn find_entry_for_path<'a>(
+    template: &'a Template,
+    target: &Path,
+    absolute: &Path,
+) -> Option<&'a FileEntry> {
     let rel = absolute.strip_prefix(target).ok()?;
     let rel_str = rel.to_string_lossy().replace('\\', "/");
     template.files.iter().find(|f| f.path == rel_str)
@@ -379,7 +438,12 @@ fn find_entry_for_path<'a>(template: &'a Template, target: &Path, absolute: &Pat
 
 /// Render an `apply` plan as a human-readable dry-run report.
 pub fn print_apply_plan(actions: &[ApplyAction]) {
-    println!("\n{}", "Preview  ·  dry run — nothing will be created".yellow().bold());
+    println!(
+        "\n{}",
+        "Preview  ·  dry run — nothing will be created"
+            .yellow()
+            .bold()
+    );
     println!();
     let mut creates = 0usize;
     let mut skips = 0usize;
@@ -391,7 +455,11 @@ pub fn print_apply_plan(actions: &[ApplyAction]) {
             }
             ApplyAction::SkipFolder(p) => {
                 skips += 1;
-                println!("  {} {}", "[skip]  ".dimmed(), p.display().to_string().dimmed());
+                println!(
+                    "  {} {}",
+                    "[skip]  ".dimmed(),
+                    p.display().to_string().dimmed()
+                );
             }
             ApplyAction::CreateFile(p) => {
                 creates += 1;
@@ -399,7 +467,11 @@ pub fn print_apply_plan(actions: &[ApplyAction]) {
             }
             ApplyAction::SkipFile(p) => {
                 skips += 1;
-                println!("  {} {}", "[skip]  ".dimmed(), p.display().to_string().dimmed());
+                println!(
+                    "  {} {}",
+                    "[skip]  ".dimmed(),
+                    p.display().to_string().dimmed()
+                );
             }
         }
     }
@@ -448,9 +520,7 @@ fn create_file(
         entry.content.clone()
     };
 
-    fs::write(&dest, content)
-        .with_context(|| format!("writing file {}", dest.display()))?;
+    fs::write(&dest, content).with_context(|| format!("writing file {}", dest.display()))?;
 
     Ok(())
 }
-

@@ -1,11 +1,13 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::Confirm;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::core::template::{self, FileEntry, FolderNode, IdConfig, Template, Transform, VarType, Variable};
 use crate::core::project;
+use crate::core::template::{
+    self, FileEntry, FolderNode, IdConfig, Template, Transform, VarType, Variable,
+};
 use crate::util::paths;
 
 /// Files larger than this are skipped when generating a template from a folder —
@@ -178,8 +180,7 @@ pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
     }
 
     // Ensure the templates dir itself exists (first-run safety).
-    fs::create_dir_all(paths::templates_dir())
-        .context("creating templates directory")?;
+    fs::create_dir_all(paths::templates_dir()).context("creating templates directory")?;
 
     let mut structure: Vec<FolderNode> = Vec::new();
     let mut files: Vec<FileEntry> = Vec::new();
@@ -237,11 +238,21 @@ pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
         if skipped_large == 0 {
             String::new()
         } else {
-            format!(" (skipped {} file{} larger than 64 KB)", skipped_large, if skipped_large == 1 { "" } else { "s" })
+            format!(
+                " (skipped {} file{} larger than 64 KB)",
+                skipped_large,
+                if skipped_large == 1 { "" } else { "s" }
+            )
         }
     );
-    println!("   Review it:  {}", format!("fastf template show {}", slug).dimmed());
-    println!("   Edit it:    {}", format!("fastf template edit {}", slug).dimmed());
+    println!(
+        "   Review it:  {}",
+        format!("fastf template show {}", slug).dimmed()
+    );
+    println!(
+        "   Edit it:    {}",
+        format!("fastf template edit {}", slug).dimmed()
+    );
     println!("   Use it:     {}", format!("fastf new {}", slug).dimmed());
 
     Ok(())
@@ -251,7 +262,10 @@ fn validate_slug(slug: &str) -> Result<()> {
     if slug.is_empty() {
         bail!("slug must not be empty");
     }
-    if !slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         bail!(
             "slug '{}' contains invalid characters (allowed: letters, digits, '-', '_')",
             slug
@@ -283,8 +297,8 @@ fn scan_directory(
     file_count: &mut usize,
     skipped_large: &mut usize,
 ) -> Result<()> {
-    let entries = fs::read_dir(current)
-        .with_context(|| format!("reading {}", current.display()))?;
+    let entries =
+        fs::read_dir(current).with_context(|| format!("reading {}", current.display()))?;
 
     for entry in entries {
         let entry = entry?;
@@ -299,7 +313,10 @@ fn scan_directory(
 
         if ft.is_dir() {
             *folder_count += 1;
-            let mut node = FolderNode { name: name.clone(), children: Vec::new() };
+            let mut node = FolderNode {
+                name: name.clone(),
+                children: Vec::new(),
+            };
             let mut sub_files: Vec<FileEntry> = Vec::new();
             scan_directory(
                 root,

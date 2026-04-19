@@ -35,15 +35,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Create a new project from a template
-    #[command(
-        after_help = "Examples:\n  \
+    #[command(after_help = "Examples:\n  \
             fastf new                                    # interactive: pick template, fill vars\n  \
             fastf new music-video                        # use named template, fill vars interactively\n  \
             fastf new music-video --dry-run              # preview without creating anything\n  \
             fastf new music-video --artist=\"Ariana Grande\" --title=Lullaby\n  \
             fastf new music-video --base-dir=/Volumes/Drive/Projects\n\n\
-            Variable flags must use = syntax: --artist=\"Bad Bunny\" not --artist \"Bad Bunny\""
-    )]
+            Variable flags must use = syntax: --artist=\"Bad Bunny\" not --artist \"Bad Bunny\"")]
     New {
         /// Template slug to use. Run 'fastf template list' to see available templates.
         /// Prompts interactively if omitted and no default-template is configured.
@@ -93,17 +91,24 @@ enum Commands {
         action: IdAction,
     },
 
-    /// List recently created projects (newest first)
-    #[command(after_help = "Examples:\n  \
-            fastf recent                           # last 20 projects\n  \
-            fastf recent --limit 5\n  \
+    /// List recent projects — opens an interactive picker by default
+    #[command(
+        after_help = "By default, `fastf recent` opens an interactive picker so you can\n\
+        select a project and choose between opening its folder or viewing its\n\
+        PROJECT_INFO.md metadata. Pass --plain (or pipe stdout) to get the\n\
+        original non-interactive list output for scripts.\n\n\
+        Examples:\n  \
+            fastf recent                           # interactive picker\n  \
+            fastf recent --plain                   # non-interactive list (script-friendly)\n  \
+            fastf recent --plain --limit 5\n  \
             fastf recent --template music-video\n  \
             fastf recent --since 2026-01-01\n  \
-            fastf recent --prune                   # remove index entries whose folder is gone")]
+            fastf recent --prune                   # remove index entries whose folder is gone"
+    )]
     Recent {
-        /// Max number of projects to show (default 20)
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
+        /// Max number of projects to show (default: from config recent_default_limit, or 20)
+        #[arg(long)]
+        limit: Option<usize>,
 
         /// Only show projects created from this template slug
         #[arg(long)]
@@ -116,15 +121,22 @@ enum Commands {
         /// Delete records whose folder no longer exists on disk (does not touch folders)
         #[arg(long)]
         prune: bool,
+
+        /// Print the plain list and exit instead of entering the interactive picker.
+        /// Auto-engages when stdout is not a TTY (e.g. piping to grep or a file).
+        #[arg(long)]
+        plain: bool,
     },
 
     /// Open a previously created project folder in the system file manager
-    #[command(after_help = "The query is matched against (in order): exact ID, ID prefix,\n\
+    #[command(
+        after_help = "The query is matched against (in order): exact ID, ID prefix,\n\
         then case-insensitive substring of the project name.\n\n\
         Examples:\n  \
             fastf open ID0047\n  \
             fastf open 0047                        # ID prefix match\n  \
-            fastf open lullaby                     # name substring match")]
+            fastf open lullaby                     # name substring match"
+    )]
     Open {
         /// Project ID (e.g. ID0047), ID prefix, or name substring
         query: String,
@@ -157,11 +169,13 @@ enum Commands {
     },
 
     /// Print a shell completion script to stdout
-    #[command(after_help = "Pipe the output into your shell's completion directory.\n\n\
+    #[command(
+        after_help = "Pipe the output into your shell's completion directory.\n\n\
         Examples:\n  \
             fastf completions bash > /etc/bash_completion.d/fastf\n  \
             fastf completions zsh > ~/.zfunc/_fastf\n  \
-            fastf completions fish > ~/.config/fish/completions/fastf.fish")]
+            fastf completions fish > ~/.config/fish/completions/fastf.fish"
+    )]
     Completions {
         /// Target shell: bash, zsh, fish, or powershell
         shell: String,
@@ -228,24 +242,36 @@ enum ConfigAction {
     /// Display current configuration and file locations
     Show,
     /// Set a configuration value
-    #[command(
-        after_help = "Valid keys:\n  \
-            base-dir           Directory where new projects are created (default: current directory)\n  \
-            editor             Editor command for opening templates (default: $EDITOR)\n  \
-            default-template   Slug of template to use without prompting (e.g. music-video)\n  \
-            date-format        strftime format for the {date} token (default: %Y-%m-%d)\n\n\
+    #[command(after_help = "Valid keys:\n  \
+            base-dir                    Directory where new projects are created (default: current directory)\n  \
+            editor                      Editor command for opening templates (default: $EDITOR)\n  \
+            default-template            Slug of template to use without prompting (e.g. music-video)\n  \
+            date-format                 strftime format for the {date} token (default: %Y-%m-%d)\n  \
+            preview-lines               Lines per file in dry-run preview (default: 8, 0 = none)\n  \
+            prompt-open-after-create    Ask 'Open project folder?' after `fastf new` (default: true)\n  \
+            confirm-create              Ask 'Create this project?' in `fastf new` (default: true)\n  \
+            show-banner                 Show ASCII banner in TUI menu (default: true)\n  \
+            project-info-enabled        Write PROJECT_INFO.md (YAML frontmatter + variables table) into each new project (default: true)\n  \
+            project-info-filename       Filename for project metadata (default: PROJECT_INFO.md)\n  \
+            recent-default-limit        Default --limit for `fastf recent` (default: 20)\n  \
+            post_create.git_init        Run `git init` automatically (default: false)\n  \
+            post_create.reveal          Open folder in file manager automatically (default: false)\n  \
+            post_create.open_in_editor  Open folder in $EDITOR automatically (default: false)\n  \
+            post_create.print_path      Print absolute path on stdout (default: false)\n\n\
+            Booleans accept: true/false, on/off, yes/no, 1/0\n\n\
             Path format for base-dir:\n  \
-            Linux / macOS      /home/user/Projects  or  /Volumes/Drive/Projects\n  \
-            Windows            C:\\Users\\user\\Projects  or  C:/Users/user/Projects\n  \
+            Linux / macOS               /home/user/Projects  or  /Volumes/Drive/Projects\n  \
+            Windows                     C:\\Users\\user\\Projects  or  C:/Users/user/Projects\n  \
             (Both slash styles work on Windows)\n\n\
             Examples:\n  \
             fastf config set base-dir /Volumes/Drive/Projects\n  \
-            fastf config set base-dir \"C:/Users/Cristo/Projects\"\n  \
             fastf config set default-template music-video\n  \
-            fastf config set date-format %d-%m-%Y"
-    )]
+            fastf config set date-format %d-%m-%Y\n  \
+            fastf config set prompt-open-after-create false\n  \
+            fastf config set project-info-filename .fastf-info.md\n  \
+            fastf config set post_create.reveal true")]
     Set {
-        /// Config key: base-dir, editor, default-template, or date-format
+        /// Config key (run `fastf config set --help` for the full list)
         key: String,
         /// New value to set
         value: String,
@@ -286,7 +312,15 @@ fn run() -> Result<()> {
         // No subcommand → interactive TUI
         None => tui::menu::run(),
 
-        Some(Commands::New { template, dry_run, base_dir, no_preview, no_post, yes, extra }) => {
+        Some(Commands::New {
+            template,
+            dry_run,
+            base_dir,
+            no_preview,
+            no_post,
+            yes,
+            extra,
+        }) => {
             let vars = parse_extra_vars(&extra);
             cli::new::run(cli::new::NewArgs {
                 template_slug: template,
@@ -300,12 +334,12 @@ fn run() -> Result<()> {
         }
 
         Some(Commands::Template { action }) => match action {
-            TemplateAction::New              => cli::template::new_interactive(),
-            TemplateAction::List             => cli::template::list(),
-            TemplateAction::Show { slug }    => cli::template::show(&slug),
-            TemplateAction::Edit { slug }    => cli::template::edit(&slug),
-            TemplateAction::Delete { slug }  => cli::template::delete(&slug),
-            TemplateAction::Import { file }  => cli::template::import(&file),
+            TemplateAction::New => cli::template::new_interactive(),
+            TemplateAction::List => cli::template::list(),
+            TemplateAction::Show { slug } => cli::template::show(&slug),
+            TemplateAction::Edit { slug } => cli::template::edit(&slug),
+            TemplateAction::Delete { slug } => cli::template::delete(&slug),
+            TemplateAction::Import { file } => cli::template::import(&file),
             TemplateAction::Export { slug, output } => {
                 cli::template::export(&slug, output.as_deref())
             }
@@ -315,23 +349,39 @@ fn run() -> Result<()> {
         },
 
         Some(Commands::Config { action }) => match action {
-            ConfigAction::Show               => cli::config::show(),
+            ConfigAction::Show => cli::config::show(),
             ConfigAction::Set { key, value } => cli::config::set(&key, &value),
         },
 
         Some(Commands::Id { action }) => match action {
-            IdAction::Show         => cli::id::show(),
-            IdAction::Reset        => cli::id::reset(),
-            IdAction::Set { value} => cli::id::set(value),
+            IdAction::Show => cli::id::show(),
+            IdAction::Reset => cli::id::reset(),
+            IdAction::Set { value } => cli::id::set(value),
         },
 
-        Some(Commands::Recent { limit, template, since, prune }) => {
-            cli::recent::run(cli::recent::RecentArgs { limit, template, since, prune })
-        }
+        Some(Commands::Recent {
+            limit,
+            template,
+            since,
+            prune,
+            plain,
+        }) => cli::recent::run(cli::recent::RecentArgs {
+            limit,
+            template,
+            since,
+            prune,
+            plain,
+        }),
 
         Some(Commands::Open { query }) => cli::recent::open(&query),
 
-        Some(Commands::Apply { template, target, dry_run, yes, extra }) => {
+        Some(Commands::Apply {
+            template,
+            target,
+            dry_run,
+            yes,
+            extra,
+        }) => {
             let vars = parse_extra_vars(&extra);
             cli::apply::run(cli::apply::ApplyArgs {
                 template_slug: template,
@@ -367,10 +417,25 @@ fn generate_completions(shell: &str) -> Result<()> {
     let mut cmd = Cli::command();
     let name = cmd.get_name().to_string();
     match shell.to_lowercase().as_str() {
-        "bash"             => { generate(shells::Bash,       &mut cmd, &name, &mut std::io::stdout()); Ok(()) }
-        "zsh"              => { generate(shells::Zsh,        &mut cmd, &name, &mut std::io::stdout()); Ok(()) }
-        "fish"             => { generate(shells::Fish,       &mut cmd, &name, &mut std::io::stdout()); Ok(()) }
-        "powershell" | "ps"=> { generate(shells::PowerShell, &mut cmd, &name, &mut std::io::stdout()); Ok(()) }
-        other => anyhow::bail!("unknown shell '{}'. Valid: bash, zsh, fish, powershell", other),
+        "bash" => {
+            generate(shells::Bash, &mut cmd, &name, &mut std::io::stdout());
+            Ok(())
+        }
+        "zsh" => {
+            generate(shells::Zsh, &mut cmd, &name, &mut std::io::stdout());
+            Ok(())
+        }
+        "fish" => {
+            generate(shells::Fish, &mut cmd, &name, &mut std::io::stdout());
+            Ok(())
+        }
+        "powershell" | "ps" => {
+            generate(shells::PowerShell, &mut cmd, &name, &mut std::io::stdout());
+            Ok(())
+        }
+        other => anyhow::bail!(
+            "unknown shell '{}'. Valid: bash, zsh, fish, powershell",
+            other
+        ),
     }
 }

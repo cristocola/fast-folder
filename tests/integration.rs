@@ -16,7 +16,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use fastf::core::{config::Config, counter::Counters, index, naming, project, template};
+use fastf::core::{
+    config::Config, counter::Counters, index, naming, project, project_info, template,
+};
 
 static SERIAL: Mutex<()> = Mutex::new(());
 
@@ -26,10 +28,14 @@ fn with_fresh_install<R>(body: impl FnOnce(&Path) -> R) -> R {
     let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().expect("tempdir");
     // Safe here: the SERIAL mutex guarantees no other test thread races on this env var.
-    unsafe { std::env::set_var("FASTF_INSTALL_DIR", tmp.path()); }
+    unsafe {
+        std::env::set_var("FASTF_INSTALL_DIR", tmp.path());
+    }
     fs::create_dir_all(tmp.path().join("templates")).unwrap();
     let result = body(tmp.path());
-    unsafe { std::env::remove_var("FASTF_INSTALL_DIR"); }
+    unsafe {
+        std::env::remove_var("FASTF_INSTALL_DIR");
+    }
     drop(guard);
     result
 }
@@ -298,7 +304,11 @@ fn dry_run_does_not_write() {
         let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
 
         // plan() does not touch disk — verify counters.toml and project folder still absent.
-        assert!(!PathBuf::from(&cfg.base_dir).join(&plan.folder_name).exists());
+        assert!(
+            !PathBuf::from(&cfg.base_dir)
+                .join(&plan.folder_name)
+                .exists()
+        );
         assert!(Counters::load().unwrap().get() == 0);
     });
 }
@@ -334,6 +344,282 @@ files:
     });
 }
 
+#[test]
+fn project_info_md_written_on_new_with_resolved_variables() {
+    with_fresh_install(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "metadata test".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        let path = plan.root_path.join("PROJECT_INFO.md");
+        assert!(
+            path.is_file(),
+            "PROJECT_INFO.md should exist at {}",
+            path.display()
+        );
+
+        let body = fs::read_to_string(&path).unwrap();
+        // Frontmatter shape — the file MUST start with `---\n` and contain
+        // a closing `---` line. This is the searchability guarantee.
+        assert!(
+            body.starts_with("---\n"),
+            "must start with YAML frontmatter open: {body}"
+        );
+        assert!(
+            body.contains("\n---\n"),
+            "must close YAML frontmatter: {body}"
+        );
+        // Frontmatter content
+        assert!(
+            body.contains("id: T001"),
+            "missing id in frontmatter: {body}"
+        );
+        assert!(
+            body.contains("template: test"),
+            "missing template slug: {body}"
+        );
+        assert!(
+            body.contains("template_name: Test"),
+            "missing template_name: {body}"
+        );
+        // Variable slug + transformed value, captured under `variables:`
+        assert!(
+            body.contains("name: Metadata_Test"),
+            "missing transformed variable: {body}"
+        );
+        // Human body — Project Info header + variables table + Notes section
+        assert!(body.contains("# Project Info"), "missing header: {body}");
+        assert!(
+            body.contains("| Variable"),
+            "missing variables table: {body}"
+        );
+        assert!(body.contains("## Notes"), "missing Notes section: {body}");
+
+        // Raw read round-trip
+        let read_back = project_info::read(&plan.root_path, &cfg).unwrap();
+        assert_eq!(read_back, body);
+    });
+}
+
+#[test]
+fn project_info_metadata_round_trips_via_yaml() {
+    // Parsing the file back via read_metadata should reconstruct the typed
+    // Metadata struct cleanly — this is the contract that future search /
+    // index tools will rely on.
+    with_fresh_install(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "round trip".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+            .expect("read_metadata Ok")
+            .expect("frontmatter present");
+
+        assert_eq!(meta.id, "T001");
+        assert_eq!(meta.template, "test");
+        assert_eq!(meta.template_name, "Test");
+        assert_eq!(meta.folder, plan.folder_name);
+        assert_eq!(
+            meta.variables.get("name").map(String::as_str),
+            Some("Round_Trip")
+        );
+    });
+}
+
+#[test]
+fn project_info_captures_variables_not_in_naming_pattern() {
+    // The metadata file is the durable home for variables that don't make it
+    // into the folder name — that's the user's stated workflow.
+    with_fresh_install(|install| {
+        // Naming pattern uses only {id}_{title}, but `artist` is also a variable.
+        let yaml = r#"name: Music
+slug: music
+naming_pattern: "{id}_{title}"
+id:
+  prefix: M
+  digits: 3
+variables:
+  - slug: title
+    label: Song Title
+    type: text
+    required: true
+    transform: title_underscore
+  - slug: artist
+    label: Artist Name
+    type: text
+    required: false
+    transform: title_underscore
+structure:
+  - name: assets
+"#;
+        write_template(install, "music", yaml);
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("music").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("title".to_string(), "lullaby".to_string());
+        vars.insert("artist".to_string(), "ariana grande".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        // Folder name does NOT include artist
+        assert!(!plan.folder_name.to_lowercase().contains("ariana"));
+
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+            .unwrap()
+            .unwrap();
+        // Both vars are recorded — even the one absent from the folder name.
+        assert_eq!(
+            meta.variables.get("title").map(String::as_str),
+            Some("Lullaby")
+        );
+        assert_eq!(
+            meta.variables.get("artist").map(String::as_str),
+            Some("Ariana_Grande")
+        );
+    });
+}
+
+#[test]
+fn project_info_md_skipped_when_disabled() {
+    with_fresh_install(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        cfg.project_info_enabled = false;
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "no metadata".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        assert!(
+            !plan.root_path.join("PROJECT_INFO.md").exists(),
+            "PROJECT_INFO.md should NOT exist when project_info_enabled=false"
+        );
+    });
+}
+
+#[test]
+fn project_info_filename_setting_respected() {
+    with_fresh_install(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        cfg.project_info_filename = ".fastf-info.md".to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "custom name".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        assert!(plan.root_path.join(".fastf-info.md").is_file());
+        assert!(!plan.root_path.join("PROJECT_INFO.md").exists());
+    });
+}
+
+#[test]
+fn config_alias_pinfo_enabled_still_parses() {
+    // A v0.2-interim config that used the old `pinfo_*` keys must still load
+    // — the rename to `project_info_*` ships with serde aliases for safety.
+    let raw = r#"
+base_dir = ""
+editor = ""
+default_template = ""
+date_format = "%Y-%m-%d"
+pinfo_enabled = false
+pinfo_filename = ".legacy-info.md"
+"#;
+    let cfg: Config = toml::from_str(raw).expect("alias config should parse");
+    assert!(!cfg.project_info_enabled);
+    assert_eq!(cfg.project_info_filename, ".legacy-info.md");
+}
+
+#[test]
+fn config_defaults_are_backwards_compatible() {
+    // An old config.toml that predates the new fields must still parse,
+    // and the new fields must take their defaults.
+    let raw = r#"
+base_dir = ""
+editor = ""
+default_template = ""
+date_format = "%Y-%m-%d"
+"#;
+    let cfg: Config = toml::from_str(raw).expect("old config should still parse");
+    assert!(cfg.prompt_open_after_create, "default should be true");
+    assert!(cfg.project_info_enabled, "default should be true");
+    assert_eq!(cfg.project_info_filename, "PROJECT_INFO.md");
+    assert_eq!(cfg.recent_default_limit, 20);
+    assert!(cfg.confirm_create);
+    assert!(cfg.show_banner);
+}
+
+#[test]
+fn bundled_templates_do_not_emit_duplicate_project_info() {
+    // Auto-gen owns PROJECT_INFO.md — bundled templates must not also
+    // declare it as a content file (would conflict / overwrite). This guards
+    // against accidental re-introduction.
+    use fastf::core::template::Template;
+    let bundled_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("templates");
+    // Also check the strings baked into bootstrap.rs by parsing each file
+    // currently shipped in the gallery.
+    for entry in fs::read_dir(&bundled_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let raw = fs::read_to_string(&path).unwrap();
+        let tmpl: Template = serde_yaml::from_str(&raw)
+            .unwrap_or_else(|e| panic!("parse {}: {}", path.display(), e));
+        for f in &tmpl.files {
+            assert_ne!(
+                f.path,
+                "PROJECT_INFO.md",
+                "{} declares PROJECT_INFO.md but auto-gen now owns it",
+                path.display()
+            );
+        }
+    }
+}
+
 /// Every YAML in `examples/templates/` must parse, validate, and plan — it's the
 /// public gallery users copy from, so broken YAML would be very visible.
 #[test]
@@ -358,5 +644,8 @@ fn gallery_templates_parse_and_plan() {
         tmpl.validate()
             .unwrap_or_else(|e| panic!("failed to validate {}: {}", path.display(), e));
     }
-    assert!(seen >= 5, "expected at least 5 gallery templates, found {seen}");
+    assert!(
+        seen >= 5,
+        "expected at least 5 gallery templates, found {seen}"
+    );
 }

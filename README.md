@@ -50,6 +50,9 @@ fastf is a general-purpose scaffolder. A few concrete examples (all five are in 
 - **Variable substitution** — artist, title, client, author, etc. via prompts or CLI flags.
 - **Rich dry-run** — full tree + resolved variables + file-content previews before anything hits disk.
 - **Post-create actions** — `git init`, reveal in file manager, open in editor, run custom shell commands, print the absolute path for shell pipelines.
+- **Open-folder prompt** — "Open project folder? [Y/n]" offered at the end of every `fastf new` (configurable on/off).
+- **Structured project metadata** — every new project gets a `PROJECT_INFO.md` with YAML frontmatter recording the ID, template, creation time, path, and **every variable** (even those not in the folder name). Parseable by Obsidian, Hugo, `yq`, and any future `fastf search` command.
+- **Interactive `fastf recent`** — press Enter on any project to open its folder or view its metadata. Falls back to the classic list with `--plain` or when piped.
 - **Re-apply templates** — retrofit an existing folder when a template evolves. Skip-only, never overwrites.
 - **Project index** — every created project is logged; `fastf recent` lists them, `fastf open <id>` jumps to one.
 - **Non-interactive mode** — fully scriptable via flags + `--yes`.
@@ -124,7 +127,7 @@ export PATH="$HOME/tools/fastf:$PATH"    # add to .bashrc / .zshrc
 fastf
 ```
 
-Full step-by-step menu: create projects, recent projects, manage templates, configure settings.
+Full step-by-step menu: create projects, browse recent projects (interactive picker with open/metadata actions), apply templates to existing folders, manage templates, configure settings.
 
 ### Create a project
 
@@ -139,10 +142,19 @@ fastf new rust-project --yes                  # skip confirmation prompt
 fastf new rust-project --base-dir=/tmp/tests  # override destination
 ```
 
+After each successful `fastf new`, you'll be asked:
+
+```
+Open project folder? [Y/n]
+```
+
+Default is Yes — opens the new folder in your system file manager. Disable globally with `fastf config set prompt-open-after-create false`.
+
 ### Recent projects
 
 ```bash
-fastf recent                         # last 20, newest first
+fastf recent                         # interactive picker (default, on TTY)
+fastf recent --plain                 # classic non-interactive list (script-friendly)
 fastf recent --limit 50
 fastf recent --template rust-project
 fastf recent --since 2026-01-01
@@ -150,6 +162,41 @@ fastf recent --prune                 # drop records whose folders no longer exis
 
 fastf open ID0047                    # reveal in system file manager
 fastf open my-crate                  # substring match on project name
+```
+
+**Interactive picker** — select a project, then choose an action:
+
+```
+? What would you like to do?
+> Open project folder
+  Show project metadata
+  Back to list
+  Quit
+```
+
+"Show project metadata" parses the YAML frontmatter in the project's `PROJECT_INFO.md` and renders it as a clean aligned key:value display — no markdown noise:
+
+```
+─────  Project metadata  ─────
+id              ID0047
+template        music-video
+template_name   Music Video
+created         2026-04-19T14:32:11Z
+folder          2026-04-19_Ariana_Grande_Lullaby_Indie_ID0047
+path            /home/cristo/Projects/MusicVideos/...
+
+variables:
+  artist        Ariana_Grande
+  client_type   Indie
+  title         Lullaby
+──────────────────────────────
+```
+
+Piping or `--plain` bypasses the picker for scripts:
+
+```bash
+fastf recent | grep music-video        # plain auto-engages for non-TTY stdout
+fastf recent --plain --prune
 ```
 
 ### Re-apply a template to an existing folder
@@ -183,6 +230,22 @@ fastf config set base-dir /path/to/projects
 fastf config set default-template rust-project
 fastf config set date-format "%Y-%m-%d"
 fastf config set editor nvim
+
+# Prompt and UX
+fastf config set prompt-open-after-create false  # disable post-new open prompt
+fastf config set confirm-create false            # skip "Create this project?" globally (like --yes)
+fastf config set show-banner false               # hide ASCII banner in TUI
+
+# Project metadata (PROJECT_INFO.md)
+fastf config set project-info-enabled false      # don't write metadata files
+fastf config set project-info-filename .info.md  # custom filename
+
+# Recent
+fastf config set recent-default-limit 50
+
+# Post-create defaults
+fastf config set post_create.git_init true
+fastf config set post_create.reveal true
 ```
 
 ### ID counter
@@ -290,6 +353,44 @@ commands = []              # list of shell commands; {path} is replaced with the
 
 ---
 
+## Project metadata (`PROJECT_INFO.md`)
+
+Every new project created with `fastf new` receives a `PROJECT_INFO.md` file in its root. The file uses YAML frontmatter — parseable by Obsidian, Hugo, `yq`, or any future `fastf search` command — followed by a human-readable variables table and a free-form `## Notes` section.
+
+```markdown
+---
+id: ID0047
+template: music-video
+template_name: Music Video
+created: 2026-04-19T14:32:11Z
+folder: 2026-04-19_Ariana_Grande_Lullaby_Indie_ID0047
+path: /home/cristo/Projects/MusicVideos/2026-04-19_Ariana_Grande_Lullaby_Indie_ID0047
+variables:
+  artist: Ariana_Grande
+  client_type: Indie
+  title: Lullaby
+---
+
+# Project Info
+
+| Variable           | Value         |
+|--------------------|---------------|
+| Artist / Band Name | Ariana_Grande |
+| Project Title      | Lullaby       |
+| Client Type        | Indie         |
+
+## Notes
+```
+
+**All template variables are recorded** — including those not present in the folder name. This is intentional: if your `naming_pattern` uses only `{id}_{title}_{date}`, variables like `artist` still land in `variables:` so you can search for them later.
+
+The `## Notes` section is yours to edit. The file is written once at creation time and never modified by fastf again.
+
+To disable: `fastf config set project-info-enabled false`
+To rename: `fastf config set project-info-filename .info.md`
+
+---
+
 ## Portability
 
 The whole installation is one folder:
@@ -305,6 +406,8 @@ fastf/
     ├── photography.yaml
     └── video-production.yaml
 ```
+
+Each created project also contains `PROJECT_INFO.md` with structured YAML metadata.
 
 The binary resolves its own location via `std::env::current_exe()` + `canonicalize()`, so symlinking the binary still finds the real folder.
 
@@ -327,7 +430,8 @@ Integration tests use `FASTF_INSTALL_DIR` to point at a tempdir, so they're herm
 |---|---|
 | `fastf` | Launch interactive menu |
 | `fastf new [slug]` | Create a project |
-| `fastf recent` | List recently created projects |
+| `fastf recent` | Interactive project picker (Open / Show metadata / Back / Quit) |
+| `fastf recent --plain` | Classic non-interactive list (script-safe) |
 | `fastf open <query>` | Reveal a project folder (by ID or name substring) |
 | `fastf apply <slug> <dir>` | Re-apply a template to an existing folder (skip-only) |
 | `fastf template list` | List all templates |
@@ -349,7 +453,7 @@ Integration tests use `FASTF_INSTALL_DIR` to point at a tempdir, so they're herm
 |---|---|
 | `clap` | CLI commands and flags |
 | `dialoguer` | Interactive prompts and menus |
-| `serde` + `serde_yaml` | Template YAML parsing |
+| `serde` + `serde_yaml` | Template YAML parsing + YAML frontmatter in `PROJECT_INFO.md` |
 | `serde` + `serde_json` | Project index (JSONL) |
 | `serde` + `toml` | Config file |
 | `chrono` | Date tokens + ISO-8601 timestamps |

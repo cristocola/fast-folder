@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -9,8 +9,7 @@ use crate::util::paths;
 // Template structs
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[derive(Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Template {
     pub name: String,
     pub slug: String,
@@ -53,8 +52,12 @@ pub struct IdConfig {
     pub digits: usize,
 }
 
-fn default_id_prefix() -> String { "ID".to_string() }
-fn default_id_digits() -> usize  { 4 }
+fn default_id_prefix() -> String {
+    "ID".to_string()
+}
+fn default_id_digits() -> usize {
+    4
+}
 
 impl Default for IdConfig {
     fn default() -> Self {
@@ -81,7 +84,9 @@ pub struct Variable {
     pub transform: Transform,
 }
 
-fn default_var_type() -> VarType { VarType::Text }
+fn default_var_type() -> VarType {
+    VarType::Text
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -133,10 +138,8 @@ impl Template {
     }
 
     pub fn save_to_file(&self, path: &PathBuf) -> Result<()> {
-        let raw = serde_yaml::to_string(self)
-            .context("serializing template")?;
-        fs::write(path, raw)
-            .with_context(|| format!("writing {}", path.display()))?;
+        let raw = serde_yaml::to_string(self).context("serializing template")?;
+        fs::write(path, raw).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
 
@@ -163,7 +166,11 @@ impl Template {
             crate::core::naming::ensure_relative_safe_path(&f.path)
                 .with_context(|| format!("template '{}' has invalid file path", self.slug))?;
             if !file_paths.insert(&f.path) {
-                bail!("duplicate file path '{}' in template '{}'", f.path, self.slug);
+                bail!(
+                    "duplicate file path '{}' in template '{}'",
+                    f.path,
+                    self.slug
+                );
             }
         }
         Ok(())
@@ -183,8 +190,8 @@ pub fn load_all() -> Result<Vec<Template>> {
         return Ok(vec![]);
     }
     let mut templates = Vec::new();
-    for entry in fs::read_dir(&dir)
-        .with_context(|| format!("reading templates dir {}", dir.display()))?
+    for entry in
+        fs::read_dir(&dir).with_context(|| format!("reading templates dir {}", dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
@@ -203,7 +210,10 @@ pub fn load_all() -> Result<Vec<Template>> {
 pub fn find_by_slug(slug: &str) -> Result<Template> {
     let path = paths::templates_dir().join(format!("{}.yaml", slug));
     if !path.exists() {
-        bail!("template '{}' not found — run `fastf template list` to see available templates", slug);
+        bail!(
+            "template '{}' not found — run `fastf template list` to see available templates",
+            slug
+        );
     }
     Template::load_from_file(&path)
 }

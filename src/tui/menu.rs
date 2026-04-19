@@ -51,7 +51,6 @@ pub fn run() -> Result<()> {
                 "Recent projects",
                 "Manage templates",
                 "View / edit settings",
-                "ID counter",
                 "Quit",
             ])
             .default(0)
@@ -62,8 +61,7 @@ pub fn run() -> Result<()> {
             1 => menu_recent()?,
             2 => menu_templates()?,
             3 => menu_settings()?,
-            4 => menu_id()?,
-            5 => {
+            4 => {
                 println!("Goodbye.");
                 break;
             }
@@ -266,6 +264,7 @@ fn menu_settings() -> Result<()> {
                 "Project metadata  (PROJECT_INFO.md enabled / filename)",
                 "Recent projects  (default limit)",
                 "Post-create actions  (git / reveal / editor / path / commands)",
+                "ID counter",
                 "Back",
             ])
             .default(0)
@@ -277,7 +276,8 @@ fn menu_settings() -> Result<()> {
             2 => menu_settings_project_info()?,
             3 => menu_settings_recent()?,
             4 => menu_settings_postcreate()?,
-            5 => break,
+            5 => menu_id()?,
+            6 => break,
             _ => unreachable!(),
         }
         println!();

@@ -700,7 +700,7 @@ fn print_template_summary(t: &Template) {
 
     if !t.structure.is_empty() {
         println!("\n{}", "Folder structure:".bold());
-        project::print_tree(&t.structure, "");
+        project::print_tree(&t.structure, "", None);
     }
 
     if !t.files.is_empty() {

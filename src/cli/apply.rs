@@ -7,7 +7,16 @@ use std::path::PathBuf;
 use crate::core::config::Config;
 use crate::core::project;
 use crate::core::template;
+use crate::core::template::FolderNode;
 use crate::core::vars::collect_vars;
+
+/// Returns true if any folder name in the structure contains a `{token}` placeholder.
+/// Used to decide whether to prompt for variables during `fastf apply`.
+fn structure_has_tokens(nodes: &[FolderNode]) -> bool {
+    nodes
+        .iter()
+        .any(|n| n.name.contains('{') || structure_has_tokens(&n.children))
+}
 
 pub struct ApplyArgs {
     pub template_slug: String,
@@ -43,15 +52,17 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         }
     }
 
-    // Only collect variables if at least one templated file needs them.
-    let needs_vars = tmpl.files.iter().any(|f| !f.template.is_empty());
+    // Collect variables if any templated file needs them, or if any folder name
+    // in the structure contains a {token} placeholder.
+    let needs_vars =
+        tmpl.files.iter().any(|f| !f.template.is_empty()) || structure_has_tokens(&tmpl.structure);
     let raw_vars = if needs_vars {
         collect_vars(&tmpl, &args.vars)?
     } else {
         HashMap::new()
     };
 
-    let actions = project::apply_plan(&tmpl, &target);
+    let actions = project::apply_plan(&tmpl, &target, &raw_vars, &config.date_format);
 
     if args.dry_run {
         project::print_apply_plan(&actions);

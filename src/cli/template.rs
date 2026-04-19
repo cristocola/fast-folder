@@ -76,7 +76,7 @@ pub fn show(slug: &str) -> Result<()> {
 
     if !t.structure.is_empty() {
         println!("\n{}", "Folder structure:".bold());
-        project::print_tree(&t.structure, "");
+        project::print_tree(&t.structure, "", None);
     }
 
     if !t.files.is_empty() {

@@ -1,7 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use colored::Colorize;
 use dialoguer::{Confirm, Select};
 use std::collections::HashMap;
+use std::io::IsTerminal;
 
 use crate::core::config::Config;
 use crate::core::counter::Counters;
@@ -60,9 +61,9 @@ pub fn run(args: NewArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Show preview and confirm (unless --yes)
+    // Show preview and confirm (unless --yes or confirm_create disabled globally)
     project::print_dry_run(&plan, &tmpl, &config);
-    if !args.yes {
+    if !args.yes && config.confirm_create {
         println!();
         let ok = Confirm::new()
             .with_prompt("Create this project?")
@@ -78,7 +79,42 @@ pub fn run(args: NewArgs) -> Result<()> {
     project::create(&plan, &tmpl, &mut counters, &config, !args.no_post)?;
     project::print_success(&plan, &tmpl);
 
+    // "Open project folder?" prompt — skip in non-interactive / headless modes
+    // and when `reveal` would already run as a post-create action (avoid double-open).
+    if should_prompt_open(&args, &tmpl, &config) {
+        let abs_path = plan
+            .root_path
+            .canonicalize()
+            .unwrap_or_else(|_| plan.root_path.clone());
+        println!();
+        if let Err(e) = crate::core::post_create::prompt_and_reveal(&abs_path) {
+            eprintln!(
+                "{} could not open folder: {}",
+                "warning:".yellow().bold(),
+                e
+            );
+        }
+    }
+
     Ok(())
+}
+
+fn should_prompt_open(args: &NewArgs, tmpl: &Template, config: &Config) -> bool {
+    if args.yes || args.no_post {
+        return false;
+    }
+    if !config.prompt_open_after_create {
+        return false;
+    }
+    if !std::io::stdout().is_terminal() {
+        return false;
+    }
+    // If reveal will already run as a post-create action, don't double-open.
+    let resolved = project::resolve_post_create(tmpl, config);
+    if resolved.reveal {
+        return false;
+    }
+    true
 }
 
 fn resolve_template(slug: Option<&str>, config: &Config) -> Result<Template> {
@@ -121,4 +157,3 @@ pub fn pick_template_interactively() -> Result<Template> {
 
     Ok(templates[idx].clone())
 }
-

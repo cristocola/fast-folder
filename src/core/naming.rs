@@ -19,9 +19,7 @@ fn to_title_underscore(s: &str) -> String {
             let mut chars = word.chars();
             match chars.next() {
                 None => String::new(),
-                Some(first) => {
-                    first.to_uppercase().to_string() + &chars.as_str().to_lowercase()
-                }
+                Some(first) => first.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
             }
         })
         .collect::<Vec<_>>()
@@ -42,16 +40,16 @@ pub fn interpolate(
     let now = Local::now();
     let date_str = now.format(date_format).to_string();
     let yyyy = now.format("%Y").to_string();
-    let mm   = now.format("%m").to_string();
-    let dd   = now.format("%d").to_string();
+    let mm = now.format("%m").to_string();
+    let dd = now.format("%d").to_string();
 
     let mut result = pattern.to_string();
 
     // Built-in tokens
     result = result.replace("{date}", &date_str);
     result = result.replace("{YYYY}", &yyyy);
-    result = result.replace("{MM}",   &mm);
-    result = result.replace("{DD}",   &dd);
+    result = result.replace("{MM}", &mm);
+    result = result.replace("{DD}", &dd);
 
     // Variable tokens
     for (key, value) in vars {

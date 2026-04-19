@@ -38,8 +38,7 @@ fn try_append(record: &ProjectRecord) -> Result<()> {
         .append(true)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    writeln!(f, "{}", line)
-        .with_context(|| format!("writing to {}", path.display()))?;
+    writeln!(f, "{}", line).with_context(|| format!("writing to {}", path.display()))?;
     Ok(())
 }
 
@@ -49,8 +48,7 @@ pub fn load_all() -> Result<Vec<ProjectRecord>> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    let f = fs::File::open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let f = fs::File::open(&path).with_context(|| format!("opening {}", path.display()))?;
     let reader = BufReader::new(f);
     let mut out = Vec::new();
     for (idx, line) in reader.lines().enumerate() {
@@ -60,11 +58,7 @@ pub fn load_all() -> Result<Vec<ProjectRecord>> {
         }
         match serde_json::from_str::<ProjectRecord>(&line) {
             Ok(r) => out.push(r),
-            Err(e) => eprintln!(
-                "warning: skipping malformed index line {}: {}",
-                idx + 1,
-                e
-            ),
+            Err(e) => eprintln!("warning: skipping malformed index line {}: {}", idx + 1, e),
         }
     }
     Ok(out)
@@ -80,12 +74,16 @@ pub fn rewrite(records: &[ProjectRecord]) -> Result<()> {
             .with_context(|| format!("creating {}", tmp_path.display()))?;
         for r in records {
             let line = serde_json::to_string(r).context("serializing record")?;
-            writeln!(f, "{}", line)
-                .with_context(|| format!("writing {}", tmp_path.display()))?;
+            writeln!(f, "{}", line).with_context(|| format!("writing {}", tmp_path.display()))?;
         }
     }
-    fs::rename(&tmp_path, &final_path)
-        .with_context(|| format!("renaming {} -> {}", tmp_path.display(), final_path.display()))?;
+    fs::rename(&tmp_path, &final_path).with_context(|| {
+        format!(
+            "renaming {} -> {}",
+            tmp_path.display(),
+            final_path.display()
+        )
+    })?;
     Ok(())
 }
 

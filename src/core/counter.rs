@@ -18,19 +18,17 @@ impl Counters {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let c: Self = toml::from_str(&raw)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let raw =
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let c: Self =
+            toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
         Ok(c)
     }
 
     pub fn save(&self) -> Result<()> {
         let path = paths::counters_path();
-        let raw = toml::to_string_pretty(self)
-            .context("serializing counters")?;
-        fs::write(&path, raw)
-            .with_context(|| format!("writing {}", path.display()))?;
+        let raw = toml::to_string_pretty(self).context("serializing counters")?;
+        fs::write(&path, raw).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
 

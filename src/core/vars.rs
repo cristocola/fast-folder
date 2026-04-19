@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use dialoguer::{Input, Select};
 use std::collections::HashMap;
 
@@ -45,9 +45,13 @@ pub fn collect_vars(
             }
             VarType::Select => {
                 if var.options.is_empty() {
-                    bail!("variable '{}' is type 'select' but has no options", var.slug);
+                    bail!(
+                        "variable '{}' is type 'select' but has no options",
+                        var.slug
+                    );
                 }
-                let default_idx = var.options
+                let default_idx = var
+                    .options
                     .iter()
                     .position(|o| o == &var.default)
                     .unwrap_or(0);

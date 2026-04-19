@@ -4,7 +4,7 @@
 ///
 /// In edit mode, a review menu at the end lets the user jump back into any
 /// section to correct mistakes without restarting the whole flow.
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use colored::Colorize;
 use dialoguer::{Confirm, Input, Select, Sort};
 

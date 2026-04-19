@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use colored::Colorize;
 use dialoguer::Confirm;
 use std::collections::HashMap;
@@ -61,10 +61,12 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     project::print_apply_plan(&actions);
 
     // Short-circuit if nothing to do
-    let will_create = actions.iter().any(|a| matches!(
-        a,
-        project::ApplyAction::CreateFolder(_) | project::ApplyAction::CreateFile(_)
-    ));
+    let will_create = actions.iter().any(|a| {
+        matches!(
+            a,
+            project::ApplyAction::CreateFolder(_) | project::ApplyAction::CreateFile(_)
+        )
+    });
     if !will_create {
         println!(
             "\n{}",
@@ -76,7 +78,11 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     if !args.yes {
         println!();
         let ok = Confirm::new()
-            .with_prompt(format!("Apply template '{}' to {}?", tmpl.slug, target.display()))
+            .with_prompt(format!(
+                "Apply template '{}' to {}?",
+                tmpl.slug,
+                target.display()
+            ))
             .default(true)
             .interact()?;
         if !ok {

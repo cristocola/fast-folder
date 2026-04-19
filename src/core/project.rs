@@ -84,7 +84,8 @@ pub fn print_dry_run(plan: &ProjectPlan, template: &Template, config: &Config) {
     if !template.files.is_empty() {
         println!("\n  {}", "Files:".bold());
         for f in &template.files {
-            println!("    {} {}", "•".cyan(), f.path.green());
+            let display = interpolate(&f.path, &plan.vars, &config.date_format);
+            println!("    {} {}", "•".cyan(), display.green());
         }
     }
 
@@ -179,7 +180,8 @@ fn print_file_previews(plan: &ProjectPlan, template: &Template, config: &Config)
         let shown = lines.len().min(config.preview_lines);
         let hidden = lines.len().saturating_sub(shown);
 
-        println!("    {} {}", "•".cyan(), entry.path.green().bold());
+        let display_path = interpolate(&entry.path, &plan.vars, &config.date_format);
+        println!("    {} {}", "•".cyan(), display_path.green().bold());
         println!(
             "    {}",
             "┌──────────────────────────────────────────".dimmed()
@@ -368,7 +370,8 @@ pub fn apply_plan(
     let mut out = Vec::new();
     walk_structure(&template.structure, target, vars, date_format, &mut out);
     for f in &template.files {
-        let path = target.join(&f.path);
+        let resolved_path = interpolate(&f.path, vars, date_format);
+        let path = target.join(&resolved_path);
         if path.exists() {
             out.push(ApplyAction::SkipFile(path));
         } else {
@@ -428,7 +431,7 @@ pub fn apply(
                 );
             }
             ApplyAction::CreateFile(p) => {
-                let entry = find_entry_for_path(template, target, p);
+                let entry = find_entry_for_path(template, target, p, vars, &config.date_format);
                 if let Some(entry) = entry {
                     if let Some(parent) = p.parent() {
                         fs::create_dir_all(parent)
@@ -439,7 +442,8 @@ pub fn apply(
                     } else {
                         entry.content.clone()
                     };
-                    ensure_relative_safe_path(&entry.path)?;
+                    let resolved = interpolate(&entry.path, vars, &config.date_format);
+                    ensure_relative_safe_path(&resolved)?;
                     fs::write(p, content).with_context(|| format!("writing {}", p.display()))?;
                     println!("  {} {}", "+ file  ".green(), p.display());
                 }
@@ -461,10 +465,15 @@ fn find_entry_for_path<'a>(
     template: &'a Template,
     target: &Path,
     absolute: &Path,
+    vars: &HashMap<String, String>,
+    date_format: &str,
 ) -> Option<&'a FileEntry> {
     let rel = absolute.strip_prefix(target).ok()?;
     let rel_str = rel.to_string_lossy().replace('\\', "/");
-    template.files.iter().find(|f| f.path == rel_str)
+    template
+        .files
+        .iter()
+        .find(|f| interpolate(&f.path, vars, date_format) == rel_str)
 }
 
 /// Render an `apply` plan as a human-readable dry-run report.
@@ -539,11 +548,14 @@ fn create_file(
     vars: &HashMap<String, String>,
     config: &Config,
 ) -> Result<()> {
+    // Resolve any {token} placeholders in the file path before use.
+    let resolved_path = interpolate(&entry.path, vars, &config.date_format);
+
     // Defence in depth: template validation already rejects unsafe paths, but
     // enforce again here so templates loaded via other code paths stay safe.
-    ensure_relative_safe_path(&entry.path)?;
+    ensure_relative_safe_path(&resolved_path)?;
 
-    let dest = root.join(&entry.path);
+    let dest = root.join(&resolved_path);
 
     // Ensure parent directories exist
     if let Some(parent) = dest.parent() {

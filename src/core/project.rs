@@ -74,7 +74,11 @@ pub fn print_dry_run(plan: &ProjectPlan, template: &Template, config: &Config) {
 
     // Tree with a 2-space indent for visual breathing room
     println!("  {}/", plan.folder_name.cyan().bold());
-    print_tree(&template.structure, "  ");
+    print_tree(
+        &template.structure,
+        "  ",
+        Some((&plan.vars, &config.date_format)),
+    );
 
     // Placeholder files as a separate section
     if !template.files.is_empty() {
@@ -230,14 +234,24 @@ fn print_project_path(path: &std::path::Path, folder_name: &str) {
     );
 }
 
-pub fn print_tree(nodes: &[FolderNode], indent: &str) {
+/// Print a folder tree. Pass `vars` to resolve `{token}` placeholders in folder
+/// names (e.g. during dry-run). Pass `None` when showing a raw template definition.
+pub fn print_tree(
+    nodes: &[FolderNode],
+    indent: &str,
+    vars: Option<(&HashMap<String, String>, &str)>,
+) {
     for (i, node) in nodes.iter().enumerate() {
         let is_last = i == nodes.len() - 1;
         let connector = if is_last { "└── " } else { "├── " };
-        println!("{}{}{}/", indent, connector, node.name.cyan());
+        let name = match vars {
+            Some((v, fmt)) => interpolate_name(&node.name, v, fmt),
+            None => node.name.clone(),
+        };
+        println!("{}{}{}/", indent, connector, name.cyan());
         if !node.children.is_empty() {
             let child_indent = format!("{}{}   ", indent, if is_last { " " } else { "│" });
-            print_tree(&node.children, &child_indent);
+            print_tree(&node.children, &child_indent, vars);
         }
     }
 }
@@ -265,7 +279,12 @@ pub fn create(
         .with_context(|| format!("creating {}", plan.root_path.display()))?;
 
     // Create subfolder structure
-    create_structure(&template.structure, &plan.root_path)?;
+    create_structure(
+        &template.structure,
+        &plan.root_path,
+        &plan.vars,
+        &config.date_format,
+    )?;
 
     // Create placeholder files
     for file_entry in &template.files {
@@ -340,9 +359,14 @@ pub enum ApplyAction {
 }
 
 /// Plan an `apply` — figure out what would be created/skipped without touching disk.
-pub fn apply_plan(template: &Template, target: &Path) -> Vec<ApplyAction> {
+pub fn apply_plan(
+    template: &Template,
+    target: &Path,
+    vars: &HashMap<String, String>,
+    date_format: &str,
+) -> Vec<ApplyAction> {
     let mut out = Vec::new();
-    walk_structure(&template.structure, target, &mut out);
+    walk_structure(&template.structure, target, vars, date_format, &mut out);
     for f in &template.files {
         let path = target.join(&f.path);
         if path.exists() {
@@ -354,16 +378,23 @@ pub fn apply_plan(template: &Template, target: &Path) -> Vec<ApplyAction> {
     out
 }
 
-fn walk_structure(nodes: &[FolderNode], parent: &Path, out: &mut Vec<ApplyAction>) {
+fn walk_structure(
+    nodes: &[FolderNode],
+    parent: &Path,
+    vars: &HashMap<String, String>,
+    date_format: &str,
+    out: &mut Vec<ApplyAction>,
+) {
     for node in nodes {
-        let path = parent.join(&node.name);
+        let actual_name = interpolate_name(&node.name, vars, date_format);
+        let path = parent.join(&actual_name);
         if path.exists() {
             out.push(ApplyAction::SkipFolder(path.clone()));
         } else {
             out.push(ApplyAction::CreateFolder(path.clone()));
         }
         if !node.children.is_empty() {
-            walk_structure(&node.children, &path, out);
+            walk_structure(&node.children, &path, vars, date_format, out);
         }
     }
 }
@@ -381,7 +412,7 @@ pub fn apply(
         anyhow::bail!("target folder does not exist: {}", target.display());
     }
 
-    let actions = apply_plan(template, target);
+    let actions = apply_plan(template, target, vars, &config.date_format);
 
     for action in &actions {
         match action {
@@ -484,13 +515,19 @@ pub fn print_apply_plan(actions: &[ApplyAction]) {
     );
 }
 
-fn create_structure(nodes: &[FolderNode], parent: &Path) -> Result<()> {
+fn create_structure(
+    nodes: &[FolderNode],
+    parent: &Path,
+    vars: &HashMap<String, String>,
+    date_format: &str,
+) -> Result<()> {
     for node in nodes {
-        let path = parent.join(&node.name);
+        let actual_name = interpolate_name(&node.name, vars, date_format);
+        let path = parent.join(&actual_name);
         fs::create_dir_all(&path)
             .with_context(|| format!("creating directory {}", path.display()))?;
         if !node.children.is_empty() {
-            create_structure(&node.children, &path)?;
+            create_structure(&node.children, &path, vars, date_format)?;
         }
     }
     Ok(())

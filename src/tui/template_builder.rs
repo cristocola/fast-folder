@@ -26,77 +26,118 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
         }
     );
 
-    // Linear first pass through all six sections.
-    println!("\n{}", "Step 1/6  Metadata".bold());
-    edit_metadata(&mut tmpl)?;
+    if !is_edit {
+        // ── New template: guided linear pass ──────────────────────────────────
+        println!("\n{}", "Step 1/6  Metadata".bold());
+        edit_metadata(&mut tmpl)?;
 
-    println!("\n{}", "Step 2/6  ID".bold());
-    edit_id(&mut tmpl)?;
+        println!("\n{}", "Step 2/6  ID".bold());
+        edit_id(&mut tmpl)?;
 
-    println!("\n{}", "Step 3/6  Variables".bold());
-    edit_variables(&mut tmpl, !is_edit)?;
+        println!("\n{}", "Step 3/6  Variables".bold());
+        edit_variables(&mut tmpl, true)?;
 
-    println!("\n{}", "Step 4/6  Folder structure".bold());
-    edit_structure(&mut tmpl, is_edit)?;
+        println!("\n{}", "Step 4/6  Folder structure".bold());
+        edit_structure(&mut tmpl, false)?;
 
-    println!("\n{}", "Step 5/6  Files".bold());
-    edit_files(&mut tmpl, is_edit)?;
+        println!("\n{}", "Step 5/6  Files".bold());
+        edit_files(&mut tmpl, false)?;
 
-    println!("\n{}", "Step 6/6  Review".bold());
-    print_template_summary(&tmpl);
-
-    // Edit mode: offer a review menu so the user can jump back into any
-    // section to fix mistakes. New-template mode keeps the original simple
-    // Save? Y/N prompt — no behaviour change for first-run users.
-    if is_edit {
+        println!("\n{}", "Step 6/6  Review".bold());
+        print_template_summary(&tmpl);
+    } else {
+        // ── Edit template: pick-a-section menu first ───────────────────────────
+        // Show the section menu immediately — no forced linear pass.
+        // Labels rebuild on every iteration so they reflect current state.
         loop {
-            println!();
+            let meta_label = format!(
+                "Metadata          {} · {} · {}",
+                tmpl.name, tmpl.slug, tmpl.naming_pattern
+            );
+            let id_label = format!(
+                "ID config          {}{}",
+                tmpl.id.prefix,
+                "0".repeat(tmpl.id.digits)
+            );
+            let var_label = if tmpl.variables.is_empty() {
+                "Variables          (none)".to_string()
+            } else {
+                let names: Vec<&str> = tmpl.variables.iter().map(|v| v.slug.as_str()).collect();
+                format!(
+                    "Variables          {}  ({})",
+                    tmpl.variables.len(),
+                    names.join(", ")
+                )
+            };
+            let folder_count = flatten_tree(&tmpl.structure, "").len();
+            let struct_label = if tmpl.structure.is_empty() {
+                "Folder structure   (none)".to_string()
+            } else {
+                format!(
+                    "Folder structure   {} folder{}",
+                    folder_count,
+                    if folder_count == 1 { "" } else { "s" }
+                )
+            };
+            let files_label = if tmpl.files.is_empty() {
+                "Files              (none)".to_string()
+            } else {
+                let names: Vec<&str> = tmpl.files.iter().map(|f| f.path.as_str()).collect();
+                format!(
+                    "Files              {}  ({})",
+                    tmpl.files.len(),
+                    names.join(", ")
+                )
+            };
+
+            let items: Vec<String> = vec![
+                meta_label,
+                id_label,
+                var_label,
+                struct_label,
+                files_label,
+                "Save".to_string(),
+                "Discard changes".to_string(),
+            ];
+
             let choice = Select::new()
-                .with_prompt("What next?")
-                .items(&[
-                    "Save template",
-                    "Edit metadata (name, slug, description, pattern)",
-                    "Edit ID config",
-                    "Edit variables",
-                    "Edit folder structure",
-                    "Edit files",
-                    "Discard",
-                ])
+                .with_prompt("What would you like to edit?")
+                .items(&items)
                 .default(0)
                 .interact()?;
 
             match choice {
                 0 => {
+                    edit_metadata(&mut tmpl)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                1 => {
+                    edit_id(&mut tmpl)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                2 => {
+                    edit_variables(&mut tmpl, false)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                3 => {
+                    edit_structure(&mut tmpl, true)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                4 => {
+                    edit_files(&mut tmpl, true)?;
+                    println!();
+                    print_template_summary(&tmpl);
+                }
+                5 => {
                     if let Err(e) = tmpl.validate() {
                         eprintln!("\n{} {}\n", "Cannot save:".red().bold(), e);
                         continue;
                     }
                     break;
-                }
-                1 => {
-                    edit_metadata(&mut tmpl)?;
-                    println!();
-                    print_template_summary(&tmpl);
-                }
-                2 => {
-                    edit_id(&mut tmpl)?;
-                    println!();
-                    print_template_summary(&tmpl);
-                }
-                3 => {
-                    edit_variables(&mut tmpl, false)?;
-                    println!();
-                    print_template_summary(&tmpl);
-                }
-                4 => {
-                    edit_structure(&mut tmpl, true)?;
-                    println!();
-                    print_template_summary(&tmpl);
-                }
-                5 => {
-                    edit_files(&mut tmpl, true)?;
-                    println!();
-                    print_template_summary(&tmpl);
                 }
                 6 => {
                     println!("Discarded.");

@@ -8,43 +8,30 @@
                        by Cristo Cola
 ```
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Built with Rust](https://img.shields.io/badge/built%20with-Rust-dea584.svg)](https://www.rust-lang.org/)
+
 A fast, template-driven CLI for creating structured project folders — code, research, finance, creative work, whatever you repeat. Portable single-folder distribution, like ffmpeg. Cross-platform (Linux, macOS, Windows).
 
 ---
 
-## Quickstart
+## Table of Contents
 
-```bash
-# Build
-cargo build --release
-
-# Put the binary somewhere on PATH
-cp target/release/fastf ~/bin/
-
-# Launch interactive menu (first run bootstraps config + templates)
-fastf
-```
-
-On first run, `fastf` bootstraps `config.toml`, `counters.toml`, and a `templates/` folder **next to the binary**. Move the folder, everything moves with it.
-
----
-
-## Use cases
-
-fastf is a general-purpose scaffolder. A few concrete examples (all five are in [`examples/templates/`](examples/templates/) — import with `fastf template import`):
-
-- **Code** — `rust-project.yaml` creates `src/ tests/ benches/ examples/ Cargo.toml .gitignore README.md` with crate name, author, and license prompted.
-- **Web** — `web-project.yaml` creates `src/ public/ tests/ package.json` with a chosen package manager (npm/pnpm/yarn/bun).
-- **Finance** — `finance-monthly.yaml` creates `{YYYY}-{MM}_<entity>_Finance/` with `INCOME/ EXPENSES/ RECEIPTS/ REPORT.md` pre-filled.
-- **Research** — `research-note.yaml` creates a date-stamped `notes/ references/ data/ figures/ SUMMARY.md` folder.
-- **Creative** — the three bundled templates (`music-video`, `photography`, `video-production`) ship built-in.
+- [Features](#features)
+- [Examples](#examples)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Template Reference](#template-reference)
+- [Project Metadata](#project-metadata)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
 ## Features
 
 - **Template-based** — YAML folder trees, placeholder files, naming patterns.
-- **Interactive builder** — create/edit templates step-by-step, no YAML required.
+- **Interactive builder** — create/edit templates step-by-step, no YAML required. Edit mode jumps directly to the section you want to change.
 - **Generate template from folder** — point at an existing project, get a template YAML out: `fastf template from-folder ./my-project my-template`.
 - **Auto-incrementing global ID** — every project gets a unique `ID0047` shared across all templates.
 - **Variable substitution** — artist, title, client, author, etc. via prompts or CLI flags.
@@ -52,18 +39,34 @@ fastf is a general-purpose scaffolder. A few concrete examples (all five are in 
 - **Post-create actions** — `git init`, reveal in file manager, open in editor, run custom shell commands, print the absolute path for shell pipelines.
 - **Open-folder prompt** — "Open project folder? [Y/n]" offered at the end of every `fastf new` (configurable on/off).
 - **Structured project metadata** — every new project gets a `PROJECT_INFO.md` with YAML frontmatter recording the ID, template, creation time, path, and **every variable** (even those not in the folder name). Parseable by Obsidian, Hugo, `yq`, and any future `fastf search` command.
-- **Interactive `fastf recent`** — press Enter on any project to open its folder or view its metadata. Falls back to the classic list with `--plain` or when piped.
+- **Interactive `fastf recent`** — pick any project to open its folder or view its metadata. Falls back to a plain list with `--plain` or when piped.
 - **Re-apply templates** — retrofit an existing folder when a template evolves. Skip-only, never overwrites.
 - **Project index** — every created project is logged; `fastf recent` lists them, `fastf open <id>` jumps to one.
 - **Non-interactive mode** — fully scriptable via flags + `--yes`.
-- **Portable** — config, templates, counters, and project index live next to the binary.
+- **Portable** — config, templates, counters, and project index live next to the binary. Move the folder, everything moves with it.
 - **Shell completions** — bash, zsh, fish, PowerShell.
+
+---
+
+## Examples
+
+fastf is a general-purpose scaffolder. A few concrete examples (all five are in [`examples/templates/`](examples/templates/) — import with `fastf template import`):
+
+| Template | What it creates |
+|---|---|
+| `rust-project.yaml` | `src/ tests/ benches/ examples/ Cargo.toml .gitignore README.md` — prompts for crate name, author, license |
+| `web-project.yaml` | `src/ public/ tests/ package.json` — prompts for package manager (npm/pnpm/yarn/bun) |
+| `finance-monthly.yaml` | `{YYYY}-{MM}_<entity>_Finance/` with `INCOME/ EXPENSES/ RECEIPTS/ REPORT.md` pre-filled |
+| `research-note.yaml` | Date-stamped `notes/ references/ data/ figures/ SUMMARY.md` |
+| `music-video` *(built-in)* | Full music video production folder structure |
+
+The three bundled templates (`music-video`, `photography`, `video-production`) are available on first run with no import needed.
 
 ---
 
 ## Installation
 
-### Build on Linux
+### On Linux
 
 ```bash
 # 1. Install Rust (if not already installed)
@@ -79,20 +82,16 @@ cargo build --release
 # 3. Deploy — copy to any folder on your PATH
 mkdir -p ~/bin
 cp target/release/fastf ~/bin/
-# Make sure ~/bin is on your PATH (add to ~/.bashrc or ~/.zshrc if needed):
+# If ~/bin is not yet on your PATH, add this to ~/.bashrc or ~/.zshrc:
 # export PATH="$HOME/bin:$PATH"
-
-# First run bootstraps config.toml, counters.toml, and templates/ next to the binary
-fastf
 ```
 
-### Build on Windows
+### On Windows
 
 ```powershell
-# 1. Install Rust (if not already installed) — use rustup, NOT the pacman/scoop package
-#    Download from https://rustup.rs  or:
+# 1. Install Rust — use rustup from https://rustup.rs (or via winget)
 winget install Rustlang.Rustup
-# Then open a new terminal so cargo is on PATH.
+# Open a new terminal so cargo is on PATH.
 
 # 2. Clone and build
 git clone https://github.com/cristocola/fast-folder.git
@@ -103,10 +102,35 @@ cargo build --release
 # 3. Deploy — copy to any folder on your PATH
 mkdir "$env:USERPROFILE\bin"
 copy target\release\fastf.exe "$env:USERPROFILE\bin\"
-# Add that folder to your PATH via System → Environment Variables if not already there.
+# Add %USERPROFILE%\bin to your PATH via System → Environment Variables.
+```
 
-# First run bootstraps config.toml, counters.toml, and templates\ next to the binary
-fastf
+### On macOS
+
+```bash
+# 1. Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# 2. Clone and build
+git clone https://github.com/cristocola/fast-folder.git
+cd fast-folder
+cargo build --release
+# Output: target/release/fastf
+
+# 3. Deploy
+cp target/release/fastf /usr/local/bin/
+```
+
+**macOS universal binary** (Apple Silicon + Intel):
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+cargo build --release --target aarch64-apple-darwin
+cargo build --release --target x86_64-apple-darwin
+lipo -create -output fastf \
+  target/aarch64-apple-darwin/release/fastf \
+  target/x86_64-apple-darwin/release/fastf
 ```
 
 ### Cross-compile
@@ -122,7 +146,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 **Windows `.exe` from Linux/macOS**:
 
 ```bash
-# Install mingw-w64 toolchain first:
+# Install mingw-w64 first:
 #   Arch/CachyOS:  sudo pacman -S mingw-w64-gcc
 #   Ubuntu/Debian: sudo apt install gcc-mingw-w64-x86-64
 #   macOS (brew):  brew install mingw-w64
@@ -132,16 +156,23 @@ cargo build --release --target x86_64-pc-windows-gnu
 # Output: target/x86_64-pc-windows-gnu/release/fastf.exe
 ```
 
-**macOS universal binary**:
+### Portable install layout
 
-```bash
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
-cargo build --release --target aarch64-apple-darwin
-cargo build --release --target x86_64-apple-darwin
-lipo -create -output fastf \
-  target/aarch64-apple-darwin/release/fastf \
-  target/x86_64-apple-darwin/release/fastf
+The whole installation is one self-contained folder — copy it anywhere, everything moves with it:
+
 ```
+fastf/
+├── fastf             (fastf.exe on Windows)
+├── config.toml
+├── counters.toml
+├── projects.jsonl
+└── templates/
+    ├── music-video.yaml
+    ├── photography.yaml
+    └── video-production.yaml
+```
+
+On first run, `fastf` creates `config.toml`, `counters.toml`, and `templates/` alongside itself. The binary resolves its own location at runtime, so symlinking also works.
 
 ---
 
@@ -149,11 +180,9 @@ lipo -create -output fastf \
 
 ### Interactive mode
 
-```
+```bash
 fastf
 ```
-
-Top-level menu:
 
 ```
 > Create new project
@@ -163,9 +192,8 @@ Top-level menu:
   Quit
 ```
 
-**Manage templates** sub-menu: create, generate from folder, edit (section-select menu — jump straight to what you want to change), apply to existing folder, list, show, delete, import.
-
-**View / edit settings** sub-menu: project basics, workflow prompts, project metadata, recent projects, post-create actions, ID counter.
+- **Manage templates** — create, generate from folder, edit, apply to existing folder, list, show, delete, import.
+- **View / edit settings** — project basics, workflow prompts, project metadata, recent projects, post-create actions, ID counter.
 
 ### Create a project
 
@@ -173,20 +201,20 @@ Top-level menu:
 fastf new                                     # pick template + fill vars interactively
 fastf new rust-project                        # named template, prompts for vars
 fastf new rust-project --name=my-crate --author="You" --license=MIT
-fastf new rust-project --dry-run              # preview only
-fastf new rust-project --no-preview           # skip file-content previews
+fastf new rust-project --dry-run              # preview tree + variables, nothing written
+fastf new rust-project --no-preview           # skip file-content previews in dry-run
 fastf new rust-project --no-post              # skip post-create actions
 fastf new rust-project --yes                  # skip confirmation prompt
 fastf new rust-project --base-dir=/tmp/tests  # override destination
 ```
 
-After each successful `fastf new`, you'll be asked:
+After each successful `fastf new`, you are asked:
 
 ```
 Open project folder? [Y/n]
 ```
 
-Default is Yes — opens the new folder in your system file manager. Disable globally with `fastf config set prompt-open-after-create false`.
+Default is Yes — opens the new folder in your system file manager. Disable with `fastf config set prompt-open-after-create false`.
 
 ### Recent projects
 
@@ -196,7 +224,7 @@ fastf recent --plain                 # classic non-interactive list (script-frie
 fastf recent --limit 50
 fastf recent --template rust-project
 fastf recent --since 2026-01-01
-fastf recent --prune                 # drop records whose folders no longer exist
+fastf recent --prune                 # remove records whose folders no longer exist
 
 fastf open ID0047                    # reveal in system file manager
 fastf open my-crate                  # substring match on project name
@@ -212,7 +240,7 @@ fastf open my-crate                  # substring match on project name
   Quit
 ```
 
-"Show project metadata" parses the YAML frontmatter in the project's `PROJECT_INFO.md` and renders it as a clean aligned key:value display — no markdown noise:
+"Show project metadata" renders the structured `PROJECT_INFO.md` as a clean aligned key:value display:
 
 ```
 ─────  Project metadata  ─────
@@ -230,14 +258,14 @@ variables:
 ──────────────────────────────
 ```
 
-Piping or `--plain` bypasses the picker for scripts:
+`--plain` or piping engages the non-interactive list automatically:
 
 ```bash
-fastf recent | grep music-video        # plain auto-engages for non-TTY stdout
+fastf recent | grep music-video
 fastf recent --plain --prune
 ```
 
-### Re-apply a template to an existing folder
+### Apply a template to an existing folder
 
 ```bash
 fastf apply rust-project ./existing-crate --dry-run
@@ -250,13 +278,13 @@ fastf apply rust-project ./existing-crate     # creates missing items, never ove
 fastf template list
 fastf template show <slug>
 fastf template new                              # interactive builder
-fastf template edit <slug>
+fastf template edit <slug>                      # jump directly to the section you want
 fastf template delete <slug>
-fastf template import <file.yaml>               # local file only
+fastf template import <file.yaml>
 fastf template import examples/templates/rust-project.yaml
 fastf template export <slug>                    # to stdout
 fastf template export <slug> -o my-template.yaml
-fastf template from-folder ./my-project my-template   # generate YAML from a real folder
+fastf template from-folder ./my-project my-template   # generate YAML from an existing folder
 fastf template from-folder ./my-project my-template --force
 ```
 
@@ -267,15 +295,15 @@ fastf config show
 fastf config set base-dir /path/to/projects
 fastf config set default-template rust-project
 fastf config set date-format "%Y-%m-%d"
-fastf config set editor nvim
+fastf config set editor nvim                     # used by post_create.open_in_editor
 
-# Prompt and UX
-fastf config set prompt-open-after-create false  # disable post-new open prompt
-fastf config set confirm-create false            # skip "Create this project?" globally (like --yes)
+# Prompts and UX
+fastf config set prompt-open-after-create false  # disable the post-new open prompt
+fastf config set confirm-create false            # skip "Create this project?" (like --yes)
 fastf config set show-banner false               # hide ASCII banner in TUI
 
-# Project metadata (PROJECT_INFO.md)
-fastf config set project-info-enabled false      # don't write metadata files
+# Project metadata
+fastf config set project-info-enabled false      # don't write PROJECT_INFO.md
 fastf config set project-info-filename .info.md  # custom filename
 
 # Recent
@@ -284,6 +312,8 @@ fastf config set recent-default-limit 50
 # Post-create defaults
 fastf config set post_create.git_init true
 fastf config set post_create.reveal true
+fastf config set post_create.open_in_editor true
+fastf config set post_create.print_path true
 ```
 
 ### ID counter
@@ -304,9 +334,9 @@ fastf completions fish >> ~/.config/fish/completions/fastf.fish
 
 ---
 
-## Template schema
+## Template Reference
 
-Templates are YAML files in `templates/` next to the binary.
+Templates are YAML files stored in `templates/` next to the binary.
 
 ```yaml
 name: "Rust Project"
@@ -356,7 +386,7 @@ post_create:
   reveal: false
 ```
 
-### Transforms
+### Variable transforms
 
 | Transform | Input | Output |
 |---|---|---|
@@ -365,35 +395,38 @@ post_create:
 | `upper_underscore` | `ariana grande` | `ARIANA_GRANDE` |
 | `lower_underscore` | `Ariana Grande` | `ariana_grande` |
 
-### Name tokens
+### Naming pattern tokens
 
 | Token | Example |
 |---|---|
-| `{date}` | `2026-04-17` (respects `date_format`) |
+| `{date}` | `2026-04-17` (respects `date_format` setting) |
 | `{YYYY}` `{MM}` `{DD}` | `2026` `04` `17` |
 | `{id}` | `RS047` |
 | `{anything_else}` | value of the matching variable |
 
-> **Note:** in file **content** (like `Cargo.toml`), `__` sequences are preserved as-is — Python's `__version__`, `__init__`, dunder names all survive. In folder/file **names**, empty variables collapse into single underscores (so `{a}_{empty}_{b}` → `a_b`, not `a__b`).
+> **Note:** in file **content**, `__` sequences are preserved as-is (Python's `__init__`, `__version__`, etc. survive). In folder and file **names**, empty variables collapse to avoid double underscores (`{a}_{empty}_{b}` → `a_b`).
 
 ### Post-create actions
 
-Configure globally in `config.toml` or per-template via `post_create:` key. All fields default to off:
+Configure globally in `config.toml` or override per-template with a `post_create:` block. All fields default to off:
 
 ```toml
 [post_create]
 git_init = true
 reveal = false
-open_in_editor = false
-print_path = false
-commands = []              # list of shell commands; {path} is replaced with the project's absolute path
+open_in_editor = false   # opens config.editor (or $EDITOR) with the project folder
+print_path = false       # prints absolute path — useful for shell pipelines: $(fastf new ...)
+commands = []            # shell commands; {path} is replaced with the project's absolute path
 ```
 
 ---
 
-## Project metadata (`PROJECT_INFO.md`)
+## Project Metadata
 
-Every new project created with `fastf new` receives a `PROJECT_INFO.md` file in its root. The file uses YAML frontmatter — parseable by Obsidian, Hugo, `yq`, or any future `fastf search` command — followed by a human-readable variables table and a free-form `## Notes` section.
+Every project created with `fastf new` receives a `PROJECT_INFO.md` in its root. The file has two layers:
+
+1. **YAML frontmatter** — machine-readable, parseable by Obsidian, Hugo, `yq`, `grep`. Contains the ID, template, timestamp, path, and every template variable regardless of whether it appears in the folder name.
+2. **Markdown body** — a human-readable variables table and a `## Notes` section you can edit freely.
 
 ```markdown
 ---
@@ -420,78 +453,61 @@ variables:
 ## Notes
 ```
 
-**All template variables are recorded** — including those not present in the folder name. This is intentional: if your `naming_pattern` uses only `{id}_{title}_{date}`, variables like `artist` still land in `variables:` so you can search for them later.
-
-The `## Notes` section is yours to edit. The file is written once at creation time and never modified by fastf again.
-
-To disable: `fastf config set project-info-enabled false`
-To rename: `fastf config set project-info-filename .info.md`
+The file is written once on `fastf new` and never modified again. To disable: `fastf config set project-info-enabled false`. To rename: `fastf config set project-info-filename .info.md`.
 
 ---
 
-## Portability
+## Command Reference
 
-The whole installation is one folder:
-
-```
-fastf/
-├── fastf             (fastf.exe on Windows)
-├── config.toml
-├── counters.toml
-├── projects.jsonl    (append-only log of created projects — used by `recent` / `open`)
-└── templates/
-    ├── music-video.yaml
-    ├── photography.yaml
-    └── video-production.yaml
-```
-
-Each created project also contains `PROJECT_INFO.md` with structured YAML metadata.
-
-The binary resolves its own location via `std::env::current_exe()` + `canonicalize()`, so symlinking the binary still finds the real folder.
-
----
-
-## Testing
-
-```bash
-cargo test                                # all tests
-cargo clippy --all-targets -- -D warnings # lint (must be clean)
-```
-
-Integration tests use `FASTF_INSTALL_DIR` to point at a tempdir, so they're hermetic and never touch your real install. See [`tests/integration.rs`](tests/integration.rs).
-
----
-
-## Command reference
-
-| Command | What it does |
+| Command | Description |
 |---|---|
 | `fastf` | Launch interactive menu |
 | `fastf new [slug]` | Create a project |
-| `fastf recent` | Interactive project picker (Open / Show metadata / Back / Quit) |
-| `fastf recent --plain` | Classic non-interactive list (script-safe) |
-| `fastf open <query>` | Reveal a project folder (by ID or name substring) |
-| `fastf apply <slug> <dir>` | Re-apply a template to an existing folder (skip-only) |
+| `fastf recent` | Interactive project picker |
+| `fastf recent --plain` | Non-interactive project list (script-safe) |
+| `fastf open <query>` | Reveal a project folder by ID or name |
+| `fastf apply <slug> <dir>` | Apply a template to an existing folder (skip-only) |
 | `fastf template list` | List all templates |
 | `fastf template show <slug>` | Print template YAML |
-| `fastf template new` / `edit` | Interactive builder |
+| `fastf template new` | Create a template interactively |
+| `fastf template edit <slug>` | Edit a template interactively |
 | `fastf template import <file>` | Install a YAML template |
-| `fastf template export <slug>` | Export YAML |
+| `fastf template export <slug>` | Export template YAML |
 | `fastf template from-folder <dir> <slug>` | Generate a template from an existing folder |
 | `fastf template delete <slug>` | Delete a template |
-| `fastf config show` / `set` | Inspect/modify global config |
-| `fastf id show` / `set` / `reset` | Global ID counter |
+| `fastf config show` | Print current configuration |
+| `fastf config set <key> <value>` | Set a configuration value |
+| `fastf id show` / `set` / `reset` | Manage the global ID counter |
 | `fastf completions <shell>` | Print shell completions |
 
 ---
 
-## Built with
+## Contributing
+
+```bash
+# Run all tests
+cargo test
+
+# Lint — must pass with no warnings
+cargo clippy --all-targets -- -D warnings
+
+# Format check
+cargo fmt --check
+```
+
+Integration tests use `FASTF_INSTALL_DIR` to point at a temporary directory, so they are hermetic and never touch a real install. See [`tests/integration.rs`](tests/integration.rs).
+
+Pull requests are welcome. Please ensure `cargo test`, `cargo clippy`, and `cargo fmt --check` all pass before submitting.
+
+---
+
+## Dependencies
 
 | Crate | Purpose |
 |---|---|
 | `clap` | CLI commands and flags |
 | `dialoguer` | Interactive prompts and menus |
-| `serde` + `serde_yaml` | Template YAML parsing + YAML frontmatter in `PROJECT_INFO.md` |
+| `serde` + `serde_yaml` | Template YAML parsing + YAML frontmatter |
 | `serde` + `serde_json` | Project index (JSONL) |
 | `serde` + `toml` | Config file |
 | `chrono` | Date tokens + ISO-8601 timestamps |
@@ -503,4 +519,4 @@ Integration tests use `FASTF_INSTALL_DIR` to point at a tempdir, so they're herm
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 Cristo Cola

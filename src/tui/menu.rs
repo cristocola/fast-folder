@@ -49,10 +49,9 @@ pub fn run() -> Result<()> {
             .items(&[
                 "Create new project",
                 "Recent projects",
-                "Apply template to existing folder",
                 "Manage templates",
                 "View / edit settings",
-                "View ID counters",
+                "ID counter",
                 "Quit",
             ])
             .default(0)
@@ -61,22 +60,10 @@ pub fn run() -> Result<()> {
         match choice {
             0 => menu_create()?,
             1 => menu_recent()?,
-            2 => menu_apply()?,
-            3 => menu_templates()?,
-            4 => menu_settings()?,
+            2 => menu_templates()?,
+            3 => menu_settings()?,
+            4 => menu_id()?,
             5 => {
-                id::show()?;
-                println!();
-                let reset = Confirm::new()
-                    .with_prompt("Reset global ID counter?")
-                    .default(false)
-                    .interact()?;
-                if reset {
-                    id::reset()?;
-                }
-                println!();
-            }
-            6 => {
                 println!("Goodbye.");
                 break;
             }
@@ -159,6 +146,7 @@ fn menu_templates() -> Result<()> {
                 "Create new template",
                 "Generate template from existing folder",
                 "Edit a template",
+                "Apply template to existing folder",
                 "List templates",
                 "Show template details",
                 "Delete a template",
@@ -193,29 +181,71 @@ fn menu_templates() -> Result<()> {
                 println!();
             }
             3 => {
+                menu_apply()?;
+            }
+            4 => {
                 template::list()?;
                 println!();
             }
-            4 => {
+            5 => {
                 let slug = prompt_template_slug("Show template")?;
                 template::show(&slug)?;
                 println!();
             }
-            5 => {
+            6 => {
                 let slug = prompt_template_slug("Delete template")?;
                 template::delete(&slug)?;
                 println!();
             }
-            6 => {
+            7 => {
                 let path: String = Input::new()
                     .with_prompt("Path to .yaml file")
                     .interact_text()?;
                 template::import(&path)?;
                 println!();
             }
-            7 => break,
+            8 => break,
             _ => unreachable!(),
         }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// ID counter
+// ---------------------------------------------------------------------------
+
+fn menu_id() -> Result<()> {
+    loop {
+        id::show()?;
+        println!();
+        let choice = Select::new()
+            .with_prompt("ID counter")
+            .items(&["Set counter value", "Reset to 0", "Back"])
+            .default(2)
+            .interact()?;
+
+        match choice {
+            0 => {
+                let val: String = Input::new()
+                    .with_prompt("Set counter to (next project will be this + 1)")
+                    .interact_text()?;
+                match val.trim().parse::<u64>() {
+                    Ok(n) => {
+                        id::set(n)?;
+                    }
+                    Err(_) => {
+                        eprintln!("{} expected a number, got '{}'", "error:".red().bold(), val);
+                    }
+                }
+            }
+            1 => {
+                id::reset()?;
+            }
+            2 => break,
+            _ => unreachable!(),
+        }
+        println!();
     }
     Ok(())
 }

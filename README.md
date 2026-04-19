@@ -63,15 +63,51 @@ fastf is a general-purpose scaffolder. A few concrete examples (all five are in 
 
 ## Installation
 
-### Build from source (native)
+### Build on Linux
 
 ```bash
+# 1. Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# 2. Clone and build
 git clone https://github.com/cristocola/fast-folder.git
 cd fast-folder
 cargo build --release
+# Output: target/release/fastf
+
+# 3. Deploy — copy to any folder on your PATH
+mkdir -p ~/bin
+cp target/release/fastf ~/bin/
+# Make sure ~/bin is on your PATH (add to ~/.bashrc or ~/.zshrc if needed):
+# export PATH="$HOME/bin:$PATH"
+
+# First run bootstraps config.toml, counters.toml, and templates/ next to the binary
+fastf
 ```
 
-Binary: `target/release/fastf` (or `fastf.exe` on Windows).
+### Build on Windows
+
+```powershell
+# 1. Install Rust (if not already installed) — use rustup, NOT the pacman/scoop package
+#    Download from https://rustup.rs  or:
+winget install Rustlang.Rustup
+# Then open a new terminal so cargo is on PATH.
+
+# 2. Clone and build
+git clone https://github.com/cristocola/fast-folder.git
+cd fast-folder
+cargo build --release
+# Output: target\release\fastf.exe
+
+# 3. Deploy — copy to any folder on your PATH
+mkdir "$env:USERPROFILE\bin"
+copy target\release\fastf.exe "$env:USERPROFILE\bin\"
+# Add that folder to your PATH via System → Environment Variables if not already there.
+
+# First run bootstraps config.toml, counters.toml, and templates\ next to the binary
+fastf
+```
 
 ### Cross-compile
 
@@ -107,16 +143,6 @@ lipo -create -output fastf \
   target/x86_64-apple-darwin/release/fastf
 ```
 
-### Deploy (any platform)
-
-Just copy the binary. On first run it creates `config.toml`, `counters.toml`, and `templates/` alongside itself.
-
-```bash
-mkdir -p ~/tools/fastf
-cp target/release/fastf ~/tools/fastf/
-export PATH="$HOME/tools/fastf:$PATH"    # add to .bashrc / .zshrc
-```
-
 ---
 
 ## Usage
@@ -127,7 +153,19 @@ export PATH="$HOME/tools/fastf:$PATH"    # add to .bashrc / .zshrc
 fastf
 ```
 
-Full step-by-step menu: create projects, browse recent projects (interactive picker with open/metadata actions), apply templates to existing folders, manage templates, configure settings.
+Top-level menu:
+
+```
+> Create new project
+  Recent projects
+  Manage templates
+  View / edit settings
+  Quit
+```
+
+**Manage templates** sub-menu: create, generate from folder, edit (section-select menu — jump straight to what you want to change), apply to existing folder, list, show, delete, import.
+
+**View / edit settings** sub-menu: project basics, workflow prompts, project metadata, recent projects, post-create actions, ID counter.
 
 ### Create a project
 

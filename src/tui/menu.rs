@@ -7,19 +7,22 @@ use crate::cli::new::{self, NewArgs};
 use crate::cli::{apply, config, id, recent, template};
 use crate::core::config::Config;
 
-const BANNER: &str = r#"
-  ___        _      ___    _    _
+const BANNER: &str = r#"  ___        _      ___    _    _
  | __|_ _ __| |_   | __|__| |__| |___ _ _
  | _/ _` (_-<  _|  | _/ _ \ / _` / -_) '_|
- |_|\__,_/__/\__|  |_|\___/_\__,_\___|_|
-                       by Cristo Cola
-"#;
+ |_|\__,_/__/\__|  |_|\___/_\__,_\___|_|"#;
+const BANNER_WIDTH: usize = 40;
 
 pub fn run() -> Result<()> {
     // Banner is shown once based on the first config load. Honors show_banner.
     let initial = Config::load().unwrap_or_default();
     if initial.show_banner {
+        println!();
         println!("{}", BANNER.cyan().bold());
+        let tagline = format!("project scaffolder · v{}", env!("CARGO_PKG_VERSION"));
+        let pad = BANNER_WIDTH.saturating_sub(tagline.chars().count());
+        println!("{}{}", " ".repeat(pad), tagline.dimmed());
+        println!();
     }
 
     loop {

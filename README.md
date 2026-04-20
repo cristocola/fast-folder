@@ -5,18 +5,27 @@
  | __|_ _ __| |_   | __|__| |__| |___ _ _
  | _/ _` (_-<  _|  | _/ _ \ / _` / -_) '_|
  |_|\__,_/__/\__|  |_|\___/_\__,_\___|_|
-                       by Cristo Cola
+             project scaffolder
 ```
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-dea584.svg)](https://www.rust-lang.org/)
 
-A fast, template-driven CLI for creating structured project folders — code, research, finance, creative work, whatever you repeat. Portable single-folder distribution, like ffmpeg. Cross-platform (Linux, macOS, Windows).
+A blazing-fast, Rust-native project generator for people who repeatedly set up structured work — **code, research, finance, creative, business, whatever you repeat.** Not just a folder duplicator: fastf builds nested, variable-driven project systems with dynamically-generated file contents, persistent metadata, and per-project tracking — all driven by either a friendly interactive TUI or a fully scriptable CLI.
+
+Portable single-folder distribution (like ffmpeg), under **3 MB**, cross-platform (Linux, macOS, Windows). No runtime, no plugin ecosystem, no config directories to hunt for.
+
+```bash
+fastf                      # interactive TUI — pick template, answer prompts, done
+fastf new music-video --artist="Ariana Grande" --title="Lullaby" --yes
+```
 
 ---
 
 ## Table of Contents
 
+- [Why fastf](#why-fastf)
+- [The TUI](#the-tui)
 - [Features](#features)
 - [Examples](#examples)
 - [Installation](#installation)
@@ -28,23 +37,127 @@ A fast, template-driven CLI for creating structured project folders — code, re
 
 ---
 
+## Why fastf
+
+Most templaters either target coders (Cookiecutter, Yeoman) or duplicate static folder structures (Post Haste). fastf sits in a different spot:
+
+- **Not only for coders.** Works for music video production, photography, film, research archives, finance workflows, client deliverables, and yes — software projects too. Same engine, same workflow, different templates.
+- **TUI *and* CLI, first-class.** Beginners get a guided interactive menu with live settings preview. Power users and scripts drive everything with flags (`--yes`, `--dry-run`, variable injection, base-dir override). AI agents, launchers, and shell pipelines plug in naturally.
+- **Rust-native and portable.** Single executable under 3 MB, near-instant startup, no runtime to install. Drop the folder on a USB stick, a network share, a new laptop — the binary finds its own config, templates, and project index next to itself.
+- **Generates file *contents* from metadata, not just folder *names*.** Variables flow into templated files: `Cargo.toml`, `README.md`, client briefs, slate info, shot lists, report headers. The output is materially tailored to the project.
+- **Nested, variable-driven project systems.** A single template can carry deliverables, notes, exports, contracts, assets, code, references, and generated metadata — all in one coherent tree, with paths and contents driven by the variables you supply.
+- **Projects are trackable objects, not one-shot output.** Every created project is logged with an ID, timestamp, template, and variables. Browse with `fastf recent`, jump to any folder with `fastf open <id>`, or parse `PROJECT_INFO.md` frontmatter with `yq`, Obsidian, Hugo, or your own tooling.
+- **Author templates any way you like.** Build interactively in the TUI (no YAML required), write YAML directly, or generate a starting template from an existing real-world folder (`fastf template from-folder ./my-project`). Import, export, edit, share.
+- **Path-safe, cross-platform.** Templates use `/` universally; fastf translates to `\` on Windows at runtime. Path-escape guards reject `..`, absolute paths, and drive letters at both template-load and write time.
+
+---
+
+## The TUI
+
+Run `fastf` with no arguments and you land in a guided menu. Arrow keys, Enter, Esc — no YAML, no flags, no docs needed to get started.
+
+```
+
+  ___        _      ___    _    _
+ | __|_ _ __| |_   | __|__| |__| |___ _ _
+ | _/ _` (_-<  _|  | _/ _ \ / _` / -_) '_|
+ |_|\__,_/__/\__|  |_|\___/_\__,_\___|_|
+             project scaffolder · v0.1.0
+
+  project base  →  /home/cristo/Projects
+
+? What would you like to do?
+❯ Create new project
+  Recent projects
+  Manage templates
+  View / edit settings
+  Quit
+```
+
+The current project base directory is shown live at every loop — change it in settings and it updates on the next iteration.
+
+**Settings are fully editable from the TUI**, grouped into five submenus so you never have to touch `config.toml` unless you want to:
+
+```
+? Settings
+❯ Project basics       (base dir / template / date / editor)
+  Workflow prompts     (open prompt / confirm / banner / preview)
+  Project metadata     (PROJECT_INFO.md enabled / filename)
+  Recent projects      (default limit)
+  Post-create actions  (git / reveal / editor / path / commands)
+  ID counter
+  Back
+```
+
+Toggles show their current `[on]`/`[off]` state inline, so you always see what's set without leaving the menu.
+
+**Template management is interactive too** — build from scratch with a step-by-step builder, edit an existing template by jumping straight to the section you want, or generate a starting template from an existing real-world folder:
+
+```
+? Templates
+❯ Create new template
+  Generate template from existing folder
+  Edit a template
+  Apply template to existing folder
+  List templates
+  Show template details
+  Delete a template
+  Import template from file
+  Back
+```
+
+**Recent projects is a picker, not a wall of text.** Select any project → open its folder, view its structured metadata, go back, or quit:
+
+```
+  1. ID0047  music-video       2026-04-19  Ariana_Grande_Lullaby_Indie
+  2. ID0046  research-note     2026-04-18  2026-04-18_protein_folding
+  3. ID0045  rust-project      2026-04-17  my_crate
+❯ 4. ID0044  finance-monthly   2026-04-01  2026-04_Acme_Finance
+  5. [Quit]
+
+? What would you like to do?
+❯ Open project folder
+  Show project metadata
+  Back to list
+  Quit
+```
+
+Every interactive step has a non-interactive CLI equivalent — use the menu when you're exploring, use flags when you're scripting.
+
+---
+
 ## Features
 
-- **Template-based** — YAML folder trees, placeholder files, naming patterns.
-- **Interactive builder** — create/edit templates step-by-step, no YAML required. Edit mode jumps directly to the section you want to change.
-- **Generate template from folder** — point at an existing project, get a template YAML out: `fastf template from-folder ./my-project my-template`.
-- **Auto-incrementing global ID** — every project gets a unique `ID0047` shared across all templates.
-- **Variable substitution** — artist, title, client, author, etc. via prompts or CLI flags.
-- **Rich dry-run** — full tree + resolved variables + file-content previews before anything hits disk.
-- **Post-create actions** — `git init`, reveal in file manager, open in editor, run custom shell commands, print the absolute path for shell pipelines.
-- **Open-folder prompt** — "Open project folder? [Y/n]" offered at the end of every `fastf new` (configurable on/off).
-- **Structured project metadata** — every new project gets a `PROJECT_INFO.md` with YAML frontmatter recording the ID, template, creation time, path, and **every variable** (even those not in the folder name). Parseable by Obsidian, Hugo, `yq`, and any future `fastf search` command.
-- **Interactive `fastf recent`** — pick any project to open its folder or view its metadata. Falls back to a plain list with `--plain` or when piped.
-- **Re-apply templates** — retrofit an existing folder when a template evolves. Skip-only, never overwrites.
-- **Project index** — every created project is logged; `fastf recent` lists them, `fastf open <id>` jumps to one.
-- **Non-interactive mode** — fully scriptable via flags + `--yes`.
-- **Portable** — config, templates, counters, and project index live next to the binary. Move the folder, everything moves with it.
-- **Shell completions** — bash, zsh, fish, PowerShell.
+### Authoring
+- **Interactive template builder** — create and edit templates step-by-step in the TUI. No YAML knowledge required. Edit mode jumps directly to the section you want to change.
+- **Generate template from folder** — point at an existing project, get a ready-to-edit template YAML: `fastf template from-folder ./my-project my-template`.
+- **Import / export / share** — YAML templates are plain text. Version them, commit them, send them to teammates.
+- **Rich variable system** — `text` (free input) and `select` (pick from list) with validation, defaults, and four case transforms (`title_underscore`, `upper_underscore`, `lower_underscore`, `none`).
+
+### Generation
+- **Nested folder structures** with variable-driven paths — folders and subfolders named from any combination of variables, dates, and IDs.
+- **Dynamic file contents** — templated files with full `{token}` interpolation for code, configs, READMEs, briefs, reports. Or verbatim `content:` when you want exact bytes (license text, `.gitignore`, etc.).
+- **Built-in tokens** — `{date}`, `{YYYY}`, `{MM}`, `{DD}`, `{id}` plus every variable you define.
+- **Auto-incrementing global ID** — every project gets a unique `ID0047` shared across all templates. Unique per install, monotonic, inspectable and editable (`fastf id set 100`).
+- **Rich dry-run** — full tree + resolved variables + file-content previews (first N lines) before anything hits disk.
+
+### Project tracking
+- **Structured metadata file** — every new project gets a `PROJECT_INFO.md` with YAML frontmatter recording the ID, template, creation time, path, and **every variable** (even ones not in the folder name). Parseable by Obsidian, Hugo, `yq`, `grep`, or any future tooling.
+- **Project index** — append-only `projects.jsonl` log of every created project.
+- **Interactive `fastf recent`** — pick a project to open its folder or view its metadata in an aligned key/value display. Falls back to a plain list with `--plain` or when piped.
+- **Quick access** — `fastf open ID0047` or `fastf open my-crate` jumps to any project folder.
+- **Re-apply to existing folders** — `fastf apply` retrofits missing files and folders when a template evolves. Skip-only, never overwrites.
+
+### Workflow integration
+- **Post-create actions** (global or per-template) — `git init`, reveal in file manager, open in editor, run custom shell commands, print the absolute path for shell pipelines.
+- **Open-folder prompt** — "Open project folder? [Y/n]" offered after every `fastf new` (configurable).
+- **Non-interactive mode** — `--yes`, inline variable flags, `--no-preview`, `--no-post`, `--dry-run`, `--base-dir`. Scriptable end-to-end.
+- **Shell completions** for bash, zsh, fish, PowerShell.
+
+### Deployment
+- **One self-contained folder.** Binary, config, templates, counters, and project index all live together. Move the folder, everything moves with it.
+- **Under 3 MB.** Single Rust binary, statically linked (musl build available). No Python, no Node, no runtime dependencies.
+- **Cross-platform.** Linux, macOS (Intel + Apple Silicon), Windows. Cross-compile instructions below.
 
 ---
 

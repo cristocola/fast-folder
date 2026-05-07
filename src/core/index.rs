@@ -97,3 +97,47 @@ pub fn now_iso8601() -> String {
 pub fn index_path_is(path: &Path) -> bool {
     paths::projects_index_path() == path
 }
+
+/// Resolve a project record by query string.
+///
+/// Resolution order: exact ID → ID prefix → case-insensitive name substring.
+/// Returns an error when the query is ambiguous or matches nothing.
+pub fn resolve_project(query: &str) -> Result<ProjectRecord> {
+    let records = load_all()?;
+    if records.is_empty() {
+        anyhow::bail!("project index is empty — create a project with `fastf new` first");
+    }
+
+    // 1. Exact ID match.
+    let mut matches: Vec<&ProjectRecord> = records.iter().filter(|r| r.id == query).collect();
+
+    // 2. ID prefix.
+    if matches.is_empty() {
+        matches = records.iter().filter(|r| r.id.starts_with(query)).collect();
+    }
+
+    // 3. Name substring (case-insensitive).
+    if matches.is_empty() {
+        let q = query.to_lowercase();
+        matches = records
+            .iter()
+            .filter(|r| r.name.to_lowercase().contains(&q))
+            .collect();
+    }
+
+    match matches.len() {
+        0 => anyhow::bail!("no project matches '{}' — try `fastf recent`", query),
+        1 => Ok(matches[0].clone()),
+        _ => {
+            let mut msg = format!(
+                "'{}' is ambiguous — {} matches. Specify a full ID:\n",
+                query,
+                matches.len()
+            );
+            for r in matches.iter().take(10) {
+                msg.push_str(&format!("  {}  {}  ({})\n", r.id, r.name, r.template));
+            }
+            anyhow::bail!("{}", msg.trim_end())
+        }
+    }
+}

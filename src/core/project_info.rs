@@ -3,13 +3,13 @@
 //! Written into the root of each new project. The file has two layers:
 //!
 //! 1. **YAML frontmatter** — the source of truth. Structured, parseable
-//!    metadata: id, template, created timestamp, folder, path, and every
-//!    template variable (regardless of whether it appears in the folder name).
-//!    This is what enables grep / Obsidian / a future `fastf search` to query
-//!    projects after the fact.
+//!    metadata: id, template, created timestamp, folder, path, every template
+//!    variable, and any tags.  This is what enables grep / Obsidian /
+//!    `fastf search` to query projects after the fact.
 //!
 //! 2. **Human-readable body** — a markdown table of variables (so the file
-//!    reads nicely in any editor) plus a `## Notes` section the user owns.
+//!    reads nicely in any editor) plus a `## Notes` section the user owns,
+//!    and a `## Journal` section that grows with timestamped entries.
 //!
 //! Generation is best-effort: a write failure logs a warning but never fails
 //! project creation.
@@ -19,6 +19,12 @@
 //!   - [`read_metadata`] parses the frontmatter into a typed [`Metadata`]
 //!     struct (returns `Ok(None)` if the file exists but has no frontmatter,
 //!     e.g. older / hand-edited files).
+//!
+//! Mutation helpers:
+//!   - [`write_frontmatter`] reads the file, applies a closure to the parsed
+//!     [`Metadata`], re-serialises, and writes back atomically.
+//!   - [`append_journal_entry`] appends a timestamped entry to `## Journal`,
+//!     creating the section if it doesn't exist yet.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -44,11 +50,17 @@ pub struct Metadata {
     pub path: String,
     #[serde(default)]
     pub variables: BTreeMap<String, String>,
+    /// Combined literal + auto-derived tags.  `#[serde(default)]` keeps files
+    /// written before tagging was introduced valid — they simply get no tags.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl Metadata {
     /// Build the typed metadata for a freshly-planned project.
-    pub fn from_plan(plan: &ProjectPlan, tmpl: &Template) -> Self {
+    /// `tags` is the combined literal + auto-derived tag list computed in
+    /// `project::create()` before writing the file.
+    pub fn from_plan(plan: &ProjectPlan, tmpl: &Template, tags: Vec<String>) -> Self {
         // Drop the synthetic "id" entry — it's already a top-level field.
         let variables: BTreeMap<String, String> = tmpl
             .variables
@@ -67,13 +79,14 @@ impl Metadata {
             folder: plan.folder_name.clone(),
             path: plan.root_path.display().to_string(),
             variables,
+            tags,
         }
     }
 }
 
 /// Build the full markdown body — frontmatter + variables table + Notes section.
-pub fn render(plan: &ProjectPlan, tmpl: &Template) -> String {
-    let meta = Metadata::from_plan(plan, tmpl);
+pub fn render(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> String {
+    let meta = Metadata::from_plan(plan, tmpl, tags.to_vec());
 
     // Serialize frontmatter via serde_yaml so colons, quotes, multibyte values,
     // etc. all escape correctly. serde_yaml's output already ends with `\n`
@@ -152,12 +165,12 @@ pub fn render(plan: &ProjectPlan, tmpl: &Template) -> String {
 }
 
 /// Write `<root>/<cfg.project_info_filename>`. No-op when disabled.
-pub fn write(plan: &ProjectPlan, tmpl: &Template, cfg: &Config) -> Result<()> {
+pub fn write(plan: &ProjectPlan, tmpl: &Template, cfg: &Config, tags: &[String]) -> Result<()> {
     if !cfg.project_info_enabled {
         return Ok(());
     }
     let path = plan.root_path.join(&cfg.project_info_filename);
-    let body = render(plan, tmpl);
+    let body = render(plan, tmpl, tags);
     fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
@@ -185,7 +198,7 @@ pub fn read(project_root: &Path, cfg: &Config) -> Result<String> {
 /// - `Err(_)` — file missing, IO error, or malformed YAML.
 pub fn read_metadata(project_root: &Path, cfg: &Config) -> Result<Option<Metadata>> {
     let body = read(project_root, cfg)?;
-    let Some(frontmatter) = extract_frontmatter(&body) else {
+    let Some((frontmatter, _)) = split_frontmatter_body(&body) else {
         return Ok(None);
     };
     let meta: Metadata = serde_yaml::from_str(frontmatter)
@@ -193,29 +206,181 @@ pub fn read_metadata(project_root: &Path, cfg: &Config) -> Result<Option<Metadat
     Ok(Some(meta))
 }
 
-/// Slice the YAML frontmatter out of a markdown string. Returns `None` when
-/// the file does not start with a `---` line followed by a closing `---` line.
-fn extract_frontmatter(body: &str) -> Option<&str> {
-    // Strip optional UTF-8 BOM so a hand-edited file from Notepad still parses.
-    let body = body.strip_prefix('\u{feff}').unwrap_or(body);
+// ---------------------------------------------------------------------------
+// Mutation helpers
+// ---------------------------------------------------------------------------
 
-    // Must open with `---` at line 0.
-    let rest = body
+/// Atomically rewrite the frontmatter of an existing `PROJECT_INFO.md`.
+///
+/// Reads the file, parses the YAML frontmatter, applies `mutator` to the
+/// typed [`Metadata`], re-serialises, recombines with the original body bytes
+/// unchanged, then writes via a `.tmp` + rename for atomicity.
+///
+/// Returns an error when:
+/// - The file cannot be read or written.
+/// - No YAML frontmatter block is present — the caller gets a named error.
+/// - The frontmatter cannot be parsed or re-serialised.
+pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Result<()> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+
+    let (frontmatter_yaml, body) = split_frontmatter_body(&content).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no YAML frontmatter — cannot update metadata (was it created by fastf new?)",
+            path.display()
+        )
+    })?;
+
+    let mut meta: Metadata = serde_yaml::from_str(frontmatter_yaml)
+        .with_context(|| format!("parsing YAML frontmatter in {}", path.display()))?;
+
+    mutator(&mut meta);
+
+    let new_yaml = serde_yaml::to_string(&meta).context("re-serialising metadata")?;
+
+    let new_content = format!("---\n{}---\n{}", new_yaml, body);
+
+    atomic_write(path, new_content.as_bytes())
+}
+
+/// Append a timestamped journal entry to `## Journal` in the file.
+///
+/// If the file has no `## Journal` section one is created before EOF.
+/// Entries are appended in chronological order (oldest first).
+/// The write is atomic: tmp-file + rename.
+pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+
+    // Require frontmatter — this is a structured project file.
+    split_frontmatter_body(&content).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no YAML frontmatter — cannot append journal entry",
+            path.display()
+        )
+    })?;
+
+    let timestamp = crate::core::index::now_iso8601();
+    let entry_line = format!("- {} — {}\n", timestamp, message);
+
+    let new_content = if content.contains("## Journal") {
+        // Section exists — append at end of file (chronological order).
+        if content.ends_with('\n') {
+            format!("{}{}", content, entry_line)
+        } else {
+            format!("{}\n{}", content, entry_line)
+        }
+    } else {
+        // No section yet — add it at end of file.
+        if content.ends_with('\n') {
+            format!("{}## Journal\n\n{}", content, entry_line)
+        } else {
+            format!("{}\n\n## Journal\n\n{}", content, entry_line)
+        }
+    };
+
+    atomic_write(path, new_content.as_bytes())
+}
+
+/// Read back only the journal lines from the metadata file.
+///
+/// Parses entries of the form `- <timestamp> — <message>` from the
+/// `## Journal` section of the body.  Returns an empty vec when there is no
+/// journal section.
+pub fn read_journal_entries(project_root: &Path, cfg: &Config) -> Result<Vec<JournalEntry>> {
+    let body = read(project_root, cfg)?;
+    Ok(parse_journal_entries(&body))
+}
+
+/// A single timestamped journal entry.
+pub struct JournalEntry {
+    pub timestamp: String,
+    pub message: String,
+}
+
+fn parse_journal_entries(content: &str) -> Vec<JournalEntry> {
+    // Only process lines after the `## Journal` header.
+    let Some(journal_start) = content.find("## Journal") else {
+        return vec![];
+    };
+    let journal_section = &content[journal_start..];
+
+    // Find where the next `##` section starts (if any) and stop there.
+    let section_body = if let Some(next_h2) = journal_section[2..].find("\n##") {
+        &journal_section[..next_h2 + 2] // stop before next ##
+    } else {
+        journal_section
+    };
+
+    let mut entries = Vec::new();
+    for line in section_body.lines() {
+        let line = line.trim();
+        if !line.starts_with("- ") {
+            continue;
+        }
+        let rest = &line[2..];
+        if let Some((ts, msg)) = rest.split_once(" — ") {
+            entries.push(JournalEntry {
+                timestamp: ts.to_string(),
+                message: msg.to_string(),
+            });
+        }
+    }
+    entries
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Split a `PROJECT_INFO.md` body into its YAML frontmatter and the markdown
+/// body that follows the closing `---` line.
+///
+/// Returns `None` when the content does not start with a valid `---` block.
+///
+/// The returned `frontmatter` slice includes the trailing `\n` of the last
+/// YAML line (so `"---\n" + frontmatter + "---\n"` rebuilds the header).
+/// The returned `body` slice starts immediately after the closing `---\n` line.
+pub fn split_frontmatter_body(content: &str) -> Option<(&str, &str)> {
+    // Strip optional UTF-8 BOM so hand-edited files from Notepad still parse.
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+
+    // Must open with `---` at column 0.
+    let rest = content
         .strip_prefix("---\n")
-        .or_else(|| body.strip_prefix("---\r\n"))?;
+        .or_else(|| content.strip_prefix("---\r\n"))?;
 
-    // Find the closing `---` line.
-    // Accept both `\n---\n` and `\n---\r\n`, and also a trailing close at EOF.
-    let close_lf = rest.find("\n---\n");
-    let close_crlf = rest.find("\n---\r\n");
-    let end = match (close_lf, close_crlf) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    }?;
+    // Locate the closing `---` line, accepting both LF and CRLF.
+    let close_lf = rest.find("\n---\n").map(|i| (i, "\n---\n".len()));
+    let close_crlf = rest.find("\n---\r\n").map(|i| (i, "\n---\r\n".len()));
 
-    Some(&rest[..end + 1]) // include the trailing `\n` of the last YAML line
+    let (close_pos, close_len) = match (close_lf, close_crlf) {
+        (Some((a, la)), Some((b, lb))) => {
+            if a <= b {
+                (a, la)
+            } else {
+                (b, lb)
+            }
+        }
+        (Some((a, la)), None) => (a, la),
+        (None, Some((b, lb))) => (b, lb),
+        (None, None) => return None,
+    };
+
+    // +1 to include the trailing \n of the last YAML line.
+    let frontmatter_yaml = &rest[..close_pos + 1];
+    let body = &rest[close_pos + close_len..];
+
+    Some((frontmatter_yaml, body))
+}
+
+/// Write `bytes` to `path` atomically via a `.tmp` sibling + rename.
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    let tmp = path.with_extension("md.tmp");
+    fs::write(&tmp, bytes).with_context(|| format!("writing tmp {}", tmp.display()))?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("renaming {} → {}", tmp.display(), path.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -223,29 +388,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_simple_frontmatter() {
+    fn split_simple_frontmatter() {
         let body = "---\nid: ID0001\ntemplate: foo\n---\n\n# Body\n";
-        let fm = extract_frontmatter(body).expect("frontmatter present");
+        let (fm, body_part) = split_frontmatter_body(body).expect("should split");
+        assert_eq!(fm, "id: ID0001\ntemplate: foo\n");
+        assert_eq!(body_part, "\n# Body\n");
+    }
+
+    #[test]
+    fn split_no_frontmatter_returns_none() {
+        let body = "# Just a markdown file\n\nNo YAML here.\n";
+        assert!(split_frontmatter_body(body).is_none());
+    }
+
+    #[test]
+    fn split_handles_crlf() {
+        let body = "---\r\nid: ID0002\r\n---\r\n\r\n# Body\r\n";
+        let (fm, _body) = split_frontmatter_body(body).expect("should split");
+        assert!(fm.contains("id: ID0002"));
+    }
+
+    #[test]
+    fn split_unterminated_returns_none() {
+        let body = "---\nid: ID0003\n# never closed\n";
+        assert!(split_frontmatter_body(body).is_none());
+    }
+
+    #[test]
+    fn split_body_byte_identical_after_roundtrip() {
+        let original = "---\nid: ID0004\ntags: []\n---\n\n# Body\nSome notes here.\n";
+        let (fm, body) = split_frontmatter_body(original).expect("split");
+        let rebuilt = format!("---\n{}---\n{}", fm, body);
+        assert_eq!(original, rebuilt);
+    }
+
+    #[test]
+    fn extracts_simple_frontmatter() {
+        // Legacy-style test — kept for regression
+        let body = "---\nid: ID0001\ntemplate: foo\n---\n\n# Body\n";
+        let (fm, _) = split_frontmatter_body(body).expect("frontmatter present");
         assert!(fm.contains("id: ID0001"));
         assert!(fm.contains("template: foo"));
     }
 
     #[test]
-    fn no_frontmatter_returns_none() {
-        let body = "# Just a markdown file\n\nNo YAML here.\n";
-        assert!(extract_frontmatter(body).is_none());
+    fn parse_journal_entries_basic() {
+        let content = "---\nid: x\n---\n\n## Notes\n\n## Journal\n\n- 2026-01-01T00:00:00Z — first entry\n- 2026-01-02T00:00:00Z — second entry\n";
+        let entries = parse_journal_entries(content);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].timestamp, "2026-01-01T00:00:00Z");
+        assert_eq!(entries[0].message, "first entry");
+        assert_eq!(entries[1].message, "second entry");
     }
 
     #[test]
-    fn handles_crlf_line_endings() {
-        let body = "---\r\nid: ID0002\r\n---\r\n\r\n# Body\r\n";
-        let fm = extract_frontmatter(body).expect("frontmatter present");
-        assert!(fm.contains("id: ID0002"));
+    fn parse_journal_entries_no_section() {
+        let content = "---\nid: x\n---\n\n## Notes\n\nSome notes.\n";
+        let entries = parse_journal_entries(content);
+        assert!(entries.is_empty());
     }
 
     #[test]
-    fn unterminated_frontmatter_returns_none() {
-        let body = "---\nid: ID0003\n# never closed\n";
-        assert!(extract_frontmatter(body).is_none());
+    fn parse_journal_entries_stops_at_next_section() {
+        let content = "---\nid: x\n---\n\n## Journal\n\n- 2026-01-01T00:00:00Z — entry\n\n## Notes\n\nNot a journal entry.\n";
+        let entries = parse_journal_entries(content);
+        assert_eq!(entries.len(), 1);
     }
 }

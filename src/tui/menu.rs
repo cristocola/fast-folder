@@ -4,7 +4,7 @@ use dialoguer::{Confirm, Input, MultiSelect, Select};
 use std::collections::HashMap;
 
 use crate::cli::new::{self, NewArgs};
-use crate::cli::{apply, config, id, recent, template};
+use crate::cli::{apply, config, id, recent, search, template};
 use crate::core::config::Config;
 
 const BANNER: &str = r#"  ___        _      ___    _    _
@@ -52,6 +52,7 @@ pub fn run() -> Result<()> {
             .items(&[
                 "Create new project",
                 "Recent projects",
+                "Search projects",
                 "Manage templates",
                 "View / edit settings",
                 "Quit",
@@ -62,9 +63,10 @@ pub fn run() -> Result<()> {
         match choice {
             0 => menu_create()?,
             1 => menu_recent()?,
-            2 => menu_templates()?,
-            3 => menu_settings()?,
-            4 => {
+            2 => menu_search()?,
+            3 => menu_templates()?,
+            4 => menu_settings()?,
+            5 => {
                 println!("Goodbye.");
                 break;
             }
@@ -97,7 +99,26 @@ fn menu_recent() -> Result<()> {
         limit: None,
         template: None,
         since: None,
+        tag: None,
         prune: false,
+        plain: false,
+    })?;
+    println!();
+    Ok(())
+}
+
+fn menu_search() -> Result<()> {
+    let query: String = Input::new()
+        .with_prompt("Search query (e.g. tag:draft  template=music-video  artist=Aria*)")
+        .interact_text()?;
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        println!("{}", "  (cancelled)".dimmed());
+        return Ok(());
+    }
+    let terms: Vec<String> = query.split_whitespace().map(|s| s.to_string()).collect();
+    search::run(search::SearchArgs {
+        terms,
         plain: false,
     })?;
     println!();

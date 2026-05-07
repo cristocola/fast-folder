@@ -311,11 +311,24 @@ pub fn create(
         created_at: crate::core::index::now_iso8601(),
     });
 
+    // Compute tags: literal template tags + auto-derived tags from tag_from.
+    // Empty variable values are skipped (no "slug/" orphan tags).
+    let tags: Vec<String> = {
+        let mut t: Vec<String> = template.tags.clone();
+        for slug in &template.tag_from {
+            let value = plan.vars.get(slug).map(|s| s.as_str()).unwrap_or("");
+            if !value.is_empty() {
+                t.push(format!("{slug}/{value}"));
+            }
+        }
+        t
+    };
+
     // PROJECT_INFO.md — best-effort, never fails the create. Written before
     // post-create so editors/file managers opened by reveal/open_in_editor see
     // it immediately. Holds YAML frontmatter (the searchable metadata) plus a
     // human-readable variables table and a Notes section the user owns.
-    if let Err(e) = crate::core::project_info::write(plan, template, config) {
+    if let Err(e) = crate::core::project_info::write(plan, template, config, &tags) {
         eprintln!(
             "{} could not write project metadata: {}",
             "warning:".yellow().bold(),

@@ -3,17 +3,21 @@
 //! # Grammar
 //! Multiple clauses AND together.  No OR, no parentheses.
 //!
-//! | Clause        | Meaning                                       |
+//! | Clause        | Meaning                                              |
 //! |---|---|
-//! | `key=value`   | exact match (case-insensitive)                |
-//! | `key=pat*`    | prefix/glob match                             |
-//! | `key>date`    | ISO-date: field is lexicographically after    |
-//! | `key<date`    | ISO-date: field is lexicographically before   |
-//! | `tag:value`   | exact tag match                               |
-//! | `tag:pat*`    | tag prefix/glob match                         |
+//! | `<term>`      | bare term — substring across vars, tags, folder,     |
+//! |               | template, template_name, id (case-insensitive)       |
+//! | `key=value`   | exact match (case-insensitive)                       |
+//! | `key=pat*`    | prefix/glob match                                    |
+//! | `key>date`    | ISO-date: field is lexicographically after           |
+//! | `key<date`    | ISO-date: field is lexicographically before          |
+//! | `tag:value`   | exact tag match                                      |
+//! | `tag:pat*`    | tag prefix/glob match                                |
 //!
 //! # Examples
 //! ```bash
+//! fastf search ariana                        # default mode: searches across fields
+//! fastf search ariana lullaby                # multi-term AND (both must appear)
 //! fastf search tag:draft
 //! fastf search tag:client/Acme*
 //! fastf search template=music-video tag:draft
@@ -40,19 +44,18 @@ pub fn run(args: SearchArgs) -> Result<()> {
 
     if args.terms.is_empty() {
         anyhow::bail!(
-            "no search terms provided — try: fastf search tag:draft\n\
+            "no search terms provided — try: fastf search ariana\n\
              Run `fastf search --help` for the full query grammar."
         );
     }
 
     let predicates = query::parse(&args.terms);
 
+    // Now that bare terms parse to Predicate::Free, predicates can only be
+    // empty when every term was whitespace.  Skip silently in that case.
     if predicates.is_empty() {
-        anyhow::bail!(
-            "no valid query clauses parsed from {:?}\n\
-             Valid forms: key=value  key=prefix*  key>date  key<date  tag:value  tag:prefix*",
-            args.terms
-        );
+        println!("{}", "No projects match that query.".dimmed());
+        return Ok(());
     }
 
     let records = index::load_all()?;

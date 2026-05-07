@@ -148,7 +148,7 @@ Every interactive step has a non-interactive CLI equivalent — use the menu whe
 - **Quick access** — `fastf open ID0047` or `fastf open my-crate` jumps to any project folder.
 - **Re-apply to existing folders** — `fastf apply` retrofits missing files and folders when a template evolves. Skip-only, never overwrites.
 - **Tags** — free-form (`draft`, `urgent`) and auto-derived from template variables (`client_type/Indie`, `artist/Ariana_Grande`). Set `tags:` and `tag_from:` in a template; manage later with `fastf tag add/remove/list/reauto`.
-- **Search** — query any frontmatter field or tag: `fastf search tag:draft template=music-video artist=Aria*`. Interactive on TTY, pipe-safe with `--plain`.
+- **Search** — bare terms search across vars/tags/folder/template/id (`fastf search ariana`); explicit grammar adds field, date, and tag operators (`fastf search template=music-video tag:draft`). Interactive on TTY, pipe-safe with `--plain`.
 - **Journal** — append timestamped notes to any project over its lifetime: `fastf note add ID0047 "finished mix"`. View with `fastf notes ID0047 --since 2026-04-01`.
 
 ### Workflow integration
@@ -421,10 +421,20 @@ tag_from: ["client_type", "artist"] # lifted from variable values: client_type/I
 ### Search
 
 ```bash
+# Default: bare term — case-insensitive substring across vars, tags,
+# folder name, template slug/name, and ID (path is excluded).
+fastf search ariana
+fastf search ariana lullaby                      # both terms must appear somewhere
+
+# Explicit grammar (each clause ANDs with the rest)
 fastf search tag:draft
 fastf search tag:client/*                        # glob on tag
 fastf search template=music-video tag:draft      # AND clauses
 fastf search artist=Aria* created>2026-01-01
+
+# Mix free + explicit
+fastf search ariana template=music-video
+
 fastf search tag:draft --plain                   # pipe-friendly
 ```
 

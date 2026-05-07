@@ -69,6 +69,7 @@ Run `fastf` with no arguments and you land in a guided menu. Arrow keys, Enter, 
 ? What would you like to do?
 ❯ Create new project
   Recent projects
+  Search projects
   Manage templates
   View / edit settings
   Quit
@@ -106,11 +107,11 @@ Toggles show their current `[on]`/`[off]` state inline, so you always see what's
   Back
 ```
 
-**Recent projects is a picker, not a wall of text.** Select any project → open its folder, view its structured metadata, go back, or quit:
+**Recent projects is a picker, not a wall of text.** Inline tags show next to each project; select one to open it, view metadata, manage tags, or write a journal note:
 
 ```
-  1. ID0047  music-video       2026-04-19  Ariana_Grande_Lullaby_Indie
-  2. ID0046  research-note     2026-04-18  2026-04-18_protein_folding
+  1. ID0047  music-video       2026-04-19  Ariana_Grande_Lullaby_Indie  [draft  client_type/Indie]
+  2. ID0046  research-note     2026-04-18  2026-04-18_protein_folding   [in-progress]
   3. ID0045  rust-project      2026-04-17  my_crate
 ❯ 4. ID0044  finance-monthly   2026-04-01  2026-04_Acme_Finance
   5. [Quit]
@@ -118,9 +119,15 @@ Toggles show their current `[on]`/`[off]` state inline, so you always see what's
 ? What would you like to do?
 ❯ Open project folder
   Show project metadata
+  Add tag
+  Remove tag
+  Add journal note
+  Show journal
   Back to list
   Quit
 ```
+
+**Search projects** is a separate top-level entry — type a free-text term (`ariana`) or explicit grammar (`tag:draft template=music-video`) and the same picker opens over only the matching projects.
 
 Every interactive step has a non-interactive CLI equivalent — use the menu when you're exploring, use flags when you're scripting.
 
@@ -303,11 +310,14 @@ fastf
 ```
 > Create new project
   Recent projects
+  Search projects
   Manage templates
   View / edit settings
   Quit
 ```
 
+- **Recent projects** — interactive picker; pick a project to open / view metadata / add tag / remove tag / add journal note / show journal.
+- **Search projects** — type a free-text term (`ariana`) or an explicit query (`tag:draft template=music-video`); matching projects open in the same picker.
 - **Manage templates** — create, generate from folder, edit, apply to existing folder, list, show, delete, import.
 - **View / edit settings** — project basics, workflow prompts, project metadata, recent projects, post-create actions, ID counter.
 

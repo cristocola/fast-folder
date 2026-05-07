@@ -188,7 +188,12 @@ enum Commands {
     },
 
     /// Search projects by metadata fields and tags
-    #[command(after_help = "Multiple clauses AND together.  Supported operators:\n\
+    #[command(
+        after_help = "Default mode: a bare term (no operator) does a case-insensitive\n\
+        substring match across all variable values, tags, folder name,\n\
+        template slug, template display name, and ID.  Multiple bare terms\n\
+        AND together.  `path` is intentionally excluded.\n\n\
+        Explicit operators (each clause ANDs with the rest):\n\
         \n  \
             key=value        exact match (case-insensitive)\n  \
             key=prefix*      prefix/glob match\n  \
@@ -199,11 +204,15 @@ enum Commands {
         Field names: id  template  template_name  created  folder  name  path\n\
         plus any template variable slug (e.g. artist=Aria*)\n\n\
         Examples:\n  \
+            fastf search ariana                       # default: substring across fields\n  \
+            fastf search ariana lullaby               # both terms must appear somewhere\n  \
             fastf search tag:draft\n  \
             fastf search tag:client/*\n  \
             fastf search template=music-video tag:draft\n  \
             fastf search artist=Aria* created>2026-01-01\n  \
-            fastf search tag:draft --plain")]
+            fastf search ariana template=music-video  # mix free + explicit\n  \
+            fastf search tag:draft --plain"
+    )]
     Search {
         /// Query clauses (e.g. tag:draft template=music-video artist=Aria*)
         #[arg(required = true)]

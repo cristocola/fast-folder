@@ -1085,6 +1085,137 @@ fn query_predicates_each_operator() {
     ));
 }
 
+/// Bare-term default mode searches across vars, tags, folder, template, and id
+/// — and explicitly excludes `path`.  Drives the end-to-end create→read→evaluate
+/// path so we know the predicate works against real frontmatter on disk.
+#[test]
+fn query_free_term_searches_across_fields() {
+    with_fresh_install(|install| {
+        // Template with one variable so we can verify variable-value matching.
+        let yaml = r#"name: Free Search
+slug: free-search
+naming_pattern: "{id}_{title}"
+id:
+  prefix: F
+  digits: 3
+variables:
+  - slug: title
+    label: Title
+    type: text
+    required: true
+    transform: title_underscore
+  - slug: artist
+    label: Artist
+    type: text
+    transform: title_underscore
+tags:
+  - creative
+"#;
+        write_template(install, "free-search", yaml);
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("free-search").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("title".to_string(), "Lullaby".to_string());
+        vars.insert("artist".to_string(), "Ariana Grande".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        // Locate the synthetic record + metadata for predicate evaluation.
+        let record = index::ProjectRecord {
+            id: plan.id_str.clone(),
+            template: tmpl.slug.clone(),
+            path: plan.root_path.display().to_string(),
+            name: plan.folder_name.clone(),
+            created_at: "2026-01-15T10:00:00Z".to_string(),
+        };
+        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+            .unwrap()
+            .unwrap();
+
+        // Variable value match (case-insensitive)
+        assert!(
+            query::evaluate(&query::parse(&["ariana".to_string()]), &record, &meta),
+            "should match variable value 'Ariana_Grande'"
+        );
+
+        // Tag match
+        assert!(
+            query::evaluate(&query::parse(&["creative".to_string()]), &record, &meta),
+            "should match tag 'creative'"
+        );
+
+        // Folder name (the resolved naming pattern)
+        assert!(
+            query::evaluate(&query::parse(&["lullaby".to_string()]), &record, &meta),
+            "should match folder name '{}'",
+            plan.folder_name
+        );
+
+        // Template slug
+        assert!(
+            query::evaluate(&query::parse(&["free-search".to_string()]), &record, &meta),
+            "should match template slug 'free-search'"
+        );
+
+        // ID
+        assert!(
+            query::evaluate(
+                &query::parse(std::slice::from_ref(&plan.id_str)),
+                &record,
+                &meta
+            ),
+            "should match ID '{}'",
+            plan.id_str
+        );
+
+        // Multi-term AND: both must appear somewhere
+        assert!(
+            query::evaluate(
+                &query::parse(&["ariana".to_string(), "lullaby".to_string()]),
+                &record,
+                &meta
+            ),
+            "two bare terms should AND across different fields"
+        );
+
+        // Free + explicit clause AND
+        assert!(
+            query::evaluate(
+                &query::parse(&["ariana".to_string(), "tag:creative".to_string()]),
+                &record,
+                &meta
+            ),
+            "free term should AND with explicit tag clause"
+        );
+
+        // No match
+        assert!(
+            !query::evaluate(&query::parse(&["xyzzy".to_string()]), &record, &meta),
+            "unmatched bare term should return false"
+        );
+
+        // Path is excluded — find a substring that exists ONLY in the path,
+        // not in folder name / vars / tags / template / id / template_name.
+        // The base_dir component "projects" appears in the path but should
+        // NOT be searchable as a free term.
+        // (Defensive: only assert this if "projects" is genuinely absent
+        // from the other fields, which it is for this fixture.)
+        assert!(!plan.folder_name.to_lowercase().contains("projects"));
+        assert!(!meta.template.to_lowercase().contains("projects"));
+        assert!(!meta.template_name.to_lowercase().contains("projects"));
+        assert!(
+            !query::evaluate(&query::parse(&["projects".to_string()]), &record, &meta),
+            "bare term that lives only in path must NOT match"
+        );
+    });
+}
+
 /// Every YAML in `examples/templates/` must parse, validate, and plan — it's the
 /// public gallery users copy from, so broken YAML would be very visible.
 #[test]

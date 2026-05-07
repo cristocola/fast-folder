@@ -144,9 +144,12 @@ Every interactive step has a non-interactive CLI equivalent — use the menu whe
 ### Project tracking
 - **Structured metadata file** — every new project gets a `PROJECT_INFO.md` with YAML frontmatter recording the ID, template, creation time, path, and **every variable** (even ones not in the folder name). Parseable by Obsidian, Hugo, `yq`, `grep`, or any future tooling.
 - **Project index** — append-only `projects.jsonl` log of every created project.
-- **Interactive `fastf recent`** — pick a project to open its folder or view its metadata in an aligned key/value display. Falls back to a plain list with `--plain` or when piped.
+- **Interactive `fastf recent`** — pick a project to open its folder, view metadata, add tags, or write a journal note. Shows inline tags. Falls back to a plain list with `--plain` or when piped.
 - **Quick access** — `fastf open ID0047` or `fastf open my-crate` jumps to any project folder.
 - **Re-apply to existing folders** — `fastf apply` retrofits missing files and folders when a template evolves. Skip-only, never overwrites.
+- **Tags** — free-form (`draft`, `urgent`) and auto-derived from template variables (`client_type/Indie`, `artist/Ariana_Grande`). Set `tags:` and `tag_from:` in a template; manage later with `fastf tag add/remove/list/reauto`.
+- **Search** — query any frontmatter field or tag: `fastf search tag:draft template=music-video artist=Aria*`. Interactive on TTY, pipe-safe with `--plain`.
+- **Journal** — append timestamped notes to any project over its lifetime: `fastf note add ID0047 "finished mix"`. View with `fastf notes ID0047 --since 2026-04-01`.
 
 ### Workflow integration
 - **Post-create actions** (global or per-template) — `git init`, reveal in file manager, open in editor, run custom shell commands, print the absolute path for shell pipelines.
@@ -337,23 +340,34 @@ fastf recent --plain                 # classic non-interactive list (script-frie
 fastf recent --limit 50
 fastf recent --template rust-project
 fastf recent --since 2026-01-01
+fastf recent --tag draft             # only projects with this tag
 fastf recent --prune                 # remove records whose folders no longer exist
 
 fastf open ID0047                    # reveal in system file manager
 fastf open my-crate                  # substring match on project name
 ```
 
-**Interactive picker** — select a project, then choose an action:
+**Interactive picker** — projects show inline tags; select a project, then choose an action:
 
 ```
+? Projects (5 shown) — pick one
+> ID0047  music-video  2026-04-19  Ariana_Grande_Lullaby  [draft  client/Indie]
+  ID0046  rust-project 2026-04-18  my-crate
+  ...
+  [Quit]
+
 ? What would you like to do?
 > Open project folder
   Show project metadata
+  Add tag
+  Remove tag
+  Add journal note
+  Show journal
   Back to list
   Quit
 ```
 
-"Show project metadata" renders the structured `PROJECT_INFO.md` as a clean aligned key:value display:
+"Show project metadata" renders the structured `PROJECT_INFO.md` as a clean aligned key:value display including tags:
 
 ```
 ─────  Project metadata  ─────
@@ -363,6 +377,10 @@ template_name   Music Video
 created         2026-04-19T14:32:11Z
 folder          2026-04-19_Ariana_Grande_Lullaby_Indie_ID0047
 path            /home/cristo/Projects/MusicVideos/...
+
+tags:
+  • draft
+  • client_type/Indie
 
 variables:
   artist        Ariana_Grande
@@ -377,6 +395,53 @@ variables:
 fastf recent | grep music-video
 fastf recent --plain --prune
 ```
+
+### Tags
+
+Free-form and auto-derived tags live in `PROJECT_INFO.md` frontmatter.
+
+```bash
+# Manual tags
+fastf tag add ID0047 draft urgent
+fastf tag remove ID0047 draft
+fastf tag list ID0047
+fastf tag reauto ID0047          # re-derive auto tags from template tag_from
+
+# Filter recent picker
+fastf recent --tag draft
+```
+
+Declare auto-derived tags in a template:
+
+```yaml
+tags: ["music-video", "creative"]   # every project from this template gets these
+tag_from: ["client_type", "artist"] # lifted from variable values: client_type/Indie, artist/Ariana_Grande
+```
+
+### Search
+
+```bash
+fastf search tag:draft
+fastf search tag:client/*                        # glob on tag
+fastf search template=music-video tag:draft      # AND clauses
+fastf search artist=Aria* created>2026-01-01
+fastf search tag:draft --plain                   # pipe-friendly
+```
+
+Search opens the same interactive picker as `fastf recent` on TTY. Selecting a result enters the project action menu (open / metadata / add tag / etc.).
+
+### Journal
+
+```bash
+fastf note add ID0047 "finished final mix"       # inline message
+fastf note add ID0047 -                          # read from stdin
+fastf note add ID0047                            # open $EDITOR
+
+fastf notes ID0047                               # all entries
+fastf notes ID0047 --since 2026-04-01
+```
+
+Journal entries are timestamped lines in `## Journal` in `PROJECT_INFO.md` — append-only, grows over the project's lifetime. Also accessible from the interactive `fastf recent` picker via "Add journal note" / "Show journal".
 
 ### Apply a template to an existing folder
 
@@ -576,10 +641,19 @@ The file is written once on `fastf new` and never modified again. To disable: `f
 |---|---|
 | `fastf` | Launch interactive menu |
 | `fastf new [slug]` | Create a project |
-| `fastf recent` | Interactive project picker |
+| `fastf recent` | Interactive project picker (shows tags inline) |
+| `fastf recent --tag <tag>` | Filter recent picker to projects with a specific tag |
 | `fastf recent --plain` | Non-interactive project list (script-safe) |
 | `fastf open <query>` | Reveal a project folder by ID or name |
 | `fastf apply <slug> <dir>` | Apply a template to an existing folder (skip-only) |
+| `fastf tag add <id> <tag>…` | Add free-form tags to a project |
+| `fastf tag remove <id> <tag>…` | Remove tags from a project |
+| `fastf tag list <id>` | List tags on a project |
+| `fastf tag reauto <id>` | Re-derive auto tags from template `tag_from` |
+| `fastf search <expr>…` | Search projects by field, date, or tag |
+| `fastf note add <id> [msg]` | Add a timestamped journal note (inline / stdin / `$EDITOR`) |
+| `fastf notes <id>` | Show journal entries for a project |
+| `fastf notes <id> --since <date>` | Show journal entries on/after a date |
 | `fastf template list` | List all templates |
 | `fastf template show <slug>` | Print template YAML |
 | `fastf template new` | Create a template interactively |

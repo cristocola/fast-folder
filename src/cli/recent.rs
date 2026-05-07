@@ -11,6 +11,8 @@ pub struct RecentArgs {
     pub limit: Option<usize>,
     pub template: Option<String>,
     pub since: Option<String>,
+    /// Only show projects that have this tag (reads metadata per record).
+    pub tag: Option<String>,
     pub prune: bool,
     /// Force the plain (non-interactive) list output. Auto-engages when stdout
     /// is not a TTY.
@@ -35,7 +37,14 @@ pub fn run(args: RecentArgs) -> Result<()> {
         return Ok(());
     }
 
-    let filtered = filter_records(&records, &args.template, &args.since, limit);
+    let filtered = filter_records(
+        &records,
+        &args.template,
+        &args.since,
+        &args.tag,
+        limit,
+        &cfg,
+    );
 
     if filtered.is_empty() {
         println!("{}", "No projects match those filters.".dimmed());
@@ -45,7 +54,7 @@ pub fn run(args: RecentArgs) -> Result<()> {
     let interactive = !args.plain && std::io::stdout().is_terminal();
 
     if interactive {
-        interactive_picker(&filtered, &cfg)
+        run_picker(&filtered, &cfg)
     } else {
         print_plain(&filtered);
         Ok(())
@@ -56,7 +65,9 @@ fn filter_records<'a>(
     records: &'a [ProjectRecord],
     template: &Option<String>,
     since: &Option<String>,
+    tag: &Option<String>,
     limit: usize,
+    cfg: &Config,
 ) -> Vec<&'a ProjectRecord> {
     // Records are append-only so newest is at the end. Reverse + filter + take.
     let mut filtered: Vec<&ProjectRecord> = records
@@ -72,6 +83,19 @@ fn filter_records<'a>(
                 && r.created_at.as_str() < since.as_str()
             {
                 return false;
+            }
+            // Tag filter: load metadata and check. Records with no/unreadable
+            // metadata are excluded when a tag filter is active.
+            if let Some(want_tag) = tag {
+                let project_path = Path::new(&r.path);
+                match crate::core::project_info::read_metadata(project_path, cfg) {
+                    Ok(Some(meta)) => {
+                        if !meta.tags.iter().any(|t| t == want_tag) {
+                            return false;
+                        }
+                    }
+                    _ => return false,
+                }
             }
             true
         })
@@ -108,26 +132,56 @@ fn print_plain(filtered: &[&ProjectRecord]) {
     }
 }
 
-fn interactive_picker(filtered: &[&ProjectRecord], cfg: &Config) -> Result<()> {
+/// Interactive picker shared by `fastf recent` and `fastf search`.
+///
+/// Displays the records in a `dialoguer::Select` loop.  Selecting a record
+/// enters `project_action_menu`.
+pub fn run_picker(filtered: &[&ProjectRecord], cfg: &Config) -> Result<()> {
     use dialoguer::Select;
 
     let id_w = filtered.iter().map(|r| r.id.len()).max().unwrap_or(4);
     let tmpl_w = filtered.iter().map(|r| r.template.len()).max().unwrap_or(8);
 
+    // Load tags for each record upfront so the picker labels can show them.
+    let tags_per_record: Vec<Vec<String>> = filtered
+        .iter()
+        .map(|r| {
+            crate::core::project_info::read_metadata(Path::new(&r.path), cfg)
+                .ok()
+                .flatten()
+                .map(|m| m.tags)
+                .unwrap_or_default()
+        })
+        .collect();
+
     loop {
         let labels: Vec<String> = filtered
             .iter()
-            .map(|r| {
+            .enumerate()
+            .map(|(i, r)| {
                 let date = r.created_at.get(..10).unwrap_or(&r.created_at);
                 let missing = !Path::new(&r.path).exists();
                 let suffix = if missing { "  (missing)" } else { "" };
+                let tags = &tags_per_record[i];
+                let tag_str = if tags.is_empty() {
+                    String::new()
+                } else {
+                    let truncated: Vec<&str> = tags.iter().map(|t| t.as_str()).take(3).collect();
+                    let extra = tags.len().saturating_sub(3);
+                    if extra > 0 {
+                        format!("  [{}  +{}]", truncated.join("  "), extra)
+                    } else {
+                        format!("  [{}]", truncated.join("  "))
+                    }
+                };
                 format!(
-                    "{:<id_w$}  {:<tmpl_w$}  {}  {}{}",
+                    "{:<id_w$}  {:<tmpl_w$}  {}  {}{}{}",
                     r.id,
                     r.template,
                     date,
                     r.name,
                     suffix,
+                    tag_str,
                     id_w = id_w,
                     tmpl_w = tmpl_w,
                 )
@@ -136,10 +190,7 @@ fn interactive_picker(filtered: &[&ProjectRecord], cfg: &Config) -> Result<()> {
             .collect();
 
         let idx = Select::new()
-            .with_prompt(format!(
-                "Recent projects ({} shown) — pick one",
-                filtered.len()
-            ))
+            .with_prompt(format!("Projects ({} shown) — pick one", filtered.len()))
             .items(&labels)
             .default(0)
             .interact()?;
@@ -161,7 +212,7 @@ enum ActionLoop {
 }
 
 fn project_action_menu(record: &ProjectRecord, cfg: &Config) -> Result<ActionLoop> {
-    use dialoguer::Select;
+    use dialoguer::{Input, Select};
 
     println!();
     println!(
@@ -181,6 +232,10 @@ fn project_action_menu(record: &ProjectRecord, cfg: &Config) -> Result<ActionLoo
         let items = [
             "Open project folder",
             "Show project metadata",
+            "Add tag",
+            "Remove tag",
+            "Add journal note",
+            "Show journal",
             "Back to list",
             "Quit",
         ];
@@ -190,9 +245,11 @@ fn project_action_menu(record: &ProjectRecord, cfg: &Config) -> Result<ActionLoo
             .default(0)
             .interact()?;
 
+        let path = Path::new(&record.path);
+
         match choice {
+            // Open folder
             0 => {
-                let path = Path::new(&record.path);
                 if !path.exists() {
                     eprintln!(
                         "{} project folder no longer exists at {} — run `fastf recent --prune`",
@@ -209,8 +266,8 @@ fn project_action_menu(record: &ProjectRecord, cfg: &Config) -> Result<ActionLoo
                     );
                 }
             }
+            // Show metadata
             1 => {
-                let path = Path::new(&record.path);
                 if !path.exists() {
                     eprintln!(
                         "{} project folder no longer exists at {}",
@@ -221,8 +278,49 @@ fn project_action_menu(record: &ProjectRecord, cfg: &Config) -> Result<ActionLoo
                 }
                 show_metadata(path, cfg);
             }
-            2 => return Ok(ActionLoop::BackToList),
-            3 => return Ok(ActionLoop::Quit),
+            // Add tag
+            2 => {
+                let input: String = Input::new()
+                    .with_prompt("Tag to add (e.g. draft  or  client/Acme)")
+                    .interact_text()?;
+                let tag = input.trim().to_string();
+                if tag.is_empty() {
+                    println!("{}", "  (cancelled)".dimmed());
+                } else if let Err(e) = crate::cli::tag::add(&record.id, &[tag]) {
+                    eprintln!("{} {}", "error:".red().bold(), e);
+                }
+            }
+            // Remove tag
+            3 => {
+                let input: String = Input::new().with_prompt("Tag to remove").interact_text()?;
+                let tag = input.trim().to_string();
+                if tag.is_empty() {
+                    println!("{}", "  (cancelled)".dimmed());
+                } else if let Err(e) = crate::cli::tag::remove(&record.id, &[tag]) {
+                    eprintln!("{} {}", "error:".red().bold(), e);
+                }
+            }
+            // Add journal note
+            4 => {
+                let input: String = Input::new().with_prompt("Journal note").interact_text()?;
+                let msg = input.trim().to_string();
+                if msg.is_empty() {
+                    println!("{}", "  (cancelled)".dimmed());
+                } else {
+                    let pinfo = path.join(&cfg.project_info_filename);
+                    if let Err(e) = crate::core::project_info::append_journal_entry(&pinfo, &msg) {
+                        eprintln!("{} {}", "error:".red().bold(), e);
+                    } else {
+                        println!("{}  Journal entry added.", "✓".green().bold());
+                    }
+                }
+            }
+            // Show journal
+            5 => {
+                show_journal(path, cfg);
+            }
+            6 => return Ok(ActionLoop::BackToList),
+            7 => return Ok(ActionLoop::Quit),
             _ => unreachable!(),
         }
     }
@@ -253,15 +351,6 @@ fn prune(records: &[ProjectRecord]) -> Result<()> {
 }
 
 /// Render a project's metadata to stdout.
-///
-/// Three cases, in order of preference:
-///
-/// 1. **Frontmatter present.** Pretty-print as aligned `key  value` pairs and
-///    a separate `variables:` block — no markdown, no bolding. Looks like
-///    `id3v2 -l` / `exiftool` output, easy to scan.
-/// 2. **File exists, no frontmatter.** Hand-edited or pre-feature file: dump
-///    the raw markdown so the user still sees what's there.
-/// 3. **File missing.** Friendly yellow warning explaining why.
 fn show_metadata(project_root: &Path, cfg: &Config) {
     use crate::core::project_info;
 
@@ -304,11 +393,20 @@ fn print_structured_metadata(meta: &crate::core::project_info::Metadata) {
         .iter()
         .map(|(k, _)| k.len())
         .chain(std::iter::once("variables".len()))
+        .chain(std::iter::once("tags".len()))
         .max()
         .unwrap_or(8);
 
     for (k, v) in scalars {
         println!("{:<w$}  {}", k.cyan(), v, w = scalar_w);
+    }
+
+    if !meta.tags.is_empty() {
+        println!();
+        println!("{}", "tags:".cyan());
+        for tag in &meta.tags {
+            println!("  {} {}", "•".yellow(), tag.yellow());
+        }
     }
 
     if !meta.variables.is_empty() {
@@ -324,6 +422,30 @@ fn print_structured_metadata(meta: &crate::core::project_info::Metadata) {
             println!("  {:<w$}  {}", k, display, w = var_w);
         }
     }
+}
+
+/// Render the journal section for a project.
+fn show_journal(project_root: &Path, cfg: &Config) {
+    use crate::core::project_info;
+
+    println!();
+    let banner = "─────  Journal  ─────";
+    println!("{}", banner.dimmed());
+
+    match project_info::read_journal_entries(project_root, cfg) {
+        Ok(entries) if entries.is_empty() => {
+            println!("  {}", "(no journal entries yet)".dimmed());
+        }
+        Ok(entries) => {
+            for entry in &entries {
+                let date = &entry.timestamp[..entry.timestamp.len().min(10)];
+                println!("  {} {}  {}", "•".dimmed(), date.dimmed(), entry.message);
+            }
+        }
+        Err(e) => println!("  {}", e.to_string().yellow()),
+    }
+
+    println!("{}", "─".repeat(banner.chars().count()).dimmed());
 }
 
 pub fn open(query: &str) -> Result<()> {

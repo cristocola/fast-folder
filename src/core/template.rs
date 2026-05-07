@@ -38,6 +38,17 @@ pub struct Template {
     /// `None` = fall back to `config.toml`'s `post_create` block.
     #[serde(default)]
     pub post_create: Option<crate::core::post_create::PostCreate>,
+
+    /// Literal tags every project from this template receives automatically.
+    /// Free-form strings (e.g. `"creative"`, `"music-video"`).
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Variable slugs whose resolved values should become hierarchical tags of
+    /// the form `slug/value` (e.g. `tag_from: [client_type]` → `client_type/Indie`).
+    /// Values that are empty after variable collection are skipped.
+    #[serde(default)]
+    pub tag_from: Vec<String>,
 }
 
 fn default_version() -> String {
@@ -169,6 +180,18 @@ impl Template {
                 bail!(
                     "duplicate file path '{}' in template '{}'",
                     f.path,
+                    self.slug
+                );
+            }
+        }
+        // tag_from entries must reference declared variable slugs.
+        let var_slugs: std::collections::HashSet<&str> =
+            self.variables.iter().map(|v| v.slug.as_str()).collect();
+        for slug in &self.tag_from {
+            if !var_slugs.contains(slug.as_str()) {
+                bail!(
+                    "tag_from slug '{}' is not a declared variable in template '{}'",
+                    slug,
                     self.slug
                 );
             }

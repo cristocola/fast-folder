@@ -94,15 +94,16 @@ enum Commands {
     /// List recent projects — opens an interactive picker by default
     #[command(
         after_help = "By default, `fastf recent` opens an interactive picker so you can\n\
-        select a project and choose between opening its folder or viewing its\n\
-        PROJECT_INFO.md metadata. Pass --plain (or pipe stdout) to get the\n\
-        original non-interactive list output for scripts.\n\n\
+        select a project and choose between opening its folder, viewing metadata,\n\
+        adding tags, or appending a journal note. Pass --plain (or pipe stdout)\n\
+        to get the non-interactive list output for scripts.\n\n\
         Examples:\n  \
             fastf recent                           # interactive picker\n  \
             fastf recent --plain                   # non-interactive list (script-friendly)\n  \
             fastf recent --plain --limit 5\n  \
             fastf recent --template music-video\n  \
             fastf recent --since 2026-01-01\n  \
+            fastf recent --tag draft               # only projects with this tag\n  \
             fastf recent --prune                   # remove index entries whose folder is gone"
     )]
     Recent {
@@ -117,6 +118,10 @@ enum Commands {
         /// Only show projects created on or after this date (YYYY-MM-DD)
         #[arg(long)]
         since: Option<String>,
+
+        /// Only show projects that have this exact tag
+        #[arg(long)]
+        tag: Option<String>,
 
         /// Delete records whose folder no longer exists on disk (does not touch folders)
         #[arg(long)]
@@ -166,6 +171,76 @@ enum Commands {
         /// Variable values as --slug=value flags (only used when templated files need interpolation)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
+    },
+
+    /// Add, remove, list, or re-derive tags on a project
+    #[command(after_help = "Tags live in the YAML frontmatter of PROJECT_INFO.md.\n\
+        Free-form tags are arbitrary strings.  Auto-derived tags follow\n\
+        the `slug/value` convention (set via `tag_from:` in a template).\n\n\
+        Examples:\n  \
+            fastf tag add ID0047 draft urgent       # add free-form tags\n  \
+            fastf tag remove ID0047 draft\n  \
+            fastf tag list ID0047\n  \
+            fastf tag reauto ID0047                 # re-derive from template tag_from")]
+    Tag {
+        #[command(subcommand)]
+        action: TagAction,
+    },
+
+    /// Search projects by metadata fields and tags
+    #[command(after_help = "Multiple clauses AND together.  Supported operators:\n\
+        \n  \
+            key=value        exact match (case-insensitive)\n  \
+            key=prefix*      prefix/glob match\n  \
+            key>date         field is lexicographically after date\n  \
+            key<date         field is lexicographically before date\n  \
+            tag:value        exact tag match\n  \
+            tag:prefix*      tag prefix/glob match\n\n\
+        Field names: id  template  template_name  created  folder  name  path\n\
+        plus any template variable slug (e.g. artist=Aria*)\n\n\
+        Examples:\n  \
+            fastf search tag:draft\n  \
+            fastf search tag:client/*\n  \
+            fastf search template=music-video tag:draft\n  \
+            fastf search artist=Aria* created>2026-01-01\n  \
+            fastf search tag:draft --plain")]
+    Search {
+        /// Query clauses (e.g. tag:draft template=music-video artist=Aria*)
+        #[arg(required = true)]
+        terms: Vec<String>,
+
+        /// Print non-interactive list (auto-engages when stdout is not a TTY)
+        #[arg(long)]
+        plain: bool,
+    },
+
+    /// Append a timestamped journal note to a project
+    #[command(
+        name = "note",
+        after_help = "Three ways to supply the message:\n  \
+            fastf note add ID0047 \"finished final mix\"   # inline\n  \
+            fastf note add ID0047 -                       # read from stdin\n  \
+            fastf note add ID0047                         # open $EDITOR"
+    )]
+    Note {
+        #[command(subcommand)]
+        action: NoteAction,
+    },
+
+    /// Show journal entries for a project
+    #[command(
+        name = "notes",
+        after_help = "Examples:\n  \
+            fastf notes ID0047\n  \
+            fastf notes ID0047 --since 2026-04-01"
+    )]
+    Notes {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+
+        /// Only show entries on or after this date (YYYY-MM-DD or ISO-8601)
+        #[arg(long)]
+        since: Option<String>,
     },
 
     /// Print a shell completion script to stdout
@@ -279,6 +354,47 @@ enum ConfigAction {
 }
 
 #[derive(Subcommand)]
+enum TagAction {
+    /// Add one or more tags to a project
+    Add {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// Tags to add (space-separated)
+        #[arg(required = true)]
+        tags: Vec<String>,
+    },
+    /// Remove one or more tags from a project
+    Remove {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// Tags to remove (space-separated)
+        #[arg(required = true)]
+        tags: Vec<String>,
+    },
+    /// List tags on a project
+    List {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+    },
+    /// Re-derive auto tags from the template's tag_from variables
+    Reauto {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum NoteAction {
+    /// Add a timestamped journal entry
+    Add {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// Message text, or `-` to read from stdin, or omit to open $EDITOR
+        message: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum IdAction {
     /// Show the current global ID counter value and what the next project ID will be
     Show,
@@ -363,12 +479,14 @@ fn run() -> Result<()> {
             limit,
             template,
             since,
+            tag,
             prune,
             plain,
         }) => cli::recent::run(cli::recent::RecentArgs {
             limit,
             template,
             since,
+            tag,
             prune,
             plain,
         }),
@@ -390,6 +508,27 @@ fn run() -> Result<()> {
                 yes,
                 vars,
             })
+        }
+
+        Some(Commands::Tag { action }) => match action {
+            TagAction::Add { query, tags } => cli::tag::add(&query, &tags),
+            TagAction::Remove { query, tags } => cli::tag::remove(&query, &tags),
+            TagAction::List { query } => cli::tag::list(&query),
+            TagAction::Reauto { query } => cli::tag::reauto(&query),
+        },
+
+        Some(Commands::Search { terms, plain }) => {
+            cli::search::run(cli::search::SearchArgs { terms, plain })
+        }
+
+        Some(Commands::Note { action }) => match action {
+            NoteAction::Add { query, message } => {
+                cli::note::add(cli::note::NoteAddArgs { query, message })
+            }
+        },
+
+        Some(Commands::Notes { query, since }) => {
+            cli::note::notes(cli::note::NotesArgs { query, since })
         }
 
         Some(Commands::Completions { shell }) => generate_completions(&shell),

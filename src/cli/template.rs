@@ -223,6 +223,8 @@ pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
         structure,
         files,
         post_create: None,
+        tags: vec![],
+        tag_from: vec![],
     };
 
     template.save_to_file(&dest)?;

@@ -26,7 +26,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (31 total: 11 unit + 20 integration)
+# Test (70 total: 40 unit + 30 integration)
 cargo test
 cargo test <test_name>   # run a single test by name
 
@@ -48,12 +48,13 @@ fast-folder/
 │                               finance-monthly, research-note). NOT bundled — users import
 │                               with `fastf template import examples/templates/<slug>.yaml`.
 ├── tests/
-│   └── integration.rs        — 20 hermetic tests using FASTF_INSTALL_DIR + tempfile
+│   └── integration.rs        — 30 hermetic tests using FASTF_INSTALL_DIR + tempfile
 └── src/
     ├── lib.rs                — Library entry: exposes core/, cli/, tui/, util/, bootstrap/
     │                           so integration tests can import fastf::...
     ├── main.rs               — Binary entry, `use fastf::{bootstrap, cli, tui};`
-    │                           clap commands include Recent (+ --plain), Open, Apply,
+    │                           clap commands include Recent (+ --plain --tag), Open, Apply,
+    │                           Tag (Add/Remove/List/Reauto), Search, Note (Add), Notes,
     │                           TemplateAction::FromFolder
     ├── bootstrap.rs          — First-run setup: creates config.toml, counters.toml, templates/
     │                           (the three bundled YAMLs no longer declare PROJECT_INFO.md —
@@ -80,15 +81,22 @@ fast-folder/
     │   │                        apply_plan(), apply(), print_apply_plan(), ApplyAction enum.
     │   │                        resolve_post_create() is pub so cli/new.rs can check for
     │   │                        double-open before offering the open prompt.
-    │   ├── project_info.rs   — NEW v0.3. Metadata struct, render(), write(), read(),
-    │   │                        read_metadata(), extract_frontmatter().
-    │   │                        Generates PROJECT_INFO.md with YAML frontmatter + variables
-    │   │                        table + Notes section. Called from project::create().
-    │   ├── template.rs       — Template (+ post_create: Option<PostCreate>), Variable,
-    │   │                        FolderNode, FileEntry, IdConfig, Transform. validate() is pub.
+    │   ├── project_info.rs   — Metadata struct (incl. tags), render(), write(), read(),
+    │   │                        read_metadata(). v0.4: write_frontmatter(path, mutator) for
+    │   │                        atomic in-place tag mutation; append_journal_entry(path, msg)
+    │   │                        for ## Journal section; read_journal_entries(); split_frontmatter_body()
+    │   │                        is pub for byte-identical body round-trips.
+    │   ├── template.rs       — Template (+ post_create, tags, tag_from), Variable,
+    │   │                        FolderNode, FileEntry, IdConfig, Transform. validate() is pub
+    │   │                        and rejects tag_from entries that aren't declared variable slugs.
+    │   ├── query.rs          — v0.4. Predicate enum (Field/After/Before/Tag/Free), Pattern
+    │   │                        (Exact/Prefix), parse() and evaluate(). Bare terms become
+    │   │                        Predicate::Free — case-insensitive substring across vars/tags/
+    │   │                        folder/template/template_name/id (path EXCLUDED).
     │   ├── vars.rs           — collect_vars() shared by `new` and `apply`
     │   ├── index.rs          — ProjectRecord + append()/try_append()/load_all()/rewrite()
-    │   │                        for projects.jsonl (JSONL append-only log)
+    │   │                        for projects.jsonl (JSONL append-only log) +
+    │   │                        resolve_project(query) — exact-id → prefix → name substring.
     │   └── post_create.rs    — PostCreate struct + run(): git_init, reveal, open_in_editor,
     │                            print_path, commands. Platform-specific reveal_folder()
     │                            via cfg(windows)/cfg(target_os="macos")/cfg(unix).
@@ -108,17 +116,29 @@ fast-folder/
     │   │                        recent_default_limit, post_create.* keys.
     │   ├── id.rs             — id show/reset/set
     │   ├── recent.rs         — `fastf recent`: defaults to interactive picker (TTY).
-    │   │                        picker → project_action_menu() → Open / Show metadata / Back / Quit.
-    │   │                        "Show metadata" calls project_info::read_metadata() → structured
-    │   │                        aligned key:value display; falls back to raw markdown if no frontmatter.
-    │   │                        --plain flag (or non-TTY stdout) gives classic list output.
+    │   │                        picker → project_action_menu() → Open / Show metadata /
+    │   │                        Add tag / Remove tag / Add journal note / Show journal /
+    │   │                        Back / Quit. Inline tag display in picker labels (truncated
+    │   │                        to 3 + "+N" overflow). --tag <name> filter. run_picker() pub
+    │   │                        so cli/search.rs can reuse it. --plain (or non-TTY) gives
+    │   │                        classic list output.
+    │   ├── tag.rs            — v0.4. add/remove/list/reauto. add is idempotent; remove no-ops
+    │   │                        on missing tags; reauto preserves free-form, replaces derived.
+    │   ├── note.rs           — v0.4. note add: inline / `-` (stdin) / omit ($EDITOR via cfg).
+    │   │                        notes: prints filtered ## Journal entries (--since YYYY-MM-DD).
+    │   ├── search.rs         — v0.4. `fastf search <terms...>`. Parses via core::query, walks
+    │   │                        index reverse-chronologically, reads metadata per record,
+    │   │                        evaluates predicates, then renders via run_picker (TTY) or
+    │   │                        plain list (--plain / pipe).
     │   └── apply.rs          — `fastf apply <slug> <dir>` with --dry-run (skip-only semantics)
     └── tui/
         ├── mod.rs
         ├── menu.rs           — Interactive TUI menu. ASCII banner (suppressed if !show_banner).
-        │                        Live base dir display. Top-level menu adds:
-        │                          "Apply template to existing folder" → menu_apply().
-        │                        menu_recent() simplified: just calls recent::run().
+        │                        Live base dir display. Top-level menu:
+        │                          Create / Recent / Search projects (v0.4) / Manage templates
+        │                          / Settings / Quit.
+        │                        menu_search() prompts for a query string, splits on
+        │                        whitespace, calls cli::search::run.
         │                        menu_settings() restructured into 5 grouped submenus:
         │                          Project basics / Workflow prompts / Project metadata /
         │                          Recent projects / Post-create actions.
@@ -166,9 +186,11 @@ Append-only JSONL log of created projects. One `{"id","template","path","name","
 
 1. **YAML frontmatter** (between `---` lines) — the machine-readable layer. Typed struct `Metadata` serialized via `serde_yaml`. Contains: `id`, `template` (slug), `template_name`, `created` (ISO-8601), `folder`, `path`, and `variables: BTreeMap<String, String>` with **every** template variable regardless of whether it appears in `naming_pattern`. `BTreeMap` keeps keys alphabetical for diff-stability.
 
-2. **Human body** — markdown table of variables (using template labels as column headers) + a `## Notes` section the user owns. Written once; never modified by fastf.
+2. **Human body** — markdown table of variables (using template labels as column headers) + a `## Notes` section the user owns. The body also gains a `## Journal` section the first time `append_journal_entry` is called. Outside of those mutation helpers, fastf never modifies the file after creation.
 
-`read_metadata(path, cfg)` slices out the frontmatter via `extract_frontmatter()`, feeds it to `serde_yaml::from_str::<Metadata>`. Returns `Ok(None)` when no frontmatter block is present (older / hand-edited files). `read(path, cfg)` returns raw markdown for fallback display.
+`read_metadata(path, cfg)` slices out the frontmatter via `split_frontmatter_body()`, feeds it to `serde_yaml::from_str::<Metadata>`. Returns `Ok(None)` when no frontmatter block is present (older / hand-edited files). `read(path, cfg)` returns raw markdown for fallback display.
+
+**Atomic mutation** (v0.4): `write_frontmatter(path, |meta| { ... })` reads → splits → parses → applies the closure → re-serializes via `serde_yaml::to_string` → writes via `.tmp` + rename. Body bytes are byte-identical after a no-op mutation — the dedicated integration test asserts this. `append_journal_entry(path, msg)` does the same atomic dance for the body. Both require frontmatter to exist; otherwise return a structured error naming the path.
 
 The bundled templates (`music-video`, `photography`, `video-production`) no longer declare a `PROJECT_INFO.md` content file — auto-gen owns that file. Custom templates that previously defined their own `PROJECT_INFO.md` will have it overwritten on `fastf new` (write order: template files → pinfo). If you want to preserve a custom body, name it something different (e.g. `NOTES.md`) and let fastf own `PROJECT_INFO.md`.
 
@@ -190,6 +212,26 @@ Calls the existing platform-correct `reveal_folder()` on Yes.
 The metadata display (`show_metadata`) tries `read_metadata` first; on success it calls `print_structured_metadata` which computes max-key-width and emits aligned `key  value` pairs with a `variables:` sub-block. Dim `(empty)` for empty values. Falls back to raw markdown on `Ok(None)`. Yellow warning on missing file.
 
 Scripting compat: `--plain` flag or non-TTY stdout → classic column-aligned list. `fastf open <query>` still exists as a one-shot alternative.
+
+### Tags, search, journal (v0.4)
+
+**Tags** live in `Metadata.tags: Vec<String>` (frontmatter, `#[serde(default)]` for back-compat). Two flavours coexist:
+- **Free-form** — arbitrary strings (`draft`, `urgent`).
+- **Auto-derived** — generated at creation from `Template.tag_from`. Slug `client_type` with value `Indie` becomes `client_type/Indie`. Empty values are skipped (no orphan `slug/` tags). Computed in `project::create()` before `project_info::write()`. Literal `Template.tags` are added too.
+
+`Template::validate()` rejects `tag_from` entries that aren't declared variable slugs.
+
+`fastf tag reauto <id>` is the safety valve: it loads the current frontmatter, looks up `tag_from` from the live template, removes any tag whose prefix matches `slug/` for slugs in `tag_from`, and re-adds the freshly-derived ones. Free-form tags survive untouched.
+
+**Search** lives in `core/query.rs`. Predicates AND together; no OR or parens. Operators: bare term (free-text substring fallthrough), `key=value` (exact, ci), `key=prefix*` (prefix glob), `key>date`, `key<date`, `tag:value`, `tag:prefix*`. Fields resolve from `Metadata` first (id/template/template_name/created/folder/path), then `meta.variables.<slug>`. Unknown keys return `false`, never error — keeps it forward-compatible.
+
+The free-text branch in `eval_one` searches `tags`, all `meta.variables.values()`, `folder`, `template`, `template_name`, and `id` — case-insensitive substring. **`path` is intentionally excluded** so home-dir text never produces phantom matches. There's a regression test that proves this.
+
+`cli/search::run` walks the index reverse-chronologically, reads each metadata file (silently skipping records with missing/unreadable PROJECT_INFO.md), and renders matches via `recent::run_picker` on TTY or a plain list when piped/`--plain`.
+
+**Journal** entries are markdown lines under a `## Journal` section in the body. Format: `- 2026-04-20T14:32:11Z — message`. Append-only and chronological — `append_journal_entry` always appends at EOF after the section, never edits existing entries. `parse_journal_entries` walks the section and stops at the next `## ` heading. `notes --since YYYY-MM-DD` filters by lexicographic timestamp comparison (cheap and correct because ISO-8601 is sortable as string).
+
+Project-resolution shared helper: `index::resolve_project(query)` does exact-id → id-prefix → name-substring (case-insensitive). Used by `tag`, `note`, and the legacy `fastf open` paths. Ambiguous queries return a structured error listing the candidates.
 
 ### Post-create actions
 `PostCreate` struct on both `Config` and `Template`. Template-level overrides config-level entirely (same resolution model as `default_template`). All fields default to off:
@@ -292,3 +334,7 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - `project_info::render()` builds frontmatter via `serde_yaml::to_string(&Metadata { ... })` — do NOT hand-format the YAML string. serde_yaml handles escaping of colons, quotes, multi-line values correctly; hand-formatting breaks on edge cases.
 - Config fields `pinfo_enabled` / `pinfo_filename` were renamed to `project_info_enabled` / `project_info_filename` in v0.3. The fields carry `#[serde(alias = "pinfo_*")]` and `config::set` accepts both name forms, so interim configs / old scripts keep working. On `config save()` they serialize under the new names.
 - `resolve_post_create()` in `project.rs` is `pub` — the open-prompt check in `cli/new.rs` calls it to avoid double-opening when `reveal: true` is already set in post_create.
+- v0.4: `project_info::split_frontmatter_body()` is `pub` (not `pub(crate)`) so integration tests can assert byte-identity round-trips. The internal `extract_frontmatter` helper from v0.3 was folded into it — there's now one splitter.
+- v0.4: `Predicate::Free` is the parser fallthrough, so any non-empty term that isn't `tag:`, `key=…`, `key>…`, `key<…` becomes a free-text predicate. Don't add another fallthrough below it (would be unreachable). Free terms search **case-insensitive substring** (not prefix) — keep it that way for grep-like UX.
+- v0.4: `path` is intentionally NOT searched by `Predicate::Free`. There's a regression test (`free_does_not_match_path`) that asserts this; if you ever extend the field set, don't break that guarantee silently — home-dir leakage is a privacy footgun.
+- v0.4: `cli::recent::run_picker` is `pub` because `cli::search` reuses it; `project_action_menu` stays private. If TUI/search both need a new picker action, add it inside `recent.rs`.

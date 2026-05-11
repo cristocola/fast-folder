@@ -84,8 +84,8 @@ The current project base directory is shown live at every loop — change it in 
 ? Settings
 ❯ Project basics       (base dir / template / date / editor)
   Workflow prompts     (open prompt / confirm / banner / preview)
-  Project metadata     (PROJECT_INFO.md enabled / filename)
-  Recent projects      (default limit)
+  Project metadata     (PROJECT_INFO.md enabled)
+  Recent projects      (default limit / prune missing entries)
   Post-create actions  (git / reveal / editor / path / commands)
   ID counter
   Back
@@ -150,10 +150,11 @@ Every interactive step has a non-interactive CLI equivalent — use the menu whe
 - **Rich dry-run** — full tree + resolved variables + file-content previews (first N lines) before anything hits disk.
 
 ### Project tracking
-- **Structured metadata file** — every new project gets a `PROJECT_INFO.md` with YAML frontmatter recording the ID, template, creation time, path, and **every variable** (even ones not in the folder name). Parseable by Obsidian, Hugo, `yq`, `grep`, or any future tooling.
+- **Structured metadata file** — every new project gets a `PROJECT_INFO.md` with YAML frontmatter recording the ID, template, creation time, path, and **every variable** (even ones not in the folder name). Parseable by Obsidian, Hugo, `yq`, `grep`, or any future tooling. The filename is fastf-managed and reserved — templates can't accidentally claim it.
 - **Project index** — append-only `projects.jsonl` log of every created project.
-- **Interactive `fastf recent`** — pick a project to open its folder, view metadata, add tags, or write a journal note. Shows inline tags. Falls back to a plain list with `--plain` or when piped.
+- **Interactive `fastf recent`** — pick a project to open its folder, view metadata, add tags, or write a journal note. Shows inline tags. Falls back to a plain list with `--plain` or when piped. Prune stale records via Settings → Recent projects.
 - **Quick access** — `fastf open ID0047` or `fastf open my-crate` jumps to any project folder.
+- **Onboard existing folders** — `fastf register ./old-project` adopts a pre-fastf folder into the index without creating anything. Optional `--template` attaches a template + tags, `--apply` fills missing structure, `--rename` standardizes the folder name via the template's pattern or `config.register_naming_pattern` (default `{date}_{name}_{id}`). Historical dates preserved via folder mtime / `--use-today` / `--created YYYY-MM-DD`.
 - **Re-apply to existing folders** — `fastf apply` retrofits missing files and folders when a template evolves. Skip-only, never overwrites.
 - **Tags** — free-form (`draft`, `urgent`) and auto-derived from template variables (`client_type/Indie`, `artist/Ariana_Grande`). Set `tags:` and `tag_from:` in a template; manage later with `fastf tag add/remove/list/reauto`.
 - **Search** — bare terms search across vars/tags/folder/template/id (`fastf search ariana`); explicit grammar adds field, date, and tag operators (`fastf search template=music-video tag:draft`). Interactive on TTY, pipe-safe with `--plain`.
@@ -162,7 +163,7 @@ Every interactive step has a non-interactive CLI equivalent — use the menu whe
 ### Workflow integration
 - **Post-create actions** (global or per-template) — `git init`, reveal in file manager, open in editor, run custom shell commands, print the absolute path for shell pipelines.
 - **Open-folder prompt** — "Open project folder? [Y/n]" offered after every `fastf new` (configurable).
-- **Non-interactive mode** — `--yes`, inline variable flags, `--no-preview`, `--no-post`, `--dry-run`, `--base-dir`. Scriptable end-to-end.
+- **Non-interactive mode** — `--yes`, inline variable flags, `--no-preview`, `--no-post`, `--dry-run`, `--base-dir`. Flags work before or after the template slug; vars use `--key=value`. Scriptable end-to-end.
 - **Shell completions** for bash, zsh, fish, PowerShell.
 
 ### Deployment

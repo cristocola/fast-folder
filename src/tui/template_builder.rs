@@ -337,17 +337,15 @@ fn edit_files(tmpl: &mut Template, is_edit_pass: bool) -> Result<()> {
 
     loop {
         let add = Confirm::new()
-            .with_prompt(if tmpl.files.is_empty() {
-                "Add a placeholder file?"
-            } else {
-                "Add another file?"
-            })
-            .default(tmpl.files.is_empty())
+            .with_prompt(
+                "Add another placeholder file? (PROJECT_INFO.md is generated automatically)",
+            )
+            .default(false)
             .interact()?;
         if !add {
             break;
         }
-        tmpl.files.push(collect_file()?);
+        tmpl.files.push(collect_file(&tmpl.variables)?);
     }
 
     Ok(())
@@ -566,24 +564,33 @@ fn collect_options() -> Result<Vec<String>> {
 // ---------------------------------------------------------------------------
 // Collect a single file entry interactively
 // ---------------------------------------------------------------------------
-fn collect_file() -> Result<FileEntry> {
+fn collect_file(vars: &[Variable]) -> Result<FileEntry> {
     println!(
         "  {}  use / for subfolders on all platforms (e.g. 01_Assets/notes.md)",
         "Hint:".yellow()
     );
-    let path: String = Input::new()
-        .with_prompt("  File path (e.g. PROJECT_INFO.md or 01_Assets/notes.md)")
-        .interact_text()?;
+    println!(
+        "  {}  PROJECT_INFO.md is fastf-managed — every new project gets one automatically; don't add it here.",
+        "Note:".yellow()
+    );
+    let path: String = loop {
+        let candidate: String = Input::new()
+            .with_prompt("  File path (e.g. NOTES.md or 01_Assets/notes.md)")
+            .interact_text()?;
+        if crate::core::project_info::path_is_reserved(&candidate) {
+            println!(
+                "  {} '{}' is reserved by fastf — pick a different filename (e.g. NOTES.md).",
+                "error:".red().bold(),
+                candidate
+            );
+            continue;
+        }
+        break candidate;
+    };
 
-    let mode_idx = Select::new()
-        .with_prompt("  Content mode")
-        .items(&[
-            "Template  (use {token} interpolation — variables are replaced)",
-            "Raw       (literal content, no substitution)",
-        ])
-        .default(0)
-        .interact()?;
-
+    // Show the substitution tokens the user has at their disposal RIGHT BEFORE
+    // they type content, so there's no guessing what `{...}` strings work.
+    print_available_tokens(vars);
     println!("  Enter content line by line. Empty line to finish:");
     let mut lines = vec![];
     loop {
@@ -598,19 +605,73 @@ fn collect_file() -> Result<FileEntry> {
     }
     let content = lines.join("\n") + "\n";
 
-    Ok(if mode_idx == 0 {
-        FileEntry {
-            path,
-            template: content,
-            content: String::new(),
+    // Quick feedback: which tokens (if any) will actually be substituted at
+    // create-time? Helps the user catch typos in slug names immediately.
+    print_token_substitution_summary(&content, vars);
+
+    // Always store in `template:` — interpolate() is a no-op on text without
+    // braces, so there's nothing to lose vs the old "Raw" mode for normal
+    // content, and `{slug}` markers Just Work.
+    Ok(FileEntry {
+        path,
+        template: content,
+        content: String::new(),
+    })
+}
+
+/// Print the list of `{token}` strings that interpolation understands for the
+/// current template: declared variable slugs + built-in date/id tokens.
+fn print_available_tokens(vars: &[Variable]) {
+    println!("  {}", "Available tokens for {substitution}:".dimmed());
+    if vars.is_empty() {
+        println!(
+            "    {}",
+            "(no user variables — add some earlier in the builder to use them here)".dimmed()
+        );
+    } else {
+        let joined = vars
+            .iter()
+            .map(|v| format!("{{{}}} ({})", v.slug, v.label))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("    {} {}", "user:".dimmed(), joined);
+    }
+    println!(
+        "    {} {{date}} {{YYYY}} {{MM}} {{DD}} {{id}}",
+        "built-ins:".dimmed()
+    );
+}
+
+/// After the user finishes typing the file content, scan it for `{token}`
+/// patterns matching the template's known tokens and print a one-line summary.
+/// Catches "I typed {clientname} but the variable is client_name" before the
+/// template gets saved.
+fn print_token_substitution_summary(content: &str, vars: &[Variable]) {
+    let mut found: Vec<String> = Vec::new();
+    let builtins = ["date", "YYYY", "MM", "DD", "id"];
+    for slug in vars.iter().map(|v| v.slug.as_str()).chain(builtins) {
+        let needle = format!("{{{}}}", slug);
+        if content.contains(&needle) && !found.contains(&needle) {
+            found.push(needle);
+        }
+    }
+    if found.is_empty() {
+        // Only worth a heads-up when the content has any `{...}` literal — that
+        // hints the user might have intended substitution but typo'd the slug.
+        if content.contains('{') {
+            println!(
+                "  {}  no recognised tokens detected; content will be written as-is.",
+                "Heads up:".yellow()
+            );
         }
     } else {
-        FileEntry {
-            path,
-            template: String::new(),
-            content,
-        }
-    })
+        println!(
+            "  {} {} will be substituted at create time: {}",
+            "✓".green(),
+            found.len(),
+            found.join(" ")
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

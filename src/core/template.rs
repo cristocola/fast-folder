@@ -142,16 +142,33 @@ impl Template {
     pub fn load_from_file(path: &PathBuf) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("reading template {}", path.display()))?;
-        let t: Self = serde_yaml::from_str(&raw)
+        let mut t: Self = serde_yaml::from_str(&raw)
             .with_context(|| format!("parsing template {}", path.display()))?;
+        // Silently strip file entries colliding with the reserved auto-gen
+        // filename. Keeps older user-built templates working (the auto-gen
+        // would have overwritten these entries at write time anyway).
+        t.strip_reserved_files();
         t.validate()?;
         Ok(t)
     }
 
     pub fn save_to_file(&self, path: &PathBuf) -> Result<()> {
-        let raw = serde_yaml::to_string(self).context("serializing template")?;
+        // Defense in depth: even if a caller built a Template in memory with
+        // a reserved-name file entry, never persist it to disk.
+        let mut snapshot = self.clone();
+        snapshot.strip_reserved_files();
+        let raw = serde_yaml::to_string(&snapshot).context("serializing template")?;
         fs::write(path, raw).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
+    }
+
+    /// Remove file entries whose path collides with the reserved auto-gen
+    /// metadata filename (PROJECT_INFO.md at the project root, case-insensitive).
+    /// Called from `load_from_file` and `save_to_file` — fastf always owns that
+    /// file, so a template-defined version would just get overwritten.
+    pub fn strip_reserved_files(&mut self) {
+        self.files
+            .retain(|f| !crate::core::project_info::path_is_reserved(&f.path));
     }
 
     pub fn validate(&self) -> Result<()> {

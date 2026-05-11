@@ -91,6 +91,11 @@ pub fn show() -> Result<()> {
         "recent_default_limit:".green(),
         config.recent_default_limit
     );
+    println!(
+        "  {:<26} {}",
+        "register_naming_pattern:".green(),
+        config.register_naming_pattern
+    );
     println!();
     println!("  {}", "post_create defaults:".bold());
     println!(
@@ -221,6 +226,25 @@ pub fn set(key: &str, value: &str) -> Result<()> {
             config.recent_default_limit = n;
             println!("Set recent_default_limit = {}", config.recent_default_limit);
         }
+        "register_naming_pattern" => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                bail!("register_naming_pattern cannot be empty");
+            }
+            // `{name}` and `{id}` are the safety net — without them the pattern
+            // would silently rename multiple registered folders to the same path.
+            if !trimmed.contains("{id}") {
+                bail!(
+                    "register_naming_pattern must contain {{id}} so registered folders get unique names; got '{}'",
+                    trimmed
+                );
+            }
+            config.register_naming_pattern = trimmed.to_string();
+            println!(
+                "Set register_naming_pattern = {}",
+                config.register_naming_pattern
+            );
+        }
         "post_create.git_init" => {
             config.post_create.git_init = parse_bool(value)?;
             println!("Set post_create.git_init = {}", config.post_create.git_init);
@@ -246,7 +270,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
         other => bail!(
             "unknown config key '{}'. Valid keys: base-dir, editor, default-template, date-format, \
              preview-lines, prompt-open-after-create, confirm-create, show-banner, \
-             project-info-enabled, project-info-filename, recent-default-limit, \
+             project-info-enabled, project-info-filename, recent-default-limit, register-naming-pattern, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
             other
         ),

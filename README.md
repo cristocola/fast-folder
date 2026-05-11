@@ -70,6 +70,7 @@ Run `fastf` with no arguments and you land in a guided menu. Arrow keys, Enter, 
 ❯ Create new project
   Recent projects
   Search projects
+  Register existing folder
   Manage templates
   View / edit settings
   Quit
@@ -311,6 +312,7 @@ fastf
 > Create new project
   Recent projects
   Search projects
+  Register existing folder
   Manage templates
   View / edit settings
   Quit
@@ -463,6 +465,26 @@ fastf notes ID0047 --since 2026-04-01
 
 Journal entries are timestamped lines in `## Journal` in `PROJECT_INFO.md` — append-only, grows over the project's lifetime. Also accessible from the interactive `fastf recent` picker via "Add journal note" / "Show journal".
 
+### Register an existing folder
+
+Onboard a folder that already exists into fastf's index — useful for pre-fastf projects you want to find in `recent`, `search`, or tag/journal:
+
+```bash
+fastf register ./old-project                                     # minimal, no template
+fastf register ./old-project --template music-video --artist=X --title=Y
+fastf register ./old-project -t music-video --apply              # also fill missing template structure
+fastf register ./old-project --rename                            # standardize folder name to {date}_{name}_{id}
+fastf register ./old-project -t music-video --rename             # rename to the template's naming_pattern
+fastf register ./old-project --created 2024-06-15                # historical date
+fastf register ./old-project --use-today                         # ignore folder mtime, mark as now
+```
+
+`register` writes a `PROJECT_INFO.md` to the folder, appends a record to `projects.jsonl`, and bumps the global ID counter. Without `--template` you get a minimal record (template = `(registered)`); with one, you get the full metadata + tags shape, identical to `fastf new`. The `created` timestamp defaults to the folder's filesystem creation time (falling back to mtime on filesystems without birth-time, e.g. ext4) — override with `--use-today` or `--created YYYY-MM-DD`.
+
+`--rename` standardizes the folder name. With `--template`, it renders the template's `naming_pattern`. Without one, it uses `config.register_naming_pattern` (default `"{date}_{name}_{id}"`, where `{name}` is the existing folder name with whitespace collapsed to underscores). Example: `fastf register "./random project" --rename` → `./2026-05-11_random_project_ID0001`. Configure with `fastf config set register-naming-pattern "{id}-{name}"` if you prefer a different layout. `--rename` confirms before moving on disk unless `--yes` is set.
+
+In the TUI, "Register existing folder" is a top-level entry — it walks you through path, optional template, the rename step (default Yes, with the fs move asking once more before it happens), and optional `--apply` for filling in missing template structure.
+
 ### Apply a template to an existing folder
 
 ```bash
@@ -506,6 +528,10 @@ fastf config set project-info-filename .info.md  # custom filename
 
 # Recent
 fastf config set recent-default-limit 50
+
+# Register
+fastf config set register-naming-pattern "{date}_{name}_{id}"   # default
+fastf config set register-naming-pattern "{id}_{name}"          # ID first, no date
 
 # Post-create defaults
 fastf config set post_create.git_init true
@@ -651,7 +677,7 @@ variables:
 ## Notes
 ```
 
-The file is written once on `fastf new` and never modified again. To disable: `fastf config set project-info-enabled false`. To rename: `fastf config set project-info-filename .info.md`.
+The file is written once on `fastf new` and modified only by `fastf tag` / `fastf note` afterward. `PROJECT_INFO.md` is a reserved filename — templates that try to declare their own file entry called `PROJECT_INFO.md` have it silently stripped on load (fastf always owns this file). To disable metadata generation entirely: `fastf config set project-info-enabled false`. The `project-info-filename` config key still exists for backwards compatibility with older configs but is no longer surfaced in the TUI.
 
 ---
 
@@ -665,6 +691,7 @@ The file is written once on `fastf new` and never modified again. To disable: `f
 | `fastf recent --tag <tag>` | Filter recent picker to projects with a specific tag |
 | `fastf recent --plain` | Non-interactive project list (script-safe) |
 | `fastf open <query>` | Reveal a project folder by ID or name |
+| `fastf register <dir>` | Onboard an existing folder into the index (no folder created) |
 | `fastf apply <slug> <dir>` | Apply a template to an existing folder (skip-only) |
 | `fastf tag add <id> <tag>…` | Add free-form tags to a project |
 | `fastf tag remove <id> <tag>…` | Remove tags from a project |

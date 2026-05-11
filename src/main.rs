@@ -2,7 +2,7 @@ use fastf::{bootstrap, cli, tui};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::collections::HashMap;
+use colored::Colorize;
 
 // ---------------------------------------------------------------------------
 // CLI definition
@@ -40,8 +40,11 @@ enum Commands {
             fastf new music-video                        # use named template, fill vars interactively\n  \
             fastf new music-video --dry-run              # preview without creating anything\n  \
             fastf new music-video --artist=\"Ariana Grande\" --title=Lullaby\n  \
-            fastf new music-video --base-dir=/Volumes/Drive/Projects\n\n\
-            Variable flags must use = syntax: --artist=\"Bad Bunny\" not --artist \"Bad Bunny\"")]
+            fastf new music-video --base-dir=/Volumes/Drive/Projects\n  \
+            fastf new music-video --yes --artist=\"Bad Bunny\"   # flags + vars in any order\n\n\
+            Variable flags must use = syntax: --artist=\"Bad Bunny\" not --artist \"Bad Bunny\".\n\
+            Flags (--yes, --dry-run, --no-preview, --no-post, --base-dir=...) may appear\n\
+            before OR after the template slug — fastf lifts them out automatically.")]
     New {
         /// Template slug to use. Run 'fastf template list' to see available templates.
         /// Prompts interactively if omitted and no default-template is configured.
@@ -145,6 +148,72 @@ enum Commands {
     Open {
         /// Project ID (e.g. ID0047), ID prefix, or name substring
         query: String,
+    },
+
+    /// Onboard an existing folder into fastf's index (no folder is created)
+    #[command(
+        about = "Onboard an existing folder into fastf's index (no folder is created)",
+        long_about = "Adopt a pre-existing folder into fastf — write PROJECT_INFO.md, append a\n\
+            record to projects.jsonl, and bump the global ID counter. Use this for\n\
+            retroactively indexing projects that started before fastf, or projects\n\
+            created outside it.\n\n\
+            With --template: prompts for that template's variables, writes a full\n\
+            metadata file (frontmatter + tags incl. tag_from auto-derivation), and\n\
+            optionally fills missing template structure (--apply) or renames the\n\
+            folder to the template's naming_pattern (--rename).\n\n\
+            Without --template: writes a minimal metadata file and appends a record\n\
+            with template = \"(registered)\". The folder is otherwise untouched.\n\n\
+            The `created` timestamp defaults to the folder's filesystem creation\n\
+            time (modification time on filesystems without birth-time, e.g. ext4).\n\
+            Override with `--use-today` (now) or `--created YYYY-MM-DD` (explicit).",
+        after_help = "Examples:\n  \
+            fastf register ./old-project                         # minimal, no template\n  \
+            fastf register ./old-project --template music-video --artist=X --title=Y\n  \
+            fastf register ./old-project -t music-video --apply  # also fill template structure\n  \
+            fastf register ./old-project -t music-video --rename # rename to naming_pattern\n  \
+            fastf register ./old-project --use-today             # ignore folder mtime\n  \
+            fastf register ./old-project --created 2024-06-15    # historical date\n\n\
+            Batch import (with the --yes ordering fix you can pipe these):\n  \
+            for d in ~/old-work/*/ ; do fastf register \"$d\" --yes ; done"
+    )]
+    Register {
+        /// Path to an existing folder to onboard into fastf's index
+        path: String,
+
+        /// Template slug to attach (enables --apply and --rename). Omit for a minimal record.
+        #[arg(short = 't', long)]
+        template: Option<String>,
+
+        /// After registering, run apply-style fill-in of missing template folders/files
+        /// (requires --template). Existing files are never overwritten.
+        #[arg(long, requires = "template")]
+        apply: bool,
+
+        /// Standardize the folder name by renaming on disk. With --template:
+        /// renders the template's naming_pattern. Without --template: uses
+        /// config.register_naming_pattern (default "{date}_{name}_{id}", where
+        /// {name} is the sanitized current folder name). Confirms before
+        /// moving unless --yes.
+        #[arg(long)]
+        rename: bool,
+
+        /// Use today's date as the project's `created` timestamp
+        /// (overrides the folder's filesystem time).
+        #[arg(long, conflicts_with = "created")]
+        use_today: bool,
+
+        /// Explicit `created` date as YYYY-MM-DD (e.g. 2024-06-15).
+        #[arg(long, value_name = "YYYY-MM-DD")]
+        created: Option<String>,
+
+        /// Skip confirmation prompts (PROJECT_INFO.md overwrite, rename).
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Variable values as --slug=value flags when --template is set.
+        /// Same parsing contract as `fastf new`: vars use =; flags may appear in any order.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        extra: Vec<String>,
     },
 
     /// Re-apply a template to an existing folder, adding missing folders/files
@@ -338,6 +407,7 @@ enum ConfigAction {
             project-info-enabled        Write PROJECT_INFO.md (YAML frontmatter + variables table) into each new project (default: true)\n  \
             project-info-filename       Filename for project metadata (default: PROJECT_INFO.md)\n  \
             recent-default-limit        Default --limit for `fastf recent` (default: 20)\n  \
+            register-naming-pattern     Pattern for `fastf register --rename` w/o a template (default: \"{date}_{name}_{id}\")\n  \
             post_create.git_init        Run `git init` automatically (default: false)\n  \
             post_create.reveal          Open folder in file manager automatically (default: false)\n  \
             post_create.open_in_editor  Open folder in $EDITOR automatically (default: false)\n  \
@@ -446,15 +516,16 @@ fn run() -> Result<()> {
             yes,
             extra,
         }) => {
-            let vars = parse_extra_vars(&extra);
+            let classified = cli::new::classify_extra(extra);
+            warn_unknown(&classified.unknown);
             cli::new::run(cli::new::NewArgs {
                 template_slug: template,
-                vars,
-                dry_run,
-                base_dir_override: base_dir,
-                no_preview,
-                no_post,
-                yes,
+                vars: classified.vars,
+                dry_run: dry_run || classified.flags.dry_run,
+                base_dir_override: base_dir.or(classified.flags.base_dir),
+                no_preview: no_preview || classified.flags.no_preview,
+                no_post: no_post || classified.flags.no_post,
+                yes: yes || classified.flags.yes,
             })
         }
 
@@ -502,6 +573,30 @@ fn run() -> Result<()> {
 
         Some(Commands::Open { query }) => cli::recent::open(&query),
 
+        Some(Commands::Register {
+            path,
+            template,
+            apply,
+            rename,
+            use_today,
+            created,
+            yes,
+            extra,
+        }) => {
+            let classified = cli::new::classify_extra(extra);
+            warn_unknown(&classified.unknown);
+            cli::register::run(cli::register::RegisterArgs {
+                path: std::path::PathBuf::from(path),
+                template_slug: template,
+                vars: classified.vars,
+                apply_structure: apply,
+                rename,
+                use_today,
+                created_override: created,
+                yes: yes || classified.flags.yes,
+            })
+        }
+
         Some(Commands::Apply {
             template,
             target,
@@ -509,13 +604,14 @@ fn run() -> Result<()> {
             yes,
             extra,
         }) => {
-            let vars = parse_extra_vars(&extra);
+            let classified = cli::new::classify_extra(extra);
+            warn_unknown(&classified.unknown);
             cli::apply::run(cli::apply::ApplyArgs {
                 template_slug: template,
                 target,
-                dry_run,
-                yes,
-                vars,
+                dry_run: dry_run || classified.flags.dry_run,
+                yes: yes || classified.flags.yes,
+                vars: classified.vars,
             })
         }
 
@@ -544,19 +640,16 @@ fn run() -> Result<()> {
     }
 }
 
-/// Parse trailing args like --artist="Ariana Grande" --title=Lullaby
-/// into HashMap { "artist" => "Ariana Grande", "title" => "Lullaby" }.
-/// Hyphens in keys are normalized to underscores.
-fn parse_extra_vars(extra: &[String]) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for arg in extra {
-        let s = arg.trim_start_matches('-');
-        if let Some((key, val)) = s.split_once('=') {
-            let key = key.replace('-', "_");
-            map.insert(key, val.to_string());
-        }
+/// Emit a `warning:` line for every token that came out of `classify_extra`'s
+/// unknown bucket. Used by the New / Apply / Register arms.
+fn warn_unknown(unknown: &[String]) {
+    for u in unknown {
+        eprintln!(
+            "{} unrecognized flag '{}' — ignored",
+            "warning:".yellow().bold(),
+            u
+        );
     }
-    map
 }
 
 fn generate_completions(shell: &str) -> Result<()> {

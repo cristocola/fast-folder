@@ -26,7 +26,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (70 total: 40 unit + 30 integration)
+# Test (106 total: 58 unit + 48 integration)
 cargo test
 cargo test <test_name>   # run a single test by name
 
@@ -48,14 +48,19 @@ fast-folder/
 │                               finance-monthly, research-note). NOT bundled — users import
 │                               with `fastf template import examples/templates/<slug>.yaml`.
 ├── tests/
-│   └── integration.rs        — 30 hermetic tests using FASTF_INSTALL_DIR + tempfile
+│   └── integration.rs        — 48 hermetic tests using FASTF_INSTALL_DIR + tempfile
 └── src/
     ├── lib.rs                — Library entry: exposes core/, cli/, tui/, util/, bootstrap/
     │                           so integration tests can import fastf::...
     ├── main.rs               — Binary entry, `use fastf::{bootstrap, cli, tui};`
-    │                           clap commands include Recent (+ --plain --tag), Open, Apply,
-    │                           Tag (Add/Remove/List/Reauto), Search, Note (Add), Notes,
-    │                           TemplateAction::FromFolder
+    │                           clap commands include Recent (+ --plain --tag), Open, Register,
+    │                           Apply, Tag (Add/Remove/List/Reauto), Search, Note (Add), Notes,
+    │                           TemplateAction::FromFolder. The New / Apply / Register arms run
+    │                           their clap `extra` Vec through `cli::new::classify_extra` so
+    │                           bool flags (--yes/--dry-run/--no-preview/--no-post/-y) and
+    │                           `--base-dir=PATH` work BEFORE or AFTER the slug. Unknown
+    │                           `--foo` tokens surface via `warn_unknown()` instead of
+    │                           silently dropping (v0.5).
     ├── bootstrap.rs          — First-run setup: creates config.toml, counters.toml, templates/
     │                           (the three bundled YAMLs no longer declare PROJECT_INFO.md —
     │                           auto-gen owns it now)
@@ -69,7 +74,8 @@ fast-folder/
     │   │                        preview_lines (8), post_create (PostCreate), and new v0.3 fields:
     │   │                        prompt_open_after_create, project_info_enabled,
     │   │                        project_info_filename, recent_default_limit,
-    │   │                        confirm_create, show_banner.
+    │   │                        confirm_create, show_banner. v0.5: register_naming_pattern
+    │   │                        (default "{date}_{name}_{id}") drives the no-template rename.
     │   │                        Serde aliases `pinfo_enabled`/`pinfo_filename` accept
     │   │                        any interim configs from before the rename.
     │   ├── counter.rs        — Global auto-increment ID (single 'global' field in counters.toml)
@@ -86,9 +92,17 @@ fast-folder/
     │   │                        atomic in-place tag mutation; append_journal_entry(path, msg)
     │   │                        for ## Journal section; read_journal_entries(); split_frontmatter_body()
     │   │                        is pub for byte-identical body round-trips.
+    │   │                        v0.5: pub const RESERVED_FILENAME = "PROJECT_INFO.md" +
+    │   │                        path_is_reserved(p) helper used by Template::strip_reserved_files
+    │   │                        and the TUI template builder to lock the auto-gen filename.
     │   ├── template.rs       — Template (+ post_create, tags, tag_from), Variable,
     │   │                        FolderNode, FileEntry, IdConfig, Transform. validate() is pub
     │   │                        and rejects tag_from entries that aren't declared variable slugs.
+    │   │                        v0.5: strip_reserved_files() drops file entries whose path
+    │   │                        collides with the reserved auto-gen filename
+    │   │                        (PROJECT_INFO.md at root, case-insensitive). Called from
+    │   │                        load_from_file (silent back-compat for older templates) and
+    │   │                        save_to_file (cleans up on re-save).
     │   ├── query.rs          — v0.4. Predicate enum (Field/After/Before/Tag/Free), Pattern
     │   │                        (Exact/Prefix), parse() and evaluate(). Bare terms become
     │   │                        Predicate::Free — case-insensitive substring across vars/tags/
@@ -108,12 +122,17 @@ fast-folder/
     │   │                        not --yes, not --no-post, cfg.prompt_open_after_create,
     │   │                        stdout is TTY, and reveal not already in resolved post_create.
     │   │                        Also honors cfg.confirm_create (global --yes equivalent).
+    │   │                        v0.5: hosts `classify_extra(extra) -> ClassifiedExtra` —
+    │   │                        the trailing_var_arg splitter shared by main.rs's New /
+    │   │                        Apply / Register arms.
     │   ├── template.rs       — list/show/edit/delete/import/export +
     │   │                        from_folder() for template generation from existing dirs
     │   ├── config.rs         — config show/set. Handles new v0.3 keys:
     │   │                        project_info_enabled, project_info_filename (with pinfo_* aliases),
     │   │                        prompt_open_after_create, confirm_create, show_banner,
-    │   │                        recent_default_limit, post_create.* keys.
+    │   │                        recent_default_limit, post_create.* keys, and
+    │   │                        v0.5 register_naming_pattern. The setter rejects patterns
+    │   │                        without `{id}` (would collide multiple registered folders).
     │   ├── id.rs             — id show/reset/set
     │   ├── recent.rs         — `fastf recent`: defaults to interactive picker (TTY).
     │   │                        picker → project_action_menu() → Open / Show metadata /
@@ -130,7 +149,17 @@ fast-folder/
     │   │                        index reverse-chronologically, reads metadata per record,
     │   │                        evaluates predicates, then renders via run_picker (TTY) or
     │   │                        plain list (--plain / pipe).
-    │   └── apply.rs          — `fastf apply <slug> <dir>` with --dry-run (skip-only semantics)
+    │   ├── apply.rs          — `fastf apply <slug> <dir>` with --dry-run (skip-only semantics)
+    │   └── register.rs       — v0.5. `fastf register <path>` onboards an existing folder:
+    │                            writes PROJECT_INFO.md, appends to projects.jsonl, bumps the
+    │                            global counter. Optional --template (full metadata + tags),
+    │                            --apply (fill missing structure via project::apply, requires
+    │                            --template), --rename (renders tmpl.naming_pattern with a
+    │                            template or cfg.register_naming_pattern without — `{name}`
+    │                            token is synthesised via slugify_folder_name()),
+    │                            --use-today / --created YYYY-MM-DD.
+    │                            Exposes pub fn resolve_created() for unit-test isolation and
+    │                            pub const REGISTERED_SLUG = "(registered)" for no-template runs.
     └── tui/
         ├── mod.rs
         ├── menu.rs           — Interactive TUI menu. ASCII banner (suppressed if !show_banner).
@@ -144,7 +173,14 @@ fast-folder/
         │                          Recent projects / Post-create actions.
         │                        Every config field has a toggle/edit entry with inline state.
         └── template_builder.rs — Step-by-step interactive template create/edit
-                                  (sets post_create: None on new templates)
+                                  (sets post_create: None on new templates).
+                                  v0.5: `collect_file(vars)` always stores user
+                                  input in `FileEntry.template` and prints the
+                                  available `{token}` strings + a post-input
+                                  substitution summary. The "Template vs Raw"
+                                  Select was removed — interpolate() is a no-op
+                                  on text without braces so there's no behavior
+                                  loss vs Raw, and `{slug}` markers just work.
 ```
 
 ## Key design decisions
@@ -192,9 +228,11 @@ Append-only JSONL log of created projects. One `{"id","template","path","name","
 
 **Atomic mutation** (v0.4): `write_frontmatter(path, |meta| { ... })` reads → splits → parses → applies the closure → re-serializes via `serde_yaml::to_string` → writes via `.tmp` + rename. Body bytes are byte-identical after a no-op mutation — the dedicated integration test asserts this. `append_journal_entry(path, msg)` does the same atomic dance for the body. Both require frontmatter to exist; otherwise return a structured error naming the path.
 
-The bundled templates (`music-video`, `photography`, `video-production`) no longer declare a `PROJECT_INFO.md` content file — auto-gen owns that file. Custom templates that previously defined their own `PROJECT_INFO.md` will have it overwritten on `fastf new` (write order: template files → pinfo). If you want to preserve a custom body, name it something different (e.g. `NOTES.md`) and let fastf own `PROJECT_INFO.md`.
+The bundled templates (`music-video`, `photography`, `video-production`) no longer declare a `PROJECT_INFO.md` content file — auto-gen owns that file. **As of v0.5, `PROJECT_INFO.md` at the project root is a reserved filename**: `Template::load_from_file` and `save_to_file` silently strip any `files[].path == "PROJECT_INFO.md"` entry (case-insensitive on the leaf, root-only — `docs/PROJECT_INFO.md` is allowed). Older user-built templates that declared their own `PROJECT_INFO.md` keep loading; the entry is just ignored. The TUI template builder rejects the name inline. If you want a custom notes file, use a different name (e.g. `NOTES.md`).
 
-**`apply` does NOT write PROJECT_INFO.md** — by design. Only `fastf new` writes it. It's not a new project.
+The reservation is enforced via `core::project_info::path_is_reserved()` against the hard-coded constant `RESERVED_FILENAME = "PROJECT_INFO.md"`, NOT against `cfg.project_info_filename`. The config field still exists and still drives where fastf writes the auto-gen file, but the reservation is fixed so the safety net is consistent regardless of config. (Power users who customized `project_info_filename` to e.g. `.fastf-info.md` need to manage their template collisions themselves.)
+
+**`apply` does NOT write PROJECT_INFO.md** — by design. Only `fastf new` and `fastf register` write it. `apply` retrofits structure into a folder that fastf doesn't necessarily own; `register` explicitly claims a folder. Different intents, different write behavior.
 
 ### "Open project folder?" prompt
 After `print_success()` in `cli/new.rs`, call `post_create::prompt_and_reveal(path)` when all of these are true:
@@ -233,6 +271,22 @@ The free-text branch in `eval_one` searches `tags`, all `meta.variables.values()
 
 Project-resolution shared helper: `index::resolve_project(query)` does exact-id → id-prefix → name-substring (case-insensitive). Used by `tag`, `note`, and the legacy `fastf open` paths. Ambiguous queries return a structured error listing the candidates.
 
+### `fastf register <path>` (v0.5)
+Onboards an existing folder into the index without creating one. Same write order as `project::create`: counter → index → pinfo. Two-step pinfo write is the key trick:
+
+1. `project_info::write(&plan, &tmpl, &cfg, &tags)` renders the full file (frontmatter + variables table + Notes), but `Metadata::from_plan` always sets `created = now_iso8601()`.
+2. `project_info::write_frontmatter(path, |m| m.created = resolved.clone())` atomically patches only the `created` YAML field via `.tmp` + rename. Body bytes are byte-identical.
+
+This avoids growing `Metadata::from_plan`'s signature for a register-only concern. The `resolved` timestamp comes from `resolve_created(path, use_today, override)`: explicit `--created YYYY-MM-DD` → `T00:00:00Z` ISO-8601; `--use-today` → now; default → `fs::metadata.created()` falling back to `modified()` (some Linux fs have no birth time).
+
+Without `--template`, a stub `Template` is used: `slug = "(registered)"` (exposed as `REGISTERED_SLUG` const), `IdConfig::default()` for the ID format, empty variables/structure/files/tags/tag_from. The rest of the render path handles empty variables gracefully (the "no variables" branch in `project_info::render`). This avoids special-casing every call site.
+
+`--rename` calls `interpolate_name(pattern, vars, date_format)` — same renderer as `project::plan`. Two pattern sources: `tmpl.naming_pattern` with a template, `cfg.register_naming_pattern` without (default `{date}_{name}_{id}`). For the no-template path a synthetic `{name}` token is injected via `slugify_folder_name(folder_basename)` — collapses whitespace runs to `_`, applies `sanitize_name`, preserves case. Confirms before `fs::rename` unless `--yes` is set. Aborts if the target already exists rather than overwriting. `--apply` calls `project::apply` after the optional rename. `--apply` still requires `--template` (there's no structure to fill in without one), but `--rename` works either way as of v0.5.
+
+PROJECT_INFO.md overwrite policy: if a file already exists, prompt (default No). With `--yes`, overwrite without asking. In non-TTY without `--yes`, refuse and warn (still register the project — index/counter happen regardless).
+
+Path equality for "already registered" uses `paths_equal` (both sides normalised to `/`) so Windows backslash variations don't slip past the duplicate check.
+
 ### Post-create actions
 `PostCreate` struct on both `Config` and `Template`. Template-level overrides config-level entirely (same resolution model as `default_template`). All fields default to off:
 - `git_init`: run `git init` in new folder
@@ -264,21 +318,34 @@ Parent path is dimmed, final directory name is bold cyan.
 ### Top-level menu entries
 ```
 > Create new project
-  Recent projects                          ← interactive picker
-  Apply template to existing folder        ← menu_apply() → prompts slug + target dir
-  Manage templates
+  Recent projects                          ← menu_recent() → straight to interactive picker
+  Search projects                          ← menu_search() → splits query, runs cli::search
+  Register existing folder                 ← menu_register() (v0.5)
+  Manage templates                         ← contains "Apply template to existing folder"
   View / edit settings
-  View ID counters
   Quit
 ```
+
+`menu_recent()` delegates directly to `recent::run` with prune=false — keeps
+the picker one keypress away from the main menu. Maintenance lives under
+**Settings → Recent projects → Prune missing entries**, which calls
+`menu_recent_prune()`: loads the index, lists up to 10 stale records (with
+`+N more` overflow), Confirms (default Yes), then delegates to `recent::run`
+with prune=true. The CLI `fastf recent --prune` is the same code path.
+
+`menu_register()` walks: folder path → optional template (Confirm + picker) →
+"Standardize folder name?" (default Yes) → optional `--apply` (only when a
+template is attached) → calls `cli::register::run`. The fs::rename inside
+`register::run` prompts again before moving, so the user has a second chance
+to back out after seeing the proposed new name.
 
 ### Settings menu structure (grouped submenus)
 ```
 Settings
 ├── Project basics               (base dir / template / date / editor)
 ├── Workflow prompts             (open prompt / confirm / banner / preview lines)
-├── Project metadata             (enabled / filename)
-├── Recent projects              (default limit)
+├── Project metadata             (PROJECT_INFO.md enabled — filename is reserved)
+├── Recent projects              (default limit / prune missing entries)
 ├── Post-create actions          (git / reveal / editor / path / commands)
 └── Back
 ```
@@ -338,3 +405,16 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - v0.4: `Predicate::Free` is the parser fallthrough, so any non-empty term that isn't `tag:`, `key=…`, `key>…`, `key<…` becomes a free-text predicate. Don't add another fallthrough below it (would be unreachable). Free terms search **case-insensitive substring** (not prefix) — keep it that way for grep-like UX.
 - v0.4: `path` is intentionally NOT searched by `Predicate::Free`. There's a regression test (`free_does_not_match_path`) that asserts this; if you ever extend the field set, don't break that guarantee silently — home-dir leakage is a privacy footgun.
 - v0.4: `cli::recent::run_picker` is `pub` because `cli::search` reuses it; `project_action_menu` stays private. If TUI/search both need a new picker action, add it inside `recent.rs`.
+- v0.5: Bool flags after the slug used to silently drop. Fixed by `cli::new::classify_extra` — main.rs's New / Apply / Register arms all run their trailing `extra` Vec through it, then OR-combine the recognized flags into the relevant Args struct. Adding a new bool flag to `New`/`Apply`/`Register` requires updating `ExtraFlags`, the recognizer match in `classify_extra`, AND the OR-combine in each match arm — three coordinated edits. Forget the third and the flag works before the slug but mysteriously breaks after it.
+- v0.5: `register` writes PROJECT_INFO.md in two steps: `project_info::write` (which uses `now_iso8601` inside `Metadata::from_plan`), then `project_info::write_frontmatter` to patch `created` to the resolved timestamp. Don't try to plumb the timestamp through `from_plan` — it'd break the byte-identity guarantee on the round-trip test and pollute the signature for a register-only concern.
+- v0.5: `register` builds its `ProjectPlan` directly (pub struct fields) instead of calling `project::plan()` because plan always sets `root_path = cfg.base_dir.join(folder_name)`. Register's `root_path` is the canonical path of the existing folder. Don't refactor plan to take a path override — keep the two flows separate.
+- v0.5: Without `--template`, register uses a `registered_stub_template()` (slug `"(registered)"`, `IdConfig::default()`). Recent and search will show these mixed with template-created projects. `project_info::render`'s "no variables" branch handles empty `tmpl.variables` correctly — don't add a special-case writer.
+- v0.5: `paths_equal` (in `cli/register.rs`) is a `/`-vs-`\` normaliser used to detect duplicate registration on Windows. Don't replace with raw `==` on path strings — re-registering a folder whose index record was written with backslashes would slip past.
+- v0.5: `sanitize_name` in `core/naming.rs` does NOT replace spaces — it only swaps filesystem-illegal chars (`/ \ : * ? " < > |`). For `fastf new`, the user-declared `transform` on each variable does space→underscore. Register's no-template path doesn't have a transform, so it uses `slugify_folder_name` (collapses whitespace runs to `_`, applies `sanitize_name`, preserves case). If you ever wire a no-template flow elsewhere, reach for `slugify_folder_name`, not `sanitize_name` alone.
+- v0.5: `config::set "register-naming-pattern"` rejects patterns that don't contain `{id}`. This is a safety net — without `{id}`, registering multiple folders with the same `{name}` would all rename to the same target. Don't relax this check unless you've thought through the duplicate-rename UX.
+- v0.5: `--apply` requires `--template` (still). `--rename` does not, as of v0.5 — it falls back to `cfg.register_naming_pattern`. If you add another "needs template" flag, encode the requirement in clap's `requires = "template"` AND in the defensive bail at the top of `register::run` (the public API can be called directly from tests, bypassing clap).
+- v0.5: `PROJECT_INFO.md` is reserved. `Template::load_from_file` and `save_to_file` both call `strip_reserved_files()` (which uses `project_info::path_is_reserved`). The check is root-only (leaf `==` reserved name, case-insensitive, AND no `/` in the normalised path) so `docs/PROJECT_INFO.md` is allowed. The reserved name is hardcoded to `"PROJECT_INFO.md"` — NOT pulled from `cfg.project_info_filename` — so the safety net is independent of user config. If you change the auto-gen filename concept (e.g. multi-file project metadata), update `RESERVED_FILENAME` and consider whether the strip should become config-driven.
+- v0.5: The TUI Settings → Project metadata submenu intentionally hides the filename customization. The toggle for `project_info_enabled` is still there. `fastf config set project-info-filename` still works for v0.3-era configs but is no longer surfaced in any interactive flow. Don't re-add the filename input to the TUI — it just leads users back to the foot-gun.
+- v0.5: Template builder's `collect_file()` example shows `NOTES.md`, not `PROJECT_INFO.md`. It also rejects the reserved name inline with a loop-back. If you change the example, keep `NOTES.md` (or another genuinely non-reserved name) — `PROJECT_INFO.md` as an example actively misleads users into creating template entries that get silently stripped.
+- v0.5: Template builder no longer asks "Template vs Raw" content mode. `collect_file()` always writes to `FileEntry.template`. The `FileEntry.content` field still exists in the YAML schema (hand-written templates with raw byte content keep working — e.g. `music-video.yaml`'s `.gitignore`), but the builder never produces it. `create_file()` and `apply()` still pick `template` when non-empty else `content`, so the dual-field semantics are preserved at the writer. If you re-add a mode switch, remember that `interpolate()` is already a no-op on text without `{token}` markers, so the only real use-case for `content:` is preserving literal `{...}` braces.
+- v0.5: The "Add another placeholder file?" prompt in `edit_files()` defaults to **No** and explicitly mentions that PROJECT_INFO.md is generated automatically. Don't flip the default back to Yes — the typical template doesn't need extra placeholder files and the auto-gen covers the common notes use-case.

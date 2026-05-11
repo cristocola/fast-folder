@@ -36,6 +36,28 @@ use crate::core::config::Config;
 use crate::core::project::ProjectPlan;
 use crate::core::template::Template;
 
+/// Canonical filename for the auto-generated per-project metadata file.
+///
+/// Reserved across the codebase — templates cannot declare a file entry with
+/// this name (case-insensitive). The configurable `cfg.project_info_filename`
+/// still controls where fastf actually writes the file, but `RESERVED_FILENAME`
+/// is the hard-coded safety net checked in `Template::load_from_file`,
+/// `Template::save_to_file`, and the TUI template builder.
+pub const RESERVED_FILENAME: &str = "PROJECT_INFO.md";
+
+/// True when `path` (the YAML `files[].path` field) collides with the reserved
+/// auto-gen filename. Compared case-insensitively on the final path component
+/// so `notes/PROJECT_INFO.md` is fine but `PROJECT_INFO.md` at the root is not.
+pub fn path_is_reserved(path: &str) -> bool {
+    // Templates always use `/` separators (see CLAUDE.md "Cross-platform paths"),
+    // but accept `\` defensively in case a user-edited YAML used backslashes.
+    let normalized = path.replace('\\', "/");
+    let leaf = normalized.rsplit('/').next().unwrap_or(&normalized);
+    // The reservation only kicks in at the project root — templates that want
+    // a sub-folder file called PROJECT_INFO.md (rare, but valid) still work.
+    leaf.eq_ignore_ascii_case(RESERVED_FILENAME) && !normalized.contains('/')
+}
+
 /// Typed view of the YAML frontmatter — the structured / queryable layer.
 ///
 /// `BTreeMap` (vs `HashMap`) keeps `variables` in deterministic alphabetical
@@ -453,5 +475,28 @@ mod tests {
         let content = "---\nid: x\n---\n\n## Journal\n\n- 2026-01-01T00:00:00Z — entry\n\n## Notes\n\nNot a journal entry.\n";
         let entries = parse_journal_entries(content);
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn path_is_reserved_matches_root_project_info() {
+        assert!(path_is_reserved("PROJECT_INFO.md"));
+        assert!(path_is_reserved("project_info.md"));
+        assert!(path_is_reserved("Project_Info.MD"));
+    }
+
+    #[test]
+    fn path_is_reserved_allows_subfolder_collision() {
+        // Templates that put PROJECT_INFO.md in a subfolder aren't fighting
+        // for the root auto-gen slot — let those through.
+        assert!(!path_is_reserved("docs/PROJECT_INFO.md"));
+        assert!(!path_is_reserved("notes\\PROJECT_INFO.md"));
+    }
+
+    #[test]
+    fn path_is_reserved_allows_other_filenames() {
+        assert!(!path_is_reserved("NOTES.md"));
+        assert!(!path_is_reserved("README.md"));
+        assert!(!path_is_reserved("project-info.md")); // hyphen, not underscore
+        assert!(!path_is_reserved(".fastf-info.md"));
     }
 }

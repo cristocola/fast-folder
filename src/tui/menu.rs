@@ -4,8 +4,11 @@ use dialoguer::{Confirm, Input, MultiSelect, Select};
 use std::collections::HashMap;
 
 use crate::cli::new::{self, NewArgs};
+use crate::cli::register::{self, RegisterArgs};
 use crate::cli::{apply, config, id, recent, search, template};
 use crate::core::config::Config;
+use crate::core::index;
+use crate::core::template as core_template;
 
 const BANNER: &str = r#"  ___        _      ___    _    _
  | __|_ _ __| |_   | __|__| |__| |___ _ _
@@ -53,6 +56,7 @@ pub fn run() -> Result<()> {
                 "Create new project",
                 "Recent projects",
                 "Search projects",
+                "Register existing folder",
                 "Manage templates",
                 "View / edit settings",
                 "Quit",
@@ -64,9 +68,10 @@ pub fn run() -> Result<()> {
             0 => menu_create()?,
             1 => menu_recent()?,
             2 => menu_search()?,
-            3 => menu_templates()?,
-            4 => menu_settings()?,
-            5 => {
+            3 => menu_register()?,
+            4 => menu_templates()?,
+            5 => menu_settings()?,
+            6 => {
                 println!("Goodbye.");
                 break;
             }
@@ -94,7 +99,9 @@ fn menu_create() -> Result<()> {
 }
 
 fn menu_recent() -> Result<()> {
-    // Interactive picker is now the default for `fastf recent`, so just delegate.
+    // Interactive picker is the default for `fastf recent`, so just delegate.
+    // Maintenance actions (prune) live under Settings → Recent projects so
+    // this entry stays focused on browsing.
     recent::run(recent::RecentArgs {
         limit: None,
         template: None,
@@ -105,6 +112,86 @@ fn menu_recent() -> Result<()> {
     })?;
     println!();
     Ok(())
+}
+
+/// Show how many index records point at folders that no longer exist, then
+/// ask the user before rewriting the index. Delegates to `recent::run` with
+/// `prune=true` for the actual rewrite so the printed result matches the CLI
+/// behavior exactly.
+fn menu_recent_prune() -> Result<()> {
+    let records = match index::load_all() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  {} could not read index: {e}", "error:".red().bold());
+            return Ok(());
+        }
+    };
+
+    if records.is_empty() {
+        println!(
+            "  {} the project index is empty — nothing to prune.",
+            "·".dimmed()
+        );
+        return Ok(());
+    }
+
+    let stale: Vec<&_> = records
+        .iter()
+        .filter(|r| !std::path::Path::new(&r.path).exists())
+        .collect();
+
+    if stale.is_empty() {
+        println!(
+            "  {} Index is already clean — no missing projects.",
+            "✓".green()
+        );
+        return Ok(());
+    }
+
+    println!();
+    println!(
+        "  {} {} record{} point at folder{} that no longer exist:",
+        "·".dimmed(),
+        stale.len(),
+        if stale.len() == 1 { "" } else { "s" },
+        if stale.len() == 1 { "" } else { "s" },
+    );
+    for r in stale.iter().take(10) {
+        println!(
+            "    {}  {}  {}",
+            r.id.dimmed(),
+            r.name,
+            r.path.to_string().dimmed()
+        );
+    }
+    if stale.len() > 10 {
+        println!("    {} (+{} more)", "·".dimmed(), stale.len() - 10);
+    }
+    println!();
+
+    let proceed = Confirm::new()
+        .with_prompt(format!(
+            "Remove {} stale record{}?",
+            stale.len(),
+            if stale.len() == 1 { "" } else { "s" }
+        ))
+        .default(true)
+        .interact()?;
+
+    if !proceed {
+        println!("  {}", "(cancelled)".dimmed());
+        return Ok(());
+    }
+
+    // The CLI prune path prints its own success line, so just delegate.
+    recent::run(recent::RecentArgs {
+        limit: None,
+        template: None,
+        since: None,
+        tag: None,
+        prune: true,
+        plain: false,
+    })
 }
 
 fn menu_search() -> Result<()> {
@@ -156,6 +243,78 @@ fn menu_apply() -> Result<()> {
             })?;
         }
     }
+    println!();
+    Ok(())
+}
+
+fn menu_register() -> Result<()> {
+    // 1. Folder path.
+    let path: String = Input::new()
+        .with_prompt("Existing folder to register")
+        .interact_text()?;
+    let path = path.trim();
+    if path.is_empty() {
+        println!("{}", "  (cancelled)".dimmed());
+        return Ok(());
+    }
+
+    // 2. Optional template — first ask, then pick if Yes. Skipping is fully
+    //    supported: register writes a minimal record with template "(registered)".
+    let use_template = Confirm::new()
+        .with_prompt("Attach a template (enables tags + variable capture)?")
+        .default(false)
+        .interact()?;
+
+    let template_slug = if use_template {
+        match core_template::load_all() {
+            Ok(ts) if !ts.is_empty() => Some(prompt_template_slug("Template to attach")?),
+            Ok(_) => {
+                println!(
+                    "  {} no templates available — continuing without one.",
+                    "·".dimmed()
+                );
+                None
+            }
+            Err(e) => {
+                println!(
+                    "  {} could not load templates ({e}) — continuing without one.",
+                    "warning:".yellow().bold()
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // 3. Standardize folder name. Default Yes; the actual fs::rename inside
+    //    register::run() prompts again before moving, so the user has a second
+    //    chance to back out once they see the proposed new name.
+    let rename = Confirm::new()
+        .with_prompt("Standardize folder name (rename to match pattern)?")
+        .default(true)
+        .interact()?;
+
+    // 4. Optional --apply (only meaningful with a template).
+    let apply_structure = if template_slug.is_some() {
+        Confirm::new()
+            .with_prompt("Fill in missing template folders/files?")
+            .default(false)
+            .interact()?
+    } else {
+        false
+    };
+
+    register::run(RegisterArgs {
+        path: std::path::PathBuf::from(path),
+        template_slug,
+        vars: HashMap::new(),
+        apply_structure,
+        rename,
+        use_today: false,
+        created_override: None,
+        yes: false,
+    })?;
     println!();
     Ok(())
 }
@@ -285,7 +444,7 @@ fn menu_settings() -> Result<()> {
             .items(&[
                 "Project basics  (base dir / template / date / editor)",
                 "Workflow prompts  (open prompt / confirm / banner / preview)",
-                "Project metadata  (PROJECT_INFO.md enabled / filename)",
+                "Project metadata  (PROJECT_INFO.md enabled)",
                 "Recent projects  (default limit)",
                 "Post-create actions  (git / reveal / editor / path / commands)",
                 "ID counter",
@@ -410,7 +569,6 @@ fn menu_settings_project_info() -> Result<()> {
                 "Generate PROJECT_INFO.md on new project",
                 cfg.project_info_enabled,
             ),
-            format!("Metadata filename  [{}]", cfg.project_info_filename),
             "Back".to_string(),
         ];
         let choice = Select::new()
@@ -420,15 +578,12 @@ fn menu_settings_project_info() -> Result<()> {
             .interact()?;
 
         match choice {
+            // The filename is intentionally not exposed here: PROJECT_INFO.md
+            // is fastf-managed and the same name across every project. Power
+            // users can still override via `fastf config set project-info-filename`
+            // for back-compat with v0.3 configs.
             0 => toggle_setting("project-info-enabled", cfg.project_info_enabled)?,
-            1 => {
-                let val: String = Input::new()
-                    .with_prompt("Filename (e.g. PROJECT_INFO.md, .fastf-info.md)")
-                    .default(cfg.project_info_filename.clone())
-                    .interact_text()?;
-                config::set("project-info-filename", &val)?;
-            }
-            2 => break,
+            1 => break,
             _ => unreachable!(),
         }
         println!();
@@ -441,6 +596,7 @@ fn menu_settings_recent() -> Result<()> {
         let cfg = Config::load().unwrap_or_default();
         let items = [
             format!("Default list limit  [{}]", cfg.recent_default_limit),
+            "Prune missing entries  (remove index records for folders that are gone)".to_string(),
             "Back".to_string(),
         ];
         let choice = Select::new()
@@ -457,7 +613,8 @@ fn menu_settings_recent() -> Result<()> {
                     .interact_text()?;
                 config::set("recent-default-limit", &val)?;
             }
-            1 => break,
+            1 => menu_recent_prune()?,
+            2 => break,
             _ => unreachable!(),
         }
         println!();

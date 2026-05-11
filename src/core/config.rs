@@ -64,6 +64,15 @@ pub struct Config {
     /// Show the ASCII banner at the top of the TUI main menu.
     #[serde(default = "default_true")]
     pub show_banner: bool,
+
+    /// Pattern used by `fastf register --rename` when no `--template` is set.
+    /// Tokens: `{date}` (uses `date_format`), `{YYYY}`, `{MM}`, `{DD}`, `{id}`,
+    /// and `{name}` — the sanitized basename of the existing folder.
+    /// Default `"{date}_{name}_{id}"` produces names like
+    /// `2026-05-11_my_video_ID0048`. With `--template`, the template's
+    /// `naming_pattern` is used instead and this setting is ignored.
+    #[serde(default = "default_register_naming_pattern")]
+    pub register_naming_pattern: String,
 }
 
 fn default_date_format() -> String {
@@ -82,6 +91,9 @@ fn default_project_info_filename() -> String {
 fn default_recent_limit() -> usize {
     20
 }
+fn default_register_naming_pattern() -> String {
+    "{date}_{name}_{id}".to_string()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -98,6 +110,7 @@ impl Default for Config {
             recent_default_limit: default_recent_limit(),
             confirm_create: true,
             show_banner: true,
+            register_naming_pattern: default_register_naming_pattern(),
         }
     }
 }

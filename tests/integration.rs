@@ -1245,3 +1245,528 @@ fn gallery_templates_parse_and_plan() {
         "expected at least 5 gallery templates, found {seen}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// PROJECT_INFO.md is a reserved fastf-managed filename.  Templates may declare
+// it (e.g. old user-built templates from before the safety net), but the
+// entry is silently stripped on load and save so the auto-gen always wins
+// at write time.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn template_load_strips_reserved_project_info_entry() {
+    with_fresh_install(|install| {
+        // Mirrors the user's `general.yaml`: a real template with a
+        // `PROJECT_INFO.md` file entry left over from the pre-fix builder.
+        let yaml = r#"name: General
+slug: general
+naming_pattern: "{id}_{title}"
+id:
+  prefix: ID
+  digits: 4
+variables:
+  - slug: title
+    label: Title
+    type: text
+    required: true
+files:
+  - path: PROJECT_INFO.md
+    template: |
+      Notes
+  - path: NOTES.md
+    content: |
+      hand-edited
+"#;
+        write_template(install, "general", yaml);
+
+        let t = template::find_by_slug("general").unwrap();
+        // The reserved entry is gone; the NOTES.md entry survives.
+        assert_eq!(
+            t.files.len(),
+            1,
+            "expected only NOTES.md, got {:?}",
+            t.files
+        );
+        assert_eq!(t.files[0].path, "NOTES.md");
+    });
+}
+
+#[test]
+fn template_save_strips_reserved_project_info_entry() {
+    with_fresh_install(|install| {
+        // Build a template in memory with a reserved entry and save it.
+        // Save-time strip should rewrite the YAML without that entry.
+        let mut t = template::Template::default();
+        t.name = "x".to_string();
+        t.slug = "x".to_string();
+        t.naming_pattern = "{id}".to_string();
+        t.files = vec![
+            template::FileEntry {
+                path: "PROJECT_INFO.md".to_string(),
+                template: "ignored\n".to_string(),
+                content: String::new(),
+            },
+            template::FileEntry {
+                path: "KEEP.md".to_string(),
+                template: String::new(),
+                content: "yes\n".to_string(),
+            },
+        ];
+
+        let path = install.join("templates").join("x.yaml");
+        t.save_to_file(&path).unwrap();
+
+        // Re-read the file — only KEEP.md should be present.
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(
+            !raw.contains("PROJECT_INFO.md"),
+            "saved YAML still contains reserved entry:\n{raw}"
+        );
+        assert!(
+            raw.contains("KEEP.md"),
+            "expected KEEP.md to survive: {raw}"
+        );
+    });
+}
+
+#[test]
+fn template_file_content_interpolates_multiple_custom_variables() {
+    // End-to-end: a placeholder file with three `{token}` markers (one used
+    // twice) should produce the fully-substituted text in the created project.
+    // Mirrors the user-facing example exactly.
+    with_fresh_install(|install| {
+        let yaml = r#"name: Greeting
+slug: greeting
+naming_pattern: "{id}_{project_name}"
+id:
+  prefix: ID
+  digits: 4
+variables:
+  - slug: client_name
+    label: Client name
+    type: text
+    required: true
+  - slug: project_name
+    label: Project name
+    type: text
+    required: true
+  - slug: producer
+    label: Producer
+    type: text
+    required: true
+files:
+  - path: NOTES.md
+    template: |
+      This is a project for {client_name}. Thank you {client_name} for working with us on {project_name}. Also thank you {producer}.
+"#;
+        write_template(install, "greeting", yaml);
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("greeting").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("client_name".to_string(), "John Doe".to_string());
+        vars.insert("project_name".to_string(), "Amazing Project".to_string());
+        vars.insert("producer".to_string(), "Steven Spielberg".to_string());
+
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        let notes = fs::read_to_string(plan.root_path.join("NOTES.md")).unwrap();
+        let expected = "This is a project for John Doe. Thank you John Doe for working with us on Amazing Project. Also thank you Steven Spielberg.\n";
+        assert_eq!(notes, expected, "interpolation produced unexpected output");
+    });
+}
+
+#[test]
+fn template_keeps_subfolder_project_info() {
+    with_fresh_install(|install| {
+        // PROJECT_INFO.md *in a subfolder* doesn't collide with the auto-gen
+        // (which lives at the project root) — the reservation is leaf-only.
+        let yaml = r#"name: subdoc
+slug: subdoc
+naming_pattern: "{id}"
+files:
+  - path: docs/PROJECT_INFO.md
+    content: |
+      sub-doc
+"#;
+        write_template(install, "subdoc", yaml);
+        let t = template::find_by_slug("subdoc").unwrap();
+        assert_eq!(t.files.len(), 1);
+        assert_eq!(t.files[0].path, "docs/PROJECT_INFO.md");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// `fastf register <path>` — onboard existing folders into the index.
+// ---------------------------------------------------------------------------
+
+use fastf::cli::register::{RegisterArgs, run as register_run};
+
+fn register_args(path: &Path) -> RegisterArgs {
+    RegisterArgs {
+        path: path.to_path_buf(),
+        template_slug: None,
+        vars: HashMap::new(),
+        apply_structure: false,
+        rename: false,
+        use_today: false,
+        created_override: None,
+        yes: true,
+    }
+}
+
+#[test]
+fn register_minimal_no_template() {
+    with_fresh_install(|install| {
+        let target = install.join("old-project");
+        fs::create_dir_all(&target).unwrap();
+
+        register_run(register_args(&target)).unwrap();
+
+        // Counter bumped to 1
+        assert_eq!(Counters::load().unwrap().get(), 1);
+
+        // Index has one record with the registered slug
+        let recs = index::load_all().unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].id, "ID0001");
+        assert_eq!(recs[0].template, "(registered)");
+        assert_eq!(recs[0].name, "old-project");
+
+        // PROJECT_INFO.md exists with frontmatter
+        let pinfo = target.join("PROJECT_INFO.md");
+        assert!(
+            pinfo.exists(),
+            "expected PROJECT_INFO.md in {}",
+            target.display()
+        );
+        let body = fs::read_to_string(&pinfo).unwrap();
+        assert!(body.starts_with("---\n"), "missing frontmatter");
+        assert!(body.contains("id: ID0001"), "missing id");
+        assert!(
+            body.contains("template: (registered)")
+                || body.contains("template: '(registered)'")
+                || body.contains("template: \"(registered)\""),
+            "missing template slug; body:\n{body}"
+        );
+    });
+}
+
+#[test]
+fn register_with_template_full_metadata() {
+    with_fresh_install(|install| {
+        write_template(install, "music", &minimal_template_yaml("music"));
+        let target = install.join("LegacyAlbum");
+        fs::create_dir_all(&target).unwrap();
+
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Lullaby".to_string());
+
+        let mut args = register_args(&target);
+        args.template_slug = Some("music".to_string());
+        args.vars = vars;
+
+        register_run(args).unwrap();
+
+        // Frontmatter reflects the template + variables
+        let cfg = Config::default();
+        let meta = project_info::read_metadata(&target, &cfg).unwrap().unwrap();
+        assert_eq!(meta.template, "music");
+        assert_eq!(meta.template_name, "Test");
+        assert_eq!(meta.id, "T001");
+        assert_eq!(
+            meta.variables.get("name").map(|s| s.as_str()),
+            Some("Lullaby")
+        );
+        // No tag_from in the minimal template, so tags should be empty.
+        assert!(meta.tags.is_empty());
+
+        // Index uses the template slug
+        let recs = index::load_all().unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].template, "music");
+        assert_eq!(recs[0].id, "T001");
+    });
+}
+
+#[test]
+fn register_with_tag_from_emits_auto_tags() {
+    with_fresh_install(|install| {
+        let yaml = r#"name: Client work
+slug: client
+naming_pattern: "{id}_{name}"
+id:
+  prefix: C
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+  - slug: tier
+    label: Tier
+    type: select
+    options: [Indie, Major]
+    default: Indie
+tag_from:
+  - tier
+"#;
+        write_template(install, "client", yaml);
+        let target = install.join("AcmeWork");
+        fs::create_dir_all(&target).unwrap();
+
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Acme".to_string());
+        vars.insert("tier".to_string(), "Indie".to_string());
+
+        let mut args = register_args(&target);
+        args.template_slug = Some("client".to_string());
+        args.vars = vars;
+
+        register_run(args).unwrap();
+
+        let cfg = Config::default();
+        let meta = project_info::read_metadata(&target, &cfg).unwrap().unwrap();
+        assert!(
+            meta.tags.iter().any(|t| t == "tier/Indie"),
+            "expected auto-tag tier/Indie, got: {:?}",
+            meta.tags
+        );
+    });
+}
+
+#[test]
+fn register_rejects_missing_path() {
+    with_fresh_install(|install| {
+        let target = install.join("does-not-exist");
+        let err = register_run(register_args(&target)).expect_err("should bail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("does not exist") || msg.contains("not accessible"),
+            "got: {msg}"
+        );
+    });
+}
+
+#[test]
+fn register_rejects_non_directory() {
+    with_fresh_install(|install| {
+        let target = install.join("a-file");
+        fs::write(&target, "im a file").unwrap();
+        let err = register_run(register_args(&target)).expect_err("should bail");
+        assert!(err.to_string().contains("not a directory"), "got: {err:#}");
+    });
+}
+
+#[test]
+fn register_rejects_double_register() {
+    with_fresh_install(|install| {
+        let target = install.join("dup");
+        fs::create_dir_all(&target).unwrap();
+
+        register_run(register_args(&target)).unwrap();
+        let err = register_run(register_args(&target)).expect_err("second should bail");
+        assert!(
+            err.to_string().contains("already registered"),
+            "got: {err:#}"
+        );
+    });
+}
+
+#[test]
+fn register_created_override_lands_in_index_and_frontmatter() {
+    with_fresh_install(|install| {
+        let target = install.join("historic");
+        fs::create_dir_all(&target).unwrap();
+
+        let mut args = register_args(&target);
+        args.created_override = Some("2024-06-15".to_string());
+        register_run(args).unwrap();
+
+        let recs = index::load_all().unwrap();
+        assert_eq!(recs[0].created_at, "2024-06-15T00:00:00Z");
+
+        let cfg = Config::default();
+        let meta = project_info::read_metadata(&target, &cfg).unwrap().unwrap();
+        assert_eq!(meta.created, "2024-06-15T00:00:00Z");
+    });
+}
+
+#[test]
+fn register_use_today_overrides_default_and_explicit_conflicts() {
+    with_fresh_install(|install| {
+        let target = install.join("today");
+        fs::create_dir_all(&target).unwrap();
+
+        // use_today + created_override are mutually exclusive.
+        let mut args = register_args(&target);
+        args.use_today = true;
+        args.created_override = Some("2024-06-15".to_string());
+        let err = register_run(args).expect_err("conflict should bail");
+        assert!(
+            err.to_string().contains("mutually exclusive"),
+            "got: {err:#}"
+        );
+    });
+}
+
+#[test]
+fn register_apply_fills_missing_structure() {
+    with_fresh_install(|install| {
+        write_template(install, "music", &minimal_template_yaml("music"));
+        let target = install.join("existing");
+        fs::create_dir_all(&target).unwrap();
+
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "x".to_string());
+
+        let mut args = register_args(&target);
+        args.template_slug = Some("music".to_string());
+        args.apply_structure = true;
+        args.vars = vars;
+
+        register_run(args).unwrap();
+
+        // Template's structure: src/core → both should exist after --apply
+        assert!(target.join("src").join("core").is_dir());
+        // And the README templated file should have been created.
+        assert!(target.join("README.md").exists());
+    });
+}
+
+#[test]
+fn register_rename_moves_folder() {
+    with_fresh_install(|install| {
+        write_template(install, "music", &minimal_template_yaml("music"));
+        let original = install.join("OldName");
+        fs::create_dir_all(&original).unwrap();
+
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "hello".to_string());
+
+        let mut args = register_args(&original);
+        args.template_slug = Some("music".to_string());
+        args.rename = true;
+        args.vars = vars;
+
+        register_run(args).unwrap();
+
+        // naming_pattern is "{id}_{name}" with id=T001 and name transformed to "Hello".
+        let renamed = install.join("T001_Hello");
+        assert!(
+            renamed.is_dir(),
+            "expected renamed folder at {}",
+            renamed.display()
+        );
+        assert!(!original.exists(), "old folder should be gone");
+
+        // Index points at the new path.
+        let recs = index::load_all().unwrap();
+        assert_eq!(recs[0].name, "T001_Hello");
+        assert!(recs[0].path.replace('\\', "/").ends_with("T001_Hello"));
+    });
+}
+
+#[test]
+fn register_rename_without_template_uses_default_pattern() {
+    with_fresh_install(|install| {
+        let target = install.join("random project");
+        fs::create_dir_all(&target).unwrap();
+
+        let mut args = register_args(&target);
+        args.rename = true;
+        // Force today's date so the assertion is deterministic about the date prefix.
+        args.use_today = true;
+        register_run(args).unwrap();
+
+        // Default pattern is "{date}_{name}_{id}". Date = today (use_today=true);
+        // {name} = sanitize_name("random project") = "random_project";
+        // {id} = "ID0001". Assert on the stable suffix.
+        let parent = target.parent().unwrap();
+        let mut found = None;
+        for entry in fs::read_dir(parent).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with("_random_project_ID0001") {
+                found = Some(entry.path());
+                break;
+            }
+        }
+        assert!(
+            found.is_some(),
+            "expected a folder ending with '_random_project_ID0001' under {}",
+            parent.display()
+        );
+        // Original folder name should be gone (renamed).
+        assert!(!target.exists(), "original folder should have been renamed");
+        // Index entry points at the renamed path.
+        let recs = index::load_all().unwrap();
+        assert!(recs[0].name.ends_with("_random_project_ID0001"));
+    });
+}
+
+#[test]
+fn register_rename_uses_custom_config_pattern() {
+    with_fresh_install(|install| {
+        // Write a config file with a non-default register_naming_pattern.
+        let mut cfg = Config::default();
+        cfg.register_naming_pattern = "{id}-{name}".to_string();
+        let toml = toml::to_string_pretty(&cfg).unwrap();
+        fs::write(install.join("config.toml"), toml).unwrap();
+
+        let target = install.join("my folder");
+        fs::create_dir_all(&target).unwrap();
+
+        let mut args = register_args(&target);
+        args.rename = true;
+        register_run(args).unwrap();
+
+        let renamed = install.join("ID0001-my_folder");
+        assert!(renamed.is_dir(), "expected {}", renamed.display());
+    });
+}
+
+#[test]
+fn register_rename_sanitizes_spaces_in_folder_name() {
+    with_fresh_install(|install| {
+        let target = install.join("Old Project With Spaces");
+        fs::create_dir_all(&target).unwrap();
+
+        let mut args = register_args(&target);
+        args.rename = true;
+        args.use_today = true;
+        register_run(args).unwrap();
+
+        let parent = target.parent().unwrap();
+        let renamed = fs::read_dir(parent)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|n| n.contains("Old_Project_With_Spaces"));
+        assert!(
+            renamed.is_some(),
+            "expected sanitized folder name with underscores"
+        );
+    });
+}
+
+#[test]
+fn register_apply_requires_template() {
+    with_fresh_install(|install| {
+        let target = install.join("no-template");
+        fs::create_dir_all(&target).unwrap();
+
+        let mut args = register_args(&target);
+        args.apply_structure = true;
+        let err = register_run(args).expect_err("should bail");
+        assert!(
+            err.to_string().contains("--apply requires --template"),
+            "got: {err:#}"
+        );
+    });
+}

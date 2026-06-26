@@ -26,13 +26,19 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (106 total: 58 unit + 48 integration)
+# Test (110 total: 58 unit + 52 integration — 47 core in integration.rs + 5 UI in ui_server.rs)
 cargo test
 cargo test <test_name>   # run a single test by name
 
 # Lint — must be clean with -D warnings
 cargo clippy --all-targets -- -D warnings
 cargo fmt
+
+# Browser UI — same `cargo build` (the server + embedded frontend live in the lib).
+cargo run -- ui --no-open            # serve only (loopback)
+cargo run -- ui --app                # serve + open a Chromium/Chrome app window
+FASTF_UI_DIR=src/ui/web cargo run -- ui   # frontend live-reload (serve assets from disk)
+node --check src/ui/web/app.js       # frontend sanity check
 ```
 
 ## Project layout
@@ -47,15 +53,20 @@ fast-folder/
 │   └── templates/            — Gallery YAMLs (rust-project, python-project, web-project,
 │                               finance-monthly, research-note). NOT bundled — users import
 │                               with `fastf template import examples/templates/<slug>.yaml`.
+├── docs/
+│   └── UI.md                 — Browser-UI reference (architecture, HTTP API, dev live-reload)
+├── Launch Fast Folder UI.desktop — desktop launcher (Exec=`fastf ui --app`)
 ├── tests/
-│   └── integration.rs        — 48 hermetic tests using FASTF_INSTALL_DIR + tempfile
+│   ├── integration.rs        — 47 hermetic core tests using FASTF_INSTALL_DIR + tempfile
+│   └── ui_server.rs          — 5 tests driving fastf::ui::route_request (v0.6)
 └── src/
-    ├── lib.rs                — Library entry: exposes core/, cli/, tui/, util/, bootstrap/
+    ├── lib.rs                — Library entry: exposes core/, cli/, tui/, ui/, util/, bootstrap/
     │                           so integration tests can import fastf::...
-    ├── main.rs               — Binary entry, `use fastf::{bootstrap, cli, tui};`
+    ├── main.rs               — Binary entry, `use fastf::{bootstrap, cli, tui, ui};`
     │                           clap commands include Recent (+ --plain --tag), Open, Register,
     │                           Apply, Tag (Add/Remove/List/Reauto), Search, Note (Add), Notes,
-    │                           TemplateAction::FromFolder. The New / Apply / Register arms run
+    │                           TemplateAction::FromFolder, Ui (v0.6 browser-UI launcher →
+    │                           cli::ui::run). The New / Apply / Register arms run
     │                           their clap `extra` Vec through `cli::new::classify_extra` so
     │                           bool flags (--yes/--dry-run/--no-preview/--no-post/-y) and
     │                           `--base-dir=PATH` work BEFORE or AFTER the slug. Unknown
@@ -150,6 +161,9 @@ fast-folder/
     │   │                        evaluates predicates, then renders via run_picker (TTY) or
     │   │                        plain list (--plain / pipe).
     │   ├── apply.rs          — `fastf apply <slug> <dir>` with --dry-run (skip-only semantics)
+    │   ├── ui.rs             — v0.6. `fastf ui` launcher: health-check → open browser
+    │   │                        (--app = Chromium/Chrome app window, else default) → serve.
+    │   │                        Calls fastf::ui::serve(); UiArgs { address, no_open, app }.
     │   └── register.rs       — v0.5. `fastf register <path>` onboards an existing folder:
     │                            writes PROJECT_INFO.md, appends to projects.jsonl, bumps the
     │                            global counter. Optional --template (full metadata + tags),
@@ -160,7 +174,7 @@ fast-folder/
     │                            --use-today / --created YYYY-MM-DD.
     │                            Exposes pub fn resolve_created() for unit-test isolation and
     │                            pub const REGISTERED_SLUG = "(registered)" for no-template runs.
-    └── tui/
+    ├── tui/
         ├── mod.rs
         ├── menu.rs           — Interactive TUI menu. ASCII banner (suppressed if !show_banner).
         │                        Live base dir display. Top-level menu:
@@ -181,6 +195,14 @@ fast-folder/
                                   Select was removed — interpolate() is a no-op
                                   on text without braces so there's no behavior
                                   loss vs Raw, and `{slug}` markers just work.
+    └── ui/                   — v0.6 browser UI (full notes in "Browser UI" section below)
+        ├── mod.rs            — loopback HTTP server (std::net, thread-per-conn, no framework)
+        │                        + all API handlers. pub serve() blocks; pub route_request()
+        │                        is the pure router (tested in tests/ui_server.rs); pub
+        │                        health_check(). Write routes take a private WRITE_LOCK.
+        ├── assets.rs         — the 4 frontend files embedded via include_str!; if FASTF_UI_DIR
+        │                        is set, served from disk instead (frontend live-reload).
+        └── web/              — index.html, app.js, styles.css, icon.svg (vanilla JS, no deps)
 ```
 
 ## Key design decisions
@@ -353,12 +375,15 @@ Each toggle entry shows current `[on]`/`[off]` state inline via `label_toggle()`
 
 ## Testing
 
-Integration tests live in `tests/integration.rs`. They use:
+Integration tests live in `tests/integration.rs` (core flows) and `tests/ui_server.rs`
+(browser-UI request layer). Both use:
 - `FASTF_INSTALL_DIR` env var to redirect `paths::install_dir()` to a tempdir per test
 - `tempfile::TempDir` for hermetic sandboxes
-- A `static SERIAL: Mutex<()>` to run tests serially within the test binary (Rust 2024 edition made `std::env::set_var` unsafe — the mutex justifies the `unsafe` block)
+- A `static SERIAL: Mutex<()>` to run tests serially within the test binary (Rust 2024 edition made `std::env::set_var` unsafe — the mutex justifies the `unsafe` block). Each test binary has its own `SERIAL`; that's fine because `FASTF_INSTALL_DIR` is per-process and `cargo test`'s binaries are separate processes.
 
-Tests cover: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, index append, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture (including non-naming-pattern vars), metadata round-trip via YAML, disabled/custom-filename metadata, pinfo alias config compat, and bundled-template deduplication guard.
+`integration.rs` covers: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, index append, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture (including non-naming-pattern vars), metadata round-trip via YAML, disabled/custom-filename metadata, pinfo alias config compat, and bundled-template deduplication guard.
+
+`ui_server.rs` (v0.6) drives `fastf::ui::route_request` directly (no socket): health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s.
 
 Run:
 ```bash

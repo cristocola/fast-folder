@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Fast Folder UI
+Comment=Create and manage structured projects
+Exec=/usr/local/bin/fastf ui --app
+Icon=/home/cristoc/2026-05-13_fast_folder_ID0052/src/ui/web/icon.svg
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=FastFolderUI

@@ -134,6 +134,25 @@ Every interactive step has a non-interactive CLI equivalent — use the menu whe
 
 ---
 
+## The Browser UI
+
+`fastf ui` launches a local browser UI — a fast, dependency-free single-page app
+served by a tiny loopback HTTP server built into the `fastf` binary. It shares
+the same templates, config, counter, and project index as the CLI (it calls the
+Fast Folder library directly — no terminal-output parsing).
+
+```bash
+fastf ui            # start the server and open your browser
+fastf ui --app      # open a dedicated app window (Chromium/Chrome)
+fastf ui --no-open  # server only
+```
+
+The frontend is embedded in the binary, so the UI stays as portable as the CLI.
+See [docs/UI.md](docs/UI.md) for architecture, the HTTP API, and frontend
+live-reload during development.
+
+---
+
 ## Features
 
 ### Authoring

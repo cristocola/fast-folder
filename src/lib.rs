@@ -6,4 +6,5 @@ pub mod bootstrap;
 pub mod cli;
 pub mod core;
 pub mod tui;
+pub mod ui;
 pub mod util;

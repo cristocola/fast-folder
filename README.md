@@ -11,13 +11,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-dea584.svg)](https://www.rust-lang.org/)
 
-A blazing-fast, Rust-native project generator for people who repeatedly set up structured work — **code, research, finance, creative, business, whatever you repeat.** Not just a folder duplicator: fastf builds nested, variable-driven project systems with dynamically-generated file contents, persistent metadata, and per-project tracking — all driven by either a friendly interactive TUI or a fully scriptable CLI.
+A blazing-fast, Rust-native project generator for people who repeatedly set up structured work — **code, research, finance, creative, business, whatever you repeat.** Not just a folder duplicator: fastf builds nested, variable-driven project systems with dynamically-generated file contents, persistent metadata, and per-project tracking — all driven by a friendly interactive TUI, a fully scriptable CLI, or a fast local browser UI.
 
 Portable single-folder distribution (like ffmpeg), under **3 MB**, cross-platform (Linux, macOS, Windows). No runtime, no plugin ecosystem, no config directories to hunt for.
 
 ```bash
 fastf                      # interactive TUI — pick template, answer prompts, done
 fastf new music-video --artist="Ariana Grande" --title="Lullaby" --yes
+fastf ui                   # local browser UI — same engine, point-and-click
 ```
 
 ---
@@ -26,6 +27,7 @@ fastf new music-video --artist="Ariana Grande" --title="Lullaby" --yes
 
 - [Why fastf](#why-fastf)
 - [The TUI](#the-tui)
+- [The Browser UI](#the-browser-ui)
 - [Features](#features)
 - [Examples](#examples)
 - [Installation](#installation)
@@ -42,7 +44,7 @@ fastf new music-video --artist="Ariana Grande" --title="Lullaby" --yes
 Most templaters either target coders (Cookiecutter, Yeoman) or duplicate static folder structures (Post Haste). fastf sits in a different spot:
 
 - **Not only for coders.** Works for music video production, photography, film, research archives, finance workflows, client deliverables, and yes — software projects too. Same engine, same workflow, different templates.
-- **TUI *and* CLI, first-class.** Beginners get a guided interactive menu with live settings preview. Power users and scripts drive everything with flags (`--yes`, `--dry-run`, variable injection, base-dir override). AI agents, launchers, and shell pipelines plug in naturally.
+- **TUI, CLI, *and* browser UI — all first-class.** Beginners get a guided interactive menu with live settings preview. Power users and scripts drive everything with flags (`--yes`, `--dry-run`, variable injection, base-dir override). `fastf ui` opens a fast point-and-click browser app for visual template editing and project creation. AI agents, launchers, and shell pipelines plug in naturally. All three interfaces share one engine and one set of data.
 - **Rust-native and portable.** Single executable under 3 MB, near-instant startup, no runtime to install. Drop the folder on a USB stick, a network share, a new laptop — the binary finds its own config, templates, and project index next to itself.
 - **Generates file *contents* from metadata, not just folder *names*.** Variables flow into templated files: `Cargo.toml`, `README.md`, client briefs, slate info, shot lists, report headers. The output is materially tailored to the project.
 - **Nested, variable-driven project systems.** A single template can carry deliverables, notes, exports, contracts, assets, code, references, and generated metadata — all in one coherent tree, with paths and contents driven by the variables you supply.
@@ -136,20 +138,28 @@ Every interactive step has a non-interactive CLI equivalent — use the menu whe
 
 ## The Browser UI
 
-`fastf ui` launches a local browser UI — a fast, dependency-free single-page app
-served by a tiny loopback HTTP server built into the `fastf` binary. It shares
-the same templates, config, counter, and project index as the CLI (it calls the
-Fast Folder library directly — no terminal-output parsing).
+Run `fastf ui` and fastf opens a local browser app — the same engine as the CLI and TUI, with a point-and-click interface. It's a small, dependency-free single-page app served by a loopback HTTP server **built into the `fastf` binary**: no separate process, no Node, no npm, no external web files. The frontend is embedded in the binary, so the UI is as portable as the CLI.
 
 ```bash
-fastf ui            # start the server and open your browser
-fastf ui --app      # open a dedicated app window (Chromium/Chrome)
-fastf ui --no-open  # server only
+fastf ui            # start the server + open your default browser
+fastf ui --app      # open a dedicated app window (Chromium/Chrome) — feels native
+fastf ui --no-open  # start the server only (no browser)
 ```
 
-The frontend is embedded in the binary, so the UI stays as portable as the CLI.
-See [docs/UI.md](docs/UI.md) for architecture, the HTTP API, and frontend
-live-reload during development.
+Because the server calls the Fast Folder library directly — the very same `plan` / `create` / `config` / `template` / `index` code the CLI runs — the UI and CLI **share one source of truth**: the same templates, the same `config.toml`, the same global ID counter, the same `projects.jsonl`. Create a project in the UI and it shows up in `fastf recent`; edit a template in the TUI and it's there in the UI. Nothing is duplicated, and nothing is parsed from terminal output.
+
+Main views:
+
+- **Dashboard** — recent projects, counts, and quick actions at a glance.
+- **Create Project** — pick a template, fill variables (text fields and `select` dropdowns), live-preview the folder tree and generated file contents, then create.
+- **Templates** — browse every template as a card.
+- **Visual Template Editor** — build and edit templates without writing YAML: variables, folder structure, and templated files, all point-and-click. Writes the same YAML the CLI and TUI read.
+- **Projects** — the full project index with tags; open any folder in your system file manager.
+- **Settings** — edit the same `config.toml` values the CLI uses, plus browser-only appearance (theme, accent, density).
+
+It's **fast** for the same reasons the CLI is: requests never leave `127.0.0.1`, the frontend has no framework to boot, assets are embedded (no disk lookups), and project creation is native Rust calling the library directly.
+
+> **Security:** the server binds to loopback (`127.0.0.1`) only and has no authentication or CSRF protection. Keep it that way — don't expose it to a network without first adding auth, origin validation, and TLS. See **[docs/UI.md](docs/UI.md)** for the full architecture, HTTP API reference, and the frontend live-reload workflow.
 
 ---
 
@@ -157,6 +167,7 @@ live-reload during development.
 
 ### Authoring
 - **Interactive template builder** — create and edit templates step-by-step in the TUI. No YAML knowledge required. Edit mode jumps directly to the section you want to change.
+- **Visual template editor (browser UI)** — build and edit templates point-and-click in `fastf ui`: variables, folder tree, and templated files, no YAML required. Writes the same YAML the CLI and TUI read.
 - **Generate template from folder** — point at an existing project, get a ready-to-edit template YAML: `fastf template from-folder ./my-project my-template`.
 - **Import / export / share** — YAML templates are plain text. Version them, commit them, send them to teammates.
 - **Rich variable system** — `text` (free input) and `select` (pick from list) with validation, defaults, and four case transforms (`title_underscore`, `upper_underscore`, `lower_underscore`, `none`).
@@ -180,6 +191,7 @@ live-reload during development.
 - **Journal** — append timestamped notes to any project over its lifetime: `fastf note add ID0047 "finished mix"`. View with `fastf notes ID0047 --since 2026-04-01`.
 
 ### Workflow integration
+- **Local browser UI** — `fastf ui` opens a fast, embedded single-page app for visual project creation and template editing, sharing the same templates/config/counter/index as the CLI. See [The Browser UI](#the-browser-ui).
 - **Post-create actions** (global or per-template) — `git init`, reveal in file manager, open in editor, run custom shell commands, print the absolute path for shell pipelines.
 - **Open-folder prompt** — "Open project folder? [Y/n]" offered after every `fastf new` (configurable).
 - **Non-interactive mode** — `--yes`, inline variable flags, `--no-preview`, `--no-post`, `--dry-run`, `--base-dir`. Flags work before or after the template slug; vars use `--key=value`. Scriptable end-to-end.
@@ -342,6 +354,17 @@ fastf
 - **Search projects** — type a free-text term (`ariana`) or an explicit query (`tag:draft template=music-video`); matching projects open in the same picker.
 - **Manage templates** — create, generate from folder, edit, apply to existing folder, list, show, delete, import.
 - **View / edit settings** — project basics, workflow prompts, project metadata, recent projects, post-create actions, ID counter.
+
+### Browser UI
+
+```bash
+fastf ui            # serve + open your default browser
+fastf ui --app      # dedicated app window (Chromium/Chrome)
+fastf ui --no-open  # server only (no browser)
+fastf ui --address 127.0.0.1:47840   # bind a different loopback port
+```
+
+A local, loopback-only browser app built into the binary — Dashboard, Create, Templates, a visual template editor, Projects, and Settings, all sharing the same templates / config / counter / index as the CLI. Stop the server with Ctrl-C; it's idempotent (re-running just opens the browser if a server is already up). The repo also ships a desktop launcher (`Launch Fast Folder UI.desktop`, `Exec=fastf ui --app`). Full reference in [docs/UI.md](docs/UI.md).
 
 ### Create a project
 
@@ -706,6 +729,7 @@ The file is written once on `fastf new` and modified only by `fastf tag` / `fast
 | Command | Description |
 |---|---|
 | `fastf` | Launch interactive menu |
+| `fastf ui` | Launch the local browser UI (`--app` window, `--no-open` server only) |
 | `fastf new [slug]` | Create a project |
 | `fastf recent` | Interactive project picker (shows tags inline) |
 | `fastf recent --tag <tag>` | Filter recent picker to projects with a specific tag |
@@ -739,7 +763,7 @@ The file is written once on `fastf new` and modified only by `fastf tag` / `fast
 ## Contributing
 
 ```bash
-# Run all tests
+# Run all tests (unit + integration + browser-UI server)
 cargo test
 
 # Lint — must pass with no warnings
@@ -747,9 +771,14 @@ cargo clippy --all-targets -- -D warnings
 
 # Format check
 cargo fmt --check
+
+# Frontend sanity check (browser UI)
+node --check src/ui/web/app.js
 ```
 
-Integration tests use `FASTF_INSTALL_DIR` to point at a temporary directory, so they are hermetic and never touch a real install. See [`tests/integration.rs`](tests/integration.rs).
+Integration tests use `FASTF_INSTALL_DIR` to point at a temporary directory, so they are hermetic and never touch a real install. The core flows live in [`tests/integration.rs`](tests/integration.rs) and the browser-UI request layer in [`tests/ui_server.rs`](tests/ui_server.rs).
+
+For frontend work, set `FASTF_UI_DIR=src/ui/web` and `fastf ui` serves the assets from disk so you can edit and refresh the browser without rebuilding (responses are `Cache-Control: no-store`). Backend changes still need a rebuild and server restart.
 
 Pull requests are welcome. Please ensure `cargo test`, `cargo clippy`, and `cargo fmt --check` all pass before submitting.
 
@@ -768,6 +797,8 @@ Pull requests are welcome. Please ensure `cargo test`, `cargo clippy`, and `carg
 | `anyhow` | Error handling |
 | `colored` | Terminal color output |
 | `clap_complete` | Shell completion generation |
+
+The **browser UI adds no new dependencies**: its HTTP server is built on the Rust standard library (`std::net`), and it reuses `serde_json` for the API. The frontend is plain HTML/CSS/JS — no framework, no bundler, no npm — embedded into the binary at build time.
 
 ---
 

@@ -418,3 +418,40 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - v0.5: Template builder's `collect_file()` example shows `NOTES.md`, not `PROJECT_INFO.md`. It also rejects the reserved name inline with a loop-back. If you change the example, keep `NOTES.md` (or another genuinely non-reserved name) — `PROJECT_INFO.md` as an example actively misleads users into creating template entries that get silently stripped.
 - v0.5: Template builder no longer asks "Template vs Raw" content mode. `collect_file()` always writes to `FileEntry.template`. The `FileEntry.content` field still exists in the YAML schema (hand-written templates with raw byte content keep working — e.g. `music-video.yaml`'s `.gitignore`), but the builder never produces it. `create_file()` and `apply()` still pick `template` when non-empty else `content`, so the dual-field semantics are preserved at the writer. If you re-add a mode switch, remember that `interpolate()` is already a no-op on text without `{token}` markers, so the only real use-case for `content:` is preserving literal `{...}` braces.
 - v0.5: The "Add another placeholder file?" prompt in `edit_files()` defaults to **No** and explicitly mentions that PROJECT_INFO.md is generated automatically. Don't flip the default back to Yes — the typical template doesn't need extra placeholder files and the auto-gen covers the common notes use-case.
+
+## Browser UI (`fastf ui`, v0.6)
+
+`fastf ui` starts a local loopback HTTP server and opens the browser UI. It is
+part of the `fastf` binary — **no separate `fastf-ui-server` binary**, no
+external web directory. Full reference: `docs/UI.md`.
+
+Layout:
+- `src/ui/mod.rs` — the HTTP server (`std::net::TcpListener`, one thread per
+  connection, no web framework) + all API handlers. `pub fn serve(address)`
+  blocks; `pub fn route_request(method, route, body) -> Response` is the pure
+  router (no socket) and is what `tests/ui_server.rs` drives. `pub fn
+  health_check(address)` lets `fastf ui` detect an already-running server. Write
+  routes serialize through a private `static WRITE_LOCK: Mutex<()>`.
+- `src/ui/assets.rs` — the four frontend files embedded via `include_str!`. If
+  `FASTF_UI_DIR` is set, files are read from disk instead (frontend live-reload).
+- `src/ui/web/` — `index.html`, `app.js`, `styles.css`, `icon.svg` (vanilla JS,
+  no framework/npm/bundler).
+- `src/cli/ui.rs` — the `fastf ui` command: health-check → open browser → serve.
+  `--address`, `--no-open`, `--app` (Chromium/Chrome app window with a dedicated
+  `~/.cache/fast-folder-ui/chromium` profile; falls back to the default browser).
+
+The server calls the library directly (`project::plan`/`create`, `Config`,
+`Counters`, `template`, `index`, `post_create`), so the UI and CLI share one
+source of truth and the same on-disk files. The `Ui` arm in `main.rs` forwards to
+`cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on the router).
+
+### UI gotchas
+- v0.6: Only `GET` (assets + read APIs) and `POST` (writes) are routed —
+  `HEAD`/others 404. Browsers GET, so this is fine; don't be surprised when
+  `curl -I` shows the JSON 404 error body's content-type.
+- v0.6: Adding a new write endpoint? Take `lock_writes()` inside the match arm
+  (like `/api/create`) so it serializes with the other writers; reads don't lock.
+- v0.6: Keep the server **loopback-only**. There is no auth/CSRF. `FASTF_UI_DIR`
+  is the frontend dev override (serve assets from disk instead of embedded).
+- v0.6: Embedded assets mean a frontend edit needs a `cargo build` to ship — but
+  `FASTF_UI_DIR=$PWD/src/ui/web fastf ui` serves from disk for dev without rebuilding.

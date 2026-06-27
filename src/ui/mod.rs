@@ -19,18 +19,21 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use crate::bootstrap;
+use crate::cli::register;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::index;
+use crate::core::index::{self, ProjectRecord};
 use crate::core::naming::{interpolate, interpolate_name};
 use crate::core::post_create::{self, PostCreate};
-use crate::core::project;
+use crate::core::project::{self, ApplyAction};
+use crate::core::project_info::{self, Metadata};
+use crate::core::query;
 use crate::core::template::{self, FolderNode, Template, VarType};
 use crate::util::paths;
 
@@ -77,6 +80,72 @@ struct TemplateSaveRequest {
 #[derive(Debug, Deserialize)]
 struct TemplateDeleteRequest {
     slug: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchRequest {
+    #[serde(default)]
+    terms: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TagRequest {
+    path: String,
+    action: String,
+    tag: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct NoteRequest {
+    path: String,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterRequest {
+    path: String,
+    #[serde(default)]
+    template: Option<String>,
+    #[serde(default)]
+    variables: HashMap<String, String>,
+    #[serde(default)]
+    rename: bool,
+    #[serde(default)]
+    apply: bool,
+    #[serde(default)]
+    created: Option<String>,
+    #[serde(default)]
+    use_today: bool,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplyRequest {
+    template: String,
+    #[serde(default)]
+    variables: HashMap<String, String>,
+    target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TemplateImportRequest {
+    yaml: String,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct FromFolderRequest {
+    source: String,
+    slug: String,
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CounterRequest {
+    value: u64,
 }
 
 /// A routed response: either a JSON body or a static asset (content-type + bytes).
@@ -210,6 +279,70 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             open_path(Path::new(&request.path))?;
             Ok(Response::Json(json!({"ok": true})))
         }
+        ("POST", "/api/search") => {
+            let request: SearchRequest =
+                serde_json::from_slice(body).context("invalid search request")?;
+            Ok(Response::Json(search_projects(request)?))
+        }
+        ("POST", "/api/project/tag") => {
+            let request: TagRequest =
+                serde_json::from_slice(body).context("invalid tag request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(project_tag(request)?))
+        }
+        ("POST", "/api/project/note") => {
+            let request: NoteRequest =
+                serde_json::from_slice(body).context("invalid note request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(project_note(request)?))
+        }
+        ("POST", "/api/register") => {
+            let request: RegisterRequest =
+                serde_json::from_slice(body).context("invalid register request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(register_folder(request)?))
+        }
+        ("POST", "/api/apply/preview") => {
+            let request: ApplyRequest =
+                serde_json::from_slice(body).context("invalid apply request")?;
+            Ok(Response::Json(apply_preview(request)?))
+        }
+        ("POST", "/api/apply") => {
+            let request: ApplyRequest =
+                serde_json::from_slice(body).context("invalid apply request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(apply_template(request)?))
+        }
+        ("POST", "/api/templates/import") => {
+            let request: TemplateImportRequest =
+                serde_json::from_slice(body).context("invalid template import request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(import_template(request)?))
+        }
+        ("POST", "/api/templates/from-folder") => {
+            let request: FromFolderRequest =
+                serde_json::from_slice(body).context("invalid from-folder request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(template_from_folder(request)?))
+        }
+        ("POST", "/api/projects/prune") => {
+            let _guard = lock_writes()?;
+            Ok(Response::Json(prune_projects()?))
+        }
+        ("POST", "/api/counter") => {
+            let request: CounterRequest =
+                serde_json::from_slice(body).context("invalid counter request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(set_counter(request)?))
+        }
+        ("GET", path) if path.starts_with("/api/project?") => {
+            let target = query_param(path, "path").context("missing 'path' query parameter")?;
+            Ok(Response::Json(project_detail(&target)?))
+        }
+        ("GET", path) if path.starts_with("/api/templates/export?") => {
+            let slug = query_param(path, "slug").context("missing 'slug' query parameter")?;
+            export_template(&slug)
+        }
         ("GET", path) if !path.starts_with("/api/") => {
             let (content_type, bytes) = assets::serve(path)?;
             Ok(Response::Static(content_type, bytes))
@@ -236,21 +369,13 @@ fn load_state() -> Result<Value> {
     let mut records = index::load_all()?;
     records.reverse();
     let projects: Vec<Value> = records
-        .into_iter()
+        .iter()
         .map(|record| {
             let project_path = Path::new(&record.path);
-            let metadata = crate::core::project_info::read_metadata(project_path, &config)
+            let metadata = project_info::read_metadata(project_path, &config)
                 .ok()
                 .flatten();
-            json!({
-                "id": record.id,
-                "template": record.template,
-                "path": record.path,
-                "name": record.name,
-                "created_at": record.created_at,
-                "exists": project_path.exists(),
-                "tags": metadata.map(|item| item.tags).unwrap_or_default(),
-            })
+            project_json(record, project_path, &metadata)
         })
         .collect();
     let counter = Counters::load()?.get();
@@ -427,7 +552,325 @@ fn save_settings(value: Value) -> Result<()> {
     if let Some(enabled) = value.get("git_init").and_then(Value::as_bool) {
         config.post_create.git_init = enabled;
     }
+    if let Some(enabled) = value.get("confirm_create").and_then(Value::as_bool) {
+        config.confirm_create = enabled;
+    }
+    if let Some(enabled) = value.get("show_banner").and_then(Value::as_bool) {
+        config.show_banner = enabled;
+    }
     config.save()
+}
+
+// ---------------------------------------------------------------------------
+// v0.7 — project detail, tags, journal, search, register, apply, maintenance
+// ---------------------------------------------------------------------------
+
+/// Shared serialization for a project row — used by `/api/state` and
+/// `/api/search` so both surfaces show identical fields (incl. tags).
+fn project_json(record: &ProjectRecord, project_path: &Path, metadata: &Option<Metadata>) -> Value {
+    json!({
+        "id": record.id,
+        "template": record.template,
+        "path": record.path,
+        "name": record.name,
+        "created_at": record.created_at,
+        "exists": project_path.exists(),
+        "tags": metadata.as_ref().map(|item| item.tags.clone()).unwrap_or_default(),
+    })
+}
+
+/// `POST /api/search` — run the same query language as `fastf search`.
+/// Empty terms returns every project (newest first), matching the plain list.
+fn search_projects(request: SearchRequest) -> Result<Value> {
+    let config = Config::load()?;
+    let predicates = query::parse(&request.terms);
+    let mut records = index::load_all()?;
+    records.reverse();
+
+    let mut projects = Vec::new();
+    for record in &records {
+        let project_path = Path::new(&record.path);
+        let metadata = project_info::read_metadata(project_path, &config)
+            .ok()
+            .flatten();
+        let include = if predicates.is_empty() {
+            true
+        } else {
+            metadata
+                .as_ref()
+                .is_some_and(|meta| query::evaluate(&predicates, record, meta))
+        };
+        if include {
+            projects.push(project_json(record, project_path, &metadata));
+        }
+    }
+    Ok(json!({"ok": true, "projects": projects}))
+}
+
+/// `GET /api/project?path=<abs>` — full metadata + journal for one project.
+fn project_detail(path: &str) -> Result<Value> {
+    let config = Config::load()?;
+    let root = Path::new(path);
+    let metadata = project_info::read_metadata(root, &config).ok().flatten();
+    let journal = project_info::read_journal_entries(root, &config)
+        .unwrap_or_default()
+        .iter()
+        .map(|entry| json!({"timestamp": entry.timestamp, "message": entry.message}))
+        .collect::<Vec<_>>();
+    // The index record carries template/name even when the file is gone.
+    let record = index::load_all()
+        .ok()
+        .and_then(|records| records.into_iter().find(|r| paths_match(&r.path, path)));
+
+    Ok(json!({
+        "ok": true,
+        "path": path,
+        "exists": root.exists(),
+        "has_metadata": metadata.is_some(),
+        "metadata": metadata,
+        "journal": journal,
+        "record": record.map(|r| json!({
+            "id": r.id,
+            "template": r.template,
+            "name": r.name,
+            "created_at": r.created_at,
+        })),
+    }))
+}
+
+/// `POST /api/project/tag` — add or remove one tag in the frontmatter.
+fn project_tag(request: TagRequest) -> Result<Value> {
+    let config = Config::load()?;
+    let tag = request.tag.trim().to_string();
+    if tag.is_empty() {
+        bail!("Tag cannot be empty");
+    }
+    let pinfo = Path::new(&request.path).join(&config.project_info_filename);
+    match request.action.as_str() {
+        "add" => project_info::write_frontmatter(&pinfo, |meta| {
+            if !meta.tags.contains(&tag) {
+                meta.tags.push(tag.clone());
+            }
+        })?,
+        "remove" => project_info::write_frontmatter(&pinfo, |meta| {
+            meta.tags.retain(|existing| existing != &tag);
+        })?,
+        other => bail!("unknown tag action '{other}' (expected 'add' or 'remove')"),
+    }
+    let tags = project_info::read_metadata(Path::new(&request.path), &config)?
+        .map(|meta| meta.tags)
+        .unwrap_or_default();
+    Ok(json!({"ok": true, "tags": tags}))
+}
+
+/// `POST /api/project/note` — append a timestamped journal entry.
+fn project_note(request: NoteRequest) -> Result<Value> {
+    let config = Config::load()?;
+    let message = request.message.trim();
+    if message.is_empty() {
+        bail!("Note cannot be empty");
+    }
+    let pinfo = Path::new(&request.path).join(&config.project_info_filename);
+    project_info::append_journal_entry(&pinfo, message)?;
+    let journal = project_info::read_journal_entries(Path::new(&request.path), &config)
+        .unwrap_or_default()
+        .iter()
+        .map(|entry| json!({"timestamp": entry.timestamp, "message": entry.message}))
+        .collect::<Vec<_>>();
+    Ok(json!({"ok": true, "journal": journal}))
+}
+
+/// `POST /api/register` — onboard an existing folder (non-interactive).
+fn register_folder(request: RegisterRequest) -> Result<Value> {
+    let template = request.template.filter(|slug| !slug.trim().is_empty());
+    let on_pinfo_conflict = if request.overwrite {
+        register::PinfoConflict::Overwrite
+    } else {
+        register::PinfoConflict::Abort
+    };
+    let outcome = register::register_core(register::RegisterOptions {
+        path: PathBuf::from(&request.path),
+        template_slug: template,
+        vars: request.variables,
+        apply_structure: request.apply,
+        rename: request.rename,
+        use_today: request.use_today,
+        created_override: request.created.filter(|date| !date.trim().is_empty()),
+        on_pinfo_conflict,
+    })?;
+    let record = &outcome.record;
+    Ok(json!({
+        "ok": true,
+        "project": {
+            "id": record.id,
+            "template": record.template,
+            "template_name": outcome.template_name,
+            "path": record.path,
+            "name": record.name,
+            "created_at": record.created_at,
+            "renamed_to": outcome.renamed_to,
+            "pinfo_written": outcome.pinfo_written,
+            "applied": outcome.applied,
+        }
+    }))
+}
+
+/// `POST /api/apply/preview` — dry-run an apply, no disk writes.
+fn apply_preview(request: ApplyRequest) -> Result<Value> {
+    let config = Config::load()?;
+    let template = template::find_by_slug(&request.template)?;
+    validate_variables(&template, &request.variables)?;
+    let target = Path::new(&request.target);
+    if !target.exists() {
+        bail!("target folder does not exist: {}", target.display());
+    }
+    let actions = project::apply_plan(&template, target, &request.variables, &config.date_format);
+    Ok(json!({
+        "ok": true,
+        "target": request.target,
+        "actions": actions.iter().map(action_json).collect::<Vec<_>>(),
+    }))
+}
+
+/// `POST /api/apply` — create missing folders/files in an existing folder.
+fn apply_template(request: ApplyRequest) -> Result<Value> {
+    let config = Config::load()?;
+    let template = template::find_by_slug(&request.template)?;
+    validate_variables(&template, &request.variables)?;
+    let target = Path::new(&request.target);
+    let actions = project::apply_plan(&template, target, &request.variables, &config.date_format);
+    project::apply(&template, target, &request.variables, &config)?;
+    Ok(json!({
+        "ok": true,
+        "actions": actions.iter().map(action_json).collect::<Vec<_>>(),
+    }))
+}
+
+fn action_json(action: &ApplyAction) -> Value {
+    let (kind_action, kind, path) = match action {
+        ApplyAction::CreateFolder(path) => ("create", "folder", path),
+        ApplyAction::SkipFolder(path) => ("skip", "folder", path),
+        ApplyAction::CreateFile(path) => ("create", "file", path),
+        ApplyAction::SkipFile(path) => ("skip", "file", path),
+    };
+    json!({"action": kind_action, "kind": kind, "path": path.display().to_string()})
+}
+
+/// `POST /api/templates/import` — parse pasted YAML and save it as a template.
+fn import_template(request: TemplateImportRequest) -> Result<Value> {
+    let mut template: Template =
+        serde_yaml::from_str(&request.yaml).context("parsing template YAML")?;
+    template.name = template.name.trim().to_string();
+    template.slug = template.slug.trim().to_string();
+    template.description = template.description.trim().to_string();
+    template.naming_pattern = template.naming_pattern.trim().to_string();
+    template.id.prefix = template.id.prefix.trim().to_string();
+    validate_template_for_ui(&template)?;
+
+    let templates_dir = paths::templates_dir();
+    fs::create_dir_all(&templates_dir)?;
+    let destination = templates_dir.join(format!("{}.yaml", template.slug));
+    if destination.exists() && !request.overwrite {
+        bail!(
+            "A template with the slug '{}' already exists",
+            template.slug
+        );
+    }
+    template.save_to_file(&destination)?;
+    Ok(json!({"ok": true, "template": template}))
+}
+
+/// `GET /api/templates/export?slug=<slug>` — download the raw YAML.
+fn export_template(slug: &str) -> Result<Response> {
+    validate_slug(slug)?;
+    let source = paths::templates_dir().join(format!("{slug}.yaml"));
+    if !source.exists() {
+        bail!("template '{}' no longer exists", slug);
+    }
+    let bytes = fs::read(&source).with_context(|| format!("reading {}", source.display()))?;
+    Ok(Response::Static("application/x-yaml; charset=utf-8", bytes))
+}
+
+/// `POST /api/templates/from-folder` — generate a template from a folder tree.
+fn template_from_folder(request: FromFolderRequest) -> Result<Value> {
+    crate::cli::template::from_folder(&request.source, &request.slug, request.force)?;
+    Ok(json!({"ok": true, "slug": request.slug}))
+}
+
+/// `POST /api/projects/prune` — drop index records whose folders are gone.
+fn prune_projects() -> Result<Value> {
+    let records = index::load_all()?;
+    let before = records.len();
+    let kept: Vec<ProjectRecord> = records
+        .into_iter()
+        .filter(|record| Path::new(&record.path).exists())
+        .collect();
+    let removed = before - kept.len();
+    if removed > 0 {
+        index::rewrite(&kept)?;
+    }
+    Ok(json!({"ok": true, "removed": removed, "remaining": kept.len()}))
+}
+
+/// `POST /api/counter` — set the global ID counter.
+fn set_counter(request: CounterRequest) -> Result<Value> {
+    let mut counters = Counters::load()?;
+    counters.set_value(request.value);
+    counters.save()?;
+    let counter = counters.get();
+    Ok(json!({
+        "ok": true,
+        "counter": counter,
+        "next_id": format!("ID{:04}", counter + 1),
+    }))
+}
+
+/// Extract a query-string parameter from a route, percent-decoding the value.
+fn query_param(route: &str, key: &str) -> Option<String> {
+    let query = route.split_once('?')?.1;
+    for pair in query.split('&') {
+        if let Some((name, value)) = pair.split_once('=')
+            && name == key
+        {
+            return Some(percent_decode(value));
+        }
+    }
+    None
+}
+
+/// Minimal percent-decoder for query values (the frontend uses
+/// `encodeURIComponent`, which emits `%20` for spaces — `+` is left literal).
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+        {
+            out.push(high * 16 + low);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Path comparison normalising separators (mirrors register's `paths_equal`).
+fn paths_match(a: &str, b: &str) -> bool {
+    a.replace('\\', "/") == b.replace('\\', "/")
 }
 
 fn save_template(mut request: TemplateSaveRequest) -> Result<Value> {

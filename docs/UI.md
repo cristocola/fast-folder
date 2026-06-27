@@ -53,10 +53,35 @@ non-loopback address.
 | POST | `/api/templates/save` | Create/update a template YAML |
 | POST | `/api/templates/delete` | Delete a template YAML |
 | POST | `/api/open` | Open a path in the system file manager |
+| POST | `/api/search` | Run the `fastf search` query language (`tag:`, `key=`, `key>date`, free text); empty terms returns all |
+| GET  | `/api/project?path=<abs>` | Full metadata + journal for one project |
+| POST | `/api/project/tag` | Add/remove one tag (`{path, action, tag}`) |
+| POST | `/api/project/note` | Append a journal entry (`{path, message}`) |
+| POST | `/api/register` | Onboard an existing folder (`{path, template?, variables, rename, apply, created?, use_today, overwrite}`) |
+| POST | `/api/apply/preview` | Dry-run an apply, return create/skip actions (no writes) |
+| POST | `/api/apply` | Create missing folders/files in an existing folder |
+| POST | `/api/templates/import` | Save a template from pasted YAML (`{yaml, overwrite}`) |
+| GET  | `/api/templates/export?slug=<slug>` | Download a template's raw YAML |
+| POST | `/api/templates/from-folder` | Generate a template from a folder (`{source, slug, force}`) |
+| POST | `/api/projects/prune` | Drop index records whose folders are gone |
+| POST | `/api/counter` | Set the global ID counter (`{value}`) |
 
-Write routes (`create`, `settings`, template save/delete) serialize through a
-process-wide mutex (`WRITE_LOCK`) so concurrent requests can't corrupt files.
-Static GET routes serve only the four embedded frontend files.
+Write routes (`create`, `settings`, template save/import/from-folder/delete,
+`project/tag`, `project/note`, `register`, `apply`, `projects/prune`, `counter`)
+serialize through a process-wide mutex (`WRITE_LOCK`) so concurrent requests
+can't corrupt files. Read routes (`/api/search`, `/api/project`, the GET state
+and export routes) are lock-free. Static GET routes serve only the four embedded
+frontend files.
+
+The query-string GET routes (`/api/project?path=`, `/api/templates/export?slug=`)
+are matched before the static-asset catch-all; values are percent-decoded with a
+small built-in decoder (`encodeURIComponent` on the frontend).
+
+`register_core` (in `src/cli/register.rs`) is the non-interactive engine the
+`/api/register` route calls — the CLI `fastf register` is a thin interactive
+shell over it. On a `PROJECT_INFO.md` collision the route passes
+`PinfoConflict::Abort`, which bails **before** the counter/index writes so the UI
+can confirm and retry with `overwrite: true` cleanly.
 
 ## Frontend development (live reload)
 

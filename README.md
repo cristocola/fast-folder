@@ -150,12 +150,13 @@ Because the server calls the Fast Folder library directly — the very same `pla
 
 Main views:
 
-- **Dashboard** — recent projects, counts, and quick actions at a glance.
+- **Dashboard** — your recent projects front-and-center (click any to open its detail drawer), at-a-glance counts, and a compact "quick start" row to relaunch a favorite template in one click.
 - **Create Project** — pick a template, fill variables (text fields and `select` dropdowns), live-preview the folder tree and generated file contents, then create.
-- **Templates** — browse every template as a card.
+- **Templates** — browse every template as a card; **import** YAML, **export** any template, or **generate one from an existing folder** — all without leaving the browser.
 - **Visual Template Editor** — build and edit templates without writing YAML: variables, folder structure, and templated files, all point-and-click. Writes the same YAML the CLI and TUI read.
-- **Projects** — the full project index with tags; open any folder in your system file manager.
-- **Settings** — edit the same `config.toml` values the CLI uses, plus browser-only appearance (theme, accent, density).
+- **Projects** — the full project index with inline tags and a real **search bar** that speaks the same query language as `fastf search` (`tag:draft`, `template=music-video`, `created>2026-01-01`, or plain text). Click any project to open the **detail drawer**: variables, add/remove tags, read and append journal notes, apply a template, or open the folder.
+- **Add existing** — onboard a folder fastf didn't create (`fastf register` in the browser): it gets a project ID and metadata, optionally renamed to the naming pattern and filled in from a template.
+- **Settings** — edit the same `config.toml` values the CLI uses (including the global ID counter and a one-click prune of missing projects), plus browser-only appearance (theme, accent, density).
 
 It's **fast** for the same reasons the CLI is: requests never leave `127.0.0.1`, the frontend has no framework to boot, assets are embedded (no disk lookups), and project creation is native Rust calling the library directly.
 

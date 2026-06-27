@@ -1,3 +1,7 @@
 /target
 /dist
 .claude
+
+# This repo is itself a registered fastf project on the dev's machine;
+# its auto-generated metadata file is machine-specific (absolute paths).
+/PROJECT_INFO.md

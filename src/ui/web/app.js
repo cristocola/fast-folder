@@ -17,9 +17,25 @@ const state = {
   previewError: "",
   previewTimer: null,
   search: "",
+  searchResults: null,
+  searchTimer: null,
   creating: false,
   gitInit: false,
   reveal: true,
+  detail: null,
+  detailBusy: false,
+  apply: null,
+  modal: null,
+  register: {
+    path: "",
+    template: "",
+    variables: {},
+    rename: false,
+    apply: false,
+    useToday: false,
+    created: "",
+    busy: false,
+  },
   appearance: loadAppearance(),
 };
 
@@ -50,7 +66,7 @@ const initialTemplate = initialParams.get("template");
 const initialSettingsTab = initialParams.get("settings");
 const initialEditTemplate = initialParams.get("edit-template");
 const initialEditorSection = initialParams.get("editor-section");
-if (["dashboard", "create", "template-editor", "templates", "projects", "settings"].includes(initialView)) {
+if (["dashboard", "create", "template-editor", "templates", "projects", "register", "settings"].includes(initialView)) {
   state.view = initialView;
 }
 if (["general", "data", "appearance"].includes(initialSettingsTab)) {
@@ -86,6 +102,13 @@ const icons = {
   database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/>',
   palette: '<path d="M12 3a9 9 0 0 0 0 18h1.5a2 2 0 0 0 0-4H12a2 2 0 0 1 0-4h3a6 6 0 0 0 0-12h-3Z"/><circle cx="7.5" cy="10" r="1" fill="currentColor"/><circle cx="9" cy="6.5" r="1" fill="currentColor"/><circle cx="14" cy="6" r="1" fill="currentColor"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  folderPlus: '<path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6Z"/><path d="M12 11v6M9 14h6"/>',
+  download: '<path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 21h14"/>',
+  upload: '<path d="M12 21V9M7 13l5-5 5 5"/><path d="M5 3h14"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/>',
+  note: '<path d="M5 4a1 1 0 0 1 1-1h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z"/><path d="M14 3v5h5M8 13h8M8 17h5"/>',
 };
 
 function icon(name, className = "") {
@@ -154,6 +177,7 @@ function shell(content) {
         <nav class="nav">
           ${navButton("dashboard", "home", "Overview")}
           ${navButton("create", "plus", "New project")}
+          ${navButton("register", "folderPlus", "Add existing")}
           ${navButton("templates", "layers", "Templates")}
           ${navButton("projects", "folder", "Projects")}
         </nav>
@@ -197,11 +221,15 @@ function render() {
   else if (state.view === "template-editor") content = templateEditorPage();
   else if (state.view === "templates") content = templatesPage();
   else if (state.view === "projects") content = projectsPage();
+  else if (state.view === "register") content = registerPage();
   else if (state.view === "settings") content = settingsPage();
   else content = dashboardPage();
-  app.innerHTML = shell(content);
+  app.innerHTML = shell(content) + drawerMarkup() + applyModalMarkup() + genericModalMarkup();
   bindCommon();
   bindView();
+  bindDrawer();
+  bindApplyModal();
+  bindGenericModal();
 }
 
 function dashboardPage() {
@@ -237,14 +265,33 @@ function dashboardPage() {
         ${statCard("clock", "purple", latest ? formatDate(latest.created_at) : "No projects", "Last created")}
       </div>
       <section class="section">
-        <div class="section-head"><h2 class="section-title">Start with a template</h2><button class="button button-quiet" data-view="templates">View all ${icon("arrow")}</button></div>
-        <div class="template-grid">${data.templates.slice(0, 6).map(templateCard).join("")}</div>
-      </section>
-      <section class="section">
         <div class="section-head"><h2 class="section-title">Recent projects</h2><button class="button button-quiet" data-view="projects">View all ${icon("arrow")}</button></div>
-        <div class="panel project-list">${projectRows(data.projects.slice(0, 5))}</div>
+        <div class="panel project-list">${projectRows(data.projects.slice(0, 6))}</div>
       </section>
+      ${quickStartSection()}
     </section>`;
+}
+
+function quickStartSection() {
+  const templates = state.data.templates.filter((template) => template.slug !== "(registered)").slice(0, 4);
+  if (!templates.length) return "";
+  return `
+    <section class="section">
+      <div class="section-head"><h2 class="section-title">Quick start</h2><button class="button button-quiet" data-view="templates">All templates ${icon("arrow")}</button></div>
+      <div class="quick-start">
+        ${templates.map(quickStartChip).join("")}
+      </div>
+    </section>`;
+}
+
+function quickStartChip(template) {
+  const visual = templateVisual(template);
+  return `
+    <button class="quick-chip" data-template="${esc(template.slug)}" title="Create a ${esc(template.name)} project">
+      <span class="quick-chip-icon ${visual.color}">${icon(visual.icon)}</span>
+      <span class="quick-chip-copy"><strong>${esc(template.name)}</strong><span>${template.variables.length} field${template.variables.length === 1 ? "" : "s"}</span></span>
+      <span class="quick-chip-go">${icon("plus")}</span>
+    </button>`;
 }
 
 function dayPart() {
@@ -258,21 +305,6 @@ function statCard(iconName, color, value, label) {
   return `<div class="stat-card"><div class="stat-icon ${color}">${icon(iconName)}</div><div class="stat-value" title="${esc(value)}">${esc(value)}</div><div class="stat-label">${label}</div></div>`;
 }
 
-function templateCard(template) {
-  const visual = templateVisual(template);
-  return `
-    <article class="template-card" data-template="${esc(template.slug)}">
-      <div class="template-card-top"><div class="template-icon ${visual.color}">${icon(visual.icon)}</div><span class="arrow-chip">${icon("arrow")}</span></div>
-      <h3>${esc(template.name)}</h3>
-      <p>${esc(template.description || "A reusable project structure ready to customize.")}</p>
-      <div class="template-meta">
-        <span>${icon("sliders")} ${template.variables.length} fields</span>
-        <span>${icon("folder")} ${countFolders(template.structure)} folders</span>
-        <span>${icon("file")} ${template.files.length} files</span>
-      </div>
-    </article>`;
-}
-
 function countFolders(nodes = []) {
   return nodes.reduce((count, node) => count + 1 + countFolders(node.children || []), 0);
 }
@@ -282,15 +314,19 @@ function projectRows(projects) {
     return `<div class="empty"><div class="empty-icon">${icon("folder")}</div><strong>No projects yet</strong><p>Create your first project and it will appear here automatically.</p></div>`;
   }
   return projects.map((project) => `
-    <div class="project-row">
+    <div class="project-row" data-detail-path="${esc(project.path)}" role="button" tabindex="0" title="View project details">
       <div class="project-name">
         <div class="project-folder ${project.exists ? "" : "missing"}">${icon("folder")}</div>
-        <div class="project-name-copy"><strong title="${esc(project.name)}">${esc(project.name)}</strong><span title="${esc(project.path)}">${esc(shortPath(project.path))}</span></div>
+        <div class="project-name-copy">
+          <strong title="${esc(project.name)}">${esc(project.name)}</strong>
+          <span title="${esc(project.path)}">${esc(shortPath(project.path))}</span>
+          ${(project.tags || []).length ? `<div class="row-tags">${(project.tags || []).slice(0, 3).map((tag) => `<span class="row-tag">${esc(tag)}</span>`).join("")}${project.tags.length > 3 ? `<span class="row-tag more">+${project.tags.length - 3}</span>` : ""}</div>` : ""}
+        </div>
       </div>
       <div class="project-cell">${esc(templateName(project.template))}</div>
       <div class="project-cell">${esc(formatDate(project.created_at))}</div>
       <div><span class="status ${project.exists ? "" : "missing"}">${project.exists ? "Available" : "Missing"}</span></div>
-      <button class="row-action" data-open-path="${esc(project.path)}" ${project.exists ? "" : "disabled"} title="Open project">${icon("external")}</button>
+      <button class="row-action" data-open-path="${esc(project.path)}" ${project.exists ? "" : "disabled"} title="Open in file manager">${icon("external")}</button>
     </div>`).join("");
 }
 
@@ -396,7 +432,8 @@ function templatesPage() {
       <div class="page-header">
         <div><h1 class="page-title">Templates</h1><p class="page-subtitle">Reusable systems that define naming, questions, folders, files, tags, and project automation.</p></div>
         <div class="page-actions">
-          <button class="button button-secondary" data-open-path="${esc(state.data.templates_dir)}">${icon("external")} Open template files</button>
+          <button class="button button-secondary" data-from-folder>${icon("folder")} From folder</button>
+          <button class="button button-secondary" data-import-template>${icon("upload")} Import</button>
           <button class="button button-primary" data-new-template>${icon("plus")} New template</button>
         </div>
       </div>
@@ -415,6 +452,7 @@ function templatesPage() {
               <div class="detail-stat"><strong>${template.files.length}</strong><span>Files</span></div>
             </div>
             <div class="card-actions">
+              <button class="button button-secondary" data-export-template="${esc(template.slug)}" title="Download YAML">${icon("download")}</button>
               <button class="button button-secondary" data-edit-template="${esc(template.slug)}">${icon("sliders")} Edit</button>
               <button class="button button-primary" data-template="${esc(template.slug)}">${icon("plus")} Use</button>
             </div>
@@ -709,18 +747,28 @@ function lightTreeMarkup(nodes = []) {
 }
 
 function projectsPage() {
-  const projects = filterProjects();
+  const projects = state.searchResults ?? state.data.projects;
   return `
     <section class="page">
       <div class="page-header">
         <div><h1 class="page-title">Projects</h1><p class="page-subtitle">Every Fast Folder project in one searchable library, including its ID, template, location, and availability.</p></div>
-        <button class="button button-primary" data-start-create>${icon("plus")} New project</button>
+        <div class="page-actions">
+          <button class="button button-secondary" data-view="register">${icon("folderPlus")} Add existing</button>
+          <button class="button button-primary" data-start-create>${icon("plus")} New project</button>
+        </div>
+      </div>
+      <div class="search-bar">
+        ${icon("search")}
+        <input id="project-search" value="${esc(state.search)}" placeholder="Search projects — try tag:draft, template=music-video, created>2026-01-01" autocomplete="off">
+      </div>
+      <div class="search-legend">
+        <span><b>tag:</b>draft</span><span><b>template=</b>music-video</span><span><b>artist=</b>Aria*</span><span><b>created&gt;</b>2026-01-01</span><span>or any free text</span>
       </div>
       <div class="panel project-list">
         <div class="project-row project-header-row">
           <div class="eyebrow">Project</div><div class="eyebrow">Template</div><div class="eyebrow">Created</div><div class="eyebrow">Status</div><span></span>
         </div>
-        ${projectRows(projects)}
+        <div id="project-results">${projectRows(projects)}</div>
       </div>
     </section>`;
 }
@@ -766,6 +814,8 @@ function generalSettings(config) {
         <p>Choose the conveniences Fast Folder should apply to newly created projects.</p>
         ${settingsToggle("settings-git", "Initialize Git", "Start a repository automatically", config.post_create.git_init)}
         ${settingsToggle("settings-open", "Open after creation", "Reveal the new folder when it is ready", config.prompt_open_after_create)}
+        ${settingsToggle("settings-confirm", "Confirm before creating", "Ask for confirmation on the CLI before writing", config.confirm_create)}
+        ${settingsToggle("settings-banner", "Show CLI banner", "Display the ASCII banner in the terminal TUI", config.show_banner)}
       </div>
       <div class="settings-section">
         <h3>External editor</h3>
@@ -804,6 +854,19 @@ function projectDataSettings(config) {
           <button class="button button-secondary" type="button" data-open-path="${esc(state.data.install_dir)}">${icon("external")} Open data folder</button>
           <button class="button button-secondary" type="button" data-open-path="${esc(state.data.templates_dir)}">${icon("layers")} Open templates</button>
         </div>
+      </div>
+      <div class="settings-section">
+        <h3>ID counter</h3>
+        <p>The global counter shared by every template. The next project will be <strong>${esc(state.data.next_id)}</strong>. Lower it carefully — reusing an ID can collide with existing folders.</p>
+        <div class="settings-row">
+          <div class="settings-label"><strong>Counter value</strong><span>Last used number; next project is this + 1</span></div>
+          <div class="inline-set"><input id="settings-counter" class="input" type="number" min="0" value="${esc(state.data.counter)}"><button class="button button-secondary" type="button" data-save-counter>${icon("check")} Set</button></div>
+        </div>
+      </div>
+      <div class="settings-section">
+        <h3>Maintenance</h3>
+        <p>Remove index entries whose folders have been moved or deleted. The folders themselves are never touched.</p>
+        <div class="data-actions"><button class="button button-secondary" type="button" data-prune>${icon("trash")} Prune missing projects</button></div>
       </div>
       <div class="settings-footer"><button class="button button-primary" type="submit">${icon("check")} Save data settings</button></div>
     </form>`;
@@ -882,12 +945,6 @@ function filterTemplates() {
   return state.data.templates.filter((template) => `${template.name} ${template.slug} ${template.description}`.toLowerCase().includes(query));
 }
 
-function filterProjects() {
-  const query = state.search.trim().toLowerCase();
-  if (!query) return state.data.projects;
-  return state.data.projects.filter((project) => `${project.id} ${project.name} ${project.template} ${project.path} ${(project.tags || []).join(" ")}`.toLowerCase().includes(query));
-}
-
 function emptySearch(message) {
   return `<div class="empty"><div class="empty-icon">${icon("search")}</div><strong>${esc(message)}</strong><p>Try a different project name, template, ID, or tag.</p></div>`;
 }
@@ -904,24 +961,91 @@ function bindCommon() {
   document.querySelectorAll("[data-template]").forEach((button) => button.addEventListener("click", () => selectTemplate(button.dataset.template)));
   document.querySelectorAll("[data-edit-template]").forEach((button) => button.addEventListener("click", () => openTemplateEditor(button.dataset.editTemplate)));
   document.querySelector("[data-new-template]")?.addEventListener("click", () => openTemplateEditor());
-  document.querySelectorAll("[data-open-path]").forEach((button) => button.addEventListener("click", () => openPath(button.dataset.openPath)));
+  document.querySelectorAll("[data-open-path]").forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openPath(button.dataset.openPath);
+  }));
   document.querySelector('[data-action="refresh"]')?.addEventListener("click", refresh);
+  document.querySelector("[data-import-template]")?.addEventListener("click", openImportModal);
+  document.querySelector("[data-from-folder]")?.addEventListener("click", openFromFolderModal);
+  document.querySelectorAll("[data-export-template]").forEach((button) => button.addEventListener("click", () => exportTemplate(button.dataset.exportTemplate)));
+  bindProjectRows();
+
   const search = document.querySelector("#global-search");
   search?.addEventListener("input", (event) => {
     state.search = event.target.value;
-    if (state.view !== "projects" && state.view !== "templates") state.view = "projects";
-    render();
-    requestAnimationFrame(() => {
-      const current = document.querySelector("#global-search");
-      current?.focus();
-      current?.setSelectionRange(current.value.length, current.value.length);
+    if (state.view === "templates") {
+      render();
+      refocusGlobalSearch();
+      return;
+    }
+    if (state.view !== "projects") {
+      state.view = "projects";
+      state.searchResults = null;
+      render();
+      refocusGlobalSearch();
+    }
+    scheduleProjectSearch();
+  });
+
+  document.querySelector("#project-search")?.addEventListener("input", (event) => {
+    state.search = event.target.value;
+    scheduleProjectSearch();
+  });
+}
+
+function refocusGlobalSearch() {
+  requestAnimationFrame(() => {
+    const current = document.querySelector("#global-search");
+    current?.focus();
+    current?.setSelectionRange(current.value.length, current.value.length);
+  });
+}
+
+function bindProjectRows() {
+  document.querySelectorAll("[data-detail-path]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("[data-open-path]")) return;
+      openProjectDetail(row.dataset.detailPath);
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openProjectDetail(row.dataset.detailPath);
+      }
     });
   });
+}
+
+function scheduleProjectSearch() {
+  clearTimeout(state.searchTimer);
+  state.searchTimer = setTimeout(runProjectSearch, 220);
+}
+
+async function runProjectSearch() {
+  const terms = state.search.trim().split(/\s+/).filter(Boolean);
+  try {
+    const result = await api("/api/search", { method: "POST", body: JSON.stringify({ terms }) });
+    state.searchResults = result.projects;
+  } catch (error) {
+    state.searchResults = [];
+    toast(error.message, true);
+  }
+  const node = document.querySelector("#project-results");
+  if (node) {
+    node.innerHTML = projectRows(state.searchResults);
+    bindProjectRows();
+    document.querySelectorAll("#project-results [data-open-path]").forEach((button) => button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openPath(button.dataset.openPath);
+    }));
+  }
 }
 
 function bindView() {
   if (state.view === "create") bindCreate();
   if (state.view === "template-editor") bindTemplateEditor();
+  if (state.view === "register") bindRegister();
   if (state.view === "settings") bindSettings();
 }
 
@@ -1346,6 +1470,8 @@ function bindSettings() {
       date_format: document.querySelector("#settings-date-format").value,
       prompt_open_after_create: document.querySelector("#settings-open").checked,
       git_init: document.querySelector("#settings-git").checked,
+      confirm_create: document.querySelector("#settings-confirm").checked,
+      show_banner: document.querySelector("#settings-banner").checked,
     };
     await saveSettings(payload, "General settings saved.");
   });
@@ -1359,6 +1485,35 @@ function bindSettings() {
       preview_lines: Number(document.querySelector("#settings-preview-lines").value || 0),
     };
     await saveSettings(payload, "Project data settings saved.");
+  });
+
+  document.querySelector("[data-save-counter]")?.addEventListener("click", async () => {
+    const value = Number(document.querySelector("#settings-counter").value);
+    if (!Number.isFinite(value) || value < 0) {
+      toast("Enter a counter value of 0 or more.", true);
+      return;
+    }
+    try {
+      await api("/api/counter", { method: "POST", body: JSON.stringify({ value }) });
+      await loadState(false);
+      render();
+      toast(`Counter set — next project is ${state.data.next_id}.`);
+    } catch (error) {
+      toast(error.message, true);
+    }
+  });
+
+  document.querySelector("[data-prune]")?.addEventListener("click", async () => {
+    if (!window.confirm("Remove index entries whose folders no longer exist?")) return;
+    try {
+      const result = await api("/api/projects/prune", { method: "POST", body: JSON.stringify({}) });
+      await loadState(false);
+      state.searchResults = null;
+      render();
+      toast(result.removed ? `Pruned ${result.removed} missing project${result.removed === 1 ? "" : "s"}.` : "No missing projects to prune.");
+    } catch (error) {
+      toast(error.message, true);
+    }
   });
 
   document.querySelector("#appearance-theme")?.addEventListener("change", (event) => {
@@ -1388,6 +1543,551 @@ async function saveSettings(payload, message) {
     await loadState(false);
     render();
     toast(message);
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Register existing folder
+// ---------------------------------------------------------------------------
+
+function registerPage() {
+  const reg = state.register;
+  const templates = state.data.templates;
+  const selected = templates.find((template) => template.slug === reg.template);
+  return `
+    <section class="page">
+      <div class="page-header"><div>
+        <h1 class="page-title">Add an existing folder</h1>
+        <p class="page-subtitle">Onboard a folder Fast Folder didn’t create. It gets a project ID and a metadata file, then appears in search, tags, and notes — just like a created project.</p>
+      </div></div>
+      <form id="register-form" class="settings-panel register-panel">
+        <div class="settings-section">
+          <h3>Folder</h3>
+          <p>The absolute path to the folder you want to onboard.</p>
+          ${editorField("Folder path", "Nothing inside is changed unless you fill structure", `<input class="input mono" id="register-path" value="${esc(reg.path)}" placeholder="/home/you/old-project">`, true, "full")}
+        </div>
+        <div class="settings-section">
+          <h3>Template <span class="optional">optional</span></h3>
+          <p>Attaching a template records its variables and tags, and unlocks structure fill-in.</p>
+          <select class="select" id="register-template">
+            <option value="" ${reg.template === "" ? "selected" : ""}>No template — index only</option>
+            ${templates.filter((template) => template.slug !== "(registered)").map((template) => `<option value="${esc(template.slug)}" ${reg.template === template.slug ? "selected" : ""}>${esc(template.name)}</option>`).join("")}
+          </select>
+          ${selected && selected.variables.length ? `<div class="register-vars">${selected.variables.map(registerVariableField).join("")}</div>` : ""}
+        </div>
+        <div class="settings-section">
+          <h3>Options</h3>
+          ${stateToggleRow("register-rename", "Standardize folder name", "Rename to match the naming pattern", reg.rename)}
+          ${stateToggleRow("register-apply", "Fill missing structure", selected ? "Create folders and files the template defines" : "Choose a template to enable", reg.apply && Boolean(selected), !selected)}
+          ${stateToggleRow("register-today", "Use today as the created date", "Otherwise the folder’s own timestamp is used", reg.useToday)}
+          ${editorField("Created date", "Override the recorded date", `<input class="input" type="date" id="register-created" value="${esc(reg.created)}" ${reg.useToday ? "disabled" : ""}>`, false, "full")}
+        </div>
+        <div class="settings-footer">
+          <button class="button button-primary" type="submit" ${reg.busy ? "disabled" : ""}>${reg.busy ? "Registering…" : `${icon("folderPlus")} Register folder`}</button>
+        </div>
+      </form>
+    </section>`;
+}
+
+function registerVariableField(variable) {
+  const value = state.register.variables?.[variable.slug] ?? variable.default ?? "";
+  const type = variable.type ?? variable.var_type ?? "text";
+  const field = type === "select"
+    ? `<select class="select" data-register-var="${esc(variable.slug)}">${variable.options.map((option) => `<option value="${esc(option)}" ${value === option ? "selected" : ""}>${esc(option)}</option>`).join("")}</select>`
+    : `<input class="input" data-register-var="${esc(variable.slug)}" value="${esc(value)}" placeholder="${esc(variable.label)}" autocomplete="off">`;
+  return `<div class="field"><div class="field-row"><label>${esc(variable.label)}${variable.required ? '<span class="required">*</span>' : ""}</label></div>${field}</div>`;
+}
+
+function stateToggleRow(id, label, hint, checked, disabled = false) {
+  return `<div class="settings-row"><div class="settings-label"><strong>${label}</strong><span>${hint}</span></div><label class="switch"><input id="${id}" type="checkbox" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}><span></span></label></div>`;
+}
+
+function bindRegister() {
+  const reg = state.register;
+  document.querySelector("#register-path")?.addEventListener("input", (event) => { reg.path = event.target.value; });
+  document.querySelector("#register-template")?.addEventListener("change", (event) => {
+    reg.template = event.target.value;
+    const template = state.data.templates.find((item) => item.slug === reg.template);
+    reg.variables = template ? Object.fromEntries(template.variables.map((variable) => [variable.slug, variable.default || ""])) : {};
+    if (!template) reg.apply = false;
+    render();
+  });
+  document.querySelectorAll("[data-register-var]").forEach((field) => {
+    const update = (event) => { reg.variables[event.target.dataset.registerVar] = event.target.value; };
+    field.addEventListener("input", update);
+    field.addEventListener("change", update);
+  });
+  document.querySelector("#register-rename")?.addEventListener("change", (event) => { reg.rename = event.target.checked; });
+  document.querySelector("#register-apply")?.addEventListener("change", (event) => { reg.apply = event.target.checked; });
+  document.querySelector("#register-today")?.addEventListener("change", (event) => { reg.useToday = event.target.checked; render(); });
+  document.querySelector("#register-created")?.addEventListener("input", (event) => { reg.created = event.target.value; });
+  document.querySelector("#register-form")?.addEventListener("submit", submitRegister);
+}
+
+async function submitRegister(event) {
+  event.preventDefault();
+  const reg = state.register;
+  reg.path = document.querySelector("#register-path")?.value.trim() || "";
+  if (!reg.path) {
+    toast("Enter a folder path to register.", true);
+    return;
+  }
+  reg.busy = true;
+  render();
+  await doRegister(false);
+}
+
+async function doRegister(overwrite) {
+  const reg = state.register;
+  const payload = {
+    path: reg.path,
+    template: reg.template || null,
+    variables: reg.variables || {},
+    rename: reg.rename,
+    apply: reg.apply && Boolean(reg.template),
+    use_today: reg.useToday,
+    created: reg.useToday ? null : (reg.created || null),
+    overwrite,
+  };
+  try {
+    const result = await api("/api/register", { method: "POST", body: JSON.stringify(payload) });
+    await loadState(false);
+    const path = result.project.path;
+    state.register = { path: "", template: "", variables: {}, rename: false, apply: false, useToday: false, created: "", busy: false };
+    state.view = "projects";
+    state.searchResults = null;
+    render();
+    toast(`Registered ${result.project.id}${result.project.renamed_to ? ` as ${result.project.renamed_to}` : ""}.`);
+    openProjectDetail(path);
+  } catch (error) {
+    reg.busy = false;
+    if (/already exists/i.test(error.message) && !overwrite) {
+      if (window.confirm(`${error.message}\n\nOverwrite the existing metadata file and register anyway?`)) {
+        reg.busy = true;
+        render();
+        await doRegister(true);
+        return;
+      }
+      render();
+      return;
+    }
+    toast(error.message, true);
+    render();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Project detail drawer
+// ---------------------------------------------------------------------------
+
+async function openProjectDetail(path) {
+  state.detail = { path, data: null, error: "" };
+  render();
+  try {
+    state.detail.data = await api(`/api/project?path=${encodeURIComponent(path)}`);
+  } catch (error) {
+    state.detail.error = error.message;
+  }
+  render();
+}
+
+function closeDetail() {
+  state.detail = null;
+  render();
+}
+
+function drawerMarkup() {
+  if (!state.detail) return "";
+  const detail = state.detail;
+  let body;
+  if (!detail.data) {
+    body = detail.error
+      ? `<div class="error-box">${esc(detail.error)}</div>`
+      : `<div class="drawer-loading">${icon("refresh")} Loading…</div>`;
+  } else {
+    body = detailBody(detail.data);
+  }
+  return `
+    <div class="drawer-scrim" data-close-detail></div>
+    <aside class="drawer" role="dialog" aria-modal="true">
+      <div class="drawer-head"><span class="eyebrow">Project</span><button class="icon-button" data-close-detail title="Close">${icon("close")}</button></div>
+      <div class="drawer-body scroll">${body}</div>
+    </aside>`;
+}
+
+function detailBody(data) {
+  const meta = data.metadata;
+  const record = data.record;
+  const name = meta?.folder || record?.name || data.path.split("/").pop();
+  const id = meta?.id || record?.id || "—";
+  const templateLabel = meta?.template_name || templateName(record?.template || "") || "—";
+  const created = meta?.created || record?.created_at;
+  const tags = meta?.tags || [];
+  const vars = meta?.variables || {};
+  const varKeys = Object.keys(vars);
+  return `
+    <div class="drawer-title">
+      <div class="project-folder ${data.exists ? "" : "missing"}">${icon("folder")}</div>
+      <div class="drawer-title-copy">
+        <h2 title="${esc(name)}">${esc(name)}</h2>
+        <div class="drawer-sub"><span class="chip">${esc(id)}</span><span>${esc(templateLabel)}</span><span class="status ${data.exists ? "" : "missing"}">${data.exists ? "Available" : "Missing"}</span></div>
+      </div>
+    </div>
+    <div class="drawer-path" title="${esc(data.path)}">${esc(shortPath(data.path))}</div>
+    ${created ? `<div class="drawer-meta-line"><span>Created</span><strong>${esc(formatDate(created))}</strong></div>` : ""}
+    <div class="drawer-actions">
+      <button class="button button-secondary" data-detail-open ${data.exists ? "" : "disabled"}>${icon("external")} Open</button>
+      <button class="button button-secondary" data-detail-apply>${icon("bolt")} Apply template</button>
+      <button class="button button-secondary" data-detail-copy>${icon("copy")} Copy path</button>
+    </div>
+    ${!meta ? `<div class="drawer-empty">${icon("info")}<p>No metadata file found. This folder predates Fast Folder metadata or was hand-edited. Register it or apply a template to add one.</p></div>` : `
+      <div class="drawer-section">
+        <div class="drawer-section-head">${icon("tag")}<h3>Tags</h3></div>
+        <div class="chip-set">
+          ${tags.length ? tags.map((tag) => `<span class="chip removable">${esc(tag)}<button data-remove-tag="${esc(tag)}" title="Remove tag">${icon("close")}</button></span>`).join("") : `<span class="field-hint">No tags yet</span>`}
+        </div>
+        <form class="chip-add" id="add-tag-form"><input class="input" id="add-tag-input" placeholder="Add a tag…" autocomplete="off"><button class="button button-secondary" type="submit" title="Add tag">${icon("plus")}</button></form>
+      </div>
+      ${varKeys.length ? `<div class="drawer-section">
+        <div class="drawer-section-head">${icon("sliders")}<h3>Variables</h3></div>
+        <div class="detail-vars">${varKeys.map((key) => `<div class="detail-var"><span>${esc(key)}</span><strong>${vars[key] ? esc(vars[key]) : '<i class="muted">(empty)</i>'}</strong></div>`).join("")}</div>
+      </div>` : ""}
+      <div class="drawer-section">
+        <div class="drawer-section-head">${icon("note")}<h3>Journal</h3></div>
+        <div class="journal">${data.journal.length ? data.journal.map((entry) => `<div class="journal-entry"><span class="journal-date">${esc(entry.timestamp.slice(0, 10))}</span><span>${esc(entry.message)}</span></div>`).join("") : `<span class="field-hint">No journal entries yet</span>`}</div>
+        <form class="note-add" id="add-note-form"><textarea class="textarea" id="add-note-input" rows="2" placeholder="Add a journal note…"></textarea><button class="button button-primary" type="submit">${icon("plus")} Add note</button></form>
+      </div>
+    `}`;
+}
+
+function bindDrawer() {
+  if (!state.detail) return;
+  document.querySelectorAll("[data-close-detail]").forEach((element) => element.addEventListener("click", closeDetail));
+  document.querySelector("[data-detail-open]")?.addEventListener("click", () => openPath(state.detail.path));
+  document.querySelector("[data-detail-copy]")?.addEventListener("click", () => copyPath(state.detail.path));
+  document.querySelector("[data-detail-apply]")?.addEventListener("click", () => openApplyModal(state.detail.path));
+  document.querySelectorAll("[data-remove-tag]").forEach((button) => button.addEventListener("click", () => mutateTag("remove", button.dataset.removeTag)));
+  document.querySelector("#add-tag-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const value = document.querySelector("#add-tag-input").value.trim();
+    if (value) mutateTag("add", value);
+  });
+  document.querySelector("#add-note-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const value = document.querySelector("#add-note-input").value.trim();
+    if (value) addNote(value);
+  });
+}
+
+async function mutateTag(action, tag) {
+  try {
+    const result = await api("/api/project/tag", { method: "POST", body: JSON.stringify({ path: state.detail.path, action, tag }) });
+    if (state.detail.data?.metadata) state.detail.data.metadata.tags = result.tags;
+    await loadState(false);
+    state.searchResults = null;
+    render();
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function addNote(message) {
+  try {
+    const result = await api("/api/project/note", { method: "POST", body: JSON.stringify({ path: state.detail.path, message }) });
+    if (state.detail.data) state.detail.data.journal = result.journal;
+    render();
+    toast("Journal note added.");
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function copyPath(path) {
+  try {
+    await navigator.clipboard.writeText(path);
+    toast("Path copied to clipboard.");
+  } catch {
+    toast("Could not copy the path.", true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Apply template modal
+// ---------------------------------------------------------------------------
+
+function openApplyModal(target = null) {
+  const templates = state.data.templates.filter((template) => template.slug !== "(registered)");
+  const template = templates[0]?.slug || "";
+  const tmpl = templates.find((item) => item.slug === template);
+  state.apply = {
+    target: target || state.data.config.base_dir,
+    template,
+    variables: tmpl ? Object.fromEntries(tmpl.variables.map((variable) => [variable.slug, variable.default || ""])) : {},
+    preview: null,
+    error: "",
+    busy: false,
+  };
+  render();
+}
+
+function closeApply() {
+  state.apply = null;
+  render();
+}
+
+function applyModalMarkup() {
+  if (!state.apply) return "";
+  const apply = state.apply;
+  const templates = state.data.templates.filter((template) => template.slug !== "(registered)");
+  const tmpl = templates.find((item) => item.slug === apply.template);
+  return `
+    <div class="overlay" data-close-apply></div>
+    <div class="modal modal-wide" role="dialog" aria-modal="true">
+      <div class="modal-head"><h2>Apply a template</h2><button class="icon-button" data-close-apply>${icon("close")}</button></div>
+      <div class="modal-body scroll">
+        <p class="modal-sub">Create any missing folders and files from a template inside an existing folder. Nothing is ever overwritten.</p>
+        ${editorField("Target folder", "The folder to fill in", `<input class="input mono" id="apply-target" value="${esc(apply.target)}">`, true, "full")}
+        ${editorField("Template", "", `<select class="select" id="apply-template">${templates.map((template) => `<option value="${esc(template.slug)}" ${apply.template === template.slug ? "selected" : ""}>${esc(template.name)}</option>`).join("")}</select>`, true, "full")}
+        ${tmpl && tmpl.variables.length ? `<div class="apply-vars">${tmpl.variables.map(applyVariableField).join("")}</div>` : ""}
+        ${apply.error ? `<div class="error-box">${esc(apply.error)}</div>` : ""}
+        ${apply.preview ? applyPreviewMarkup(apply.preview) : ""}
+      </div>
+      <div class="modal-foot">
+        <button class="button button-secondary" data-apply-preview ${apply.busy ? "disabled" : ""}>${icon("layers")} Preview</button>
+        <button class="button button-primary" data-apply-run ${apply.busy || !apply.preview ? "disabled" : ""}>${icon("bolt")} Apply</button>
+      </div>
+    </div>`;
+}
+
+function applyVariableField(variable) {
+  const value = state.apply.variables?.[variable.slug] ?? variable.default ?? "";
+  const type = variable.type ?? variable.var_type ?? "text";
+  const field = type === "select"
+    ? `<select class="select" data-apply-var="${esc(variable.slug)}">${variable.options.map((option) => `<option value="${esc(option)}" ${value === option ? "selected" : ""}>${esc(option)}</option>`).join("")}</select>`
+    : `<input class="input" data-apply-var="${esc(variable.slug)}" value="${esc(value)}" placeholder="${esc(variable.label)}" autocomplete="off">`;
+  return `<div class="field"><div class="field-row"><label>${esc(variable.label)}${variable.required ? '<span class="required">*</span>' : ""}</label></div>${field}</div>`;
+}
+
+function applyPreviewMarkup(preview) {
+  const creates = preview.actions.filter((item) => item.action === "create").length;
+  return `
+    <div class="apply-preview">
+      <div class="apply-preview-head"><strong>${creates} to create</strong><span>${preview.actions.length - creates} already present</span></div>
+      <div class="apply-action-list">${preview.actions.map((item) => `<div class="apply-action ${item.action}"><span class="apply-kind">${item.action === "create" ? "+" : "·"} ${item.kind}</span><code title="${esc(item.path)}">${esc(item.path)}</code></div>`).join("")}</div>
+    </div>`;
+}
+
+function bindApplyModal() {
+  if (!state.apply) return;
+  document.querySelectorAll("[data-close-apply]").forEach((element) => element.addEventListener("click", closeApply));
+  document.querySelector("#apply-target")?.addEventListener("input", (event) => { state.apply.target = event.target.value; state.apply.preview = null; });
+  document.querySelector("#apply-template")?.addEventListener("change", (event) => {
+    state.apply.template = event.target.value;
+    const tmpl = state.data.templates.find((item) => item.slug === event.target.value);
+    state.apply.variables = tmpl ? Object.fromEntries(tmpl.variables.map((variable) => [variable.slug, variable.default || ""])) : {};
+    state.apply.preview = null;
+    render();
+  });
+  document.querySelectorAll("[data-apply-var]").forEach((field) => {
+    const update = (event) => { state.apply.variables[event.target.dataset.applyVar] = event.target.value; state.apply.preview = null; };
+    field.addEventListener("input", update);
+    field.addEventListener("change", update);
+  });
+  document.querySelector("[data-apply-preview]")?.addEventListener("click", runApplyPreview);
+  document.querySelector("[data-apply-run]")?.addEventListener("click", runApply);
+}
+
+async function runApplyPreview() {
+  const apply = state.apply;
+  apply.busy = true;
+  apply.error = "";
+  apply.target = document.querySelector("#apply-target")?.value || apply.target;
+  try {
+    apply.preview = await api("/api/apply/preview", { method: "POST", body: JSON.stringify({ template: apply.template, variables: apply.variables, target: apply.target }) });
+  } catch (error) {
+    apply.preview = null;
+    apply.error = error.message;
+  }
+  apply.busy = false;
+  render();
+}
+
+async function runApply() {
+  const apply = state.apply;
+  if (!apply.preview) return;
+  apply.busy = true;
+  apply.error = "";
+  try {
+    await api("/api/apply", { method: "POST", body: JSON.stringify({ template: apply.template, variables: apply.variables, target: apply.target }) });
+    const detailPath = state.detail?.path;
+    closeApply();
+    toast("Template applied.");
+    if (detailPath) openProjectDetail(detailPath);
+  } catch (error) {
+    apply.error = error.message;
+    apply.busy = false;
+    render();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Template import / generate-from-folder modals + export
+// ---------------------------------------------------------------------------
+
+function openImportModal() {
+  state.modal = { kind: "import", yaml: "", overwrite: false, busy: false, error: "" };
+  render();
+}
+
+function openFromFolderModal() {
+  state.modal = { kind: "from-folder", source: "", slug: "", force: false, busy: false, error: "" };
+  render();
+}
+
+function closeModal() {
+  state.modal = null;
+  render();
+}
+
+function genericModalMarkup() {
+  if (!state.modal) return "";
+  if (state.modal.kind === "import") return importModalMarkup();
+  if (state.modal.kind === "from-folder") return fromFolderModalMarkup();
+  return "";
+}
+
+function importModalMarkup() {
+  const modal = state.modal;
+  return `
+    <div class="overlay" data-close-modal></div>
+    <div class="modal modal-wide" role="dialog" aria-modal="true">
+      <div class="modal-head"><h2>Import a template</h2><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <div class="modal-body scroll">
+        <p class="modal-sub">Paste template YAML or load a <code>.yaml</code> file. The slug must be unique unless you overwrite.</p>
+        <input type="file" id="import-file" accept=".yaml,.yml" class="input">
+        ${editorField("Template YAML", "", `<textarea class="textarea mono" id="import-yaml" rows="14" placeholder="name: My Template&#10;slug: my-template&#10;naming_pattern: '{date}_{name}_{id}'">${esc(modal.yaml || "")}</textarea>`, false, "full")}
+        ${modal.error ? `<div class="error-box">${esc(modal.error)}</div>` : ""}
+      </div>
+      <div class="modal-foot">
+        <label class="inline-check"><input type="checkbox" id="import-overwrite" ${modal.overwrite ? "checked" : ""}> Overwrite if it exists</label>
+        <button class="button button-primary" data-import-run ${modal.busy ? "disabled" : ""}>${icon("upload")} Import</button>
+      </div>
+    </div>`;
+}
+
+function fromFolderModalMarkup() {
+  const modal = state.modal;
+  return `
+    <div class="overlay" data-close-modal></div>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head"><h2>Generate from folder</h2><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <div class="modal-body scroll">
+        <p class="modal-sub">Scan an existing folder and turn its structure and small text files into a reusable template.</p>
+        ${editorField("Source folder", "Absolute path to scan", `<input class="input mono" id="ff-source" value="${esc(modal.source || "")}" placeholder="/home/you/example-project">`, true, "full")}
+        ${editorField("New template slug", "Letters, numbers, '-' or '_'", `<input class="input mono" id="ff-slug" value="${esc(modal.slug || "")}" placeholder="my-template">`, true, "full")}
+        ${modal.error ? `<div class="error-box">${esc(modal.error)}</div>` : ""}
+      </div>
+      <div class="modal-foot">
+        <label class="inline-check"><input type="checkbox" id="ff-force" ${modal.force ? "checked" : ""}> Overwrite if it exists</label>
+        <button class="button button-primary" data-ff-run ${modal.busy ? "disabled" : ""}>${icon("layers")} Generate</button>
+      </div>
+    </div>`;
+}
+
+function bindGenericModal() {
+  if (!state.modal) return;
+  document.querySelectorAll("[data-close-modal]").forEach((element) => element.addEventListener("click", closeModal));
+  if (state.modal.kind === "import") {
+    document.querySelector("#import-yaml")?.addEventListener("input", (event) => { state.modal.yaml = event.target.value; });
+    document.querySelector("#import-overwrite")?.addEventListener("change", (event) => { state.modal.overwrite = event.target.checked; });
+    document.querySelector("#import-file")?.addEventListener("change", async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      state.modal.yaml = await file.text();
+      render();
+    });
+    document.querySelector("[data-import-run]")?.addEventListener("click", runImport);
+  }
+  if (state.modal.kind === "from-folder") {
+    document.querySelector("#ff-source")?.addEventListener("input", (event) => { state.modal.source = event.target.value; });
+    document.querySelector("#ff-slug")?.addEventListener("input", (event) => { state.modal.slug = event.target.value; });
+    document.querySelector("#ff-force")?.addEventListener("change", (event) => { state.modal.force = event.target.checked; });
+    document.querySelector("[data-ff-run]")?.addEventListener("click", runFromFolder);
+  }
+}
+
+async function runImport() {
+  const modal = state.modal;
+  modal.yaml = document.querySelector("#import-yaml")?.value || modal.yaml;
+  modal.overwrite = document.querySelector("#import-overwrite")?.checked || false;
+  if (!modal.yaml?.trim()) {
+    modal.error = "Paste YAML or choose a file first.";
+    render();
+    return;
+  }
+  modal.busy = true;
+  modal.error = "";
+  render();
+  try {
+    const result = await api("/api/templates/import", { method: "POST", body: JSON.stringify({ yaml: modal.yaml, overwrite: modal.overwrite }) });
+    await loadState(false);
+    state.modal = null;
+    state.view = "templates";
+    render();
+    toast(`Imported “${result.template.name}”.`);
+  } catch (error) {
+    modal.busy = false;
+    modal.error = error.message;
+    render();
+  }
+}
+
+async function runFromFolder() {
+  const modal = state.modal;
+  modal.source = document.querySelector("#ff-source")?.value || "";
+  modal.slug = document.querySelector("#ff-slug")?.value || "";
+  modal.force = document.querySelector("#ff-force")?.checked || false;
+  if (!modal.source.trim() || !modal.slug.trim()) {
+    modal.error = "Source folder and slug are both required.";
+    render();
+    return;
+  }
+  modal.busy = true;
+  modal.error = "";
+  render();
+  try {
+    await api("/api/templates/from-folder", { method: "POST", body: JSON.stringify({ source: modal.source, slug: modal.slug, force: modal.force }) });
+    await loadState(false);
+    state.modal = null;
+    state.view = "templates";
+    render();
+    toast(`Generated template “${modal.slug}”.`);
+  } catch (error) {
+    modal.busy = false;
+    modal.error = error.message;
+    render();
+  }
+}
+
+async function exportTemplate(slug) {
+  try {
+    const response = await fetch(`/api/templates/export?slug=${encodeURIComponent(slug)}`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "Export failed.");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${slug}.yaml`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${slug}.yaml`);
   } catch (error) {
     toast(error.message, true);
   }
@@ -1428,6 +2128,11 @@ async function refresh() {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    if (state.modal) { closeModal(); return; }
+    if (state.apply) { closeApply(); return; }
+    if (state.detail) { closeDetail(); return; }
+  }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     document.querySelector("#global-search")?.focus();

@@ -157,3 +157,257 @@ fn unknown_route_is_not_found() {
         assert!(err.to_string().starts_with("not found:"), "got: {err}");
     });
 }
+
+// ---------------------------------------------------------------------------
+// v0.7 — search, project detail, tags, journal, register, apply, maintenance
+// ---------------------------------------------------------------------------
+
+/// Create a project through the UI and return its root path on disk.
+fn create_project(name: &str) -> String {
+    let value = json(
+        "POST",
+        "/api/create",
+        serde_json::json!({"template": "test", "variables": {"name": name}}),
+    );
+    value["project"]["root_path"]
+        .as_str()
+        .expect("root_path")
+        .to_string()
+}
+
+#[test]
+fn search_route_respects_query() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+
+        let alpha = create_project("alpha unique");
+        create_project("beta project");
+
+        // Free-text term matches the folder/variable of exactly one project.
+        let value = json(
+            "POST",
+            "/api/search",
+            serde_json::json!({"terms": ["alpha"]}),
+        );
+        let hits = value["projects"].as_array().unwrap();
+        assert_eq!(hits.len(), 1, "expected one alpha match");
+        assert_eq!(hits[0]["name"], "T001_Alpha_Unique");
+
+        // Empty query returns everything.
+        let all = json("POST", "/api/search", serde_json::json!({"terms": []}));
+        assert_eq!(all["projects"].as_array().unwrap().len(), 2);
+
+        // `projects` only appears in the base path — path is NOT free-text searched.
+        let none = json(
+            "POST",
+            "/api/search",
+            serde_json::json!({"terms": ["projects"]}),
+        );
+        assert!(
+            none["projects"].as_array().unwrap().is_empty(),
+            "path must be excluded from free-text search"
+        );
+
+        // Tag a project, then filter by it.
+        let _ = json(
+            "POST",
+            "/api/project/tag",
+            serde_json::json!({"path": alpha, "action": "add", "tag": "special"}),
+        );
+        let tagged = json(
+            "POST",
+            "/api/search",
+            serde_json::json!({"terms": ["tag:special"]}),
+        );
+        let tagged_hits = tagged["projects"].as_array().unwrap();
+        assert_eq!(tagged_hits.len(), 1);
+        assert_eq!(tagged_hits[0]["name"], "T001_Alpha_Unique");
+    });
+}
+
+#[test]
+fn project_detail_returns_metadata_and_journal() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let path = create_project("detail demo");
+
+        let value = json(
+            "GET",
+            &format!("/api/project?path={path}"),
+            serde_json::Value::Null,
+        );
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["has_metadata"], true);
+        assert_eq!(value["metadata"]["id"], "T001");
+        assert_eq!(value["metadata"]["variables"]["name"], "Detail_Demo");
+        assert!(value["journal"].as_array().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn tag_add_then_remove_roundtrip() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let path = create_project("tagme");
+
+        let added = json(
+            "POST",
+            "/api/project/tag",
+            serde_json::json!({"path": path, "action": "add", "tag": "draft"}),
+        );
+        let tags = added["tags"].as_array().unwrap();
+        assert!(tags.iter().any(|t| t == "draft"));
+
+        let pinfo = fs::read_to_string(Path::new(&path).join("PROJECT_INFO.md")).unwrap();
+        assert!(pinfo.contains("draft"), "frontmatter should hold the tag");
+
+        let removed = json(
+            "POST",
+            "/api/project/tag",
+            serde_json::json!({"path": path, "action": "remove", "tag": "draft"}),
+        );
+        assert!(removed["tags"].as_array().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn note_appends_journal_entry() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let path = create_project("journal demo");
+
+        let value = json(
+            "POST",
+            "/api/project/note",
+            serde_json::json!({"path": path, "message": "first milestone"}),
+        );
+        let journal = value["journal"].as_array().unwrap();
+        assert_eq!(journal.len(), 1);
+        assert_eq!(journal[0]["message"], "first milestone");
+
+        let pinfo = fs::read_to_string(Path::new(&path).join("PROJECT_INFO.md")).unwrap();
+        assert!(pinfo.contains("## Journal"));
+        assert!(pinfo.contains("first milestone"));
+    });
+}
+
+#[test]
+fn register_onboards_existing_folder() {
+    with_fresh_install(|install| {
+        write_config(install);
+        let folder = install.join("legacy_project");
+        fs::create_dir_all(&folder).unwrap();
+
+        let value = json(
+            "POST",
+            "/api/register",
+            serde_json::json!({"path": folder.display().to_string()}),
+        );
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["project"]["pinfo_written"], true);
+
+        // Index got the record and the counter advanced.
+        let records = index::load_all().unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(folder.join("PROJECT_INFO.md").exists());
+    });
+}
+
+#[test]
+fn apply_preview_lists_actions_without_writing() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let target = install.join("apply_target");
+        fs::create_dir_all(&target).unwrap();
+
+        let value = json(
+            "POST",
+            "/api/apply/preview",
+            serde_json::json!({"template": "test", "variables": {"name": "x"}, "target": target.display().to_string()}),
+        );
+        let actions = value["actions"].as_array().unwrap();
+        assert!(actions.iter().any(|a| a["action"] == "create"));
+        // Preview writes nothing.
+        assert!(!target.join("src").exists());
+    });
+}
+
+#[test]
+fn apply_creates_missing() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let target = install.join("apply_real");
+        fs::create_dir_all(&target).unwrap();
+
+        let _ = json(
+            "POST",
+            "/api/apply",
+            serde_json::json!({"template": "test", "variables": {"name": "x"}, "target": target.display().to_string()}),
+        );
+        assert!(
+            target.join("src").is_dir(),
+            "structure folder should be created"
+        );
+        assert!(target.join("README.md").exists(), "file should be created");
+    });
+}
+
+#[test]
+fn template_import_then_export_roundtrip() {
+    with_fresh_install(|install| {
+        write_config(install);
+        let yaml = r#"name: Imported
+slug: imported
+description: via UI
+naming_pattern: "{id}_{name}"
+id:
+  prefix: I
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+    transform: none
+structure: []
+files: []
+"#;
+        let imported = json(
+            "POST",
+            "/api/templates/import",
+            serde_json::json!({"yaml": yaml}),
+        );
+        assert_eq!(imported["template"]["slug"], "imported");
+        assert!(install.join("templates").join("imported.yaml").exists());
+
+        match ui::route_request("GET", "/api/templates/export?slug=imported", b"").unwrap() {
+            Response::Static(content_type, bytes) => {
+                assert!(content_type.contains("yaml"));
+                let text = String::from_utf8(bytes).unwrap();
+                assert!(text.contains("slug: imported"));
+            }
+            Response::Json(_) => panic!("expected YAML download"),
+        }
+    });
+}
+
+#[test]
+fn prune_drops_missing_records() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let path = create_project("doomed");
+        assert_eq!(index::load_all().unwrap().len(), 1);
+
+        fs::remove_dir_all(&path).unwrap();
+        let value = json("POST", "/api/projects/prune", serde_json::json!({}));
+        assert_eq!(value["removed"], 1);
+        assert!(index::load_all().unwrap().is_empty());
+    });
+}

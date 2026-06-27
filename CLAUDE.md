@@ -26,7 +26,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (110 total: 58 unit + 52 integration — 47 core in integration.rs + 5 UI in ui_server.rs)
+# Test (119 total: 58 unit + 61 integration — 47 core in integration.rs + 14 UI in ui_server.rs)
 cargo test
 cargo test <test_name>   # run a single test by name
 
@@ -58,7 +58,8 @@ fast-folder/
 ├── Launch Fast Folder UI.desktop — desktop launcher (Exec=`fastf ui --app`)
 ├── tests/
 │   ├── integration.rs        — 47 hermetic core tests using FASTF_INSTALL_DIR + tempfile
-│   └── ui_server.rs          — 5 tests driving fastf::ui::route_request (v0.6)
+│   └── ui_server.rs          — 14 tests driving fastf::ui::route_request (v0.6 core
+│                               + v0.7 search/detail/tag/note/register/apply/import-export/prune)
 └── src/
     ├── lib.rs                — Library entry: exposes core/, cli/, tui/, ui/, util/, bootstrap/
     │                           so integration tests can import fastf::...
@@ -383,7 +384,7 @@ Integration tests live in `tests/integration.rs` (core flows) and `tests/ui_serv
 
 `integration.rs` covers: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, index append, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture (including non-naming-pattern vars), metadata round-trip via YAML, disabled/custom-filename metadata, pinfo alias config compat, and bundled-template deduplication guard.
 
-`ui_server.rs` (v0.6) drives `fastf::ui::route_request` directly (no socket): health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s.
+`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s. v0.7 adds: search respects the query language + path exclusion, project detail returns metadata + journal, tag add/remove roundtrip, note appends journal, register onboards an existing folder, apply preview is non-writing while apply creates missing, template import→export roundtrip, and prune drops missing records.
 
 Run:
 ```bash
@@ -444,11 +445,21 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - v0.5: Template builder no longer asks "Template vs Raw" content mode. `collect_file()` always writes to `FileEntry.template`. The `FileEntry.content` field still exists in the YAML schema (hand-written templates with raw byte content keep working — e.g. `music-video.yaml`'s `.gitignore`), but the builder never produces it. `create_file()` and `apply()` still pick `template` when non-empty else `content`, so the dual-field semantics are preserved at the writer. If you re-add a mode switch, remember that `interpolate()` is already a no-op on text without `{token}` markers, so the only real use-case for `content:` is preserving literal `{...}` braces.
 - v0.5: The "Add another placeholder file?" prompt in `edit_files()` defaults to **No** and explicitly mentions that PROJECT_INFO.md is generated automatically. Don't flip the default back to Yes — the typical template doesn't need extra placeholder files and the auto-gen covers the common notes use-case.
 
-## Browser UI (`fastf ui`, v0.6)
+## Browser UI (`fastf ui`, v0.7)
 
 `fastf ui` starts a local loopback HTTP server and opens the browser UI. It is
 part of the `fastf` binary — **no separate `fastf-ui-server` binary**, no
 external web directory. Full reference: `docs/UI.md`.
+
+**v0.7 — feature-parity pass.** The UI now reaches the v0.4–v0.5 surface that was
+CLI-only: a project **detail drawer** (variables table + tag add/remove + journal
+notes, opened from any project row), real **search** using `core::query` (the
+`/api/search` route), a **register** page for onboarding existing folders, an
+**apply** modal (preview then create-missing), template **import / export /
+generate-from-folder**, and Settings **ID-counter editor + prune**. Every one of
+those maps to an existing `pub` library function, so the work was endpoint wiring
++ frontend views plus one refactor: `cli::register::register_core` /
+`RegisterOptions` / `PinfoConflict` (the non-interactive engine the route calls).
 
 Layout:
 - `src/ui/mod.rs` — the HTTP server (`std::net::TcpListener`, one thread per
@@ -480,3 +491,35 @@ source of truth and the same on-disk files. The `Ui` arm in `main.rs` forwards t
   is the frontend dev override (serve assets from disk instead of embedded).
 - v0.6: Embedded assets mean a frontend edit needs a `cargo build` to ship — but
   `FASTF_UI_DIR=$PWD/src/ui/web fastf ui` serves from disk for dev without rebuilding.
+- v0.7: Query-string GET routes (`/api/project?path=`, `/api/templates/export?slug=`)
+  are matched with `if path.starts_with(...)` guards placed BEFORE the static-asset
+  catch-all (`("GET", path) if !path.starts_with("/api/")`). Order matters — a new
+  `/api/...?` GET route must go above the catch-all. Values are percent-decoded by
+  the in-module `query_param` + `percent_decode` (no url crate); the frontend uses
+  `encodeURIComponent`, which emits `%20` (not `+`) for spaces, so the decoder does
+  NOT treat `+` as space (paths can legitimately contain `+`).
+- v0.7: `register_core` is the non-interactive engine; `fastf register`'s `run` is a
+  thin interactive shell over it (rename preview + pinfo-overwrite prompts there,
+  not in core). `RegisterArgs` (CLI) and `RegisterOptions` (engine) are separate
+  structs — `run` translates one to the other. The CLI rename-confirm shows the
+  exact `old → new` name via a preview computed from `build_plan_vars` +
+  `desired_rename` (shared helpers), reading `counter.get()+1` without incrementing;
+  the engine recomputes the same value and is authoritative.
+- v0.7: `PinfoConflict` controls the existing-`PROJECT_INFO.md` policy. `Abort`
+  bails BEFORE the counter/index writes (so the UI can confirm + retry with
+  `overwrite:true` without a duplicate-registration bail); `Skip` keeps the file but
+  still registers (index + counter); `Overwrite` rewrites it. The UI sends `Abort`
+  unless the user confirmed overwrite; the CLI sends `Overwrite`/`Skip` from its
+  prompt and never `Abort` (preserving the old "register regardless" behavior).
+- v0.7: The UI `apply` routes pass **raw** variables to `project::apply_plan` /
+  `apply` (no transform/sanitize) — matching `fastf apply`'s semantics, NOT `new`'s.
+  Don't "fix" this to apply transforms; it would diverge the UI from the CLI apply.
+- v0.7: `/api/search` reuses `core::query` exactly, so the deliberate "path excluded
+  from free-text" guarantee holds (there's a regression test). Empty `terms` returns
+  all projects (newest first) — the server-side equivalent of the plain list.
+- v0.7: The frontend renders the drawer + apply modal + generic (import/from-folder)
+  modal as state-driven layers appended after `shell(content)` in `render()`; each
+  has a `bind*` call. Mutating actions re-fetch + full `render()` (acceptable — the
+  only focus-sensitive surface is the projects search, which updates `#project-results`
+  in place via `runProjectSearch` instead of re-rendering). `(registered)`-slug
+  projects are filtered out of the apply/register template pickers.

@@ -40,9 +40,41 @@ fn with_fresh_install<R>(body: impl FnOnce(&Path) -> R) -> R {
     result
 }
 
+/// Install a template in v0.8 folder form: `templates/<slug>/template.yaml`
+/// plus a `files/` subtree. For test convenience the fixture YAML may still
+/// carry an inline `files:` block (as older flat templates did); this helper
+/// splits it out onto disk exactly like the real conversion, so the copy engine
+/// (which walks `files/`) sees the files. The `files:` key left in the manifest
+/// is an unknown field ignored by `Template`'s deserializer.
 fn write_template(install: &Path, slug: &str, yaml: &str) {
-    let path = install.join("templates").join(format!("{}.yaml", slug));
-    fs::write(&path, yaml).unwrap();
+    #[derive(serde::Deserialize)]
+    struct InlineFiles {
+        #[serde(default)]
+        files: Vec<InlineFile>,
+    }
+    #[derive(serde::Deserialize)]
+    struct InlineFile {
+        path: String,
+        #[serde(default)]
+        template: String,
+        #[serde(default)]
+        content: String,
+    }
+    let dir = install.join("templates").join(slug);
+    fs::create_dir_all(dir.join("files")).unwrap();
+    fs::write(dir.join("template.yaml"), yaml).unwrap();
+    if let Ok(inline) = serde_yaml::from_str::<InlineFiles>(yaml) {
+        for f in inline.files {
+            let body = if !f.template.is_empty() {
+                f.template
+            } else {
+                f.content
+            };
+            let dest = dir.join("files").join(&f.path);
+            fs::create_dir_all(dest.parent().unwrap()).unwrap();
+            fs::write(dest, body).unwrap();
+        }
+    }
 }
 
 /// A minimal valid template with one text var, one folder, and one templated file.
@@ -215,40 +247,62 @@ fn apply_skips_existing_and_creates_missing() {
 }
 
 #[test]
-fn template_rejects_parent_escape() {
+fn create_rejects_parent_escape_via_variable() {
+    // Folder-form templates can't author an escaping *path* on disk, but a file
+    // name can interpolate a variable. A malicious `..` value must be caught by
+    // the copy engine's `ensure_relative_safe_path` guard at create time.
     with_fresh_install(|install| {
-        let bad = r#"name: Bad
+        let yaml = r#"name: Bad
 slug: bad
 naming_pattern: "{id}"
+variables:
+  - slug: sub
+    label: Sub
+    type: text
+    required: true
 files:
-  - path: "../pwned.txt"
+  - path: "{sub}/keep.txt"
     content: nope
 "#;
-        write_template(install, "bad", bad);
-        let err = template::find_by_slug("bad").expect_err("should reject");
+        write_template(install, "bad", yaml);
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("bad").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("sub".to_string(), "..".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        let err = project::create(&plan, &tmpl, &mut counters, &cfg, false)
+            .expect_err("escaping file name must be rejected");
         let msg = format!("{err:#}");
         assert!(msg.contains("..") || msg.contains("relative"), "got: {msg}");
     });
 }
 
 #[test]
-fn template_rejects_absolute_path() {
-    with_fresh_install(|install| {
-        let bad = r#"name: Bad
-slug: bad
-naming_pattern: "{id}"
-files:
-  - path: "/etc/passwd"
-    content: nope
-"#;
-        write_template(install, "bad", bad);
-        let err = template::find_by_slug("bad").expect_err("should reject");
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("relative") || msg.contains("drive letter"),
-            "got: {msg}"
-        );
-    });
+fn template_validate_rejects_absolute_file_path() {
+    // `validate()` still guards `self.files` against escaping paths — the safety
+    // net for templates built in memory (e.g. the UI's save path), which never
+    // touch the folder-form disk scan.
+    let mut t = template::Template::default();
+    t.name = "bad".to_string();
+    t.slug = "bad".to_string();
+    t.naming_pattern = "{id}".to_string();
+    t.files = vec![template::FileEntry {
+        path: "/etc/passwd".to_string(),
+        template: String::new(),
+        content: "nope".to_string(),
+    }];
+    let err = t.validate().expect_err("should reject");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("relative") || msg.contains("drive letter"),
+        "got: {msg}"
+    );
 }
 
 #[test]
@@ -602,19 +656,22 @@ fn bundled_templates_do_not_emit_duplicate_project_info() {
     // currently shipped in the gallery.
     for entry in fs::read_dir(&bundled_dir).unwrap() {
         let entry = entry.unwrap();
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+        let dir = entry.path();
+        if !dir.is_dir() {
             continue;
         }
-        let raw = fs::read_to_string(&path).unwrap();
-        let tmpl: Template = serde_yaml::from_str(&raw)
-            .unwrap_or_else(|e| panic!("parse {}: {}", path.display(), e));
+        let manifest = dir.join("template.yaml");
+        if !manifest.exists() {
+            continue;
+        }
+        let tmpl = Template::load_from_file(&manifest)
+            .unwrap_or_else(|e| panic!("parse {}: {}", manifest.display(), e));
         for f in &tmpl.files {
             assert_ne!(
                 f.path,
                 "PROJECT_INFO.md",
                 "{} declares PROJECT_INFO.md but auto-gen now owns it",
-                path.display()
+                manifest.display()
             );
         }
     }
@@ -1229,16 +1286,19 @@ fn gallery_templates_parse_and_plan() {
     let mut seen = 0;
     for entry in entries {
         let entry = entry.unwrap();
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let manifest = dir.join("template.yaml");
+        if !manifest.exists() {
             continue;
         }
         seen += 1;
-        let yaml = fs::read_to_string(&path).unwrap();
-        let tmpl: template::Template = serde_yaml::from_str(&yaml)
-            .unwrap_or_else(|e| panic!("failed to parse {}: {}", path.display(), e));
+        let tmpl = template::Template::load_from_file(&manifest)
+            .unwrap_or_else(|e| panic!("failed to parse {}: {}", manifest.display(), e));
         tmpl.validate()
-            .unwrap_or_else(|e| panic!("failed to validate {}: {}", path.display(), e));
+            .unwrap_or_else(|e| panic!("failed to validate {}: {}", manifest.display(), e));
     }
     assert!(
         seen >= 5,
@@ -1313,18 +1373,19 @@ fn template_save_strips_reserved_project_info_entry() {
             },
         ];
 
-        let path = install.join("templates").join("x.yaml");
+        let dir = install.join("templates").join("x");
+        let path = dir.join("template.yaml");
         t.save_to_file(&path).unwrap();
 
-        // Re-read the file — only KEEP.md should be present.
-        let raw = fs::read_to_string(&path).unwrap();
+        // Files live on disk now: the reserved root entry must not be flushed,
+        // while KEEP.md is written into files/.
         assert!(
-            !raw.contains("PROJECT_INFO.md"),
-            "saved YAML still contains reserved entry:\n{raw}"
+            !dir.join("files").join("PROJECT_INFO.md").exists(),
+            "reserved PROJECT_INFO.md was written to files/"
         );
         assert!(
-            raw.contains("KEEP.md"),
-            "expected KEEP.md to survive: {raw}"
+            dir.join("files").join("KEEP.md").exists(),
+            "expected KEEP.md to be flushed into files/"
         );
     });
 }
@@ -1379,6 +1440,71 @@ files:
         let notes = fs::read_to_string(plan.root_path.join("NOTES.md")).unwrap();
         let expected = "This is a project for John Doe. Thank you John Doe for working with us on Amazing Project. Also thank you Steven Spielberg.\n";
         assert_eq!(notes, expected, "interpolation produced unexpected output");
+    });
+}
+
+#[test]
+fn copy_engine_handles_binary_verbatim_and_globs() {
+    // v0.8 files/ subtree: interpolated text, byte-identical binaries, a
+    // `verbatim` glob that preserves literal braces, and `exclude` globs.
+    with_fresh_install(|install| {
+        let yaml = r#"name: Assets
+slug: assets
+naming_pattern: "{id}_{name}"
+id:
+  prefix: A
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+    transform: title_underscore
+verbatim: ["*.tmpl"]
+exclude: [".DS_Store", "*.tmp"]
+"#;
+        let tdir = install.join("templates").join("assets");
+        fs::create_dir_all(tdir.join("files")).unwrap();
+        fs::write(tdir.join("template.yaml"), yaml).unwrap();
+        fs::write(
+            tdir.join("files").join("Note_{name}.md"),
+            "Hello {name} ({id})\n",
+        )
+        .unwrap();
+        let blob: [u8; 5] = [0x00, 0xFF, 0x10, 0x80, 0x07];
+        fs::write(tdir.join("files").join("logo.bin"), blob).unwrap();
+        fs::write(tdir.join("files").join("raw.tmpl"), "literal {name}\n").unwrap();
+        fs::write(tdir.join("files").join(".DS_Store"), "junk").unwrap();
+        fs::write(tdir.join("files").join("scratch.tmp"), "junk").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("assets").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "aurora".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        let root = &plan.root_path;
+        // Name + contents interpolated (title_underscore → Aurora).
+        assert_eq!(
+            fs::read_to_string(root.join("Note_Aurora.md")).unwrap(),
+            "Hello Aurora (A001)\n"
+        );
+        // Binary copied byte-for-byte.
+        assert_eq!(fs::read(root.join("logo.bin")).unwrap(), blob);
+        // verbatim glob: braces left literal.
+        assert_eq!(
+            fs::read_to_string(root.join("raw.tmpl")).unwrap(),
+            "literal {name}\n"
+        );
+        // exclude globs: never copied.
+        assert!(!root.join(".DS_Store").exists());
+        assert!(!root.join("scratch.tmp").exists());
     });
 }
 

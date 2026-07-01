@@ -1,0 +1,37 @@
+name: Python Project
+slug: python-project
+description: Modern Python project with src-layout, pyproject.toml, and pytest. Rename `src/package` after creation.
+version: "1"
+naming_pattern: "{name}"
+id:
+  prefix: PY
+  digits: 3
+variables:
+  - slug: name
+    label: Package name (letters, digits, underscores)
+    type: text
+    required: true
+    transform: lower_underscore
+  - slug: author
+    label: Author name
+    type: text
+    required: false
+    default: ""
+    transform: none
+  - slug: python_version
+    label: Minimum Python version
+    type: select
+    required: true
+    options:
+      - "3.10"
+      - "3.11"
+      - "3.12"
+      - "3.13"
+    default: "3.12"
+    transform: none
+structure:
+  - name: src
+    children:
+      - name: package
+  - name: tests
+  - name: docs

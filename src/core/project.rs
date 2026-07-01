@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::core::assets;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::naming::{
@@ -80,12 +81,19 @@ pub fn print_dry_run(plan: &ProjectPlan, template: &Template, config: &Config) {
         Some((&plan.vars, &config.date_format)),
     );
 
-    // Placeholder files as a separate section
-    if !template.files.is_empty() {
-        println!("\n  {}", "Files:".bold());
-        for f in &template.files {
-            let display = interpolate(&f.path, &plan.vars, &config.date_format);
-            println!("    {} {}", "•".cyan(), display.green());
+    // Bundled files (the whole files/ subtree, incl. binaries), interpolated names.
+    if let Ok(entries) = assets::walk(&template.files_dir()) {
+        let files: Vec<String> = entries
+            .iter()
+            .filter(|e| !e.is_dir && !assets::is_excluded(&e.rel, &template.exclude))
+            .map(|e| assets::interp_rel(&e.rel, &plan.vars, &config.date_format))
+            .filter(|rel| !crate::core::project_info::path_is_reserved(rel))
+            .collect();
+        if !files.is_empty() {
+            println!("\n  {}", "Files:".bold());
+            for f in &files {
+                println!("    {} {}", "•".cyan(), f.green());
+            }
         }
     }
 
@@ -288,10 +296,15 @@ pub fn create(
         &config.date_format,
     )?;
 
-    // Create placeholder files
-    for file_entry in &template.files {
-        create_file(file_entry, &plan.root_path, &plan.vars, config)?;
-    }
+    // Reproduce the template's files/ subtree into the new project.
+    copy_template_files(
+        template,
+        &plan.root_path,
+        &plan.vars,
+        &config.date_format,
+        false,
+        false,
+    )?;
 
     // Persist the new global counter value
     counters.set_value(plan.counter_value);
@@ -382,13 +395,23 @@ pub fn apply_plan(
 ) -> Vec<ApplyAction> {
     let mut out = Vec::new();
     walk_structure(&template.structure, target, vars, date_format, &mut out);
-    for f in &template.files {
-        let resolved_path = interpolate(&f.path, vars, date_format);
-        let path = target.join(&resolved_path);
-        if path.exists() {
-            out.push(ApplyAction::SkipFile(path));
-        } else {
-            out.push(ApplyAction::CreateFile(path));
+    if let Ok(entries) = assets::walk(&template.files_dir()) {
+        for entry in entries {
+            if assets::is_excluded(&entry.rel, &template.exclude) {
+                continue;
+            }
+            let rel = assets::interp_rel(&entry.rel, vars, date_format);
+            if crate::core::project_info::path_is_reserved(&rel) {
+                continue;
+            }
+            let path = target.join(&rel);
+            let exists = path.exists();
+            out.push(match (entry.is_dir, exists) {
+                (true, true) => ApplyAction::SkipFolder(path),
+                (true, false) => ApplyAction::CreateFolder(path),
+                (false, true) => ApplyAction::SkipFile(path),
+                (false, false) => ApplyAction::CreateFile(path),
+            });
         }
     }
     out
@@ -428,12 +451,11 @@ pub fn apply(
         anyhow::bail!("target folder does not exist: {}", target.display());
     }
 
-    let actions = apply_plan(template, target, vars, &config.date_format);
-
-    for action in &actions {
+    // Empty dirs declared in `structure:` first (create-or-skip, printed).
+    for action in apply_plan(template, target, vars, &config.date_format) {
         match action {
             ApplyAction::CreateFolder(p) => {
-                fs::create_dir_all(p).with_context(|| format!("creating {}", p.display()))?;
+                fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
                 println!("  {} {}", "+ folder".green(), p.display());
             }
             ApplyAction::SkipFolder(p) => {
@@ -443,50 +465,15 @@ pub fn apply(
                     format!("{} (exists)", p.display()).dimmed()
                 );
             }
-            ApplyAction::CreateFile(p) => {
-                let entry = find_entry_for_path(template, target, p, vars, &config.date_format);
-                if let Some(entry) = entry {
-                    if let Some(parent) = p.parent() {
-                        fs::create_dir_all(parent)
-                            .with_context(|| format!("creating parent dirs for {}", p.display()))?;
-                    }
-                    let content = if !entry.template.is_empty() {
-                        interpolate(&entry.template, vars, &config.date_format)
-                    } else {
-                        entry.content.clone()
-                    };
-                    let resolved = interpolate(&entry.path, vars, &config.date_format);
-                    ensure_relative_safe_path(&resolved)?;
-                    fs::write(p, content).with_context(|| format!("writing {}", p.display()))?;
-                    println!("  {} {}", "+ file  ".green(), p.display());
-                }
-            }
-            ApplyAction::SkipFile(p) => {
-                println!(
-                    "  {} {}",
-                    "  file  ".dimmed(),
-                    format!("{} (exists)", p.display()).dimmed()
-                );
-            }
+            // Files are copied below via the shared engine (handles binaries).
+            ApplyAction::CreateFile(_) | ApplyAction::SkipFile(_) => {}
         }
     }
 
-    Ok(())
-}
+    // Files from the files/ subtree — never overwrite, print each item.
+    copy_template_files(template, target, vars, &config.date_format, true, true)?;
 
-fn find_entry_for_path<'a>(
-    template: &'a Template,
-    target: &Path,
-    absolute: &Path,
-    vars: &HashMap<String, String>,
-    date_format: &str,
-) -> Option<&'a FileEntry> {
-    let rel = absolute.strip_prefix(target).ok()?;
-    let rel_str = rel.to_string_lossy().replace('\\', "/");
-    template
-        .files
-        .iter()
-        .find(|f| interpolate(&f.path, vars, date_format) == rel_str)
+    Ok(())
 }
 
 /// Render an `apply` plan as a human-readable dry-run report.
@@ -555,34 +542,61 @@ fn create_structure(
     Ok(())
 }
 
-fn create_file(
-    entry: &FileEntry,
-    root: &Path,
+/// Walk a template's `files/` subtree and reproduce it under `dest_root`.
+/// Names and UTF-8 text (≤ [`assets::TEXT_MAX_BYTES`]) are interpolated;
+/// binaries / `verbatim` globs are copied byte-for-byte; `exclude` globs are
+/// skipped. When `skip_existing` is set (apply semantics) existing files are
+/// left untouched; `verbose` prints a per-item line (used by `fastf apply`).
+fn copy_template_files(
+    template: &Template,
+    dest_root: &Path,
     vars: &HashMap<String, String>,
-    config: &Config,
+    date_format: &str,
+    skip_existing: bool,
+    verbose: bool,
 ) -> Result<()> {
-    // Resolve any {token} placeholders in the file path before use.
-    let resolved_path = interpolate(&entry.path, vars, &config.date_format);
+    let files_dir = template.files_dir();
+    for entry in assets::walk(&files_dir)? {
+        if assets::is_excluded(&entry.rel, &template.exclude) {
+            continue;
+        }
+        let rel = assets::interp_rel(&entry.rel, vars, date_format);
+        ensure_relative_safe_path(&rel)?;
+        // fastf owns PROJECT_INFO.md — never let a bundled file clobber it.
+        if crate::core::project_info::path_is_reserved(&rel) {
+            continue;
+        }
+        let dest = dest_root.join(&rel);
 
-    // Defence in depth: template validation already rejects unsafe paths, but
-    // enforce again here so templates loaded via other code paths stay safe.
-    ensure_relative_safe_path(&resolved_path)?;
+        if entry.is_dir {
+            fs::create_dir_all(&dest)
+                .with_context(|| format!("creating directory {}", dest.display()))?;
+            continue;
+        }
 
-    let dest = root.join(&resolved_path);
+        if skip_existing && dest.exists() {
+            if verbose {
+                println!(
+                    "  {} {}",
+                    "  file  ".dimmed(),
+                    format!("{} (exists)", dest.display()).dimmed()
+                );
+            }
+            continue;
+        }
 
-    // Ensure parent directories exist
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent dirs for {}", dest.display()))?;
+        let force_verbatim = assets::is_verbatim(&entry.rel, &template.verbatim)
+            || entry.size > assets::TEXT_MAX_BYTES;
+        assets::copy_file(
+            &files_dir.join(&entry.rel),
+            &dest,
+            force_verbatim,
+            vars,
+            date_format,
+        )?;
+        if verbose {
+            println!("  {} {}", "+ file  ".green(), dest.display());
+        }
     }
-
-    let content = if !entry.template.is_empty() {
-        interpolate(&entry.template, vars, &config.date_format)
-    } else {
-        entry.content.clone()
-    };
-
-    fs::write(&dest, content).with_context(|| format!("writing file {}", dest.display()))?;
-
     Ok(())
 }

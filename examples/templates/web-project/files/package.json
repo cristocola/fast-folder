@@ -1,0 +1,12 @@
+{{
+  "name": "{name}",
+  "version": "0.1.0",
+  "description": "",
+  "author": "{author}",
+  "type": "module",
+  "scripts": {{
+    "dev": "{runtime} run dev",
+    "build": "{runtime} run build",
+    "test": "{runtime} test"
+  }}
+}}

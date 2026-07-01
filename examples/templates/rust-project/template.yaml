@@ -1,0 +1,37 @@
+name: Rust Project
+slug: rust-project
+description: Cargo-style Rust project scaffold with src/, tests/, and a starter Cargo.toml.
+version: "1"
+naming_pattern: "{name}"
+id:
+  prefix: RS
+  digits: 3
+variables:
+  - slug: name
+    label: Crate name (letters, digits, hyphens)
+    type: text
+    required: true
+    transform: lower_underscore
+  - slug: author
+    label: Author name
+    type: text
+    required: false
+    default: ""
+    transform: none
+  - slug: license
+    label: License
+    type: select
+    required: true
+    options:
+      - MIT
+      - Apache-2.0
+      - GPL-3.0
+      - BSD-3-Clause
+      - Proprietary
+    default: MIT
+    transform: none
+structure:
+  - name: src
+  - name: tests
+  - name: benches
+  - name: examples

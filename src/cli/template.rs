@@ -96,7 +96,7 @@ pub fn new_interactive() -> Result<()> {
 
 /// Edit an existing template using the interactive builder.
 pub fn edit(slug: &str) -> Result<()> {
-    let path = paths::templates_dir().join(format!("{}.yaml", slug));
+    let path = paths::template_manifest(slug);
     if !path.exists() {
         bail!("template '{}' not found", slug);
     }
@@ -105,16 +105,16 @@ pub fn edit(slug: &str) -> Result<()> {
 }
 
 pub fn delete(slug: &str) -> Result<()> {
-    let path = paths::templates_dir().join(format!("{}.yaml", slug));
-    if !path.exists() {
+    let dir = paths::template_dir(slug);
+    if !dir.exists() {
         bail!("template '{}' not found", slug);
     }
     let ok = Confirm::new()
-        .with_prompt(format!("Delete template '{}'?", slug))
+        .with_prompt(format!("Delete template '{}' and its bundled files?", slug))
         .default(false)
         .interact()?;
     if ok {
-        fs::remove_file(&path)?;
+        fs::remove_dir_all(&dir)?;
         println!("Deleted template '{}'.", slug);
     } else {
         println!("Aborted.");
@@ -122,42 +122,7 @@ pub fn delete(slug: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn import(file: &str) -> Result<()> {
-    let src = std::path::PathBuf::from(file);
-    let t = Template::load_from_file(&src)?;
-    let dest = paths::templates_dir().join(format!("{}.yaml", t.slug));
-    if dest.exists() {
-        let ok = Confirm::new()
-            .with_prompt(format!("Template '{}' already exists — overwrite?", t.slug))
-            .default(false)
-            .interact()?;
-        if !ok {
-            println!("Aborted.");
-            return Ok(());
-        }
-    }
-    fs::copy(&src, &dest)?;
-    println!("Imported template '{}' (slug: {}).", t.name, t.slug);
-    Ok(())
-}
-
-pub fn export(slug: &str, output: Option<&str>) -> Result<()> {
-    let src = paths::templates_dir().join(format!("{}.yaml", slug));
-    if !src.exists() {
-        bail!("template '{}' not found", slug);
-    }
-    let content = fs::read_to_string(&src)?;
-    match output {
-        Some(path) => {
-            fs::write(path, &content)?;
-            println!("Exported to {}", path);
-        }
-        None => print!("{}", content),
-    }
-    Ok(())
-}
-
-/// Generate a YAML template from an existing folder tree.
+/// Generate a template from an existing folder tree.
 /// The generated template can be edited like any other — either via
 /// `fastf template edit <slug>` or by opening the YAML directly.
 pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
@@ -171,16 +136,16 @@ pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
 
     validate_slug(slug)?;
 
-    let dest = paths::templates_dir().join(format!("{}.yaml", slug));
-    if dest.exists() && !force {
+    let dest = paths::template_manifest(slug);
+    if paths::template_dir(slug).exists() && !force {
         bail!(
             "template '{}' already exists — re-run with --force to overwrite",
             slug
         );
     }
 
-    // Ensure the templates dir itself exists (first-run safety).
-    fs::create_dir_all(paths::templates_dir()).context("creating templates directory")?;
+    // Ensure the template's folder exists (first-run safety).
+    fs::create_dir_all(paths::template_files_dir(slug)).context("creating template directory")?;
 
     let mut structure: Vec<FolderNode> = Vec::new();
     let mut files: Vec<FileEntry> = Vec::new();
@@ -222,6 +187,9 @@ pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
         variables,
         structure,
         files,
+        verbatim: vec![],
+        exclude: vec![],
+        dir: paths::template_dir(slug),
         post_create: None,
         tags: vec![],
         tag_from: vec![],

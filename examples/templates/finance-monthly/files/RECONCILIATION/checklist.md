@@ -1,0 +1,4 @@
+- [ ] Bank statement downloaded
+- [ ] Cards reconciled
+- [ ] Receipts filed
+- [ ] Net figure posted in REPORT.md

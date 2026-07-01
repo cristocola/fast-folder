@@ -1,0 +1,11 @@
+[project]
+name = "{name}"
+version = "0.1.0"
+requires-python = ">={python_version}"
+authors = [{{name = "{author}"}}]
+description = ""
+readme = "README.md"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

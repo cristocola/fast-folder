@@ -47,14 +47,9 @@ structure:
       - name: "01_Finals"
       - name: "02_WIP"
   - name: "03_Project_Files"
-
-files:
-  - path: ".gitignore"
-    content: |
-      *.tmp
-      .DS_Store
-      Thumbs.db
 "#;
+
+static MUSIC_VIDEO_GITIGNORE: &str = "*.tmp\n.DS_Store\nThumbs.db\n";
 
 static PHOTOGRAPHY_YAML: &str = r#"name: "Photography Shoot"
 slug: "photography"
@@ -91,8 +86,6 @@ structure:
     children:
       - name: "01_Web"
       - name: "02_Print"
-
-files: []
 "#;
 
 static VIDEO_PRODUCTION_YAML: &str = r#"name: "Video Production"
@@ -139,8 +132,6 @@ structure:
     children:
       - name: "01_Finals"
       - name: "02_Review"
-
-files: []
 "#;
 
 /// Ensure the installation is bootstrapped:
@@ -166,9 +157,14 @@ pub fn ensure_bootstrapped() -> Result<()> {
     // Write bundled templates only if the directory is empty
     let is_empty = fs::read_dir(&templates_dir)?.next().is_none();
     if is_empty {
-        write_bundled_template("music-video.yaml", MUSIC_VIDEO_YAML)?;
-        write_bundled_template("photography.yaml", PHOTOGRAPHY_YAML)?;
-        write_bundled_template("video-production.yaml", VIDEO_PRODUCTION_YAML)?;
+        write_bundled_template("music-video", MUSIC_VIDEO_YAML)?;
+        write_bundled_template("photography", PHOTOGRAPHY_YAML)?;
+        write_bundled_template("video-production", VIDEO_PRODUCTION_YAML)?;
+        // Bundled asset: music-video ships a starter .gitignore in its files/ tree.
+        fs::write(
+            paths::template_files_dir("music-video").join(".gitignore"),
+            MUSIC_VIDEO_GITIGNORE,
+        )?;
         println!(
             "fastf: initialized in {}\n       3 default templates written to templates/",
             install.display()
@@ -178,8 +174,10 @@ pub fn ensure_bootstrapped() -> Result<()> {
     Ok(())
 }
 
-fn write_bundled_template(filename: &str, content: &str) -> Result<()> {
-    let path = paths::templates_dir().join(filename);
-    fs::write(path, content)?;
+/// Write a bundled template in folder form: `templates/<slug>/template.yaml`
+/// plus an (initially empty) `files/` subtree for bundled assets.
+fn write_bundled_template(slug: &str, manifest: &str) -> Result<()> {
+    fs::create_dir_all(paths::template_files_dir(slug))?;
+    fs::write(paths::template_manifest(slug), manifest)?;
     Ok(())
 }

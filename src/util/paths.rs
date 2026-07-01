@@ -34,6 +34,23 @@ pub fn templates_dir() -> PathBuf {
     install_dir().join("templates")
 }
 
+/// Directory holding a single template (folder form): `templates/<slug>/`.
+/// Contains `template.yaml` (metadata) and a `files/` subtree (the spec).
+pub fn template_dir(slug: &str) -> PathBuf {
+    templates_dir().join(slug)
+}
+
+/// The metadata manifest for a template: `templates/<slug>/template.yaml`.
+pub fn template_manifest(slug: &str) -> PathBuf {
+    template_dir(slug).join("template.yaml")
+}
+
+/// The bundled-files subtree for a template: `templates/<slug>/files/`.
+/// Everything here is reproduced into new projects (names + text interpolated).
+pub fn template_files_dir(slug: &str) -> PathBuf {
+    template_dir(slug).join("files")
+}
+
 pub fn projects_index_path() -> PathBuf {
     install_dir().join("projects.jsonl")
 }

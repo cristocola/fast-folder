@@ -11,9 +11,12 @@
 //! and `fastf apply` (CLI and UI share it).
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::core::naming::interpolate_name;
 
@@ -21,6 +24,97 @@ use crate::core::naming::interpolate_name;
 /// Anything larger is copied verbatim — interpolating a 200 MB file makes no
 /// sense and would blow up memory.
 pub const TEXT_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Files larger than this are deferred to a background copy job in the UI so a
+/// slow cross-filesystem copy (btrfs `~` → ntfs `/mnt/base`) never blocks the
+/// request. Must be ≥ [`TEXT_MAX_BYTES`] so every deferred file is verbatim
+/// (never needs interpolation) — the background copier does pure byte copies.
+pub const JOB_DEFER_BYTES: u64 = 4 * 1024 * 1024;
+
+/// A single deferred file copy (always a verbatim byte copy — see
+/// [`JOB_DEFER_BYTES`]). Produced by the eager create phase, run by a UI
+/// background thread with progress.
+#[derive(Debug, Clone)]
+pub struct CopyJob {
+    pub src: PathBuf,
+    pub dest: PathBuf,
+    pub bytes: u64,
+}
+
+/// Live progress of a background copy job. Serialized to the UI's `/api/job`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Progress {
+    pub total_bytes: u64,
+    pub copied_bytes: u64,
+    pub total_files: usize,
+    pub done_files: usize,
+    pub current_file: String,
+    /// `"running"`, `"done"`, or `"failed"`.
+    pub status: String,
+    pub error: Option<String>,
+}
+
+impl Progress {
+    pub fn new(jobs: &[CopyJob]) -> Self {
+        Self {
+            total_bytes: jobs.iter().map(|j| j.bytes).sum(),
+            copied_bytes: 0,
+            total_files: jobs.len(),
+            done_files: 0,
+            current_file: String::new(),
+            status: "running".to_string(),
+            error: None,
+        }
+    }
+}
+
+/// Copy one deferred (large, verbatim) file into place with chunked progress.
+/// Atomic via `.part` + rename; `progress.copied_bytes` is bumped per chunk so
+/// the UI shows a live bar during a multi-minute copy.
+pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>) -> Result<()> {
+    if let Some(parent) = job.dest.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent dirs for {}", job.dest.display()))?;
+    }
+    let mut tmp_os = job.dest.as_os_str().to_owned();
+    tmp_os.push(".part");
+    let tmp = PathBuf::from(tmp_os);
+
+    let result = (|| -> Result<()> {
+        let mut reader =
+            fs::File::open(&job.src).with_context(|| format!("opening {}", job.src.display()))?;
+        let mut writer =
+            fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let n = reader.read(&mut buf).context("reading source")?;
+            if n == 0 {
+                break;
+            }
+            writer.write_all(&buf[..n]).context("writing destination")?;
+            if let Ok(mut p) = progress.lock() {
+                p.copied_bytes += n as u64;
+            }
+        }
+        writer.sync_all().ok();
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            fs::rename(&tmp, &job.dest)
+                .with_context(|| format!("finalizing {}", job.dest.display()))
+                .inspect_err(|_| {
+                    let _ = fs::remove_file(&tmp);
+                })?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
 
 /// One physical entry discovered under a template's `files/` directory.
 pub struct AssetEntry {
@@ -203,6 +297,25 @@ mod tests {
         assert!(is_verbatim("assets/logo.svg", &["*.svg".into()]));
         assert!(is_excluded(".DS_Store", &[".DS_Store".into()]));
         assert!(!is_excluded("keep.txt", &["*.tmp".into()]));
+    }
+
+    #[test]
+    fn copy_job_is_byte_identical_and_tracks_progress() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("big.bin");
+        let dest = tmp.path().join("out/big.bin");
+        let data: Vec<u8> = (0..(3 * 1024 * 1024u32)).map(|i| i as u8).collect();
+        fs::write(&src, &data).unwrap();
+        let job = CopyJob {
+            src: src.clone(),
+            dest: dest.clone(),
+            bytes: data.len() as u64,
+        };
+        let progress = Mutex::new(Progress::new(std::slice::from_ref(&job)));
+        copy_job(&job, &progress).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), data);
+        assert_eq!(progress.lock().unwrap().copied_bytes, data.len() as u64);
+        assert!(!dest.with_extension("bin.part").exists());
     }
 
     #[test]

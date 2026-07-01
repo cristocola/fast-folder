@@ -269,7 +269,7 @@ pub fn print_tree(
 /// Create the project on disk: folders, files, and increment the counter.
 /// Also appends a record to the project index and runs post-create actions
 /// (if enabled globally or per-template). Both are best-effort — they never
-/// fail the create operation itself.
+/// fail the create operation itself. Copies the whole `files/` subtree inline.
 pub fn create(
     plan: &ProjectPlan,
     template: &Template,
@@ -277,6 +277,33 @@ pub fn create(
     config: &Config,
     run_post: bool,
 ) -> Result<()> {
+    create_inner(plan, template, counters, config, run_post, None)?;
+    Ok(())
+}
+
+/// Like [`create`], but files larger than `defer_over` bytes are **not** copied
+/// inline — they're returned as [`assets::CopyJob`]s for the caller to run in
+/// the background (the UI's job model). Everything else (structure, small/text
+/// files, counter, index, PROJECT_INFO.md) is done synchronously so the project
+/// is immediately usable. Post-create is skipped (the caller owns it).
+pub fn create_deferred(
+    plan: &ProjectPlan,
+    template: &Template,
+    counters: &mut Counters,
+    config: &Config,
+    defer_over: u64,
+) -> Result<Vec<assets::CopyJob>> {
+    create_inner(plan, template, counters, config, false, Some(defer_over))
+}
+
+fn create_inner(
+    plan: &ProjectPlan,
+    template: &Template,
+    counters: &mut Counters,
+    config: &Config,
+    run_post: bool,
+    defer_over: Option<u64>,
+) -> Result<Vec<assets::CopyJob>> {
     if plan.root_path.exists() {
         anyhow::bail!(
             "project folder already exists: {}",
@@ -296,14 +323,16 @@ pub fn create(
         &config.date_format,
     )?;
 
-    // Reproduce the template's files/ subtree into the new project.
-    copy_template_files(
+    // Reproduce the template's files/ subtree into the new project. Large files
+    // may be deferred (returned as jobs) when a threshold is given.
+    let deferred = copy_template_files(
         template,
         &plan.root_path,
         &plan.vars,
         &config.date_format,
         false,
         false,
+        defer_over,
     )?;
 
     // Persist the new global counter value
@@ -364,7 +393,7 @@ pub fn create(
         }
     }
 
-    Ok(())
+    Ok(deferred)
 }
 
 pub fn resolve_post_create(
@@ -471,7 +500,15 @@ pub fn apply(
     }
 
     // Files from the files/ subtree — never overwrite, print each item.
-    copy_template_files(template, target, vars, &config.date_format, true, true)?;
+    copy_template_files(
+        template,
+        target,
+        vars,
+        &config.date_format,
+        true,
+        true,
+        None,
+    )?;
 
     Ok(())
 }
@@ -547,6 +584,10 @@ fn create_structure(
 /// binaries / `verbatim` globs are copied byte-for-byte; `exclude` globs are
 /// skipped. When `skip_existing` is set (apply semantics) existing files are
 /// left untouched; `verbose` prints a per-item line (used by `fastf apply`).
+///
+/// When `defer_over` is `Some(limit)`, files larger than `limit` are **not**
+/// copied here — they're returned as [`assets::CopyJob`]s for a background
+/// copier. (`None` copies everything inline; the returned vec is empty.)
 fn copy_template_files(
     template: &Template,
     dest_root: &Path,
@@ -554,7 +595,9 @@ fn copy_template_files(
     date_format: &str,
     skip_existing: bool,
     verbose: bool,
-) -> Result<()> {
+    defer_over: Option<u64>,
+) -> Result<Vec<assets::CopyJob>> {
+    let mut deferred = Vec::new();
     let files_dir = template.files_dir();
     for entry in assets::walk(&files_dir)? {
         if assets::is_excluded(&entry.rel, &template.exclude) {
@@ -585,6 +628,19 @@ fn copy_template_files(
             continue;
         }
 
+        // Defer large files to a background job (always verbatim — the threshold
+        // is ≥ the text-interpolation cap).
+        if let Some(limit) = defer_over
+            && entry.size > limit
+        {
+            deferred.push(assets::CopyJob {
+                src: files_dir.join(&entry.rel),
+                dest,
+                bytes: entry.size,
+            });
+            continue;
+        }
+
         let force_verbatim = assets::is_verbatim(&entry.rel, &template.verbatim)
             || entry.size > assets::TEXT_MAX_BYTES;
         assets::copy_file(
@@ -598,5 +654,5 @@ fn copy_template_files(
             println!("  {} {}", "+ file  ".green(), dest.display());
         }
     }
-    Ok(())
+    Ok(deferred)
 }

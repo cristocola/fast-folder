@@ -20,7 +20,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -45,6 +46,25 @@ const MAX_REQUEST_SIZE: usize = 2 * 1024 * 1024;
 /// so concurrent requests can't corrupt Fast Folder's on-disk files. Reads are
 /// lock-free.
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Background copy jobs (large bundled assets), keyed by job id. The copy runs
+/// off the request thread and outside [`WRITE_LOCK`] — it only writes inside the
+/// new project's own folder, so it can't race the shared counter/index. The UI
+/// polls `GET /api/job/<id>` for [`crate::core::assets::Progress`].
+static JOBS: Mutex<Option<HashMap<String, Arc<Mutex<crate::core::assets::Progress>>>>> =
+    Mutex::new(None);
+
+fn jobs_lock() -> std::sync::MutexGuard<
+    'static,
+    Option<HashMap<String, Arc<Mutex<crate::core::assets::Progress>>>>,
+> {
+    JOBS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn next_job_id() -> String {
+    static COUNTER: AtomicUsize = AtomicUsize::new(1);
+    format!("job-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
 
 #[derive(Debug, Deserialize)]
 struct PlanRequest {
@@ -326,6 +346,10 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             let target = query_param(path, "path").context("missing 'path' query parameter")?;
             Ok(Response::Json(project_detail(&target)?))
         }
+        ("GET", path) if path.starts_with("/api/job/") => {
+            let id = path.trim_start_matches("/api/job/");
+            Ok(Response::Json(job_status(id)?))
+        }
         ("GET", path) if !path.starts_with("/api/") => {
             let (content_type, bytes) = assets::serve(path)?;
             Ok(Response::Static(content_type, bytes))
@@ -405,7 +429,16 @@ fn create_project(request: CreateRequest) -> Result<Value> {
         base_dir: request.base_dir,
     };
     let (template, config, mut counters, plan) = configured_plan(&plan_request)?;
-    project::create(&plan, &template, &mut counters, &config, false)?;
+    // Fast path: structure + text/small files + counter + index + PROJECT_INFO.md.
+    // Large bundled assets come back as jobs to copy in the background so the
+    // request returns immediately and the project is usable at once.
+    let deferred = project::create_deferred(
+        &plan,
+        &template,
+        &mut counters,
+        &config,
+        crate::core::assets::JOB_DEFER_BYTES,
+    )?;
 
     let actions = PostCreate {
         git_init: request.git_init,
@@ -416,10 +449,71 @@ fn create_project(request: CreateRequest) -> Result<Value> {
         post_create::run(&actions, &plan.root_path, &config)?;
     }
 
+    let job_id = if deferred.is_empty() {
+        None
+    } else {
+        Some(spawn_copy_job(deferred))
+    };
+
     Ok(json!({
         "ok": true,
-        "project": plan_json(&template, &config, &plan)
+        "project": plan_json(&template, &config, &plan),
+        "job_id": job_id,
     }))
+}
+
+/// Register a background copy job and start its worker thread. Returns the job
+/// id the frontend polls. Evicts already-finished jobs so the registry stays
+/// bounded across a long session.
+fn spawn_copy_job(jobs: Vec<crate::core::assets::CopyJob>) -> String {
+    let id = next_job_id();
+    let progress = Arc::new(Mutex::new(crate::core::assets::Progress::new(&jobs)));
+    {
+        let mut guard = jobs_lock();
+        let map = guard.get_or_insert_with(HashMap::new);
+        map.retain(|_, p| p.lock().map(|p| p.status == "running").unwrap_or(false));
+        map.insert(id.clone(), Arc::clone(&progress));
+    }
+
+    thread::spawn(move || {
+        for job in &jobs {
+            if let Ok(mut p) = progress.lock() {
+                p.current_file = job
+                    .dest
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+            }
+            if let Err(e) = crate::core::assets::copy_job(job, &progress) {
+                if let Ok(mut p) = progress.lock() {
+                    p.status = "failed".to_string();
+                    p.error = Some(format!("{e:#}"));
+                }
+                return;
+            }
+            if let Ok(mut p) = progress.lock() {
+                p.done_files += 1;
+            }
+        }
+        if let Ok(mut p) = progress.lock() {
+            p.status = "done".to_string();
+            p.current_file.clear();
+        }
+    });
+
+    id
+}
+
+/// `GET /api/job/<id>` — snapshot a background copy job's progress. A missing id
+/// (evicted after completion) is a clean error the frontend treats as "done".
+fn job_status(id: &str) -> Result<Value> {
+    let guard = jobs_lock();
+    let progress = guard
+        .as_ref()
+        .and_then(|map| map.get(id))
+        .context("job not found")?;
+    let snapshot = progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    Ok(json!({ "ok": true, "job": snapshot }))
 }
 
 fn validate_variables(template: &Template, variables: &HashMap<String, String>) -> Result<()> {

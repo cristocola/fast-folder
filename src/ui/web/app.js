@@ -1407,7 +1407,7 @@ async function createProject(event) {
         reveal: state.reveal,
       }),
     });
-    showSuccess(result.project);
+    showSuccess(result);
     await loadState(false);
   } catch (error) {
     state.previewError = error.message;
@@ -1420,7 +1420,15 @@ async function createProject(event) {
   }
 }
 
-function showSuccess(project) {
+function showSuccess(result) {
+  const project = result.project || result;
+  const jobId = result.job_id || null;
+  const progressMarkup = jobId
+    ? `<div class="job-progress" id="job-progress">
+         <div class="job-bar"><div class="job-bar-fill" style="width:0%"></div></div>
+         <div class="job-label">Copying bundled files…</div>
+       </div>`
+    : "";
   const overlay = document.createElement("div");
   overlay.className = "success-overlay";
   overlay.innerHTML = `
@@ -1429,6 +1437,7 @@ function showSuccess(project) {
       <h2>Project created.</h2>
       <p>Fast Folder created the complete <strong>${esc(project.template_name)}</strong> system with project ID <strong>${esc(project.id)}</strong>.</p>
       <div class="success-path" title="${esc(project.root_path)}">${esc(project.root_path)}</div>
+      ${progressMarkup}
       <div class="success-actions">
         <button class="button button-secondary" data-close-success>Done</button>
         <button class="button button-dark" data-success-open>${icon("external")} Open folder</button>
@@ -1440,7 +1449,50 @@ function showSuccess(project) {
     state.view = "dashboard";
     render();
   });
+  // "Open folder" works immediately — the structure + small files already exist.
   overlay.querySelector("[data-success-open]").addEventListener("click", () => openPath(project.root_path));
+  if (jobId) pollJob(jobId, overlay);
+}
+
+// Poll a background asset-copy job, updating only the progress node inside the
+// success overlay (no full re-render). A 404 means the job was evicted after
+// finishing — treat it as done.
+async function pollJob(jobId, overlay) {
+  const node = overlay.querySelector("#job-progress");
+  if (!node) return;
+  const fill = () => node.querySelector(".job-bar-fill");
+  const label = () => node.querySelector(".job-label");
+
+  while (document.body.contains(overlay)) {
+    let job;
+    try {
+      const res = await api(`/api/job/${encodeURIComponent(jobId)}`);
+      job = res.job;
+    } catch {
+      break; // evicted → complete
+    }
+    const pct = job.total_bytes
+      ? Math.min(100, Math.round((job.copied_bytes / job.total_bytes) * 100))
+      : 100;
+    if (fill()) fill().style.width = pct + "%";
+    if (job.status === "failed") {
+      node.classList.add("job-failed");
+      if (label()) label().textContent = `Copy failed: ${job.error || "unknown error"}`;
+      toast("Asset copy failed.", true);
+      return;
+    }
+    if (job.status === "done") break;
+    if (label()) {
+      label().textContent = `Copying ${job.current_file || "files"}… ${pct}% (${job.done_files}/${job.total_files})`;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  if (!document.body.contains(overlay)) return;
+  node.classList.add("job-done");
+  if (fill()) fill().style.width = "100%";
+  if (label()) label().textContent = "Bundled files copied.";
+  toast("Bundled files copied.");
 }
 
 async function openPath(path) {

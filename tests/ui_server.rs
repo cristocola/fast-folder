@@ -11,6 +11,7 @@
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use fastf::core::{config::Config, index};
 use fastf::ui::{self, Response};
@@ -354,6 +355,74 @@ fn apply_creates_missing() {
             "structure folder should be created"
         );
         assert!(target.join("README.md").exists(), "file should be created");
+    });
+}
+
+#[test]
+fn create_small_assets_has_no_job() {
+    // Only small/text files → nothing is deferred → no background job.
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let value = json(
+            "POST",
+            "/api/create",
+            serde_json::json!({"template": "test", "variables": {"name": "small"}}),
+        );
+        assert!(value["job_id"].is_null(), "unexpected job: {value}");
+    });
+}
+
+#[test]
+fn create_large_asset_returns_job_and_completes() {
+    // A bundled file over the defer threshold is copied in the background: the
+    // create returns a job_id immediately (project already usable), and polling
+    // /api/job/<id> reaches "done" with the file copied byte-for-byte.
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        let files_dir = install.join("templates").join("test").join("files");
+        // 5 MiB > JOB_DEFER_BYTES (4 MiB).
+        let big = vec![0xABu8; 5 * 1024 * 1024];
+        fs::write(files_dir.join("delivery.bin"), &big).unwrap();
+        write_config(install);
+
+        let value = json(
+            "POST",
+            "/api/create",
+            serde_json::json!({"template": "test", "variables": {"name": "heavy"}}),
+        );
+        let job_id = value["job_id"]
+            .as_str()
+            .expect("expected a job_id")
+            .to_string();
+        let root = Path::new(value["project"]["root_path"].as_str().unwrap()).to_path_buf();
+        // Project is immediately usable (structure exists) even mid-copy.
+        assert!(root.join("src").is_dir());
+
+        // Poll to completion.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut status = String::new();
+        while Instant::now() < deadline {
+            let job = json(
+                "GET",
+                &format!("/api/job/{job_id}"),
+                serde_json::Value::Null,
+            );
+            status = job["job"]["status"].as_str().unwrap_or("").to_string();
+            assert_ne!(status, "failed", "copy job failed: {job}");
+            if status == "done" {
+                assert_eq!(
+                    job["job"]["total_bytes"].as_u64().unwrap(),
+                    big.len() as u64
+                );
+                assert_eq!(job["job"]["done_files"].as_u64().unwrap(), 1);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        assert_eq!(status, "done", "job did not complete in time");
+        assert_eq!(fs::read(root.join("delivery.bin")).unwrap(), big);
+        assert!(!root.join("delivery.bin.part").exists());
     });
 }
 

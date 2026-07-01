@@ -2146,6 +2146,30 @@ html[data-theme="dark"] .switch input:checked + span { background: var(--accent-
 
 .success-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
+/* Background asset-copy progress (large bundled files). */
+.job-progress { margin: 4px 0 18px; }
+.job-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.job-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  transition: width 0.4s ease;
+}
+.job-label {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted, #6b7280);
+}
+.job-progress.job-done .job-bar-fill { background: var(--accent-strong); }
+.job-progress.job-failed .job-bar-fill { background: #e5534b; }
+.job-progress.job-failed .job-label { color: #e5534b; }
+
 #toast-root {
   position: fixed;
   z-index: 50;

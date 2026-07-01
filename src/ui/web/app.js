@@ -433,7 +433,6 @@ function templatesPage() {
         <div><h1 class="page-title">Templates</h1><p class="page-subtitle">Reusable systems that define naming, questions, folders, files, tags, and project automation.</p></div>
         <div class="page-actions">
           <button class="button button-secondary" data-from-folder>${icon("folder")} From folder</button>
-          <button class="button button-secondary" data-import-template>${icon("upload")} Import</button>
           <button class="button button-primary" data-new-template>${icon("plus")} New template</button>
         </div>
       </div>
@@ -452,7 +451,6 @@ function templatesPage() {
               <div class="detail-stat"><strong>${template.files.length}</strong><span>Files</span></div>
             </div>
             <div class="card-actions">
-              <button class="button button-secondary" data-export-template="${esc(template.slug)}" title="Download YAML">${icon("download")}</button>
               <button class="button button-secondary" data-edit-template="${esc(template.slug)}">${icon("sliders")} Edit</button>
               <button class="button button-primary" data-template="${esc(template.slug)}">${icon("plus")} Use</button>
             </div>
@@ -966,9 +964,7 @@ function bindCommon() {
     openPath(button.dataset.openPath);
   }));
   document.querySelector('[data-action="refresh"]')?.addEventListener("click", refresh);
-  document.querySelector("[data-import-template]")?.addEventListener("click", openImportModal);
   document.querySelector("[data-from-folder]")?.addEventListener("click", openFromFolderModal);
-  document.querySelectorAll("[data-export-template]").forEach((button) => button.addEventListener("click", () => exportTemplate(button.dataset.exportTemplate)));
   bindProjectRows();
 
   const search = document.querySelector("#global-search");
@@ -1933,13 +1929,8 @@ async function runApply() {
 }
 
 // ---------------------------------------------------------------------------
-// Template import / generate-from-folder modals + export
+// Generate-from-folder modal
 // ---------------------------------------------------------------------------
-
-function openImportModal() {
-  state.modal = { kind: "import", yaml: "", overwrite: false, busy: false, error: "" };
-  render();
-}
 
 function openFromFolderModal() {
   state.modal = { kind: "from-folder", source: "", slug: "", force: false, busy: false, error: "" };
@@ -1953,28 +1944,8 @@ function closeModal() {
 
 function genericModalMarkup() {
   if (!state.modal) return "";
-  if (state.modal.kind === "import") return importModalMarkup();
   if (state.modal.kind === "from-folder") return fromFolderModalMarkup();
   return "";
-}
-
-function importModalMarkup() {
-  const modal = state.modal;
-  return `
-    <div class="overlay" data-close-modal></div>
-    <div class="modal modal-wide" role="dialog" aria-modal="true">
-      <div class="modal-head"><h2>Import a template</h2><button class="icon-button" data-close-modal>${icon("close")}</button></div>
-      <div class="modal-body scroll">
-        <p class="modal-sub">Paste template YAML or load a <code>.yaml</code> file. The slug must be unique unless you overwrite.</p>
-        <input type="file" id="import-file" accept=".yaml,.yml" class="input">
-        ${editorField("Template YAML", "", `<textarea class="textarea mono" id="import-yaml" rows="14" placeholder="name: My Template&#10;slug: my-template&#10;naming_pattern: '{date}_{name}_{id}'">${esc(modal.yaml || "")}</textarea>`, false, "full")}
-        ${modal.error ? `<div class="error-box">${esc(modal.error)}</div>` : ""}
-      </div>
-      <div class="modal-foot">
-        <label class="inline-check"><input type="checkbox" id="import-overwrite" ${modal.overwrite ? "checked" : ""}> Overwrite if it exists</label>
-        <button class="button button-primary" data-import-run ${modal.busy ? "disabled" : ""}>${icon("upload")} Import</button>
-      </div>
-    </div>`;
 }
 
 function fromFolderModalMarkup() {
@@ -1999,48 +1970,11 @@ function fromFolderModalMarkup() {
 function bindGenericModal() {
   if (!state.modal) return;
   document.querySelectorAll("[data-close-modal]").forEach((element) => element.addEventListener("click", closeModal));
-  if (state.modal.kind === "import") {
-    document.querySelector("#import-yaml")?.addEventListener("input", (event) => { state.modal.yaml = event.target.value; });
-    document.querySelector("#import-overwrite")?.addEventListener("change", (event) => { state.modal.overwrite = event.target.checked; });
-    document.querySelector("#import-file")?.addEventListener("change", async (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
-      state.modal.yaml = await file.text();
-      render();
-    });
-    document.querySelector("[data-import-run]")?.addEventListener("click", runImport);
-  }
   if (state.modal.kind === "from-folder") {
     document.querySelector("#ff-source")?.addEventListener("input", (event) => { state.modal.source = event.target.value; });
     document.querySelector("#ff-slug")?.addEventListener("input", (event) => { state.modal.slug = event.target.value; });
     document.querySelector("#ff-force")?.addEventListener("change", (event) => { state.modal.force = event.target.checked; });
     document.querySelector("[data-ff-run]")?.addEventListener("click", runFromFolder);
-  }
-}
-
-async function runImport() {
-  const modal = state.modal;
-  modal.yaml = document.querySelector("#import-yaml")?.value || modal.yaml;
-  modal.overwrite = document.querySelector("#import-overwrite")?.checked || false;
-  if (!modal.yaml?.trim()) {
-    modal.error = "Paste YAML or choose a file first.";
-    render();
-    return;
-  }
-  modal.busy = true;
-  modal.error = "";
-  render();
-  try {
-    const result = await api("/api/templates/import", { method: "POST", body: JSON.stringify({ yaml: modal.yaml, overwrite: modal.overwrite }) });
-    await loadState(false);
-    state.modal = null;
-    state.view = "templates";
-    render();
-    toast(`Imported “${result.template.name}”.`);
-  } catch (error) {
-    modal.busy = false;
-    modal.error = error.message;
-    render();
   }
 }
 
@@ -2068,28 +2002,6 @@ async function runFromFolder() {
     modal.busy = false;
     modal.error = error.message;
     render();
-  }
-}
-
-async function exportTemplate(slug) {
-  try {
-    const response = await fetch(`/api/templates/export?slug=${encodeURIComponent(slug)}`);
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || "Export failed.");
-    }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${slug}.yaml`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    toast(`Exported ${slug}.yaml`);
-  } catch (error) {
-    toast(error.message, true);
   }
 }
 

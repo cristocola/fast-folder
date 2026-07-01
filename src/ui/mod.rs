@@ -129,13 +129,6 @@ struct ApplyRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct TemplateImportRequest {
-    yaml: String,
-    #[serde(default)]
-    overwrite: bool,
-}
-
-#[derive(Debug, Deserialize)]
 struct FromFolderRequest {
     source: String,
     slug: String,
@@ -313,12 +306,6 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             let _guard = lock_writes()?;
             Ok(Response::Json(apply_template(request)?))
         }
-        ("POST", "/api/templates/import") => {
-            let request: TemplateImportRequest =
-                serde_json::from_slice(body).context("invalid template import request")?;
-            let _guard = lock_writes()?;
-            Ok(Response::Json(import_template(request)?))
-        }
         ("POST", "/api/templates/from-folder") => {
             let request: FromFolderRequest =
                 serde_json::from_slice(body).context("invalid from-folder request")?;
@@ -338,10 +325,6 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
         ("GET", path) if path.starts_with("/api/project?") => {
             let target = query_param(path, "path").context("missing 'path' query parameter")?;
             Ok(Response::Json(project_detail(&target)?))
-        }
-        ("GET", path) if path.starts_with("/api/templates/export?") => {
-            let slug = query_param(path, "slug").context("missing 'slug' query parameter")?;
-            export_template(&slug)
         }
         ("GET", path) if !path.starts_with("/api/") => {
             let (content_type, bytes) = assets::serve(path)?;
@@ -756,41 +739,6 @@ fn action_json(action: &ApplyAction) -> Value {
     json!({"action": kind_action, "kind": kind, "path": path.display().to_string()})
 }
 
-/// `POST /api/templates/import` — parse pasted YAML and save it as a template.
-fn import_template(request: TemplateImportRequest) -> Result<Value> {
-    let mut template: Template =
-        serde_yaml::from_str(&request.yaml).context("parsing template YAML")?;
-    template.name = template.name.trim().to_string();
-    template.slug = template.slug.trim().to_string();
-    template.description = template.description.trim().to_string();
-    template.naming_pattern = template.naming_pattern.trim().to_string();
-    template.id.prefix = template.id.prefix.trim().to_string();
-    validate_template_for_ui(&template)?;
-
-    let templates_dir = paths::templates_dir();
-    fs::create_dir_all(&templates_dir)?;
-    let destination = templates_dir.join(format!("{}.yaml", template.slug));
-    if destination.exists() && !request.overwrite {
-        bail!(
-            "A template with the slug '{}' already exists",
-            template.slug
-        );
-    }
-    template.save_to_file(&destination)?;
-    Ok(json!({"ok": true, "template": template}))
-}
-
-/// `GET /api/templates/export?slug=<slug>` — download the raw YAML.
-fn export_template(slug: &str) -> Result<Response> {
-    validate_slug(slug)?;
-    let source = paths::templates_dir().join(format!("{slug}.yaml"));
-    if !source.exists() {
-        bail!("template '{}' no longer exists", slug);
-    }
-    let bytes = fs::read(&source).with_context(|| format!("reading {}", source.display()))?;
-    Ok(Response::Static("application/x-yaml; charset=utf-8", bytes))
-}
-
 /// `POST /api/templates/from-folder` — generate a template from a folder tree.
 fn template_from_folder(request: FromFolderRequest) -> Result<Value> {
     crate::cli::template::from_folder(&request.source, &request.slug, request.force)?;
@@ -882,16 +830,16 @@ fn save_template(mut request: TemplateSaveRequest) -> Result<Value> {
 
     validate_template_for_ui(&request.template)?;
 
-    let templates_dir = paths::templates_dir();
-    fs::create_dir_all(&templates_dir)?;
-    let destination = templates_dir.join(format!("{}.yaml", request.template.slug));
+    fs::create_dir_all(paths::templates_dir())?;
+    let destination = paths::template_manifest(&request.template.slug);
+    let template_dir = paths::template_dir(&request.template.slug);
 
     let original_slug = request
         .original_slug
         .as_deref()
         .map(str::trim)
         .filter(|slug| !slug.is_empty());
-    if destination.exists() && original_slug != Some(request.template.slug.as_str()) {
+    if template_dir.exists() && original_slug != Some(request.template.slug.as_str()) {
         bail!(
             "A template with the slug '{}' already exists",
             request.template.slug
@@ -900,14 +848,19 @@ fn save_template(mut request: TemplateSaveRequest) -> Result<Value> {
 
     if let Some(original_slug) = original_slug {
         validate_slug(original_slug)?;
-        let original_path = templates_dir.join(format!("{original_slug}.yaml"));
-        if !original_path.exists() {
+        let original_dir = paths::template_dir(original_slug);
+        if !original_dir.exists() {
             bail!("The original template '{}' no longer exists", original_slug);
         }
+        // On a slug change, carry bundled files across before removing the old
+        // folder, then flush the (possibly edited) text files.
+        if original_dir != template_dir {
+            copy_dir_recursive(&original_dir.join("files"), &template_dir.join("files"))?;
+        }
         request.template.save_to_file(&destination)?;
-        if original_path != destination {
-            fs::remove_file(&original_path)
-                .with_context(|| format!("removing {}", original_path.display()))?;
+        if original_dir != template_dir {
+            fs::remove_dir_all(&original_dir)
+                .with_context(|| format!("removing {}", original_dir.display()))?;
         }
     } else {
         request.template.save_to_file(&destination)?;
@@ -916,13 +869,33 @@ fn save_template(mut request: TemplateSaveRequest) -> Result<Value> {
     Ok(json!({"ok": true, "template": request.template}))
 }
 
+/// Recursively copy `src` into `dest` (used when renaming a template's slug so
+/// its bundled binary files survive the move). No-op when `src` is absent.
+fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
+    if !src.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
 fn delete_template(slug: &str) -> Result<()> {
     validate_slug(slug)?;
-    let path = paths::templates_dir().join(format!("{slug}.yaml"));
-    if !path.exists() {
+    let dir = paths::template_dir(slug);
+    if !dir.exists() {
         bail!("Template '{}' no longer exists", slug);
     }
-    fs::remove_file(&path).with_context(|| format!("deleting {}", path.display()))
+    fs::remove_dir_all(&dir).with_context(|| format!("deleting {}", dir.display()))
 }
 
 fn validate_template_for_ui(template: &Template) -> Result<()> {

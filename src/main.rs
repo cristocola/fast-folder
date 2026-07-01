@@ -76,7 +76,7 @@ enum Commands {
         extra: Vec<String>,
     },
 
-    /// Manage templates (list, create, edit, delete, import, export)
+    /// Manage templates (list, create, edit, delete, from-folder)
     Template {
         #[command(subcommand)]
         action: TemplateAction,
@@ -381,19 +381,6 @@ enum TemplateAction {
         /// Template slug (see 'fastf template list')
         slug: String,
     },
-    /// Import a template from a YAML file into the templates directory
-    Import {
-        /// Path to the YAML template file to import
-        file: String,
-    },
-    /// Export a template as YAML — to stdout or to a file for sharing or backup
-    Export {
-        /// Template slug (see 'fastf template list')
-        slug: String,
-        /// Write output to this file instead of stdout
-        #[arg(short, long)]
-        output: Option<String>,
-    },
     /// Generate a template from an existing folder tree (structure + small file contents)
     #[command(
         after_help = "Walks the folder, turning every directory into a FolderNode and every\n\
@@ -560,10 +547,6 @@ fn run() -> Result<()> {
             TemplateAction::Show { slug } => cli::template::show(&slug),
             TemplateAction::Edit { slug } => cli::template::edit(&slug),
             TemplateAction::Delete { slug } => cli::template::delete(&slug),
-            TemplateAction::Import { file } => cli::template::import(&file),
-            TemplateAction::Export { slug, output } => {
-                cli::template::export(&slug, output.as_deref())
-            }
             TemplateAction::FromFolder { path, slug, force } => {
                 cli::template::from_folder(&path, &slug, force)
             }

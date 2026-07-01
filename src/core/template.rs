@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::util::paths;
 
@@ -31,8 +31,28 @@ pub struct Template {
     #[serde(default)]
     pub structure: Vec<FolderNode>,
 
-    #[serde(default)]
+    /// Glob patterns (relative to `files/`) whose files are copied **verbatim**
+    /// even when they look like text — use this to preserve literal `{braces}`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verbatim: Vec<String>,
+
+    /// Glob patterns (relative to `files/`) that are **never** copied
+    /// (e.g. `.DS_Store`, `*.tmp`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+
+    /// In-memory snapshot of the template's UTF-8 text files, loaded from the
+    /// `files/` subtree. **Not** serialized into `template.yaml` — the `files/`
+    /// directory on disk is the single source of truth. This buffer exists only
+    /// so the editors/previews can show and round-trip text files; the copy
+    /// engine (`core::assets`) always walks the real directory.
+    #[serde(skip)]
     pub files: Vec<FileEntry>,
+
+    /// The template's own directory (`templates/<slug>/`). Set at load time so
+    /// callers can find the `files/` subtree. Not serialized.
+    #[serde(skip)]
+    pub dir: PathBuf,
 
     /// Optional per-template post-create actions (override the global config).
     /// `None` = fall back to `config.toml`'s `post_create` block.
@@ -139,26 +159,83 @@ pub struct FileEntry {
 // ---------------------------------------------------------------------------
 
 impl Template {
-    pub fn load_from_file(path: &PathBuf) -> Result<Self> {
+    /// The `files/` subtree of this template (the spec reproduced into projects).
+    pub fn files_dir(&self) -> PathBuf {
+        self.dir.join("files")
+    }
+
+    /// Load a template from its `template.yaml` manifest. The manifest holds
+    /// metadata only; the sibling `files/` directory holds the actual spec. The
+    /// UTF-8 text files under `files/` are scanned into the in-memory `files`
+    /// buffer (for editors/previews); binaries stay on disk only.
+    pub fn load_from_file(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("reading template {}", path.display()))?;
         let mut t: Self = serde_yaml::from_str(&raw)
             .with_context(|| format!("parsing template {}", path.display()))?;
+        t.dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        t.scan_files();
         // Silently strip file entries colliding with the reserved auto-gen
-        // filename. Keeps older user-built templates working (the auto-gen
-        // would have overwritten these entries at write time anyway).
+        // filename. fastf always owns PROJECT_INFO.md.
         t.strip_reserved_files();
         t.validate()?;
         Ok(t)
     }
 
-    pub fn save_to_file(&self, path: &PathBuf) -> Result<()> {
-        // Defense in depth: even if a caller built a Template in memory with
-        // a reserved-name file entry, never persist it to disk.
+    /// Read the UTF-8 text files under `files/` into the `files` buffer. Binary
+    /// or oversize files are left on disk only (the copy engine handles them).
+    fn scan_files(&mut self) {
+        self.files.clear();
+        let files_dir = self.files_dir();
+        let entries = match crate::core::assets::walk(&files_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries {
+            if entry.is_dir || entry.size > crate::core::assets::TEXT_MAX_BYTES {
+                continue;
+            }
+            if let Ok(text) = fs::read_to_string(files_dir.join(&entry.rel)) {
+                self.files.push(FileEntry {
+                    path: entry.rel,
+                    template: text,
+                    content: String::new(),
+                });
+            }
+        }
+    }
+
+    /// Persist a template in folder form: write `template.yaml` (metadata only)
+    /// at `path` and flush the in-memory text `files` buffer into the sibling
+    /// `files/` directory. Binaries already on disk are untouched.
+    pub fn save_to_file(&self, path: &Path) -> Result<()> {
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+
+        // Defense in depth: never persist a reserved-name file entry.
         let mut snapshot = self.clone();
         snapshot.strip_reserved_files();
+
         let raw = serde_yaml::to_string(&snapshot).context("serializing template")?;
         fs::write(path, raw).with_context(|| format!("writing {}", path.display()))?;
+
+        // Flush text files into files/. Uses `path`'s parent (authoritative)
+        // rather than `self.dir`, which may be unset on an in-memory template.
+        let files_dir = dir.join("files");
+        for f in &snapshot.files {
+            crate::core::naming::ensure_relative_safe_path(&f.path)?;
+            let dest = files_dir.join(&f.path);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            let content = if !f.template.is_empty() {
+                &f.template
+            } else {
+                &f.content
+            };
+            fs::write(&dest, content).with_context(|| format!("writing {}", dest.display()))?;
+        }
         Ok(())
     }
 
@@ -216,14 +293,14 @@ impl Template {
         Ok(())
     }
 
-    /// Path where this template is stored on disk.
-    #[allow(dead_code)]
+    /// Path to this template's manifest: `templates/<slug>/template.yaml`.
     pub fn file_path(&self) -> PathBuf {
-        paths::templates_dir().join(format!("{}.yaml", self.slug))
+        paths::template_manifest(&self.slug)
     }
 }
 
-/// Load all templates from the templates directory.
+/// Load all templates from the templates directory. Each template is a folder
+/// `templates/<slug>/` containing a `template.yaml` manifest.
 pub fn load_all() -> Result<Vec<Template>> {
     let dir = paths::templates_dir();
     if !dir.exists() {
@@ -235,11 +312,16 @@ pub fn load_all() -> Result<Vec<Template>> {
     {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-            match Template::load_from_file(&path) {
-                Ok(t) => templates.push(t),
-                Err(e) => eprintln!("warning: skipping {}: {}", path.display(), e),
-            }
+        if !path.is_dir() {
+            continue;
+        }
+        let manifest = path.join("template.yaml");
+        if !manifest.exists() {
+            continue;
+        }
+        match Template::load_from_file(&manifest) {
+            Ok(t) => templates.push(t),
+            Err(e) => eprintln!("warning: skipping {}: {}", manifest.display(), e),
         }
     }
     templates.sort_by(|a, b| a.name.cmp(&b.name));
@@ -248,7 +330,7 @@ pub fn load_all() -> Result<Vec<Template>> {
 
 /// Find a template by slug.
 pub fn find_by_slug(slug: &str) -> Result<Template> {
-    let path = paths::templates_dir().join(format!("{}.yaml", slug));
+    let path = paths::template_manifest(slug);
     if !path.exists() {
         bail!(
             "template '{}' not found — run `fastf template list` to see available templates",

@@ -331,7 +331,6 @@ fn menu_templates() -> Result<()> {
                 "List templates",
                 "Show template details",
                 "Delete a template",
-                "Import template from file",
                 "Back",
             ])
             .default(0)
@@ -378,14 +377,7 @@ fn menu_templates() -> Result<()> {
                 template::delete(&slug)?;
                 println!();
             }
-            7 => {
-                let path: String = Input::new()
-                    .with_prompt("Path to .yaml file")
-                    .interact_text()?;
-                template::import(&path)?;
-                println!();
-            }
-            8 => break,
+            7 => break,
             _ => unreachable!(),
         }
     }

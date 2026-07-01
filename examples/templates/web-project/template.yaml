@@ -1,0 +1,38 @@
+name: Web Project
+slug: web-project
+description: Frontend starter (vanilla or framework-ready) with src/, public/, and a package.json.
+version: "1"
+naming_pattern: "{name}"
+id:
+  prefix: WEB
+  digits: 3
+variables:
+  - slug: name
+    label: Project name (kebab-case)
+    type: text
+    required: true
+    transform: lower_underscore
+  - slug: author
+    label: Author name
+    type: text
+    required: false
+    default: ""
+    transform: none
+  - slug: runtime
+    label: Package manager / runtime
+    type: select
+    required: true
+    options:
+      - npm
+      - pnpm
+      - yarn
+      - bun
+    default: pnpm
+    transform: none
+structure:
+  - name: src
+    children:
+      - name: components
+      - name: styles
+  - name: public
+  - name: tests

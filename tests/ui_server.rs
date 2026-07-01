@@ -50,14 +50,13 @@ variables:
     transform: title_underscore
 structure:
   - name: src
-files:
-  - path: README.md
-    template: |
-      # {{name}}
-      id: {{id}}
 "#
     );
-    fs::write(install.join("templates").join(format!("{slug}.yaml")), yaml).unwrap();
+    // v0.8 folder form: manifest + a files/ subtree holding the bundled README.
+    let dir = install.join("templates").join(slug);
+    fs::create_dir_all(dir.join("files")).unwrap();
+    fs::write(dir.join("template.yaml"), yaml).unwrap();
+    fs::write(dir.join("files").join("README.md"), "# {name}\nid: {id}\n").unwrap();
 }
 
 /// Write a config.toml whose base_dir points inside the sandbox, so the UI's
@@ -359,41 +358,25 @@ fn apply_creates_missing() {
 }
 
 #[test]
-fn template_import_then_export_roundtrip() {
+fn create_reproduces_bundled_files_via_ui() {
+    // v0.8: the UI create path walks the template's files/ subtree. A binary
+    // asset must land byte-identical; a text file must be interpolated.
     with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        let files_dir = install.join("templates").join("test").join("files");
+        let blob: [u8; 4] = [0x00, 0xFF, 0x10, 0x80];
+        fs::write(files_dir.join("logo.bin"), blob).unwrap();
         write_config(install);
-        let yaml = r#"name: Imported
-slug: imported
-description: via UI
-naming_pattern: "{id}_{name}"
-id:
-  prefix: I
-  digits: 3
-variables:
-  - slug: name
-    label: Name
-    type: text
-    required: true
-    transform: none
-structure: []
-files: []
-"#;
-        let imported = json(
-            "POST",
-            "/api/templates/import",
-            serde_json::json!({"yaml": yaml}),
-        );
-        assert_eq!(imported["template"]["slug"], "imported");
-        assert!(install.join("templates").join("imported.yaml").exists());
 
-        match ui::route_request("GET", "/api/templates/export?slug=imported", b"").unwrap() {
-            Response::Static(content_type, bytes) => {
-                assert!(content_type.contains("yaml"));
-                let text = String::from_utf8(bytes).unwrap();
-                assert!(text.contains("slug: imported"));
-            }
-            Response::Json(_) => panic!("expected YAML download"),
-        }
+        let created = json(
+            "POST",
+            "/api/create",
+            serde_json::json!({"template": "test", "variables": {"name": "bundled"}}),
+        );
+        let root = Path::new(created["project"]["root_path"].as_str().unwrap());
+        assert_eq!(fs::read(root.join("logo.bin")).unwrap(), blob);
+        let readme = fs::read_to_string(root.join("README.md")).unwrap();
+        assert!(readme.contains("# Bundled"), "readme was: {readme}");
     });
 }
 

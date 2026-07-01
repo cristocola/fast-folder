@@ -48,10 +48,11 @@ non-loopback address.
 | GET  | `/api/health` | Health check |
 | GET  | `/api/state` | Config, templates, projects, counter, data paths |
 | POST | `/api/preview` | Validate variables, return a project plan (no writes) |
-| POST | `/api/create` | Create a project + run requested post-create actions |
+| POST | `/api/create` | Create a project + run post-create; returns `{project, job_id}` (`job_id` set only when large assets are copied in the background) |
+| GET  | `/api/job/<id>` | Poll a background asset-copy job's progress (404 once evicted after completion) |
 | POST | `/api/settings` | Update supported `config.toml` values |
-| POST | `/api/templates/save` | Create/update a template YAML |
-| POST | `/api/templates/delete` | Delete a template YAML |
+| POST | `/api/templates/save` | Create/update a template (`template.yaml` + `files/`) |
+| POST | `/api/templates/delete` | Delete a template (its whole `<slug>/` folder) |
 | POST | `/api/open` | Open a path in the system file manager |
 | POST | `/api/search` | Run the `fastf search` query language (`tag:`, `key=`, `key>date`, free text); empty terms returns all |
 | GET  | `/api/project?path=<abs>` | Full metadata + journal for one project |
@@ -60,22 +61,30 @@ non-loopback address.
 | POST | `/api/register` | Onboard an existing folder (`{path, template?, variables, rename, apply, created?, use_today, overwrite}`) |
 | POST | `/api/apply/preview` | Dry-run an apply, return create/skip actions (no writes) |
 | POST | `/api/apply` | Create missing folders/files in an existing folder |
-| POST | `/api/templates/import` | Save a template from pasted YAML (`{yaml, overwrite}`) |
-| GET  | `/api/templates/export?slug=<slug>` | Download a template's raw YAML |
 | POST | `/api/templates/from-folder` | Generate a template from a folder (`{source, slug, force}`) |
 | POST | `/api/projects/prune` | Drop index records whose folders are gone |
 | POST | `/api/counter` | Set the global ID counter (`{value}`) |
 
-Write routes (`create`, `settings`, template save/import/from-folder/delete,
+Write routes (`create`, `settings`, template save/from-folder/delete,
 `project/tag`, `project/note`, `register`, `apply`, `projects/prune`, `counter`)
 serialize through a process-wide mutex (`WRITE_LOCK`) so concurrent requests
-can't corrupt files. Read routes (`/api/search`, `/api/project`, the GET state
-and export routes) are lock-free. Static GET routes serve only the four embedded
+can't corrupt files. Read routes (`/api/search`, `/api/project`, `/api/job/<id>`,
+the GET state route) are lock-free. Static GET routes serve only the four embedded
 frontend files.
 
-The query-string GET routes (`/api/project?path=`, `/api/templates/export?slug=`)
-are matched before the static-asset catch-all; values are percent-decoded with a
-small built-in decoder (`encodeURIComponent` on the frontend).
+**Background copy jobs (v0.8).** `/api/create` copies structure + text/small
+files synchronously and returns immediately; bundled files over 4 MiB are copied
+on a background thread (**not** holding `WRITE_LOCK` — the copy only touches the
+new project's own folder) with chunked progress. The frontend polls
+`/api/job/<id>` (~500 ms) and shows a progress bar; a 404 (job evicted after it
+finishes) is treated as done. `job_id` is `null` when nothing was deferred.
+
+The path/query GET routes (`/api/project?path=`, `/api/job/<id>`) are matched
+before the static-asset catch-all; query values are percent-decoded with a small
+built-in decoder (`encodeURIComponent` on the frontend).
+
+Templates are folders — sharing is a folder copy, so there are no import/export
+routes (removed in v0.8).
 
 `register_core` (in `src/cli/register.rs`) is the non-interactive engine the
 `/api/register` route calls — the CLI `fastf register` is a thin interactive

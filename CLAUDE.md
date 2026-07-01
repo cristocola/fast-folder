@@ -2,7 +2,9 @@
 
 ## What this project is
 
-`fastf` (Fast Folder Creator) is a portable Rust CLI tool for creating structured project folders from YAML templates. Universal use cases: code, research, finance, music video, photography, and film production workflows. Single-folder portable distribution — config, templates, counters, and project index live next to the binary.
+`fastf` (Fast Folder Creator) is a portable Rust CLI tool for creating structured project folders from **folder templates**. Universal use cases: code, research, finance, music video, photography, and film production workflows. Single-folder portable distribution — config, templates, counters, and project index live next to the binary.
+
+**v0.8 (in progress): a template is a folder.** `templates/<slug>/template.yaml` holds metadata (variables, naming_pattern, id, structure, post_create, tags, tag_from, verbatim/exclude globs); a sibling `templates/<slug>/files/` subtree IS the file spec — every file/dir under it is reproduced into each new project, with `{token}` interpolation on names and on UTF-8 text (≤1 MiB), binaries copied byte-for-byte. See "Folder templates + bundled assets (v0.8)" below. Phases 1–2 landed (folder model + copy engine + CLI; UI background copy jobs); phases 3–4 (editor ingestion, from-folder bundling) pending.
 
 ## Build commands
 
@@ -26,7 +28,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (119 total: 58 unit + 61 integration — 47 core in integration.rs + 14 UI in ui_server.rs)
+# Test (126 total: 62 unit/lib + 48 core in integration.rs + 16 UI in ui_server.rs)
 cargo test
 cargo test <test_name>   # run a single test by name
 
@@ -50,16 +52,18 @@ fast-folder/
 ├── CLAUDE.md
 ├── .gitignore
 ├── examples/
-│   └── templates/            — Gallery YAMLs (rust-project, python-project, web-project,
-│                               finance-monthly, research-note). NOT bundled — users import
-│                               with `fastf template import examples/templates/<slug>.yaml`.
+│   └── templates/            — Gallery templates in folder form
+│                               (rust-project, python-project, web-project, finance-monthly,
+│                               research-note), each <slug>/template.yaml + files/. NOT
+│                               bundled — copy a folder into your templates/ dir to use one.
 ├── docs/
 │   └── UI.md                 — Browser-UI reference (architecture, HTTP API, dev live-reload)
 ├── Launch Fast Folder UI.desktop — desktop launcher (Exec=`fastf ui --app`)
 ├── tests/
-│   ├── integration.rs        — 47 hermetic core tests using FASTF_INSTALL_DIR + tempfile
-│   └── ui_server.rs          — 14 tests driving fastf::ui::route_request (v0.6 core
-│                               + v0.7 search/detail/tag/note/register/apply/import-export/prune)
+│   ├── integration.rs        — 48 hermetic core tests using FASTF_INSTALL_DIR + tempfile
+│   │                           (write_template splits an inline files: block onto disk)
+│   └── ui_server.rs          — 16 tests driving fastf::ui::route_request (v0.6/v0.7 core
+│                               + v0.8 bundled-file reproduce + background copy job)
 └── src/
     ├── lib.rs                — Library entry: exposes core/, cli/, tui/, ui/, util/, bootstrap/
     │                           so integration tests can import fastf::...
@@ -82,6 +86,13 @@ fast-folder/
     │                           projects_index_path() → install_dir()/projects.jsonl
     ├── core/
     │   ├── mod.rs
+    │   ├── assets.rs         — v0.8 copy engine. walk(files_dir) lists the files/ subtree;
+    │   │                        interp_rel() (per-segment name interpolation); is_verbatim/
+    │   │                        is_excluded glob matching; copy_file() (atomic .part+rename,
+    │   │                        UTF-8→interpolate else byte copy, non-UTF-8 auto-verbatim);
+    │   │                        TEXT_MAX_BYTES (1 MiB interpolation cap). Job model:
+    │   │                        JOB_DEFER_BYTES (4 MiB), CopyJob, Progress (Serialize),
+    │   │                        copy_job() (chunked byte copy w/ live progress).
     │   ├── config.rs         — Config: base_dir, editor, date_format, default_template,
     │   │                        preview_lines (8), post_create (PostCreate), and new v0.3 fields:
     │   │                        prompt_open_after_create, project_info_enabled,
@@ -98,7 +109,11 @@ fast-folder/
     │   │                        print_resolved_values(), print_file_previews(), print_tree(),
     │   │                        apply_plan(), apply(), print_apply_plan(), ApplyAction enum.
     │   │                        resolve_post_create() is pub so cli/new.rs can check for
-    │   │                        double-open before offering the open prompt.
+    │   │                        double-open before offering the open prompt. v0.8: files come
+    │   │                        from the template's files/ subtree via copy_template_files()
+    │   │                        (walks core::assets), NOT template.files. create_deferred()
+    │   │                        does the eager work + returns large-file CopyJobs for the UI
+    │   │                        to copy in the background; create() stays fully synchronous.
     │   ├── project_info.rs   — Metadata struct (incl. tags), render(), write(), read(),
     │   │                        read_metadata(). v0.4: write_frontmatter(path, mutator) for
     │   │                        atomic in-place tag mutation; append_journal_entry(path, msg)
@@ -107,14 +122,17 @@ fast-folder/
     │   │                        v0.5: pub const RESERVED_FILENAME = "PROJECT_INFO.md" +
     │   │                        path_is_reserved(p) helper used by Template::strip_reserved_files
     │   │                        and the TUI template builder to lock the auto-gen filename.
-    │   ├── template.rs       — Template (+ post_create, tags, tag_from), Variable,
-    │   │                        FolderNode, FileEntry, IdConfig, Transform. validate() is pub
-    │   │                        and rejects tag_from entries that aren't declared variable slugs.
-    │   │                        v0.5: strip_reserved_files() drops file entries whose path
-    │   │                        collides with the reserved auto-gen filename
-    │   │                        (PROJECT_INFO.md at root, case-insensitive). Called from
-    │   │                        load_from_file (silent back-compat for older templates) and
-    │   │                        save_to_file (cleans up on re-save).
+    │   ├── template.rs       — Template (+ post_create, tags, tag_from, v0.8 verbatim/exclude
+    │   │                        globs + dir + files), Variable, FolderNode, FileEntry, IdConfig,
+    │   │                        Transform. validate() is pub and rejects tag_from entries that
+    │   │                        aren't declared variable slugs. v0.8: folder form only —
+    │   │                        load_from_file(<slug>/template.yaml) sets `dir` and scans the
+    │   │                        files/ subtree's UTF-8 text into the `files` buffer (NOT
+    │   │                        serialized — files/ on disk is the source of truth; buffer is
+    │   │                        for editors/previews). save_to_file writes template.yaml +
+    │   │                        flushes text `files` into files/. load_all() iterates subdirs;
+    │   │                        find_by_slug/file_path → <slug>/template.yaml. files_dir().
+    │   │                        strip_reserved_files() still drops root PROJECT_INFO.md.
     │   ├── query.rs          — v0.4. Predicate enum (Field/After/Before/Tag/Free), Pattern
     │   │                        (Exact/Prefix), parse() and evaluate(). Bare terms become
     │   │                        Predicate::Free — case-insensitive substring across vars/tags/
@@ -137,8 +155,10 @@ fast-folder/
     │   │                        v0.5: hosts `classify_extra(extra) -> ClassifiedExtra` —
     │   │                        the trailing_var_arg splitter shared by main.rs's New /
     │   │                        Apply / Register arms.
-    │   ├── template.rs       — list/show/edit/delete/import/export +
-    │   │                        from_folder() for template generation from existing dirs
+    │   ├── template.rs       — list/show/edit/delete (delete removes the whole <slug>/ dir) +
+    │   │                        from_folder() for template generation from existing dirs.
+    │   │                        v0.8: import/export removed (templates are folders — share by
+    │   │                        copying the folder).
     │   ├── config.rs         — config show/set. Handles new v0.3 keys:
     │   │                        project_info_enabled, project_info_filename (with pinfo_* aliases),
     │   │                        prompt_open_after_create, confirm_create, show_banner,
@@ -217,13 +237,19 @@ Folder paths in templates (structure names, file paths) always use `/` as the se
 ### Global ID counter
 One counter for all templates: `counters.toml` with a single `global` field. Every project creation increments it. `fastf id set 46` → next project gets ID0047. This is intentional — IDs are unique across all project types.
 
-### Template YAML schema
+### Template YAML schema (v0.8, folder form)
+`templates/<slug>/template.yaml` is **metadata only** — the file spec lives in the
+sibling `files/` directory (see below). Keys:
 - `naming_pattern`: tokens `{date}`, `{YYYY}`, `{MM}`, `{DD}`, `{id}`, plus any variable slug
 - Variables: `type: text` (free input) or `type: select` (pick from list)
 - Transforms: `none`, `title_underscore`, `upper_underscore`, `lower_underscore`
-- `structure`: nested `FolderNode` list (name + children). Names support forward slashes when entered via the builder — parsed via `parse_paths_to_tree()`.
-- `files`: `template` (with `{token}` interpolation) or `content` (raw, no substitution). `path` supports subfolders using `/` — parent dirs are created automatically.
+- `structure`: nested `FolderNode` list (name + children) — the canonical, archive-safe way to declare **empty** dirs. Names support forward slashes when entered via the builder — parsed via `parse_paths_to_tree()`.
+- `verbatim` (v0.8): glob list (relative to `files/`) whose files are copied literally even if text — preserves literal `{braces}`.
+- `exclude` (v0.8): glob list never copied (e.g. `.DS_Store`, `*.tmp`).
 - `post_create` (optional): per-template override of the global `config.post_create`.
+- **No `files:` key.** (`FileEntry`/the in-memory `files` buffer still exist for editors/previews; they are `#[serde(skip)]` — never written to the manifest.)
+
+`files/` subtree: every file/dir is reproduced into new projects. Names + UTF-8 text (≤ `TEXT_MAX_BYTES`) are interpolated; `verbatim`/oversize/non-UTF-8 files are byte-copied; `exclude` globs skipped; root `PROJECT_INFO.md` is reserved and skipped.
 
 ### Interpolation: `interpolate` vs `interpolate_name` (important)
 Two separate functions in `core/naming.rs`:
@@ -384,7 +410,7 @@ Integration tests live in `tests/integration.rs` (core flows) and `tests/ui_serv
 
 `integration.rs` covers: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, index append, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture (including non-naming-pattern vars), metadata round-trip via YAML, disabled/custom-filename metadata, pinfo alias config compat, and bundled-template deduplication guard.
 
-`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s. v0.7 adds: search respects the query language + path exclusion, project detail returns metadata + journal, tag add/remove roundtrip, note appends journal, register onboards an existing folder, apply preview is non-writing while apply creates missing, template import→export roundtrip, and prune drops missing records.
+`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s. v0.7 adds: search respects the query language + path exclusion, project detail returns metadata + journal, tag add/remove roundtrip, note appends journal, register onboards an existing folder, apply preview is non-writing while apply creates missing, and prune drops missing records. v0.8 adds: create reproduces bundled files (incl. a byte-identical binary), a large bundled asset returns a `job_id` that polls to `done` (small assets → `job_id:null`).
 
 Run:
 ```bash
@@ -444,8 +470,13 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - v0.5: Template builder's `collect_file()` example shows `NOTES.md`, not `PROJECT_INFO.md`. It also rejects the reserved name inline with a loop-back. If you change the example, keep `NOTES.md` (or another genuinely non-reserved name) — `PROJECT_INFO.md` as an example actively misleads users into creating template entries that get silently stripped.
 - v0.5: Template builder no longer asks "Template vs Raw" content mode. `collect_file()` always writes to `FileEntry.template`. The `FileEntry.content` field still exists in the YAML schema (hand-written templates with raw byte content keep working — e.g. `music-video.yaml`'s `.gitignore`), but the builder never produces it. `create_file()` and `apply()` still pick `template` when non-empty else `content`, so the dual-field semantics are preserved at the writer. If you re-add a mode switch, remember that `interpolate()` is already a no-op on text without `{token}` markers, so the only real use-case for `content:` is preserving literal `{...}` braces.
 - v0.5: The "Add another placeholder file?" prompt in `edit_files()` defaults to **No** and explicitly mentions that PROJECT_INFO.md is generated automatically. Don't flip the default back to Yes — the typical template doesn't need extra placeholder files and the auto-gen covers the common notes use-case.
+- v0.8: **`files/` on disk is the source of truth for create/apply**, NOT `template.files`. `create`/`apply`/dry-run walk the dir via `core::assets`; `template.files` is a load-time scan of *text* files only, kept for the editors/previews/apply-var-detection. Building a `Template` in memory with `files` and calling `project::create` writes **nothing** unless those files are on disk under `files/` — this is why tests use a `write_template` helper that flushes an inline `files:` block onto disk before loading. Don't route create back through `template.files`.
+- v0.8: `defer_over` in `copy_template_files` must stay ≥ `TEXT_MAX_BYTES` so every deferred file is verbatim (no interpolation needed off-thread). `create` passes `None` (copies all inline — CLI stays synchronous); only the UI's `create_deferred` passes `Some(JOB_DEFER_BYTES)`.
+- v0.8: `Template.files`/`dir`/(text buffer) are `#[serde(skip)]`; `verbatim`/`exclude` use `skip_serializing_if = "Vec::is_empty"` so empty globs don't clutter every `template.yaml`. `load_from_file`/`save_to_file` take `&Path` (was `&PathBuf`) — `&PathBuf` still coerces.
+- v0.8: `interp_rel` interpolates each path segment separately (via `interpolate_name`) so `__` collapse/trim happens *within* a name, never across `/`. Don't run `interpolate_name` on the whole slash-joined path.
+- v0.8: Converting old flat `<slug>.yaml` templates → folder form: `template.yaml` (drop the `files:` block) + one real file per entry under `files/`. There is **no migrate command** and no flat-form fallback — an old flat `.yaml` sitting directly in `templates/` is simply ignored by `load_all` (it only reads subdirs with a `template.yaml`).
 
-## Browser UI (`fastf ui`, v0.7)
+## Browser UI (`fastf ui`, v0.7 + v0.8 jobs)
 
 `fastf ui` starts a local loopback HTTP server and opens the browser UI. It is
 part of the `fastf` binary — **no separate `fastf-ui-server` binary**, no
@@ -455,11 +486,23 @@ external web directory. Full reference: `docs/UI.md`.
 CLI-only: a project **detail drawer** (variables table + tag add/remove + journal
 notes, opened from any project row), real **search** using `core::query` (the
 `/api/search` route), a **register** page for onboarding existing folders, an
-**apply** modal (preview then create-missing), template **import / export /
-generate-from-folder**, and Settings **ID-counter editor + prune**. Every one of
-those maps to an existing `pub` library function, so the work was endpoint wiring
-+ frontend views plus one refactor: `cli::register::register_core` /
-`RegisterOptions` / `PinfoConflict` (the non-interactive engine the route calls).
+**apply** modal (preview then create-missing), template **generate-from-folder**,
+and Settings **ID-counter editor + prune**. Every one of those maps to an existing
+`pub` library function, so the work was endpoint wiring + frontend views plus one
+refactor: `cli::register::register_core` / `RegisterOptions` / `PinfoConflict`
+(the non-interactive engine the route calls).
+
+**v0.8 (phase 2) — background copy jobs.** `POST /api/create` does the fast work
+(structure + text/small files + counter + index + PROJECT_INFO.md) synchronously
+and returns `{ project, job_id }`; files over `assets::JOB_DEFER_BYTES` (4 MiB) are
+copied on a background thread (via `project::create_deferred` → `spawn_copy_job`),
+**outside `WRITE_LOCK`** — the copy only touches the new project's own folder.
+`GET /api/job/<id>` returns `assets::Progress`; a missing id (evicted after done)
+is a clean error the frontend treats as complete. The success modal shows a live
+progress bar polled ~500 ms; "Open folder" works immediately. `job_id` is `null`
+when nothing needed deferring. **v0.8 removed the `/api/templates/import` and
+`/api/templates/export` routes + their frontend** (templates are folders now —
+share by copying the folder).
 
 Layout:
 - `src/ui/mod.rs` — the HTTP server (`std::net::TcpListener`, one thread per
@@ -491,10 +534,10 @@ source of truth and the same on-disk files. The `Ui` arm in `main.rs` forwards t
   is the frontend dev override (serve assets from disk instead of embedded).
 - v0.6: Embedded assets mean a frontend edit needs a `cargo build` to ship — but
   `FASTF_UI_DIR=$PWD/src/ui/web fastf ui` serves from disk for dev without rebuilding.
-- v0.7: Query-string GET routes (`/api/project?path=`, `/api/templates/export?slug=`)
-  are matched with `if path.starts_with(...)` guards placed BEFORE the static-asset
+- v0.7/v0.8: Path/query GET routes (`/api/project?path=`, `/api/job/<id>`) are
+  matched with `if path.starts_with(...)` guards placed BEFORE the static-asset
   catch-all (`("GET", path) if !path.starts_with("/api/")`). Order matters — a new
-  `/api/...?` GET route must go above the catch-all. Values are percent-decoded by
+  `/api/...` GET route must go above the catch-all. Query values are percent-decoded by
   the in-module `query_param` + `percent_decode` (no url crate); the frontend uses
   `encodeURIComponent`, which emits `%20` (not `+`) for spaces, so the decoder does
   NOT treat `+` as space (paths can legitimately contain `+`).
@@ -517,9 +560,20 @@ source of truth and the same on-disk files. The `Ui` arm in `main.rs` forwards t
 - v0.7: `/api/search` reuses `core::query` exactly, so the deliberate "path excluded
   from free-text" guarantee holds (there's a regression test). Empty `terms` returns
   all projects (newest first) — the server-side equivalent of the plain list.
-- v0.7: The frontend renders the drawer + apply modal + generic (import/from-folder)
+- v0.7: The frontend renders the drawer + apply modal + generic (from-folder)
   modal as state-driven layers appended after `shell(content)` in `render()`; each
   has a `bind*` call. Mutating actions re-fetch + full `render()` (acceptable — the
   only focus-sensitive surface is the projects search, which updates `#project-results`
   in place via `runProjectSearch` instead of re-rendering). `(registered)`-slug
   projects are filtered out of the apply/register template pickers.
+- v0.8: The `JOBS` registry is `static Mutex<Option<HashMap<..>>>` (const-init'd to
+  `None`, lazily filled) keyed by `job-<n>` (`AtomicUsize`). The copy thread updates
+  an `Arc<Mutex<Progress>>`; `spawn_copy_job` evicts finished jobs on each new create
+  so the map stays bounded, so the frontend `pollJob` treats a `/api/job` 404 as done.
+  The background copy must NOT take `WRITE_LOCK` (it only writes inside the new
+  project's folder) — holding it would serialize a 200 MB copy against every other UI
+  write, defeating the point. Deferred files are always verbatim (threshold ≥ text cap),
+  so `copy_job` never needs vars.
+- v0.8: `showSuccess(result)` (frontend) now takes the whole create response (not just
+  `result.project`) so it can read `job_id`. The progress bar updates only the
+  `#job-progress` node inside the imperatively-built success overlay — no `render()`.

@@ -49,7 +49,7 @@ Most templaters either target coders (Cookiecutter, Yeoman) or duplicate static 
 - **Generates file *contents* from metadata, not just folder *names*.** Variables flow into templated files: `Cargo.toml`, `README.md`, client briefs, slate info, shot lists, report headers. The output is materially tailored to the project.
 - **Nested, variable-driven project systems.** A single template can carry deliverables, notes, exports, contracts, assets, code, references, and generated metadata — all in one coherent tree, with paths and contents driven by the variables you supply.
 - **Projects are trackable objects, not one-shot output.** Every created project is logged with an ID, timestamp, template, and variables. Browse with `fastf recent`, jump to any folder with `fastf open <id>`, or parse `PROJECT_INFO.md` frontmatter with `yq`, Obsidian, Hugo, or your own tooling.
-- **Author templates any way you like.** Build interactively in the TUI (no YAML required), write YAML directly, or generate a starting template from an existing real-world folder (`fastf template from-folder ./my-project`). Import, export, edit, share.
+- **Author templates any way you like.** Build interactively in the TUI (no YAML required), write `template.yaml` directly, or generate a starting template from an existing real-world folder (`fastf template from-folder ./my-project`). A template is a folder — edit it, version it, share it by copying.
 - **Path-safe, cross-platform.** Templates use `/` universally; fastf translates to `\` on Windows at runtime. Path-escape guards reject `..`, absolute paths, and drive letters at both template-load and write time.
 
 ---
@@ -106,7 +106,6 @@ Toggles show their current `[on]`/`[off]` state inline, so you always see what's
   List templates
   Show template details
   Delete a template
-  Import template from file
   Back
 ```
 
@@ -152,8 +151,9 @@ Main views:
 
 - **Dashboard** — your recent projects front-and-center (click any to open its detail drawer), at-a-glance counts, and a compact "quick start" row to relaunch a favorite template in one click.
 - **Create Project** — pick a template, fill variables (text fields and `select` dropdowns), live-preview the folder tree and generated file contents, then create.
-- **Templates** — browse every template as a card; **import** YAML, **export** any template, or **generate one from an existing folder** — all without leaving the browser.
-- **Visual Template Editor** — build and edit templates without writing YAML: variables, folder structure, and templated files, all point-and-click. Writes the same YAML the CLI and TUI read.
+- **Templates** — browse every template as a card, or **generate one from an existing folder** — without leaving the browser.
+- **Visual Template Editor** — build and edit templates without writing YAML: variables, folder structure, and templated files, all point-and-click. Writes the same `template.yaml` the CLI and TUI read.
+- **Large bundled assets, non-blocking** — a template can carry real files (a logo, a multi-hundred-MB delivery video). On create, small/text files land instantly and big files copy in the background with a live progress bar — the project is usable (and openable) immediately.
 - **Projects** — the full project index with inline tags and a real **search bar** that speaks the same query language as `fastf search` (`tag:draft`, `template=music-video`, `created>2026-01-01`, or plain text). Click any project to open the **detail drawer**: variables, add/remove tags, read and append journal notes, apply a template, or open the folder.
 - **Add existing** — onboard a folder fastf didn't create (`fastf register` in the browser): it gets a project ID and metadata, optionally renamed to the naming pattern and filled in from a template.
 - **Settings** — edit the same `config.toml` values the CLI uses (including the global ID counter and a one-click prune of missing projects), plus browser-only appearance (theme, accent, density).
@@ -169,8 +169,9 @@ It's **fast** for the same reasons the CLI is: requests never leave `127.0.0.1`,
 ### Authoring
 - **Interactive template builder** — create and edit templates step-by-step in the TUI. No YAML knowledge required. Edit mode jumps directly to the section you want to change.
 - **Visual template editor (browser UI)** — build and edit templates point-and-click in `fastf ui`: variables, folder tree, and templated files, no YAML required. Writes the same YAML the CLI and TUI read.
-- **Generate template from folder** — point at an existing project, get a ready-to-edit template YAML: `fastf template from-folder ./my-project my-template`.
-- **Import / export / share** — YAML templates are plain text. Version them, commit them, send them to teammates.
+- **Generate template from folder** — point at an existing project, get a ready-to-edit template: `fastf template from-folder ./my-project my-template`.
+- **Bundle real files** — drop any file (text or binary) into a template's `files/` folder and it's reproduced into every project built from it; file names and UTF-8 text get `{token}` interpolation, binaries are copied byte-for-byte.
+- **Share = copy the folder** — a template is a folder; version it, commit it, or send the folder to a teammate. No import/export step.
 - **Rich variable system** — `text` (free input) and `select` (pick from list) with validation, defaults, and four case transforms (`title_underscore`, `upper_underscore`, `lower_underscore`, `none`).
 
 ### Generation
@@ -207,17 +208,17 @@ It's **fast** for the same reasons the CLI is: requests never leave `127.0.0.1`,
 
 ## Examples
 
-fastf is a general-purpose scaffolder. A few concrete examples (all five are in [`examples/templates/`](examples/templates/) — import with `fastf template import`):
+fastf is a general-purpose scaffolder. A few concrete examples (all five are in [`examples/templates/`](examples/templates/) — copy a folder into your `templates/` dir to use one):
 
 | Template | What it creates |
 |---|---|
-| `rust-project.yaml` | `src/ tests/ benches/ examples/ Cargo.toml .gitignore README.md` — prompts for crate name, author, license |
-| `web-project.yaml` | `src/ public/ tests/ package.json` — prompts for package manager (npm/pnpm/yarn/bun) |
-| `finance-monthly.yaml` | `{YYYY}-{MM}_<entity>_Finance/` with `INCOME/ EXPENSES/ RECEIPTS/ REPORT.md` pre-filled |
-| `research-note.yaml` | Date-stamped `notes/ references/ data/ figures/ SUMMARY.md` |
+| `rust-project` | `src/ tests/ benches/ examples/ Cargo.toml .gitignore README.md` — prompts for crate name, author, license |
+| `web-project` | `src/ public/ tests/ package.json` — prompts for package manager (npm/pnpm/yarn/bun) |
+| `finance-monthly` | `{YYYY}-{MM}_<entity>_Finance/` with `INCOME/ EXPENSES/ RECEIPTS/ REPORT.md` pre-filled |
+| `research-note` | Date-stamped `notes/ references/ data/ figures/ SUMMARY.md` |
 | `music-video` *(built-in)* | Full music video production folder structure |
 
-The three bundled templates (`music-video`, `photography`, `video-production`) are available on first run with no import needed.
+The three bundled templates (`music-video`, `photography`, `video-production`) are available on first run with no setup needed.
 
 ---
 
@@ -353,7 +354,7 @@ fastf
 
 - **Recent projects** — interactive picker; pick a project to open / view metadata / add tag / remove tag / add journal note / show journal.
 - **Search projects** — type a free-text term (`ariana`) or an explicit query (`tag:draft template=music-video`); matching projects open in the same picker.
-- **Manage templates** — create, generate from folder, edit, apply to existing folder, list, show, delete, import.
+- **Manage templates** — create, generate from folder, edit, apply to existing folder, list, show, delete.
 - **View / edit settings** — project basics, workflow prompts, project metadata, recent projects, post-create actions, ID counter.
 
 ### Browser UI
@@ -543,14 +544,15 @@ fastf template list
 fastf template show <slug>
 fastf template new                              # interactive builder
 fastf template edit <slug>                      # jump directly to the section you want
-fastf template delete <slug>
-fastf template import <file.yaml>
-fastf template import examples/templates/rust-project.yaml
-fastf template export <slug>                    # to stdout
-fastf template export <slug> -o my-template.yaml
-fastf template from-folder ./my-project my-template   # generate YAML from an existing folder
+fastf template delete <slug>                    # removes the whole templates/<slug>/ folder
+fastf template from-folder ./my-project my-template   # generate a template from an existing folder
 fastf template from-folder ./my-project my-template --force
 ```
+
+> **Sharing templates:** a template is a folder, so share it by copying the
+> folder. To use a gallery example, copy `examples/templates/<slug>/` into your
+> `templates/` directory. (There is no `import`/`export` command — copying a
+> folder replaces both.)
 
 ### Settings
 
@@ -604,7 +606,23 @@ fastf completions fish >> ~/.config/fish/completions/fastf.fish
 
 ## Template Reference
 
-Templates are YAML files stored in `templates/` next to the binary.
+**A template is a folder** in `templates/` next to the binary:
+
+```
+templates/rust-project/
+├── template.yaml        # metadata only (variables, naming, structure, globs)
+└── files/               # the file spec — reproduced into every new project
+    ├── Cargo.toml       # {name}, {license}, {id}, {date}… are interpolated
+    ├── .gitignore
+    └── src/lib.rs
+```
+
+Everything under `files/` is copied into each new project: **file and folder
+names are interpolated**, **UTF-8 text (≤ 1 MiB) has its `{tokens}` substituted**,
+and **binaries (a logo, a 200 MB delivery video) are copied byte-for-byte**. No
+per-file config — the directory is the spec. Sharing a template = copy its folder.
+
+`template.yaml` holds metadata only:
 
 ```yaml
 name: "Rust Project"
@@ -633,26 +651,24 @@ variables:
     options: ["MIT", "Apache-2.0", "GPL-3.0"]
     default: "MIT"
 
-structure:
+structure:                 # empty dirs to guarantee (archive-safe, text)
   - name: "src"
   - name: "tests"
   - name: "examples"
 
-files:
-  - path: "Cargo.toml"
-    template: |          # interpolated — {name}, {id}, {date}, etc. are substituted
-      [package]
-      name = "{name}"
-      license = "{license}"
-  - path: ".gitignore"
-    content: |           # verbatim — no interpolation
-      target/
+# Optional globs, relative to files/:
+verbatim: ["*.svg"]        # copy literally even if text (preserve {braces})
+exclude: [".DS_Store", "*.tmp"]
 
 # Optional per-template override of the global post_create config.
 post_create:
   git_init: true
   reveal: false
 ```
+
+Non-empty folders are implied by the paths of files in `files/` — only *empty*
+dirs need listing under `structure:`. A file whose name contains a token (e.g.
+`files/05_Delivery/Deliver_Note_{artist}.md`) is renamed on create.
 
 ### Variable transforms
 
@@ -750,10 +766,8 @@ The file is written once on `fastf new` and modified only by `fastf tag` / `fast
 | `fastf template show <slug>` | Print template YAML |
 | `fastf template new` | Create a template interactively |
 | `fastf template edit <slug>` | Edit a template interactively |
-| `fastf template import <file>` | Install a YAML template |
-| `fastf template export <slug>` | Export template YAML |
 | `fastf template from-folder <dir> <slug>` | Generate a template from an existing folder |
-| `fastf template delete <slug>` | Delete a template |
+| `fastf template delete <slug>` | Delete a template (removes its whole folder) |
 | `fastf config show` | Print current configuration |
 | `fastf config set <key> <value>` | Set a configuration value |
 | `fastf id show` / `set` / `reset` | Manage the global ID counter |

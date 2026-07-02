@@ -317,7 +317,15 @@ fn from_folder_round_trip() {
         fs::create_dir_all(src.join(".git")).unwrap();
         fs::write(src.join(".git").join("HEAD"), "noise").unwrap();
 
-        fastf::cli::template::from_folder(&src.display().to_string(), "generated", false).unwrap();
+        let report = fastf::cli::template::from_folder(
+            &src.display().to_string(),
+            "generated",
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(report.text_files, 2);
+        assert_eq!(report.bundled, 0);
 
         let tmpl = template::find_by_slug("generated").unwrap();
         // The .git folder must be absent.
@@ -331,6 +339,44 @@ fn from_folder_round_trip() {
         // Files captured with relative paths.
         assert!(tmpl.files.iter().any(|f| f.path == "README.md"));
         assert!(tmpl.files.iter().any(|f| f.path == "subdir/nested.txt"));
+    });
+}
+
+#[test]
+fn from_folder_bundles_binaries_when_requested() {
+    with_fresh_install(|install| {
+        let src = install.join("kit");
+        fs::create_dir_all(src.join("assets")).unwrap();
+        fs::write(src.join("brief.md"), "# Brief").unwrap();
+        // A non-UTF-8 binary blob that must be bundled byte-for-byte.
+        let blob: [u8; 5] = [0x00, 0xFF, 0x10, 0x80, 0x01];
+        fs::write(src.join("assets").join("logo.bin"), blob).unwrap();
+
+        // Without bundling: the binary is skipped, not reproduced.
+        let plain = fastf::cli::template::from_folder(
+            &src.display().to_string(),
+            "kit-plain",
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(plain.text_files, 1);
+        assert_eq!(plain.bundled, 0);
+        assert_eq!(plain.skipped, 1);
+        assert!(
+            !fastf::util::paths::template_files_dir("kit-plain")
+                .join("assets/logo.bin")
+                .exists()
+        );
+
+        // With bundling: the binary lands byte-for-byte under files/.
+        let bundled =
+            fastf::cli::template::from_folder(&src.display().to_string(), "kit-full", false, true)
+                .unwrap();
+        assert_eq!(bundled.bundled, 1);
+        assert_eq!(bundled.bundled_bytes, blob.len() as u64);
+        let landed = fastf::util::paths::template_files_dir("kit-full").join("assets/logo.bin");
+        assert_eq!(fs::read(&landed).unwrap(), blob);
     });
 }
 

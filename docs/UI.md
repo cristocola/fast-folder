@@ -65,7 +65,7 @@ non-loopback address.
 | POST | `/api/register` | Onboard an existing folder (`{path, template?, variables, rename, apply, created?, use_today, overwrite}`) |
 | POST | `/api/apply/preview` | Dry-run an apply, return create/skip actions (no writes) |
 | POST | `/api/apply` | Create missing folders/files in an existing folder |
-| POST | `/api/templates/from-folder` | Generate a template from a folder (`{source, slug, force}`) |
+| POST | `/api/templates/from-folder` | Generate a template from a folder (`{source, slug, force, bundle_assets}`); returns a `report` of counts (folders / text files / bundled + bytes / skipped) |
 | POST | `/api/projects/prune` | Drop index records whose folders are gone |
 | POST | `/api/counter` | Set the global ID counter (`{value}`) |
 

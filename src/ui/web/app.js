@@ -2061,7 +2061,7 @@ async function runApply() {
 // ---------------------------------------------------------------------------
 
 function openFromFolderModal() {
-  state.modal = { kind: "from-folder", source: "", slug: "", force: false, busy: false, error: "" };
+  state.modal = { kind: "from-folder", source: "", slug: "", force: false, bundle: false, busy: false, error: "" };
   render();
 }
 
@@ -2083,9 +2083,10 @@ function fromFolderModalMarkup() {
     <div class="modal" role="dialog" aria-modal="true">
       <div class="modal-head"><h2>Generate from folder</h2><button class="icon-button" data-close-modal>${icon("close")}</button></div>
       <div class="modal-body scroll">
-        <p class="modal-sub">Scan an existing folder and turn its structure and small text files into a reusable template.</p>
+        <p class="modal-sub">Scan an existing folder and turn its structure and text files into a reusable template. Binary and large files are skipped unless you bundle them.</p>
         ${editorField("Source folder", "Absolute path to scan", `<input class="input mono" id="ff-source" value="${esc(modal.source || "")}" placeholder="/home/you/example-project">`, true, "full")}
         ${editorField("New template slug", "Letters, numbers, '-' or '_'", `<input class="input mono" id="ff-slug" value="${esc(modal.slug || "")}" placeholder="my-template">`, true, "full")}
+        <label class="inline-check ff-bundle"><input type="checkbox" id="ff-bundle" ${modal.bundle ? "checked" : ""}> Bundle binary &amp; large files (copy them into the template — can be large)</label>
         ${modal.error ? `<div class="error-box">${esc(modal.error)}</div>` : ""}
       </div>
       <div class="modal-foot">
@@ -2102,6 +2103,7 @@ function bindGenericModal() {
     document.querySelector("#ff-source")?.addEventListener("input", (event) => { state.modal.source = event.target.value; });
     document.querySelector("#ff-slug")?.addEventListener("input", (event) => { state.modal.slug = event.target.value; });
     document.querySelector("#ff-force")?.addEventListener("change", (event) => { state.modal.force = event.target.checked; });
+    document.querySelector("#ff-bundle")?.addEventListener("change", (event) => { state.modal.bundle = event.target.checked; });
     document.querySelector("[data-ff-run]")?.addEventListener("click", runFromFolder);
   }
 }
@@ -2111,6 +2113,7 @@ async function runFromFolder() {
   modal.source = document.querySelector("#ff-source")?.value || "";
   modal.slug = document.querySelector("#ff-slug")?.value || "";
   modal.force = document.querySelector("#ff-force")?.checked || false;
+  modal.bundle = document.querySelector("#ff-bundle")?.checked || false;
   if (!modal.source.trim() || !modal.slug.trim()) {
     modal.error = "Source folder and slug are both required.";
     render();
@@ -2120,12 +2123,15 @@ async function runFromFolder() {
   modal.error = "";
   render();
   try {
-    await api("/api/templates/from-folder", { method: "POST", body: JSON.stringify({ source: modal.source, slug: modal.slug, force: modal.force }) });
+    const result = await api("/api/templates/from-folder", { method: "POST", body: JSON.stringify({ source: modal.source, slug: modal.slug, force: modal.force, bundle_assets: modal.bundle }) });
     await loadState(false);
+    const slug = modal.slug;
     state.modal = null;
     state.view = "templates";
     render();
-    toast(`Generated template “${modal.slug}”.`);
+    const r = result.report || {};
+    const bundled = r.bundled ? `, ${r.bundled} asset${r.bundled === 1 ? "" : "s"} (${formatBytes(r.bundled_bytes || 0)})` : "";
+    toast(`Generated “${slug}” — ${r.folders || 0} folder${r.folders === 1 ? "" : "s"}, ${r.text_files || 0} file${r.text_files === 1 ? "" : "s"}${bundled}.`);
   } catch (error) {
     modal.busy = false;
     modal.error = error.message;

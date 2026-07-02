@@ -170,7 +170,7 @@ It's **fast** for the same reasons the CLI is: requests never leave `127.0.0.1`,
 ### Authoring
 - **Interactive template builder** — create and edit templates step-by-step in the TUI. No YAML knowledge required. Edit mode jumps directly to the section you want to change.
 - **Visual template editor (browser UI)** — build and edit templates point-and-click in `fastf ui`: variables, folder tree, templated files, and bundled assets (add from a disk path, edit text in place), no YAML required. Writes the same `template.yaml` + `files/` the CLI and TUI read.
-- **Generate template from folder** — point at an existing project, get a ready-to-edit template: `fastf template from-folder ./my-project my-template`.
+- **Generate template from folder** — point at an existing project, get a ready-to-edit template: `fastf template from-folder ./my-project my-template`. Add `--bundle-assets` to copy binary/large files into the template byte-for-byte (it confirms the total size first).
 - **Bundle real files** — drop any file (text or binary) into a template's `files/` folder and it's reproduced into every project built from it; file names and UTF-8 text get `{token}` interpolation, binaries are copied byte-for-byte.
 - **Share = copy the folder** — a template is a folder; version it, commit it, or send the folder to a teammate. No import/export step.
 - **Rich variable system** — `text` (free input) and `select` (pick from list) with validation, defaults, and four case transforms (`title_underscore`, `upper_underscore`, `lower_underscore`, `none`).
@@ -548,6 +548,7 @@ fastf template edit <slug>                      # jump directly to the section y
 fastf template delete <slug>                    # removes the whole templates/<slug>/ folder
 fastf template from-folder ./my-project my-template   # generate a template from an existing folder
 fastf template from-folder ./my-project my-template --force
+fastf template from-folder ./delivery-kit client-kit --bundle-assets   # also copy binary/large files into the template (confirms total size)
 ```
 
 > **Sharing templates:** a template is a folder, so share it by copying the

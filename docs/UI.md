@@ -51,8 +51,12 @@ non-loopback address.
 | POST | `/api/create` | Create a project + run post-create; returns `{project, job_id}` (`job_id` set only when large assets are copied in the background) |
 | GET  | `/api/job/<id>` | Poll a background asset-copy job's progress (404 once evicted after completion) |
 | POST | `/api/settings` | Update supported `config.toml` values |
-| POST | `/api/templates/save` | Create/update a template (`template.yaml` + `files/`) |
+| POST | `/api/templates/save` | Create/update a template's metadata (`template.yaml`) |
 | POST | `/api/templates/delete` | Delete a template (its whole `<slug>/` folder) |
+| GET  | `/api/template-files?slug=<slug>` | List a template's `files/` subtree (path, size, text content or binary) |
+| POST | `/api/templates/file-save` | Write a UTF-8 text file into `files/` (empty content = placeholder) |
+| POST | `/api/templates/file-add` | Copy a file from a disk path into `files/` (binaries land byte-identical) |
+| POST | `/api/templates/file-delete` | Remove one file from `files/` |
 | POST | `/api/open` | Open a path in the system file manager |
 | POST | `/api/search` | Run the `fastf search` query language (`tag:`, `key=`, `key>date`, free text); empty terms returns all |
 | GET  | `/api/project?path=<abs>` | Full metadata + journal for one project |
@@ -65,12 +69,26 @@ non-loopback address.
 | POST | `/api/projects/prune` | Drop index records whose folders are gone |
 | POST | `/api/counter` | Set the global ID counter (`{value}`) |
 
-Write routes (`create`, `settings`, template save/from-folder/delete,
-`project/tag`, `project/note`, `register`, `apply`, `projects/prune`, `counter`)
-serialize through a process-wide mutex (`WRITE_LOCK`) so concurrent requests
-can't corrupt files. Read routes (`/api/search`, `/api/project`, `/api/job/<id>`,
-the GET state route) are lock-free. Static GET routes serve only the four embedded
+Write routes (`create`, `settings`, template save/from-folder/delete, template
+`file-save`/`file-add`/`file-delete`, `project/tag`, `project/note`, `register`,
+`apply`, `projects/prune`, `counter`) serialize through a process-wide mutex
+(`WRITE_LOCK`) so concurrent requests can't corrupt files. Read routes
+(`/api/search`, `/api/project`, `/api/job/<id>`, `/api/template-files`, the GET
+state route) are lock-free. Static GET routes serve only the four embedded
 frontend files.
+
+**Template file editing (v0.8).** The template editor's Files section works
+directly on the `files/` subtree on disk — `template-files` lists it, `file-save`
+writes/updates a text file (or creates a placeholder), `file-add` copies an asset
+from a disk path (the local-first ingestion route — no large file round-trips
+through the browser), and `file-delete` removes one. These are independent of the
+metadata `templates/save` button, which only writes `template.yaml` (a template's
+`files` buffer is `#[serde(skip)]`, so a metadata save never touches `files/`).
+Because file ops act on disk, the editor requires the template to already exist —
+new templates must be saved once before their files can be managed. Dest paths are
+traversal-guarded and reject the reserved `PROJECT_INFO.md`. `verbatim`/`exclude`
+globs are ordinary metadata, edited in the editor and persisted via
+`templates/save`.
 
 **Background copy jobs (v0.8).** `/api/create` copies structure + text/small
 files synchronously and returns immediately; bundled files over 4 MiB are copied

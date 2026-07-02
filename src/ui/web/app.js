@@ -10,6 +10,8 @@ const state = {
   templateEditorSection: "basics",
   templateSlugTouched: false,
   templateDirty: false,
+  templateFiles: null,
+  templateFilesError: "",
   savingTemplate: false,
   selectedTemplate: null,
   variables: {},
@@ -162,6 +164,12 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value.slice(0, 10);
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(date);
+}
+
+function formatBytes(bytes = 0) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function shell(content) {
@@ -448,7 +456,7 @@ function templatesPage() {
             <div class="detail-stats">
               <div class="detail-stat"><strong>${template.variables.length}</strong><span>Fields</span></div>
               <div class="detail-stat"><strong>${countFolders(template.structure)}</strong><span>Folders</span></div>
-              <div class="detail-stat"><strong>${template.files.length}</strong><span>Files</span></div>
+              <div class="detail-stat"><strong>${template.file_count ?? 0}</strong><span>Files</span></div>
             </div>
             <div class="card-actions">
               <button class="button button-secondary" data-edit-template="${esc(template.slug)}">${icon("sliders")} Edit</button>
@@ -478,7 +486,8 @@ function newTemplateDraft() {
       transform: "title_underscore",
     }],
     structure: [],
-    files: [],
+    verbatim: [],
+    exclude: [],
     post_create: null,
     tags: [],
     tag_from: [],
@@ -498,8 +507,25 @@ function openTemplateEditor(slug = null) {
   state.templateEditorSection = "basics";
   state.templateSlugTouched = Boolean(slug);
   state.templateDirty = false;
+  state.templateFiles = null;
+  state.templateFilesError = "";
   state.view = "template-editor";
   render();
+  if (slug) loadTemplateFiles(slug);
+}
+
+// Fetch a template's real files/ subtree (paths, sizes, and text content) for
+// the editor's Files section. Re-renders when done if the editor is open.
+async function loadTemplateFiles(slug) {
+  try {
+    const result = await api(`/api/template-files?slug=${encodeURIComponent(slug)}`);
+    state.templateFiles = result.files;
+    state.templateFilesError = "";
+  } catch (error) {
+    state.templateFiles = [];
+    state.templateFilesError = error.message;
+  }
+  if (state.view === "template-editor") render();
 }
 
 function templateEditorPage() {
@@ -533,7 +559,7 @@ function templateEditorPage() {
             ${editorNavButton("basics", "settings", "Basics")}
             ${editorNavButton("variables", "sliders", "Questions", template.variables.length)}
             ${editorNavButton("structure", "folder", "Folders", countFolders(template.structure))}
-            ${editorNavButton("files", "file", "Files", template.files.length)}
+            ${editorNavButton("files", "file", "Files", state.templateFiles?.length ?? template.file_count ?? 0)}
             ${editorNavButton("automation", "bolt", "Tags & actions")}
           </nav>
           <div class="editor-token-card">
@@ -665,27 +691,47 @@ function structureEditor(template) {
 }
 
 function fileEditor(template) {
+  const head = editorSectionHeader("Template 04", "Generated files", "Everything in the template's files/ folder is copied into each new project. Text files interpolate {tokens}; binaries are copied byte-for-byte.");
+  // File operations act on disk directly, so the template must already exist.
+  if (!state.templateOriginalSlug) {
+    return `${head}${editorEmpty("file", "Save the template first", "Files live on disk in this template's files/ folder. Save the template, then reopen it here to add or edit files.")}`;
+  }
+  if (state.templateFiles === null) {
+    return `${head}<div class="drawer-loading">${icon("refresh")} Loading files…</div>`;
+  }
+  const files = state.templateFiles;
   return `
-    ${editorSectionHeader("Template 04", "Generated files", "Add starter files and optionally interpolate project tokens into their contents.", `<button type="button" class="button button-primary" data-add-file>${icon("plus")} Add file</button>`)}
+    ${head}
+    ${state.templateFilesError ? `<div class="error-box">${esc(state.templateFilesError)}</div>` : ""}
+    <div class="file-add-panel">
+      <div class="file-add-row">
+        <input class="input mono" id="file-new-path" placeholder="docs/NOTES.md" autocomplete="off">
+        <button type="button" class="button button-secondary" data-file-new>${icon("plus")} New text file</button>
+      </div>
+      <div class="file-add-row">
+        <input class="input mono" id="file-src" placeholder="/home/you/asset.mp4 (source on disk)" autocomplete="off">
+        <input class="input mono" id="file-dest" placeholder="assets/asset.mp4 (optional)" autocomplete="off">
+        <button type="button" class="button button-secondary" data-file-add-path>${icon("upload")} Add from path</button>
+      </div>
+      <div class="editor-tip">${icon("info")} Or drop files straight into the template's files/ folder — they show up here automatically.</div>
+    </div>
     <div class="editor-stack">
-      ${template.files.length ? template.files.map(fileEditorCard).join("") : editorEmpty("file", "No generated files", "Templates can create READMEs, briefs, configuration files, scripts, and other text files.")}
+      ${files.length ? files.map(fileEditorCard).join("") : editorEmpty("file", "No generated files yet", "Add a text file, bundle an asset from a path, or drop files into the files/ folder.")}
     </div>`;
 }
 
-function fileEditorCard(file, index) {
-  const templated = Boolean(file.template);
-  const body = templated ? file.template : (file.content || "");
+function fileEditorCard(file) {
+  const meta = file.is_text ? `Text · ${formatBytes(file.size)}` : `Binary · ${formatBytes(file.size)}`;
+  const body = file.is_text
+    ? editorField("File content", "Saved on blur; {tokens} interpolate at create time", `<textarea class="textarea mono file-content" data-file-path="${esc(file.path)}" rows="9" placeholder="# {name}">${esc(file.content || "")}</textarea>`, false, "full")
+    : `<div class="file-binary-note">${icon("info")} Binary asset — copied into every project exactly as-is.</div>`;
   return `
     <article class="editor-item-card">
       <div class="editor-item-head">
-        <div><span>File ${index + 1}</span><strong>${esc(file.path || "Untitled file")}</strong></div>
-        <button type="button" class="row-action danger" data-remove-file="${index}" title="Remove file">${icon("more")}</button>
+        <div><span>${esc(meta)}</span><strong>${esc(file.path)}</strong></div>
+        <button type="button" class="row-action danger" data-file-delete="${esc(file.path)}" title="Remove file">${icon("trash")}</button>
       </div>
-      <div class="editor-form-grid">
-        ${editorField("File path", "Relative to the project root", `<input class="input mono" data-file-index="${index}" data-file-field="path" value="${esc(file.path)}" placeholder="README.md">`, true)}
-        ${editorField("Content mode", "Choose whether tokens are replaced", `<select class="select" data-file-index="${index}" data-file-field="mode"><option value="template" ${templated ? "selected" : ""}>Replace {tokens}</option><option value="raw" ${templated ? "" : "selected"}>Keep exact text</option></select>`)}
-        ${editorField("File content", "Text written into the generated file", `<textarea class="textarea mono file-content" data-file-index="${index}" data-file-field="body" rows="9" placeholder="# {name}">${esc(body)}</textarea>`, false, "full")}
-      </div>
+      ${body}
     </article>`;
 }
 
@@ -693,9 +739,17 @@ function automationEditor(template) {
   const override = template.post_create !== null && template.post_create !== undefined;
   const actions = template.post_create || { git_init: false, reveal: false, open_in_editor: false, print_path: false, commands: [] };
   return `
-    ${editorSectionHeader("Template 05", "Tags & actions", "Attach searchable tags and optionally override the global actions run after project creation.")}
+    ${editorSectionHeader("Template 05", "Tags & actions", "Attach searchable tags, tune how bundled files copy, and optionally override the global actions run after project creation.")}
     <div class="editor-subsection flush">
       ${editorField("Default tags", "Comma-separated tags added to every project", `<input class="input" id="template-tags" value="${esc((template.tags || []).join(", "))}" placeholder="creative, client-work">`, false)}
+    </div>
+    <div class="editor-subsection">
+      <h3>Asset copy rules</h3>
+      <p>Glob patterns applied to the files/ folder when creating a project. Match on a filename (<code>*.svg</code>) or a path (<code>docs/*.md</code>).</p>
+      <div class="editor-form-grid">
+        ${editorField("Copy verbatim", "Copy literally even if it looks like text (keeps {braces})", `<input class="input mono" id="template-verbatim" value="${esc((template.verbatim || []).join(", "))}" placeholder="*.svg">`, false)}
+        ${editorField("Exclude", "Never copy these into a project", `<input class="input mono" id="template-exclude" value="${esc((template.exclude || []).join(", "))}" placeholder=".DS_Store, *.tmp">`, false)}
+      </div>
     </div>
     <div class="editor-subsection">
       ${editorCheck("template-override-actions", "Override global post-create actions", "Use settings specific to this template", override, "data-template-override-actions")}
@@ -1075,6 +1129,9 @@ function bindTemplateEditor() {
   document.querySelectorAll("[data-editor-section]").forEach((button) => button.addEventListener("click", () => {
     state.templateEditorSection = button.dataset.editorSection;
     render();
+    if (button.dataset.editorSection === "files" && state.templateFiles === null && state.templateOriginalSlug) {
+      loadTemplateFiles(state.templateOriginalSlug);
+    }
   }));
   document.querySelector("[data-cancel-template]")?.addEventListener("click", closeTemplateEditor);
   document.querySelector("[data-save-template]")?.addEventListener("click", saveTemplate);
@@ -1235,52 +1292,71 @@ function bindTemplateStructure() {
   });
 }
 
+// Files are stored on disk in the template's files/ folder, so every operation
+// hits its own endpoint and re-reads the list — independent of the metadata
+// "Save template" button.
 function bindTemplateFiles() {
-  const template = state.templateEditor;
-  document.querySelector("[data-add-file]")?.addEventListener("click", () => {
-    template.files.push({ path: "README.md", template: "# {name}\n", content: "" });
-    state.templateDirty = true;
-    render();
-  });
-  document.querySelectorAll("[data-remove-file]").forEach((button) => button.addEventListener("click", () => {
-    template.files.splice(Number(button.dataset.removeFile), 1);
-    state.templateDirty = true;
-    render();
-  }));
-  document.querySelectorAll("[data-file-field]").forEach((field) => {
-    const eventName = field.tagName === "SELECT" ? "change" : "input";
-    field.addEventListener(eventName, updateTemplateFile);
-  });
+  document.querySelector("[data-file-new]")?.addEventListener("click", createTemplateFile);
+  document.querySelector("[data-file-add-path]")?.addEventListener("click", addTemplateFileFromPath);
+  document.querySelectorAll("[data-file-delete]").forEach((button) =>
+    button.addEventListener("click", () => deleteTemplateFile(button.dataset.fileDelete)));
+  document.querySelectorAll("[data-file-path]").forEach((area) =>
+    area.addEventListener("blur", () => saveTemplateFileContent(area.dataset.filePath, area.value)));
 }
 
-function updateTemplateFile(event) {
-  const index = Number(event.target.dataset.fileIndex);
-  const file = state.templateEditor.files[index];
-  const field = event.target.dataset.fileField;
-  if (!file) return;
-  if (field === "path") {
-    file.path = event.target.value;
-  } else if (field === "body") {
-    const mode = document.querySelector(`[data-file-index="${index}"][data-file-field="mode"]`)?.value
-      || (file.template !== "" ? "template" : "raw");
-    if (mode === "template") file.template = event.target.value;
-    else file.content = event.target.value;
-  } else if (field === "mode") {
-    const currentBody = file.template || file.content || "";
-    if (event.target.value === "template") {
-      file.template = currentBody;
-      file.content = "";
-    } else {
-      file.content = currentBody;
-      file.template = "";
-    }
+async function createTemplateFile() {
+  const input = document.querySelector("#file-new-path");
+  const path = input?.value.trim();
+  if (!path) {
+    toast("Enter a path for the new file.", true);
+    return;
   }
-  state.templateDirty = true;
+  await runFileOp("/api/templates/file-save", { slug: state.templateOriginalSlug, path, content: "" }, `Created ${path}.`);
+}
+
+async function addTemplateFileFromPath() {
+  const src = document.querySelector("#file-src")?.value.trim();
+  const destInput = document.querySelector("#file-dest")?.value.trim();
+  if (!src) {
+    toast("Enter a source file path to copy from.", true);
+    return;
+  }
+  const dest = destInput || src.split("/").pop();
+  await runFileOp("/api/templates/file-add", { slug: state.templateOriginalSlug, src, dest }, `Added ${dest}.`);
+}
+
+async function deleteTemplateFile(path) {
+  if (!window.confirm(`Remove ${path} from this template?`)) return;
+  await runFileOp("/api/templates/file-delete", { slug: state.templateOriginalSlug, path }, `Removed ${path}.`);
+}
+
+async function saveTemplateFileContent(path, content) {
+  const existing = (state.templateFiles || []).find((file) => file.path === path);
+  if (existing && existing.content === content) return; // no-op — unchanged
+  try {
+    await api("/api/templates/file-save", { method: "POST", body: JSON.stringify({ slug: state.templateOriginalSlug, path, content }) });
+    if (existing) existing.content = content;
+    toast(`Saved ${path}.`);
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function runFileOp(route, payload, message) {
+  try {
+    await api(route, { method: "POST", body: JSON.stringify(payload) });
+    toast(message);
+    await loadTemplateFiles(state.templateOriginalSlug); // re-reads + re-renders
+  } catch (error) {
+    toast(error.message, true);
+  }
 }
 
 function bindTemplateAutomation() {
   const template = state.templateEditor;
   bindValue("#template-tags", (value) => { template.tags = commaList(value); });
+  bindValue("#template-verbatim", (value) => { template.verbatim = commaList(value); });
+  bindValue("#template-exclude", (value) => { template.exclude = commaList(value); });
   document.querySelector("[data-template-override-actions]")?.addEventListener("change", (event) => {
     template.post_create = event.target.checked
       ? { git_init: false, reveal: false, open_in_editor: false, print_path: false, commands: [] }
@@ -2067,6 +2143,7 @@ async function loadState(renderAfter = true) {
       state.templateEditor = structuredClone(source);
       state.templateOriginalSlug = initialEditTemplate === "new" ? null : initialEditTemplate;
       state.templateSlugTouched = initialEditTemplate !== "new";
+      if (state.templateOriginalSlug) loadTemplateFiles(state.templateOriginalSlug);
     } else {
       state.view = "templates";
     }

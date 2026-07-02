@@ -449,6 +449,160 @@ fn create_reproduces_bundled_files_via_ui() {
     });
 }
 
+// ---------------------------------------------------------------------------
+// v0.8 phase 3 — template file ingestion / editor
+// ---------------------------------------------------------------------------
+
+/// Send a request expected to fail and return the error string.
+fn err(method: &str, route: &str, body: serde_json::Value) -> String {
+    ui::route_request(method, route, body.to_string().as_bytes())
+        .unwrap_err()
+        .to_string()
+}
+
+#[test]
+fn template_files_list_includes_bundled_readme() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let value = json(
+            "GET",
+            "/api/template-files?slug=test",
+            serde_json::Value::Null,
+        );
+        let files = value["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["path"], "README.md");
+        assert_eq!(files[0]["is_text"], true);
+        assert!(files[0]["content"].as_str().unwrap().contains("{name}"));
+    });
+}
+
+#[test]
+fn state_reports_template_file_count() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let value = json("GET", "/api/state", serde_json::Value::Null);
+        let tmpl = value["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["slug"] == "test")
+            .unwrap();
+        assert_eq!(tmpl["file_count"], 1);
+    });
+}
+
+#[test]
+fn template_file_save_creates_and_updates() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let on_disk = install.join("templates/test/files/docs/NOTES.md");
+
+        let _ = json(
+            "POST",
+            "/api/templates/file-save",
+            serde_json::json!({"slug": "test", "path": "docs/NOTES.md", "content": "hello {name}"}),
+        );
+        assert_eq!(fs::read_to_string(&on_disk).unwrap(), "hello {name}");
+
+        // The list now reports both files.
+        let listed = json(
+            "GET",
+            "/api/template-files?slug=test",
+            serde_json::Value::Null,
+        );
+        assert_eq!(listed["files"].as_array().unwrap().len(), 2);
+
+        // Saving again overwrites in place.
+        let _ = json(
+            "POST",
+            "/api/templates/file-save",
+            serde_json::json!({"slug": "test", "path": "docs/NOTES.md", "content": "changed"}),
+        );
+        assert_eq!(fs::read_to_string(&on_disk).unwrap(), "changed");
+    });
+}
+
+#[test]
+fn template_file_add_from_path_copies_bytes() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let src = install.join("logo_source.bin");
+        let blob = vec![0x00u8, 0xFF, 0x7F, 0x80, 0x01];
+        fs::write(&src, &blob).unwrap();
+
+        let value = json(
+            "POST",
+            "/api/templates/file-add",
+            serde_json::json!({"slug": "test", "src": src.display().to_string(), "dest": "assets/logo.bin"}),
+        );
+        assert_eq!(value["is_text"], false);
+        let landed = install.join("templates/test/files/assets/logo.bin");
+        assert_eq!(fs::read(&landed).unwrap(), blob);
+        assert!(!landed.with_extension("bin.part").exists());
+    });
+}
+
+#[test]
+fn template_file_delete_removes_it() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let _ = json(
+            "POST",
+            "/api/templates/file-delete",
+            serde_json::json!({"slug": "test", "path": "README.md"}),
+        );
+        assert!(!install.join("templates/test/files/README.md").exists());
+        let listed = json(
+            "GET",
+            "/api/template-files?slug=test",
+            serde_json::Value::Null,
+        );
+        assert!(listed["files"].as_array().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn template_file_rejects_reserved_traversal_and_missing() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+
+        // The reserved auto-gen filename is refused.
+        let reserved = err(
+            "POST",
+            "/api/templates/file-save",
+            serde_json::json!({"slug": "test", "path": "PROJECT_INFO.md", "content": "x"}),
+        );
+        assert!(
+            reserved.contains("generated automatically"),
+            "got: {reserved}"
+        );
+
+        // Path traversal is rejected and writes nothing outside files/.
+        let _ = err(
+            "POST",
+            "/api/templates/file-save",
+            serde_json::json!({"slug": "test", "path": "../pwned.txt", "content": "x"}),
+        );
+        assert!(!install.join("templates/test/pwned.txt").exists());
+
+        // Adding to a template that isn't saved yet fails clearly (the
+        // existence check runs before the source is even inspected).
+        let missing = err(
+            "POST",
+            "/api/templates/file-add",
+            serde_json::json!({"slug": "ghost", "src": "/nonexistent/src", "dest": "x"}),
+        );
+        assert!(missing.contains("does not exist"), "got: {missing}");
+    });
+}
+
 #[test]
 fn prune_drops_missing_records() {
     with_fresh_install(|install| {

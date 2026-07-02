@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use fastf::core::{config::Config, index};
+use fastf::core::config::Config;
 use fastf::ui::{self, Response};
 
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -105,13 +105,13 @@ fn preview_produces_plan_without_writing() {
             fs::read_dir(&base).unwrap().next().is_none(),
             "preview should not write any project folder"
         );
-        // Counter untouched.
-        assert!(index::load_all().unwrap().is_empty());
+        // Preview writes nothing at all — no cache either.
+        assert!(!install.join("projects.jsonl").exists());
     });
 }
 
 #[test]
-fn create_makes_folder_and_appends_index() {
+fn create_makes_folder_and_is_discovered() {
     with_fresh_install(|install| {
         write_minimal_template(install, "test");
         let base = write_config(install);
@@ -130,10 +130,16 @@ fn create_makes_folder_and_appends_index() {
         assert!(readme.contains("# Hello_World"), "readme was: {readme}");
         assert!(readme.contains("id: T001"));
 
-        // Index got exactly one record for it.
-        let records = index::load_all().unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].id, "T001");
+        // Filesystem-as-truth: no projects.jsonl is written; the project is
+        // discovered from its PROJECT_INFO.md and surfaced via /api/state.
+        assert!(
+            !install.join("projects.jsonl").exists(),
+            "create must not write projects.jsonl"
+        );
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        let projects = state["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["id"], "T001");
     });
 }
 
@@ -298,8 +304,9 @@ fn note_appends_journal_entry() {
 #[test]
 fn register_onboards_existing_folder() {
     with_fresh_install(|install| {
-        write_config(install);
-        let folder = install.join("legacy_project");
+        let base = write_config(install);
+        // Place the folder under the base so discovery surfaces it afterwards.
+        let folder = Path::new(&base).join("legacy_project");
         fs::create_dir_all(&folder).unwrap();
 
         let value = json(
@@ -310,10 +317,11 @@ fn register_onboards_existing_folder() {
         assert_eq!(value["ok"], true);
         assert_eq!(value["project"]["pinfo_written"], true);
 
-        // Index got the record and the counter advanced.
-        let records = index::load_all().unwrap();
-        assert_eq!(records.len(), 1);
+        // The folder is now a project: PROJECT_INFO.md was written and it shows
+        // up in discovery via /api/state.
         assert!(folder.join("PROJECT_INFO.md").exists());
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        assert_eq!(state["projects"].as_array().unwrap().len(), 1);
     });
 }
 
@@ -630,16 +638,41 @@ fn from_folder_bundles_assets_and_reports_counts() {
 }
 
 #[test]
-fn prune_drops_missing_records() {
+fn reindex_route_rescans_bases() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        create_project("one");
+        create_project("two");
+
+        let value = json("POST", "/api/reindex", serde_json::json!({}));
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["projects"], 2);
+    });
+}
+
+#[test]
+fn prune_route_is_gone() {
+    with_fresh_install(|_install| {
+        let err = ui::route_request("POST", "/api/projects/prune", b"{}").unwrap_err();
+        assert!(err.to_string().starts_with("not found:"), "got: {err}");
+    });
+}
+
+#[test]
+fn discovery_self_heals_missing_folder() {
     with_fresh_install(|install| {
         write_minimal_template(install, "test");
         write_config(install);
         let path = create_project("doomed");
-        assert_eq!(index::load_all().unwrap().len(), 1);
 
+        // State lists the project, discovered from its PROJECT_INFO.md.
+        let before = json("GET", "/api/state", serde_json::Value::Null);
+        assert_eq!(before["projects"].as_array().unwrap().len(), 1);
+
+        // Delete the folder — no manual prune. The next discovery drops it.
         fs::remove_dir_all(&path).unwrap();
-        let value = json("POST", "/api/projects/prune", serde_json::json!({}));
-        assert_eq!(value["removed"], 1);
-        assert!(index::load_all().unwrap().is_empty());
+        let after = json("GET", "/api/state", serde_json::Value::Null);
+        assert!(after["projects"].as_array().unwrap().is_empty());
     });
 }

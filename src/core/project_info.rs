@@ -32,18 +32,22 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::core::config::Config;
 use crate::core::project::ProjectPlan;
 use crate::core::template::Template;
 
-/// Canonical filename for the auto-generated per-project metadata file.
+/// Canonical filename for the per-project metadata file.
 ///
-/// Reserved across the codebase — templates cannot declare a file entry with
-/// this name (case-insensitive). The configurable `cfg.project_info_filename`
-/// still controls where fastf actually writes the file, but `RESERVED_FILENAME`
-/// is the hard-coded safety net checked in `Template::load_from_file`,
-/// `Template::save_to_file`, and the TUI template builder.
+/// As of v0.9 the filename is fixed (no config knob): this file IS the
+/// project's identity in the filesystem-as-truth model, so it is mandatory and
+/// always named `PROJECT_INFO.md`. Reserved across the codebase — templates
+/// cannot declare a file entry with this name (case-insensitive), checked in
+/// `Template::load_from_file`, `Template::save_to_file`, and the TUI builder.
 pub const RESERVED_FILENAME: &str = "PROJECT_INFO.md";
+
+/// Absolute path of a project's metadata file: `<dir>/PROJECT_INFO.md`.
+pub fn pinfo_path(dir: &Path) -> std::path::PathBuf {
+    dir.join(RESERVED_FILENAME)
+}
 
 /// True when `path` (the YAML `files[].path` field) collides with the reserved
 /// auto-gen filename. Compared case-insensitively on the final path component
@@ -97,7 +101,7 @@ impl Metadata {
             id: plan.id_str.clone(),
             template: tmpl.slug.clone(),
             template_name: tmpl.name.clone(),
-            created: crate::core::index::now_iso8601(),
+            created: crate::core::library::now_iso8601(),
             folder: plan.folder_name.clone(),
             path: plan.root_path.display().to_string(),
             variables,
@@ -186,12 +190,10 @@ pub fn render(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> String {
     out
 }
 
-/// Write `<root>/<cfg.project_info_filename>`. No-op when disabled.
-pub fn write(plan: &ProjectPlan, tmpl: &Template, cfg: &Config, tags: &[String]) -> Result<()> {
-    if !cfg.project_info_enabled {
-        return Ok(());
-    }
-    let path = plan.root_path.join(&cfg.project_info_filename);
+/// Write `<root>/PROJECT_INFO.md`. Metadata is mandatory in v0.9 (the file is
+/// the project's identity), so there is no "disabled" path.
+pub fn write(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<()> {
+    let path = pinfo_path(&plan.root_path);
     let body = render(plan, tmpl, tags);
     fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
@@ -199,14 +201,10 @@ pub fn write(plan: &ProjectPlan, tmpl: &Template, cfg: &Config, tags: &[String])
 
 /// Read the raw markdown body for the project's metadata file.
 /// Errors with a friendly message when missing.
-pub fn read(project_root: &Path, cfg: &Config) -> Result<String> {
-    let path = project_root.join(&cfg.project_info_filename);
+pub fn read(project_root: &Path) -> Result<String> {
+    let path = pinfo_path(project_root);
     if !path.exists() {
-        anyhow::bail!(
-            "no {} found at {} — this project predates the metadata feature",
-            cfg.project_info_filename,
-            path.display()
-        );
+        anyhow::bail!("no {} found at {}", RESERVED_FILENAME, path.display());
     }
     fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
 }
@@ -218,13 +216,13 @@ pub fn read(project_root: &Path, cfg: &Config) -> Result<String> {
 ///   hand-edited file). Caller should fall back to displaying [`read`] output
 ///   verbatim.
 /// - `Err(_)` — file missing, IO error, or malformed YAML.
-pub fn read_metadata(project_root: &Path, cfg: &Config) -> Result<Option<Metadata>> {
-    let body = read(project_root, cfg)?;
+pub fn read_metadata(project_root: &Path) -> Result<Option<Metadata>> {
+    let body = read(project_root)?;
     let Some((frontmatter, _)) = split_frontmatter_body(&body) else {
         return Ok(None);
     };
     let meta: Metadata = serde_yaml::from_str(frontmatter)
-        .with_context(|| format!("parsing YAML frontmatter in {}", cfg.project_info_filename))?;
+        .with_context(|| format!("parsing YAML frontmatter in {}", RESERVED_FILENAME))?;
     Ok(Some(meta))
 }
 
@@ -282,7 +280,7 @@ pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
         )
     })?;
 
-    let timestamp = crate::core::index::now_iso8601();
+    let timestamp = crate::core::library::now_iso8601();
     let entry_line = format!("- {} — {}\n", timestamp, message);
 
     let new_content = if content.contains("## Journal") {
@@ -309,8 +307,8 @@ pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
 /// Parses entries of the form `- <timestamp> — <message>` from the
 /// `## Journal` section of the body.  Returns an empty vec when there is no
 /// journal section.
-pub fn read_journal_entries(project_root: &Path, cfg: &Config) -> Result<Vec<JournalEntry>> {
-    let body = read(project_root, cfg)?;
+pub fn read_journal_entries(project_root: &Path) -> Result<Vec<JournalEntry>> {
+    let body = read(project_root)?;
     Ok(parse_journal_entries(&body))
 }
 

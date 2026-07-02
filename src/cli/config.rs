@@ -78,18 +78,17 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
-        "project_info_enabled:".green(),
-        bool_label(config.project_info_enabled)
-    );
-    println!(
-        "  {:<26} {}",
-        "project_info_filename:".green(),
-        config.project_info_filename
-    );
-    println!(
-        "  {:<26} {}",
         "recent_default_limit:".green(),
         config.recent_default_limit
+    );
+    println!(
+        "  {:<26} {}",
+        "bases:".green(),
+        if config.bases.is_empty() {
+            "(none)".dimmed().to_string()
+        } else {
+            config.bases.join(", ")
+        }
     );
     println!(
         "  {:<26} {}",
@@ -197,26 +196,19 @@ pub fn set(key: &str, value: &str) -> Result<()> {
             config.show_banner = parse_bool(value)?;
             println!("Set show_banner = {}", config.show_banner);
         }
-        // `pinfo_*` are kept as aliases (parse-only) for the v0.2-interim
-        // config files that used the old name. They write into the renamed
-        // fields and serialize back under the new names on save.
-        "project_info_enabled" | "pinfo_enabled" => {
-            config.project_info_enabled = parse_bool(value)?;
-            println!("Set project_info_enabled = {}", config.project_info_enabled);
-        }
-        "project_info_filename" | "pinfo_filename" => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                bail!("project_info_filename cannot be empty");
+        "bases" => {
+            // Comma-separated list of extra base directories to index. Empty
+            // value clears the list.
+            config.bases = value
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if config.bases.is_empty() {
+                println!("Cleared bases");
+            } else {
+                println!("Set bases = {}", config.bases.join(", "));
             }
-            if trimmed.contains('/') || trimmed.contains('\\') {
-                bail!("project_info_filename must be a bare filename, not a path");
-            }
-            config.project_info_filename = trimmed.to_string();
-            println!(
-                "Set project_info_filename = {}",
-                config.project_info_filename
-            );
         }
         "recent_default_limit" => {
             let n = parse_usize(value)?;
@@ -268,9 +260,9 @@ pub fn set(key: &str, value: &str) -> Result<()> {
             );
         }
         other => bail!(
-            "unknown config key '{}'. Valid keys: base-dir, editor, default-template, date-format, \
+            "unknown config key '{}'. Valid keys: base-dir, bases, editor, default-template, date-format, \
              preview-lines, prompt-open-after-create, confirm-create, show-banner, \
-             project-info-enabled, project-info-filename, recent-default-limit, register-naming-pattern, \
+             recent-default-limit, register-naming-pattern, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
             other
         ),

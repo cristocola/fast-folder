@@ -46,7 +46,7 @@ Most templaters either target coders (Cookiecutter, Yeoman) or duplicate static 
 
 - **Not only for coders.** Works for music video production, photography, film, research archives, finance workflows, client deliverables, and yes — software projects too. Same engine, same workflow, different templates.
 - **TUI, CLI, *and* browser UI — all first-class.** Beginners get a guided interactive menu with live settings preview. Power users and scripts drive everything with flags (`--yes`, `--dry-run`, variable injection, base-dir override). `fastf ui` opens a fast point-and-click browser app for visual template editing and project creation. AI agents, launchers, and shell pipelines plug in naturally. All three interfaces share one engine and one set of data.
-- **Rust-native and portable.** Single executable under 3 MB, near-instant startup, no runtime to install. Drop the folder on a USB stick, a network share, a new laptop — the binary finds its own config, templates, and project index next to itself.
+- **Rust-native and portable.** Single executable under 3 MB, near-instant startup, no runtime to install. Drop the folder on a USB stick, a network share, a new laptop — the binary finds its own config, templates, and counter next to itself. Projects are discovered from the filesystem, so there's no separate database to keep in sync.
 - **Generates file *contents* from metadata, not just folder *names*.** Variables flow into templated files: `Cargo.toml`, `README.md`, client briefs, slate info, shot lists, report headers. The output is materially tailored to the project.
 - **Nested, variable-driven project systems.** A single template can carry deliverables, notes, exports, contracts, assets, code, references, and generated metadata — all in one coherent tree, with paths and contents driven by the variables you supply.
 - **Projects are trackable objects, not one-shot output.** Every created project is logged with an ID, timestamp, template, and variables. Browse with `fastf recent`, jump to any folder with `fastf open <id>`, or parse `PROJECT_INFO.md` frontmatter with `yq`, Obsidian, Hugo, or your own tooling.
@@ -146,7 +146,7 @@ fastf ui --app      # open a dedicated app window (Chromium/Chrome) — feels na
 fastf ui --no-open  # start the server only (no browser)
 ```
 
-Because the server calls the Fast Folder library directly — the very same `plan` / `create` / `config` / `template` / `index` code the CLI runs — the UI and CLI **share one source of truth**: the same templates, the same `config.toml`, the same global ID counter, the same `projects.jsonl`. Create a project in the UI and it shows up in `fastf recent`; edit a template in the TUI and it's there in the UI. Nothing is duplicated, and nothing is parsed from terminal output.
+Because the server calls the Fast Folder library directly — the very same `plan` / `create` / `config` / `template` / discovery code the CLI runs — the UI and CLI **share one source of truth**: the same templates, the same `config.toml`, the same global ID counter, and the same projects (discovered from their `PROJECT_INFO.md` on disk). Create a project in the UI and it shows up in `fastf recent`; edit a template in the TUI and it's there in the UI. Nothing is duplicated, and nothing is parsed from terminal output.
 
 Main views:
 
@@ -183,25 +183,27 @@ It's **fast** for the same reasons the CLI is: requests never leave `127.0.0.1`,
 - **Rich dry-run** — full tree + resolved variables + file-content previews (first N lines) before anything hits disk.
 
 ### Project tracking
-- **Structured metadata file** — every new project gets a `PROJECT_INFO.md` with YAML frontmatter recording the ID, template, creation time, path, and **every variable** (even ones not in the folder name). Parseable by Obsidian, Hugo, `yq`, `grep`, or any future tooling. The filename is fastf-managed and reserved — templates can't accidentally claim it.
-- **Project index** — append-only `projects.jsonl` log of every created project.
-- **Interactive `fastf recent`** — pick a project to open its folder, view metadata, add tags, or write a journal note. Shows inline tags. Falls back to a plain list with `--plain` or when piped. Prune stale records via Settings → Recent projects.
+- **The filesystem is the source of truth** — a folder is a project because it contains a `PROJECT_INFO.md`, whose YAML frontmatter records the ID, template, creation time, path, and **every variable**. There's no separate database to drift out of sync; delete a folder and it's simply gone. Fast Folder discovers projects across your base dir plus any extra `bases`, accelerated by a disposable per-base `.fastf-index.json` cache that heals itself (no manual prune, ever).
+- **Structured metadata** — `PROJECT_INFO.md` is parseable by Obsidian, Hugo, `yq`, `grep`, or any future tooling. Mandatory and always named `PROJECT_INFO.md` — templates can't claim the name.
+- **Self-healing counter** — the next ID is always `max(counter, highest ID found on disk) + 1`, so wiping the install folder can never mint an ID that collides with an existing project.
+- **Interactive `fastf recent`** — pick a project to open its folder, view metadata, add tags, or write a journal note. Shows inline tags. Falls back to a plain list with `--plain` or when piped.
 - **Quick access** — `fastf open ID0047` or `fastf open my-crate` jumps to any project folder.
-- **Onboard existing folders** — `fastf register ./old-project` adopts a pre-fastf folder into the index without creating anything. Optional `--template` attaches a template + tags, `--apply` fills missing structure, `--rename` standardizes the folder name via the template's pattern or `config.register_naming_pattern` (default `{date}_{name}_{id}`). Historical dates preserved via folder mtime / `--use-today` / `--created YYYY-MM-DD`.
+- **Onboard existing folders** — `fastf register ./old-project` writes a `PROJECT_INFO.md` into a folder so Fast Folder can find it (recovering an `ID####` from the folder name if present, else minting fresh). `--recursive` bulk-onboards a whole base's children (`--dry-run` to preview). Optional `--template` attaches a template + tags, `--apply` fills missing structure, `--rename` standardizes the name. Historical dates preserved via folder mtime / `--use-today` / `--created YYYY-MM-DD`.
+- **Reindex** — `fastf reindex` forces a full rescan after external changes (folders moved or metadata edited on another machine).
 - **Re-apply to existing folders** — `fastf apply` retrofits missing files and folders when a template evolves. Skip-only, never overwrites.
 - **Tags** — free-form (`draft`, `urgent`) and auto-derived from template variables (`client_type/Indie`, `artist/Ariana_Grande`). Set `tags:` and `tag_from:` in a template; manage later with `fastf tag add/remove/list/reauto`.
 - **Search** — bare terms search across vars/tags/folder/template/id (`fastf search ariana`); explicit grammar adds field, date, and tag operators (`fastf search template=music-video tag:draft`). Interactive on TTY, pipe-safe with `--plain`.
 - **Journal** — append timestamped notes to any project over its lifetime: `fastf note add ID0047 "finished mix"`. View with `fastf notes ID0047 --since 2026-04-01`.
 
 ### Workflow integration
-- **Local browser UI** — `fastf ui` opens a fast, embedded single-page app for visual project creation and template editing, sharing the same templates/config/counter/index as the CLI. See [The Browser UI](#the-browser-ui).
+- **Local browser UI** — `fastf ui` opens a fast, embedded single-page app for visual project creation and template editing, sharing the same templates/config/counter and the same discovered projects as the CLI. See [The Browser UI](#the-browser-ui).
 - **Post-create actions** (global or per-template) — `git init`, reveal in file manager, open in editor, run custom shell commands, print the absolute path for shell pipelines.
 - **Open-folder prompt** — "Open project folder? [Y/n]" offered after every `fastf new` (configurable).
 - **Non-interactive mode** — `--yes`, inline variable flags, `--no-preview`, `--no-post`, `--dry-run`, `--base-dir`. Flags work before or after the template slug; vars use `--key=value`. Scriptable end-to-end.
 - **Shell completions** for bash, zsh, fish, PowerShell.
 
 ### Deployment
-- **One self-contained folder.** Binary, config, templates, counters, and project index all live together. Move the folder, everything moves with it.
+- **One self-contained folder.** Binary, config, templates, and the counter all live together. Move the folder, everything moves with it. (Projects live wherever you create them, each base carrying its own portable cache.)
 - **Under 3 MB.** Single Rust binary, statically linked (musl build available). No Python, no Node, no runtime dependencies.
 - **Cross-platform.** Linux, macOS (Intel + Apple Silicon), Windows. Cross-compile instructions below.
 
@@ -324,14 +326,13 @@ fastf/
 ├── fastf             (fastf.exe on Windows)
 ├── config.toml
 ├── counters.toml
-├── projects.jsonl
 └── templates/
-    ├── music-video.yaml
-    ├── photography.yaml
-    └── video-production.yaml
+    ├── music-video/       (template.yaml + files/)
+    ├── photography/
+    └── video-production/
 ```
 
-On first run, `fastf` creates `config.toml`, `counters.toml`, and `templates/` alongside itself. The binary resolves its own location at runtime, so symlinking also works.
+On first run, `fastf` creates `config.toml`, `counters.toml`, and `templates/` alongside itself. The binary resolves its own location at runtime, so symlinking also works. There's no project database here — each project carries its own `PROJECT_INFO.md`, and each base directory keeps a disposable `.fastf-index.json` cache next to its projects.
 
 ---
 
@@ -399,7 +400,6 @@ fastf recent --limit 50
 fastf recent --template rust-project
 fastf recent --since 2026-01-01
 fastf recent --tag draft             # only projects with this tag
-fastf recent --prune                 # remove records whose folders no longer exist
 
 fastf open ID0047                    # reveal in system file manager
 fastf open my-crate                  # substring match on project name
@@ -451,8 +451,10 @@ variables:
 
 ```bash
 fastf recent | grep music-video
-fastf recent --plain --prune
+fastf recent --plain --limit 100
 ```
+
+Deleted a project? Just delete the folder — the next `fastf recent` won't list it (the cache heals itself). No prune command needed. If you moved folders or edited metadata outside fastf, run `fastf reindex` to force a fresh scan.
 
 ### Tags
 
@@ -513,7 +515,7 @@ Journal entries are timestamped lines in `## Journal` in `PROJECT_INFO.md` — a
 
 ### Register an existing folder
 
-Onboard a folder that already exists into fastf's index — useful for pre-fastf projects you want to find in `recent`, `search`, or tag/journal:
+Onboard a folder that already exists so Fast Folder can find it in `recent`, `search`, or tag/journal — by writing a `PROJECT_INFO.md` into it:
 
 ```bash
 fastf register ./old-project                                     # minimal, no template
@@ -523,9 +525,12 @@ fastf register ./old-project --rename                            # standardize f
 fastf register ./old-project -t music-video --rename             # rename to the template's naming_pattern
 fastf register ./old-project --created 2024-06-15                # historical date
 fastf register ./old-project --use-today                         # ignore folder mtime, mark as now
+
+fastf register ~/Projects --recursive --dry-run                  # preview a bulk import
+fastf register ~/Projects --recursive                            # onboard every child that lacks metadata
 ```
 
-`register` writes a `PROJECT_INFO.md` to the folder, appends a record to `projects.jsonl`, and bumps the global ID counter. Without `--template` you get a minimal record (template = `(registered)`); with one, you get the full metadata + tags shape, identical to `fastf new`. The `created` timestamp defaults to the folder's filesystem creation time (falling back to mtime on filesystems without birth-time, e.g. ext4) — override with `--use-today` or `--created YYYY-MM-DD`.
+`register` writes a `PROJECT_INFO.md` into the folder — that's what makes it a project. The ID is **recovered from an `ID####` token in the folder name** when present (so a folder named `..._ID0030` keeps ID 30), otherwise minted fresh from the self-healing counter. Without `--template` you get a minimal file (template = `(registered)`); with one, you get the full metadata + tags shape, identical to `fastf new`. `--recursive` writes a `PROJECT_INFO.md` into every direct child of a base that lacks one (great for adopting a whole projects folder at once); pair it with `--dry-run` to see what would happen first. The `created` timestamp defaults to the folder's filesystem creation time (falling back to mtime on filesystems without birth-time, e.g. ext4) — override with `--use-today` or `--created YYYY-MM-DD`.
 
 `--rename` standardizes the folder name. With `--template`, it renders the template's `naming_pattern`. Without one, it uses `config.register_naming_pattern` (default `"{date}_{name}_{id}"`, where `{name}` is the existing folder name with whitespace collapsed to underscores). Example: `fastf register "./random project" --rename` → `./2026-05-11_random_project_ID0001`. Configure with `fastf config set register-naming-pattern "{id}-{name}"` if you prefer a different layout. `--rename` confirms before moving on disk unless `--yes` is set.
 
@@ -565,14 +570,14 @@ fastf config set default-template rust-project
 fastf config set date-format "%Y-%m-%d"
 fastf config set editor nvim                     # used by post_create.open_in_editor
 
+# Library bases (extra folders to index, beyond base-dir)
+fastf config set bases "/mnt/proj/01_PROJECTS,/srv/archive"   # comma-separated
+fastf config set bases ""                                     # clear the list
+
 # Prompts and UX
 fastf config set prompt-open-after-create false  # disable the post-new open prompt
 fastf config set confirm-create false            # skip "Create this project?" (like --yes)
 fastf config set show-banner false               # hide ASCII banner in TUI
-
-# Project metadata
-fastf config set project-info-enabled false      # don't write PROJECT_INFO.md
-fastf config set project-info-filename .info.md  # custom filename
 
 # Recent
 fastf config set recent-default-limit 50
@@ -739,7 +744,7 @@ variables:
 ## Notes
 ```
 
-The file is written once on `fastf new` and modified only by `fastf tag` / `fastf note` afterward. `PROJECT_INFO.md` is a reserved filename — templates that try to declare their own file entry called `PROJECT_INFO.md` have it silently stripped on load (fastf always owns this file). To disable metadata generation entirely: `fastf config set project-info-enabled false`. The `project-info-filename` config key still exists for backwards compatibility with older configs but is no longer surfaced in the TUI.
+The file is written once on `fastf new` (or `fastf register`) and modified only by `fastf tag` / `fastf note` afterward. **It's what makes a folder a project** — Fast Folder discovers projects by finding `PROJECT_INFO.md` files, so it's mandatory and always named `PROJECT_INFO.md` (templates that try to declare their own file entry with that name have it silently stripped on load — fastf always owns this file).
 
 ---
 
@@ -754,7 +759,8 @@ The file is written once on `fastf new` and modified only by `fastf tag` / `fast
 | `fastf recent --tag <tag>` | Filter recent picker to projects with a specific tag |
 | `fastf recent --plain` | Non-interactive project list (script-safe) |
 | `fastf open <query>` | Reveal a project folder by ID or name |
-| `fastf register <dir>` | Onboard an existing folder into the index (no folder created) |
+| `fastf register <dir>` | Write a PROJECT_INFO.md into an existing folder (`--recursive` for a whole base) |
+| `fastf reindex` | Force a full rescan of every base, rewriting each `.fastf-index.json` cache |
 | `fastf apply <slug> <dir>` | Apply a template to an existing folder (skip-only) |
 | `fastf tag add <id> <tag>…` | Add free-form tags to a project |
 | `fastf tag remove <id> <tag>…` | Remove tags from a project |
@@ -808,7 +814,7 @@ Pull requests are welcome. Please ensure `cargo test`, `cargo clippy`, and `carg
 | `clap` | CLI commands and flags |
 | `dialoguer` | Interactive prompts and menus |
 | `serde` + `serde_yaml` | Template YAML parsing + YAML frontmatter |
-| `serde` + `serde_json` | Project index (JSONL) |
+| `serde` + `serde_json` | Per-base project cache (`.fastf-index.json`) |
 | `serde` + `toml` | Config file |
 | `chrono` | Date tokens + ISO-8601 timestamps |
 | `anyhow` | Error handling |

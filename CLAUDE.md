@@ -2,9 +2,11 @@
 
 ## What this project is
 
-`fastf` (Fast Folder Creator) is a portable Rust CLI tool for creating structured project folders from **folder templates**. Universal use cases: code, research, finance, music video, photography, and film production workflows. Single-folder portable distribution — config, templates, counters, and project index live next to the binary.
+`fastf` (Fast Folder Creator) is a portable Rust CLI tool for creating structured project folders from **folder templates**. Universal use cases: code, research, finance, music video, photography, and film production workflows. Single-folder portable distribution — config, templates, and the counter live next to the binary.
 
-**v0.8: a template is a folder.** `templates/<slug>/template.yaml` holds metadata (variables, naming_pattern, id, structure, post_create, tags, tag_from, verbatim/exclude globs); a sibling `templates/<slug>/files/` subtree IS the file spec — every file/dir under it is reproduced into each new project, with `{token}` interpolation on names and on UTF-8 text (≤1 MiB), binaries copied byte-for-byte. See "Folder templates + bundled assets (v0.8)" below. All four phases landed: folder model + copy engine + CLI; UI background copy jobs; UI file ingestion + editor; from-folder binary bundling.
+**v0.9: the filesystem is the source of truth.** There is no `projects.jsonl`. A folder is a project **iff** it contains a `PROJECT_INFO.md` (the `id` in its YAML frontmatter is authoritative; the folder name is cosmetic). `fastf` discovers projects across all bases (`base_dir` + config `bases`), accelerated by a disposable per-base `.fastf-index.json` cache that self-heals (base-mtime gate + per-entry existence check — no manual prune). The global counter self-heals: next ID = `max(counter_file, highest id discovered) + 1`. See "Filesystem-as-truth library (v0.9)" below. Core in `src/core/library.rs`.
+
+**v0.8: a template is a folder.** `templates/<slug>/template.yaml` holds metadata (variables, naming_pattern, id, structure, post_create, tags, tag_from, verbatim/exclude globs); a sibling `templates/<slug>/files/` subtree IS the file spec — every file/dir under it is reproduced into each new project, with `{token}` interpolation on names and on UTF-8 text (≤1 MiB), binaries copied byte-for-byte. See "Folder templates + bundled assets (v0.8)" below.
 
 ## Build commands
 
@@ -28,7 +30,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (134 total: 62 unit/lib + 49 core in integration.rs + 23 UI in ui_server.rs)
+# Test (149 total: 74 unit/lib + 50 core in integration.rs + 25 UI in ui_server.rs)
 cargo test
 cargo test <test_name>   # run a single test by name
 
@@ -85,7 +87,8 @@ fast-folder/
     ├── util/
     │   ├── mod.rs
     │   └── paths.rs          — install_dir(): FASTF_INSTALL_DIR override, else current_exe().
-    │                           projects_index_path() → install_dir()/projects.jsonl
+    │                           config/counters/templates paths. (No projects_index_path — v0.9
+    │                           discovers projects from the filesystem, not a jsonl next to the binary.)
     ├── core/
     │   ├── mod.rs
     │   ├── assets.rs         — v0.8 copy engine. walk(files_dir) lists the files/ subtree;
@@ -95,14 +98,14 @@ fast-folder/
     │   │                        TEXT_MAX_BYTES (1 MiB interpolation cap). Job model:
     │   │                        JOB_DEFER_BYTES (4 MiB), CopyJob, Progress (Serialize),
     │   │                        copy_job() (chunked byte copy w/ live progress).
-    │   ├── config.rs         — Config: base_dir, editor, date_format, default_template,
-    │   │                        preview_lines (8), post_create (PostCreate), and new v0.3 fields:
-    │   │                        prompt_open_after_create, project_info_enabled,
-    │   │                        project_info_filename, recent_default_limit,
-    │   │                        confirm_create, show_banner. v0.5: register_naming_pattern
-    │   │                        (default "{date}_{name}_{id}") drives the no-template rename.
-    │   │                        Serde aliases `pinfo_enabled`/`pinfo_filename` accept
-    │   │                        any interim configs from before the rename.
+    │   ├── config.rs         — Config: base_dir, bases (v0.9 extra index dirs),
+    │   │                        editor, date_format, default_template, preview_lines (8),
+    │   │                        post_create, prompt_open_after_create, recent_default_limit,
+    │   │                        confirm_create, show_banner, register_naming_pattern.
+    │   │                        effective_bases() = dedup([base_dir] + bases), canonicalized.
+    │   │                        v0.9 REMOVED project_info_enabled/project_info_filename
+    │   │                        (metadata is mandatory, always PROJECT_INFO.md); old configs
+    │   │                        with those keys still parse (serde ignores unknown fields).
     │   ├── counter.rs        — Global auto-increment ID (single 'global' field in counters.toml)
     │   ├── naming.rs         — apply_transform(), interpolate() [raw for file CONTENT],
     │   │                        interpolate_name() [collapses __ and trims for NAMES],
@@ -116,8 +119,9 @@ fast-folder/
     │   │                        (walks core::assets), NOT template.files. create_deferred()
     │   │                        does the eager work + returns large-file CopyJobs for the UI
     │   │                        to copy in the background; create() stays fully synchronous.
-    │   ├── project_info.rs   — Metadata struct (incl. tags), render(), write(), read(),
-    │   │                        read_metadata(). v0.4: write_frontmatter(path, mutator) for
+    │   ├── project_info.rs   — Metadata struct (incl. tags), render(), write(plan,tmpl,tags),
+    │   │                        read(dir), read_metadata(dir), pinfo_path(dir) [v0.9: fixed
+    │   │                        filename, no cfg]. v0.4: write_frontmatter(path, mutator) for
     │   │                        atomic in-place tag mutation; append_journal_entry(path, msg)
     │   │                        for ## Journal section; read_journal_entries(); split_frontmatter_body()
     │   │                        is pub for byte-identical body round-trips.
@@ -140,9 +144,13 @@ fast-folder/
     │   │                        Predicate::Free — case-insensitive substring across vars/tags/
     │   │                        folder/template/template_name/id (path EXCLUDED).
     │   ├── vars.rs           — collect_vars() shared by `new` and `apply`
-    │   ├── index.rs          — ProjectRecord + append()/try_append()/load_all()/rewrite()
-    │   │                        for projects.jsonl (JSONL append-only log) +
-    │   │                        resolve_project(query) — exact-id → prefix → name substring.
+    │   ├── library.rs        — v0.9 filesystem-as-truth. Project struct; discover(cfg) unions
+    │   │                        effective_bases() newest-first (cache-first + staleness gate);
+    │   │                        scan_base() reads depth-1 folders with PROJECT_INFO.md;
+    │   │                        cache format .fastf-index.json (base-relative `dir`);
+    │   │                        resolve(cfg,query) [replaces index::resolve_project];
+    │   │                        max_id(cfg) [read-only, safe from plan()]; reindex(cfg);
+    │   │                        cache_upsert/cache_remove/refresh_cache; now_iso8601().
     │   └── post_create.rs    — PostCreate struct + run(): git_init, reveal, open_in_editor,
     │                            print_path, commands. Platform-specific reveal_folder()
     │                            via cfg(windows)/cfg(target_os="macos")/cfg(unix).
@@ -165,42 +173,44 @@ fast-folder/
     │   │                        (UI + tests); run_from_folder() is the CLI shell (size-confirm +
     │   │                        summary). scan_source()/execute_scan() split so the CLI confirms
     │   │                        before writing; bundle_assets copies binary/large files verbatim.
-    │   ├── config.rs         — config show/set. Handles new v0.3 keys:
-    │   │                        project_info_enabled, project_info_filename (with pinfo_* aliases),
+    │   ├── config.rs         — config show/set. Keys: base-dir, bases (v0.9 comma-list),
     │   │                        prompt_open_after_create, confirm_create, show_banner,
-    │   │                        recent_default_limit, post_create.* keys, and
-    │   │                        v0.5 register_naming_pattern. The setter rejects patterns
-    │   │                        without `{id}` (would collide multiple registered folders).
+    │   │                        recent_default_limit, preview_lines, post_create.* keys,
+    │   │                        register_naming_pattern (rejects patterns without `{id}`).
+    │   │                        v0.9 dropped project-info-enabled/-filename keys.
     │   ├── id.rs             — id show/reset/set
-    │   ├── recent.rs         — `fastf recent`: defaults to interactive picker (TTY).
-    │   │                        picker → project_action_menu() → Open / Show metadata /
-    │   │                        Add tag / Remove tag / Add journal note / Show journal /
-    │   │                        Back / Quit. Inline tag display in picker labels (truncated
-    │   │                        to 3 + "+N" overflow). --tag <name> filter. run_picker() pub
-    │   │                        so cli/search.rs can reuse it. --plain (or non-TTY) gives
-    │   │                        classic list output.
+    │   ├── reindex.rs        — v0.9. `fastf reindex` → library::reindex(cfg): force full
+    │   │                        rescan of every base + rewrite each .fastf-index.json.
+    │   ├── recent.rs         — `fastf recent`: defaults to interactive picker (TTY). v0.9:
+    │   │                        sources from library::discover (no --prune). picker →
+    │   │                        project_action_menu() → Open / Show metadata / Add tag /
+    │   │                        Remove tag / Add journal note / Show journal / Back / Quit.
+    │   │                        Inline tag display from project.tags (from discovery, no reload).
+    │   │                        --tag <name> filter. run_picker(&[&Project]) pub so cli/search
+    │   │                        reuses it. open(query) → library::resolve. --plain / non-TTY
+    │   │                        gives classic list output.
     │   ├── tag.rs            — v0.4. add/remove/list/reauto. add is idempotent; remove no-ops
     │   │                        on missing tags; reauto preserves free-form, replaces derived.
     │   ├── note.rs           — v0.4. note add: inline / `-` (stdin) / omit ($EDITOR via cfg).
     │   │                        notes: prints filtered ## Journal entries (--since YYYY-MM-DD).
     │   ├── search.rs         — v0.4. `fastf search <terms...>`. Parses via core::query, walks
-    │   │                        index reverse-chronologically, reads metadata per record,
-    │   │                        evaluates predicates, then renders via run_picker (TTY) or
-    │   │                        plain list (--plain / pipe).
+    │   │                        library::discover newest-first, reads metadata per project,
+    │   │                        evaluates predicates (query::evaluate(preds, meta) — v0.9 no
+    │   │                        record arg), renders via run_picker (TTY) or plain list.
     │   ├── apply.rs          — `fastf apply <slug> <dir>` with --dry-run (skip-only semantics)
     │   ├── ui.rs             — v0.6. `fastf ui` launcher: health-check → open browser
     │   │                        (--app = Chromium/Chrome app window, else default) → serve.
     │   │                        Calls fastf::ui::serve(); UiArgs { address, no_open, app }.
-    │   └── register.rs       — v0.5. `fastf register <path>` onboards an existing folder:
-    │                            writes PROJECT_INFO.md, appends to projects.jsonl, bumps the
-    │                            global counter. Optional --template (full metadata + tags),
-    │                            --apply (fill missing structure via project::apply, requires
-    │                            --template), --rename (renders tmpl.naming_pattern with a
-    │                            template or cfg.register_naming_pattern without — `{name}`
-    │                            token is synthesised via slugify_folder_name()),
-    │                            --use-today / --created YYYY-MM-DD.
-    │                            Exposes pub fn resolve_created() for unit-test isolation and
-    │                            pub const REGISTERED_SLUG = "(registered)" for no-template runs.
+    │   └── register.rs       — `fastf register <path>` writes a PROJECT_INFO.md into an
+    │                            existing folder (its whole job in v0.9 — no index). ID recovered
+    │                            from an ID#### token in the folder name (parse_id_token) if
+    │                            present, else minted from the self-healed floor. cache_upsert
+    │                            after write. Optional --template (full metadata + tags), --apply
+    │                            (requires --template), --rename, --use-today / --created.
+    │                            v0.9: --recursive (+ --dry-run) → run_recursive() onboards every
+    │                            metadata-less direct child of a base (PinfoConflict::Skip).
+    │                            RegisterOutcome carries a library::Project. resolve_created() pub;
+    │                            REGISTERED_SLUG = "(registered)".
     ├── tui/
         ├── mod.rs
         ├── menu.rs           — Interactive TUI menu. ASCII banner (suppressed if !show_banner).
@@ -209,9 +219,9 @@ fast-folder/
         │                          / Settings / Quit.
         │                        menu_search() prompts for a query string, splits on
         │                        whitespace, calls cli::search::run.
-        │                        menu_settings() restructured into 5 grouped submenus:
-        │                          Project basics / Workflow prompts / Project metadata /
-        │                          Recent projects / Post-create actions.
+        │                        menu_settings() grouped submenus:
+        │                          Project basics / Workflow prompts / Library bases (v0.9) /
+        │                          Recent projects / Post-create actions / ID counter.
         │                        Every config field has a toggle/edit entry with inline state.
         └── template_builder.rs — Step-by-step interactive template create/edit
                                   (sets post_create: None on new templates).
@@ -235,7 +245,7 @@ fast-folder/
 ## Key design decisions
 
 ### Portability
-`paths::install_dir()` checks `FASTF_INSTALL_DIR` first (test-only escape hatch), then falls back to `std::env::current_exe().canonicalize().parent()` — the binary finds its own location at runtime. Config, templates, counters, and `projects.jsonl` always live next to the binary. No `~/.config/` or OS-specific paths.
+`paths::install_dir()` checks `FASTF_INSTALL_DIR` first (test-only escape hatch), then falls back to `std::env::current_exe().canonicalize().parent()` — the binary finds its own location at runtime. Config, templates, and the counter always live next to the binary. No `~/.config/` or OS-specific paths. (Projects themselves live in the bases; each base carries its own `.fastf-index.json` cache — v0.9.)
 
 ### Cross-platform paths
 Folder paths in templates (structure names, file paths) always use `/` as the separator in YAML — Rust's `PathBuf::join()` handles conversion to `\` on Windows at runtime. Users should always enter `/` in templates and `base-dir` config, though Windows also accepts backslashes in config values.
@@ -269,8 +279,12 @@ When adding new code: if you're building a *path component name*, call `interpol
 1. `Template::validate()` at template-load time (so broken templates fail at `fastf template list`).
 2. `create_file()` and `apply()` at disk-write time (defence in depth).
 
-### Project index (`projects.jsonl`)
-Append-only JSONL log of created projects. One `{"id","template","path","name","created_at"}` record per line. Chosen over TOML for atomic appends (no read-modify-write) and crash safety. `fastf recent --prune` rewrites via tmp-file + rename to drop records whose folders no longer exist. Writes are best-effort — index failures never fail `fastf new`.
+### Filesystem-as-truth library (`core/library.rs`, v0.9)
+There is **no `projects.jsonl`**. The project list is discovered from the filesystem: a folder is a project iff it holds a `PROJECT_INFO.md`, whose frontmatter `id` is authoritative (folder name is cosmetic, never consulted for discovery). `discover(cfg)` unions `cfg.effective_bases()` (`base_dir` + config `bases`), newest-first.
+
+Each base carries a **disposable** `.fastf-index.json` cache at its root, co-located with the projects so it travels with them and is portable (entries store a base-relative `dir`, valid across `/mnt/…` and `D:\…`). The cache is never authoritative — `discover_base` self-heals: if the base's mtime is newer than the cache (or either can't be stat'd) it rescans + rewrites; otherwise it trusts cached metadata but existence-checks each entry and drops (rewriting away) any whose folder disappeared. **No manual prune, ever** — the "missing" state is transient. `fastf reindex` forces a full rescan for external edits fastf can't observe.
+
+`max_id(cfg)` is **read-only** (reads a fresh cache or scans, never writes) so it's safe to call from `plan()`/preview. `resolve(cfg, query)` replaces the old `index::resolve_project` (exact-id → id-prefix → name-substring). `cache_upsert`/`refresh_cache` keep the cache fresh after create / tag mutations without a rescan. All cache writes are best-effort and atomic (`.tmp` + rename); a cache error never fails a command. Counter self-heals: `plan()` computes the ID from `max(counters.get(), library::max_id(cfg)) + 1`.
 
 ### `PROJECT_INFO.md` — structured per-project metadata
 `core/project_info.rs` generates a `PROJECT_INFO.md` in each new project root. The file has two layers:
@@ -279,13 +293,13 @@ Append-only JSONL log of created projects. One `{"id","template","path","name","
 
 2. **Human body** — markdown table of variables (using template labels as column headers) + a `## Notes` section the user owns. The body also gains a `## Journal` section the first time `append_journal_entry` is called. Outside of those mutation helpers, fastf never modifies the file after creation.
 
-`read_metadata(path, cfg)` slices out the frontmatter via `split_frontmatter_body()`, feeds it to `serde_yaml::from_str::<Metadata>`. Returns `Ok(None)` when no frontmatter block is present (older / hand-edited files). `read(path, cfg)` returns raw markdown for fallback display.
+`read_metadata(path)` slices out the frontmatter via `split_frontmatter_body()`, feeds it to `serde_yaml::from_str::<Metadata>`. Returns `Ok(None)` when no frontmatter block is present (older / hand-edited files). `read(path)` returns raw markdown for fallback display. **v0.9:** the filename is fixed (`RESERVED_FILENAME`); `write`/`read`/`read_metadata`/`read_journal_entries` no longer take a `cfg` (use `pinfo_path(dir)`); metadata is mandatory (no "disabled" toggle).
 
 **Atomic mutation** (v0.4): `write_frontmatter(path, |meta| { ... })` reads → splits → parses → applies the closure → re-serializes via `serde_yaml::to_string` → writes via `.tmp` + rename. Body bytes are byte-identical after a no-op mutation — the dedicated integration test asserts this. `append_journal_entry(path, msg)` does the same atomic dance for the body. Both require frontmatter to exist; otherwise return a structured error naming the path.
 
 The bundled templates (`music-video`, `photography`, `video-production`) no longer declare a `PROJECT_INFO.md` content file — auto-gen owns that file. **As of v0.5, `PROJECT_INFO.md` at the project root is a reserved filename**: `Template::load_from_file` and `save_to_file` silently strip any `files[].path == "PROJECT_INFO.md"` entry (case-insensitive on the leaf, root-only — `docs/PROJECT_INFO.md` is allowed). Older user-built templates that declared their own `PROJECT_INFO.md` keep loading; the entry is just ignored. The TUI template builder rejects the name inline. If you want a custom notes file, use a different name (e.g. `NOTES.md`).
 
-The reservation is enforced via `core::project_info::path_is_reserved()` against the hard-coded constant `RESERVED_FILENAME = "PROJECT_INFO.md"`, NOT against `cfg.project_info_filename`. The config field still exists and still drives where fastf writes the auto-gen file, but the reservation is fixed so the safety net is consistent regardless of config. (Power users who customized `project_info_filename` to e.g. `.fastf-info.md` need to manage their template collisions themselves.)
+The reservation is enforced via `core::project_info::path_is_reserved()` against the hard-coded constant `RESERVED_FILENAME = "PROJECT_INFO.md"`. **v0.9:** the filename is now fixed everywhere — the old `cfg.project_info_filename` / `project_info_enabled` config knobs are gone (metadata is the project's identity, so it is mandatory and always `PROJECT_INFO.md`).
 
 **`apply` does NOT write PROJECT_INFO.md** — by design. Only `fastf new` and `fastf register` write it. `apply` retrofits structure into a folder that fastf doesn't necessarily own; `register` explicitly claims a folder. Different intents, different write behavior.
 
@@ -300,7 +314,7 @@ After `print_success()` in `cli/new.rs`, call `post_create::prompt_and_reveal(pa
 Calls the existing platform-correct `reveal_folder()` on Yes.
 
 ### Interactive `fastf recent`
-`cli/recent.rs` decides interactive vs plain by `!args.plain && std::io::stdout().is_terminal()`. In interactive mode: `dialoguer::Select` picker over the filtered records + a `[Quit]` sentinel at the end. Selecting a record enters `project_action_menu()` which loops until Back/Quit.
+`cli/recent.rs` decides interactive vs plain by `!args.plain && std::io::stdout().is_terminal()`. In interactive mode: `dialoguer::Select` picker over the filtered `library::Project`s + a `[Quit]` sentinel at the end. Selecting a project enters `project_action_menu()` which loops until Back/Quit. **v0.9:** `--prune` is gone (the cache self-heals); the picker sources from `library::discover` and reads tags straight off `project.tags`.
 
 The metadata display (`show_metadata`) tries `read_metadata` first; on success it calls `print_structured_metadata` which computes max-key-width and emits aligned `key  value` pairs with a `variables:` sub-block. Dim `(empty)` for empty values. Falls back to raw markdown on `Ok(None)`. Yellow warning on missing file.
 
@@ -320,27 +334,22 @@ Scripting compat: `--plain` flag or non-TTY stdout → classic column-aligned li
 
 The free-text branch in `eval_one` searches `tags`, all `meta.variables.values()`, `folder`, `template`, `template_name`, and `id` — case-insensitive substring. **`path` is intentionally excluded** so home-dir text never produces phantom matches. There's a regression test that proves this.
 
-`cli/search::run` walks the index reverse-chronologically, reads each metadata file (silently skipping records with missing/unreadable PROJECT_INFO.md), and renders matches via `recent::run_picker` on TTY or a plain list when piped/`--plain`.
+`cli/search::run` walks `library::discover` (newest-first), reads each metadata file (silently skipping projects with unreadable PROJECT_INFO.md), and renders matches via `recent::run_picker` on TTY or a plain list when piped/`--plain`. `query::evaluate(preds, meta)` takes only `&Metadata` (v0.9 dropped the `ProjectRecord` arg).
 
 **Journal** entries are markdown lines under a `## Journal` section in the body. Format: `- 2026-04-20T14:32:11Z — message`. Append-only and chronological — `append_journal_entry` always appends at EOF after the section, never edits existing entries. `parse_journal_entries` walks the section and stops at the next `## ` heading. `notes --since YYYY-MM-DD` filters by lexicographic timestamp comparison (cheap and correct because ISO-8601 is sortable as string).
 
-Project-resolution shared helper: `index::resolve_project(query)` does exact-id → id-prefix → name-substring (case-insensitive). Used by `tag`, `note`, and the legacy `fastf open` paths. Ambiguous queries return a structured error listing the candidates.
+Project-resolution shared helper: `library::resolve(cfg, query)` does exact-id → id-prefix → name-substring (case-insensitive) over `discover`. Used by `tag`, `note`, and `fastf open`. Ambiguous queries return a structured error listing the candidates.
 
-### `fastf register <path>` (v0.5)
-Onboards an existing folder into the index without creating one. Same write order as `project::create`: counter → index → pinfo. Two-step pinfo write is the key trick:
+### `fastf register <path>` (reworked v0.9)
+Register's whole job is now: **write a `PROJECT_INFO.md` into a folder that lacks one**, making it discoverable. No index, no counter-first ordering. Flow: canonicalize → resolve `created` → resolve template (or stub) → early PinfoConflict check → compute ID → optional rename → write metadata → `cache_upsert` → optional `--apply`.
 
-1. `project_info::write(&plan, &tmpl, &cfg, &tags)` renders the full file (frontmatter + variables table + Notes), but `Metadata::from_plan` always sets `created = now_iso8601()`.
-2. `project_info::write_frontmatter(path, |m| m.created = resolved.clone())` atomically patches only the `created` YAML field via `.tmp` + rename. Body bytes are byte-identical.
+**ID source (decision 8):** recover an `ID####` token from the folder name via `naming::parse_id_token(folder, prefix)` (any digit count → numeric value, ignoring zero-padding) — the *only* place folder names still influence identity. If absent, mint fresh from the self-healed floor `max(counter, library::max_id(cfg)) + 1`. The counter advances monotonically (`if id_value > counters.get()`), so recovering a low ID never lowers it.
 
-This avoids growing `Metadata::from_plan`'s signature for a register-only concern. The `resolved` timestamp comes from `resolve_created(path, use_today, override)`: explicit `--created YYYY-MM-DD` → `T00:00:00Z` ISO-8601; `--use-today` → now; default → `fs::metadata.created()` falling back to `modified()` (some Linux fs have no birth time).
+Two-step pinfo write patches the historical `created`: `project_info::write(&plan, &tmpl, &tags)` (which sets `created = now`), then `write_frontmatter(path, |m| m.created = resolved)`. `resolve_created`: `--created YYYY-MM-DD` → `T00:00:00Z`; `--use-today` → now; default → `fs::metadata.created()` → `modified()` fallback.
 
-Without `--template`, a stub `Template` is used: `slug = "(registered)"` (exposed as `REGISTERED_SLUG` const), `IdConfig::default()` for the ID format, empty variables/structure/files/tags/tag_from. The rest of the render path handles empty variables gracefully (the "no variables" branch in `project_info::render`). This avoids special-casing every call site.
+Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGISTERED_SLUG`, `IdConfig::default()`, empty everything). `--rename` uses `tmpl.naming_pattern` (with template) or `cfg.register_naming_pattern` (without, synthesising `{name}` via `slugify_folder_name`). `--apply` requires `--template`.
 
-`--rename` calls `interpolate_name(pattern, vars, date_format)` — same renderer as `project::plan`. Two pattern sources: `tmpl.naming_pattern` with a template, `cfg.register_naming_pattern` without (default `{date}_{name}_{id}`). For the no-template path a synthetic `{name}` token is injected via `slugify_folder_name(folder_basename)` — collapses whitespace runs to `_`, applies `sanitize_name`, preserves case. Confirms before `fs::rename` unless `--yes` is set. Aborts if the target already exists rather than overwriting. `--apply` calls `project::apply` after the optional rename. `--apply` still requires `--template` (there's no structure to fill in without one), but `--rename` works either way as of v0.5.
-
-PROJECT_INFO.md overwrite policy: if a file already exists, prompt (default No). With `--yes`, overwrite without asking. In non-TTY without `--yes`, refuse and warn (still register the project — index/counter happen regardless).
-
-Path equality for "already registered" uses `paths_equal` (both sides normalised to `/`) so Windows backslash variations don't slip past the duplicate check.
+**PinfoConflict** (existing metadata policy): `Abort` (UI default) bails before any write; `Skip` keeps the file (used by `--recursive`); `Overwrite` rewrites. The CLI `run` resolves this from `--yes`/TTY prompts. `--recursive` (`run_recursive`) writes a `PROJECT_INFO.md` into every metadata-less direct child of a base (sorted); `--dry-run` previews (showing recover-vs-mint per folder) and writes nothing. `RegisterOutcome` carries a `library::Project`; `cache_upsert` only runs when metadata was actually written.
 
 ### Post-create actions
 `PostCreate` struct on both `Config` and `Template`. Template-level overrides config-level entirely (same resolution model as `default_template`). All fields default to off:
@@ -381,12 +390,10 @@ Parent path is dimmed, final directory name is bold cyan.
   Quit
 ```
 
-`menu_recent()` delegates directly to `recent::run` with prune=false — keeps
-the picker one keypress away from the main menu. Maintenance lives under
-**Settings → Recent projects → Prune missing entries**, which calls
-`menu_recent_prune()`: loads the index, lists up to 10 stale records (with
-`+N more` overflow), Confirms (default Yes), then delegates to `recent::run`
-with prune=true. The CLI `fastf recent --prune` is the same code path.
+`menu_recent()` delegates directly to `recent::run` — keeps the picker one
+keypress away from the main menu. **v0.9:** there's no prune maintenance (the
+cache self-heals); Settings → Library bases (`menu_settings_bases`) edits the
+`bases` list instead.
 
 `menu_register()` walks: folder path → optional template (Confirm + picker) →
 "Standardize folder name?" (default Yes) → optional `--apply` (only when a
@@ -399,9 +406,10 @@ to back out after seeing the proposed new name.
 Settings
 ├── Project basics               (base dir / template / date / editor)
 ├── Workflow prompts             (open prompt / confirm / banner / preview lines)
-├── Project metadata             (PROJECT_INFO.md enabled — filename is reserved)
-├── Recent projects              (default limit / prune missing entries)
+├── Library bases                (v0.9 — add/remove extra index dirs)
+├── Recent projects              (default limit)
 ├── Post-create actions          (git / reveal / editor / path / commands)
+├── ID counter
 └── Back
 ```
 Each toggle entry shows current `[on]`/`[off]` state inline via `label_toggle()`. `toggle_setting(key, current)` calls `config::set` under the hood.
@@ -414,9 +422,9 @@ Integration tests live in `tests/integration.rs` (core flows) and `tests/ui_serv
 - `tempfile::TempDir` for hermetic sandboxes
 - A `static SERIAL: Mutex<()>` to run tests serially within the test binary (Rust 2024 edition made `std::env::set_var` unsafe — the mutex justifies the `unsafe` block). Each test binary has its own `SERIAL`; that's fine because `FASTF_INSTALL_DIR` is per-process and `cargo test`'s binaries are separate processes.
 
-`integration.rs` covers: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, index append, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture (including non-naming-pattern vars), metadata round-trip via YAML, disabled/custom-filename metadata, pinfo alias config compat, bundled-template deduplication guard, and from-folder asset bundling (binary bundled byte-identical when `bundle_assets`, skipped otherwise).
+`integration.rs` covers: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture, metadata round-trip via YAML, config back-compat (removed project_info_* keys still parse), bundled-template deduplication guard, from-folder asset bundling, and **v0.9**: create is discoverable without a jsonl (+ cache written), counter self-heals from existing projects, register recovers an ID from the folder name / mints fresh, `--recursive` onboards children (+ `--dry-run` writes nothing, skips existing metadata), Abort policy on existing metadata. `core/library.rs` unit tests cover discovery (only PROJECT_INFO.md folders), base-relative cache round-trip, staleness rescan, drop-missing, multi-base union+sort, `max_id`, `resolve` (+ ambiguity). `core/naming.rs` covers `parse_id_token` padding + `id_value`.
 
-`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s. v0.7 adds: search respects the query language + path exclusion, project detail returns metadata + journal, tag add/remove roundtrip, note appends journal, register onboards an existing folder, apply preview is non-writing while apply creates missing, and prune drops missing records. v0.8 adds: create reproduces bundled files (incl. a byte-identical binary), a large bundled asset returns a `job_id` that polls to `done` (small assets → `job_id:null`); phase 3 adds template file endpoints — `template-files` lists the `files/` subtree with a `file_count` in `/api/state`, `file-save` creates/updates a text file, `file-add` copies a disk asset byte-identical, `file-delete` removes one, and reserved-name/traversal writes are rejected. Phase 4 adds a from-folder bundling test: `bundle_assets:true` bundles a binary byte-identical and the `report` carries the counts (folders / text files / bundled + bytes / skipped).
+`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health, preview-no-write, create makes the folder + is discovered, `/app.js` served, unknown route 404s. v0.7: search query language + path exclusion, project detail, tag add/remove, note, register, apply preview/create. v0.8: bundled-file reproduce (incl. byte-identical binary), background copy job, template file endpoints (list/save/add/delete + reserved/traversal guard), from-folder bundling. **v0.9:** create writes no `projects.jsonl` and shows via `/api/state`; discovery self-heals a deleted folder; `/api/reindex` rescans; the removed `/api/projects/prune` route now 404s.
 
 Run:
 ```bash
@@ -454,25 +462,25 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - **Naming pattern** in `project::plan()` uses `interpolate_name()` (collapses `__`, trims edges). **File content** in `create_file()`, `apply()`, and `print_file_previews()` uses `interpolate()` (raw, no collapse). Mixing them up will either break Python dunders in generated files OR leave dangling underscores in folder names.
 - Rust 2024 edition makes `std::env::set_var`/`remove_var` unsafe. In tests they are wrapped in `unsafe { }` with the `SERIAL` mutex held.
 - Clippy lint `field_reassign_with_default` is allowed at the test-file level (`#![allow(clippy::field_reassign_with_default)]`) — rewriting every test's `Config::default()` builder into struct-literal form adds churn for no benefit in tests.
-- `projects.jsonl` append is best-effort. `index::append()` swallows errors; `try_append()` is for the test that actually asserts on write success.
+- v0.9: the per-base `.fastf-index.json` cache is a *disposable accelerator*, never authority. All cache writes (`cache_upsert`/`refresh_cache`/`write_cache`) are best-effort and atomic — a failure never fails the command (folders are the truth). `library::max_id` MUST stay **read-only** (it's called from `plan()`/preview via the counter self-heal) — it uses `read_base_readonly` (fresh cache or scan, no write), NOT `discover` (which writes). If you route `max_id` through `discover`, previews start writing `.fastf-index.json` and the "preview writes nothing" tests fail.
 - Post-create `commands` run synchronously through the user's shell (`cmd /c` on Windows, `sh -c` elsewhere). `{path}` is substituted before execution. There's no sandbox — template authors control this.
 - `project_info::render()` builds frontmatter via `serde_yaml::to_string(&Metadata { ... })` — do NOT hand-format the YAML string. serde_yaml handles escaping of colons, quotes, multi-line values correctly; hand-formatting breaks on edge cases.
-- Config fields `pinfo_enabled` / `pinfo_filename` were renamed to `project_info_enabled` / `project_info_filename` in v0.3. The fields carry `#[serde(alias = "pinfo_*")]` and `config::set` accepts both name forms, so interim configs / old scripts keep working. On `config save()` they serialize under the new names.
+- v0.9: the `project_info_enabled` / `project_info_filename` (and legacy `pinfo_*`) config fields are **gone**. Metadata is mandatory and always `PROJECT_INFO.md`. Old configs that still carry those keys keep parsing because `Config` has no `deny_unknown_fields` — serde silently ignores them (there's a regression test). Don't re-add a filename knob; the reservation + discovery all assume the fixed name.
 - `resolve_post_create()` in `project.rs` is `pub` — the open-prompt check in `cli/new.rs` calls it to avoid double-opening when `reveal: true` is already set in post_create.
 - v0.4: `project_info::split_frontmatter_body()` is `pub` (not `pub(crate)`) so integration tests can assert byte-identity round-trips. The internal `extract_frontmatter` helper from v0.3 was folded into it — there's now one splitter.
 - v0.4: `Predicate::Free` is the parser fallthrough, so any non-empty term that isn't `tag:`, `key=…`, `key>…`, `key<…` becomes a free-text predicate. Don't add another fallthrough below it (would be unreachable). Free terms search **case-insensitive substring** (not prefix) — keep it that way for grep-like UX.
 - v0.4: `path` is intentionally NOT searched by `Predicate::Free`. There's a regression test (`free_does_not_match_path`) that asserts this; if you ever extend the field set, don't break that guarantee silently — home-dir leakage is a privacy footgun.
 - v0.4: `cli::recent::run_picker` is `pub` because `cli::search` reuses it; `project_action_menu` stays private. If TUI/search both need a new picker action, add it inside `recent.rs`.
 - v0.5: Bool flags after the slug used to silently drop. Fixed by `cli::new::classify_extra` — main.rs's New / Apply / Register arms all run their trailing `extra` Vec through it, then OR-combine the recognized flags into the relevant Args struct. Adding a new bool flag to `New`/`Apply`/`Register` requires updating `ExtraFlags`, the recognizer match in `classify_extra`, AND the OR-combine in each match arm — three coordinated edits. Forget the third and the flag works before the slug but mysteriously breaks after it.
-- v0.5: `register` writes PROJECT_INFO.md in two steps: `project_info::write` (which uses `now_iso8601` inside `Metadata::from_plan`), then `project_info::write_frontmatter` to patch `created` to the resolved timestamp. Don't try to plumb the timestamp through `from_plan` — it'd break the byte-identity guarantee on the round-trip test and pollute the signature for a register-only concern.
+- register writes PROJECT_INFO.md in two steps: `project_info::write(&plan, &tmpl, &tags)` (which uses `library::now_iso8601` inside `Metadata::from_plan`), then `project_info::write_frontmatter` to patch `created` to the resolved timestamp. Don't try to plumb the timestamp through `from_plan` — it'd break the byte-identity guarantee on the round-trip test and pollute the signature for a register-only concern.
 - v0.5: `register` builds its `ProjectPlan` directly (pub struct fields) instead of calling `project::plan()` because plan always sets `root_path = cfg.base_dir.join(folder_name)`. Register's `root_path` is the canonical path of the existing folder. Don't refactor plan to take a path override — keep the two flows separate.
 - v0.5: Without `--template`, register uses a `registered_stub_template()` (slug `"(registered)"`, `IdConfig::default()`). Recent and search will show these mixed with template-created projects. `project_info::render`'s "no variables" branch handles empty `tmpl.variables` correctly — don't add a special-case writer.
-- v0.5: `paths_equal` (in `cli/register.rs`) is a `/`-vs-`\` normaliser used to detect duplicate registration on Windows. Don't replace with raw `==` on path strings — re-registering a folder whose index record was written with backslashes would slip past.
+- v0.9: register no longer has an "already registered" dup-check (there's no index to consult). "Already a project" now means "the folder already has a `PROJECT_INFO.md`" — handled by `PinfoConflict` (Abort/Skip/Overwrite). `--recursive` pre-filters children that already have metadata and passes `Skip`; the CLI single-register resolves the policy from `--yes`/TTY prompts. `paths_equal` and the old duplicate bail are gone.
 - v0.5: `sanitize_name` in `core/naming.rs` does NOT replace spaces — it only swaps filesystem-illegal chars (`/ \ : * ? " < > |`). For `fastf new`, the user-declared `transform` on each variable does space→underscore. Register's no-template path doesn't have a transform, so it uses `slugify_folder_name` (collapses whitespace runs to `_`, applies `sanitize_name`, preserves case). If you ever wire a no-template flow elsewhere, reach for `slugify_folder_name`, not `sanitize_name` alone.
 - v0.5: `config::set "register-naming-pattern"` rejects patterns that don't contain `{id}`. This is a safety net — without `{id}`, registering multiple folders with the same `{name}` would all rename to the same target. Don't relax this check unless you've thought through the duplicate-rename UX.
 - v0.5: `--apply` requires `--template` (still). `--rename` does not, as of v0.5 — it falls back to `cfg.register_naming_pattern`. If you add another "needs template" flag, encode the requirement in clap's `requires = "template"` AND in the defensive bail at the top of `register::run` (the public API can be called directly from tests, bypassing clap).
-- v0.5: `PROJECT_INFO.md` is reserved. `Template::load_from_file` and `save_to_file` both call `strip_reserved_files()` (which uses `project_info::path_is_reserved`). The check is root-only (leaf `==` reserved name, case-insensitive, AND no `/` in the normalised path) so `docs/PROJECT_INFO.md` is allowed. The reserved name is hardcoded to `"PROJECT_INFO.md"` — NOT pulled from `cfg.project_info_filename` — so the safety net is independent of user config. If you change the auto-gen filename concept (e.g. multi-file project metadata), update `RESERVED_FILENAME` and consider whether the strip should become config-driven.
-- v0.5: The TUI Settings → Project metadata submenu intentionally hides the filename customization. The toggle for `project_info_enabled` is still there. `fastf config set project-info-filename` still works for v0.3-era configs but is no longer surfaced in any interactive flow. Don't re-add the filename input to the TUI — it just leads users back to the foot-gun.
+- `PROJECT_INFO.md` is reserved. `Template::load_from_file` and `save_to_file` both call `strip_reserved_files()` (which uses `project_info::path_is_reserved`). The check is root-only (leaf `==` reserved name, case-insensitive, AND no `/` in the normalised path) so `docs/PROJECT_INFO.md` is allowed. The reserved name is hardcoded to `RESERVED_FILENAME = "PROJECT_INFO.md"` — the safety net is independent of anything. `project_info::pinfo_path(dir)` is the one helper that builds `<dir>/PROJECT_INFO.md`; use it instead of hand-joining the filename.
+- v0.9: the TUI Settings → "Project metadata" submenu (metadata toggle/filename) is gone — replaced by "Library bases" (`menu_settings_bases`), which add/removes entries in the `bases` config list via `config::set("bases", comma_joined)`.
 - v0.5: Template builder's `collect_file()` example shows `NOTES.md`, not `PROJECT_INFO.md`. It also rejects the reserved name inline with a loop-back. If you change the example, keep `NOTES.md` (or another genuinely non-reserved name) — `PROJECT_INFO.md` as an example actively misleads users into creating template entries that get silently stripped.
 - v0.5: Template builder no longer asks "Template vs Raw" content mode. `collect_file()` always writes to `FileEntry.template`. The `FileEntry.content` field still exists in the YAML schema (hand-written templates with raw byte content keep working — e.g. `music-video.yaml`'s `.gitignore`), but the builder never produces it. `create_file()` and `apply()` still pick `template` when non-empty else `content`, so the dual-field semantics are preserved at the writer. If you re-add a mode switch, remember that `interpolate()` is already a no-op on text without `{token}` markers, so the only real use-case for `content:` is preserving literal `{...}` braces.
 - v0.5: The "Add another placeholder file?" prompt in `edit_files()` defaults to **No** and explicitly mentions that PROJECT_INFO.md is generated automatically. Don't flip the default back to Yes — the typical template doesn't need extra placeholder files and the auto-gen covers the common notes use-case.
@@ -482,6 +490,10 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - v0.8: `interp_rel` interpolates each path segment separately (via `interpolate_name`) so `__` collapse/trim happens *within* a name, never across `/`. Don't run `interpolate_name` on the whole slash-joined path.
 - v0.8: Converting old flat `<slug>.yaml` templates → folder form: `template.yaml` (drop the `files:` block) + one real file per entry under `files/`. There is **no migrate command** and no flat-form fallback — an old flat `.yaml` sitting directly in `templates/` is simply ignored by `load_all` (it only reads subdirs with a `template.yaml`).
 - v0.8 (phase 4): `cli::template::from_folder(source, slug, force, bundle_assets)` is the **non-interactive core** (returns `FromFolderReport`) called by the UI route and tests; `run_from_folder` is the **CLI shell** (interactive size-`Confirm` before bundling + colored summary). Don't call the interactive one from the UI/TUI-headless path — `run_from_folder`'s `Confirm` needs a TTY (piping stdin fails with "not a terminal", by design, like every other dialoguer prompt). The `scan_source` → `execute_scan` split exists so the CLI can confirm the total bundle size *before* any write; keep it. Text files (UTF-8 ≤ 64 KB) always reproduce as editable `FileEntry`s; only binary/large files are gated on `bundle_assets` (else counted `skipped`). Bundled assets are copied via `assets::copy_file(force_verbatim=true)` — stored raw, interpolated later at create time. Root `PROJECT_INFO.md` is skipped during scan (fastf owns it).
+- v0.9: the counter self-heal lives in `project::plan()`: `counter_value = max(counters.get(), library::max_id(config)) + 1`, then `id_str`/`folder_name` derive from it. Doing it in `plan()` (not `create`) keeps `id_str`→`folder_name` consistent and makes preview show the true next ID. `create_inner` persists `plan.counter_value` and drops the old `index::append`, replacing it with `library::cache_upsert(abs_path.parent(), &project)` (base = the new folder's canonical parent, which matches `discover`'s canonicalized bases; even if `strip_prefix` fails the entry falls back to the basename = correct depth-1 `dir`).
+- v0.9: `naming::parse_id_token(name, prefix)` (folder-name ID recovery, register-only) vs `naming::id_value(id)` (trailing-digit extraction for `max_id`, prefix-agnostic). `max_id` uses `id_value` because ids across templates have different prefixes; register uses `parse_id_token` with the template's prefix. Don't swap them.
+- v0.9: discovery is **depth-1** (`SCAN_DEPTH` const in `library.rs`) — direct children of each base only. Matches the user's flat layouts. If you make it configurable, thread it through `scan_base`/`reindex`/`read_base_readonly`, not just `discover`.
+- v0.9: `tag add/remove/reauto` (CLI + UI `project_tag`) call `library::refresh_cache(&project.path)` after mutating the frontmatter so the cache's tags stay fresh without a rescan. `note` doesn't (the cache stores no journal). `load_state`/`search_projects` also read metadata fresh per project for the `tags` field, so UI display is correct even if a cache is momentarily stale.
 
 ## Browser UI (`fastf ui`, v0.7 + v0.8 jobs)
 
@@ -494,13 +506,17 @@ CLI-only: a project **detail drawer** (variables table + tag add/remove + journa
 notes, opened from any project row), real **search** using `core::query` (the
 `/api/search` route), a **register** page for onboarding existing folders, an
 **apply** modal (preview then create-missing), template **generate-from-folder**,
-and Settings **ID-counter editor + prune**. Every one of those maps to an existing
+and Settings **ID-counter editor**. Every one of those maps to an existing
 `pub` library function, so the work was endpoint wiring + frontend views plus one
 refactor: `cli::register::register_core` / `RegisterOptions` / `PinfoConflict`
-(the non-interactive engine the route calls).
+(the non-interactive engine the route calls). **v0.9** rewired the read routes to
+`library::discover` (no `projects.jsonl`), removed `/api/projects/prune` + its
+frontend button, added `POST /api/reindex` (+ a "Reindex library" button) and a
+**Library bases** editor in Settings (a `bases` textarea; `set_config` accepts a
+`bases` array). `project_json` now takes a `library::Project`.
 
 **v0.8 (phase 2) — background copy jobs.** `POST /api/create` does the fast work
-(structure + text/small files + counter + index + PROJECT_INFO.md) synchronously
+(structure + text/small files + counter + PROJECT_INFO.md + cache) synchronously
 and returns `{ project, job_id }`; files over `assets::JOB_DEFER_BYTES` (4 MiB) are
 copied on a background thread (via `project::create_deferred` → `spawn_copy_job`),
 **outside `WRITE_LOCK`** — the copy only touches the new project's own folder.
@@ -552,9 +568,9 @@ Layout:
   `~/.cache/fast-folder-ui/chromium` profile; falls back to the default browser).
 
 The server calls the library directly (`project::plan`/`create`, `Config`,
-`Counters`, `template`, `index`, `post_create`), so the UI and CLI share one
-source of truth and the same on-disk files. The `Ui` arm in `main.rs` forwards to
-`cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on the router).
+`Counters`, `template`, `library` discovery, `post_create`), so the UI and CLI
+share one source of truth and the same on-disk files. The `Ui` arm in `main.rs`
+forwards to `cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on the router).
 
 ### UI gotchas
 - v0.6: Only `GET` (assets + read APIs) and `POST` (writes) are routed —
@@ -580,12 +596,11 @@ source of truth and the same on-disk files. The `Ui` arm in `main.rs` forwards t
   exact `old → new` name via a preview computed from `build_plan_vars` +
   `desired_rename` (shared helpers), reading `counter.get()+1` without incrementing;
   the engine recomputes the same value and is authoritative.
-- v0.7: `PinfoConflict` controls the existing-`PROJECT_INFO.md` policy. `Abort`
-  bails BEFORE the counter/index writes (so the UI can confirm + retry with
-  `overwrite:true` without a duplicate-registration bail); `Skip` keeps the file but
-  still registers (index + counter); `Overwrite` rewrites it. The UI sends `Abort`
-  unless the user confirmed overwrite; the CLI sends `Overwrite`/`Skip` from its
-  prompt and never `Abort` (preserving the old "register regardless" behavior).
+- v0.7/v0.9: `PinfoConflict` controls the existing-`PROJECT_INFO.md` policy. `Abort`
+  bails BEFORE any write (so the UI can confirm + retry with `overwrite:true`); `Skip`
+  keeps the existing file (no rewrite, no cache_upsert — used by `--recursive`);
+  `Overwrite` rewrites it. The UI sends `Abort` unless the user confirmed overwrite;
+  the CLI single-register sends `Overwrite`/`Skip` from its prompt.
 - v0.7: The UI `apply` routes pass **raw** variables to `project::apply_plan` /
   `apply` (no transform/sanitize) — matching `fastf apply`'s semantics, NOT `new`'s.
   Don't "fix" this to apply transforms; it would diverge the UI from the CLI apply.
@@ -621,3 +636,11 @@ source of truth and the same on-disk files. The `Ui` arm in `main.rs` forwards t
   traversal/reserved guard. Don't interpolate at ingestion time — a template asset
   is stored raw and only interpolated at project-create time. `list_template_files`
   omits directories (empty dirs are the `structure:` section's job).
+- v0.9: `load_state`/`search_projects`/`project_detail` all source from
+  `library::discover(&config)` (no `index::load_all`). They still read each project's
+  metadata fresh for the `tags` field so display stays correct even against a
+  momentarily-stale cache. `project_json(project: &Project, metadata)` takes a
+  discovered `Project`. `/api/reindex` (write route, takes `lock_writes`) calls
+  `library::reindex`; `set_config` accepts a `bases` array (trimmed, non-empty).
+  The `/api/projects/prune` route + `prune_projects` fn are **gone** (the cache
+  self-heals) — a POST to it 404s (regression test).

@@ -7,7 +7,6 @@ use crate::cli::new::{self, NewArgs};
 use crate::cli::register::{self, RegisterArgs};
 use crate::cli::{apply, config, id, recent, search, template};
 use crate::core::config::Config;
-use crate::core::index;
 use crate::core::template as core_template;
 
 const BANNER: &str = r#"  ___        _      ___    _    _
@@ -100,98 +99,15 @@ fn menu_create() -> Result<()> {
 
 fn menu_recent() -> Result<()> {
     // Interactive picker is the default for `fastf recent`, so just delegate.
-    // Maintenance actions (prune) live under Settings → Recent projects so
-    // this entry stays focused on browsing.
     recent::run(recent::RecentArgs {
         limit: None,
         template: None,
         since: None,
         tag: None,
-        prune: false,
         plain: false,
     })?;
     println!();
     Ok(())
-}
-
-/// Show how many index records point at folders that no longer exist, then
-/// ask the user before rewriting the index. Delegates to `recent::run` with
-/// `prune=true` for the actual rewrite so the printed result matches the CLI
-/// behavior exactly.
-fn menu_recent_prune() -> Result<()> {
-    let records = match index::load_all() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("  {} could not read index: {e}", "error:".red().bold());
-            return Ok(());
-        }
-    };
-
-    if records.is_empty() {
-        println!(
-            "  {} the project index is empty — nothing to prune.",
-            "·".dimmed()
-        );
-        return Ok(());
-    }
-
-    let stale: Vec<&_> = records
-        .iter()
-        .filter(|r| !std::path::Path::new(&r.path).exists())
-        .collect();
-
-    if stale.is_empty() {
-        println!(
-            "  {} Index is already clean — no missing projects.",
-            "✓".green()
-        );
-        return Ok(());
-    }
-
-    println!();
-    println!(
-        "  {} {} record{} point at folder{} that no longer exist:",
-        "·".dimmed(),
-        stale.len(),
-        if stale.len() == 1 { "" } else { "s" },
-        if stale.len() == 1 { "" } else { "s" },
-    );
-    for r in stale.iter().take(10) {
-        println!(
-            "    {}  {}  {}",
-            r.id.dimmed(),
-            r.name,
-            r.path.to_string().dimmed()
-        );
-    }
-    if stale.len() > 10 {
-        println!("    {} (+{} more)", "·".dimmed(), stale.len() - 10);
-    }
-    println!();
-
-    let proceed = Confirm::new()
-        .with_prompt(format!(
-            "Remove {} stale record{}?",
-            stale.len(),
-            if stale.len() == 1 { "" } else { "s" }
-        ))
-        .default(true)
-        .interact()?;
-
-    if !proceed {
-        println!("  {}", "(cancelled)".dimmed());
-        return Ok(());
-    }
-
-    // The CLI prune path prints its own success line, so just delegate.
-    recent::run(recent::RecentArgs {
-        limit: None,
-        template: None,
-        since: None,
-        tag: None,
-        prune: true,
-        plain: false,
-    })
 }
 
 fn menu_search() -> Result<()> {
@@ -436,7 +352,7 @@ fn menu_settings() -> Result<()> {
             .items(&[
                 "Project basics  (base dir / template / date / editor)",
                 "Workflow prompts  (open prompt / confirm / banner / preview)",
-                "Project metadata  (PROJECT_INFO.md enabled)",
+                "Library bases  (extra folders to index)",
                 "Recent projects  (default limit)",
                 "Post-create actions  (git / reveal / editor / path / commands)",
                 "ID counter",
@@ -448,7 +364,7 @@ fn menu_settings() -> Result<()> {
         match choice {
             0 => menu_settings_basics()?,
             1 => menu_settings_workflow()?,
-            2 => menu_settings_project_info()?,
+            2 => menu_settings_bases()?,
             3 => menu_settings_recent()?,
             4 => menu_settings_postcreate()?,
             5 => menu_id()?,
@@ -553,30 +469,59 @@ fn menu_settings_workflow() -> Result<()> {
     Ok(())
 }
 
-fn menu_settings_project_info() -> Result<()> {
+/// Edit the list of extra base directories the project library indexes (beyond
+/// `base_dir`). An absent/unmounted base is simply skipped at scan time.
+fn menu_settings_bases() -> Result<()> {
     loop {
         let cfg = Config::load().unwrap_or_default();
-        let items = [
-            label_toggle(
-                "Generate PROJECT_INFO.md on new project",
-                cfg.project_info_enabled,
-            ),
-            "Back".to_string(),
-        ];
+        println!();
+        if cfg.bases.is_empty() {
+            println!(
+                "  {}",
+                "No extra bases. base_dir is always indexed on its own.".dimmed()
+            );
+        } else {
+            println!("  {}", "Extra indexed bases (besides base_dir):".bold());
+            for b in &cfg.bases {
+                println!("    {} {}", "•".cyan(), b);
+            }
+        }
+        println!();
+
+        let mut items = vec!["Add a base directory".to_string()];
+        for b in &cfg.bases {
+            items.push(format!("Remove  {b}"));
+        }
+        items.push("Back".to_string());
+
         let choice = Select::new()
-            .with_prompt("Project metadata")
+            .with_prompt("Library bases")
             .items(&items)
             .default(0)
             .interact()?;
 
-        match choice {
-            // The filename is intentionally not exposed here: PROJECT_INFO.md
-            // is fastf-managed and the same name across every project. Power
-            // users can still override via `fastf config set project-info-filename`
-            // for back-compat with v0.3 configs.
-            0 => toggle_setting("project-info-enabled", cfg.project_info_enabled)?,
-            1 => break,
-            _ => unreachable!(),
+        if choice == 0 {
+            let val: String = Input::new()
+                .with_prompt("Base directory to add (absolute path)")
+                .allow_empty(true)
+                .interact_text()?;
+            let val = val.trim();
+            if !val.is_empty() {
+                let mut bases = cfg.bases.clone();
+                if !bases.iter().any(|b| b == val) {
+                    bases.push(val.to_string());
+                }
+                config::set("bases", &bases.join(","))?;
+            }
+        } else if choice == items.len() - 1 {
+            break;
+        } else {
+            let mut bases = cfg.bases.clone();
+            let idx = choice - 1;
+            if idx < bases.len() {
+                bases.remove(idx);
+            }
+            config::set("bases", &bases.join(","))?;
         }
         println!();
     }
@@ -588,7 +533,6 @@ fn menu_settings_recent() -> Result<()> {
         let cfg = Config::load().unwrap_or_default();
         let items = [
             format!("Default list limit  [{}]", cfg.recent_default_limit),
-            "Prune missing entries  (remove index records for folders that are gone)".to_string(),
             "Back".to_string(),
         ];
         let choice = Select::new()
@@ -605,8 +549,7 @@ fn menu_settings_recent() -> Result<()> {
                     .interact_text()?;
                 config::set("recent-default-limit", &val)?;
             }
-            1 => menu_recent_prune()?,
-            2 => break,
+            1 => break,
             _ => unreachable!(),
         }
         println!();

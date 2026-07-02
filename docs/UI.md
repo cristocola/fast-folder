@@ -29,9 +29,10 @@ Three layers, one binary:
    framework.
 3. **Domain logic** — the server calls the `fastf` library directly
    (`core::project::plan`/`create`, `Config`, `Counters`, `core::template`,
-   `core::index`, `core::post_create`). It never shells out to the CLI or parses
-   terminal output, so the UI and CLI share one source of truth and the same
-   on-disk files (config, templates, counter, project index).
+   `core::library` discovery, `core::post_create`). It never shells out to the CLI
+   or parses terminal output, so the UI and CLI share one source of truth and the
+   same on-disk files (config, templates, counter; projects are discovered from
+   their `PROJECT_INFO.md` across the bases).
 
 `fastf ui` lives in `src/cli/ui.rs` (process orchestration + browser launching);
 the HTTP server and all API handlers live in `src/ui/`. `ui::route_request` is a
@@ -46,7 +47,7 @@ non-loopback address.
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET  | `/api/health` | Health check |
-| GET  | `/api/state` | Config, templates, projects, counter, data paths |
+| GET  | `/api/state` | Config, templates, discovered projects, counter, data paths |
 | POST | `/api/preview` | Validate variables, return a project plan (no writes) |
 | POST | `/api/create` | Create a project + run post-create; returns `{project, job_id}` (`job_id` set only when large assets are copied in the background) |
 | GET  | `/api/job/<id>` | Poll a background asset-copy job's progress (404 once evicted after completion) |
@@ -66,12 +67,12 @@ non-loopback address.
 | POST | `/api/apply/preview` | Dry-run an apply, return create/skip actions (no writes) |
 | POST | `/api/apply` | Create missing folders/files in an existing folder |
 | POST | `/api/templates/from-folder` | Generate a template from a folder (`{source, slug, force, bundle_assets}`); returns a `report` of counts (folders / text files / bundled + bytes / skipped) |
-| POST | `/api/projects/prune` | Drop index records whose folders are gone |
+| POST | `/api/reindex` | Force a full rescan of every base, rewriting each `.fastf-index.json`; returns `{projects}` |
 | POST | `/api/counter` | Set the global ID counter (`{value}`) |
 
 Write routes (`create`, `settings`, template save/from-folder/delete, template
 `file-save`/`file-add`/`file-delete`, `project/tag`, `project/note`, `register`,
-`apply`, `projects/prune`, `counter`) serialize through a process-wide mutex
+`apply`, `reindex`, `counter`) serialize through a process-wide mutex
 (`WRITE_LOCK`) so concurrent requests can't corrupt files. Read routes
 (`/api/search`, `/api/project`, `/api/job/<id>`, `/api/template-files`, the GET
 state route) are lock-free. Static GET routes serve only the four embedded
@@ -107,8 +108,8 @@ routes (removed in v0.8).
 `register_core` (in `src/cli/register.rs`) is the non-interactive engine the
 `/api/register` route calls — the CLI `fastf register` is a thin interactive
 shell over it. On a `PROJECT_INFO.md` collision the route passes
-`PinfoConflict::Abort`, which bails **before** the counter/index writes so the UI
-can confirm and retry with `overwrite: true` cleanly.
+`PinfoConflict::Abort`, which bails **before** any write so the UI can confirm and
+retry with `overwrite: true` cleanly.
 
 ## Frontend development (live reload)
 
@@ -128,7 +129,9 @@ Backend (Rust) changes still require a rebuild and server restart.
 Fast Folder resolves its data dir from the directory containing the running
 executable (`paths::install_dir()`, overridable with `FASTF_INSTALL_DIR`).
 Because the UI is the same `fastf` binary, it reads/writes the same
-`config.toml`, `templates/`, `counters.toml`, and `projects.jsonl` as the CLI.
+`config.toml`, `templates/`, and `counters.toml` as the CLI. Projects are
+discovered from their `PROJECT_INFO.md` across the configured bases (v0.9 — no
+`projects.jsonl`), each base holding its own `.fastf-index.json` cache.
 
 ## Security boundary
 

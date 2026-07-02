@@ -42,8 +42,12 @@ pub fn plan(
         vars.insert(var.slug.clone(), sanitized);
     }
 
-    // Resolve ID — one global counter across all templates
-    let counter_value = counters.get() + 1;
+    // Resolve ID — one global counter across all templates. Self-healing: the
+    // floor is the higher of the counter file and the highest ID discovered
+    // across all bases, so a lost or reset `counters.toml` can never mint an ID
+    // that collides with an existing project.
+    let floor = counters.get().max(crate::core::library::max_id(config));
+    let counter_value = floor + 1;
     let id_str = Counters::format_id(&template.id.prefix, template.id.digits, counter_value);
     vars.insert("id".to_string(), id_str.clone());
 
@@ -267,9 +271,10 @@ pub fn print_tree(
 }
 
 /// Create the project on disk: folders, files, and increment the counter.
-/// Also appends a record to the project index and runs post-create actions
-/// (if enabled globally or per-template). Both are best-effort — they never
-/// fail the create operation itself. Copies the whole `files/` subtree inline.
+/// Writes the project's `PROJECT_INFO.md` (its identity), updates the base
+/// cache, and runs post-create actions (if enabled globally or per-template).
+/// The cache update and post-create are best-effort — they never fail the
+/// create operation itself. Copies the whole `files/` subtree inline.
 pub fn create(
     plan: &ProjectPlan,
     template: &Template,
@@ -284,7 +289,7 @@ pub fn create(
 /// Like [`create`], but files larger than `defer_over` bytes are **not** copied
 /// inline — they're returned as [`assets::CopyJob`]s for the caller to run in
 /// the background (the UI's job model). Everything else (structure, small/text
-/// files, counter, index, PROJECT_INFO.md) is done synchronously so the project
+/// files, counter, PROJECT_INFO.md, cache) is done synchronously so the project
 /// is immediately usable. Post-create is skipped (the caller owns it).
 pub fn create_deferred(
     plan: &ProjectPlan,
@@ -339,19 +344,10 @@ fn create_inner(
     counters.set_value(plan.counter_value);
     counters.save().context("saving counters")?;
 
-    // Record in the project index (append-only log next to the binary).
-    // Logged as absolute path when canonicalize succeeds, otherwise as-given.
     let abs_path = plan
         .root_path
         .canonicalize()
         .unwrap_or_else(|_| plan.root_path.clone());
-    crate::core::index::append(&crate::core::index::ProjectRecord {
-        id: plan.id_str.clone(),
-        template: template.slug.clone(),
-        path: abs_path.display().to_string(),
-        name: plan.folder_name.clone(),
-        created_at: crate::core::index::now_iso8601(),
-    });
 
     // Compute tags: literal template tags + auto-derived tags from tag_from.
     // Empty variable values are skipped (no "slug/" orphan tags).
@@ -366,16 +362,33 @@ fn create_inner(
         t
     };
 
-    // PROJECT_INFO.md — best-effort, never fails the create. Written before
-    // post-create so editors/file managers opened by reveal/open_in_editor see
-    // it immediately. Holds YAML frontmatter (the searchable metadata) plus a
-    // human-readable variables table and a Notes section the user owns.
-    if let Err(e) = crate::core::project_info::write(plan, template, config, &tags) {
+    // PROJECT_INFO.md — best-effort, never fails the create. This file IS the
+    // project's identity (filesystem-as-truth), so it's written before the cache
+    // and before post-create so editors/file managers opened by reveal see it.
+    if let Err(e) = crate::core::project_info::write(plan, template, &tags) {
         eprintln!(
             "{} could not write project metadata: {}",
             "warning:".yellow().bold(),
             e
         );
+    }
+
+    // Update the base's disposable cache so `recent`/`search` reflect the new
+    // project without a rescan. Best-effort — the folder's PROJECT_INFO.md is
+    // the truth; a cache error never fails the create. The cache base is the
+    // new project's parent (canonical), matching `library::discover`'s bases.
+    let project = crate::core::library::Project {
+        id: plan.id_str.clone(),
+        template: template.slug.clone(),
+        template_name: template.name.clone(),
+        name: plan.folder_name.clone(),
+        path: abs_path.clone(),
+        created: crate::core::library::now_iso8601(),
+        tags,
+        exists: true,
+    };
+    if let Some(base) = abs_path.parent() {
+        crate::core::library::cache_upsert(base, &project);
     }
 
     // Post-create actions (opt-in). Template override > config default.

@@ -1,12 +1,15 @@
-//! `fastf register <path>` — onboard an existing folder into fastf's index.
+//! `fastf register <path>` — onboard an existing folder by writing its metadata.
 //!
-//! Writes a `PROJECT_INFO.md` to the folder, appends a record to
-//! `projects.jsonl`, and bumps the global ID counter. No folders or files
-//! are created on the target (unless `--apply` is given, which runs the
-//! same skip-only fill-in as `fastf apply`). Optionally renames the folder
-//! to the template's `naming_pattern` (`--rename`).
+//! Writes a `PROJECT_INFO.md` into the folder, which is what makes it a project
+//! under the filesystem-as-truth model (there is no separate index). The ID is
+//! recovered from an `ID####` token in the folder name when present, else minted
+//! fresh from the self-healing counter. No folders or files are otherwise created
+//! on the target (unless `--apply` is given, which runs the same skip-only
+//! fill-in as `fastf apply`). Optionally renames the folder to the template's
+//! `naming_pattern` (`--rename`). `--recursive` onboards every metadata-less
+//! direct child of a base.
 //!
-//! Useful for retroactively indexing pre-fastf projects so they appear in
+//! Useful for retroactively adopting pre-fastf projects so they appear in
 //! `recent`, `search`, `tag`, and `note`.
 //!
 //! # Architecture
@@ -27,16 +30,16 @@ use std::path::{Path, PathBuf};
 
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::index::{self, ProjectRecord};
-use crate::core::naming::{apply_transform, interpolate_name, sanitize_name};
+use crate::core::library::{self, Project};
+use crate::core::naming::{apply_transform, interpolate_name, parse_id_token, sanitize_name};
 use crate::core::project::{self, ProjectPlan};
 use crate::core::project_info;
 use crate::core::template::{self, IdConfig, Template};
 use crate::core::vars::collect_vars;
 
-/// Slug stored in `projects.jsonl` and PROJECT_INFO.md frontmatter when a
-/// folder is registered without a template. Surfaces clearly in `recent`
-/// listings so the user can tell "registered" projects apart from "created".
+/// Slug stored in PROJECT_INFO.md frontmatter when a folder is registered
+/// without a template. Surfaces clearly in `recent` listings so the user can
+/// tell "registered" projects apart from "created".
 pub const REGISTERED_SLUG: &str = "(registered)";
 
 /// What [`register_core`] should do when a `PROJECT_INFO.md` already exists in
@@ -45,10 +48,10 @@ pub const REGISTERED_SLUG: &str = "(registered)";
 pub enum PinfoConflict {
     /// Overwrite the existing file with freshly-rendered metadata.
     Overwrite,
-    /// Keep the existing file; still register the project (index + counter).
+    /// Keep the existing metadata file untouched (used by `--recursive`).
     Skip,
-    /// Refuse to register at all — bail *before* touching the counter or index
-    /// so the caller can confirm and retry cleanly. Used by the browser UI.
+    /// Refuse to register at all — bail *before* any write so the caller can
+    /// confirm and retry cleanly. Used by the browser UI.
     Abort,
 }
 
@@ -80,9 +83,10 @@ pub struct RegisterOptions {
 }
 
 /// What actually happened during [`register_core`].
+#[derive(Debug)]
 pub struct RegisterOutcome {
-    pub record: ProjectRecord,
-    pub template_name: String,
+    /// The registered project (as it would be discovered from disk).
+    pub project: Project,
     /// `Some(new_folder_name)` if the folder was renamed.
     pub renamed_to: Option<String>,
     /// Whether a fresh `PROJECT_INFO.md` was written.
@@ -95,14 +99,18 @@ pub struct RegisterOutcome {
 // Non-interactive engine
 // ---------------------------------------------------------------------------
 
-/// Onboard an existing folder into the index — fully non-interactive.
+/// Onboard an existing folder by writing a `PROJECT_INFO.md` into it — fully
+/// non-interactive. This is register's whole job in v0.9: the file makes the
+/// folder discoverable (filesystem-as-truth); there is no separate index.
 ///
-/// Write order matches `project::create`: counter → index → PROJECT_INFO.md.
-/// On a `PinfoConflict::Abort` collision nothing is committed (the early check
-/// runs before the counter bump) so callers can re-invoke after confirming.
+/// The ID is **recovered from the folder name** (`ID####` token, any digit
+/// count) when present — the only place folder names still influence identity —
+/// otherwise minted fresh from the self-healed counter floor. On a
+/// `PinfoConflict::Abort` collision nothing is committed so callers can re-invoke
+/// after confirming an overwrite.
 pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
-    // 1. Validate path.  canonicalize() resolves symlinks so the index stores
-    //    a stable absolute path even when the caller passed a relative one.
+    // 1. Validate path. canonicalize() resolves symlinks so we act on a stable
+    //    absolute path even when the caller passed a relative one.
     let canonical = opts.path.canonicalize().with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
@@ -113,23 +121,7 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
         bail!("path is not a directory: {}", canonical.display());
     }
 
-    // 2. Bail if this folder is already in the index — avoid duplicate IDs
-    //    pointing at the same path, and avoid double-write of PROJECT_INFO.md.
-    let canonical_str = canonical.display().to_string();
-    let existing = index::load_all()?;
-    if let Some(rec) = existing
-        .iter()
-        .find(|r| paths_equal(&r.path, &canonical_str))
-    {
-        bail!(
-            "{} is already registered as {} (created {})",
-            canonical.display(),
-            rec.id,
-            rec.created_at
-        );
-    }
-
-    // 3. Flag conflict checks (clap covers the CLI, but the public API can be
+    // 2. Flag conflict checks (clap covers the CLI, but the public API can be
     //    called directly — re-check defensively).
     if opts.apply_structure && opts.template_slug.is_none() {
         bail!("--apply requires --template");
@@ -138,15 +130,15 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
         bail!("--use-today and --created are mutually exclusive");
     }
 
-    // 4. Resolve `created` timestamp (folder mtime / today / explicit date).
+    // 3. Resolve `created` timestamp (folder mtime / today / explicit date).
     let resolved_created =
         resolve_created(&canonical, opts.use_today, opts.created_override.as_deref())?;
 
-    // 5. Load global state.
+    // 4. Load global state.
     let cfg = Config::load()?;
     let mut counters = Counters::load()?;
 
-    // 6. Resolve template (or stub). Variables come in raw; transforms are
+    // 5. Resolve template (or stub). Variables come in raw; transforms are
     //    applied below. Required variables must already be present.
     let tmpl = match &opts.template_slug {
         Some(slug) => template::find_by_slug(slug)?,
@@ -159,24 +151,28 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
         }
     }
 
-    // 7. Early PROJECT_INFO.md conflict check. For `Abort`, bail *before* the
-    //    counter/index writes so a UI retry-with-overwrite is clean.
-    let pinfo_path_initial = canonical.join(&cfg.project_info_filename);
-    let pinfo_exists = cfg.project_info_enabled && pinfo_path_initial.exists();
+    // 6. Early PROJECT_INFO.md conflict check. A folder that already has one is
+    //    already a project; for `Abort` bail *before* any write so a UI
+    //    retry-with-overwrite is clean.
+    let pinfo_path_initial = project_info::pinfo_path(&canonical);
+    let pinfo_exists = pinfo_path_initial.exists();
     if pinfo_exists && opts.on_pinfo_conflict == PinfoConflict::Abort {
         bail!(
-            "{} already exists — confirm overwrite to register this folder",
+            "{} already exists — this folder is already a project (confirm overwrite to re-register)",
             pinfo_path_initial.display()
         );
     }
-
-    let counter_value = counters.get() + 1;
-    let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, counter_value);
 
     let folder_name = canonical
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "registered".to_string());
+
+    // 7. ID: recover an `ID####` token from the folder name (identity that
+    //    already lives on disk), else mint fresh from the self-healed floor.
+    let id_value = parse_id_token(&folder_name, &tmpl.id.prefix)
+        .unwrap_or_else(|| counters.get().max(library::max_id(&cfg)) + 1);
+    let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
 
     let mut plan_vars = build_plan_vars(&tmpl, &opts.vars, &id_str);
     // For the no-template rename path, inject a synthetic `{name}` token.
@@ -193,7 +189,7 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
         root_path: canonical.clone(),
         vars: plan_vars,
         id_str: id_str.clone(),
-        counter_value,
+        counter_value: id_value,
     };
 
     // 9. Optional rename — render the pattern, move the folder if different.
@@ -237,29 +233,41 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
         t
     };
 
-    // 11. Persist counter (same order as project::create: counter → index → pinfo).
-    counters.set_value(counter_value);
-    counters.save().context("saving counters")?;
+    // 11. Persist the counter floor monotonically. A recovered ID lower than
+    //     the counter never lowers it; a minted ID advances it. The counter
+    //     also self-heals from `max_id` on the next create regardless.
+    if id_value > counters.get() {
+        counters.set_value(id_value);
+        counters.save().context("saving counters")?;
+    }
 
-    // 12. Append to index. `created_at` is the resolved timestamp.
-    let record = ProjectRecord {
-        id: id_str.clone(),
-        template: tmpl.slug.clone(),
-        path: plan.root_path.display().to_string(),
-        name: plan.folder_name.clone(),
-        created_at: resolved_created.clone(),
-    };
-    index::append(&record);
-
-    // 13. Write PROJECT_INFO.md unless we're keeping an existing one.
+    // 12. Write PROJECT_INFO.md unless we're keeping an existing one.
     let mut pinfo_written = false;
-    if cfg.project_info_enabled && !(pinfo_exists && opts.on_pinfo_conflict == PinfoConflict::Skip)
-    {
-        write_metadata(&plan, &tmpl, &cfg, &tags, &resolved_created)?;
+    if !(pinfo_exists && opts.on_pinfo_conflict == PinfoConflict::Skip) {
+        write_metadata(&plan, &tmpl, &tags, &resolved_created)?;
         pinfo_written = true;
     }
 
-    // 14. Optional --apply: fill in missing template structure.
+    // 13. The registered project (as discovery would see it).
+    let project = Project {
+        id: id_str.clone(),
+        template: tmpl.slug.clone(),
+        template_name: tmpl.name.clone(),
+        name: plan.folder_name.clone(),
+        path: plan.root_path.clone(),
+        created: resolved_created.clone(),
+        tags,
+        exists: true,
+    };
+
+    // 14. Refresh the base cache so the project shows up without a rescan.
+    //     Only when we actually wrote metadata — on Skip, discovery picks up
+    //     the pre-existing file (whose id/tags are authoritative, not ours).
+    if pinfo_written && let Some(base) = project.path.parent() {
+        library::cache_upsert(base, &project);
+    }
+
+    // 15. Optional --apply: fill in missing template structure.
     let mut applied = false;
     if opts.apply_structure {
         project::apply(&tmpl, &plan.root_path, &plan.vars, &cfg)?;
@@ -267,8 +275,7 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
     }
 
     Ok(RegisterOutcome {
-        record,
-        template_name: tmpl.name.clone(),
+        project,
         renamed_to,
         pinfo_written,
         applied,
@@ -315,13 +322,15 @@ pub fn run(args: RegisterArgs) -> Result<()> {
     // Decide whether to actually rename: preview the target and confirm.
     let mut rename = args.rename;
     if rename && !args.yes {
-        let counter_value = Counters::load()?.get() + 1;
-        let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, counter_value);
-        let mut preview_vars = build_plan_vars(&tmpl, &collected_vars, &id_str);
         let current_name = canonical
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        // Preview ID: recover from the folder name if present, else next floor.
+        let id_value = parse_id_token(&current_name, &tmpl.id.prefix)
+            .unwrap_or_else(|| Counters::load().map(|c| c.get()).unwrap_or(0) + 1);
+        let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
+        let mut preview_vars = build_plan_vars(&tmpl, &collected_vars, &id_str);
         if args.template_slug.is_none() {
             preview_vars
                 .entry("name".to_string())
@@ -340,8 +349,8 @@ pub fn run(args: RegisterArgs) -> Result<()> {
     }
 
     // Decide PROJECT_INFO.md conflict policy.
-    let pinfo_path = canonical.join(&cfg.project_info_filename);
-    let on_pinfo_conflict = if cfg.project_info_enabled && pinfo_path.exists() {
+    let pinfo_path = project_info::pinfo_path(&canonical);
+    let on_pinfo_conflict = if pinfo_path.exists() {
         if args.yes {
             PinfoConflict::Overwrite
         } else if std::io::stdout().is_terminal() {
@@ -387,14 +396,14 @@ pub fn run(args: RegisterArgs) -> Result<()> {
     })?;
 
     // Success summary — mirrors `project::print_success` layout.
-    let record = &outcome.record;
+    let project = &outcome.project;
     println!("\n{}  {}", "✓".green().bold(), "Project registered".bold());
-    println!("  {} {}", "Template:".dimmed(), outcome.template_name);
-    println!("  {} {}", "ID:".dimmed(), record.id);
-    println!("  {} {}", "Created:".dimmed(), record.created_at);
+    println!("  {} {}", "Template:".dimmed(), project.template_name);
+    println!("  {} {}", "ID:".dimmed(), project.id);
+    println!("  {} {}", "Created:".dimmed(), project.created);
     println!();
-    let root_path = PathBuf::from(&record.path);
-    let parent_display = root_path
+    let parent_display = project
+        .path
         .parent()
         .map(|p| format!("{}{}", p.display(), std::path::MAIN_SEPARATOR))
         .unwrap_or_default();
@@ -402,9 +411,123 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         "  {} {}{}",
         "→".cyan().bold(),
         parent_display.dimmed(),
-        record.name.bold().white()
+        project.name.bold().white()
     );
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Recursive registration
+// ---------------------------------------------------------------------------
+
+/// Args for `fastf register <base> --recursive`.
+pub struct RecursiveArgs {
+    pub base: PathBuf,
+    pub template_slug: Option<String>,
+    pub use_today: bool,
+    pub dry_run: bool,
+}
+
+/// Write a `PROJECT_INFO.md` into every direct child of `base` that lacks one,
+/// making them all discoverable. `--dry-run` previews without writing.
+///
+/// Bulk onboarding uses empty variables + the given template (or the registered
+/// stub), so a template with required variables isn't appropriate here.
+pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
+    let base = args.base.canonicalize().with_context(|| {
+        format!(
+            "path does not exist or is not accessible: {}",
+            args.base.display()
+        )
+    })?;
+    if !base.is_dir() {
+        bail!("path is not a directory: {}", base.display());
+    }
+
+    // Direct children that are directories without a PROJECT_INFO.md.
+    let mut targets: Vec<PathBuf> = fs::read_dir(&base)
+        .with_context(|| format!("reading {}", base.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && !project_info::pinfo_path(p).exists())
+        .collect();
+    targets.sort();
+
+    if targets.is_empty() {
+        println!(
+            "{}",
+            "Every direct child already has a PROJECT_INFO.md — nothing to register.".dimmed()
+        );
+        return Ok(());
+    }
+
+    if args.dry_run {
+        println!(
+            "\n{}",
+            "Preview  ·  dry run — nothing will be written"
+                .yellow()
+                .bold()
+        );
+        println!();
+        let prefix = args
+            .template_slug
+            .as_deref()
+            .and_then(|s| template::find_by_slug(s).ok())
+            .map(|t| t.id.prefix)
+            .unwrap_or_else(|| IdConfig::default().prefix);
+        for path in &targets {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let id_note = match parse_id_token(&name, &prefix) {
+                Some(v) => format!("recover {}", Counters::format_id(&prefix, 4, v)),
+                None => "mint new ID".to_string(),
+            };
+            println!("  {} {}  {}", "+".green().bold(), name, id_note.dimmed());
+        }
+        println!();
+        println!(
+            "  {} {} folder{} would be registered",
+            "Summary:".bold(),
+            targets.len(),
+            if targets.len() == 1 { "" } else { "s" }
+        );
+        return Ok(());
+    }
+
+    let mut registered = 0usize;
+    for path in targets {
+        match register_core(RegisterOptions {
+            path: path.clone(),
+            template_slug: args.template_slug.clone(),
+            vars: HashMap::new(),
+            apply_structure: false,
+            rename: false,
+            use_today: args.use_today,
+            created_override: None,
+            on_pinfo_conflict: PinfoConflict::Skip,
+        }) {
+            Ok(outcome) => {
+                println!(
+                    "  {} {}  {}",
+                    "✓".green().bold(),
+                    outcome.project.id.green(),
+                    outcome.project.name
+                );
+                registered += 1;
+            }
+            Err(e) => eprintln!("  {} {}: {}", "skip".yellow().bold(), path.display(), e),
+        }
+    }
+    println!();
+    println!(
+        "{}  Registered {} folder{}.",
+        "✓".green().bold(),
+        registered,
+        if registered == 1 { "" } else { "s" }
+    );
     Ok(())
 }
 
@@ -488,12 +611,11 @@ fn registered_stub_template() -> Template {
 fn write_metadata(
     plan: &ProjectPlan,
     tmpl: &Template,
-    cfg: &Config,
     tags: &[String],
     resolved_created: &str,
 ) -> Result<()> {
-    project_info::write(plan, tmpl, cfg, tags).context("writing project metadata")?;
-    let pinfo_path = plan.root_path.join(&cfg.project_info_filename);
+    project_info::write(plan, tmpl, tags).context("writing project metadata")?;
+    let pinfo_path = project_info::pinfo_path(&plan.root_path);
     let resolved = resolved_created.to_string();
     project_info::write_frontmatter(&pinfo_path, |meta| {
         meta.created = resolved.clone();
@@ -505,7 +627,7 @@ fn write_metadata(
 ///
 /// Precedence:
 /// 1. `override_date` ("YYYY-MM-DD") → `YYYY-MM-DDT00:00:00Z`.
-/// 2. `use_today` → `index::now_iso8601()`.
+/// 2. `use_today` → `library::now_iso8601()`.
 /// 3. fs `created()` → fallback to `modified()` → fallback to `now`.
 ///
 /// Pure function (no Counters/Config dependency) so tests can exercise every
@@ -521,7 +643,7 @@ pub fn resolve_created(
         return Ok(format!("{}T00:00:00Z", parsed));
     }
     if use_today {
-        return Ok(index::now_iso8601());
+        return Ok(library::now_iso8601());
     }
     let meta =
         fs::metadata(path).with_context(|| format!("reading metadata of {}", path.display()))?;
@@ -536,16 +658,9 @@ pub fn resolve_created(
                 "{} could not determine folder timestamp; using now",
                 "warning:".yellow().bold()
             );
-            Ok(index::now_iso8601())
+            Ok(library::now_iso8601())
         }
     }
-}
-
-/// Compare two path strings for equality after normalising separators.
-/// Avoids false negatives on Windows when one record was written with `\`
-/// and another with `/`.
-fn paths_equal(a: &str, b: &str) -> bool {
-    a.replace('\\', "/") == b.replace('\\', "/")
 }
 
 /// Turn an existing folder basename into the `{name}` token used by
@@ -587,13 +702,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let r = resolve_created(tmp.path(), false, None).unwrap();
         assert!(r.ends_with('Z'), "got: {r}");
-    }
-
-    #[test]
-    fn paths_equal_normalises_separators() {
-        assert!(paths_equal("C:\\Users\\x\\proj", "C:/Users/x/proj"));
-        assert!(paths_equal("/home/a", "/home/a"));
-        assert!(!paths_equal("/home/a", "/home/b"));
     }
 
     #[test]

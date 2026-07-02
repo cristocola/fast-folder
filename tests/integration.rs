@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use fastf::core::{
-    config::Config, counter::Counters, index, naming, project, project_info, query, template,
+    config::Config, counter::Counters, library, naming, project, project_info, query, template,
 };
 
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -195,7 +195,7 @@ fn existing_project_fails_cleanly() {
 }
 
 #[test]
-fn project_index_appends_on_create() {
+fn create_is_discoverable_without_jsonl() {
     with_fresh_install(|install| {
         write_template(install, "test", &minimal_template_yaml("test"));
         let mut cfg = Config::default();
@@ -211,11 +211,56 @@ fn project_index_appends_on_create() {
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let records = index::load_all().unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].id, "T001");
-        assert_eq!(records[0].template, "test");
-        assert!(records[0].name.contains("Indexed"));
+        // Filesystem-as-truth: no projects.jsonl; discovery reads the folder.
+        assert!(
+            !install.join("projects.jsonl").exists(),
+            "create must not write projects.jsonl"
+        );
+        let projects = library::discover(&cfg);
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, "T001");
+        assert_eq!(projects[0].template, "test");
+        assert!(projects[0].name.contains("Indexed"));
+
+        // The base cache was written co-located with the project.
+        let cache = std::path::Path::new(&cfg.base_dir).join(".fastf-index.json");
+        assert!(cache.exists(), "base cache should exist after create");
+    });
+}
+
+#[test]
+fn counter_self_heals_from_existing_projects() {
+    with_fresh_install(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "first".to_string());
+
+        // First project → T001; counter advances to 1.
+        let mut counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        assert_eq!(plan.id_str, "T001");
+
+        // Simulate a lost/reset counters.toml (e.g. `target/release/` wiped).
+        let mut counters = Counters::load().unwrap();
+        counters.reset();
+        counters.save().unwrap();
+
+        // Next create must NOT reuse T001 — the floor self-heals to the highest
+        // ID discovered on disk (1), so the new project is T002.
+        vars.insert("name".to_string(), "second".to_string());
+        let mut counters = Counters::load().unwrap();
+        let plan2 = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        assert_eq!(plan2.id_str, "T002", "counter should self-heal past T001");
+        project::create(&plan2, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        // And the persisted counter is now at least 2.
+        assert!(Counters::load().unwrap().get() >= 2);
     });
 }
 
@@ -506,7 +551,7 @@ fn project_info_md_written_on_new_with_resolved_variables() {
         assert!(body.contains("## Notes"), "missing Notes section: {body}");
 
         // Raw read round-trip
-        let read_back = project_info::read(&plan.root_path, &cfg).unwrap();
+        let read_back = project_info::read(&plan.root_path).unwrap();
         assert_eq!(read_back, body);
     });
 }
@@ -531,7 +576,7 @@ fn project_info_metadata_round_trips_via_yaml() {
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+        let meta = project_info::read_metadata(&plan.root_path)
             .expect("read_metadata Ok")
             .expect("frontmatter present");
 
@@ -590,7 +635,7 @@ structure:
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+        let meta = project_info::read_metadata(&plan.root_path)
             .unwrap()
             .unwrap();
         // Both vars are recorded — even the one absent from the folder name.
@@ -606,68 +651,24 @@ structure:
 }
 
 #[test]
-fn project_info_md_skipped_when_disabled() {
-    with_fresh_install(|install| {
-        write_template(install, "test", &minimal_template_yaml("test"));
-
-        let mut cfg = Config::default();
-        cfg.base_dir = install.join("projects").display().to_string();
-        cfg.project_info_enabled = false;
-        fs::create_dir_all(&cfg.base_dir).unwrap();
-
-        let tmpl = template::find_by_slug("test").unwrap();
-        let mut vars = HashMap::new();
-        vars.insert("name".to_string(), "no metadata".to_string());
-        let counters = Counters::load().unwrap();
-        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
-        let mut counters = counters;
-        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
-
-        assert!(
-            !plan.root_path.join("PROJECT_INFO.md").exists(),
-            "PROJECT_INFO.md should NOT exist when project_info_enabled=false"
-        );
-    });
-}
-
-#[test]
-fn project_info_filename_setting_respected() {
-    with_fresh_install(|install| {
-        write_template(install, "test", &minimal_template_yaml("test"));
-
-        let mut cfg = Config::default();
-        cfg.base_dir = install.join("projects").display().to_string();
-        cfg.project_info_filename = ".fastf-info.md".to_string();
-        fs::create_dir_all(&cfg.base_dir).unwrap();
-
-        let tmpl = template::find_by_slug("test").unwrap();
-        let mut vars = HashMap::new();
-        vars.insert("name".to_string(), "custom name".to_string());
-        let counters = Counters::load().unwrap();
-        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
-        let mut counters = counters;
-        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
-
-        assert!(plan.root_path.join(".fastf-info.md").is_file());
-        assert!(!plan.root_path.join("PROJECT_INFO.md").exists());
-    });
-}
-
-#[test]
-fn config_alias_pinfo_enabled_still_parses() {
-    // A v0.2-interim config that used the old `pinfo_*` keys must still load
-    // — the rename to `project_info_*` ships with serde aliases for safety.
+fn config_ignores_removed_project_info_keys() {
+    // v0.9 dropped the `project_info_*` / `pinfo_*` config knobs (metadata is now
+    // mandatory and always named PROJECT_INFO.md). Old configs that still carry
+    // those keys must keep parsing — serde ignores unknown fields — and the
+    // surviving fields must load normally.
     let raw = r#"
-base_dir = ""
+base_dir = "/tmp/x"
 editor = ""
 default_template = ""
 date_format = "%Y-%m-%d"
 pinfo_enabled = false
 pinfo_filename = ".legacy-info.md"
+project_info_enabled = false
+project_info_filename = ".fastf-info.md"
 "#;
-    let cfg: Config = toml::from_str(raw).expect("alias config should parse");
-    assert!(!cfg.project_info_enabled);
-    assert_eq!(cfg.project_info_filename, ".legacy-info.md");
+    let cfg: Config = toml::from_str(raw).expect("config with removed keys should still parse");
+    assert_eq!(cfg.base_dir, "/tmp/x");
+    assert!(cfg.confirm_create);
 }
 
 #[test]
@@ -682,11 +683,10 @@ date_format = "%Y-%m-%d"
 "#;
     let cfg: Config = toml::from_str(raw).expect("old config should still parse");
     assert!(cfg.prompt_open_after_create, "default should be true");
-    assert!(cfg.project_info_enabled, "default should be true");
-    assert_eq!(cfg.project_info_filename, "PROJECT_INFO.md");
     assert_eq!(cfg.recent_default_limit, 20);
     assert!(cfg.confirm_create);
     assert!(cfg.show_banner);
+    assert!(cfg.bases.is_empty());
 }
 
 #[test]
@@ -766,7 +766,7 @@ tag_from:
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+        let meta = project_info::read_metadata(&plan.root_path)
             .unwrap()
             .unwrap();
 
@@ -812,7 +812,7 @@ tag_from:
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+        let meta = project_info::read_metadata(&plan.root_path)
             .unwrap()
             .unwrap();
         assert!(
@@ -841,7 +841,7 @@ fn write_frontmatter_body_bytes_preserved() {
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let pinfo = plan.root_path.join(&cfg.project_info_filename);
+        let pinfo = project_info::pinfo_path(&plan.root_path);
 
         // Record the body section before mutation.
         let before = fs::read_to_string(&pinfo).unwrap();
@@ -864,7 +864,7 @@ fn write_frontmatter_body_bytes_preserved() {
         );
 
         // Tag must be present.
-        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+        let meta = project_info::read_metadata(&plan.root_path)
             .unwrap()
             .unwrap();
         assert!(meta.tags.contains(&"draft".to_string()));
@@ -906,7 +906,7 @@ fn append_journal_entry_creates_and_appends() {
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let pinfo = plan.root_path.join(&cfg.project_info_filename);
+        let pinfo = project_info::pinfo_path(&plan.root_path);
 
         // No journal section yet.
         let content = fs::read_to_string(&pinfo).unwrap();
@@ -951,12 +951,12 @@ fn journal_entries_round_trip() {
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let pinfo = plan.root_path.join(&cfg.project_info_filename);
+        let pinfo = project_info::pinfo_path(&plan.root_path);
 
         project_info::append_journal_entry(&pinfo, "alpha").unwrap();
         project_info::append_journal_entry(&pinfo, "beta").unwrap();
 
-        let entries = project_info::read_journal_entries(&plan.root_path, &cfg).unwrap();
+        let entries = project_info::read_journal_entries(&plan.root_path).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].message, "alpha");
         assert_eq!(entries[1].message, "beta");
@@ -981,7 +981,7 @@ fn tag_add_persists() {
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let pinfo = plan.root_path.join(&cfg.project_info_filename);
+        let pinfo = project_info::pinfo_path(&plan.root_path);
 
         // Add twice — should be idempotent.
         project_info::write_frontmatter(&pinfo, |m| {
@@ -997,7 +997,7 @@ fn tag_add_persists() {
         })
         .unwrap();
 
-        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+        let meta = project_info::read_metadata(&plan.root_path)
             .unwrap()
             .unwrap();
         let count = meta.tags.iter().filter(|t| t.as_str() == "draft").count();
@@ -1009,7 +1009,7 @@ fn tag_add_persists() {
 
         // Remove.
         project_info::write_frontmatter(&pinfo, |m| m.tags.retain(|t| t != "draft")).unwrap();
-        let meta2 = project_info::read_metadata(&plan.root_path, &cfg)
+        let meta2 = project_info::read_metadata(&plan.root_path)
             .unwrap()
             .unwrap();
         assert!(!meta2.tags.contains(&"draft".to_string()));
@@ -1041,11 +1041,7 @@ variables:
     let file = dir.join("PROJECT_INFO.md");
     fs::write(&file, legacy_yaml).unwrap();
 
-    let mut cfg = Config::default();
-    cfg.project_info_filename = "PROJECT_INFO.md".to_string();
-    cfg.project_info_enabled = true;
-
-    let meta = project_info::read_metadata(dir, &cfg).unwrap().unwrap();
+    let meta = project_info::read_metadata(dir).unwrap().unwrap();
     assert_eq!(meta.id, "ID0001");
     assert!(
         meta.tags.is_empty(),
@@ -1078,14 +1074,6 @@ fn query_predicates_each_operator() {
         }
     };
 
-    let make_rec = |id: &str, tmpl: &str| index::ProjectRecord {
-        id: id.to_string(),
-        template: tmpl.to_string(),
-        path: format!("/projects/{id}"),
-        name: format!("{id}_proj"),
-        created_at: "2026-01-15T10:00:00Z".to_string(),
-    };
-
     // exact field
     let meta = make_meta(
         "ID0001",
@@ -1094,96 +1082,80 @@ fn query_predicates_each_operator() {
         &["draft"],
         &[("artist", "Ariana")],
     );
-    let rec = make_rec("ID0001", "music-video");
     assert!(query::evaluate(
         &query::parse(&["template=music-video".to_string()]),
-        &rec,
         &meta
     ));
     assert!(!query::evaluate(
         &query::parse(&["template=other".to_string()]),
-        &rec,
         &meta
     ));
 
     // prefix glob
     assert!(query::evaluate(
         &query::parse(&["template=music*".to_string()]),
-        &rec,
         &meta
     ));
 
     // date after
     assert!(query::evaluate(
         &query::parse(&["created>2026-01-01".to_string()]),
-        &rec,
         &meta
     ));
     assert!(!query::evaluate(
         &query::parse(&["created>2027-01-01".to_string()]),
-        &rec,
         &meta
     ));
 
     // date before
     assert!(query::evaluate(
         &query::parse(&["created<2027-01-01".to_string()]),
-        &rec,
         &meta
     ));
     assert!(!query::evaluate(
         &query::parse(&["created<2025-01-01".to_string()]),
-        &rec,
         &meta
     ));
 
     // exact tag
     assert!(query::evaluate(
         &query::parse(&["tag:draft".to_string()]),
-        &rec,
         &meta
     ));
     assert!(!query::evaluate(
         &query::parse(&["tag:urgent".to_string()]),
-        &rec,
         &meta
     ));
 
     // tag glob
     assert!(query::evaluate(
         &query::parse(&["tag:dra*".to_string()]),
-        &rec,
         &meta
     ));
 
     // variable field
     assert!(query::evaluate(
         &query::parse(&["artist=Ariana".to_string()]),
-        &rec,
         &meta
     ));
     assert!(query::evaluate(
         &query::parse(&["artist=Aria*".to_string()]),
-        &rec,
         &meta
     ));
 
     // multi-clause AND
     assert!(query::evaluate(
         &query::parse(&["template=music-video".to_string(), "tag:draft".to_string()]),
-        &rec,
         &meta,
     ));
     assert!(!query::evaluate(
         &query::parse(&["template=music-video".to_string(), "tag:urgent".to_string()]),
-        &rec,
         &meta,
     ));
 
     // unknown key → false, not error
     assert!(!query::evaluate(
         &query::parse(&["nonexistent=anything".to_string()]),
-        &rec,
         &meta
     ));
 }
@@ -1229,50 +1201,39 @@ tags:
         let mut counters = counters;
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        // Locate the synthetic record + metadata for predicate evaluation.
-        let record = index::ProjectRecord {
-            id: plan.id_str.clone(),
-            template: tmpl.slug.clone(),
-            path: plan.root_path.display().to_string(),
-            name: plan.folder_name.clone(),
-            created_at: "2026-01-15T10:00:00Z".to_string(),
-        };
-        let meta = project_info::read_metadata(&plan.root_path, &cfg)
+        // Read the on-disk metadata for predicate evaluation.
+        let meta = project_info::read_metadata(&plan.root_path)
             .unwrap()
             .unwrap();
 
         // Variable value match (case-insensitive)
         assert!(
-            query::evaluate(&query::parse(&["ariana".to_string()]), &record, &meta),
+            query::evaluate(&query::parse(&["ariana".to_string()]), &meta),
             "should match variable value 'Ariana_Grande'"
         );
 
         // Tag match
         assert!(
-            query::evaluate(&query::parse(&["creative".to_string()]), &record, &meta),
+            query::evaluate(&query::parse(&["creative".to_string()]), &meta),
             "should match tag 'creative'"
         );
 
         // Folder name (the resolved naming pattern)
         assert!(
-            query::evaluate(&query::parse(&["lullaby".to_string()]), &record, &meta),
+            query::evaluate(&query::parse(&["lullaby".to_string()]), &meta),
             "should match folder name '{}'",
             plan.folder_name
         );
 
         // Template slug
         assert!(
-            query::evaluate(&query::parse(&["free-search".to_string()]), &record, &meta),
+            query::evaluate(&query::parse(&["free-search".to_string()]), &meta),
             "should match template slug 'free-search'"
         );
 
         // ID
         assert!(
-            query::evaluate(
-                &query::parse(std::slice::from_ref(&plan.id_str)),
-                &record,
-                &meta
-            ),
+            query::evaluate(&query::parse(std::slice::from_ref(&plan.id_str)), &meta),
             "should match ID '{}'",
             plan.id_str
         );
@@ -1281,7 +1242,6 @@ tags:
         assert!(
             query::evaluate(
                 &query::parse(&["ariana".to_string(), "lullaby".to_string()]),
-                &record,
                 &meta
             ),
             "two bare terms should AND across different fields"
@@ -1291,7 +1251,6 @@ tags:
         assert!(
             query::evaluate(
                 &query::parse(&["ariana".to_string(), "tag:creative".to_string()]),
-                &record,
                 &meta
             ),
             "free term should AND with explicit tag clause"
@@ -1299,7 +1258,7 @@ tags:
 
         // No match
         assert!(
-            !query::evaluate(&query::parse(&["xyzzy".to_string()]), &record, &meta),
+            !query::evaluate(&query::parse(&["xyzzy".to_string()]), &meta),
             "unmatched bare term should return false"
         );
 
@@ -1313,7 +1272,7 @@ tags:
         assert!(!meta.template.to_lowercase().contains("projects"));
         assert!(!meta.template_name.to_lowercase().contains("projects"));
         assert!(
-            !query::evaluate(&query::parse(&["projects".to_string()]), &record, &meta),
+            !query::evaluate(&query::parse(&["projects".to_string()]), &meta),
             "bare term that lives only in path must NOT match"
         );
     });
@@ -1578,7 +1537,10 @@ files:
 // `fastf register <path>` — onboard existing folders into the index.
 // ---------------------------------------------------------------------------
 
-use fastf::cli::register::{RegisterArgs, run as register_run};
+use fastf::cli::register::{
+    PinfoConflict, RecursiveArgs, RegisterArgs, RegisterOptions, register_core,
+    run as register_run, run_recursive,
+};
 
 fn register_args(path: &Path) -> RegisterArgs {
     RegisterArgs {
@@ -1601,15 +1563,14 @@ fn register_minimal_no_template() {
 
         register_run(register_args(&target)).unwrap();
 
-        // Counter bumped to 1
+        // Counter bumped to 1 (minted fresh — no ID token in the folder name)
         assert_eq!(Counters::load().unwrap().get(), 1);
 
-        // Index has one record with the registered slug
-        let recs = index::load_all().unwrap();
-        assert_eq!(recs.len(), 1);
-        assert_eq!(recs[0].id, "ID0001");
-        assert_eq!(recs[0].template, "(registered)");
-        assert_eq!(recs[0].name, "old-project");
+        // The written metadata carries the registered slug + minted ID.
+        let meta = project_info::read_metadata(&target).unwrap().unwrap();
+        assert_eq!(meta.id, "ID0001");
+        assert_eq!(meta.template, "(registered)");
+        assert_eq!(meta.folder, "old-project");
 
         // PROJECT_INFO.md exists with frontmatter
         let pinfo = target.join("PROJECT_INFO.md");
@@ -1647,8 +1608,7 @@ fn register_with_template_full_metadata() {
         register_run(args).unwrap();
 
         // Frontmatter reflects the template + variables
-        let cfg = Config::default();
-        let meta = project_info::read_metadata(&target, &cfg).unwrap().unwrap();
+        let meta = project_info::read_metadata(&target).unwrap().unwrap();
         assert_eq!(meta.template, "music");
         assert_eq!(meta.template_name, "Test");
         assert_eq!(meta.id, "T001");
@@ -1658,12 +1618,6 @@ fn register_with_template_full_metadata() {
         );
         // No tag_from in the minimal template, so tags should be empty.
         assert!(meta.tags.is_empty());
-
-        // Index uses the template slug
-        let recs = index::load_all().unwrap();
-        assert_eq!(recs.len(), 1);
-        assert_eq!(recs[0].template, "music");
-        assert_eq!(recs[0].id, "T001");
     });
 }
 
@@ -1703,8 +1657,7 @@ tag_from:
 
         register_run(args).unwrap();
 
-        let cfg = Config::default();
-        let meta = project_info::read_metadata(&target, &cfg).unwrap().unwrap();
+        let meta = project_info::read_metadata(&target).unwrap().unwrap();
         assert!(
             meta.tags.iter().any(|t| t == "tier/Indie"),
             "expected auto-tag tier/Indie, got: {:?}",
@@ -1737,22 +1690,97 @@ fn register_rejects_non_directory() {
 }
 
 #[test]
-fn register_rejects_double_register() {
+fn register_recovers_id_from_folder_name() {
     with_fresh_install(|install| {
-        let target = install.join("dup");
+        // Folder name carries an ID token (inconsistent padding is fine — value
+        // is what matters). Register recovers it rather than minting fresh.
+        let target = install.join("2026-04-19_Old_ID0030");
         fs::create_dir_all(&target).unwrap();
 
         register_run(register_args(&target)).unwrap();
-        let err = register_run(register_args(&target)).expect_err("second should bail");
-        assert!(
-            err.to_string().contains("already registered"),
-            "got: {err:#}"
-        );
+
+        let meta = project_info::read_metadata(&target).unwrap().unwrap();
+        assert_eq!(meta.id, "ID0030");
+        // Counter self-heals up to the recovered value.
+        assert!(Counters::load().unwrap().get() >= 30);
     });
 }
 
 #[test]
-fn register_created_override_lands_in_index_and_frontmatter() {
+fn register_recursive_onboards_children_and_previews() {
+    with_fresh_install(|install| {
+        let base = install.join("bulk");
+        fs::create_dir_all(base.join("Alpha_ID0005")).unwrap();
+        fs::create_dir_all(base.join("Beta")).unwrap();
+        // A child that already has metadata must be skipped, untouched.
+        let gamma = base.join("Gamma");
+        fs::create_dir_all(&gamma).unwrap();
+        fs::write(
+            gamma.join("PROJECT_INFO.md"),
+            "---\nid: ID0009\ntemplate: x\ntemplate_name: X\ncreated: \"2026-01-01T00:00:00Z\"\nfolder: Gamma\npath: x\nvariables: {}\ntags: []\n---\n\n# Project Info\n",
+        )
+        .unwrap();
+
+        // Dry-run writes nothing.
+        run_recursive(RecursiveArgs {
+            base: base.clone(),
+            template_slug: None,
+            use_today: false,
+            dry_run: true,
+        })
+        .unwrap();
+        assert!(!base.join("Alpha_ID0005/PROJECT_INFO.md").exists());
+        assert!(!base.join("Beta/PROJECT_INFO.md").exists());
+
+        // Real run onboards the two metadata-less children.
+        run_recursive(RecursiveArgs {
+            base: base.clone(),
+            template_slug: None,
+            use_today: false,
+            dry_run: false,
+        })
+        .unwrap();
+
+        // Alpha recovered its ID from the folder name; Beta got a fresh one.
+        let alpha = project_info::read_metadata(&base.join("Alpha_ID0005"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(alpha.id, "ID0005");
+        assert!(base.join("Beta/PROJECT_INFO.md").exists());
+        // Gamma was skipped — its original metadata is intact.
+        let gamma_meta = project_info::read_metadata(&gamma).unwrap().unwrap();
+        assert_eq!(gamma_meta.id, "ID0009");
+    });
+}
+
+#[test]
+fn register_existing_metadata_aborts_under_abort_policy() {
+    with_fresh_install(|install| {
+        let target = install.join("dup");
+        fs::create_dir_all(&target).unwrap();
+
+        // First register writes PROJECT_INFO.md.
+        register_run(register_args(&target)).unwrap();
+
+        // A folder that already has metadata is already a project. The Abort
+        // policy (the UI default) refuses to re-register before touching disk.
+        let err = register_core(RegisterOptions {
+            path: target.clone(),
+            template_slug: None,
+            vars: HashMap::new(),
+            apply_structure: false,
+            rename: false,
+            use_today: false,
+            created_override: None,
+            on_pinfo_conflict: PinfoConflict::Abort,
+        })
+        .expect_err("existing metadata should abort");
+        assert!(err.to_string().contains("already"), "got: {err:#}");
+    });
+}
+
+#[test]
+fn register_created_override_lands_in_frontmatter() {
     with_fresh_install(|install| {
         let target = install.join("historic");
         fs::create_dir_all(&target).unwrap();
@@ -1761,11 +1789,7 @@ fn register_created_override_lands_in_index_and_frontmatter() {
         args.created_override = Some("2024-06-15".to_string());
         register_run(args).unwrap();
 
-        let recs = index::load_all().unwrap();
-        assert_eq!(recs[0].created_at, "2024-06-15T00:00:00Z");
-
-        let cfg = Config::default();
-        let meta = project_info::read_metadata(&target, &cfg).unwrap().unwrap();
+        let meta = project_info::read_metadata(&target).unwrap().unwrap();
         assert_eq!(meta.created, "2024-06-15T00:00:00Z");
     });
 }
@@ -1838,10 +1862,9 @@ fn register_rename_moves_folder() {
         );
         assert!(!original.exists(), "old folder should be gone");
 
-        // Index points at the new path.
-        let recs = index::load_all().unwrap();
-        assert_eq!(recs[0].name, "T001_Hello");
-        assert!(recs[0].path.replace('\\', "/").ends_with("T001_Hello"));
+        // The metadata in the renamed folder reflects the new folder name.
+        let meta = project_info::read_metadata(&renamed).unwrap().unwrap();
+        assert_eq!(meta.folder, "T001_Hello");
     });
 }
 
@@ -1877,9 +1900,11 @@ fn register_rename_without_template_uses_default_pattern() {
         );
         // Original folder name should be gone (renamed).
         assert!(!target.exists(), "original folder should have been renamed");
-        // Index entry points at the renamed path.
-        let recs = index::load_all().unwrap();
-        assert!(recs[0].name.ends_with("_random_project_ID0001"));
+        // The metadata in the renamed folder reflects the new folder name.
+        let meta = project_info::read_metadata(found.as_ref().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(meta.folder.ends_with("_random_project_ID0001"));
     });
 }
 

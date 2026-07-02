@@ -74,6 +74,56 @@ pub fn interpolate_name(
     result.trim_matches('_').to_string()
 }
 
+/// Recover a numeric ID from a folder name by locating a `<prefix><digits>`
+/// token (e.g. `parse_id_token("2026-04-19_Foo_ID0030", "ID")` → `Some(30)`).
+///
+/// Zero-padding is ignored — the value is what matters, so `ID007` and `ID0030`
+/// yield `7` and `30`. Scans left-to-right and returns the first occurrence of
+/// the prefix that is immediately followed by at least one ASCII digit. Returns
+/// `None` when the prefix is empty or no digit-bearing token is found.
+///
+/// This is the **only** place folder names still influence identity — used by
+/// `fastf register` to seed a metadata-less folder's ID. Discovery never calls it.
+pub fn parse_id_token(name: &str, prefix: &str) -> Option<u64> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let mut search_start = 0;
+    while let Some(rel) = name[search_start..].find(prefix) {
+        let after = search_start + rel + prefix.len();
+        let digits: String = name[after..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if !digits.is_empty() {
+            return digits.parse::<u64>().ok();
+        }
+        // Prefix without trailing digits — keep scanning past this occurrence.
+        search_start = after;
+        if search_start >= name.len() {
+            break;
+        }
+    }
+    None
+}
+
+/// Extract the numeric value from a formatted ID string by reading its trailing
+/// run of ASCII digits (e.g. `id_value("ID0030")` → `Some(30)`). Prefix-agnostic
+/// so it works across templates with different ID prefixes — used to compute the
+/// counter self-heal floor (`library::max_id`). Returns `None` when the string
+/// has no trailing digits.
+pub fn id_value(id: &str) -> Option<u64> {
+    let bytes = id.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 && bytes[i - 1].is_ascii_digit() {
+        i -= 1;
+    }
+    if i == bytes.len() {
+        return None;
+    }
+    id[i..].parse::<u64>().ok()
+}
+
 /// Sanitize a string for use as a folder/file name component.
 /// Strips characters that are problematic on Windows, macOS, or Linux.
 pub fn sanitize_name(s: &str) -> String {
@@ -141,6 +191,36 @@ mod tests {
         let vars = HashMap::new();
         let result = interpolate("__version__ = \"0.1.0\"", &vars, "%Y-%m-%d");
         assert_eq!(result, "__version__ = \"0.1.0\"");
+    }
+
+    #[test]
+    fn parse_id_token_ignores_padding() {
+        assert_eq!(parse_id_token("2026-04-19_Foo_ID0030", "ID"), Some(30));
+        assert_eq!(parse_id_token("ID007_bar", "ID"), Some(7));
+        assert_eq!(parse_id_token("proj_ID0068_final", "ID"), Some(68));
+    }
+
+    #[test]
+    fn parse_id_token_none_when_absent() {
+        assert_eq!(parse_id_token("no_id_here", "ID"), None);
+        // Prefix present but no trailing digits.
+        assert_eq!(parse_id_token("this_is_IDentity", "ID"), None);
+        assert_eq!(parse_id_token("anything", ""), None);
+    }
+
+    #[test]
+    fn parse_id_token_skips_prefix_without_digits() {
+        // First "ID" has no digits; the second one does.
+        assert_eq!(parse_id_token("IDeas_then_ID0042", "ID"), Some(42));
+    }
+
+    #[test]
+    fn id_value_reads_trailing_digits() {
+        assert_eq!(id_value("ID0030"), Some(30));
+        assert_eq!(id_value("ID007"), Some(7));
+        assert_eq!(id_value("T042"), Some(42));
+        assert_eq!(id_value("no-digits"), None);
+        assert_eq!(id_value(""), None);
     }
 
     #[test]

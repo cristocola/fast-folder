@@ -106,8 +106,7 @@ enum Commands {
             fastf recent --plain --limit 5\n  \
             fastf recent --template music-video\n  \
             fastf recent --since 2026-01-01\n  \
-            fastf recent --tag draft               # only projects with this tag\n  \
-            fastf recent --prune                   # remove index entries whose folder is gone"
+            fastf recent --tag draft               # only projects with this tag"
     )]
     Recent {
         /// Max number of projects to show (default: from config recent_default_limit, or 20)
@@ -125,10 +124,6 @@ enum Commands {
         /// Only show projects that have this exact tag
         #[arg(long)]
         tag: Option<String>,
-
-        /// Delete records whose folder no longer exists on disk (does not touch folders)
-        #[arg(long)]
-        prune: bool,
 
         /// Print the plain list and exit instead of entering the interactive picker.
         /// Auto-engages when stdout is not a TTY (e.g. piping to grep or a file).
@@ -150,35 +145,57 @@ enum Commands {
         query: String,
     },
 
-    /// Onboard an existing folder into fastf's index (no folder is created)
+    /// Rebuild the project-library cache by rescanning every base
     #[command(
-        about = "Onboard an existing folder into fastf's index (no folder is created)",
-        long_about = "Adopt a pre-existing folder into fastf — write PROJECT_INFO.md, append a\n\
-            record to projects.jsonl, and bump the global ID counter. Use this for\n\
-            retroactively indexing projects that started before fastf, or projects\n\
-            created outside it.\n\n\
+        about = "Force a full rescan of every base and rewrite its .fastf-index.json cache",
+        long_about = "Projects are discovered from each folder's PROJECT_INFO.md and accelerated\n\
+            by a per-base .fastf-index.json cache that self-heals automatically. Run\n\
+            `fastf reindex` only after EXTERNAL changes fastf can't observe — folders\n\
+            moved or metadata hand-edited on another machine — to refresh the caches."
+    )]
+    Reindex,
+
+    /// Onboard an existing folder by writing its PROJECT_INFO.md (no folder is created)
+    #[command(
+        about = "Onboard an existing folder by writing its PROJECT_INFO.md (no folder is created)",
+        long_about = "Adopt a pre-existing folder into fastf by writing a PROJECT_INFO.md, which\n\
+            makes it discoverable (filesystem-as-truth). Use this for projects that\n\
+            started before fastf, or were created outside it.\n\n\
+            The ID is recovered from an `ID####` token in the folder name when present\n\
+            (so a folder named `..._ID0030` keeps ID 30); otherwise a fresh ID is\n\
+            minted from the self-healing counter.\n\n\
             With --template: prompts for that template's variables, writes a full\n\
             metadata file (frontmatter + tags incl. tag_from auto-derivation), and\n\
             optionally fills missing template structure (--apply) or renames the\n\
             folder to the template's naming_pattern (--rename).\n\n\
-            Without --template: writes a minimal metadata file and appends a record\n\
-            with template = \"(registered)\". The folder is otherwise untouched.\n\n\
-            The `created` timestamp defaults to the folder's filesystem creation\n\
-            time (modification time on filesystems without birth-time, e.g. ext4).\n\
-            Override with `--use-today` (now) or `--created YYYY-MM-DD` (explicit).",
+            Without --template: writes a minimal metadata file with\n\
+            template = \"(registered)\". The folder is otherwise untouched.\n\n\
+            With --recursive: writes a PROJECT_INFO.md into every direct child of\n\
+            <path> that lacks one (use --dry-run to preview). The `created` timestamp\n\
+            defaults to the folder's filesystem time; override with --use-today or\n\
+            --created YYYY-MM-DD.",
         after_help = "Examples:\n  \
             fastf register ./old-project                         # minimal, no template\n  \
             fastf register ./old-project --template music-video --artist=X --title=Y\n  \
             fastf register ./old-project -t music-video --apply  # also fill template structure\n  \
             fastf register ./old-project -t music-video --rename # rename to naming_pattern\n  \
             fastf register ./old-project --use-today             # ignore folder mtime\n  \
-            fastf register ./old-project --created 2024-06-15    # historical date\n\n\
-            Batch import (with the --yes ordering fix you can pipe these):\n  \
-            for d in ~/old-work/*/ ; do fastf register \"$d\" --yes ; done"
+            fastf register ~/Projects --recursive --dry-run      # preview a bulk import\n  \
+            fastf register ~/Projects --recursive                # onboard every child"
     )]
     Register {
-        /// Path to an existing folder to onboard into fastf's index
+        /// Path to an existing folder to onboard (writes a PROJECT_INFO.md so it
+        /// becomes discoverable). With --recursive, a base whose direct children
+        /// are onboarded.
         path: String,
+
+        /// Register every direct child of <path> that lacks a PROJECT_INFO.md.
+        #[arg(long)]
+        recursive: bool,
+
+        /// With --recursive: preview which folders would be registered, writing nothing.
+        #[arg(long)]
+        dry_run: bool,
 
         /// Template slug to attach (enables --apply and --rename). Omit for a minimal record.
         #[arg(short = 't', long)]
@@ -577,21 +594,23 @@ fn run() -> Result<()> {
             template,
             since,
             tag,
-            prune,
             plain,
         }) => cli::recent::run(cli::recent::RecentArgs {
             limit,
             template,
             since,
             tag,
-            prune,
             plain,
         }),
 
         Some(Commands::Open { query }) => cli::recent::open(&query),
 
+        Some(Commands::Reindex) => cli::reindex::run(),
+
         Some(Commands::Register {
             path,
+            recursive,
+            dry_run,
             template,
             apply,
             rename,
@@ -602,16 +621,25 @@ fn run() -> Result<()> {
         }) => {
             let classified = cli::new::classify_extra(extra);
             warn_unknown(&classified.unknown);
-            cli::register::run(cli::register::RegisterArgs {
-                path: std::path::PathBuf::from(path),
-                template_slug: template,
-                vars: classified.vars,
-                apply_structure: apply,
-                rename,
-                use_today,
-                created_override: created,
-                yes: yes || classified.flags.yes,
-            })
+            if recursive {
+                cli::register::run_recursive(cli::register::RecursiveArgs {
+                    base: std::path::PathBuf::from(path),
+                    template_slug: template,
+                    use_today,
+                    dry_run,
+                })
+            } else {
+                cli::register::run(cli::register::RegisterArgs {
+                    path: std::path::PathBuf::from(path),
+                    template_slug: template,
+                    vars: classified.vars,
+                    apply_structure: apply,
+                    rename,
+                    use_today,
+                    created_override: created,
+                    yes: yes || classified.flags.yes,
+                })
+            }
         }
 
         Some(Commands::Apply {

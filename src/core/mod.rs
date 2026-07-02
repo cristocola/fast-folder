@@ -1,7 +1,7 @@
 pub mod assets;
 pub mod config;
 pub mod counter;
-pub mod index;
+pub mod library;
 pub mod naming;
 pub mod post_create;
 pub mod project;

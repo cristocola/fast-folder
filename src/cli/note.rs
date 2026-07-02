@@ -20,9 +20,9 @@
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use std::io::{self, Read};
-use std::path::Path;
 
-use crate::core::{config::Config, index, project_info};
+use crate::core::library;
+use crate::core::{config::Config, project_info};
 
 // ---------------------------------------------------------------------------
 // Add a journal entry
@@ -37,14 +37,14 @@ pub struct NoteAddArgs {
 
 pub fn add(args: NoteAddArgs) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let record = index::resolve_project(&args.query)?;
-    let pinfo = Path::new(&record.path).join(&cfg.project_info_filename);
+    let project = library::resolve(&cfg, &args.query)?;
+    let pinfo = project_info::pinfo_path(&project.path);
 
     if !pinfo.exists() {
         bail!(
-            "no {} found for project {} — this project may predate the metadata feature",
-            cfg.project_info_filename,
-            record.id
+            "no {} found for project {}",
+            project_info::RESERVED_FILENAME,
+            project.id
         );
     }
 
@@ -61,7 +61,7 @@ pub fn add(args: NoteAddArgs) -> Result<()> {
     println!(
         "{}  Journal entry added to {}",
         "✓".green().bold(),
-        record.id.green().bold()
+        project.id.green().bold()
     );
     Ok(())
 }
@@ -79,15 +79,15 @@ pub struct NotesArgs {
 
 pub fn notes(args: NotesArgs) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let record = index::resolve_project(&args.query)?;
+    let project = library::resolve(&cfg, &args.query)?;
 
-    let entries = project_info::read_journal_entries(Path::new(&record.path), &cfg)?;
+    let entries = project_info::read_journal_entries(&project.path)?;
 
     println!(
         "  {} {} {}",
         "→".cyan().bold(),
-        record.id.green().bold(),
-        record.name.bold()
+        project.id.green().bold(),
+        project.name.bold()
     );
 
     let filtered: Vec<_> = entries

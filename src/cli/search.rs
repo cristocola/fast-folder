@@ -28,9 +28,9 @@
 use anyhow::Result;
 use colored::Colorize;
 use std::io::IsTerminal;
-use std::path::Path;
 
-use crate::core::{config::Config, index, project_info, query};
+use crate::core::library::{self, Project};
+use crate::core::{config::Config, project_info, query};
 
 pub struct SearchArgs {
     /// Raw query terms (e.g. `["tag:draft", "template=music-video"]`).
@@ -58,9 +58,9 @@ pub fn run(args: SearchArgs) -> Result<()> {
         return Ok(());
     }
 
-    let records = index::load_all()?;
+    let projects = library::discover(&cfg);
 
-    if records.is_empty() {
+    if projects.is_empty() {
         println!(
             "{}",
             "No projects yet — create one with `fastf new`.".dimmed()
@@ -68,14 +68,14 @@ pub fn run(args: SearchArgs) -> Result<()> {
         return Ok(());
     }
 
-    // For each record (newest first), try to load its metadata and evaluate.
+    // For each project (newest first), load its metadata and evaluate. The
+    // authoritative field values live in PROJECT_INFO.md, so read it fresh.
     let mut matches = Vec::new();
-    for record in records.iter().rev() {
-        let project_path = Path::new(&record.path);
-        if let Ok(Some(meta)) = project_info::read_metadata(project_path, &cfg)
-            && query::evaluate(&predicates, record, &meta)
+    for project in &projects {
+        if let Ok(Some(meta)) = project_info::read_metadata(&project.path)
+            && query::evaluate(&predicates, &meta)
         {
-            matches.push(record);
+            matches.push(project);
         }
     }
 
@@ -87,36 +87,37 @@ pub fn run(args: SearchArgs) -> Result<()> {
     let interactive = !args.plain && std::io::stdout().is_terminal();
 
     if interactive {
-        crate::cli::recent::run_picker(&matches, &cfg)
+        crate::cli::recent::run_picker(&matches)
     } else {
         print_plain_results(&matches);
         Ok(())
     }
 }
 
-fn print_plain_results(matches: &[&index::ProjectRecord]) {
-    let id_w = matches.iter().map(|r| r.id.len()).max().unwrap_or(4);
-    let tmpl_w = matches.iter().map(|r| r.template.len()).max().unwrap_or(8);
+fn print_plain_results(matches: &[&Project]) {
+    let id_w = matches.iter().map(|p| p.id.len()).max().unwrap_or(4);
+    let tmpl_w = matches.iter().map(|p| p.template.len()).max().unwrap_or(8);
     let date_w = 10;
 
-    for r in matches {
-        let date = r.created_at.get(..date_w).unwrap_or(&r.created_at);
-        let missing = !Path::new(&r.path).exists();
+    for p in matches {
+        let date = p.created.get(..date_w).unwrap_or(&p.created);
+        let path_str = p.path.display().to_string();
+        let missing = !p.path.exists();
         let marker = if missing { "✗".red() } else { "•".cyan() };
         println!(
             "  {} {:<id_w$}  {:<tmpl_w$}  {}  {}",
             marker,
-            r.id.green().bold(),
-            r.template.dimmed(),
+            p.id.green().bold(),
+            p.template.dimmed(),
             date.dimmed(),
             if missing {
-                format!("{} {}", r.name, "(missing)".red())
+                format!("{} {}", p.name, "(missing)".red())
             } else {
-                r.name.clone()
+                p.name.clone()
             },
             id_w = id_w,
             tmpl_w = tmpl_w,
         );
-        println!("      {} {}", "→".dimmed(), r.path.dimmed());
+        println!("      {} {}", "→".dimmed(), path_str.dimmed());
     }
 }

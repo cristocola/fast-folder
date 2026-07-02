@@ -9,9 +9,9 @@
 
 use anyhow::{Result, bail};
 use colored::Colorize;
-use std::path::Path;
 
-use crate::core::{config::Config, index, project_info, template};
+use crate::core::library;
+use crate::core::{config::Config, project_info, template};
 
 // ---------------------------------------------------------------------------
 // Public entry points (called from main.rs)
@@ -19,8 +19,8 @@ use crate::core::{config::Config, index, project_info, template};
 
 pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let record = index::resolve_project(query)?;
-    let path = pinfo_path(&record.path, &cfg);
+    let project = library::resolve(&cfg, query)?;
+    let path = project_info::pinfo_path(&project.path);
 
     project_info::write_frontmatter(&path, |meta| {
         for tag in new_tags {
@@ -29,6 +29,7 @@ pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
             }
         }
     })?;
+    library::refresh_cache(&project.path);
 
     let n = new_tags.len();
     println!(
@@ -36,15 +37,15 @@ pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
         "✓".green().bold(),
         n,
         if n == 1 { "" } else { "s" },
-        record.id.green().bold()
+        project.id.green().bold()
     );
     Ok(())
 }
 
 pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let record = index::resolve_project(query)?;
-    let path = pinfo_path(&record.path, &cfg);
+    let project = library::resolve(&cfg, query)?;
+    let path = project_info::pinfo_path(&project.path);
 
     let mut removed_count = 0usize;
     project_info::write_frontmatter(&path, |meta| {
@@ -52,12 +53,13 @@ pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
         meta.tags.retain(|t| !remove_tags.contains(t));
         removed_count = before - meta.tags.len();
     })?;
+    library::refresh_cache(&project.path);
 
     if removed_count == 0 {
         println!(
             "{}  No matching tags found on {} — nothing changed.",
             "i".cyan(),
-            record.id.green().bold()
+            project.id.green().bold()
         );
     } else {
         println!(
@@ -65,7 +67,7 @@ pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
             "✓".green().bold(),
             removed_count,
             if removed_count == 1 { "" } else { "s" },
-            record.id.green().bold()
+            project.id.green().bold()
         );
     }
     Ok(())
@@ -73,18 +75,18 @@ pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
 
 pub fn list(query: &str) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let record = index::resolve_project(query)?;
-    let path = pinfo_path(&record.path, &cfg);
+    let project = library::resolve(&cfg, query)?;
+    let path = project_info::pinfo_path(&project.path);
 
     if !path.exists() {
         bail!(
             "no {} found for project {} — this project may predate the metadata feature",
-            cfg.project_info_filename,
-            record.id
+            project_info::RESERVED_FILENAME,
+            project.id
         );
     }
 
-    let meta = project_info::read_metadata(Path::new(&record.path), &cfg)?.ok_or_else(|| {
+    let meta = project_info::read_metadata(&project.path)?.ok_or_else(|| {
         anyhow::anyhow!(
             "{} has no YAML frontmatter — cannot read tags",
             path.display()
@@ -94,8 +96,8 @@ pub fn list(query: &str) -> Result<()> {
     println!(
         "  {} {} {}",
         "→".cyan().bold(),
-        record.id.green().bold(),
-        record.name.bold()
+        project.id.green().bold(),
+        project.name.bold()
     );
 
     if meta.tags.is_empty() {
@@ -113,15 +115,15 @@ pub fn list(query: &str) -> Result<()> {
 /// `template.tag_from`) while keeping free-form tags intact.
 pub fn reauto(query: &str) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let record = index::resolve_project(query)?;
-    let path = pinfo_path(&record.path, &cfg);
+    let project = library::resolve(&cfg, query)?;
+    let path = project_info::pinfo_path(&project.path);
 
     // Load the current metadata to get variables and current tags.
-    let meta = project_info::read_metadata(Path::new(&record.path), &cfg)?
+    let meta = project_info::read_metadata(&project.path)?
         .ok_or_else(|| anyhow::anyhow!("{} has no YAML frontmatter", path.display()))?;
 
     // Load the template to get tag_from.
-    let tmpl = template::find_by_slug(&record.template)?;
+    let tmpl = template::find_by_slug(&project.template)?;
 
     // Compute new derived tags from the current variable values.
     let new_derived: Vec<String> = tmpl
@@ -148,22 +150,14 @@ pub fn reauto(query: &str) -> Result<()> {
         // (keep free-form tags the user added manually via `fastf tag add`).
         m.tags.extend(new_derived.iter().cloned());
     })?;
+    library::refresh_cache(&project.path);
 
     println!(
         "{}  Re-derived {} auto-tag{} for {}",
         "✓".green().bold(),
         new_derived.len(),
         if new_derived.len() == 1 { "" } else { "s" },
-        record.id.green().bold()
+        project.id.green().bold()
     );
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Build the full path to the project's metadata file.
-fn pinfo_path(project_path: &str, cfg: &Config) -> std::path::PathBuf {
-    Path::new(project_path).join(&cfg.project_info_filename)
 }

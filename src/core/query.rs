@@ -19,7 +19,6 @@
 //! "default" fallthrough, so `fastf search ariana` works without remembering
 //! the explicit grammar.
 
-use crate::core::index::ProjectRecord;
 use crate::core::project_info::Metadata;
 
 // ---------------------------------------------------------------------------
@@ -133,35 +132,34 @@ fn to_pattern(s: &str) -> Pattern {
 // ---------------------------------------------------------------------------
 
 /// Return `true` when every predicate in `predicates` matches the given
-/// `(record, metadata)` pair.
+/// project metadata.
 ///
 /// Fields are resolved in this order:
 /// 1. Top-level `Metadata` scalar fields (`id`, `template`, `template_name`,
 ///    `created`, `folder`, `path`).
 /// 2. `variables.<slug>` — looked up in `meta.variables`.
-/// 3. `ProjectRecord` fields for `name` (alias for `folder`).
 ///
 /// Unknown field keys never match (returns false for that predicate).
-pub fn evaluate(predicates: &[Predicate], record: &ProjectRecord, meta: &Metadata) -> bool {
-    predicates.iter().all(|p| eval_one(p, record, meta))
+pub fn evaluate(predicates: &[Predicate], meta: &Metadata) -> bool {
+    predicates.iter().all(|p| eval_one(p, meta))
 }
 
-fn eval_one(pred: &Predicate, record: &ProjectRecord, meta: &Metadata) -> bool {
+fn eval_one(pred: &Predicate, meta: &Metadata) -> bool {
     match pred {
         Predicate::Tag(pat) => meta.tags.iter().any(|t| pat.matches(t)),
 
         Predicate::Field { key, pattern } => {
-            let val = resolve_field(key, record, meta);
+            let val = resolve_field(key, meta);
             val.map(|v| pattern.matches(&v)).unwrap_or(false)
         }
 
         Predicate::After { key, value } => {
-            let val = resolve_field(key, record, meta);
+            let val = resolve_field(key, meta);
             val.map(|v| v.as_str() > value.as_str()).unwrap_or(false)
         }
 
         Predicate::Before { key, value } => {
-            let val = resolve_field(key, record, meta);
+            let val = resolve_field(key, meta);
             val.map(|v| v.as_str() < value.as_str()).unwrap_or(false)
         }
 
@@ -200,8 +198,8 @@ fn eval_one(pred: &Predicate, record: &ProjectRecord, meta: &Metadata) -> bool {
     }
 }
 
-/// Look up a field value from the combined record + metadata view.
-fn resolve_field(key: &str, record: &ProjectRecord, meta: &Metadata) -> Option<String> {
+/// Look up a field value from the project metadata.
+fn resolve_field(key: &str, meta: &Metadata) -> Option<String> {
     match key {
         "id" => Some(meta.id.clone()),
         "template" => Some(meta.template.clone()),
@@ -210,16 +208,7 @@ fn resolve_field(key: &str, record: &ProjectRecord, meta: &Metadata) -> Option<S
         "folder" | "name" => Some(meta.folder.clone()),
         "path" => Some(meta.path.clone()),
         // Check user-defined template variables
-        other => meta
-            .variables
-            .get(other)
-            .cloned()
-            // Fall back to ProjectRecord fields for convenience
-            .or_else(|| match other {
-                "id" => Some(record.id.clone()),
-                "name" => Some(record.name.clone()),
-                _ => None,
-            }),
+        other => meta.variables.get(other).cloned(),
     }
 }
 
@@ -242,16 +231,6 @@ mod tests {
             path: "/projects/ID0001_My_Project".to_string(),
             variables: BTreeMap::new(),
             tags: tags.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-
-    fn makerecord(id: &str) -> ProjectRecord {
-        ProjectRecord {
-            id: id.to_string(),
-            template: "test".to_string(),
-            path: "/projects/test".to_string(),
-            name: "test".to_string(),
-            created_at: "2026-01-15T10:00:00Z".to_string(),
         }
     }
 
@@ -304,67 +283,59 @@ mod tests {
 
     #[test]
     fn evaluate_exact_tag_match() {
-        let rec = makerecord("ID0001");
         let meta = make_meta("ID0001", "music-video", &["draft", "client/Acme"]);
         let preds = parse(&["tag:draft".to_string()]);
-        assert!(evaluate(&preds, &rec, &meta));
+        assert!(evaluate(&preds, &meta));
     }
 
     #[test]
     fn evaluate_tag_glob_match() {
-        let rec = makerecord("ID0001");
         let meta = make_meta("ID0001", "music-video", &["client/Acme_Corp"]);
         let preds = parse(&["tag:client/*".to_string()]);
-        assert!(evaluate(&preds, &rec, &meta));
+        assert!(evaluate(&preds, &meta));
     }
 
     #[test]
     fn evaluate_tag_no_match() {
-        let rec = makerecord("ID0001");
         let meta = make_meta("ID0001", "music-video", &["draft"]);
         let preds = parse(&["tag:urgent".to_string()]);
-        assert!(!evaluate(&preds, &rec, &meta));
+        assert!(!evaluate(&preds, &meta));
     }
 
     #[test]
     fn evaluate_field_exact() {
-        let rec = makerecord("ID0001");
         let meta = make_meta("ID0001", "music-video", &[]);
         let preds = parse(&["template=music-video".to_string()]);
-        assert!(evaluate(&preds, &rec, &meta));
+        assert!(evaluate(&preds, &meta));
     }
 
     #[test]
     fn evaluate_date_after() {
-        let rec = makerecord("ID0001");
         let meta = make_meta("ID0001", "music-video", &[]);
         let preds = parse(&["created>2026-01-01".to_string()]);
-        assert!(evaluate(&preds, &rec, &meta));
+        assert!(evaluate(&preds, &meta));
     }
 
     #[test]
     fn evaluate_date_before() {
-        let rec = makerecord("ID0001");
         let meta = make_meta("ID0001", "music-video", &[]);
         let preds = parse(&["created<2027-01-01".to_string()]);
-        assert!(evaluate(&preds, &rec, &meta));
+        assert!(evaluate(&preds, &meta));
     }
 
     #[test]
     fn evaluate_multi_clause_and() {
-        let rec = makerecord("ID0001");
         let meta = make_meta("ID0001", "music-video", &["draft"]);
         let terms: Vec<String> = vec!["template=music-video".to_string(), "tag:draft".to_string()];
         let preds = parse(&terms);
-        assert!(evaluate(&preds, &rec, &meta));
+        assert!(evaluate(&preds, &meta));
     }
 
     #[test]
     fn evaluate_unknown_key_is_false() {
-        let rec = makerecord("ID0001");
         let meta = make_meta("ID0001", "test", &[]);
         let preds = parse(&["nonexistent_field=anything".to_string()]);
-        assert!(!evaluate(&preds, &rec, &meta));
+        assert!(!evaluate(&preds, &meta));
     }
 
     // ---------------------------------------------------------------------
@@ -409,7 +380,6 @@ mod tests {
 
     #[test]
     fn free_matches_variable_value() {
-        let rec = makerecord("ID0001");
         let meta = make_full_meta(
             "ID0001",
             "music-video",
@@ -419,13 +389,12 @@ mod tests {
             &[],
             &[("artist", "Ariana_Grande"), ("title", "Lullaby")],
         );
-        assert!(evaluate(&parse(&["ariana".to_string()]), &rec, &meta));
-        assert!(evaluate(&parse(&["lullaby".to_string()]), &rec, &meta));
+        assert!(evaluate(&parse(&["ariana".to_string()]), &meta));
+        assert!(evaluate(&parse(&["lullaby".to_string()]), &meta));
     }
 
     #[test]
     fn free_matches_tag() {
-        let rec = makerecord("ID0001");
         let meta = make_full_meta(
             "ID0001",
             "test",
@@ -435,13 +404,12 @@ mod tests {
             &["draft", "client/Acme"],
             &[],
         );
-        assert!(evaluate(&parse(&["draft".to_string()]), &rec, &meta));
-        assert!(evaluate(&parse(&["acme".to_string()]), &rec, &meta));
+        assert!(evaluate(&parse(&["draft".to_string()]), &meta));
+        assert!(evaluate(&parse(&["acme".to_string()]), &meta));
     }
 
     #[test]
     fn free_matches_folder_template_id() {
-        let rec = makerecord("ID0042");
         let meta = make_full_meta(
             "ID0042",
             "music-video",
@@ -452,18 +420,17 @@ mod tests {
             &[],
         );
         // folder
-        assert!(evaluate(&parse(&["cool_track".to_string()]), &rec, &meta));
+        assert!(evaluate(&parse(&["cool_track".to_string()]), &meta));
         // template slug
-        assert!(evaluate(&parse(&["music-video".to_string()]), &rec, &meta));
+        assert!(evaluate(&parse(&["music-video".to_string()]), &meta));
         // template display name (case-insensitive)
-        assert!(evaluate(&parse(&["MUSIC VIDEO".to_string()]), &rec, &meta));
+        assert!(evaluate(&parse(&["MUSIC VIDEO".to_string()]), &meta));
         // ID
-        assert!(evaluate(&parse(&["ID0042".to_string()]), &rec, &meta));
+        assert!(evaluate(&parse(&["ID0042".to_string()]), &meta));
     }
 
     #[test]
     fn free_is_case_insensitive() {
-        let rec = makerecord("ID0001");
         let meta = make_full_meta(
             "ID0001",
             "test",
@@ -473,17 +440,12 @@ mod tests {
             &[],
             &[("artist", "Ariana_Grande")],
         );
-        assert!(evaluate(&parse(&["ARIANA".to_string()]), &rec, &meta));
-        assert!(evaluate(
-            &parse(&["ariana_grande".to_string()]),
-            &rec,
-            &meta
-        ));
+        assert!(evaluate(&parse(&["ARIANA".to_string()]), &meta));
+        assert!(evaluate(&parse(&["ariana_grande".to_string()]), &meta));
     }
 
     #[test]
     fn free_substring_not_just_prefix() {
-        let rec = makerecord("ID0001");
         let meta = make_full_meta(
             "ID0001",
             "test",
@@ -494,14 +456,13 @@ mod tests {
             &[("artist", "Bad_Bunny")],
         );
         // Substring inside the value
-        assert!(evaluate(&parse(&["bunny".to_string()]), &rec, &meta));
+        assert!(evaluate(&parse(&["bunny".to_string()]), &meta));
         // Also middle of word
-        assert!(evaluate(&parse(&["d_b".to_string()]), &rec, &meta));
+        assert!(evaluate(&parse(&["d_b".to_string()]), &meta));
     }
 
     #[test]
     fn free_does_not_match_path() {
-        let rec = makerecord("ID0001");
         let meta = make_full_meta(
             "ID0001",
             "test",
@@ -512,14 +473,13 @@ mod tests {
             &[],
         );
         // The substring "stash" appears only in path — should NOT match
-        assert!(!evaluate(&parse(&["stash".to_string()]), &rec, &meta));
+        assert!(!evaluate(&parse(&["stash".to_string()]), &meta));
         // "cristo" only in path — should NOT match
-        assert!(!evaluate(&parse(&["cristo".to_string()]), &rec, &meta));
+        assert!(!evaluate(&parse(&["cristo".to_string()]), &meta));
     }
 
     #[test]
     fn free_no_match_returns_false() {
-        let rec = makerecord("ID0001");
         let meta = make_full_meta(
             "ID0001",
             "test",
@@ -529,12 +489,11 @@ mod tests {
             &[],
             &[("name", "World")],
         );
-        assert!(!evaluate(&parse(&["xyzzy".to_string()]), &rec, &meta));
+        assert!(!evaluate(&parse(&["xyzzy".to_string()]), &meta));
     }
 
     #[test]
     fn free_multi_term_ands_together() {
-        let rec = makerecord("ID0001");
         let meta = make_full_meta(
             "ID0001",
             "test",
@@ -547,20 +506,17 @@ mod tests {
         // Both terms match (different fields) → true
         assert!(evaluate(
             &parse(&["ariana".to_string(), "lullaby".to_string()]),
-            &rec,
             &meta
         ));
         // One missing → false
         assert!(!evaluate(
             &parse(&["ariana".to_string(), "absent".to_string()]),
-            &rec,
             &meta
         ));
     }
 
     #[test]
     fn free_combines_with_explicit_clauses() {
-        let rec = makerecord("ID0001");
         let meta = make_full_meta(
             "ID0001",
             "music-video",
@@ -573,19 +529,16 @@ mod tests {
         // Free + tag clause both match
         assert!(evaluate(
             &parse(&["ariana".to_string(), "tag:draft".to_string()]),
-            &rec,
             &meta
         ));
         // Free + tag clause where tag doesn't match
         assert!(!evaluate(
             &parse(&["ariana".to_string(), "tag:urgent".to_string()]),
-            &rec,
             &meta
         ));
         // Free + field clause both match
         assert!(evaluate(
             &parse(&["ariana".to_string(), "template=music-video".to_string()]),
-            &rec,
             &meta
         ));
     }

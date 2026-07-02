@@ -882,10 +882,12 @@ function projectDataSettings(config) {
   return `
     <form id="data-settings-form" class="settings-panel">
       <div class="settings-section">
-        <h3>Project metadata</h3>
-        <p>Structured metadata powers project details, tags, search, notes, and future integrations.</p>
-        ${settingsToggle("settings-info", "Write project information", "Create a metadata file inside every new project", config.project_info_enabled)}
-        ${settingsInput("settings-info-filename", "Metadata filename", "A bare filename stored at the project root", config.project_info_filename, "mono")}
+        <h3>Library bases</h3>
+        <p>Fast Folder discovers projects from the <code>PROJECT_INFO.md</code> in each folder. Your base directory is always indexed; list any extra folders here (one path per line) to include them too.</p>
+        <div class="settings-row">
+          <div class="settings-label"><strong>Extra base directories</strong><span>One absolute path per line. Missing folders are skipped.</span></div>
+          <textarea id="settings-bases" class="input mono" rows="3" placeholder="/mnt/proj/01_PROJECTS">${esc((config.bases || []).join("\n"))}</textarea>
+        </div>
       </div>
       <div class="settings-section">
         <h3>Library behavior</h3>
@@ -895,9 +897,9 @@ function projectDataSettings(config) {
       </div>
       <div class="settings-section">
         <h3>Fast Folder data</h3>
-        <p>Your current installation is portable. These files contain its templates, project index, configuration, and counter.</p>
+        <p>Your current installation is portable. These files contain its templates, configuration, and counter. Projects live in your bases, each with a disposable <code>.fastf-index.json</code> cache.</p>
         <div class="data-summary">
-          ${dataSummary("Projects tracked", state.data.projects.length)}
+          ${dataSummary("Projects found", state.data.projects.length)}
           ${dataSummary("Templates", state.data.templates.length)}
           ${dataSummary("Current counter", state.data.counter)}
         </div>
@@ -905,6 +907,7 @@ function projectDataSettings(config) {
         <div class="data-actions">
           <button class="button button-secondary" type="button" data-open-path="${esc(state.data.install_dir)}">${icon("external")} Open data folder</button>
           <button class="button button-secondary" type="button" data-open-path="${esc(state.data.templates_dir)}">${icon("layers")} Open templates</button>
+          <button class="button button-secondary" type="button" data-reindex>${icon("refresh")} Reindex library</button>
         </div>
       </div>
       <div class="settings-section">
@@ -914,11 +917,6 @@ function projectDataSettings(config) {
           <div class="settings-label"><strong>Counter value</strong><span>Last used number; next project is this + 1</span></div>
           <div class="inline-set"><input id="settings-counter" class="input" type="number" min="0" value="${esc(state.data.counter)}"><button class="button button-secondary" type="button" data-save-counter>${icon("check")} Set</button></div>
         </div>
-      </div>
-      <div class="settings-section">
-        <h3>Maintenance</h3>
-        <p>Remove index entries whose folders have been moved or deleted. The folders themselves are never touched.</p>
-        <div class="data-actions"><button class="button button-secondary" type="button" data-prune>${icon("trash")} Prune missing projects</button></div>
       </div>
       <div class="settings-footer"><button class="button button-primary" type="submit">${icon("check")} Save data settings</button></div>
     </form>`;
@@ -1602,13 +1600,28 @@ function bindSettings() {
 
   document.querySelector("#data-settings-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const bases = (document.querySelector("#settings-bases").value || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
     const payload = {
-      project_info_enabled: document.querySelector("#settings-info").checked,
-      project_info_filename: document.querySelector("#settings-info-filename").value,
+      bases,
       recent_default_limit: Number(document.querySelector("#settings-recent").value || 20),
       preview_lines: Number(document.querySelector("#settings-preview-lines").value || 0),
     };
     await saveSettings(payload, "Project data settings saved.");
+  });
+
+  document.querySelector("[data-reindex]")?.addEventListener("click", async () => {
+    try {
+      const result = await api("/api/reindex", { method: "POST", body: JSON.stringify({}) });
+      await loadState(false);
+      state.searchResults = null;
+      render();
+      toast(`Reindexed ${result.projects} project${result.projects === 1 ? "" : "s"}.`);
+    } catch (error) {
+      toast(error.message, true);
+    }
   });
 
   document.querySelector("[data-save-counter]")?.addEventListener("click", async () => {
@@ -1622,19 +1635,6 @@ function bindSettings() {
       await loadState(false);
       render();
       toast(`Counter set — next project is ${state.data.next_id}.`);
-    } catch (error) {
-      toast(error.message, true);
-    }
-  });
-
-  document.querySelector("[data-prune]")?.addEventListener("click", async () => {
-    if (!window.confirm("Remove index entries whose folders no longer exist?")) return;
-    try {
-      const result = await api("/api/projects/prune", { method: "POST", body: JSON.stringify({}) });
-      await loadState(false);
-      state.searchResults = null;
-      render();
-      toast(result.removed ? `Pruned ${result.removed} missing project${result.removed === 1 ? "" : "s"}.` : "No missing projects to prune.");
     } catch (error) {
       toast(error.message, true);
     }

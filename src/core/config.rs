@@ -10,6 +10,13 @@ pub struct Config {
     #[serde(default)]
     pub base_dir: String,
 
+    /// Additional directories to index for the project library (beyond
+    /// `base_dir`). Each holds project folders whose `PROJECT_INFO.md` makes
+    /// them discoverable. `effective_bases()` unions these with `base_dir`.
+    /// An unmounted/absent base is simply skipped at scan time.
+    #[serde(default)]
+    pub bases: Vec<String>,
+
     /// Editor to use for `fastf template edit`. Empty = $EDITOR env var.
     #[serde(default)]
     pub editor: String,
@@ -37,20 +44,6 @@ pub struct Config {
     /// the prompt auto-skips when reveal is already enabled to avoid double-open.
     #[serde(default = "default_true")]
     pub prompt_open_after_create: bool,
-
-    /// Write a `PROJECT_INFO.md` metadata file (with YAML frontmatter) into
-    /// each new project's root. Powers `fastf recent` → "Show project metadata"
-    /// and is the source of truth for any future `fastf search` command.
-    ///
-    /// Aliased to the v0.2-interim `pinfo_enabled` so any pre-rename config
-    /// files keep parsing without manual migration.
-    #[serde(default = "default_true", alias = "pinfo_enabled")]
-    pub project_info_enabled: bool,
-
-    /// Filename for the per-project metadata file.
-    /// Aliased to `pinfo_filename` for the same reason as `project_info_enabled`.
-    #[serde(default = "default_project_info_filename", alias = "pinfo_filename")]
-    pub project_info_filename: String,
 
     /// Default `--limit` for `fastf recent` and the TUI's recent menu.
     #[serde(default = "default_recent_limit")]
@@ -85,9 +78,6 @@ fn default_preview_lines() -> usize {
 fn default_true() -> bool {
     true
 }
-fn default_project_info_filename() -> String {
-    "PROJECT_INFO.md".to_string()
-}
 fn default_recent_limit() -> usize {
     20
 }
@@ -99,14 +89,13 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             base_dir: String::new(),
+            bases: Vec::new(),
             editor: String::new(),
             default_template: String::new(),
             date_format: default_date_format(),
             preview_lines: default_preview_lines(),
             post_create: Default::default(),
             prompt_open_after_create: true,
-            project_info_enabled: true,
-            project_info_filename: default_project_info_filename(),
             recent_default_limit: default_recent_limit(),
             confirm_create: true,
             show_banner: true,
@@ -142,6 +131,30 @@ impl Config {
         } else {
             std::path::PathBuf::from(&self.base_dir)
         }
+    }
+
+    /// The full set of directories the project library indexes: `base_dir`
+    /// unioned with `bases`, each normalized (canonicalized when it exists) and
+    /// de-duplicated. Order is stable: `base_dir` first, then `bases` as listed.
+    /// Non-existent paths are kept (not canonicalizable) so callers can decide
+    /// to skip them — discovery does, treating an absent base as honestly empty.
+    pub fn effective_bases(&self) -> Vec<std::path::PathBuf> {
+        let mut candidates = vec![self.resolve_base_dir()];
+        for b in &self.bases {
+            if !b.trim().is_empty() {
+                candidates.push(std::path::PathBuf::from(b));
+            }
+        }
+
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for c in candidates {
+            let norm = c.canonicalize().unwrap_or(c);
+            if seen.insert(norm.clone()) {
+                out.push(norm);
+            }
+        }
+        out
     }
 
     /// Resolve editor: configured, or $EDITOR, or fallback.

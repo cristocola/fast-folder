@@ -50,7 +50,3 @@ pub fn template_manifest(slug: &str) -> PathBuf {
 pub fn template_files_dir(slug: &str) -> PathBuf {
     template_dir(slug).join("files")
 }
-
-pub fn projects_index_path() -> PathBuf {
-    install_dir().join("projects.jsonl")
-}

@@ -5,6 +5,7 @@ pub mod new;
 pub mod note;
 pub mod recent;
 pub mod register;
+pub mod reindex;
 pub mod search;
 pub mod tag;
 pub mod template;

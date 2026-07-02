@@ -2,9 +2,9 @@
 //!
 //! A small, dependency-free HTTP server (loopback only) that drives the
 //! single-page frontend in `web/`. It calls the `fastf` library directly —
-//! `project::plan`/`create`, `Config`, `Counters`, `template`, `index`,
-//! `post_create` — so the UI shares one source of truth with the CLI and never
-//! parses terminal output.
+//! `project::plan`/`create`, `Config`, `Counters`, `template`, `library`
+//! (filesystem-as-truth discovery), `post_create` — so the UI shares one source
+//! of truth with the CLI and never parses terminal output.
 //!
 //! `serve()` is the long-running entry point used by `fastf ui`. `route_request()`
 //! is the pure request handler (no socket) so integration tests can exercise the
@@ -29,7 +29,7 @@ use crate::bootstrap;
 use crate::cli::register;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::index::{self, ProjectRecord};
+use crate::core::library::{self, Project};
 use crate::core::naming::{interpolate, interpolate_name};
 use crate::core::post_create::{self, PostCreate};
 use crate::core::project::{self, ApplyAction};
@@ -373,9 +373,9 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             let _guard = lock_writes()?;
             Ok(Response::Json(template_from_folder(request)?))
         }
-        ("POST", "/api/projects/prune") => {
+        ("POST", "/api/reindex") => {
             let _guard = lock_writes()?;
-            Ok(Response::Json(prune_projects()?))
+            Ok(Response::Json(reindex_all()?))
         }
         ("POST", "/api/counter") => {
             let request: CounterRequest =
@@ -435,16 +435,13 @@ fn load_state() -> Result<Value> {
         })
         .collect();
 
-    let mut records = index::load_all()?;
-    records.reverse();
-    let projects: Vec<Value> = records
+    // Filesystem-as-truth: discover projects from PROJECT_INFO.md across bases
+    // (cache-accelerated, already newest-first).
+    let projects: Vec<Value> = library::discover(&config)
         .iter()
-        .map(|record| {
-            let project_path = Path::new(&record.path);
-            let metadata = project_info::read_metadata(project_path, &config)
-                .ok()
-                .flatten();
-            project_json(record, project_path, &metadata)
+        .map(|project| {
+            let metadata = project_info::read_metadata(&project.path).ok().flatten();
+            project_json(project, &metadata)
         })
         .collect();
     let counter = Counters::load()?.get();
@@ -669,18 +666,13 @@ fn save_settings(value: Value) -> Result<()> {
     if let Some(lines) = value.get("preview_lines").and_then(Value::as_u64) {
         config.preview_lines = usize::try_from(lines).unwrap_or(8);
     }
-    if let Some(enabled) = value.get("project_info_enabled").and_then(Value::as_bool) {
-        config.project_info_enabled = enabled;
-    }
-    if let Some(filename) = value.get("project_info_filename").and_then(Value::as_str) {
-        let filename = filename.trim();
-        if filename.is_empty() {
-            bail!("Metadata filename cannot be empty");
-        }
-        if filename.contains('/') || filename.contains('\\') {
-            bail!("Metadata filename must be a filename, not a path");
-        }
-        config.project_info_filename = filename.to_string();
+    if let Some(bases) = value.get("bases").and_then(Value::as_array) {
+        config.bases = bases
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
     }
     if let Some(enabled) = value
         .get("prompt_open_after_create")
@@ -705,16 +697,22 @@ fn save_settings(value: Value) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Shared serialization for a project row — used by `/api/state` and
-/// `/api/search` so both surfaces show identical fields (incl. tags).
-fn project_json(record: &ProjectRecord, project_path: &Path, metadata: &Option<Metadata>) -> Value {
+/// `/api/search` so both surfaces show identical fields (incl. tags). Tags come
+/// from freshly-read metadata (authoritative) when available, else the cached
+/// values carried on the discovered project.
+fn project_json(project: &Project, metadata: &Option<Metadata>) -> Value {
+    let tags = metadata
+        .as_ref()
+        .map(|item| item.tags.clone())
+        .unwrap_or_else(|| project.tags.clone());
     json!({
-        "id": record.id,
-        "template": record.template,
-        "path": record.path,
-        "name": record.name,
-        "created_at": record.created_at,
-        "exists": project_path.exists(),
-        "tags": metadata.as_ref().map(|item| item.tags.clone()).unwrap_or_default(),
+        "id": project.id,
+        "template": project.template,
+        "path": project.path,
+        "name": project.name,
+        "created_at": project.created,
+        "exists": project.path.exists(),
+        "tags": tags,
     })
 }
 
@@ -723,24 +721,19 @@ fn project_json(record: &ProjectRecord, project_path: &Path, metadata: &Option<M
 fn search_projects(request: SearchRequest) -> Result<Value> {
     let config = Config::load()?;
     let predicates = query::parse(&request.terms);
-    let mut records = index::load_all()?;
-    records.reverse();
 
     let mut projects = Vec::new();
-    for record in &records {
-        let project_path = Path::new(&record.path);
-        let metadata = project_info::read_metadata(project_path, &config)
-            .ok()
-            .flatten();
+    for project in library::discover(&config) {
+        let metadata = project_info::read_metadata(&project.path).ok().flatten();
         let include = if predicates.is_empty() {
             true
         } else {
             metadata
                 .as_ref()
-                .is_some_and(|meta| query::evaluate(&predicates, record, meta))
+                .is_some_and(|meta| query::evaluate(&predicates, meta))
         };
         if include {
-            projects.push(project_json(record, project_path, &metadata));
+            projects.push(project_json(&project, &metadata));
         }
     }
     Ok(json!({"ok": true, "projects": projects}))
@@ -750,16 +743,16 @@ fn search_projects(request: SearchRequest) -> Result<Value> {
 fn project_detail(path: &str) -> Result<Value> {
     let config = Config::load()?;
     let root = Path::new(path);
-    let metadata = project_info::read_metadata(root, &config).ok().flatten();
-    let journal = project_info::read_journal_entries(root, &config)
+    let metadata = project_info::read_metadata(root).ok().flatten();
+    let journal = project_info::read_journal_entries(root)
         .unwrap_or_default()
         .iter()
         .map(|entry| json!({"timestamp": entry.timestamp, "message": entry.message}))
         .collect::<Vec<_>>();
-    // The index record carries template/name even when the file is gone.
-    let record = index::load_all()
-        .ok()
-        .and_then(|records| records.into_iter().find(|r| paths_match(&r.path, path)));
+    // Discovery carries template/name/id straight from the folder's metadata.
+    let record = library::discover(&config)
+        .into_iter()
+        .find(|p| paths_match(&p.path.display().to_string(), path));
 
     Ok(json!({
         "ok": true,
@@ -768,23 +761,23 @@ fn project_detail(path: &str) -> Result<Value> {
         "has_metadata": metadata.is_some(),
         "metadata": metadata,
         "journal": journal,
-        "record": record.map(|r| json!({
-            "id": r.id,
-            "template": r.template,
-            "name": r.name,
-            "created_at": r.created_at,
+        "record": record.map(|p| json!({
+            "id": p.id,
+            "template": p.template,
+            "name": p.name,
+            "created_at": p.created,
         })),
     }))
 }
 
 /// `POST /api/project/tag` — add or remove one tag in the frontmatter.
 fn project_tag(request: TagRequest) -> Result<Value> {
-    let config = Config::load()?;
     let tag = request.tag.trim().to_string();
     if tag.is_empty() {
         bail!("Tag cannot be empty");
     }
-    let pinfo = Path::new(&request.path).join(&config.project_info_filename);
+    let root = Path::new(&request.path);
+    let pinfo = project_info::pinfo_path(root);
     match request.action.as_str() {
         "add" => project_info::write_frontmatter(&pinfo, |meta| {
             if !meta.tags.contains(&tag) {
@@ -796,7 +789,9 @@ fn project_tag(request: TagRequest) -> Result<Value> {
         })?,
         other => bail!("unknown tag action '{other}' (expected 'add' or 'remove')"),
     }
-    let tags = project_info::read_metadata(Path::new(&request.path), &config)?
+    // Keep the base cache's tags fresh so list/search reflect the change.
+    library::refresh_cache(root);
+    let tags = project_info::read_metadata(root)?
         .map(|meta| meta.tags)
         .unwrap_or_default();
     Ok(json!({"ok": true, "tags": tags}))
@@ -804,14 +799,13 @@ fn project_tag(request: TagRequest) -> Result<Value> {
 
 /// `POST /api/project/note` — append a timestamped journal entry.
 fn project_note(request: NoteRequest) -> Result<Value> {
-    let config = Config::load()?;
     let message = request.message.trim();
     if message.is_empty() {
         bail!("Note cannot be empty");
     }
-    let pinfo = Path::new(&request.path).join(&config.project_info_filename);
+    let pinfo = project_info::pinfo_path(Path::new(&request.path));
     project_info::append_journal_entry(&pinfo, message)?;
-    let journal = project_info::read_journal_entries(Path::new(&request.path), &config)
+    let journal = project_info::read_journal_entries(Path::new(&request.path))
         .unwrap_or_default()
         .iter()
         .map(|entry| json!({"timestamp": entry.timestamp, "message": entry.message}))
@@ -837,16 +831,16 @@ fn register_folder(request: RegisterRequest) -> Result<Value> {
         created_override: request.created.filter(|date| !date.trim().is_empty()),
         on_pinfo_conflict,
     })?;
-    let record = &outcome.record;
+    let project = &outcome.project;
     Ok(json!({
         "ok": true,
         "project": {
-            "id": record.id,
-            "template": record.template,
-            "template_name": outcome.template_name,
-            "path": record.path,
-            "name": record.name,
-            "created_at": record.created_at,
+            "id": project.id,
+            "template": project.template,
+            "template_name": project.template_name,
+            "path": project.path,
+            "name": project.name,
+            "created_at": project.created,
             "renamed_to": outcome.renamed_to,
             "pinfo_written": outcome.pinfo_written,
             "applied": outcome.applied,
@@ -1011,19 +1005,11 @@ fn normalize_template_rel(path: &str) -> Result<String> {
     Ok(rel)
 }
 
-/// `POST /api/projects/prune` — drop index records whose folders are gone.
-fn prune_projects() -> Result<Value> {
-    let records = index::load_all()?;
-    let before = records.len();
-    let kept: Vec<ProjectRecord> = records
-        .into_iter()
-        .filter(|record| Path::new(&record.path).exists())
-        .collect();
-    let removed = before - kept.len();
-    if removed > 0 {
-        index::rewrite(&kept)?;
-    }
-    Ok(json!({"ok": true, "removed": removed, "remaining": kept.len()}))
+/// `POST /api/reindex` — force a full rescan of every base, rewriting caches.
+fn reindex_all() -> Result<Value> {
+    let config = Config::load()?;
+    let total = library::reindex(&config);
+    Ok(json!({"ok": true, "projects": total}))
 }
 
 /// `POST /api/counter` — set the global ID counter.

@@ -1,3 +1,4 @@
+<img width="2712" height="1863" alt="Screenshot_20260627_114158" src="https://github.com/user-attachments/assets/08bb830c-1c85-42f7-b94c-85ddfa34e795" />
 # fastf — Fast Folder Creator
 
 ```

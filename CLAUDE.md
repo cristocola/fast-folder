@@ -4,7 +4,7 @@
 
 `fastf` (Fast Folder Creator) is a portable Rust CLI tool for creating structured project folders from **folder templates**. Universal use cases: code, research, finance, music video, photography, and film production workflows. Single-folder portable distribution — config, templates, counters, and project index live next to the binary.
 
-**v0.8 (in progress): a template is a folder.** `templates/<slug>/template.yaml` holds metadata (variables, naming_pattern, id, structure, post_create, tags, tag_from, verbatim/exclude globs); a sibling `templates/<slug>/files/` subtree IS the file spec — every file/dir under it is reproduced into each new project, with `{token}` interpolation on names and on UTF-8 text (≤1 MiB), binaries copied byte-for-byte. See "Folder templates + bundled assets (v0.8)" below. Phases 1–3 landed (folder model + copy engine + CLI; UI background copy jobs; UI file ingestion + editor); phase 4 (from-folder binary bundling) pending.
+**v0.8: a template is a folder.** `templates/<slug>/template.yaml` holds metadata (variables, naming_pattern, id, structure, post_create, tags, tag_from, verbatim/exclude globs); a sibling `templates/<slug>/files/` subtree IS the file spec — every file/dir under it is reproduced into each new project, with `{token}` interpolation on names and on UTF-8 text (≤1 MiB), binaries copied byte-for-byte. See "Folder templates + bundled assets (v0.8)" below. All four phases landed: folder model + copy engine + CLI; UI background copy jobs; UI file ingestion + editor; from-folder binary bundling.
 
 ## Build commands
 
@@ -28,7 +28,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (132 total: 62 unit/lib + 48 core in integration.rs + 22 UI in ui_server.rs)
+# Test (134 total: 62 unit/lib + 49 core in integration.rs + 23 UI in ui_server.rs)
 cargo test
 cargo test <test_name>   # run a single test by name
 
@@ -62,9 +62,10 @@ fast-folder/
 ├── tests/
 │   ├── integration.rs        — 48 hermetic core tests using FASTF_INSTALL_DIR + tempfile
 │   │                           (write_template splits an inline files: block onto disk)
-│   └── ui_server.rs          — 22 tests driving fastf::ui::route_request (v0.6/v0.7 core
+│   └── ui_server.rs          — 23 tests driving fastf::ui::route_request (v0.6/v0.7 core
 │                               + v0.8 bundled-file reproduce + background copy job +
-│                               template file list/save/add/delete + reserved/traversal guard)
+│                               template file list/save/add/delete + reserved/traversal guard
+│                               + from-folder bundling report)
 └── src/
     ├── lib.rs                — Library entry: exposes core/, cli/, tui/, ui/, util/, bootstrap/
     │                           so integration tests can import fastf::...
@@ -159,7 +160,11 @@ fast-folder/
     │   ├── template.rs       — list/show/edit/delete (delete removes the whole <slug>/ dir) +
     │   │                        from_folder() for template generation from existing dirs.
     │   │                        v0.8: import/export removed (templates are folders — share by
-    │   │                        copying the folder).
+    │   │                        copying the folder). Phase 4: from_folder(source, slug, force,
+    │   │                        bundle_assets) -> FromFolderReport is the non-interactive core
+    │   │                        (UI + tests); run_from_folder() is the CLI shell (size-confirm +
+    │   │                        summary). scan_source()/execute_scan() split so the CLI confirms
+    │   │                        before writing; bundle_assets copies binary/large files verbatim.
     │   ├── config.rs         — config show/set. Handles new v0.3 keys:
     │   │                        project_info_enabled, project_info_filename (with pinfo_* aliases),
     │   │                        prompt_open_after_create, confirm_create, show_banner,
@@ -409,9 +414,9 @@ Integration tests live in `tests/integration.rs` (core flows) and `tests/ui_serv
 - `tempfile::TempDir` for hermetic sandboxes
 - A `static SERIAL: Mutex<()>` to run tests serially within the test binary (Rust 2024 edition made `std::env::set_var` unsafe — the mutex justifies the `unsafe` block). Each test binary has its own `SERIAL`; that's fine because `FASTF_INSTALL_DIR` is per-process and `cargo test`'s binaries are separate processes.
 
-`integration.rs` covers: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, index append, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture (including non-naming-pattern vars), metadata round-trip via YAML, disabled/custom-filename metadata, pinfo alias config compat, and bundled-template deduplication guard.
+`integration.rs` covers: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, index append, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture (including non-naming-pattern vars), metadata round-trip via YAML, disabled/custom-filename metadata, pinfo alias config compat, bundled-template deduplication guard, and from-folder asset bundling (binary bundled byte-identical when `bundle_assets`, skipped otherwise).
 
-`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s. v0.7 adds: search respects the query language + path exclusion, project detail returns metadata + journal, tag add/remove roundtrip, note appends journal, register onboards an existing folder, apply preview is non-writing while apply creates missing, and prune drops missing records. v0.8 adds: create reproduces bundled files (incl. a byte-identical binary), a large bundled asset returns a `job_id` that polls to `done` (small assets → `job_id:null`); phase 3 adds template file endpoints — `template-files` lists the `files/` subtree with a `file_count` in `/api/state`, `file-save` creates/updates a text file, `file-add` copies a disk asset byte-identical, `file-delete` removes one, and reserved-name/traversal writes are rejected.
+`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s. v0.7 adds: search respects the query language + path exclusion, project detail returns metadata + journal, tag add/remove roundtrip, note appends journal, register onboards an existing folder, apply preview is non-writing while apply creates missing, and prune drops missing records. v0.8 adds: create reproduces bundled files (incl. a byte-identical binary), a large bundled asset returns a `job_id` that polls to `done` (small assets → `job_id:null`); phase 3 adds template file endpoints — `template-files` lists the `files/` subtree with a `file_count` in `/api/state`, `file-save` creates/updates a text file, `file-add` copies a disk asset byte-identical, `file-delete` removes one, and reserved-name/traversal writes are rejected. Phase 4 adds a from-folder bundling test: `bundle_assets:true` bundles a binary byte-identical and the `report` carries the counts (folders / text files / bundled + bytes / skipped).
 
 Run:
 ```bash
@@ -476,6 +481,7 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - v0.8: `Template.files`/`dir`/(text buffer) are `#[serde(skip)]`; `verbatim`/`exclude` use `skip_serializing_if = "Vec::is_empty"` so empty globs don't clutter every `template.yaml`. `load_from_file`/`save_to_file` take `&Path` (was `&PathBuf`) — `&PathBuf` still coerces.
 - v0.8: `interp_rel` interpolates each path segment separately (via `interpolate_name`) so `__` collapse/trim happens *within* a name, never across `/`. Don't run `interpolate_name` on the whole slash-joined path.
 - v0.8: Converting old flat `<slug>.yaml` templates → folder form: `template.yaml` (drop the `files:` block) + one real file per entry under `files/`. There is **no migrate command** and no flat-form fallback — an old flat `.yaml` sitting directly in `templates/` is simply ignored by `load_all` (it only reads subdirs with a `template.yaml`).
+- v0.8 (phase 4): `cli::template::from_folder(source, slug, force, bundle_assets)` is the **non-interactive core** (returns `FromFolderReport`) called by the UI route and tests; `run_from_folder` is the **CLI shell** (interactive size-`Confirm` before bundling + colored summary). Don't call the interactive one from the UI/TUI-headless path — `run_from_folder`'s `Confirm` needs a TTY (piping stdin fails with "not a terminal", by design, like every other dialoguer prompt). The `scan_source` → `execute_scan` split exists so the CLI can confirm the total bundle size *before* any write; keep it. Text files (UTF-8 ≤ 64 KB) always reproduce as editable `FileEntry`s; only binary/large files are gated on `bundle_assets` (else counted `skipped`). Bundled assets are copied via `assets::copy_file(force_verbatim=true)` — stored raw, interpolated later at create time. Root `PROJECT_INFO.md` is skipped during scan (fastf owns it).
 
 ## Browser UI (`fastf ui`, v0.7 + v0.8 jobs)
 

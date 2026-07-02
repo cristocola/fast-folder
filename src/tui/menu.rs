@@ -352,7 +352,7 @@ fn menu_templates() -> Result<()> {
                     .with_prompt("Overwrite if a template with this slug exists?")
                     .default(false)
                     .interact()?;
-                template::from_folder(&path, &slug, force)?;
+                template::run_from_folder(&path, &slug, force, false)?;
                 println!();
             }
             2 => {

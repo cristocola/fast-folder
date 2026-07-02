@@ -381,14 +381,17 @@ enum TemplateAction {
         /// Template slug (see 'fastf template list')
         slug: String,
     },
-    /// Generate a template from an existing folder tree (structure + small file contents)
+    /// Generate a template from an existing folder tree (structure + file contents, opt-in assets)
     #[command(
         after_help = "Walks the folder, turning every directory into a FolderNode and every\n\
-            text file ≤ 64 KB into a FileEntry with raw content. Common noise dirs\n\
+            text file ≤ 64 KB into a reproduced file. Binary and large files are\n\
+            skipped by default; pass --bundle-assets to copy them byte-for-byte into\n\
+            the template (it confirms the total size first). Common noise dirs\n\
             (.git, node_modules, target, __pycache__, .venv, dist, build, .idea, .vscode)\n\
             are skipped automatically.\n\n\
             Examples:\n  \
                 fastf template from-folder ./my-crate rust-project\n  \
+                fastf template from-folder ./delivery-kit client-kit --bundle-assets\n  \
                 fastf template from-folder ./existing-video video-project --force"
     )]
     FromFolder {
@@ -399,6 +402,9 @@ enum TemplateAction {
         /// Overwrite existing template with the same slug
         #[arg(long)]
         force: bool,
+        /// Bundle binary/large files byte-for-byte (default: text files only)
+        #[arg(long)]
+        bundle_assets: bool,
     },
 }
 
@@ -547,9 +553,12 @@ fn run() -> Result<()> {
             TemplateAction::Show { slug } => cli::template::show(&slug),
             TemplateAction::Edit { slug } => cli::template::edit(&slug),
             TemplateAction::Delete { slug } => cli::template::delete(&slug),
-            TemplateAction::FromFolder { path, slug, force } => {
-                cli::template::from_folder(&path, &slug, force)
-            }
+            TemplateAction::FromFolder {
+                path,
+                slug,
+                force,
+                bundle_assets,
+            } => cli::template::run_from_folder(&path, &slug, force, bundle_assets),
         },
 
         Some(Commands::Config { action }) => match action {

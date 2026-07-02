@@ -122,10 +122,95 @@ pub fn delete(slug: &str) -> Result<()> {
     Ok(())
 }
 
-/// Generate a template from an existing folder tree.
-/// The generated template can be edited like any other — either via
-/// `fastf template edit <slug>` or by opening the YAML directly.
-pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
+/// Counts returned by a `from-folder` generation, for the CLI summary and the
+/// browser UI result.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct FromFolderReport {
+    /// Directories reproduced into the template's `structure`.
+    pub folders: usize,
+    /// UTF-8 text files reproduced into `files/` (editable in the builder).
+    pub text_files: usize,
+    /// Binary/large files copied byte-for-byte into `files/` (bundle mode).
+    pub bundled: usize,
+    /// Total bytes of the bundled assets.
+    pub bundled_bytes: u64,
+    /// Binary/large files left out because bundling was off.
+    pub skipped: usize,
+}
+
+/// One binary/large file queued for byte-for-byte bundling into `files/`.
+struct AssetPlan {
+    src: PathBuf,
+    rel: String,
+    size: u64,
+}
+
+/// The result of scanning a source folder — a pure plan, nothing written yet.
+#[derive(Default)]
+struct ScanResult {
+    structure: Vec<FolderNode>,
+    text_files: Vec<FileEntry>,
+    assets: Vec<AssetPlan>,
+    folders: usize,
+    skipped: usize,
+}
+
+impl ScanResult {
+    fn bundle_bytes(&self) -> u64 {
+        self.assets.iter().map(|a| a.size).sum()
+    }
+}
+
+/// Generate a template from an existing folder tree (non-interactive core used
+/// by the browser UI and tests). Text files are reproduced into `files/`;
+/// binary/large files are bundled byte-for-byte only when `bundle_assets` is set
+/// (otherwise they are skipped). The generated template can be edited like any
+/// other — via `fastf template edit <slug>`, the browser editor, or on disk.
+pub fn from_folder(
+    source: &str,
+    slug: &str,
+    force: bool,
+    bundle_assets: bool,
+) -> Result<FromFolderReport> {
+    let root = validate_source(source)?;
+    validate_slug(slug)?;
+    ensure_slug_available(slug, force)?;
+    let scan = scan_source(&root, bundle_assets)?;
+    execute_scan(scan, slug, &root)
+}
+
+/// Interactive CLI wrapper: confirms the total size before bundling assets, then
+/// prints a summary. `main.rs` calls this; the UI calls [`from_folder`] directly.
+pub fn run_from_folder(source: &str, slug: &str, force: bool, bundle_assets: bool) -> Result<()> {
+    let root = validate_source(source)?;
+    validate_slug(slug)?;
+    ensure_slug_available(slug, force)?;
+    let scan = scan_source(&root, bundle_assets)?;
+
+    if bundle_assets && !scan.assets.is_empty() {
+        let total = scan.bundle_bytes();
+        let ok = Confirm::new()
+            .with_prompt(format!(
+                "Bundle {} asset{} ({}) into template '{}'?",
+                scan.assets.len(),
+                if scan.assets.len() == 1 { "" } else { "s" },
+                human_size(total),
+                slug
+            ))
+            .default(true)
+            .interact()?;
+        if !ok {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    let report = execute_scan(scan, slug, &root)?;
+    print_from_folder_summary(slug, &report);
+    Ok(())
+}
+
+fn validate_source(source: &str) -> Result<PathBuf> {
     let root = PathBuf::from(source);
     if !root.exists() {
         bail!("source folder does not exist: {}", root.display());
@@ -133,35 +218,34 @@ pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
     if !root.is_dir() {
         bail!("source is not a directory: {}", root.display());
     }
+    Ok(root)
+}
 
-    validate_slug(slug)?;
-
-    let dest = paths::template_manifest(slug);
+fn ensure_slug_available(slug: &str, force: bool) -> Result<()> {
     if paths::template_dir(slug).exists() && !force {
         bail!(
             "template '{}' already exists — re-run with --force to overwrite",
             slug
         );
     }
+    Ok(())
+}
 
-    // Ensure the template's folder exists (first-run safety).
-    fs::create_dir_all(paths::template_files_dir(slug)).context("creating template directory")?;
+/// Materialize a [`ScanResult`] into a template on disk: write `template.yaml` +
+/// the text `files/`, then copy bundled binary assets byte-for-byte.
+fn execute_scan(scan: ScanResult, slug: &str, root: &Path) -> Result<FromFolderReport> {
+    let files_dir = paths::template_files_dir(slug);
+    fs::create_dir_all(&files_dir).context("creating template directory")?;
+    let dest = paths::template_manifest(slug);
 
-    let mut structure: Vec<FolderNode> = Vec::new();
-    let mut files: Vec<FileEntry> = Vec::new();
-    let mut folder_count = 0usize;
-    let mut file_count = 0usize;
-    let mut skipped_large = 0usize;
-
-    scan_directory(
-        &root,
-        &root,
-        &mut structure,
-        &mut files,
-        &mut folder_count,
-        &mut file_count,
-        &mut skipped_large,
-    )?;
+    let ScanResult {
+        structure,
+        text_files,
+        assets,
+        folders,
+        skipped,
+    } = scan;
+    let text_count = text_files.len();
 
     // Auto-add a `name` variable so the naming_pattern has something to bind.
     let variables = vec![Variable {
@@ -186,7 +270,7 @@ pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
         },
         variables,
         structure,
-        files,
+        files: text_files,
         verbatim: vec![],
         exclude: vec![],
         dir: paths::template_dir(slug),
@@ -194,27 +278,61 @@ pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
         tags: vec![],
         tag_from: vec![],
     };
-
     template.save_to_file(&dest)?;
 
+    // Bundle the binary/large assets byte-for-byte (interpolation happens later,
+    // at project-create time — assets are stored raw).
+    let empty = std::collections::HashMap::new();
+    let mut bundled_bytes = 0u64;
+    for asset in &assets {
+        let target = files_dir.join(&asset.rel);
+        crate::core::assets::copy_file(&asset.src, &target, true, &empty, "")
+            .with_context(|| format!("bundling {}", asset.rel))?;
+        bundled_bytes += asset.size;
+    }
+
+    Ok(FromFolderReport {
+        folders,
+        text_files: text_count,
+        bundled: assets.len(),
+        bundled_bytes,
+        skipped,
+    })
+}
+
+fn print_from_folder_summary(slug: &str, report: &FromFolderReport) {
+    let mut detail = format!(
+        "{} folder{}, {} text file{}",
+        report.folders,
+        if report.folders == 1 { "" } else { "s" },
+        report.text_files,
+        if report.text_files == 1 { "" } else { "s" },
+    );
+    if report.bundled > 0 {
+        detail.push_str(&format!(
+            ", {} bundled asset{} ({})",
+            report.bundled,
+            if report.bundled == 1 { "" } else { "s" },
+            human_size(report.bundled_bytes)
+        ));
+    }
     println!(
-        "{}  Generated template {} from {} folder{} and {} file{}{}.",
+        "{}  Generated template {} — {}.",
         "✓".green().bold(),
         slug.cyan().bold(),
-        folder_count,
-        if folder_count == 1 { "" } else { "s" },
-        file_count,
-        if file_count == 1 { "" } else { "s" },
-        if skipped_large == 0 {
-            String::new()
-        } else {
-            format!(
-                " (skipped {} file{} larger than 64 KB)",
-                skipped_large,
-                if skipped_large == 1 { "" } else { "s" }
-            )
-        }
+        detail
     );
+    if report.skipped > 0 {
+        println!(
+            "   {}",
+            format!(
+                "{} binary/large file{} skipped — re-run with --bundle-assets to include them.",
+                report.skipped,
+                if report.skipped == 1 { "" } else { "s" }
+            )
+            .dimmed()
+        );
+    }
     println!(
         "   Review it:  {}",
         format!("fastf template show {}", slug).dimmed()
@@ -224,8 +342,23 @@ pub fn from_folder(source: &str, slug: &str, force: bool) -> Result<()> {
         format!("fastf template edit {}", slug).dimmed()
     );
     println!("   Use it:     {}", format!("fastf new {}", slug).dimmed());
+}
 
-    Ok(())
+/// Human-readable byte size (KB/MB/GB) for confirmations and summaries.
+fn human_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn validate_slug(slug: &str) -> Result<()> {
@@ -258,15 +391,23 @@ fn humanize_slug(slug: &str) -> String {
         .join(" ")
 }
 
-fn scan_directory(
+/// Walk `root` once, classifying every file into text (reproduced as an editable
+/// `FileEntry`) or asset (binary/large — bundled when `bundle_assets`, else
+/// counted as skipped). Nothing is written.
+fn scan_source(root: &Path, bundle_assets: bool) -> Result<ScanResult> {
+    let mut result = ScanResult::default();
+    let structure = scan_dir(root, root, bundle_assets, &mut result)?;
+    result.structure = structure;
+    Ok(result)
+}
+
+fn scan_dir(
     root: &Path,
     current: &Path,
-    structure: &mut Vec<FolderNode>,
-    files: &mut Vec<FileEntry>,
-    folder_count: &mut usize,
-    file_count: &mut usize,
-    skipped_large: &mut usize,
-) -> Result<()> {
+    bundle_assets: bool,
+    out: &mut ScanResult,
+) -> Result<Vec<FolderNode>> {
+    let mut nodes = Vec::new();
     let entries =
         fs::read_dir(current).with_context(|| format!("reading {}", current.display()))?;
 
@@ -282,51 +423,54 @@ fn scan_directory(
         let ft = entry.file_type()?;
 
         if ft.is_dir() {
-            *folder_count += 1;
-            let mut node = FolderNode {
+            out.folders += 1;
+            let children = scan_dir(root, &path, bundle_assets, out)?;
+            nodes.push(FolderNode {
                 name: name.clone(),
-                children: Vec::new(),
-            };
-            let mut sub_files: Vec<FileEntry> = Vec::new();
-            scan_directory(
-                root,
-                &path,
-                &mut node.children,
-                &mut sub_files,
-                folder_count,
-                file_count,
-                skipped_large,
-            )?;
-            files.extend(sub_files);
-            structure.push(node);
-        } else if ft.is_file() {
-            let meta = entry.metadata()?;
-            if meta.len() > FROM_FOLDER_MAX_FILE_SIZE {
-                *skipped_large += 1;
-                continue;
-            }
-            let content = match fs::read_to_string(&path) {
-                Ok(s) => s,
-                Err(_) => {
-                    // Probably binary. Skip silently — user can add it back with raw content if needed.
-                    *skipped_large += 1;
-                    continue;
-                }
-            };
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            *file_count += 1;
-            files.push(FileEntry {
-                path: relative,
-                template: String::new(),
-                content,
+                children,
             });
+        } else if ft.is_file() {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            classify_file(root, &path, size, bundle_assets, out);
         }
         // symlinks, fifos, etc. are intentionally skipped
     }
 
-    Ok(())
+    Ok(nodes)
+}
+
+/// Route one file into the scan: small UTF-8 text becomes an editable
+/// `FileEntry`; everything else (binary, or larger than the text cap) is an
+/// asset — bundled byte-for-byte when `bundle_assets`, otherwise skipped. The
+/// reserved auto-gen filename is never reproduced (fastf owns it).
+fn classify_file(root: &Path, path: &Path, size: u64, bundle_assets: bool, out: &mut ScanResult) {
+    let rel = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    if crate::core::project_info::path_is_reserved(&rel) {
+        return;
+    }
+
+    if size <= FROM_FOLDER_MAX_FILE_SIZE
+        && let Ok(content) = fs::read_to_string(path)
+    {
+        out.text_files.push(FileEntry {
+            path: rel,
+            template: String::new(),
+            content,
+        });
+        return;
+    }
+
+    if bundle_assets {
+        out.assets.push(AssetPlan {
+            src: path.to_path_buf(),
+            rel,
+            size,
+        });
+    } else {
+        out.skipped += 1;
+    }
 }

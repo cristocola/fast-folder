@@ -2469,6 +2469,7 @@ html[data-theme="dark"] .switch input:checked + span { background: var(--accent-
 .modal-sub code { font-family: "SFMono-Regular", Consolas, monospace; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
 .modal-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--line); }
 .inline-check { display: flex; align-items: center; gap: 7px; margin-right: auto; color: var(--muted); font-size: 11px; cursor: pointer; }
+.inline-check.ff-bundle { margin-top: 14px; margin-right: 0; }
 
 /* ---- Apply preview ---- */
 .apply-vars { display: grid; gap: 12px; }

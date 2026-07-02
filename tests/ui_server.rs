@@ -604,6 +604,32 @@ fn template_file_rejects_reserved_traversal_and_missing() {
 }
 
 #[test]
+fn from_folder_bundles_assets_and_reports_counts() {
+    with_fresh_install(|install| {
+        write_config(install);
+        let src = install.join("kit");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("brief.md"), "# Brief").unwrap();
+        let blob = vec![0x00u8, 0xFF, 0x10, 0x80];
+        fs::write(src.join("logo.bin"), &blob).unwrap();
+
+        let value = json(
+            "POST",
+            "/api/templates/from-folder",
+            serde_json::json!({"source": src.display().to_string(), "slug": "kit", "bundle_assets": true}),
+        );
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["report"]["text_files"], 1);
+        assert_eq!(value["report"]["bundled"], 1);
+        assert_eq!(value["report"]["bundled_bytes"], blob.len() as u64);
+
+        // The binary landed byte-for-byte in the new template's files/.
+        let landed = install.join("templates/kit/files/logo.bin");
+        assert_eq!(fs::read(&landed).unwrap(), blob);
+    });
+}
+
+#[test]
 fn prune_drops_missing_records() {
     with_fresh_install(|install| {
         write_minimal_template(install, "test");

@@ -154,6 +154,8 @@ struct FromFolderRequest {
     slug: String,
     #[serde(default)]
     force: bool,
+    #[serde(default)]
+    bundle_assets: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -894,9 +896,16 @@ fn action_json(action: &ApplyAction) -> Value {
 }
 
 /// `POST /api/templates/from-folder` — generate a template from a folder tree.
+/// `bundle_assets` copies binary/large files byte-for-byte; the report carries
+/// the counts (folders / text files / bundled + bytes / skipped) for the UI.
 fn template_from_folder(request: FromFolderRequest) -> Result<Value> {
-    crate::cli::template::from_folder(&request.source, &request.slug, request.force)?;
-    Ok(json!({"ok": true, "slug": request.slug}))
+    let report = crate::cli::template::from_folder(
+        &request.source,
+        &request.slug,
+        request.force,
+        request.bundle_assets,
+    )?;
+    Ok(json!({"ok": true, "slug": request.slug, "report": report}))
 }
 
 // ---------------------------------------------------------------------------

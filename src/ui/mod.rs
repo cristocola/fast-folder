@@ -161,6 +161,27 @@ struct CounterRequest {
     value: u64,
 }
 
+#[derive(Debug, Deserialize)]
+struct TemplateFileSaveRequest {
+    slug: String,
+    path: String,
+    #[serde(default)]
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TemplateFileAddRequest {
+    slug: String,
+    src: String,
+    dest: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TemplateFileDeleteRequest {
+    slug: String,
+    path: String,
+}
+
 /// A routed response: either a JSON body or a static asset (content-type + bytes).
 #[derive(Debug)]
 pub enum Response {
@@ -286,6 +307,24 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             delete_template(&request.slug)?;
             Ok(Response::Json(json!({"ok": true})))
         }
+        ("POST", "/api/templates/file-save") => {
+            let request: TemplateFileSaveRequest =
+                serde_json::from_slice(body).context("invalid file-save request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(save_template_file(request)?))
+        }
+        ("POST", "/api/templates/file-add") => {
+            let request: TemplateFileAddRequest =
+                serde_json::from_slice(body).context("invalid file-add request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(add_template_file(request)?))
+        }
+        ("POST", "/api/templates/file-delete") => {
+            let request: TemplateFileDeleteRequest =
+                serde_json::from_slice(body).context("invalid file-delete request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(delete_template_file(request)?))
+        }
         ("POST", "/api/open") => {
             let request: OpenRequest =
                 serde_json::from_slice(body).context("invalid open request")?;
@@ -350,6 +389,10 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             let id = path.trim_start_matches("/api/job/");
             Ok(Response::Json(job_status(id)?))
         }
+        ("GET", path) if path.starts_with("/api/template-files?") => {
+            let slug = query_param(path, "slug").context("missing 'slug' query parameter")?;
+            Ok(Response::Json(list_template_files(&slug)?))
+        }
         ("GET", path) if !path.starts_with("/api/") => {
             let (content_type, bytes) = assets::serve(path)?;
             Ok(Response::Static(content_type, bytes))
@@ -373,6 +416,23 @@ fn load_state() -> Result<Value> {
         b_default.cmp(&a_default).then_with(|| a.name.cmp(&b.name))
     });
 
+    // Enrich each template with a live count of its `files/` subtree — `files`
+    // itself is `#[serde(skip)]` (the dir is the source of truth), so the
+    // frontend gets a count for its cards/nav without shipping every asset.
+    let templates_json: Vec<Value> = templates
+        .iter()
+        .map(|template| {
+            let mut value = serde_json::to_value(template).unwrap_or_else(|_| json!({}));
+            let file_count = crate::core::assets::walk(&template.files_dir())
+                .map(|entries| entries.iter().filter(|entry| !entry.is_dir).count())
+                .unwrap_or(0);
+            if let Value::Object(map) = &mut value {
+                map.insert("file_count".to_string(), json!(file_count));
+            }
+            value
+        })
+        .collect();
+
     let mut records = index::load_all()?;
     records.reverse();
     let projects: Vec<Value> = records
@@ -390,7 +450,7 @@ fn load_state() -> Result<Value> {
     Ok(json!({
         "ok": true,
         "config": config,
-        "templates": templates,
+        "templates": templates_json,
         "projects": projects,
         "counter": counter,
         "next_id": format!("ID{:04}", counter + 1),
@@ -837,6 +897,109 @@ fn action_json(action: &ApplyAction) -> Value {
 fn template_from_folder(request: FromFolderRequest) -> Result<Value> {
     crate::cli::template::from_folder(&request.source, &request.slug, request.force)?;
     Ok(json!({"ok": true, "slug": request.slug}))
+}
+
+// ---------------------------------------------------------------------------
+// v0.8 phase 3 — template file ingestion / editor
+// ---------------------------------------------------------------------------
+
+/// `GET /api/template-files?slug=<slug>` — list a template's real `files/`
+/// subtree. Text files (UTF-8, ≤ `TEXT_MAX_BYTES`) include their content for
+/// in-place editing; binaries report size only. Directories are omitted —
+/// deliberately-empty dirs are managed via the template's `structure`.
+fn list_template_files(slug: &str) -> Result<Value> {
+    validate_slug(slug)?;
+    let dir = paths::template_files_dir(slug);
+    let entries = crate::core::assets::walk(&dir)?;
+    let files: Vec<Value> = entries
+        .iter()
+        .filter(|entry| !entry.is_dir)
+        .map(|entry| {
+            let content = if entry.size <= crate::core::assets::TEXT_MAX_BYTES {
+                fs::read_to_string(dir.join(&entry.rel)).ok()
+            } else {
+                None
+            };
+            json!({
+                "path": entry.rel,
+                "size": entry.size,
+                "is_text": content.is_some(),
+                "content": content,
+            })
+        })
+        .collect();
+    Ok(json!({"ok": true, "slug": slug, "files": files}))
+}
+
+/// `POST /api/templates/file-save` — write (create or replace) a UTF-8 text file
+/// in the template's `files/` subtree. Empty content creates a placeholder.
+fn save_template_file(request: TemplateFileSaveRequest) -> Result<Value> {
+    require_template_exists(&request.slug)?;
+    let rel = normalize_template_rel(&request.path)?;
+    let dest = paths::template_files_dir(&request.slug).join(&rel);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    fs::write(&dest, request.content.as_bytes())
+        .with_context(|| format!("writing {}", dest.display()))?;
+    Ok(json!({"ok": true, "path": rel}))
+}
+
+/// `POST /api/templates/file-add` — copy a file from a disk path into the
+/// template's `files/` subtree (any type; binaries land byte-identical).
+fn add_template_file(request: TemplateFileAddRequest) -> Result<Value> {
+    require_template_exists(&request.slug)?;
+    let src = PathBuf::from(request.src.trim());
+    if !src.is_file() {
+        bail!("source file does not exist: {}", src.display());
+    }
+    let rel = normalize_template_rel(&request.dest)?;
+    let dest = paths::template_files_dir(&request.slug).join(&rel);
+    // A template asset is copied byte-for-byte here; `{token}` interpolation
+    // happens later, at project-create time, not at ingestion.
+    crate::core::assets::copy_file(&src, &dest, true, &HashMap::new(), "")?;
+    let size = fs::metadata(&dest).map(|meta| meta.len()).unwrap_or(0);
+    let is_text = size <= crate::core::assets::TEXT_MAX_BYTES && fs::read_to_string(&dest).is_ok();
+    Ok(json!({"ok": true, "path": rel, "size": size, "is_text": is_text}))
+}
+
+/// `POST /api/templates/file-delete` — remove one file from the `files/` subtree.
+fn delete_template_file(request: TemplateFileDeleteRequest) -> Result<Value> {
+    validate_slug(&request.slug)?;
+    let rel = normalize_template_rel(&request.path)?;
+    let target = paths::template_files_dir(&request.slug).join(&rel);
+    if !target.is_file() {
+        bail!("file not found: {rel}");
+    }
+    fs::remove_file(&target).with_context(|| format!("deleting {}", target.display()))?;
+    Ok(json!({"ok": true, "path": rel}))
+}
+
+/// A template's `files/` operations require it to already exist on disk (the
+/// `files/` subtree is the source of truth). New templates must be saved first.
+fn require_template_exists(slug: &str) -> Result<()> {
+    validate_slug(slug)?;
+    if !paths::template_manifest(slug).exists() {
+        bail!("template '{slug}' does not exist yet — save it before adding files");
+    }
+    Ok(())
+}
+
+/// Normalize + guard a relative path inside a template's `files/`: forward
+/// slashes, traversal-safe, and never the reserved auto-gen filename.
+fn normalize_template_rel(path: &str) -> Result<String> {
+    let rel = path.trim().replace('\\', "/");
+    if rel.is_empty() {
+        bail!("file path cannot be empty");
+    }
+    crate::core::naming::ensure_relative_safe_path(&rel)?;
+    if project_info::path_is_reserved(&rel) {
+        bail!(
+            "'{}' is generated automatically — choose another filename (e.g. NOTES.md)",
+            project_info::RESERVED_FILENAME
+        );
+    }
+    Ok(rel)
 }
 
 /// `POST /api/projects/prune` — drop index records whose folders are gone.

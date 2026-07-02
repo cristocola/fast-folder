@@ -1734,6 +1734,39 @@ button {
 
 .file-content { min-height: 170px; }
 
+.file-add-panel {
+  padding: 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+
+.file-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.file-add-row + .file-add-row { margin-top: 8px; }
+.file-add-row .input { flex: 1 1 auto; min-width: 0; }
+.file-add-row .button { flex: 0 0 auto; white-space: nowrap; }
+.file-add-panel .editor-tip { margin-top: 11px; }
+
+.file-binary-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px;
+  padding: 11px 13px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.file-binary-note svg { width: 15px; height: 15px; flex: 0 0 auto; }
+
 .action-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

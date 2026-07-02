@@ -152,7 +152,7 @@ Main views:
 - **Dashboard** — your recent projects front-and-center (click any to open its detail drawer), at-a-glance counts, and a compact "quick start" row to relaunch a favorite template in one click.
 - **Create Project** — pick a template, fill variables (text fields and `select` dropdowns), live-preview the folder tree and generated file contents, then create.
 - **Templates** — browse every template as a card, or **generate one from an existing folder** — without leaving the browser.
-- **Visual Template Editor** — build and edit templates without writing YAML: variables, folder structure, and templated files, all point-and-click. Writes the same `template.yaml` the CLI and TUI read.
+- **Visual Template Editor** — build and edit templates without writing YAML: variables, folder structure, templated files, and bundled assets, all point-and-click. Edit text files in place, copy an asset into a template straight from a disk path, and set `verbatim`/`exclude` globs. Writes the same `template.yaml` + `files/` the CLI and TUI read.
 - **Large bundled assets, non-blocking** — a template can carry real files (a logo, a multi-hundred-MB delivery video). On create, small/text files land instantly and big files copy in the background with a live progress bar — the project is usable (and openable) immediately.
 - **Projects** — the full project index with inline tags and a real **search bar** that speaks the same query language as `fastf search` (`tag:draft`, `template=music-video`, `created>2026-01-01`, or plain text). Click any project to open the **detail drawer**: variables, add/remove tags, read and append journal notes, apply a template, or open the folder.
 - **Add existing** — onboard a folder fastf didn't create (`fastf register` in the browser): it gets a project ID and metadata, optionally renamed to the naming pattern and filled in from a template.
@@ -168,7 +168,7 @@ It's **fast** for the same reasons the CLI is: requests never leave `127.0.0.1`,
 
 ### Authoring
 - **Interactive template builder** — create and edit templates step-by-step in the TUI. No YAML knowledge required. Edit mode jumps directly to the section you want to change.
-- **Visual template editor (browser UI)** — build and edit templates point-and-click in `fastf ui`: variables, folder tree, and templated files, no YAML required. Writes the same YAML the CLI and TUI read.
+- **Visual template editor (browser UI)** — build and edit templates point-and-click in `fastf ui`: variables, folder tree, templated files, and bundled assets (add from a disk path, edit text in place), no YAML required. Writes the same `template.yaml` + `files/` the CLI and TUI read.
 - **Generate template from folder** — point at an existing project, get a ready-to-edit template: `fastf template from-folder ./my-project my-template`.
 - **Bundle real files** — drop any file (text or binary) into a template's `files/` folder and it's reproduced into every project built from it; file names and UTF-8 text get `{token}` interpolation, binaries are copied byte-for-byte.
 - **Share = copy the folder** — a template is a folder; version it, commit it, or send the folder to a teammate. No import/export step.

@@ -4,7 +4,7 @@
 
 `fastf` (Fast Folder Creator) is a portable Rust CLI tool for creating structured project folders from **folder templates**. Universal use cases: code, research, finance, music video, photography, and film production workflows. Single-folder portable distribution — config, templates, counters, and project index live next to the binary.
 
-**v0.8 (in progress): a template is a folder.** `templates/<slug>/template.yaml` holds metadata (variables, naming_pattern, id, structure, post_create, tags, tag_from, verbatim/exclude globs); a sibling `templates/<slug>/files/` subtree IS the file spec — every file/dir under it is reproduced into each new project, with `{token}` interpolation on names and on UTF-8 text (≤1 MiB), binaries copied byte-for-byte. See "Folder templates + bundled assets (v0.8)" below. Phases 1–2 landed (folder model + copy engine + CLI; UI background copy jobs); phases 3–4 (editor ingestion, from-folder bundling) pending.
+**v0.8 (in progress): a template is a folder.** `templates/<slug>/template.yaml` holds metadata (variables, naming_pattern, id, structure, post_create, tags, tag_from, verbatim/exclude globs); a sibling `templates/<slug>/files/` subtree IS the file spec — every file/dir under it is reproduced into each new project, with `{token}` interpolation on names and on UTF-8 text (≤1 MiB), binaries copied byte-for-byte. See "Folder templates + bundled assets (v0.8)" below. Phases 1–3 landed (folder model + copy engine + CLI; UI background copy jobs; UI file ingestion + editor); phase 4 (from-folder binary bundling) pending.
 
 ## Build commands
 
@@ -28,7 +28,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (126 total: 62 unit/lib + 48 core in integration.rs + 16 UI in ui_server.rs)
+# Test (132 total: 62 unit/lib + 48 core in integration.rs + 22 UI in ui_server.rs)
 cargo test
 cargo test <test_name>   # run a single test by name
 
@@ -62,8 +62,9 @@ fast-folder/
 ├── tests/
 │   ├── integration.rs        — 48 hermetic core tests using FASTF_INSTALL_DIR + tempfile
 │   │                           (write_template splits an inline files: block onto disk)
-│   └── ui_server.rs          — 16 tests driving fastf::ui::route_request (v0.6/v0.7 core
-│                               + v0.8 bundled-file reproduce + background copy job)
+│   └── ui_server.rs          — 22 tests driving fastf::ui::route_request (v0.6/v0.7 core
+│                               + v0.8 bundled-file reproduce + background copy job +
+│                               template file list/save/add/delete + reserved/traversal guard)
 └── src/
     ├── lib.rs                — Library entry: exposes core/, cli/, tui/, ui/, util/, bootstrap/
     │                           so integration tests can import fastf::...
@@ -410,7 +411,7 @@ Integration tests live in `tests/integration.rs` (core flows) and `tests/ui_serv
 
 `integration.rs` covers: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, index append, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture (including non-naming-pattern vars), metadata round-trip via YAML, disabled/custom-filename metadata, pinfo alias config compat, and bundled-template deduplication guard.
 
-`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s. v0.7 adds: search respects the query language + path exclusion, project detail returns metadata + journal, tag add/remove roundtrip, note appends journal, register onboards an existing folder, apply preview is non-writing while apply creates missing, and prune drops missing records. v0.8 adds: create reproduces bundled files (incl. a byte-identical binary), a large bundled asset returns a `job_id` that polls to `done` (small assets → `job_id:null`).
+`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health route, preview produces a plan without writing, create makes the folder + appends the index, an embedded static asset (`/app.js`) is served, and an unknown route 404s. v0.7 adds: search respects the query language + path exclusion, project detail returns metadata + journal, tag add/remove roundtrip, note appends journal, register onboards an existing folder, apply preview is non-writing while apply creates missing, and prune drops missing records. v0.8 adds: create reproduces bundled files (incl. a byte-identical binary), a large bundled asset returns a `job_id` that polls to `done` (small assets → `job_id:null`); phase 3 adds template file endpoints — `template-files` lists the `files/` subtree with a `file_count` in `/api/state`, `file-save` creates/updates a text file, `file-add` copies a disk asset byte-identical, `file-delete` removes one, and reserved-name/traversal writes are rejected.
 
 Run:
 ```bash
@@ -504,6 +505,31 @@ when nothing needed deferring. **v0.8 removed the `/api/templates/import` and
 `/api/templates/export` routes + their frontend** (templates are folders now —
 share by copying the folder).
 
+**v0.8 (phase 3) — template file ingestion + editor.** The template editor's
+Files section now works directly on the `files/` subtree on disk (since
+`Template.files` is `#[serde(skip)]`, `/api/state` can't ship the file list — the
+editor fetches it live). Four routes: `GET /api/template-files?slug=` lists the
+subtree (`{path, size, is_text, content}` — text files ≤ `TEXT_MAX_BYTES` carry
+content for in-place editing, binaries report size only, dirs omitted);
+`POST /api/templates/file-save` `{slug, path, content}` writes/updates a UTF-8
+text file (empty content = placeholder); `POST /api/templates/file-add`
+`{slug, src, dest}` copies a file from a disk path into `files/` via
+`assets::copy_file(.., force_verbatim=true, ..)` (byte-identical; the local-first
+ingestion path — no large upload through the browser); `POST
+/api/templates/file-delete` `{slug, path}` removes one. All three writes go
+through `normalize_template_rel` (forward-slash, `ensure_relative_safe_path`,
+reject reserved `PROJECT_INFO.md`) and `require_template_exists` (files ops need
+the template saved first — `files/` on disk is the source of truth, so there's no
+in-memory buffer to flush). These are **independent of `templates/save`**, which
+still writes metadata only (a UI metadata save sends an empty `files` buffer → no
+`files/` write). `verbatim`/`exclude` globs are ordinary metadata edited in the
+automation section and saved via `templates/save`. `/api/state` injects a computed
+`file_count` per template (via `assets::walk`) for the cards/nav. Frontend:
+`state.templateFiles` holds the fetched list; `loadTemplateFiles(slug)` fetches +
+re-renders; each op (`createTemplateFile` / `addTemplateFileFromPath` /
+`deleteTemplateFile` / blur-`saveTemplateFileContent`) hits its endpoint then
+reloads the list.
+
 Layout:
 - `src/ui/mod.rs` — the HTTP server (`std::net::TcpListener`, one thread per
   connection, no web framework) + all API handlers. `pub fn serve(address)`
@@ -577,3 +603,15 @@ source of truth and the same on-disk files. The `Ui` arm in `main.rs` forwards t
 - v0.8: `showSuccess(result)` (frontend) now takes the whole create response (not just
   `result.project`) so it can read `job_id`. The progress bar updates only the
   `#job-progress` node inside the imperatively-built success overlay — no `render()`.
+- v0.8 (phase 3): The template editor's **Files section is live-on-disk**, NOT part
+  of the `templateEditor` object. Never re-add a `files` array to `newTemplateDraft`
+  / the save payload — `Template.files` is `#[serde(skip)]`, so it round-trips to
+  nothing; a metadata save deliberately doesn't touch `files/`. File CRUD uses the
+  four dedicated endpoints and re-fetches `state.templateFiles`. Because they act on
+  disk, they need the on-disk slug (`state.templateOriginalSlug`, not the edited
+  slug) and the template to exist — new templates show a "save first" notice.
+- v0.8 (phase 3): file writes reuse `assets::copy_file(force_verbatim=true)` for
+  ingestion (byte copy, atomic `.part`+rename) and `normalize_template_rel` for the
+  traversal/reserved guard. Don't interpolate at ingestion time — a template asset
+  is stored raw and only interpolated at project-create time. `list_template_files`
+  omits directories (empty dirs are the `structure:` section's job).

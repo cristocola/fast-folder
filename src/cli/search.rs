@@ -29,7 +29,7 @@ use anyhow::Result;
 use colored::Colorize;
 use std::io::IsTerminal;
 
-use crate::core::library::{self, Project};
+use crate::core::library;
 use crate::core::{config::Config, project_info, query};
 
 pub struct SearchArgs {
@@ -89,35 +89,8 @@ pub fn run(args: SearchArgs) -> Result<()> {
     if interactive {
         crate::cli::recent::run_picker(&matches)
     } else {
-        print_plain_results(&matches);
+        // Shared with `fastf recent` — identical plain output (incl. base column).
+        crate::cli::recent::print_plain(&matches);
         Ok(())
-    }
-}
-
-fn print_plain_results(matches: &[&Project]) {
-    let id_w = matches.iter().map(|p| p.id.len()).max().unwrap_or(4);
-    let tmpl_w = matches.iter().map(|p| p.template.len()).max().unwrap_or(8);
-    let date_w = 10;
-
-    for p in matches {
-        let date = p.created.get(..date_w).unwrap_or(&p.created);
-        let path_str = p.path.display().to_string();
-        let missing = !p.path.exists();
-        let marker = if missing { "✗".red() } else { "•".cyan() };
-        println!(
-            "  {} {:<id_w$}  {:<tmpl_w$}  {}  {}",
-            marker,
-            p.id.green().bold(),
-            p.template.dimmed(),
-            date.dimmed(),
-            if missing {
-                format!("{} {}", p.name, "(missing)".red())
-            } else {
-                p.name.clone()
-            },
-            id_w = id_w,
-            tmpl_w = tmpl_w,
-        );
-        println!("      {} {}", "→".dimmed(), path_str.dimmed());
     }
 }

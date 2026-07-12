@@ -676,3 +676,149 @@ fn discovery_self_heals_missing_folder() {
         assert!(after["projects"].as_array().unwrap().is_empty());
     });
 }
+
+// ---------------------------------------------------------------------------
+// v0.10: base display + move between bases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn project_json_includes_base() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        create_project("based");
+
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        let project = &state["projects"][0];
+        assert_eq!(project["base_label"], "projects");
+        let base = project["base"].as_str().unwrap();
+        assert!(
+            base.ends_with("projects"),
+            "base should be the configured base dir, got: {base}"
+        );
+    });
+}
+
+#[test]
+fn move_route_moves_between_configured_bases() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+
+        let base_a = install.join("projects");
+        let base_b = install.join("projects_b");
+        fs::create_dir_all(&base_a).unwrap();
+        fs::create_dir_all(&base_b).unwrap();
+        let mut cfg = Config::default();
+        cfg.base_dir = base_a.display().to_string();
+        cfg.bases = vec![base_b.display().to_string()];
+        cfg.save().unwrap();
+
+        let value = json(
+            "POST",
+            "/api/create",
+            serde_json::json!({"template": "test", "variables": {"name": "mover"}}),
+        );
+        assert_eq!(value["ok"], true);
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        let path = state["projects"][0]["path"].as_str().unwrap().to_string();
+
+        // A non-configured base is rejected — targets are effective_bases only.
+        let err = ui::route_request(
+            "POST",
+            "/api/project/move",
+            serde_json::json!({
+                "path": path,
+                "base": install.join("elsewhere").display().to_string(),
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("not a configured base"),
+            "got: {err}"
+        );
+
+        // Moving into the second configured base returns a background job id.
+        let value = json(
+            "POST",
+            "/api/project/move",
+            serde_json::json!({"path": path, "base": base_b.display().to_string()}),
+        );
+        assert_eq!(value["ok"], true);
+        let job_id = value["job_id"]
+            .as_str()
+            .expect("expected a job_id")
+            .to_string();
+
+        // Poll the move job to completion (copy → verify → finalize → done).
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut status = String::new();
+        while Instant::now() < deadline {
+            let job = json(
+                "GET",
+                &format!("/api/job/{job_id}"),
+                serde_json::Value::Null,
+            );
+            status = job["job"]["status"].as_str().unwrap_or("").to_string();
+            assert_ne!(status, "failed", "move job failed: {job}");
+            if status == "done" {
+                assert_eq!(job["job"]["phase"], "done");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        assert_eq!(status, "done", "move job did not complete in time");
+        assert!(!Path::new(&path).exists(), "source folder should be gone");
+
+        // State now shows the project under the new base, with its files intact.
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        let projects = state["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["base_label"], "projects_b");
+        let shown = projects[0]["path"].as_str().unwrap();
+        assert!(
+            Path::new(shown).join("README.md").is_file(),
+            "files must travel with the move"
+        );
+    });
+}
+
+#[test]
+fn reconcile_route_resumes_pending_copy_and_state_surfaces_it() {
+    with_fresh_install(|install| {
+        let base = install.join("projects");
+        fs::create_dir_all(&base).unwrap();
+        let mut cfg = Config::default();
+        cfg.base_dir = base.display().to_string();
+        cfg.save().unwrap();
+
+        // A project folder left mid-provisioning: a durable create marker plus an
+        // asset that never finished copying (simulating a crash).
+        let root = base.join("proj");
+        fs::create_dir_all(&root).unwrap();
+        let src = install.join("asset.bin");
+        let data = vec![3u8; 6000];
+        fs::write(&src, &data).unwrap();
+        let dest = root.join("asset.bin");
+        let job = fastf::core::assets::CopyJob {
+            src,
+            dest: dest.clone(),
+            bytes: data.len() as u64,
+        };
+        fastf::core::provisioning::write_create_marker(&root, std::slice::from_ref(&job)).unwrap();
+
+        // /api/state surfaces the incomplete provisioning for the banner.
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        assert_eq!(state["provisioning"].as_array().unwrap().len(), 1);
+
+        // /api/reconcile resumes the copy and clears the marker.
+        let value = json("POST", "/api/reconcile", serde_json::json!({}));
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["report"]["resumed"], 1);
+        assert_eq!(fs::read(&dest).unwrap(), data);
+
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        assert_eq!(state["provisioning"].as_array().unwrap().len(), 0);
+    });
+}

@@ -827,9 +827,9 @@ button {
 .project-list { overflow: hidden; }
 
 .project-row {
-  min-width: 680px;
+  min-width: 800px;
   display: grid;
-  grid-template-columns: minmax(230px, 1.4fr) 120px 110px 90px 34px;
+  grid-template-columns: minmax(230px, 1.4fr) 120px 120px 110px 90px 34px;
   align-items: center;
   gap: 16px;
   padding: 13px 17px;
@@ -864,6 +864,16 @@ button {
 .project-folder svg { width: 15px; height: 15px; }
 
 .project-name-copy { min-width: 0; }
+
+/* Base column: chip truncates instead of blowing the grid track. */
+.base-cell { min-width: 0; }
+.base-cell .chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
 
 .project-name-copy strong {
   display: block;
@@ -2203,6 +2213,45 @@ html[data-theme="dark"] .switch input:checked + span { background: var(--accent-
 .job-progress.job-failed .job-bar-fill { background: #e5534b; }
 .job-progress.job-failed .job-label { color: #e5534b; }
 
+/* Verification phase: a gentle animated sheen so the user sees files being
+   checked, not a frozen bar. Purely cosmetic. */
+.job-progress.job-verifying .job-bar-fill {
+  background: linear-gradient(
+    90deg,
+    var(--accent-strong) 0%,
+    color-mix(in srgb, var(--accent-strong) 55%, #fff) 50%,
+    var(--accent-strong) 100%
+  );
+  background-size: 200% 100%;
+  animation: job-verify-sheen 1.1s linear infinite;
+}
+@keyframes job-verify-sheen {
+  from { background-position: 200% 0; }
+  to { background-position: 0 0; }
+}
+.success-mark.move-mark {
+  background: color-mix(in srgb, var(--accent-strong) 16%, transparent);
+  color: var(--accent-strong);
+}
+
+/* Recovery banner (interrupted copy/move) */
+.recover-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, #e0a13a 45%, transparent);
+  background: color-mix(in srgb, #e0a13a 12%, var(--surface));
+}
+.recover-copy { display: flex; align-items: center; gap: 12px; }
+.recover-copy svg { flex: none; color: #d9902a; }
+.recover-copy strong { display: block; font-size: 13px; }
+.recover-copy span { font-size: 12px; color: var(--muted, #6b7280); }
+.recover-banner .button { flex: none; }
+
 #toast-root {
   position: fixed;
   z-index: 50;
@@ -2389,6 +2438,9 @@ html[data-theme="dark"] .switch input:checked + span { background: var(--accent-
 .drawer-meta-line strong { color: var(--ink-2); }
 .drawer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .drawer-actions .button { height: 34px; padding: 0 12px; font-size: 11px; }
+.drawer-move { display: flex; gap: 8px; margin-bottom: 14px; }
+.drawer-move select { flex: 1; min-width: 0; height: 34px; font-size: 11px; }
+.drawer-move .button { height: 34px; padding: 0 12px; font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
 .drawer-empty {
   margin-top: 18px;
   padding: 18px;

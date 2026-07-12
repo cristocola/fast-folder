@@ -50,7 +50,8 @@ non-loopback address.
 | GET  | `/api/state` | Config, templates, discovered projects, counter, data paths |
 | POST | `/api/preview` | Validate variables, return a project plan (no writes) |
 | POST | `/api/create` | Create a project + run post-create; returns `{project, job_id}` (`job_id` set only when large assets are copied in the background) |
-| GET  | `/api/job/<id>` | Poll a background asset-copy job's progress (404 once evicted after completion) |
+| GET  | `/api/job/<id>` | Poll a background copy/move job's progress (`copying`→`verifying`→`finalizing`→`done`; 404 once evicted after completion) |
+| POST | `/api/job/<id>/cancel` | Request cancellation of a running job (cleans up its `.part`/staging; source untouched) |
 | POST | `/api/settings` | Update supported `config.toml` values |
 | POST | `/api/templates/save` | Create/update a template's metadata (`template.yaml`) |
 | POST | `/api/templates/delete` | Delete a template (its whole `<slug>/` folder) |
@@ -63,16 +64,18 @@ non-loopback address.
 | GET  | `/api/project?path=<abs>` | Full metadata + journal for one project |
 | POST | `/api/project/tag` | Add/remove one tag (`{path, action, tag}`) |
 | POST | `/api/project/note` | Append a journal entry (`{path, message}`) |
+| POST | `/api/project/move` | Move a project into another configured base (`{path, base}`); target must be in `effective_bases()`. Returns `{job_id}` — the move runs in the background (same-fs = instant rename; cross-fs = staged copy → verify → commit → remove source). Poll `/api/job/<id>` |
 | POST | `/api/register` | Onboard an existing folder (`{path, template?, variables, rename, apply, created?, use_today, overwrite}`) |
 | POST | `/api/apply/preview` | Dry-run an apply, return create/skip actions (no writes) |
 | POST | `/api/apply` | Create missing folders/files in an existing folder |
 | POST | `/api/templates/from-folder` | Generate a template from a folder (`{source, slug, force, bundle_assets}`); returns a `report` of counts (folders / text files / bundled + bytes / skipped) |
 | POST | `/api/reindex` | Force a full rescan of every base, rewriting each `.fastf-index.json`; returns `{projects}` |
+| POST | `/api/reconcile` | Resume interrupted copies + finish/roll-back interrupted moves across all bases; returns `{report}` (`resumed`/`completed`/`rolled_back`/`unrecoverable`) |
 | POST | `/api/counter` | Set the global ID counter (`{value}`) |
 
 Write routes (`create`, `settings`, template save/from-folder/delete, template
-`file-save`/`file-add`/`file-delete`, `project/tag`, `project/note`, `register`,
-`apply`, `reindex`, `counter`) serialize through a process-wide mutex
+`file-save`/`file-add`/`file-delete`, `project/tag`, `project/note`,
+`project/move`, `register`, `apply`, `reindex`, `counter`) serialize through a process-wide mutex
 (`WRITE_LOCK`) so concurrent requests can't corrupt files. Read routes
 (`/api/search`, `/api/project`, `/api/job/<id>`, `/api/template-files`, the GET
 state route) are lock-free. Static GET routes serve only the four embedded
@@ -97,6 +100,19 @@ on a background thread (**not** holding `WRITE_LOCK` — the copy only touches t
 new project's own folder) with chunked progress. The frontend polls
 `/api/job/<id>` (~500 ms) and shows a progress bar; a 404 (job evicted after it
 finishes) is treated as done. `job_id` is `null` when nothing was deferred.
+
+**Durable provisioning + verified moves (v0.11).** Both bulk-data flows are now
+crash-safe. A deferred create writes a durable `.fastf-provisioning.json` marker
+into the project root before copying (cleared on completion). A move returns a
+`job_id` and runs in the background: same-filesystem = instant atomic rename;
+cross-filesystem/network = stage into `.<folder>.fastf-part` (guarded by a
+`.fastf-move-<folder>.json` marker) → verify size+count+existence → atomic rename
+into place → remove source. **The source is never removed until the copy is
+verified.** Jobs report a `phase` (`copying`/`verifying`/`finalizing`/`done`) and
+are cancellable via `/api/job/<id>/cancel`. `/api/state` carries a `provisioning`
+array of anything interrupted; the UI shows a banner whose Retry hits
+`/api/reconcile` (same recovery as the `fastf reconcile` CLI). The move job runs
+off `WRITE_LOCK` (it only writes the target staging + atomic caches).
 
 The path/query GET routes (`/api/project?path=`, `/api/job/<id>`) are matched
 before the static-asset catch-all; query values are percent-decoded with a small

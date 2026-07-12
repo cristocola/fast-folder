@@ -17,6 +17,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::naming::interpolate_name;
 
@@ -49,8 +50,11 @@ pub struct Progress {
     pub total_files: usize,
     pub done_files: usize,
     pub current_file: String,
-    /// `"running"`, `"done"`, or `"failed"`.
+    /// `"running"`, `"done"`, `"failed"`, or `"cancelled"`.
     pub status: String,
+    /// Coarse stage for the UI, shared by create + move jobs:
+    /// `"copying" | "verifying" | "finalizing" | "done"`.
+    pub phase: String,
     pub error: Option<String>,
 }
 
@@ -63,15 +67,24 @@ impl Progress {
             done_files: 0,
             current_file: String::new(),
             status: "running".to_string(),
+            phase: "copying".to_string(),
             error: None,
         }
     }
 }
 
+/// A copy that stopped because its cancel flag was set. Callers distinguish this
+/// from a genuine failure by checking the flag after `copy_job` returns `Err`.
+pub const CANCELLED_MSG: &str = "copy cancelled";
+
 /// Copy one deferred (large, verbatim) file into place with chunked progress.
 /// Atomic via `.part` + rename; `progress.copied_bytes` is bumped per chunk so
 /// the UI shows a live bar during a multi-minute copy.
-pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>) -> Result<()> {
+///
+/// `cancel` is polled between chunks: when set, the partial `.part` is removed
+/// and the copy returns an [`CANCELLED_MSG`] error so no half-written file is
+/// ever left in place.
+pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) -> Result<()> {
     if let Some(parent) = job.dest.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating parent dirs for {}", job.dest.display()))?;
@@ -87,6 +100,9 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>) -> Result<()> {
             fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         let mut buf = vec![0u8; 1024 * 1024];
         loop {
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("{CANCELLED_MSG}");
+            }
             let n = reader.read(&mut buf).context("reading source")?;
             if n == 0 {
                 break;
@@ -164,6 +180,105 @@ fn walk_inner(root: &Path, current: &Path, out: &mut Vec<AssetEntry>) -> Result<
             });
         }
         // symlinks / fifos / etc. are intentionally skipped
+    }
+    Ok(())
+}
+
+/// Recursively copy a directory tree, byte-for-byte — **no interpolation**
+/// (used by `library::move_project`'s cross-device fallback, where the copy
+/// must preserve every file exactly, including literal `{braces}`). Fails if
+/// `dst` already exists so a half-typed target never gets merged into.
+pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
+    if dst.exists() {
+        anyhow::bail!("copy target already exists: {}", dst.display());
+    }
+    fs::create_dir_all(dst).with_context(|| format!("creating {}", dst.display()))?;
+    // `walk` sorts parents before children, so plain create_dir + copy works.
+    for entry in walk(src)? {
+        let rel = entry.rel.replace('/', std::path::MAIN_SEPARATOR_STR);
+        let target = dst.join(&rel);
+        if entry.is_dir {
+            fs::create_dir_all(&target)
+                .with_context(|| format!("creating {}", target.display()))?;
+        } else {
+            let source = src.join(&rel);
+            fs::copy(&source, &target)
+                .with_context(|| format!("copying {} → {}", source.display(), target.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Disposable/transient files that must not count toward a copy or verification:
+/// the per-base cache, provisioning/move markers, and half-written `.part` temps.
+/// A tree copy skips them and verification ignores them on both sides, so a move
+/// of a project that itself carries stale scaffolding still verifies cleanly.
+fn is_transient(rel: &str) -> bool {
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    base == crate::core::library::CACHE_FILENAME
+        || base == crate::core::provisioning::MARKER_CREATE
+        || base.starts_with(crate::core::provisioning::MARKER_MOVE_PREFIX)
+        || base.ends_with(".part")
+}
+
+/// Enumerate a source tree into the directory creates + per-file [`CopyJob`]s
+/// needed to reproduce it verbatim under `dst`. Directories (including empty
+/// ones) come first so a plain create-then-copy is ordering-safe. Transient
+/// scaffolding files are skipped. Used by the staged (cross-filesystem / network)
+/// move so the copy can report live progress and honor cancellation.
+pub fn jobs_for_tree(src: &Path, dst: &Path) -> Result<(Vec<PathBuf>, Vec<CopyJob>)> {
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for entry in walk(src)? {
+        let rel = entry.rel.replace('/', std::path::MAIN_SEPARATOR_STR);
+        let target = dst.join(&rel);
+        if entry.is_dir {
+            dirs.push(target);
+        } else if !is_transient(&entry.rel) {
+            files.push(CopyJob {
+                src: src.join(&rel),
+                dest: target,
+                bytes: entry.size,
+            });
+        }
+    }
+    Ok((dirs, files))
+}
+
+/// Verify that `dst` faithfully reproduces `src`: every non-transient file in
+/// `src` exists under `dst` with an identical byte size, and the file counts
+/// match (no source file dropped). This is the guarantee that must hold **before**
+/// a move removes its source — it catches the real network-share failure mode
+/// (a truncated or dropped-connection copy) without the cost of re-hashing every
+/// byte. Returns a descriptive error on the first discrepancy.
+pub fn verify_tree(src: &Path, dst: &Path) -> Result<()> {
+    let sizes = |root: &Path| -> Result<HashMap<String, u64>> {
+        let mut map = HashMap::new();
+        for entry in walk(root)? {
+            if !entry.is_dir && !is_transient(&entry.rel) {
+                map.insert(entry.rel, entry.size);
+            }
+        }
+        Ok(map)
+    };
+    let src_files = sizes(src)?;
+    let dst_files = sizes(dst)?;
+
+    for (rel, src_size) in &src_files {
+        match dst_files.get(rel) {
+            None => anyhow::bail!("verification failed: missing at destination: {rel}"),
+            Some(dst_size) if dst_size != src_size => anyhow::bail!(
+                "verification failed: size mismatch for {rel} (src {src_size} B, dst {dst_size} B)"
+            ),
+            Some(_) => {}
+        }
+    }
+    if dst_files.len() < src_files.len() {
+        anyhow::bail!(
+            "verification failed: destination has {} files, source has {}",
+            dst_files.len(),
+            src_files.len()
+        );
     }
     Ok(())
 }
@@ -312,10 +427,90 @@ mod tests {
             bytes: data.len() as u64,
         };
         let progress = Mutex::new(Progress::new(std::slice::from_ref(&job)));
-        copy_job(&job, &progress).unwrap();
+        copy_job(&job, &progress, &AtomicBool::new(false)).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), data);
         assert_eq!(progress.lock().unwrap().copied_bytes, data.len() as u64);
         assert!(!dest.with_extension("bin.part").exists());
+    }
+
+    #[test]
+    fn copy_job_honors_cancel_and_leaves_no_partial() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("big.bin");
+        let dest = tmp.path().join("out/big.bin");
+        let data: Vec<u8> = (0..(3 * 1024 * 1024u32)).map(|i| i as u8).collect();
+        fs::write(&src, &data).unwrap();
+        let job = CopyJob {
+            src,
+            dest: dest.clone(),
+            bytes: data.len() as u64,
+        };
+        let progress = Mutex::new(Progress::new(std::slice::from_ref(&job)));
+        // Pre-set cancel so the copy bails on the first chunk check.
+        let err = copy_job(&job, &progress, &AtomicBool::new(true)).unwrap_err();
+        assert!(err.to_string().contains(CANCELLED_MSG));
+        assert!(!dest.exists(), "no destination file on cancel");
+        let mut part = dest.into_os_string();
+        part.push(".part");
+        assert!(!PathBuf::from(part).exists(), "no .part left behind");
+    }
+
+    #[test]
+    fn verify_tree_detects_short_and_missing_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("a.txt"), "hello").unwrap();
+        fs::write(src.join("sub/b.bin"), vec![0u8; 2048]).unwrap();
+
+        // Faithful copy verifies.
+        copy_tree(&src, &dst).unwrap();
+        verify_tree(&src, &dst).unwrap();
+
+        // A truncated destination file fails verification.
+        fs::write(dst.join("sub/b.bin"), vec![0u8; 1024]).unwrap();
+        assert!(
+            verify_tree(&src, &dst)
+                .unwrap_err()
+                .to_string()
+                .contains("size mismatch")
+        );
+        // Restore it so the next case isolates the missing-file failure.
+        fs::write(dst.join("sub/b.bin"), vec![0u8; 2048]).unwrap();
+        verify_tree(&src, &dst).unwrap();
+
+        // A missing destination file fails verification.
+        fs::remove_file(dst.join("a.txt")).unwrap();
+        let err = verify_tree(&src, &dst).unwrap_err().to_string();
+        assert!(
+            err.contains("missing") || err.contains("files"),
+            "err: {err}"
+        );
+    }
+
+    #[test]
+    fn copy_tree_reproduces_nested_files_and_empty_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("docs/deep")).unwrap();
+        fs::create_dir_all(src.join("empty_dir")).unwrap();
+        // Literal braces must survive — a move never interpolates.
+        fs::write(src.join("notes_{client}.md"), "hello {name}").unwrap();
+        let binary: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+        fs::write(src.join("docs/deep/blob.bin"), &binary).unwrap();
+
+        let dst = tmp.path().join("dst");
+        copy_tree(&src, &dst).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dst.join("notes_{client}.md")).unwrap(),
+            "hello {name}"
+        );
+        assert_eq!(fs::read(dst.join("docs/deep/blob.bin")).unwrap(), binary);
+        assert!(dst.join("empty_dir").is_dir());
+        // Refuses to merge into an existing target.
+        assert!(copy_tree(&src, &dst).is_err());
     }
 
     #[test]

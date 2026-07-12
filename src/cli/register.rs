@@ -255,6 +255,11 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
         template_name: tmpl.name.clone(),
         name: plan.folder_name.clone(),
         path: plan.root_path.clone(),
+        base: plan
+            .root_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default(),
         created: resolved_created.clone(),
         tags,
         exists: true,

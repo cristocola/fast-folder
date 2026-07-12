@@ -40,7 +40,7 @@ enum Commands {
             fastf new music-video                        # use named template, fill vars interactively\n  \
             fastf new music-video --dry-run              # preview without creating anything\n  \
             fastf new music-video --artist=\"Ariana Grande\" --title=Lullaby\n  \
-            fastf new music-video --base-dir=/Volumes/Drive/Projects\n  \
+            fastf new music-video --base-dir=/mnt/proj/01_PROJECTS   # create in another base\n  \
             fastf new music-video --yes --artist=\"Bad Bunny\"   # flags + vars in any order\n\n\
             Variable flags must use = syntax: --artist=\"Bad Bunny\" not --artist \"Bad Bunny\".\n\
             Flags (--yes, --dry-run, --no-preview, --no-post, --base-dir=...) may appear\n\
@@ -145,6 +145,29 @@ enum Commands {
         query: String,
     },
 
+    /// Move a project folder into another configured base
+    #[command(
+        name = "move",
+        about = "Move a project folder into another configured base directory",
+        long_about = "Move a project's folder from its current base into another configured base\n\
+            (base_dir or one of the `bases` list), keeping the folder name. Targets are\n\
+            restricted to configured bases so the moved project stays discoverable.\n\n\
+            Cross-filesystem moves (e.g. btrfs home → NTFS project drive) automatically\n\
+            fall back to a byte-for-byte copy + remove. Both bases' caches and the\n\
+            project's PROJECT_INFO.md path are updated.",
+        after_help = "Examples:\n  \
+            fastf move ID0047 /mnt/proj/01_PROJECTS   # by full base path\n  \
+            fastf move ID0047 01_PROJECTS             # by base folder name\n  \
+            fastf move lullaby                        # interactive base picker (TTY)"
+    )]
+    Move {
+        /// Project ID (e.g. ID0047), ID prefix, or name substring
+        query: String,
+
+        /// Target base — full path or its folder name. Omit to pick interactively.
+        base: Option<String>,
+    },
+
     /// Rebuild the project-library cache by rescanning every base
     #[command(
         about = "Force a full rescan of every base and rewrite its .fastf-index.json cache",
@@ -154,6 +177,18 @@ enum Commands {
             moved or metadata hand-edited on another machine — to refresh the caches."
     )]
     Reindex,
+
+    /// Resume interrupted asset copies and finish/roll back interrupted moves
+    #[command(
+        about = "Recover interrupted background copies and staged moves",
+        long_about = "Large asset copies (during UI creates) and cross-filesystem moves leave a\n\
+            durable marker so a crash mid-copy is never silent data loss. `fastf\n\
+            reconcile` (also run automatically when `fastf ui` launches) walks every\n\
+            base, resumes any pending copies, and either finishes an already-committed\n\
+            move's source removal or rolls an uncommitted one back — the source folder\n\
+            is always left intact when nothing was verified."
+    )]
+    Reconcile,
 
     /// Onboard an existing folder by writing its PROJECT_INFO.md (no folder is created)
     #[command(
@@ -604,8 +639,12 @@ fn run() -> Result<()> {
         }),
 
         Some(Commands::Open { query }) => cli::recent::open(&query),
+        Some(Commands::Move { query, base }) => {
+            cli::move_project::run(cli::move_project::MoveArgs { query, base })
+        }
 
         Some(Commands::Reindex) => cli::reindex::run(),
+        Some(Commands::Reconcile) => cli::reconcile::run(),
 
         Some(Commands::Register {
             path,

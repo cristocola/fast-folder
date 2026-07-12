@@ -1,9 +1,11 @@
 pub mod apply;
 pub mod config;
 pub mod id;
+pub mod move_project;
 pub mod new;
 pub mod note;
 pub mod recent;
+pub mod reconcile;
 pub mod register;
 pub mod reindex;
 pub mod search;

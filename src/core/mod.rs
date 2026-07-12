@@ -6,6 +6,7 @@ pub mod naming;
 pub mod post_create;
 pub mod project;
 pub mod project_info;
+pub mod provisioning;
 pub mod query;
 pub mod template;
 pub mod vars;

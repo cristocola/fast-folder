@@ -22,11 +22,15 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
 
+use crate::core::assets::{self, Progress};
 use crate::core::config::Config;
 use crate::core::naming;
 use crate::core::project_info::{self, Metadata};
+use crate::core::provisioning;
 
 /// Filename of the per-base disposable cache, co-located with the projects.
 pub const CACHE_FILENAME: &str = ".fastf-index.json";
@@ -48,6 +52,9 @@ pub struct Project {
     pub name: String,
     /// Absolute path (`base.join(dir)`).
     pub path: PathBuf,
+    /// The effective base this project was discovered under (canonicalized when
+    /// it came through `discover`; always the project folder's parent).
+    pub base: PathBuf,
     /// ISO-8601 creation timestamp from metadata (folder mtime as a fallback).
     pub created: String,
     pub tags: Vec<String>,
@@ -112,6 +119,7 @@ impl CacheEntry {
             template_name: self.template_name,
             name: self.name,
             path,
+            base: base.to_path_buf(),
             created: self.created,
             tags: self.tags,
             exists: true,
@@ -214,7 +222,17 @@ pub fn scan_base(base: &Path) -> Vec<Project> {
         if !path.is_dir() {
             continue;
         }
-        if let Some(project) = project_at(&path) {
+        // Skip dot-prefixed dirs (e.g. a staged move's `.<folder>.fastf-part`,
+        // which carries a copy of PROJECT_INFO.md) so a move in flight never
+        // surfaces as a phantom duplicate project.
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with('.'))
+        {
+            continue;
+        }
+        if let Some(project) = project_at(base, &path) {
             out.push(project);
         }
     }
@@ -224,9 +242,9 @@ pub fn scan_base(base: &Path) -> Vec<Project> {
 /// Build a [`Project`] from a folder iff it contains a readable
 /// `PROJECT_INFO.md` with parseable frontmatter. Uses the fixed reserved
 /// filename directly (no config lookup) — metadata is now the project identity.
-fn project_at(dir: &Path) -> Option<Project> {
+fn project_at(base: &Path, dir: &Path) -> Option<Project> {
     let meta = read_project_meta(dir)?;
-    Some(project_from_meta(meta, dir))
+    Some(project_from_meta(meta, base, dir))
 }
 
 /// Read + parse the frontmatter of `<dir>/PROJECT_INFO.md`. `None` on any
@@ -238,7 +256,7 @@ fn read_project_meta(dir: &Path) -> Option<Metadata> {
     serde_yaml::from_str::<Metadata>(frontmatter).ok()
 }
 
-fn project_from_meta(meta: Metadata, dir: &Path) -> Project {
+fn project_from_meta(meta: Metadata, base: &Path, dir: &Path) -> Project {
     let name = dir
         .file_name()
         .and_then(|s| s.to_str())
@@ -255,6 +273,7 @@ fn project_from_meta(meta: Metadata, dir: &Path) -> Project {
         template_name: meta.template_name,
         name,
         path: dir.to_path_buf(),
+        base: base.to_path_buf(),
         created,
         tags: meta.tags,
         exists: true,
@@ -334,10 +353,11 @@ pub fn refresh_cache(project_dir: &Path) {
     let Some(meta) = read_project_meta(project_dir) else {
         return;
     };
-    let project = project_from_meta(meta, project_dir);
-    if let Some(base) = project_dir.parent() {
-        cache_upsert(base, &project);
-    }
+    let Some(base) = project_dir.parent() else {
+        return;
+    };
+    let project = project_from_meta(meta, base, project_dir);
+    cache_upsert(base, &project);
 }
 
 /// Remove the entry for base-relative `dir` from `base`'s cache. No-op when the
@@ -354,6 +374,225 @@ pub fn cache_remove(base: &Path, dir: &str) {
         .map(|e| e.into_project(base))
         .collect();
     let _ = write_cache(base, &projects);
+}
+
+// ---------------------------------------------------------------------------
+// Base display + move
+// ---------------------------------------------------------------------------
+
+/// Short display label for a base directory: its last path component (e.g.
+/// `01_PROJECTS` for `/mnt/proj/01_PROJECTS`, `cristoc` for `/home/cristoc`).
+/// Falls back to the full path for roots like `/`.
+pub fn base_label(base: &Path) -> String {
+    base.file_name()
+        .and_then(|s| s.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| base.display().to_string())
+}
+
+/// Move a project folder into another base directory, keeping its folder name.
+/// Synchronous convenience wrapper over [`move_project_with`] with throwaway
+/// progress/cancel handles — used by `fastf move` (CLI).
+pub fn move_project(project: &Project, new_base: &Path) -> Result<Project> {
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+    move_project_with(project, new_base, &progress, &cancel)
+}
+
+/// Move a project folder into another base directory, keeping its folder name.
+///
+/// **Safety invariant: the source is never removed until the destination is
+/// fully copied AND verified.** Same-filesystem moves take an instant, atomic
+/// `fs::rename` (verified by atomicity). Cross-filesystem / network moves stage
+/// the copy into a dot-prefixed `.<folder>.fastf-part` folder under the target
+/// base, guarded by a durable `.fastf-move-<folder>.json` marker, verify the
+/// copy (`assets::verify_tree`: size + count + existence), atomically rename the
+/// staging folder into place, and only *then* remove the source. A crash before
+/// the commit rename leaves the source intact and reconcile rolls the staging
+/// back; a crash after it lets reconcile finish the source removal.
+///
+/// `progress` drives the UI bar (phase + per-file counts); `cancel` aborts a
+/// staged copy cooperatively, cleaning up the staging folder and marker and
+/// leaving the source untouched. Returns the relocated [`Project`]. The caller
+/// is responsible for ensuring `new_base` is a configured base so the project
+/// stays discoverable.
+pub fn move_project_with(
+    project: &Project,
+    new_base: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<Project> {
+    if !new_base.is_dir() {
+        anyhow::bail!("target base does not exist: {}", new_base.display());
+    }
+    let new_base = new_base
+        .canonicalize()
+        .unwrap_or_else(|_| new_base.to_path_buf());
+    let old_base = project
+        .base
+        .canonicalize()
+        .unwrap_or_else(|_| project.base.clone());
+    if new_base == old_base {
+        anyhow::bail!(
+            "'{}' is already in base {}",
+            project.name,
+            new_base.display()
+        );
+    }
+
+    let folder_os = project.path.file_name().ok_or_else(|| {
+        anyhow::anyhow!(
+            "project path has no folder name: {}",
+            project.path.display()
+        )
+    })?;
+    let folder = folder_os.to_string_lossy().into_owned();
+    let new_path = new_base.join(&folder);
+    if new_path.exists() {
+        anyhow::bail!("move target already exists: {}", new_path.display());
+    }
+
+    // Fast path: same-filesystem rename is atomic and instant — no staging,
+    // no verification needed (there is no window in which data is half-there).
+    if fs::rename(&project.path, &new_path).is_err() {
+        staged_copy_verify_commit(project, &new_base, &new_path, &folder, progress, cancel)?;
+    }
+    set_phase(progress, "finalizing");
+
+    let mut moved = project.clone();
+    moved.path = new_path.canonicalize().unwrap_or(new_path);
+    moved.base = new_base.clone();
+
+    // Keep the displayed metadata truthful; discovery never reads `path`, so a
+    // failure here is a warning, not a failed move.
+    let pinfo = project_info::pinfo_path(&moved.path);
+    if pinfo.exists()
+        && let Err(err) = project_info::write_frontmatter(&pinfo, |meta| {
+            meta.path = moved.path.display().to_string();
+        })
+    {
+        eprintln!("warning: could not update PROJECT_INFO.md path: {err:#}");
+    }
+
+    // Two-sided cache update, best-effort.
+    let old_dir = project
+        .path
+        .strip_prefix(&old_base)
+        .map(to_forward_slashes)
+        .unwrap_or_else(|_| project.name.clone());
+    cache_remove(&old_base, &old_dir);
+    cache_upsert(&new_base, &moved);
+
+    set_phase(progress, "done");
+    Ok(moved)
+}
+
+/// The staged cross-filesystem move body: marker → copy-to-staging → verify →
+/// commit rename → remove source. Any failure (including cancel) before the
+/// commit leaves the source fully intact.
+fn staged_copy_verify_commit(
+    project: &Project,
+    new_base: &Path,
+    new_path: &Path,
+    folder: &str,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    use anyhow::Context;
+    use std::sync::atomic::Ordering;
+
+    let temp = provisioning::staging_path(new_base, folder);
+    // Clear any stale staging from a previous aborted attempt.
+    if temp.exists() {
+        let _ = fs::remove_dir_all(&temp);
+    }
+    provisioning::write_move_marker(new_base, folder, &project.path, &temp, new_path, "copying")
+        .ok();
+
+    // Enumerate the source tree and copy it verbatim into staging with progress.
+    let (dirs, files) = assets::jobs_for_tree(&project.path, &temp)?;
+    {
+        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+        p.phase = "copying".to_string();
+        p.total_bytes = files.iter().map(|j| j.bytes).sum();
+        p.total_files = files.len();
+        p.done_files = 0;
+        p.copied_bytes = 0;
+    }
+    let abort = |msg: &str| {
+        let _ = fs::remove_dir_all(&temp);
+        provisioning::clear_move(new_base, folder);
+        anyhow::anyhow!("{msg}")
+    };
+
+    fs::create_dir_all(&temp).with_context(|| format!("creating {}", temp.display()))?;
+    for dir in &dirs {
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    for job in &files {
+        if let Ok(mut p) = progress.lock() {
+            p.current_file = job
+                .dest
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+        }
+        if let Err(err) = assets::copy_job(job, progress, cancel) {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(abort(&format!("move of '{}' cancelled", project.name)));
+            }
+            let _ = fs::remove_dir_all(&temp);
+            provisioning::clear_move(new_base, folder);
+            return Err(err).with_context(|| {
+                format!("failed to copy '{}' to {}", project.name, temp.display())
+            });
+        }
+        if let Ok(mut p) = progress.lock() {
+            p.done_files += 1;
+        }
+    }
+
+    // Verify BEFORE the source is ever touched. A short/missing file here means
+    // the source stays put and the staging is discarded.
+    set_phase(progress, "verifying");
+    if let Err(err) = assets::verify_tree(&project.path, &temp) {
+        return Err(abort(&format!(
+            "move of '{}' aborted — {err}. Source left intact.",
+            project.name
+        )));
+    }
+
+    // Commit: atomic rename within the target base, then remove the source.
+    set_phase(progress, "finalizing");
+    provisioning::write_move_marker(
+        new_base,
+        folder,
+        &project.path,
+        &temp,
+        new_path,
+        "finalizing",
+    )
+    .ok();
+    fs::rename(&temp, new_path)
+        .with_context(|| format!("finalizing move into {}", new_path.display()))?;
+
+    // Target is verified and in place; a source-removal failure is a warning,
+    // never data loss (reconcile will finish it).
+    if let Err(err) = fs::remove_dir_all(&project.path) {
+        eprintln!(
+            "warning: moved to {} but could not remove source {} ({err}) — remove it manually",
+            new_path.display(),
+            project.path.display()
+        );
+    }
+    provisioning::clear_move(new_base, folder);
+    Ok(())
+}
+
+fn set_phase(progress: &Mutex<Progress>, phase: &str) {
+    if let Ok(mut p) = progress.lock() {
+        p.phase = phase.to_string();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -564,6 +803,7 @@ mod tests {
             template_name: "gen name".to_string(),
             name: "proj_ghost".to_string(),
             path: base.join("proj_ghost"),
+            base: base.to_path_buf(),
             created: "2026-03-01T00:00:00Z".to_string(),
             tags: vec![],
             exists: true,
@@ -675,6 +915,154 @@ mod tests {
         assert_eq!(resolve(&cfg, "BETA").unwrap().id, "ID0100");
         // No match.
         assert!(resolve(&cfg, "nope").is_err());
+    }
+
+    #[test]
+    fn discover_populates_base() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+
+        let cfg = cfg_for(base, &[]);
+        let canon = base.canonicalize().unwrap();
+        // Fresh scan path.
+        let projects = discover(&cfg);
+        assert_eq!(projects[0].base, canon);
+        // Cached path (second discover reads the cache written by the first).
+        let projects = discover(&cfg);
+        assert_eq!(projects[0].base, canon);
+    }
+
+    #[test]
+    fn move_project_round_trip() {
+        let tmp1 = tempfile::tempdir().unwrap();
+        let tmp2 = tempfile::tempdir().unwrap();
+        let (old_base, new_base) = (tmp1.path(), tmp2.path());
+        write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        // Extra content so the copy fallback path (if hit) is exercised on a tree.
+        fs::create_dir_all(old_base.join("proj_a/assets")).unwrap();
+        fs::write(old_base.join("proj_a/assets/raw_{x}.txt"), "keep {braces}").unwrap();
+
+        let cfg = cfg_for(old_base, &[new_base]);
+        let projects = discover(&cfg);
+        assert_eq!(projects.len(), 1);
+
+        let moved = move_project(&projects[0], new_base).unwrap();
+
+        let new_canon = new_base.canonicalize().unwrap();
+        assert_eq!(moved.base, new_canon);
+        assert_eq!(moved.path, new_canon.join("proj_a"));
+        assert!(moved.path.is_dir(), "moved folder should exist");
+        assert!(!old_base.join("proj_a").exists(), "source should be gone");
+        // Bytes untouched.
+        assert_eq!(
+            fs::read_to_string(moved.path.join("assets/raw_{x}.txt")).unwrap(),
+            "keep {braces}"
+        );
+        // Metadata `path` patched.
+        let meta = read_project_meta(&moved.path).unwrap();
+        assert_eq!(meta.path, moved.path.display().to_string());
+        assert_eq!(meta.id, "ID0001");
+        // Caches on both sides are fresh.
+        let old_cache = load_cache(&old_base.canonicalize().unwrap()).unwrap();
+        assert!(old_cache.entries.iter().all(|e| e.dir != "proj_a"));
+        let new_cache = load_cache(&new_canon).unwrap();
+        assert!(new_cache.entries.iter().any(|e| e.dir == "proj_a"));
+        // Discovery now finds it under the new base only.
+        let after = discover(&cfg);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].base, new_canon);
+    }
+
+    #[test]
+    fn staged_move_copies_verifies_commits_and_removes_source() {
+        // Exercises the cross-filesystem path directly (a same-fs test would take
+        // the instant fs::rename fast path and never stage/verify).
+        let tmp1 = tempfile::tempdir().unwrap();
+        let tmp2 = tempfile::tempdir().unwrap();
+        let (old_base, new_base) = (tmp1.path(), tmp2.path());
+        write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        fs::create_dir_all(old_base.join("proj_a/assets")).unwrap();
+        fs::write(old_base.join("proj_a/assets/big.bin"), vec![1u8; 8000]).unwrap();
+        fs::write(old_base.join("proj_a/notes_{x}.md"), "keep {braces}").unwrap();
+
+        let cfg = cfg_for(old_base, &[new_base]);
+        let project = discover(&cfg).remove(0);
+        let new_path = new_base.join("proj_a");
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(false);
+
+        staged_copy_verify_commit(&project, new_base, &new_path, "proj_a", &progress, &cancel)
+            .unwrap();
+
+        // Copied verbatim, verified, committed, source removed.
+        assert_eq!(
+            fs::read(new_path.join("assets/big.bin")).unwrap(),
+            vec![1u8; 8000]
+        );
+        assert_eq!(
+            fs::read_to_string(new_path.join("notes_{x}.md")).unwrap(),
+            "keep {braces}"
+        );
+        assert!(
+            !old_base.join("proj_a").exists(),
+            "source removed only after verify"
+        );
+        // Staging + marker cleaned up.
+        assert!(!provisioning::staging_path(new_base, "proj_a").exists());
+    }
+
+    #[test]
+    fn cancelled_staged_move_leaves_source_intact() {
+        let tmp1 = tempfile::tempdir().unwrap();
+        let tmp2 = tempfile::tempdir().unwrap();
+        let (old_base, new_base) = (tmp1.path(), tmp2.path());
+        write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        fs::write(old_base.join("proj_a/data.bin"), vec![9u8; 4096]).unwrap();
+
+        let cfg = cfg_for(old_base, &[new_base]);
+        let project = discover(&cfg).remove(0);
+        let new_path = new_base.join("proj_a");
+        let progress = Mutex::new(Progress::new(&[]));
+        // Pre-cancelled → copy aborts on the first chunk.
+        let cancel = AtomicBool::new(true);
+
+        let err =
+            staged_copy_verify_commit(&project, new_base, &new_path, "proj_a", &progress, &cancel)
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("cancelled"), "err: {err}");
+        assert!(
+            old_base.join("proj_a").is_dir(),
+            "source untouched on cancel"
+        );
+        assert!(!new_path.exists(), "no target committed");
+        assert!(!provisioning::staging_path(new_base, "proj_a").exists());
+    }
+
+    #[test]
+    fn move_project_rejects_same_base_and_collision() {
+        let tmp1 = tempfile::tempdir().unwrap();
+        let tmp2 = tempfile::tempdir().unwrap();
+        write_project(
+            tmp1.path(),
+            "proj_a",
+            "ID0001",
+            "gen",
+            "2026-01-01T00:00:00Z",
+        );
+        let cfg = cfg_for(tmp1.path(), &[tmp2.path()]);
+        let project = discover(&cfg).remove(0);
+
+        // Same base → bail.
+        let err = move_project(&project, tmp1.path()).unwrap_err().to_string();
+        assert!(err.contains("already in base"), "err: {err}");
+
+        // Target name collision → bail, source untouched.
+        fs::create_dir_all(tmp2.path().join("proj_a")).unwrap();
+        let err = move_project(&project, tmp2.path()).unwrap_err().to_string();
+        assert!(err.contains("already exists"), "err: {err}");
+        assert!(project.path.is_dir(), "source must be untouched on bail");
     }
 
     #[test]

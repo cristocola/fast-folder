@@ -87,7 +87,7 @@ fn menu_create() -> Result<()> {
         template_slug: Some(tmpl.slug.clone()),
         vars: HashMap::new(),
         dry_run: false,
-        base_dir_override: None,
+        base_dir_override: pick_base_interactively()?,
         no_preview: false,
         no_post: false,
         yes: false,
@@ -95,6 +95,44 @@ fn menu_create() -> Result<()> {
     new::run(args)?;
     println!();
     Ok(())
+}
+
+/// When more than one base is configured, ask which one the new project should
+/// be created in. Returns `None` (= config default) when there's only one base
+/// or the first (default) entry is chosen.
+fn pick_base_interactively() -> Result<Option<String>> {
+    let cfg = Config::load().unwrap_or_default();
+    let bases: Vec<std::path::PathBuf> = cfg
+        .effective_bases()
+        .into_iter()
+        .filter(|b| b.is_dir())
+        .collect();
+    if bases.len() <= 1 {
+        return Ok(None);
+    }
+    let labels: Vec<String> = bases
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let default = if i == 0 { "  (default)" } else { "" };
+            format!(
+                "{}  ({}){}",
+                crate::core::library::base_label(b),
+                b.display(),
+                default
+            )
+        })
+        .collect();
+    let idx = Select::new()
+        .with_prompt("Create the project in which base?")
+        .items(&labels)
+        .default(0)
+        .interact()?;
+    if idx == 0 {
+        // The default base — let config.base_dir resolution do its thing.
+        return Ok(None);
+    }
+    Ok(Some(bases[idx].display().to_string()))
 }
 
 fn menu_recent() -> Result<()> {

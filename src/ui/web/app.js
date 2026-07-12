@@ -22,6 +22,8 @@ const state = {
   searchResults: null,
   searchTimer: null,
   creating: false,
+  reconciling: false,
+  moving: false,
   gitInit: false,
   reveal: true,
   detail: null,
@@ -217,6 +219,31 @@ function shell(content) {
     </div>`;
 }
 
+// Banner shown when any project has an interrupted copy or move (durable marker
+// on disk). Retry runs the same reconcile the `fastf reconcile` CLI does.
+function provisioningBanner() {
+  const items = state.data?.provisioning || [];
+  if (!items.length) return "";
+  const noun = items.length === 1 ? "project needs" : "projects need";
+  const detail = items
+    .map((it) => `${baseLabel(it.path.replace(/\/[^/]*$/, "")) || it.path} (${it.kind})`)
+    .slice(0, 3)
+    .join(", ");
+  return `
+    <div class="recover-banner">
+      <div class="recover-copy">
+        ${icon("bolt")}
+        <div>
+          <strong>${items.length} ${noun} recovery</strong>
+          <span>An asset copy or move was interrupted — ${esc(detail)}. Your data is safe; finish it now.</span>
+        </div>
+      </div>
+      <button class="button button-dark" data-reconcile ${state.reconciling ? "disabled" : ""}>
+        ${icon("refresh")} ${state.reconciling ? "Reconciling…" : "Reconcile"}
+      </button>
+    </div>`;
+}
+
 function navButton(view, iconName, label) {
   const active = state.view === view || (view === "templates" && state.view === "template-editor");
   return `<button class="nav-button ${active ? "active" : ""}" data-view="${view}" title="${label}">${icon(iconName)}<span>${label}</span></button>`;
@@ -232,7 +259,7 @@ function render() {
   else if (state.view === "register") content = registerPage();
   else if (state.view === "settings") content = settingsPage();
   else content = dashboardPage();
-  app.innerHTML = shell(content) + drawerMarkup() + applyModalMarkup() + genericModalMarkup();
+  app.innerHTML = shell(provisioningBanner() + content) + drawerMarkup() + applyModalMarkup() + genericModalMarkup();
   bindCommon();
   bindView();
   bindDrawer();
@@ -331,6 +358,7 @@ function projectRows(projects) {
           ${(project.tags || []).length ? `<div class="row-tags">${(project.tags || []).slice(0, 3).map((tag) => `<span class="row-tag">${esc(tag)}</span>`).join("")}${project.tags.length > 3 ? `<span class="row-tag more">+${project.tags.length - 3}</span>` : ""}</div>` : ""}
         </div>
       </div>
+      <div class="project-cell base-cell" title="${esc(project.base || "")}"><span class="chip">${esc(project.base_label || "—")}</span></div>
       <div class="project-cell">${esc(templateName(project.template))}</div>
       <div class="project-cell">${esc(formatDate(project.created_at))}</div>
       <div><span class="status ${project.exists ? "" : "missing"}">${project.exists ? "Available" : "Missing"}</span></div>
@@ -340,6 +368,29 @@ function projectRows(projects) {
 
 function templateName(slug) {
   return state.data.templates.find((template) => template.slug === slug)?.name || slug;
+}
+
+// All configured bases (base_dir first, then the extra `bases` list), deduped
+// on a trailing-slash-insensitive key. Mirrors Config::effective_bases().
+function effectiveBases() {
+  const config = state.data.config;
+  const seen = new Set();
+  const out = [];
+  for (const raw of [config.base_dir, ...(config.bases || [])]) {
+    const value = (raw || "").trim();
+    if (!value) continue;
+    const key = value.replace(/\/+$/, "") || "/";
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(value);
+    }
+  }
+  return out;
+}
+
+function baseLabel(base) {
+  const trimmed = (base || "").replace(/\/+$/, "");
+  return trimmed.split("/").pop() || base;
 }
 
 function createPage() {
@@ -366,8 +417,10 @@ function createPage() {
             <div class="form-intro"><div class="eyebrow">${esc(selected?.slug)}</div><h2>${esc(selected?.name)}</h2><p>${esc(selected?.description || "Configure the details for this project.")}</p></div>
             ${selected?.variables.length ? selected.variables.map(variableField).join("") : `<div class="empty" style="padding:20px 0 30px"><strong>No details required</strong><p>This template is ready to create as-is.</p></div>`}
             <div class="field">
-              <div class="field-row"><label for="base-dir">Create inside</label><span class="field-hint">Override for this project</span></div>
-              <input class="input mono" id="base-dir" value="${esc(state.data.config.base_dir)}" placeholder="/home/you/Projects">
+              <div class="field-row"><label for="base-dir">Create inside</label><span class="field-hint">${effectiveBases().length > 1 ? "Pick a base for this project" : "Configured base"}</span></div>
+              <select class="input mono" id="base-dir">
+                ${effectiveBases().map((base, index) => `<option value="${esc(base)}" ${index === 0 ? "selected" : ""}>${esc(baseLabel(base))} — ${esc(base)}</option>`).join("")}
+              </select>
             </div>
             <div class="options-box">
               ${toggleRow("git-init", "Initialize Git repository", "Run git init after creation", state.gitInit)}
@@ -818,7 +871,7 @@ function projectsPage() {
       </div>
       <div class="panel project-list">
         <div class="project-row project-header-row">
-          <div class="eyebrow">Project</div><div class="eyebrow">Template</div><div class="eyebrow">Created</div><div class="eyebrow">Status</div><span></span>
+          <div class="eyebrow">Project</div><div class="eyebrow">Base</div><div class="eyebrow">Template</div><div class="eyebrow">Created</div><div class="eyebrow">Status</div><span></span>
         </div>
         <div id="project-results">${projectRows(projects)}</div>
       </div>
@@ -1017,6 +1070,7 @@ function bindCommon() {
   }));
   document.querySelector('[data-action="refresh"]')?.addEventListener("click", refresh);
   document.querySelector("[data-from-folder]")?.addEventListener("click", openFromFolderModal);
+  document.querySelector("[data-reconcile]")?.addEventListener("click", reconcileProvisioning);
   bindProjectRows();
 
   const search = document.querySelector("#global-search");
@@ -1117,7 +1171,7 @@ function bindCreate() {
     field.addEventListener("input", update);
     field.addEventListener("change", update);
   });
-  document.querySelector("#base-dir")?.addEventListener("input", schedulePreview);
+  document.querySelector("#base-dir")?.addEventListener("change", schedulePreview);
   document.querySelector("#git-init")?.addEventListener("change", (event) => { state.gitInit = event.target.checked; });
   document.querySelector("#reveal-folder")?.addEventListener("change", (event) => { state.reveal = event.target.checked; });
   document.querySelector("#create-form")?.addEventListener("submit", createProject);
@@ -1861,6 +1915,8 @@ function detailBody(data) {
     </div>
     <div class="drawer-path" title="${esc(data.path)}">${esc(shortPath(data.path))}</div>
     ${created ? `<div class="drawer-meta-line"><span>Created</span><strong>${esc(formatDate(created))}</strong></div>` : ""}
+    ${record?.base ? `<div class="drawer-meta-line"><span>Base</span><strong title="${esc(record.base)}">${esc(record.base_label || record.base)}</strong></div>` : ""}
+    ${moveControls(record)}
     <div class="drawer-actions">
       <button class="button button-secondary" data-detail-open ${data.exists ? "" : "disabled"}>${icon("external")} Open</button>
       <button class="button button-secondary" data-detail-apply>${icon("bolt")} Apply template</button>
@@ -1886,12 +1942,175 @@ function detailBody(data) {
     `}`;
 }
 
+// Move-to-base controls for the drawer: a select of the OTHER configured
+// bases + a Move button. Hidden when the project isn't in the library or
+// there's nowhere else to move to.
+function moveControls(record) {
+  if (!record?.base) return "";
+  const currentKey = (record.base || "").replace(/\/+$/, "");
+  const targets = effectiveBases().filter((base) => base.replace(/\/+$/, "") !== currentKey);
+  if (!targets.length) return "";
+  return `
+    <div class="drawer-move">
+      <select class="input mono" id="move-base-select" ${state.moving ? "disabled" : ""}>
+        ${targets.map((base) => `<option value="${esc(base)}">${esc(baseLabel(base))} — ${esc(base)}</option>`).join("")}
+      </select>
+      <button class="button button-secondary" data-detail-move ${state.moving ? "disabled" : ""}>${icon("external")} ${state.moving ? "Moving…" : "Move to base"}</button>
+    </div>`;
+}
+
+async function moveProject() {
+  const base = document.querySelector("#move-base-select")?.value;
+  if (!base || state.moving) return;
+  const detailData = state.detail.data || {};
+  const projectPath = state.detail.path;
+  const projectId = detailData.metadata?.id || detailData.record?.id || null;
+  const projectName = detailData.metadata?.folder || detailData.record?.name || projectPath.split("/").pop();
+  state.moving = true;
+  render();
+
+  let result;
+  try {
+    result = await api("/api/project/move", { method: "POST", body: JSON.stringify({ path: projectPath, base }) });
+  } catch (error) {
+    state.moving = false;
+    toast(error.message, true);
+    render();
+    return;
+  }
+
+  // The move runs as a background job (copy → verify → finalize). Watch it to
+  // completion so the source is only ever considered gone once verified.
+  const status = await showMoveProgress(result.job_id, projectName, baseLabel(base));
+  state.moving = false;
+  state.searchResults = null;
+  await loadState(false);
+
+  if (status === "done") {
+    toast(`Moved ${projectName} to ${baseLabel(base)} — verified.`);
+    // Re-open the drawer at the project's new location (found by its stable ID).
+    const moved = (state.data.projects || []).find((p) => p.id === projectId);
+    if (moved) await openProjectDetail(moved.path);
+    else { closeDetail(); }
+  } else if (status === "cancelled") {
+    toast("Move cancelled — original left untouched.");
+    render();
+  } else {
+    render();
+  }
+}
+
+// Progress overlay for a background move: copy → verify → finalize, with a
+// Cancel button. Resolves with the final job status ("done"|"cancelled"|"failed").
+function showMoveProgress(jobId, projectName, baseName) {
+  return new Promise((resolve) => {
+    if (!jobId) { resolve("done"); return; }
+    const overlay = document.createElement("div");
+    overlay.className = "success-overlay";
+    overlay.innerHTML = `
+      <div class="success-modal">
+        <div class="success-mark move-mark">${icon("external")}</div>
+        <h2>Moving ${esc(projectName)}</h2>
+        <p>Copying to <strong>${esc(baseName)}</strong>, verifying every file, then removing the original. Your files are never deleted until the copy is verified.</p>
+        <div class="job-progress" id="move-progress">
+          <div class="job-bar"><div class="job-bar-fill" style="width:0%"></div></div>
+          <div class="job-label">Starting…</div>
+        </div>
+        <div class="success-actions">
+          <button class="button button-secondary" data-move-cancel>Cancel</button>
+        </div>
+      </div>`;
+    document.body.append(overlay);
+    const node = overlay.querySelector("#move-progress");
+    const fill = () => node.querySelector(".job-bar-fill");
+    const label = () => node.querySelector(".job-label");
+    let cancelling = false;
+    overlay.querySelector("[data-move-cancel]").addEventListener("click", async () => {
+      if (cancelling) return;
+      cancelling = true;
+      try { await api(`/api/job/${encodeURIComponent(jobId)}/cancel`, { method: "POST", body: "{}" }); } catch {}
+      if (label()) label().textContent = "Cancelling…";
+    });
+
+    (async () => {
+      let status = "done";
+      while (true) {
+        let job;
+        try {
+          const res = await api(`/api/job/${encodeURIComponent(jobId)}`);
+          job = res.job;
+        } catch { status = "done"; break; } // evicted after finishing → done
+        const pct = job.total_bytes
+          ? Math.min(100, Math.round((job.copied_bytes / job.total_bytes) * 100))
+          : (job.phase === "done" ? 100 : 0);
+        if (fill()) fill().style.width = pct + "%";
+        node.classList.toggle("job-verifying", job.phase === "verifying");
+        if (job.status === "failed") {
+          status = "failed";
+          node.classList.add("job-failed");
+          if (label()) label().textContent = `Move failed: ${job.error || "unknown error"} (original untouched)`;
+          toast(`Move failed — original left intact.`, true);
+          await new Promise((r) => setTimeout(r, 1600));
+          break;
+        }
+        if (job.status === "cancelled") { status = "cancelled"; break; }
+        if (job.status === "done" || job.phase === "done") { status = "done"; break; }
+        if (label()) label().textContent = phaseLabel(job);
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (status === "done") {
+        node.classList.remove("job-verifying");
+        node.classList.add("job-done");
+        if (fill()) fill().style.width = "100%";
+        if (label()) label().textContent = "Moved and verified.";
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      overlay.remove();
+      resolve(status);
+    })();
+  });
+}
+
+// Human phase label for a job progress snapshot, shared by create + move.
+function phaseLabel(job) {
+  const pct = job.total_bytes ? Math.min(100, Math.round((job.copied_bytes / job.total_bytes) * 100)) : 100;
+  if (job.phase === "verifying") return `Verifying files… (${job.done_files}/${job.total_files})`;
+  if (job.phase === "finalizing") return "Finalizing…";
+  if (job.status === "done" || job.phase === "done") return "Done.";
+  return `Copying ${job.current_file || "files"}… ${pct}% (${job.done_files}/${job.total_files})`;
+}
+
+// Retry interrupted copies/moves — same recovery the `fastf reconcile` CLI runs.
+async function reconcileProvisioning() {
+  if (state.reconciling) return;
+  state.reconciling = true;
+  render();
+  try {
+    const res = await api("/api/reconcile", { method: "POST", body: "{}" });
+    const r = res.report || {};
+    const parts = [];
+    if (r.resumed) parts.push(`${r.resumed} copy job(s) finished`);
+    if (r.completed) parts.push(`${r.completed} move(s) committed`);
+    if (r.rolled_back) parts.push(`${r.rolled_back} move(s) rolled back`);
+    toast(parts.length ? parts.join(", ") : "Nothing to reconcile.");
+    if (r.unrecoverable && r.unrecoverable.length) {
+      toast(`${r.unrecoverable.length} item(s) could not be recovered.`, true);
+    }
+  } catch (error) {
+    toast(error.message, true);
+  }
+  state.reconciling = false;
+  await loadState(false);
+  render();
+}
+
 function bindDrawer() {
   if (!state.detail) return;
   document.querySelectorAll("[data-close-detail]").forEach((element) => element.addEventListener("click", closeDetail));
   document.querySelector("[data-detail-open]")?.addEventListener("click", () => openPath(state.detail.path));
   document.querySelector("[data-detail-copy]")?.addEventListener("click", () => copyPath(state.detail.path));
   document.querySelector("[data-detail-apply]")?.addEventListener("click", () => openApplyModal(state.detail.path));
+  document.querySelector("[data-detail-move]")?.addEventListener("click", moveProject);
   document.querySelectorAll("[data-remove-tag]").forEach((button) => button.addEventListener("click", () => mutateTag("remove", button.dataset.removeTag)));
   document.querySelector("#add-tag-form")?.addEventListener("submit", (event) => {
     event.preventDefault();

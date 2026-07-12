@@ -47,17 +47,19 @@ const MAX_REQUEST_SIZE: usize = 2 * 1024 * 1024;
 /// lock-free.
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Background copy jobs (large bundled assets), keyed by job id. The copy runs
-/// off the request thread and outside [`WRITE_LOCK`] — it only writes inside the
-/// new project's own folder, so it can't race the shared counter/index. The UI
-/// polls `GET /api/job/<id>` for [`crate::core::assets::Progress`].
-static JOBS: Mutex<Option<HashMap<String, Arc<Mutex<crate::core::assets::Progress>>>>> =
-    Mutex::new(None);
+/// A live background job (bundled-asset copy on create, or a staged move),
+/// keyed by job id. The work runs off the request thread and outside
+/// [`WRITE_LOCK`] — it only writes inside the new/target project folder plus that
+/// base's atomic cache, so it can't race the shared counter. The UI polls
+/// `GET /api/job/<id>` for the [`Progress`] and can `POST /api/job/<id>/cancel`.
+struct JobHandle {
+    progress: Arc<Mutex<crate::core::assets::Progress>>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
 
-fn jobs_lock() -> std::sync::MutexGuard<
-    'static,
-    Option<HashMap<String, Arc<Mutex<crate::core::assets::Progress>>>>,
-> {
+static JOBS: Mutex<Option<HashMap<String, JobHandle>>> = Mutex::new(None);
+
+fn jobs_lock() -> std::sync::MutexGuard<'static, Option<HashMap<String, JobHandle>>> {
     JOBS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -119,6 +121,14 @@ struct TagRequest {
 struct NoteRequest {
     path: String,
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MoveRequest {
+    /// Absolute path of the project folder to move.
+    path: String,
+    /// Target base directory (must be a configured base).
+    base: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -350,6 +360,18 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             let _guard = lock_writes()?;
             Ok(Response::Json(project_note(request)?))
         }
+        ("POST", "/api/project/move") => {
+            let request: MoveRequest =
+                serde_json::from_slice(body).context("invalid move request")?;
+            // No WRITE_LOCK: the move runs on a background thread (staged copy +
+            // atomic cache updates), so a slow network copy never blocks other
+            // UI writes. The synchronous part is discovery + pre-flight guards.
+            Ok(Response::Json(project_move(request)?))
+        }
+        ("POST", "/api/reconcile") => {
+            let _guard = lock_writes()?;
+            Ok(Response::Json(reconcile_provisioning()?))
+        }
         ("POST", "/api/register") => {
             let request: RegisterRequest =
                 serde_json::from_slice(body).context("invalid register request")?;
@@ -386,6 +408,12 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
         ("GET", path) if path.starts_with("/api/project?") => {
             let target = query_param(path, "path").context("missing 'path' query parameter")?;
             Ok(Response::Json(project_detail(&target)?))
+        }
+        ("POST", path) if path.starts_with("/api/job/") && path.ends_with("/cancel") => {
+            let id = path
+                .trim_start_matches("/api/job/")
+                .trim_end_matches("/cancel");
+            Ok(Response::Json(job_cancel(id)?))
         }
         ("GET", path) if path.starts_with("/api/job/") => {
             let id = path.trim_start_matches("/api/job/");
@@ -455,7 +483,17 @@ fn load_state() -> Result<Value> {
         "next_id": format!("ID{:04}", counter + 1),
         "install_dir": paths::install_dir(),
         "templates_dir": paths::templates_dir(),
+        // Projects with an in-flight/interrupted copy or move, for the banner.
+        "provisioning": crate::core::provisioning::list_incomplete(&config),
     }))
+}
+
+/// `POST /api/reconcile` — resume interrupted background copies and finish or roll
+/// back interrupted staged moves across every base. Best-effort; returns a report.
+fn reconcile_provisioning() -> Result<Value> {
+    let config = Config::load()?;
+    let report = crate::core::provisioning::reconcile(&config);
+    Ok(json!({ "ok": true, "report": report }))
 }
 
 fn configured_plan(
@@ -511,7 +549,7 @@ fn create_project(request: CreateRequest) -> Result<Value> {
     let job_id = if deferred.is_empty() {
         None
     } else {
-        Some(spawn_copy_job(deferred))
+        Some(spawn_copy_job(plan.root_path.clone(), deferred))
     };
 
     Ok(json!({
@@ -521,18 +559,43 @@ fn create_project(request: CreateRequest) -> Result<Value> {
     }))
 }
 
-/// Register a background copy job and start its worker thread. Returns the job
-/// id the frontend polls. Evicts already-finished jobs so the registry stays
-/// bounded across a long session.
-fn spawn_copy_job(jobs: Vec<crate::core::assets::CopyJob>) -> String {
+/// Register a job handle and evict finished ones so the registry stays bounded.
+fn register_job(
+    id: &str,
+    progress: &Arc<Mutex<crate::core::assets::Progress>>,
+    cancel: &Arc<std::sync::atomic::AtomicBool>,
+) {
+    let mut guard = jobs_lock();
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.retain(|_, h| {
+        h.progress
+            .lock()
+            .map(|p| p.status == "running")
+            .unwrap_or(false)
+    });
+    map.insert(
+        id.to_string(),
+        JobHandle {
+            progress: Arc::clone(progress),
+            cancel: Arc::clone(cancel),
+        },
+    );
+}
+
+/// Register a background copy job and start its worker thread. Returns the job id
+/// the frontend polls. A durable `.fastf-provisioning.json` marker in `root`
+/// records the deferred copies so a crash mid-copy is recoverable by reconcile;
+/// each file is flipped `done` as it lands and the marker is cleared on success.
+fn spawn_copy_job(root: PathBuf, jobs: Vec<crate::core::assets::CopyJob>) -> String {
+    use crate::core::provisioning;
+
     let id = next_job_id();
     let progress = Arc::new(Mutex::new(crate::core::assets::Progress::new(&jobs)));
-    {
-        let mut guard = jobs_lock();
-        let map = guard.get_or_insert_with(HashMap::new);
-        map.retain(|_, p| p.lock().map(|p| p.status == "running").unwrap_or(false));
-        map.insert(id.clone(), Arc::clone(&progress));
-    }
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    register_job(&id, &progress, &cancel);
+
+    // Durable record before any copy starts.
+    let _ = provisioning::write_create_marker(&root, &jobs);
 
     thread::spawn(move || {
         for job in &jobs {
@@ -543,19 +606,23 @@ fn spawn_copy_job(jobs: Vec<crate::core::assets::CopyJob>) -> String {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
             }
-            if let Err(e) = crate::core::assets::copy_job(job, &progress) {
+            if let Err(e) = crate::core::assets::copy_job(job, &progress, &cancel) {
+                let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
                 if let Ok(mut p) = progress.lock() {
-                    p.status = "failed".to_string();
+                    p.status = if cancelled { "cancelled" } else { "failed" }.to_string();
                     p.error = Some(format!("{e:#}"));
                 }
-                return;
+                return; // marker retained → reconcile can resume/clean up
             }
+            provisioning::mark_done(&root, &job.dest);
             if let Ok(mut p) = progress.lock() {
                 p.done_files += 1;
             }
         }
+        provisioning::clear_create(&root);
         if let Ok(mut p) = progress.lock() {
             p.status = "done".to_string();
+            p.phase = "done".to_string();
             p.current_file.clear();
         }
     });
@@ -563,15 +630,66 @@ fn spawn_copy_job(jobs: Vec<crate::core::assets::CopyJob>) -> String {
     id
 }
 
+/// Register a background staged-move job. Returns the job id the frontend polls;
+/// the move runs off `WRITE_LOCK` (it only writes the target staging folder + the
+/// two base caches, both atomic), reporting copy → verify → finalize progress.
+fn spawn_move_job(project: Project, target: PathBuf) -> String {
+    let id = next_job_id();
+    let progress = Arc::new(Mutex::new(crate::core::assets::Progress::new(&[])));
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    register_job(&id, &progress, &cancel);
+
+    let progress_thread = Arc::clone(&progress);
+    thread::spawn(move || {
+        match library::move_project_with(&project, &target, &progress_thread, &cancel) {
+            Ok(_) => {
+                if let Ok(mut p) = progress_thread.lock() {
+                    p.status = "done".to_string();
+                    p.phase = "done".to_string();
+                    p.current_file.clear();
+                }
+            }
+            Err(e) => {
+                let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
+                if let Ok(mut p) = progress_thread.lock() {
+                    p.status = if cancelled { "cancelled" } else { "failed" }.to_string();
+                    p.error = Some(format!("{e:#}"));
+                }
+            }
+        }
+    });
+
+    id
+}
+
+/// `POST /api/job/<id>/cancel` — request cancellation of a running job. The
+/// worker checks the flag between chunks, cleans up its `.part`/staging, and
+/// leaves the source intact (moves) or a resumable marker (creates).
+fn job_cancel(id: &str) -> Result<Value> {
+    let guard = jobs_lock();
+    let handle = guard
+        .as_ref()
+        .and_then(|map| map.get(id))
+        .context("job not found")?;
+    handle
+        .cancel
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(json!({ "ok": true }))
+}
+
 /// `GET /api/job/<id>` — snapshot a background copy job's progress. A missing id
 /// (evicted after completion) is a clean error the frontend treats as "done".
 fn job_status(id: &str) -> Result<Value> {
     let guard = jobs_lock();
-    let progress = guard
+    let handle = guard
         .as_ref()
         .and_then(|map| map.get(id))
         .context("job not found")?;
-    let snapshot = progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let snapshot = handle
+        .progress
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     Ok(json!({ "ok": true, "job": snapshot }))
 }
 
@@ -710,6 +828,8 @@ fn project_json(project: &Project, metadata: &Option<Metadata>) -> Value {
         "template": project.template,
         "path": project.path,
         "name": project.name,
+        "base": project.base,
+        "base_label": library::base_label(&project.base),
         "created_at": project.created,
         "exists": project.path.exists(),
         "tags": tags,
@@ -765,9 +885,53 @@ fn project_detail(path: &str) -> Result<Value> {
             "id": p.id,
             "template": p.template,
             "name": p.name,
+            "base": p.base,
+            "base_label": library::base_label(&p.base),
             "created_at": p.created,
         })),
     }))
+}
+
+/// `POST /api/project/move` — move a project folder into another configured
+/// base. Targets are restricted to `effective_bases()` so the moved project
+/// stays discoverable. Returns a `job_id` the frontend polls: a same-filesystem
+/// move finishes near-instantly (the job reports `done`), while a cross-fs /
+/// network move streams copy → verify → finalize progress and can be cancelled.
+/// Runs off WRITE_LOCK so a slow network copy never blocks other UI writes.
+fn project_move(request: MoveRequest) -> Result<Value> {
+    let config = Config::load()?;
+    let project = library::discover(&config)
+        .into_iter()
+        .find(|p| paths_match(&p.path.display().to_string(), &request.path))
+        .ok_or_else(|| anyhow::anyhow!("no project found at {}", request.path))?;
+
+    let wanted = PathBuf::from(request.base.trim());
+    let wanted = wanted.canonicalize().unwrap_or(wanted);
+    let target = config
+        .effective_bases()
+        .into_iter()
+        .find(|b| *b == wanted)
+        .ok_or_else(|| anyhow::anyhow!("'{}' is not a configured base", request.base.trim()))?;
+
+    // Pre-flight the cheap guards so obvious errors surface synchronously rather
+    // than only via job polling (mirrors move_project_with's own checks).
+    if !target.is_dir() {
+        bail!("target base does not exist: {}", target.display());
+    }
+    let folder = project
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| anyhow::anyhow!("project has no folder name"))?;
+    if target.join(&folder).exists() {
+        bail!(
+            "move target already exists: {}",
+            target.join(&folder).display()
+        );
+    }
+
+    let job_id = spawn_move_job(project, target);
+    Ok(json!({ "ok": true, "job_id": job_id }))
 }
 
 /// `POST /api/project/tag` — add or remove one tag in the frontmatter.

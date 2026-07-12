@@ -383,6 +383,7 @@ fn create_inner(
         template_name: template.name.clone(),
         name: plan.folder_name.clone(),
         path: abs_path.clone(),
+        base: abs_path.parent().map(Path::to_path_buf).unwrap_or_default(),
         created: crate::core::library::now_iso8601(),
         tags,
         exists: true,

@@ -85,9 +85,16 @@ fn filter_projects<'a>(
     filtered
 }
 
-fn print_plain(filtered: &[&Project]) {
+/// Plain (non-interactive) list output. Shared by `fastf recent` and
+/// `fastf search` — keep the two commands' output identical.
+pub fn print_plain(filtered: &[&Project]) {
     let id_w = filtered.iter().map(|p| p.id.len()).max().unwrap_or(4);
     let tmpl_w = filtered.iter().map(|p| p.template.len()).max().unwrap_or(8);
+    let base_w = filtered
+        .iter()
+        .map(|p| library::base_label(&p.base).len())
+        .max()
+        .unwrap_or(4);
     let date_w = 10; // YYYY-MM-DD
 
     for p in filtered {
@@ -96,11 +103,12 @@ fn print_plain(filtered: &[&Project]) {
         let missing = !p.path.exists();
         let marker = if missing { "✗".red() } else { "•".cyan() };
         println!(
-            "  {} {:<id_w$}  {:<tmpl_w$}  {}  {}",
+            "  {} {:<id_w$}  {:<tmpl_w$}  {}  {:<base_w$}  {}",
             marker,
             p.id.green().bold(),
             p.template.dimmed(),
             date.dimmed(),
+            library::base_label(&p.base).cyan(),
             if missing {
                 format!("{} {}", p.name, "(missing)".red())
             } else {
@@ -108,6 +116,7 @@ fn print_plain(filtered: &[&Project]) {
             },
             id_w = id_w,
             tmpl_w = tmpl_w,
+            base_w = base_w,
         );
         println!("      {} {}", "→".dimmed(), path_str.dimmed());
     }
@@ -122,6 +131,11 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
 
     let id_w = filtered.iter().map(|p| p.id.len()).max().unwrap_or(4);
     let tmpl_w = filtered.iter().map(|p| p.template.len()).max().unwrap_or(8);
+    let base_w = filtered
+        .iter()
+        .map(|p| library::base_label(&p.base).len())
+        .max()
+        .unwrap_or(4);
 
     loop {
         let labels: Vec<String> = filtered
@@ -143,15 +157,17 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
                     }
                 };
                 format!(
-                    "{:<id_w$}  {:<tmpl_w$}  {}  {}{}{}",
+                    "{:<id_w$}  {:<tmpl_w$}  {}  {:<base_w$}  {}{}{}",
                     p.id,
                     p.template,
                     date,
+                    library::base_label(&p.base),
                     p.name,
                     suffix,
                     tag_str,
                     id_w = id_w,
                     tmpl_w = tmpl_w,
+                    base_w = base_w,
                 )
             })
             .chain(std::iter::once("[Quit]".to_string()))
@@ -193,28 +209,91 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
         project.name.bold()
     );
     println!(
-        "    {} {}  {}",
+        "    {} {}  {} {}  {}",
         "template:".dimmed(),
         project.template,
+        "base:".dimmed(),
+        library::base_label(&project.base).cyan(),
         path_str.dimmed()
     );
 
+    // Other configured bases this project could move to (mounted ones only).
+    let other_bases: Vec<std::path::PathBuf> = {
+        let cfg = Config::load().unwrap_or_default();
+        let current = project
+            .base
+            .canonicalize()
+            .unwrap_or_else(|_| project.base.clone());
+        cfg.effective_bases()
+            .into_iter()
+            .filter(|b| b.is_dir() && *b != current)
+            .collect()
+    };
+
     loop {
-        let items = [
+        let mut items = vec![
             "Open project folder",
             "Show project metadata",
             "Add tag",
             "Remove tag",
             "Add journal note",
             "Show journal",
-            "Back to list",
-            "Quit",
         ];
+        // Only offer a move when there is somewhere to move to.
+        if !other_bases.is_empty() {
+            items.push("Move to another base");
+        }
+        items.push("Back to list");
+        items.push("Quit");
+        let move_idx = if other_bases.is_empty() {
+            usize::MAX
+        } else {
+            6
+        };
+        let back_idx = items.len() - 2;
+        let quit_idx = items.len() - 1;
+
         let choice = Select::new()
             .with_prompt("What would you like to do?")
             .items(&items)
             .default(0)
             .interact()?;
+
+        if choice == move_idx {
+            let mut labels: Vec<String> = other_bases
+                .iter()
+                .map(|b| format!("{}  ({})", library::base_label(b), b.display()))
+                .collect();
+            labels.push("[Cancel]".to_string());
+            let sel = Select::new()
+                .with_prompt("Move to which base?")
+                .items(&labels)
+                .default(0)
+                .interact()?;
+            if sel == other_bases.len() {
+                continue;
+            }
+            match library::move_project(project, &other_bases[sel]) {
+                Ok(moved) => {
+                    println!(
+                        "{}  Moved to {}",
+                        "✓".green().bold(),
+                        moved.path.display().to_string().bold()
+                    );
+                    // The in-memory list still shows the old path — go back so
+                    // the user re-enters from a fresh `recent`/`search`.
+                    return Ok(ActionLoop::BackToList);
+                }
+                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+            }
+            continue;
+        }
+        if choice == back_idx {
+            return Ok(ActionLoop::BackToList);
+        }
+        if choice == quit_idx {
+            return Ok(ActionLoop::Quit);
+        }
 
         match choice {
             // Open folder
@@ -288,8 +367,7 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
             5 => {
                 show_journal(path);
             }
-            6 => return Ok(ActionLoop::BackToList),
-            7 => return Ok(ActionLoop::Quit),
+            // Move / Back / Quit are handled above the match (dynamic indices).
             _ => unreachable!(),
         }
     }
@@ -304,7 +382,7 @@ fn show_metadata(project_root: &Path) {
     println!("{}", banner.dimmed());
 
     match project_info::read_metadata(project_root) {
-        Ok(Some(meta)) => print_structured_metadata(&meta),
+        Ok(Some(meta)) => print_structured_metadata(&meta, project_root),
         Ok(None) => match project_info::read(project_root) {
             Ok(raw) => {
                 println!(
@@ -323,14 +401,21 @@ fn show_metadata(project_root: &Path) {
 }
 
 /// Aligned `key  value` printer for parsed frontmatter.
-fn print_structured_metadata(meta: &crate::core::project_info::Metadata) {
+fn print_structured_metadata(meta: &crate::core::project_info::Metadata, project_root: &Path) {
+    // Base = the project folder's parent (depth-1 discovery). Derived live, not
+    // from frontmatter, so it stays truthful after external moves.
+    let base = project_root
+        .parent()
+        .map(|b| b.display().to_string())
+        .unwrap_or_default();
     // Top-level scalar fields, in a readable order (not alphabetical — id first).
-    let scalars: [(&str, &str); 6] = [
+    let scalars: [(&str, &str); 7] = [
         ("id", &meta.id),
         ("template", &meta.template),
         ("template_name", &meta.template_name),
         ("created", &meta.created),
         ("folder", &meta.folder),
+        ("base", &base),
         ("path", &meta.path),
     ];
 

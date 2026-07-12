@@ -24,6 +24,8 @@ const state = {
   creating: false,
   reconciling: false,
   moving: false,
+  selected: new Set(),
+  bulkBase: "",
   gitInit: false,
   reveal: true,
   detail: null,
@@ -349,7 +351,10 @@ function projectRows(projects) {
     return `<div class="empty"><div class="empty-icon">${icon("folder")}</div><strong>No projects yet</strong><p>Create your first project and it will appear here automatically.</p></div>`;
   }
   return projects.map((project) => `
-    <div class="project-row" data-detail-path="${esc(project.path)}" role="button" tabindex="0" title="View project details">
+    <div class="project-row ${state.selected.has(project.path) ? "selected" : ""}" data-detail-path="${esc(project.path)}" role="button" tabindex="0" title="View project details">
+      <label class="project-select" title="Select for bulk move">
+        <input type="checkbox" data-select-path="${esc(project.path)}" ${state.selected.has(project.path) ? "checked" : ""}>
+      </label>
       <div class="project-name">
         <div class="project-folder ${project.exists ? "" : "missing"}">${icon("folder")}</div>
         <div class="project-name-copy">
@@ -869,13 +874,42 @@ function projectsPage() {
       <div class="search-legend">
         <span><b>tag:</b>draft</span><span><b>template=</b>music-video</span><span><b>artist=</b>Aria*</span><span><b>created&gt;</b>2026-01-01</span><span>or any free text</span>
       </div>
+      ${bulkBar(projects)}
       <div class="panel project-list">
         <div class="project-row project-header-row">
+          <label class="project-select"><input type="checkbox" data-select-all ${allSelected(projects) ? "checked" : ""}></label>
           <div class="eyebrow">Project</div><div class="eyebrow">Base</div><div class="eyebrow">Template</div><div class="eyebrow">Created</div><div class="eyebrow">Status</div><span></span>
         </div>
         <div id="project-results">${projectRows(projects)}</div>
       </div>
     </section>`;
+}
+
+function allSelected(projects) {
+  return projects.length > 0 && projects.every((p) => state.selected.has(p.path));
+}
+
+// Bulk-action toolbar shown when ≥1 project is checked: pick a target base and
+// move every selected project into it (skipping any already there).
+function bulkBar(projects) {
+  const count = state.selected.size;
+  if (!count) return "";
+  const bases = effectiveBases();
+  if (bases.length < 2) {
+    return `<div class="bulk-bar"><span class="bulk-count">${count} selected</span><span class="bulk-spacer"></span><button class="button button-secondary" data-bulk-clear>Clear</button></div>`;
+  }
+  const selectedBase = state.bulkBase || bases[0];
+  return `
+    <div class="bulk-bar">
+      <span class="bulk-count">${count} selected</span>
+      <span class="bulk-spacer"></span>
+      <label class="field-hint" for="bulk-base-select">Move to</label>
+      <select class="input mono" id="bulk-base-select" ${state.moving ? "disabled" : ""}>
+        ${bases.map((base) => `<option value="${esc(base)}" ${base === selectedBase ? "selected" : ""}>${esc(baseLabel(base))} — ${esc(base)}</option>`).join("")}
+      </select>
+      <button class="button button-dark" data-bulk-move ${state.moving ? "disabled" : ""}>${icon("external")} ${state.moving ? "Moving…" : `Move ${count}`}</button>
+      <button class="button button-secondary" data-bulk-clear ${state.moving ? "disabled" : ""}>Clear</button>
+    </div>`;
 }
 
 function settingsPage() {
@@ -1072,6 +1106,7 @@ function bindCommon() {
   document.querySelector("[data-from-folder]")?.addEventListener("click", openFromFolderModal);
   document.querySelector("[data-reconcile]")?.addEventListener("click", reconcileProvisioning);
   bindProjectRows();
+  bindProjectBulk();
 
   const search = document.querySelector("#global-search");
   search?.addEventListener("input", (event) => {
@@ -1107,7 +1142,7 @@ function refocusGlobalSearch() {
 function bindProjectRows() {
   document.querySelectorAll("[data-detail-path]").forEach((row) => {
     row.addEventListener("click", (event) => {
-      if (event.target.closest("[data-open-path]")) return;
+      if (event.target.closest("[data-open-path]") || event.target.closest(".project-select")) return;
       openProjectDetail(row.dataset.detailPath);
     });
     row.addEventListener("keydown", (event) => {
@@ -1117,6 +1152,34 @@ function bindProjectRows() {
       }
     });
   });
+  document.querySelectorAll("[data-select-path]").forEach((box) => {
+    box.addEventListener("click", (event) => event.stopPropagation());
+    box.addEventListener("change", () => {
+      const path = box.dataset.selectPath;
+      if (box.checked) state.selected.add(path);
+      else state.selected.delete(path);
+      render();
+    });
+  });
+}
+
+// Bulk-select toolbar (page-level, outside #project-results). Bound on full
+// render only, so in-place search updates don't double-bind it.
+function bindProjectBulk() {
+  document.querySelector("[data-select-all]")?.addEventListener("change", (event) => {
+    const projects = state.searchResults ?? state.data.projects;
+    if (event.target.checked) projects.forEach((p) => state.selected.add(p.path));
+    else projects.forEach((p) => state.selected.delete(p.path));
+    render();
+  });
+  document.querySelector("#bulk-base-select")?.addEventListener("change", (event) => {
+    state.bulkBase = event.target.value;
+  });
+  document.querySelector("[data-bulk-clear]")?.addEventListener("click", () => {
+    state.selected.clear();
+    render();
+  });
+  document.querySelector("[data-bulk-move]")?.addEventListener("click", moveSelected);
 }
 
 function scheduleProjectSearch() {
@@ -2078,6 +2141,129 @@ function phaseLabel(job) {
   if (job.phase === "finalizing") return "Finalizing…";
   if (job.status === "done" || job.phase === "done") return "Done.";
   return `Copying ${job.current_file || "files"}… ${pct}% (${job.done_files}/${job.total_files})`;
+}
+
+// Poll one move/copy job to a terminal state, calling `onUpdate(job)` each tick.
+// Returns "done" | "cancelled" | "failed". A 404 (evicted after finishing) = done.
+async function pollMoveJob(jobId, onUpdate) {
+  if (!jobId) return "done";
+  while (true) {
+    let job;
+    try {
+      job = (await api(`/api/job/${encodeURIComponent(jobId)}`)).job;
+    } catch {
+      return "done";
+    }
+    if (onUpdate) onUpdate(job);
+    if (job.status === "failed") return "failed";
+    if (job.status === "cancelled") return "cancelled";
+    if (job.status === "done" || job.phase === "done") return "done";
+    await new Promise((r) => setTimeout(r, 350));
+  }
+}
+
+// Move every checked project into the chosen base (skipping any already there).
+async function moveSelected() {
+  if (state.moving) return;
+  const base = document.querySelector("#bulk-base-select")?.value || state.bulkBase;
+  if (!base) return;
+  const baseKey = base.replace(/\/+$/, "");
+  const all = state.data.projects || [];
+  const targets = all.filter(
+    (p) => state.selected.has(p.path) && (p.base || "").replace(/\/+$/, "") !== baseKey
+  );
+  const skipped = state.selected.size - targets.length;
+  if (!targets.length) {
+    toast(skipped ? "Every selected project is already in that base." : "Nothing to move.", true);
+    return;
+  }
+
+  state.moving = true;
+  render();
+  const result = await runBulkMove(targets, base);
+  state.moving = false;
+  state.selected.clear();
+  state.searchResults = null;
+  await loadState(false);
+  render();
+
+  const parts = [`${result.done} moved`];
+  if (result.failed) parts.push(`${result.failed} failed`);
+  if (result.cancelled) parts.push(`${result.cancelled} cancelled`);
+  if (skipped) parts.push(`${skipped} already there`);
+  toast(parts.join(" · "), result.failed > 0);
+}
+
+// Sequential bulk move with one combined overlay (overall bar + per-project
+// phase). Moves run one at a time so they never race the base caches, and each
+// source is only removed after its copy is verified. Resolves with a tally.
+function runBulkMove(projects, base) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "success-overlay";
+    overlay.innerHTML = `
+      <div class="success-modal">
+        <div class="success-mark move-mark">${icon("external")}</div>
+        <h2>Moving ${projects.length} project${projects.length === 1 ? "" : "s"}</h2>
+        <p>Copying to <strong>${esc(baseLabel(base))}</strong>, verifying each, then removing the originals. Files are never deleted until the copy is verified.</p>
+        <div class="job-progress" id="bulk-progress">
+          <div class="job-bar"><div class="job-bar-fill" style="width:0%"></div></div>
+          <div class="job-label">Starting…</div>
+        </div>
+        <div class="success-actions"><button class="button button-secondary" data-bulk-cancel>Cancel</button></div>
+      </div>`;
+    document.body.append(overlay);
+    const node = overlay.querySelector("#bulk-progress");
+    const fill = () => node.querySelector(".job-bar-fill");
+    const label = () => node.querySelector(".job-label");
+    let cancelRequested = false;
+    let currentJobId = null;
+    overlay.querySelector("[data-bulk-cancel]").addEventListener("click", async () => {
+      cancelRequested = true;
+      if (currentJobId) {
+        try { await api(`/api/job/${encodeURIComponent(currentJobId)}/cancel`, { method: "POST", body: "{}" }); } catch {}
+      }
+      if (label()) label().textContent = "Cancelling…";
+    });
+
+    (async () => {
+      let done = 0, failed = 0, cancelled = 0;
+      const total = projects.length;
+      for (let i = 0; i < total; i++) {
+        if (cancelRequested) { cancelled += total - i; break; }
+        const project = projects[i];
+        if (fill()) fill().style.width = Math.round((i / total) * 100) + "%";
+        if (label()) label().textContent = `Moving ${project.name} (${i + 1}/${total})…`;
+
+        let jobId;
+        try {
+          const res = await api("/api/project/move", { method: "POST", body: JSON.stringify({ path: project.path, base }) });
+          jobId = res.job_id;
+        } catch {
+          failed++;
+          continue;
+        }
+        currentJobId = jobId;
+        const status = await pollMoveJob(jobId, (job) => {
+          const inner = job.total_bytes ? job.copied_bytes / job.total_bytes : (job.phase === "done" ? 1 : 0);
+          if (fill()) fill().style.width = Math.round(((i + inner) / total) * 100) + "%";
+          node.classList.toggle("job-verifying", job.phase === "verifying");
+          if (label()) label().textContent = `${project.name} — ${phaseLabel(job)} (${i + 1}/${total})`;
+        });
+        currentJobId = null;
+        if (status === "done") done++;
+        else if (status === "cancelled") { cancelled++; break; }
+        else failed++;
+      }
+      node.classList.remove("job-verifying");
+      node.classList.add(failed ? "job-failed" : "job-done");
+      if (fill()) fill().style.width = "100%";
+      if (label()) label().textContent = `${done} moved${failed ? `, ${failed} failed` : ""}.`;
+      await new Promise((r) => setTimeout(r, 700));
+      overlay.remove();
+      resolve({ done, failed, cancelled });
+    })();
+  });
 }
 
 // Retry interrupted copies/moves — same recovery the `fastf reconcile` CLI runs.

@@ -114,6 +114,15 @@ array of anything interrupted; the UI shows a banner whose Retry hits
 `/api/reconcile` (same recovery as the `fastf reconcile` CLI). The move job runs
 off `WRITE_LOCK` (it only writes the target staging + atomic caches).
 
+**Moving projects.** A single project moves from its detail drawer (base select
++ Move button). The Projects table also supports **multi-select**: a checkbox per
+row + a select-all header checkbox drive a bulk toolbar (`N selected` · target
+base `<select>` · `Move N`), which relocates every checked project into the
+chosen base **sequentially** (one `/api/project/move` job at a time so they never
+race the base caches), skipping any already there. Both single and bulk moves
+show a `copying → verifying → finalizing` progress overlay with a Cancel button;
+selection state lives in `state.selected` (a `Set` of project paths).
+
 The path/query GET routes (`/api/project?path=`, `/api/job/<id>`) are matched
 before the static-asset catch-all; query values are percent-decoded with a small
 built-in decoder (`encodeURIComponent` on the frontend).

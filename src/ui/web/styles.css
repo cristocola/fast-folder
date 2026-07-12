@@ -827,15 +827,37 @@ button {
 .project-list { overflow: hidden; }
 
 .project-row {
-  min-width: 800px;
+  min-width: 828px;
   display: grid;
-  grid-template-columns: minmax(230px, 1.4fr) 120px 120px 110px 90px 34px;
+  grid-template-columns: 22px minmax(230px, 1.4fr) 120px 120px 110px 90px 34px;
   align-items: center;
   gap: 16px;
   padding: 13px 17px;
   border-bottom: 1px solid var(--line);
   transition: background .14s;
 }
+
+.project-select {
+  display: grid;
+  place-items: center;
+}
+.project-select input { width: 15px; height: 15px; cursor: pointer; accent-color: var(--accent-strong); }
+.project-row.selected { background: color-mix(in srgb, var(--accent-strong) 8%, transparent); }
+
+/* Bulk actions toolbar (multi-select move) */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-strong) 40%, transparent);
+  background: color-mix(in srgb, var(--accent-strong) 10%, var(--surface));
+}
+.bulk-bar .bulk-count { font-size: 13px; font-weight: 600; }
+.bulk-bar .bulk-spacer { flex: 1; }
+.bulk-bar select { max-width: 320px; }
 
 .project-row:last-child { border-bottom: 0; }
 .project-row:hover { background: var(--surface-2); }
@@ -2166,6 +2188,7 @@ html[data-theme="dark"] .switch input:checked + span { background: var(--accent-
   margin: 19px 0 7px;
   font-size: 22px;
   letter-spacing: -.04em;
+  overflow-wrap: anywhere;
 }
 
 .success-modal > p {
@@ -2173,6 +2196,7 @@ html[data-theme="dark"] .switch input:checked + span { background: var(--accent-
   color: var(--muted);
   font-size: 10px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .success-path {
@@ -2208,6 +2232,7 @@ html[data-theme="dark"] .switch input:checked + span { background: var(--accent-
   margin-top: 8px;
   font-size: 11px;
   color: var(--muted, #6b7280);
+  overflow-wrap: anywhere;
 }
 .job-progress.job-done .job-bar-fill { background: var(--accent-strong); }
 .job-progress.job-failed .job-bar-fill { background: #e5534b; }

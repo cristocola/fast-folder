@@ -482,6 +482,7 @@ fn load_state() -> Result<Value> {
         "counter": counter,
         "next_id": format!("ID{:04}", counter + 1),
         "install_dir": paths::install_dir(),
+        "dir_mode": paths::try_install_dir().map(|(_, m)| m.label()).unwrap_or("unknown"),
         "templates_dir": paths::templates_dir(),
         // Projects with an in-flight/interrupted copy or move, for the banner.
         "provisioning": crate::core::provisioning::list_incomplete(&config),

@@ -139,7 +139,13 @@ structure:
 /// - templates/ directory exists
 /// - bundled templates are written if the directory is empty
 pub fn ensure_bootstrapped() -> Result<()> {
-    let install = paths::install_dir();
+    let (install, mode) = paths::try_install_dir()?;
+
+    // The resolved data dir may not exist yet (fresh user-config-dir install,
+    // e.g. after `pacman -S fast-folder` put the binary in read-only /usr/bin).
+    // Only bootstrap creates it — path resolution itself never writes.
+    fs::create_dir_all(&install)
+        .map_err(|e| anyhow::anyhow!("cannot create data directory {}: {e}", install.display()))?;
 
     // Config
     let config_path = paths::config_path();
@@ -166,8 +172,9 @@ pub fn ensure_bootstrapped() -> Result<()> {
             MUSIC_VIDEO_GITIGNORE,
         )?;
         println!(
-            "fastf: initialized in {}\n       3 default templates written to templates/",
-            install.display()
+            "fastf: initialized in {} — {}\n       3 default templates written to templates/",
+            install.display(),
+            mode.label()
         );
     }
 

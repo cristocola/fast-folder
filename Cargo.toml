@@ -1,8 +1,16 @@
 [package]
 name = "fastf"
-version = "0.11.0"
+version = "1.0.0"
 edition = "2024"
-description = "Fast Folder Creator — template-driven project folder generator"
+rust-version = "1.88"
+description = "Fast Folder Creator — template-driven project folder generator with TUI and browser UI"
+license = "MIT"
+repository = "https://github.com/cristocola/fast-folder"
+homepage = "https://github.com/cristocola/fast-folder"
+authors = ["Cristo Cola"]
+readme = "README.md"
+keywords = ["cli", "template", "scaffolding", "folders", "productivity"]
+categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
 name = "fastf"
@@ -11,6 +19,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+clap_mangen = "0.2"
 dialoguer = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
@@ -27,3 +36,4 @@ tempfile = "3"
 opt-level = 3
 lto = true
 strip = true
+codegen-units = 1

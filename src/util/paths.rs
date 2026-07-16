@@ -1,25 +1,136 @@
-use std::path::PathBuf;
+use anyhow::{Result, bail};
+use std::path::{Path, PathBuf};
 
-/// Returns the directory where the fastf binary lives.
-/// All config, templates, and counters are resolved relative to this path.
-/// Uses canonicalize() so symlinks resolve to the real binary location.
+/// How the data directory (config, templates, counters) was resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirMode {
+    /// `FASTF_INSTALL_DIR` environment variable override.
+    EnvOverride,
+    /// Portable mode: the binary's own directory (it contains `config.toml`
+    /// or `templates/`).
+    Portable,
+    /// Per-user config directory (`~/.config/fastf`, `%APPDATA%\fastf`).
+    UserDir,
+}
+
+impl DirMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            DirMode::EnvOverride => "env override (FASTF_INSTALL_DIR)",
+            DirMode::Portable => "portable (next to the binary)",
+            DirMode::UserDir => "user config directory",
+        }
+    }
+}
+
+/// Resolve the directory where config, templates, and counters live.
 ///
-/// Tests can override the install directory by setting `FASTF_INSTALL_DIR`.
-/// This is the single escape hatch that lets integration tests run hermetically
-/// against a temp directory without spawning a real fastf binary.
-pub fn install_dir() -> PathBuf {
+/// Precedence:
+/// 1. `FASTF_INSTALL_DIR` (non-empty) — test hermeticity hatch + power users.
+/// 2. Portable mode: the binary's directory, iff it already contains a
+///    `config.toml` or a `templates/` dir. Keeps binary-plus-data folders
+///    (USB stick, `target/release/`) working exactly as before.
+/// 3. The per-user config directory: `$XDG_CONFIG_HOME/fastf` (or
+///    `~/.config/fastf`) on Unix, `%APPDATA%\fastf` on Windows — the only
+///    option that works when the binary sits in a read-only location like
+///    `/usr/bin`.
+///
+/// No memoization on purpose: tests swap `FASTF_INSTALL_DIR` within one
+/// process, and the fallback costs only a couple of `stat` calls.
+pub fn try_install_dir() -> Result<(PathBuf, DirMode)> {
     if let Ok(override_dir) = std::env::var("FASTF_INSTALL_DIR")
         && !override_dir.is_empty()
     {
-        return PathBuf::from(override_dir);
+        return Ok((PathBuf::from(override_dir), DirMode::EnvOverride));
     }
-    std::env::current_exe()
-        .expect("cannot resolve binary path")
-        .canonicalize()
-        .expect("cannot canonicalize binary path")
-        .parent()
-        .expect("binary has no parent directory")
-        .to_path_buf()
+    if let Some(dir) = portable_dir() {
+        return Ok((dir, DirMode::Portable));
+    }
+    Ok((user_config_dir()?, DirMode::UserDir))
+}
+
+/// Infallible wrapper around [`try_install_dir`] for the ~30 path helpers and
+/// their callers. `main()` runs `try_install_dir()?` first thing, so in the
+/// binary this can only be reached after a successful resolution; the exit
+/// branch is belt-and-braces for library consumers (e.g. UI server threads).
+pub fn install_dir() -> PathBuf {
+    match try_install_dir() {
+        Ok((dir, _)) => dir,
+        Err(err) => {
+            eprintln!(
+                "fastf: cannot determine data directory: {err}. \
+                 Set FASTF_INSTALL_DIR to choose one."
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Portable-mode probe: the canonicalized directory of the running binary,
+/// iff it already holds fastf data (`config.toml` or `templates/`).
+fn portable_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let dir = exe.parent()?;
+    if is_portable_data_dir(dir) {
+        Some(dir.to_path_buf())
+    } else {
+        None
+    }
+}
+
+fn is_portable_data_dir(dir: &Path) -> bool {
+    dir.join("config.toml").is_file() || dir.join("templates").is_dir()
+}
+
+/// Per-user config directory, hand-rolled (no `dirs` crate — two env lookups).
+#[cfg(windows)]
+fn user_config_dir() -> Result<PathBuf> {
+    user_config_dir_from(
+        std::env::var("APPDATA").ok().as_deref(),
+        std::env::var("USERPROFILE").ok().as_deref(),
+    )
+}
+
+#[cfg(windows)]
+fn user_config_dir_from(appdata: Option<&str>, profile: Option<&str>) -> Result<PathBuf> {
+    if let Some(appdata) = appdata
+        && !appdata.is_empty()
+    {
+        return Ok(PathBuf::from(appdata).join("fastf"));
+    }
+    if let Some(profile) = profile
+        && !profile.is_empty()
+    {
+        return Ok(PathBuf::from(profile)
+            .join("AppData")
+            .join("Roaming")
+            .join("fastf"));
+    }
+    bail!("neither %APPDATA% nor %USERPROFILE% is set")
+}
+
+#[cfg(not(windows))]
+fn user_config_dir() -> Result<PathBuf> {
+    user_config_dir_from(
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+#[cfg(not(windows))]
+fn user_config_dir_from(xdg: Option<&str>, home: Option<&str>) -> Result<PathBuf> {
+    if let Some(xdg) = xdg
+        && !xdg.is_empty()
+        && Path::new(xdg).is_absolute()
+    {
+        return Ok(PathBuf::from(xdg).join("fastf"));
+    }
+    if let Some(home) = home
+        && !home.is_empty()
+    {
+        return Ok(PathBuf::from(home).join(".config").join("fastf"));
+    }
+    bail!("neither $XDG_CONFIG_HOME nor $HOME is set")
 }
 
 pub fn config_path() -> PathBuf {
@@ -49,4 +160,49 @@ pub fn template_manifest(slug: &str) -> PathBuf {
 /// Everything here is reproduced into new projects (names + text interpolated).
 pub fn template_files_dir(slug: &str) -> PathBuf {
     template_dir(slug).join("files")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn portable_marker_detection() {
+        let tmp = std::env::temp_dir().join(format!("fastf-paths-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert!(!is_portable_data_dir(&tmp));
+        std::fs::write(tmp.join("config.toml"), "").unwrap();
+        assert!(is_portable_data_dir(&tmp));
+        std::fs::remove_file(tmp.join("config.toml")).unwrap();
+        std::fs::create_dir_all(tmp.join("templates")).unwrap();
+        assert!(is_portable_data_dir(&tmp));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn user_config_dir_precedence() {
+        // Absolute XDG_CONFIG_HOME wins.
+        assert_eq!(
+            user_config_dir_from(Some("/tmp/xdg-test"), Some("/home/testuser")).unwrap(),
+            PathBuf::from("/tmp/xdg-test/fastf")
+        );
+        // Relative or empty XDG_CONFIG_HOME is ignored (per the XDG spec).
+        assert_eq!(
+            user_config_dir_from(Some("relative/dir"), Some("/home/testuser")).unwrap(),
+            PathBuf::from("/home/testuser/.config/fastf")
+        );
+        assert_eq!(
+            user_config_dir_from(Some(""), Some("/home/testuser")).unwrap(),
+            PathBuf::from("/home/testuser/.config/fastf")
+        );
+        assert_eq!(
+            user_config_dir_from(None, Some("/home/testuser")).unwrap(),
+            PathBuf::from("/home/testuser/.config/fastf")
+        );
+        // Nothing set → error, not a panic.
+        assert!(user_config_dir_from(None, None).is_err());
+        assert!(user_config_dir_from(None, Some("")).is_err());
+    }
 }

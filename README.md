@@ -10,13 +10,22 @@
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-dea584.svg" alt="Built with Rust"></a>
 </p>
 
-Every new music video, client shoot, research topic, monthly report, or code repository starts the same way: make a folder, name it consistently, rebuild the same subfolder skeleton, copy in the same starter files, rename everything. fastf does that in seconds. You describe the structure once as a template. From then on it asks a few questions (artist, client, project title, whatever your template defines) and generates the complete project: every subfolder in place, files pre-filled with your answers, a unique project ID, and metadata that lets you find the project again months later.
+Everyone who works in projects has a folder convention: how a new project should be named, which subfolders it needs, which starter files belong inside. In practice the convention lives in someone's head or a wiki page, and every rushed deadline erodes it a little more. fastf makes the convention executable. You describe the structure once as a template. From then on, creating a project means answering a few questions, and the result is always right: consistent name, complete folder skeleton, starter files pre-filled with your answers, a unique project ID, and metadata that lets you find the project again months later.
 
-It is a general-purpose tool. Video producers, photographers, researchers, freelancers, and developers all use the same engine with different templates. One engine drives three interfaces, so you can work whichever way fits the moment:
+It is the same tool for very different people:
+
+- A **video editor** gets a delivery-ready episode folder for every new video.
+- A **designer** gets brief and asset folders named for the client.
+- A **journalist** gets a story folder with places for interviews, footage, and drafts.
+- A **project manager** gets every engagement structured and numbered the same way.
+- A **developer** gets a code scaffold with configs ready to build.
+- A **team or agency** points everyone's fastf at the same master folder on the shared drive. The convention enforces itself, new hires inherit it on day one, and the whole team searches one project history. No server, no database, no accounts. The folders are the system.
+
+One engine drives three interfaces, so you can work whichever way fits the moment:
 
 ```bash
 fastf                       # interactive terminal menu
-fastf new music-video --artist="Ariana Grande" --title="Lullaby" --yes
+fastf new general --name="spring campaign"    # -> 2026-07-16_Spring_Campaign_ID0048/
 fastf ui                    # local browser UI, same engine, point and click
 ```
 
@@ -55,7 +64,7 @@ cargo install --git https://github.com/cristocola/fast-folder
 fastf                        # pick a bundled template, answer the prompts, done
 ```
 
-Three templates (`music-video`, `photography`, `video-production`) are available on first run. Five more examples live in [`examples/templates/`](examples/templates/): `rust-project`, `python-project`, `web-project`, `finance-monthly`, and `research-note`. Copy any of them into your templates directory to use it.
+Four templates are bundled on first run. `general` is the zero-setup starting point for any kind of work: it creates a dated, numbered folder (`2026-07-16_Spring_Campaign_ID0048`) with an inbox subfolder, and you shape it into your own convention from there. The other three (`music-video`, `photography`, `video-production`) show what a deeper domain template looks like. Five more examples live in [`examples/templates/`](examples/templates/): `rust-project`, `python-project`, `web-project`, `finance-monthly`, and `research-note`. Copy any of them into your templates directory to use it.
 
 ## What it does
 
@@ -66,6 +75,7 @@ Three templates (`music-video`, `photography`, `video-production`) are available
 - **Every project is findable again.** Unique IDs, creation dates, tags, and searchable metadata. Jump to any project with `fastf open ID0047`, browse recent work, or keep timestamped journal notes per project.
 - **Search that understands your projects.** Plain text works (`fastf search ariana`), and so do precise filters: `fastf search template=music-video tag:draft created>2026-01-01`.
 - **Projects can live on several drives.** Index any number of folders, including external drives that come and go. A disconnected drive is skipped quietly and comes back when remounted.
+- **Teams share one project system.** Point every install at the same master folder on a NAS or shared drive. Everyone creates projects through the same convention and searches the same history. Because the metadata travels inside the folders, there is no server and nothing to administer.
 - **Moves that cannot lose data.** `fastf move` relocates a project to another drive by copying, verifying, and only then removing the original. If anything is interrupted mid-move, `fastf reconcile` finishes or rolls it back.
 - **Adopts your existing folders.** `fastf register` onboards work that fastf did not create, one folder or a whole directory at once.
 - **Optional automation after each create.** Open the new folder, launch your editor, initialize a git repository, or run your own commands.

@@ -84,7 +84,9 @@ jobs:
           # MSI ProductVersion must be numeric x.y.z; dev dry-runs use 0.0.0.
           $msiVersion = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.0.0" }
           $name = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "dev-" + $env:GITHUB_SHA.Substring(0,7) }
-          dotnet tool install --global wix
+          # Pin WiX v5: v6+ requires accepting the paid Open Source
+          # Maintenance Fee EULA (error WIX7015) in CI.
+          dotnet tool install --global wix --version 5.0.2
           wix build packaging/wix/main.wxs `
             -d Version=$msiVersion `
             -d BinPath=target/${{ matrix.target }}/release/fastf.exe `

@@ -22,6 +22,22 @@ fastf ui                    # local browser UI, same engine, point and click
   <img src="https://github.com/user-attachments/assets/08bb830c-1c85-42f7-b94c-85ddfa34e795" alt="Fast Folder browser UI" width="820">
 </p>
 
+## The browser UI
+
+That screenshot is `fastf ui`: a full point-and-click interface served by the same binary. No Electron, no Node, no separate server process. The frontend is embedded in the executable and talks to the same engine the CLI uses, so both always see the same templates, settings, and projects.
+
+- **Visual template editor.** Build variables, folder structure, and templated files without touching YAML. Drop real assets (a logo, a delivery video) into a template from a disk path.
+- **Create with live preview.** Fill in variables and watch the folder tree and generated file contents update before anything is written.
+- **Manage everything.** Search with the full query language, tag projects, write journal notes, and bulk-move projects between drives with verified copies.
+- **Local only.** The server binds to `127.0.0.1` and closing the app window shuts it down.
+
+```bash
+fastf ui --app      # dedicated app window (Chromium/Chrome), also in your app menu as "Fast Folder"
+fastf ui            # same thing in your default browser
+```
+
+Prefer the terminal? Everything the UI does has a CLI or TUI equivalent, and the rest of this README speaks fluent shell.
+
 The whole tool is a single Rust binary under 3 MB with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
 
 ## Quick start

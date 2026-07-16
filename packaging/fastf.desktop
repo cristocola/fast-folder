@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Fast Folder
+GenericName=Project Folder Manager
+Comment=Create and manage structured project folders from templates
+Exec=fastf ui --app
+Icon=fastf
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=projects;folders;templates;scaffolding;
+StartupWMClass=FastFolderUI

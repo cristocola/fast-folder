@@ -2643,3 +2643,82 @@ html[data-theme="dark"] .quick-chip { background: var(--surface); }
 
 @media (max-width: 1180px) { .quick-start { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .quick-start { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------------------
+   v1.0 production polish: offline banner, dialogs, sorting, spinners
+   --------------------------------------------------------------------------- */
+
+.offline-banner {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border: 1px solid var(--error-border);
+  border-radius: 999px;
+  background: var(--error-bg);
+  color: var(--error-text);
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: var(--shadow);
+  animation: toast-in .18s ease;
+}
+.offline-banner svg { width: 14px; height: 14px; }
+
+.button-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.button-danger:hover { filter: brightness(1.08); }
+.button-danger:disabled { opacity: .55; cursor: not-allowed; filter: none; }
+
+.modal-confirm { max-width: 440px; }
+.modal-confirm .modal-sub strong { color: var(--ink); }
+.modal-confirm .modal-foot { justify-content: flex-end; gap: 10px; }
+
+.drawer-manage { margin-top: 10px; }
+
+.sort-header {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.sort-header:hover { color: var(--ink); }
+.sort-header.active { color: var(--ink); }
+.sort-arrow { font-size: 10px; line-height: 1; }
+
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: spinner-rotate .7s linear infinite;
+}
+@keyframes spinner-rotate { to { transform: rotate(360deg); } }
+
+.boot-error-detail {
+  max-width: 420px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.6;
+}

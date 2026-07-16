@@ -9,12 +9,15 @@
              project scaffolder
 ```
 
+[![CI](https://github.com/cristocola/fast-folder/actions/workflows/ci.yml/badge.svg)](https://github.com/cristocola/fast-folder/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/cristocola/fast-folder)](https://github.com/cristocola/fast-folder/releases)
+[![AUR](https://img.shields.io/aur/version/fast-folder)](https://aur.archlinux.org/packages/fast-folder)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-dea584.svg)](https://www.rust-lang.org/)
 
 A blazing-fast, Rust-native project generator for people who repeatedly set up structured work — **code, research, finance, creative, business, whatever you repeat.** Not just a folder duplicator: fastf builds nested, variable-driven project systems with dynamically-generated file contents, persistent metadata, and per-project tracking — all driven by a friendly interactive TUI, a fully scriptable CLI, or a fast local browser UI.
 
-Portable single-folder distribution (like ffmpeg), under **3 MB**, cross-platform (Linux, macOS, Windows). No runtime, no plugin ecosystem, no config directories to hunt for.
+Under **3 MB**, cross-platform (Linux, macOS, Windows), no runtime, no plugin ecosystem. Install it from a package manager, or run it as a portable single-folder distribution (like ffmpeg) — `fastf paths` always tells you exactly where its data lives.
 
 ```bash
 fastf                      # interactive TUI — pick template, answer prompts, done
@@ -46,7 +49,7 @@ Most templaters either target coders (Cookiecutter, Yeoman) or duplicate static 
 
 - **Not only for coders.** Works for music video production, photography, film, research archives, finance workflows, client deliverables, and yes — software projects too. Same engine, same workflow, different templates.
 - **TUI, CLI, *and* browser UI — all first-class.** Beginners get a guided interactive menu with live settings preview. Power users and scripts drive everything with flags (`--yes`, `--dry-run`, variable injection, base-dir override). `fastf ui` opens a fast point-and-click browser app for visual template editing and project creation. AI agents, launchers, and shell pipelines plug in naturally. All three interfaces share one engine and one set of data.
-- **Rust-native and portable.** Single executable under 3 MB, near-instant startup, no runtime to install. Drop the folder on a USB stick, a network share, a new laptop — the binary finds its own config, templates, and counter next to itself. Projects are discovered from the filesystem, so there's no separate database to keep in sync.
+- **Rust-native and portable.** Single executable under 3 MB, near-instant startup, no runtime to install. Install it system-wide (data lives in `~/.config/fastf`) or drop the folder on a USB stick, a network share, a new laptop — in portable mode the binary finds its config, templates, and counter next to itself. Projects are discovered from the filesystem, so there's no separate database to keep in sync.
 - **Generates file *contents* from metadata, not just folder *names*.** Variables flow into templated files: `Cargo.toml`, `README.md`, client briefs, slate info, shot lists, report headers. The output is materially tailored to the project.
 - **Nested, variable-driven project systems.** A single template can carry deliverables, notes, exports, contracts, assets, code, references, and generated metadata — all in one coherent tree, with paths and contents driven by the variables you supply.
 - **Projects are trackable objects, not one-shot output.** Every created project is logged with an ID, timestamp, template, and variables. Browse with `fastf recent`, jump to any folder with `fastf open <id>`, or parse `PROJECT_INFO.md` frontmatter with `yq`, Obsidian, Hugo, or your own tooling.
@@ -203,7 +206,7 @@ It's **fast** for the same reasons the CLI is: requests never leave `127.0.0.1`,
 - **Shell completions** for bash, zsh, fish, PowerShell.
 
 ### Deployment
-- **One self-contained folder.** Binary, config, templates, and the counter all live together. Move the folder, everything moves with it. (Projects live wherever you create them, each base carrying its own portable cache.)
+- **One data folder.** Config, templates, and the counter live together — next to the binary in portable mode, or in your user config dir for system installs (`fastf paths` shows which). Move a portable folder and everything moves with it. (Projects live wherever you create them, each base carrying its own portable cache.)
 - **Under 3 MB.** Single Rust binary, statically linked (musl build available). No Python, no Node, no runtime dependencies.
 - **Cross-platform.** Linux, macOS (Intel + Apple Silicon), Windows. Cross-compile instructions below.
 
@@ -227,71 +230,46 @@ The three bundled templates (`music-video`, `photography`, `video-production`) a
 
 ## Installation
 
-### On Linux
+### Prebuilt binaries (recommended)
+
+Every release ships prebuilt archives on the [GitHub Releases page](https://github.com/cristocola/fast-folder/releases) — binary + shell completions + man pages included, checksums in `SHA256SUMS`:
+
+| Archive | Platform |
+|---|---|
+| `fastf-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` | Linux (glibc — most distros) |
+| `fastf-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz` | Linux (fully static — works anywhere) |
+| `fastf-vX.Y.Z-x86_64-pc-windows-msvc.zip` | Windows 10/11 |
 
 ```bash
-# 1. Install Rust (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
+# Linux example
+tar xzf fastf-v1.0.0-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 fastf-v1.0.0-x86_64-unknown-linux-gnu/fastf ~/.local/bin/fastf
+fastf --version
+```
 
-# 2. Clone and build
+Released Windows binaries are MSVC builds; the mingw cross-compile below remains the local-dev path.
+
+### Arch Linux (AUR)
+
+```bash
+paru -S fast-folder        # build from source
+paru -S fast-folder-bin    # prebuilt static binary
+```
+
+Both install the `fastf` command plus completions, man pages, and a "Fast Folder" app-menu entry for the browser UI.
+
+### Build from source
+
+Works the same on Linux, macOS, and Windows — install Rust via [rustup](https://rustup.rs), then:
+
+```bash
 git clone https://github.com/cristocola/fast-folder.git
 cd fast-folder
 cargo build --release
-# Output: target/release/fastf
+# Output: target/release/fastf (fastf.exe on Windows)
 
-# 3. Deploy — copy to any folder on your PATH
-mkdir -p ~/bin
-cp target/release/fastf ~/bin/
-# If ~/bin is not yet on your PATH, add this to ~/.bashrc or ~/.zshrc:
-# export PATH="$HOME/bin:$PATH"
-```
-
-### On Windows
-
-```powershell
-# 1. Install Rust — use rustup from https://rustup.rs (or via winget)
-winget install Rustlang.Rustup
-# Open a new terminal so cargo is on PATH.
-
-# 2. Clone and build
-git clone https://github.com/cristocola/fast-folder.git
-cd fast-folder
-cargo build --release
-# Output: target\release\fastf.exe
-
-# 3. Deploy — copy to any folder on your PATH
-mkdir "$env:USERPROFILE\bin"
-copy target\release\fastf.exe "$env:USERPROFILE\bin\"
-# Add %USERPROFILE%\bin to your PATH via System → Environment Variables.
-```
-
-### On macOS
-
-```bash
-# 1. Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-
-# 2. Clone and build
-git clone https://github.com/cristocola/fast-folder.git
-cd fast-folder
-cargo build --release
-# Output: target/release/fastf
-
-# 3. Deploy
-cp target/release/fastf /usr/local/bin/
-```
-
-**macOS universal binary** (Apple Silicon + Intel):
-
-```bash
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
-cargo build --release --target aarch64-apple-darwin
-cargo build --release --target x86_64-apple-darwin
-lipo -create -output fastf \
-  target/aarch64-apple-darwin/release/fastf \
-  target/x86_64-apple-darwin/release/fastf
+# Deploy — copy to any folder on your PATH
+install -Dm755 target/release/fastf ~/.local/bin/fastf
 ```
 
 ### Cross-compile
@@ -317,9 +295,17 @@ cargo build --release --target x86_64-pc-windows-gnu
 # Output: target/x86_64-pc-windows-gnu/release/fastf.exe
 ```
 
-### Portable install layout
+### Where fastf keeps its data
 
-The whole installation is one self-contained folder — copy it anywhere, everything moves with it:
+Config, templates, and the ID counter live together in **one data folder**, resolved in this order (check yours with `fastf paths`):
+
+| Priority | Location | When |
+|---|---|---|
+| 1 | `$FASTF_INSTALL_DIR` | The env var is set (scripting / testing) |
+| 2 | **Portable:** the binary's own directory | A `config.toml` or `templates/` already sits next to the binary |
+| 3 | **User dir:** `~/.config/fastf` (Linux/macOS) or `%APPDATA%\fastf` (Windows) | Everything else — including package-manager installs to `/usr/bin` |
+
+**Portable mode** keeps the classic single-folder layout — copy it anywhere (USB stick included) and everything moves with it. To opt in, just put an empty `config.toml` next to the binary before first run:
 
 ```
 fastf/
@@ -332,7 +318,7 @@ fastf/
     └── video-production/
 ```
 
-On first run, `fastf` creates `config.toml`, `counters.toml`, and `templates/` alongside itself. The binary resolves its own location at runtime, so symlinking also works. There's no project database here — each project carries its own `PROJECT_INFO.md`, and each base directory keeps a disposable `.fastf-index.json` cache next to its projects.
+On first run, `fastf` creates the config, counter, and three starter templates in the resolved data folder. There's no project database — each project carries its own `PROJECT_INFO.md`, and each base directory keeps a disposable `.fastf-index.json` cache next to its projects.
 
 ---
 
@@ -761,6 +747,8 @@ The file is written once on `fastf new` (or `fastf register`) and modified only 
 | `fastf open <query>` | Reveal a project folder by ID or name |
 | `fastf register <dir>` | Write a PROJECT_INFO.md into an existing folder (`--recursive` for a whole base) |
 | `fastf reindex` | Force a full rescan of every base, rewriting each `.fastf-index.json` cache |
+| `fastf move <query> [base]` | Move a project folder into another configured base (verified copy across filesystems) |
+| `fastf reconcile` | Resume interrupted copies, finish or roll back interrupted moves |
 | `fastf apply <slug> <dir>` | Apply a template to an existing folder (skip-only) |
 | `fastf tag add <id> <tag>…` | Add free-form tags to a project |
 | `fastf tag remove <id> <tag>…` | Remove tags from a project |
@@ -776,6 +764,7 @@ The file is written once on `fastf new` (or `fastf register`) and modified only 
 | `fastf template edit <slug>` | Edit a template interactively |
 | `fastf template from-folder <dir> <slug>` | Generate a template from an existing folder |
 | `fastf template delete <slug>` | Delete a template (removes its whole folder) |
+| `fastf paths` | Show the resolved data folder and how it was chosen |
 | `fastf config show` | Print current configuration |
 | `fastf config set <key> <value>` | Set a configuration value |
 | `fastf id show` / `set` / `reset` | Manage the global ID counter |

@@ -5,3 +5,9 @@
 # This repo is itself a registered fastf project on the dev's machine;
 # its auto-generated metadata file is machine-specific (absolute paths).
 /PROJECT_INFO.md
+
+# makepkg artifacts inside packaging/aur (local validation runs)
+packaging/aur/**/src/
+packaging/aur/**/pkg/
+packaging/aur/**/*.tar.gz
+packaging/aur/**/*.pkg.tar.zst

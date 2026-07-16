@@ -65,6 +65,9 @@ non-loopback address.
 | POST | `/api/project/tag` | Add/remove one tag (`{path, action, tag}`) |
 | POST | `/api/project/note` | Append a journal entry (`{path, message}`) |
 | POST | `/api/project/move` | Move a project into another configured base (`{path, base}`); target must be in `effective_bases()`. Returns `{job_id}` — the move runs in the background (same-fs = instant rename; cross-fs = staged copy → verify → commit → remove source). Poll `/api/job/<id>` |
+| POST | `/api/project/unregister` | Remove a project's `PROJECT_INFO.md` so fastf forgets it (`{path}`); files stay on disk |
+| POST | `/api/project/delete` | Recursively delete a project folder (`{path, confirm_name}` — `confirm_name` must equal the folder name; restricted to configured bases) |
+| POST | `/api/project/rename` | Rename a project folder in place (`{path, folder}`); metadata `folder`/`path` patched, cache updated |
 | POST | `/api/register` | Onboard an existing folder (`{path, template?, variables, rename, apply, created?, use_today, overwrite}`) |
 | POST | `/api/apply/preview` | Dry-run an apply, return create/skip actions (no writes) |
 | POST | `/api/apply` | Create missing folders/files in an existing folder |
@@ -151,12 +154,19 @@ Backend (Rust) changes still require a rebuild and server restart.
 
 ## Data location
 
-Fast Folder resolves its data dir from the directory containing the running
-executable (`paths::install_dir()`, overridable with `FASTF_INSTALL_DIR`).
+Fast Folder resolves its data dir with a three-tier precedence (v1.0,
+`paths::try_install_dir()`): the `FASTF_INSTALL_DIR` env override, else the
+binary's own directory when a `config.toml`/`templates/` sits next to it
+(portable mode), else the per-user config directory (`~/.config/fastf`,
+`%APPDATA%\fastf`) — which is what a package-manager install uses. `fastf
+paths` prints the resolved dir + mode; `/api/state` exposes it as `dir_mode`.
 Because the UI is the same `fastf` binary, it reads/writes the same
 `config.toml`, `templates/`, and `counters.toml` as the CLI. Projects are
 discovered from their `PROJECT_INFO.md` across the configured bases (v0.9 — no
 `projects.jsonl`), each base holding its own `.fastf-index.json` cache.
+
+Request bodies are capped at 2 MiB (`MAX_REQUEST_SIZE`) — oversized or
+malformed requests get a clean JSON 400, never a crashed connection thread.
 
 ## Security boundary
 

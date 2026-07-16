@@ -16,13 +16,15 @@ use colored::Colorize;
 \n\
 Templates define a folder structure, placeholder files, and variables (text inputs\n\
 or select menus). Each project gets an auto-incrementing ID. Templates, config, and\n\
-counters live next to the binary — fully portable, no home directory required.\n\
+counters live in one data folder: next to the binary when a config.toml sits there\n\
+(portable mode), otherwise in your user config directory. See `fastf paths`.\n\
 \n\
 Getting started:\n\
   fastf                        # interactive menu\n\
   fastf new                    # pick a template and fill in variables\n\
   fastf template list          # see available templates\n\
   fastf template new           # create a new template interactively\n\
+  fastf paths                  # where fastf keeps its data\n\
   fastf config show            # view current settings",
     version,
     propagate_version = true

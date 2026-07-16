@@ -261,14 +261,19 @@ pub fn health_check(address: &str) -> bool {
     {
         return false;
     }
+    // Read until the status line is complete — a single read can return a
+    // partial TCP segment, and treating that as "not answering" made the
+    // probe flaky (the launcher would then try to re-bind a busy port).
+    const EXPECTED: &[u8] = b"HTTP/1.1 200";
     let mut buffer = [0_u8; 256];
-    match stream.read(&mut buffer) {
-        Ok(read) if read > 0 => {
-            let head = String::from_utf8_lossy(&buffer[..read]);
-            head.starts_with("HTTP/1.1 200")
+    let mut got = 0;
+    while got < EXPECTED.len() {
+        match stream.read(&mut buffer[got..]) {
+            Ok(read) if read > 0 => got += read,
+            _ => return false,
         }
-        _ => false,
     }
+    buffer[..EXPECTED.len()] == *EXPECTED
 }
 
 fn handle_connection(mut stream: TcpStream) -> Result<()> {
@@ -599,6 +604,21 @@ fn create_project(request: CreateRequest) -> Result<Value> {
         "project": plan_json(&template, &config, &plan),
         "job_id": job_id,
     }))
+}
+
+/// True while any background copy/move job is still running. `fastf ui --app`
+/// ties the server's lifetime to the app window — this lets it hold shutdown
+/// until in-flight copies land instead of stranding them for reconcile.
+pub fn jobs_active() -> bool {
+    let guard = jobs_lock();
+    guard.as_ref().is_some_and(|jobs| {
+        jobs.values().any(|h| {
+            h.progress
+                .lock()
+                .map(|p| p.status == "running")
+                .unwrap_or(false)
+        })
+    })
 }
 
 /// Register a job handle and evict finished ones so the registry stays bounded.
@@ -1321,7 +1341,16 @@ fn hex_value(byte: u8) -> Option<u8> {
 
 /// Path comparison normalising separators (mirrors register's `paths_equal`).
 fn paths_match(a: &str, b: &str) -> bool {
-    a.replace('\\', "/") == b.replace('\\', "/")
+    if a.replace('\\', "/") == b.replace('\\', "/") {
+        return true;
+    }
+    // Windows spells one folder several ways (\\?\ verbatim prefix, 8.3 short
+    // names like RUNNER~1, case differences) — canonicalize both sides to
+    // settle it. A side that fails to canonicalize (path gone) is no match.
+    match (Path::new(a).canonicalize(), Path::new(b).canonicalize()) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
 }
 
 fn save_template(mut request: TemplateSaveRequest) -> Result<Value> {
@@ -1549,12 +1578,17 @@ fn write_response(
         404 => "Not Found",
         _ => "Internal Server Error",
     };
-    write!(
-        stream,
+    // Assemble the full response and send it in ONE write. `write!` straight
+    // to a TcpStream is unbuffered — every format fragment becomes its own
+    // TCP segment, and a client's first read can land mid-status-line (the
+    // health probe used to see just "HTTP/1.1 " and call the server dead).
+    let mut response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n",
         body.len()
-    )?;
-    stream.write_all(&body)?;
+    )
+    .into_bytes();
+    response.extend_from_slice(&body);
+    stream.write_all(&response)?;
     stream.flush()?;
     Ok(())
 }

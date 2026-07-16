@@ -579,6 +579,13 @@ enum IdAction {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    // Die quietly when stdout closes early (`fastf recent --plain | head`)
+    // instead of panicking — restore the default SIGPIPE disposition that the
+    // Rust runtime masks on startup.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     if let Err(e) = run() {
         eprintln!("{} {:#}", colored::Colorize::red("error:"), e);
         std::process::exit(1);

@@ -254,6 +254,7 @@ dependencies = [
  "clap_mangen",
  "colored",
  "dialoguer",
+ "libc",
  "serde",
  "serde_json",
  "serde_yaml",

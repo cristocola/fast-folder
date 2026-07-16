@@ -10,7 +10,9 @@
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-dea584.svg" alt="Built with Rust"></a>
 </p>
 
-fastf creates fully structured project folders from templates: nested directories, files with generated contents, unique IDs, and searchable metadata. It was built for people who set up the same kind of work over and over. That includes code, but also music video production, photography, research, finance, and client deliverables. One engine drives three interfaces, so you can work whichever way fits the moment:
+Every new music video, client shoot, research topic, monthly report, or code repository starts the same way: make a folder, name it consistently, rebuild the same subfolder skeleton, copy in the same starter files, rename everything. fastf does that in seconds. You describe the structure once as a template. From then on it asks a few questions (artist, client, project title, whatever your template defines) and generates the complete project: every subfolder in place, files pre-filled with your answers, a unique project ID, and metadata that lets you find the project again months later.
+
+It is a general-purpose tool. Video producers, photographers, researchers, freelancers, and developers all use the same engine with different templates. One engine drives three interfaces, so you can work whichever way fits the moment:
 
 ```bash
 fastf                       # interactive terminal menu
@@ -57,17 +59,17 @@ Three templates (`music-video`, `photography`, `video-production`) are available
 
 ## What it does
 
-- **Templates generate contents, not just names.** Variables flow into file contents: `Cargo.toml`, client briefs, shot lists, report headers. Names and UTF-8 text get `{token}` interpolation, binaries are copied byte for byte.
-- **A template is a folder.** `template.yaml` plus a `files/` tree that is reproduced into every project. Share one by copying its folder. Generate one from an existing project with `fastf template from-folder`.
-- **Three first-class interfaces.** A guided TUI for exploring, a fully scriptable CLI (`--yes`, `--dry-run`, variable flags) for automation, and a local browser UI with a visual template editor. All three share the same config, templates, and counter.
-- **The filesystem is the source of truth.** A folder is a project because it contains a `PROJECT_INFO.md` with YAML frontmatter. There is no database to drift out of sync. Delete a folder and it is simply gone.
-- **Projects are trackable.** Every project gets a unique ID, timestamp, and metadata. Browse with `fastf recent`, jump anywhere with `fastf open ID0047`, filter with tags, keep timestamped journal notes.
-- **Search that understands your metadata.** Free text plus a query grammar: `fastf search template=music-video tag:draft created>2026-01-01`.
-- **Multiple project locations.** Index any number of base folders, including external drives that come and go. Unmounted bases are skipped quietly.
-- **Safe moves.** `fastf move` relocates projects between bases. Cross-filesystem moves are copied, verified, and committed atomically before the source is removed. `fastf reconcile` recovers anything interrupted.
-- **Onboard existing work.** `fastf register` makes folders fastf did not create discoverable, including bulk imports of a whole directory.
-- **Post-create automation.** `git init`, reveal in file manager, open in editor, or run your own commands after each create.
-- **Cross-platform and path-safe.** Linux and Windows binaries, macOS via source build. Templates use `/` everywhere and escape guards reject `..` and absolute paths.
+- **Fills in file contents, not just folder names.** Your answers land inside the files themselves: a client brief with the client's name already written in, a shot list titled for the artist, a report header with the right month, a code project's config ready to build. Text files get placeholders substituted, and binary files (a logo, a video asset) are copied exactly as they are.
+- **A template is just a folder.** One small settings file plus a folder tree that gets reproduced into every project. Share a template by copying its folder. Or point fastf at a finished project and it generates a template from it (`fastf template from-folder`).
+- **Three ways to work, one engine.** A guided menu in the terminal, a browser UI with a visual template editor, and a scriptable command line for automation. All three read the same templates and settings, so nothing gets out of sync.
+- **No hidden database.** A folder is a project because it contains a small `PROJECT_INFO.md` metadata file inside it. Delete the folder and the project is simply gone. Nothing to maintain, nothing to drift out of sync.
+- **Every project is findable again.** Unique IDs, creation dates, tags, and searchable metadata. Jump to any project with `fastf open ID0047`, browse recent work, or keep timestamped journal notes per project.
+- **Search that understands your projects.** Plain text works (`fastf search ariana`), and so do precise filters: `fastf search template=music-video tag:draft created>2026-01-01`.
+- **Projects can live on several drives.** Index any number of folders, including external drives that come and go. A disconnected drive is skipped quietly and comes back when remounted.
+- **Moves that cannot lose data.** `fastf move` relocates a project to another drive by copying, verifying, and only then removing the original. If anything is interrupted mid-move, `fastf reconcile` finishes or rolls it back.
+- **Adopts your existing folders.** `fastf register` onboards work that fastf did not create, one folder or a whole directory at once.
+- **Optional automation after each create.** Open the new folder, launch your editor, initialize a git repository, or run your own commands.
+- **Cross-platform and path-safe.** Linux and Windows binaries, macOS via source build. Templates use `/` everywhere, and unsafe paths (`..`, absolute) are rejected outright.
 
 ## Installation
 

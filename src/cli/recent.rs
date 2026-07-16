@@ -243,6 +243,9 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
         if !other_bases.is_empty() {
             items.push("Move to another base");
         }
+        items.push("Rename folder");
+        items.push("Unregister (keep files)");
+        items.push("Delete folder permanently");
         items.push("Back to list");
         items.push("Quit");
         let move_idx = if other_bases.is_empty() {
@@ -250,6 +253,9 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
         } else {
             6
         };
+        let rename_idx = items.len() - 5;
+        let unregister_idx = items.len() - 4;
+        let delete_idx = items.len() - 3;
         let back_idx = items.len() - 2;
         let quit_idx = items.len() - 1;
 
@@ -282,6 +288,75 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
                     );
                     // The in-memory list still shows the old path — go back so
                     // the user re-enters from a fresh `recent`/`search`.
+                    return Ok(ActionLoop::BackToList);
+                }
+                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+            }
+            continue;
+        }
+        if choice == rename_idx {
+            let new_name: String = Input::new()
+                .with_prompt("New folder name")
+                .with_initial_text(project.name.clone())
+                .interact_text()?;
+            match library::rename_project(project, &new_name) {
+                Ok(renamed) => {
+                    println!("{}  Renamed to {}", "✓".green().bold(), renamed.name.bold());
+                    // The in-memory list still shows the old name — go back so
+                    // the user re-enters from a fresh `recent`/`search`.
+                    return Ok(ActionLoop::BackToList);
+                }
+                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+            }
+            continue;
+        }
+        if choice == unregister_idx {
+            let confirmed = dialoguer::Confirm::new()
+                .with_prompt(format!(
+                    "Remove PROJECT_INFO.md from '{}'? The files stay on disk; fastf just forgets the project",
+                    project.name
+                ))
+                .default(false)
+                .interact()?;
+            if !confirmed {
+                continue;
+            }
+            match library::unregister_project(project) {
+                Ok(()) => {
+                    println!(
+                        "{}  Unregistered {}",
+                        "✓".green().bold(),
+                        project.name.bold()
+                    );
+                    return Ok(ActionLoop::BackToList);
+                }
+                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+            }
+            continue;
+        }
+        if choice == delete_idx {
+            println!(
+                "  {} this permanently deletes {} and everything inside it.",
+                "warning:".red().bold(),
+                path_str.bold()
+            );
+            let typed: String = Input::new()
+                .with_prompt(format!(
+                    "Type the folder name '{}' to confirm",
+                    project.name
+                ))
+                .allow_empty(true)
+                .interact_text()?;
+            if typed.trim() != project.name {
+                eprintln!(
+                    "{} name did not match — nothing deleted",
+                    "cancelled:".yellow()
+                );
+                continue;
+            }
+            match library::delete_project(project) {
+                Ok(()) => {
+                    println!("{}  Deleted {}", "✓".green().bold(), path_str.bold());
                     return Ok(ActionLoop::BackToList);
                 }
                 Err(e) => eprintln!("{} {}", "error:".red().bold(), e),

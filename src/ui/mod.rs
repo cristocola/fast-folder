@@ -132,6 +132,29 @@ struct MoveRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct UnregisterRequest {
+    /// Absolute path of the project folder to unregister (files kept).
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteProjectRequest {
+    /// Absolute path of the project folder to delete recursively.
+    path: String,
+    /// Must equal the folder name — the server-side re-check of the typed
+    /// confirmation the UI collects.
+    confirm_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RenameRequest {
+    /// Absolute path of the project folder to rename.
+    path: String,
+    /// The new folder name (basename only, not a path).
+    folder: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct RegisterRequest {
     path: String,
     #[serde(default)]
@@ -367,6 +390,24 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             // atomic cache updates), so a slow network copy never blocks other
             // UI writes. The synchronous part is discovery + pre-flight guards.
             Ok(Response::Json(project_move(request)?))
+        }
+        ("POST", "/api/project/unregister") => {
+            let request: UnregisterRequest =
+                serde_json::from_slice(body).context("invalid unregister request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(project_unregister(request)?))
+        }
+        ("POST", "/api/project/delete") => {
+            let request: DeleteProjectRequest =
+                serde_json::from_slice(body).context("invalid delete request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(project_delete(request)?))
+        }
+        ("POST", "/api/project/rename") => {
+            let request: RenameRequest =
+                serde_json::from_slice(body).context("invalid rename request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(project_rename(request)?))
         }
         ("POST", "/api/reconcile") => {
             let _guard = lock_writes()?;
@@ -899,12 +940,57 @@ fn project_detail(path: &str) -> Result<Value> {
 /// move finishes near-instantly (the job reports `done`), while a cross-fs /
 /// network move streams copy → verify → finalize progress and can be cancelled.
 /// Runs off WRITE_LOCK so a slow network copy never blocks other UI writes.
+/// Look up a discovered project by its absolute folder path.
+fn find_project(config: &Config, path: &str) -> Result<library::Project> {
+    library::discover(config)
+        .into_iter()
+        .find(|p| paths_match(&p.path.display().to_string(), path))
+        .ok_or_else(|| anyhow::anyhow!("no project found at {path}"))
+}
+
+/// `POST /api/project/unregister` — remove the project's PROJECT_INFO.md so it
+/// stops being a project; the folder and its files are untouched.
+fn project_unregister(request: UnregisterRequest) -> Result<Value> {
+    let config = Config::load()?;
+    let project = find_project(&config, &request.path)?;
+    library::unregister_project(&project)?;
+    Ok(json!({"ok": true}))
+}
+
+/// `POST /api/project/delete` — recursively delete the project folder. The
+/// typed confirmation is re-checked server-side (`confirm_name` must equal the
+/// folder name) and, like move, the operation is restricted to configured bases.
+fn project_delete(request: DeleteProjectRequest) -> Result<Value> {
+    let config = Config::load()?;
+    let project = find_project(&config, &request.path)?;
+    if request.confirm_name.trim() != project.name {
+        bail!(
+            "confirmation does not match the folder name '{}'",
+            project.name
+        );
+    }
+    let base = project
+        .base
+        .canonicalize()
+        .unwrap_or_else(|_| project.base.clone());
+    if !config.effective_bases().contains(&base) {
+        bail!("'{}' is not inside a configured base", request.path);
+    }
+    library::delete_project(&project)?;
+    Ok(json!({"ok": true}))
+}
+
+/// `POST /api/project/rename` — rename the project folder in place.
+fn project_rename(request: RenameRequest) -> Result<Value> {
+    let config = Config::load()?;
+    let project = find_project(&config, &request.path)?;
+    let renamed = library::rename_project(&project, &request.folder)?;
+    Ok(json!({"ok": true, "path": renamed.path, "name": renamed.name}))
+}
+
 fn project_move(request: MoveRequest) -> Result<Value> {
     let config = Config::load()?;
-    let project = library::discover(&config)
-        .into_iter()
-        .find(|p| paths_match(&p.path.display().to_string(), &request.path))
-        .ok_or_else(|| anyhow::anyhow!("no project found at {}", request.path))?;
+    let project = find_project(&config, &request.path)?;
 
     let wanted = PathBuf::from(request.base.trim());
     let wanted = wanted.canonicalize().unwrap_or(wanted);

@@ -822,3 +822,145 @@ fn reconcile_route_resumes_pending_copy_and_state_surfaces_it() {
         assert_eq!(state["provisioning"].as_array().unwrap().len(), 0);
     });
 }
+
+// ---------------------------------------------------------------------------
+// v1.0: unregister / delete / rename
+// ---------------------------------------------------------------------------
+
+/// Create the fixture project and return its absolute folder path.
+fn create_fixture_project(install: &Path) -> std::path::PathBuf {
+    write_minimal_template(install, "test");
+    let base = write_config(install);
+    let value = json(
+        "POST",
+        "/api/create",
+        serde_json::json!({"template": "test", "variables": {"name": "hello world"}}),
+    );
+    assert_eq!(value["ok"], true);
+    Path::new(&base).join("T001_Hello_World")
+}
+
+#[test]
+fn unregister_keeps_files_but_hides_project() {
+    with_fresh_install(|install| {
+        let root = create_fixture_project(install);
+
+        let value = json(
+            "POST",
+            "/api/project/unregister",
+            serde_json::json!({"path": root.display().to_string()}),
+        );
+        assert_eq!(value["ok"], true);
+
+        // Files stay; only PROJECT_INFO.md is gone; discovery forgets it.
+        assert!(root.join("src").is_dir(), "project files must survive");
+        assert!(root.join("README.md").is_file());
+        assert!(!root.join("PROJECT_INFO.md").exists());
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        assert_eq!(state["projects"].as_array().unwrap().len(), 0);
+    });
+}
+
+#[test]
+fn delete_removes_folder_after_typed_confirmation() {
+    with_fresh_install(|install| {
+        let root = create_fixture_project(install);
+
+        // Wrong confirmation name → error, nothing deleted.
+        let err = ui::route_request(
+            "POST",
+            "/api/project/delete",
+            serde_json::json!({"path": root.display().to_string(), "confirm_name": "nope"})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("confirmation"), "err was: {err}");
+        assert!(root.is_dir(), "folder must survive a failed confirmation");
+
+        // Correct confirmation → recursive delete + gone from discovery.
+        let value = json(
+            "POST",
+            "/api/project/delete",
+            serde_json::json!({
+                "path": root.display().to_string(),
+                "confirm_name": "T001_Hello_World"
+            }),
+        );
+        assert_eq!(value["ok"], true);
+        assert!(!root.exists(), "folder must be deleted");
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        assert_eq!(state["projects"].as_array().unwrap().len(), 0);
+    });
+}
+
+#[test]
+fn delete_refuses_paths_that_are_not_projects() {
+    with_fresh_install(|install| {
+        create_fixture_project(install);
+        // A random dir outside any base is never discovered → clean error.
+        let stray = install.join("stray");
+        fs::create_dir_all(&stray).unwrap();
+        let err = ui::route_request(
+            "POST",
+            "/api/project/delete",
+            serde_json::json!({"path": stray.display().to_string(), "confirm_name": "stray"})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no project found"), "err: {err}");
+        assert!(stray.is_dir());
+    });
+}
+
+#[test]
+fn rename_round_trips_and_rejects_collisions() {
+    with_fresh_install(|install| {
+        let root = create_fixture_project(install);
+        let base = root.parent().unwrap().to_path_buf();
+
+        let value = json(
+            "POST",
+            "/api/project/rename",
+            serde_json::json!({
+                "path": root.display().to_string(),
+                "folder": "T001_Renamed_Project"
+            }),
+        );
+        assert_eq!(value["ok"], true);
+        let new_root = base.join("T001_Renamed_Project");
+        assert!(!root.exists());
+        assert!(
+            new_root.join("src").is_dir(),
+            "files travel with the rename"
+        );
+
+        // Metadata folder/path patched; identity (id) unchanged; discoverable.
+        let meta = fastf::core::project_info::read_metadata(&new_root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.folder, "T001_Renamed_Project");
+        assert_eq!(meta.id, "T001");
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        let projects = state["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["name"], "T001_Renamed_Project");
+
+        // Renaming onto an existing folder is rejected.
+        fs::create_dir_all(base.join("occupied")).unwrap();
+        let err = ui::route_request(
+            "POST",
+            "/api/project/rename",
+            serde_json::json!({
+                "path": new_root.display().to_string(),
+                "folder": "occupied"
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("already exists"), "err: {err}");
+        assert!(new_root.is_dir(), "failed rename must leave project intact");
+    });
+}

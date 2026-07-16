@@ -32,6 +32,77 @@ pub fn run(args: UiArgs) -> Result<()> {
         return Ok(());
     }
 
+    // `--app` with a Chromium-family browser ties the server's lifetime to the
+    // app window: serve in the background, wait for the window process to
+    // exit, then shut down. Closing the window fully stops fastf, so the next
+    // launcher click always starts fresh — no lingering background server and
+    // no race against a half-closed window. Every other mode (terminal
+    // `fastf ui`, `--no-open`, default-browser fallback) serves in the
+    // foreground until Ctrl-C, since a browser tab can't be waited on.
+    if args.app && !args.no_open {
+        let server = {
+            let address = args.address.clone();
+            thread::spawn(move || ui::serve(&address))
+        };
+        let mut up = false;
+        for _ in 0..100 {
+            if server.is_finished() {
+                // The server died before answering (e.g. bind failure) —
+                // surface its error instead of a vague timeout.
+                return match server.join() {
+                    Ok(result) => result,
+                    Err(_) => anyhow::bail!("UI server thread panicked"),
+                };
+            }
+            if ui::health_check(&args.address) {
+                up = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        if !up {
+            eprintln!(
+                "{} server did not come up in time; open {url} manually",
+                "warning:".yellow().bold()
+            );
+        }
+        if let Some(spawned) = open_app_window(&url) {
+            match spawned {
+                Ok(mut child) => {
+                    println!("Close the app window to stop the server (or Ctrl-C).");
+                    let _ = child.wait();
+                    // Don't strand an in-flight background copy: let it land
+                    // before exiting (it would otherwise wait for reconcile).
+                    if ui::jobs_active() {
+                        println!("Waiting for a background copy to finish…");
+                        while ui::jobs_active() {
+                            thread::sleep(Duration::from_millis(500));
+                        }
+                    }
+                    println!("App window closed — Fast Folder UI stopped.");
+                    return Ok(());
+                }
+                Err(error) => eprintln!(
+                    "{} could not open app window ({error}); falling back to default browser",
+                    "warning:".yellow().bold()
+                ),
+            }
+        }
+        // No Chromium (or the app window failed): default browser + serve
+        // until Ctrl-C, like the non-app path.
+        if let Err(error) = open_default(&url) {
+            eprintln!(
+                "{} could not open browser ({error}); open {url} manually",
+                "warning:".yellow().bold()
+            );
+        }
+        println!("Stop the server with Ctrl-C.");
+        return match server.join() {
+            Ok(result) => result,
+            Err(_) => anyhow::bail!("UI server thread panicked"),
+        };
+    }
+
     // Open the browser once the server is up. Serve blocks, so the opener runs
     // on a background thread that waits for the health check to pass.
     if !args.no_open {
@@ -63,7 +134,9 @@ pub fn run(args: UiArgs) -> Result<()> {
 fn open_browser(url: &str, app: bool) {
     if app && let Some(result) = open_app_window(url) {
         match result {
-            Ok(()) => return,
+            // The window process is intentionally not waited on here — this
+            // path runs when the server belongs to another fastf process.
+            Ok(_child) => return,
             Err(error) => eprintln!(
                 "{} could not open app window ({error}); falling back to default browser",
                 "warning:".yellow().bold()
@@ -80,8 +153,10 @@ fn open_browser(url: &str, app: bool) {
 
 /// Launch a Chromium/Chrome app window with a dedicated profile, mirroring the
 /// old launcher's polished window experience. Returns `None` when no
-/// Chromium-family browser is installed (so the caller falls back).
-fn open_app_window(url: &str) -> Option<Result<(), std::io::Error>> {
+/// Chromium-family browser is installed (so the caller falls back). On success
+/// hands back the window's [`Child`](std::process::Child) so `run` can tie the
+/// server's lifetime to it.
+fn open_app_window(url: &str) -> Option<Result<std::process::Child, std::io::Error>> {
     let profile = chromium_profile_dir();
     for browser in [
         "chromium",
@@ -97,8 +172,7 @@ fn open_app_window(url: &str) -> Option<Result<(), std::io::Error>> {
                 .arg(format!("--user-data-dir={}", profile.display()))
                 .arg("--window-size=1440,940")
                 .arg("--no-first-run")
-                .spawn()
-                .map(|_| ());
+                .spawn();
             return Some(spawn);
         }
     }

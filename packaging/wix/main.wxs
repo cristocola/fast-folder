@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WiX authoring for the fastf Windows installer (built with WiX v5:
+  `wix build` in .github/workflows/release.yml).
+
+  Preprocessor variables, passed with -d on the command line:
+    Version     numeric x.y.z (MSI requires numeric versions, no "v" prefix)
+    BinPath     path to the built fastf.exe
+    LicensePath path to the repo LICENSE file
+
+  The UpgradeCode GUID is the product's permanent identity: never change it,
+  or upgrades stop replacing older installs. Per-file GUIDs are auto-generated.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="fastf"
+      Manufacturer="Cristo Cola"
+      Version="$(var.Version)"
+      UpgradeCode="8515ae1a-7ef7-4a99-8b82-f702365c3ad6"
+      Scope="perMachine"
+      Compressed="yes">
+
+    <SummaryInformation Description="fastf - template-driven project scaffolder" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of fastf is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="fastf">
+
+        <Component Id="MainExecutable">
+          <File Id="FastfExe" Source="$(var.BinPath)" Name="fastf.exe" KeyPath="yes" />
+        </Component>
+
+        <Component Id="LicenseFile">
+          <File Id="License" Source="$(var.LicensePath)" Name="LICENSE.txt" KeyPath="yes" />
+        </Component>
+
+        <!-- Append the install dir to the system PATH so `fastf` works in any
+             new terminal. Removed again on uninstall (Permanent="no"). The
+             registry value is the component's KeyPath because an Environment
+             element cannot be one. -->
+        <Component Id="PathEntry" Guid="5b226d2a-8653-42c3-9274-92514dcab65d">
+          <RegistryValue
+              Root="HKLM"
+              Key="Software\fastf"
+              Name="InstallFolder"
+              Type="string"
+              Value="[INSTALLFOLDER]"
+              KeyPath="yes" />
+          <Environment
+              Id="UpdatePath"
+              Name="PATH"
+              Value="[INSTALLFOLDER]"
+              Permanent="no"
+              Part="last"
+              Action="set"
+              System="yes" />
+        </Component>
+
+      </Directory>
+    </StandardDirectory>
+  </Package>
+</Wix>

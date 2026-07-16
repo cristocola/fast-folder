@@ -13,8 +13,15 @@ fastf ui --address 127.0.0.1:47840   # bind a different loopback port
 ```
 
 `fastf ui` is idempotent: if a server is already answering on the address it
-just opens the browser. Stop a foreground server with Ctrl-C. The desktop entry
-`Launch Fast Folder UI.desktop` runs `fastf ui --app`.
+just opens the browser.
+
+Lifecycle (v1.0.1): with `--app` and a Chromium-family browser available, the
+server's lifetime is tied to the app window. Closing the window stops the
+server, so every launch starts fresh. In every other mode (terminal `fastf ui`,
+`--no-open`, or the default-browser fallback) the server runs in the foreground
+until Ctrl-C, since a browser tab cannot be waited on. The packaged desktop
+entry (`packaging/fastf.desktop`, installed by the AUR packages as a "Fast
+Folder" app-menu entry) runs `fastf ui --app`.
 
 ## Architecture
 

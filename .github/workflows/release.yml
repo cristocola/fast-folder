@@ -77,12 +77,28 @@ jobs:
           Copy-Item $bin, LICENSE, README.md $staging
           Compress-Archive -Path $staging -DestinationPath "$staging.zip"
 
+      - name: Build MSI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # MSI ProductVersion must be numeric x.y.z; dev dry-runs use 0.0.0.
+          $msiVersion = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME.TrimStart("v") } else { "0.0.0" }
+          $name = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "dev-" + $env:GITHUB_SHA.Substring(0,7) }
+          dotnet tool install --global wix
+          wix build packaging/wix/main.wxs `
+            -d Version=$msiVersion `
+            -d BinPath=target/${{ matrix.target }}/release/fastf.exe `
+            -d LicensePath=LICENSE `
+            -arch x64 `
+            -o "fastf-$name-x86_64.msi"
+
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.target }}
           path: |
             fastf-*.tar.gz
             fastf-*.zip
+            fastf-*.msi
           if-no-files-found: error
 
   release:

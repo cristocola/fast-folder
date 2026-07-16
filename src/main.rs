@@ -485,6 +485,7 @@ enum ConfigAction {
     /// Set a configuration value
     #[command(after_help = "Valid keys:\n  \
             base-dir                    Directory where new projects are created (default: current directory)\n  \
+            bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \
             date-format                 strftime format for the {date} token (default: %Y-%m-%d)\n  \
@@ -492,8 +493,6 @@ enum ConfigAction {
             prompt-open-after-create    Ask 'Open project folder?' after `fastf new` (default: true)\n  \
             confirm-create              Ask 'Create this project?' in `fastf new` (default: true)\n  \
             show-banner                 Show ASCII banner in TUI menu (default: true)\n  \
-            project-info-enabled        Write PROJECT_INFO.md (YAML frontmatter + variables table) into each new project (default: true)\n  \
-            project-info-filename       Filename for project metadata (default: PROJECT_INFO.md)\n  \
             recent-default-limit        Default --limit for `fastf recent` (default: 20)\n  \
             register-naming-pattern     Pattern for `fastf register --rename` w/o a template (default: \"{date}_{name}_{id}\")\n  \
             post_create.git_init        Run `git init` automatically (default: false)\n  \
@@ -501,16 +500,16 @@ enum ConfigAction {
             post_create.open_in_editor  Open folder in $EDITOR automatically (default: false)\n  \
             post_create.print_path      Print absolute path on stdout (default: false)\n\n\
             Booleans accept: true/false, on/off, yes/no, 1/0\n\n\
-            Path format for base-dir:\n  \
+            Path format for base-dir and bases:\n  \
             Linux / macOS               /home/user/Projects  or  /Volumes/Drive/Projects\n  \
             Windows                     C:\\Users\\user\\Projects  or  C:/Users/user/Projects\n  \
             (Both slash styles work on Windows)\n\n\
             Examples:\n  \
             fastf config set base-dir /Volumes/Drive/Projects\n  \
+            fastf config set bases \"/mnt/proj/01_PROJECTS,/srv/archive\"\n  \
             fastf config set default-template music-video\n  \
             fastf config set date-format %d-%m-%Y\n  \
             fastf config set prompt-open-after-create false\n  \
-            fastf config set project-info-filename .fastf-info.md\n  \
             fastf config set post_create.reveal true")]
     Set {
         /// Config key (run `fastf config set --help` for the full list)

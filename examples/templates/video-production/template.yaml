@@ -1,0 +1,44 @@
+name: "Video Production"
+slug: "video-production"
+description: "Generic video production project"
+version: "1"
+
+naming_pattern: "{date}_{project}_{client}_{id}"
+
+id:
+  prefix: "ID"
+  digits: 4
+
+variables:
+  - slug: project
+    label: "Project Name"
+    type: text
+    required: true
+    transform: title_underscore
+
+  - slug: client
+    label: "Client / Company"
+    type: text
+    required: true
+    transform: title_underscore
+
+structure:
+  - name: "01_Assets"
+    children:
+      - name: "01_Footage"
+      - name: "02_Audio"
+      - name: "03_Graphics"
+      - name: "04_References"
+  - name: "02_Production"
+    children:
+      - name: "01_Scripts"
+      - name: "02_Storyboards"
+  - name: "03_Post"
+    children:
+      - name: "01_Project_Files"
+      - name: "02_Renders"
+      - name: "03_VFX"
+  - name: "04_Delivery"
+    children:
+      - name: "01_Finals"
+      - name: "02_Review"

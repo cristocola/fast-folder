@@ -127,7 +127,9 @@ impl Config {
     /// Resolve base directory: configured path, or current working directory.
     pub fn resolve_base_dir(&self) -> std::path::PathBuf {
         if self.base_dir.is_empty() {
-            std::env::current_dir().expect("cannot get current dir")
+            // If the cwd is gone (deleted underneath us), fall back to "." —
+            // downstream fs ops then fail with a clear io error instead of a panic.
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
         } else {
             std::path::PathBuf::from(&self.base_dir)
         }

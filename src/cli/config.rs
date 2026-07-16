@@ -11,6 +11,9 @@ pub fn show() -> Result<()> {
     let editor = config.resolve_editor();
 
     println!("{}", "fastf config:".bold());
+    if let Ok((_, mode)) = paths::try_install_dir() {
+        println!("  {:<26} {}", "Data dir mode:".dimmed(), mode.label());
+    }
     println!(
         "  {:<26} {}",
         "Config file:".dimmed(),

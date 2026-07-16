@@ -4,6 +4,7 @@ pub mod id;
 pub mod move_project;
 pub mod new;
 pub mod note;
+pub mod paths_cmd;
 pub mod recent;
 pub mod reconcile;
 pub mod register;

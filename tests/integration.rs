@@ -2022,3 +2022,101 @@ fn move_project_between_bases_full_round_trip() {
         assert_eq!(resolved.path, moved.path);
     });
 }
+
+// ---------------------------------------------------------------------------
+// v1.0: data-dir resolution (portable mode + user config dir fallback)
+// ---------------------------------------------------------------------------
+
+/// Serialize + point the user-config-dir fallback at a tempdir, with
+/// `FASTF_INSTALL_DIR` unset — simulating a binary installed to a read-only
+/// system path (e.g. /usr/bin via a package manager). The test binary lives in
+/// `target/debug/deps/` with no `config.toml`/`templates/` beside it, so
+/// portable mode cannot trigger and resolution must land in the user dir.
+fn with_user_dir_env<R>(body: impl FnOnce(&Path) -> R) -> R {
+    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().expect("tempdir");
+    #[cfg(not(windows))]
+    let var = "XDG_CONFIG_HOME";
+    #[cfg(windows)]
+    let var = "APPDATA";
+    let saved = std::env::var(var).ok();
+    // Safe: SERIAL guarantees no other test thread races on these env vars.
+    unsafe {
+        std::env::remove_var("FASTF_INSTALL_DIR");
+        std::env::set_var(var, tmp.path());
+    }
+    let result = body(tmp.path());
+    unsafe {
+        match saved {
+            Some(v) => std::env::set_var(var, v),
+            None => std::env::remove_var(var),
+        }
+    }
+    drop(guard);
+    result
+}
+
+#[test]
+fn data_dir_falls_back_to_user_config_dir() {
+    with_user_dir_env(|tmp| {
+        let (dir, mode) = fastf::util::paths::try_install_dir().expect("must resolve");
+        assert_eq!(dir, tmp.join("fastf"));
+        assert_eq!(mode, fastf::util::paths::DirMode::UserDir);
+    });
+}
+
+#[test]
+fn env_override_beats_user_config_dir() {
+    with_user_dir_env(|_tmp| {
+        let other = tempfile::tempdir().expect("tempdir");
+        unsafe {
+            std::env::set_var("FASTF_INSTALL_DIR", other.path());
+        }
+        let (dir, mode) = fastf::util::paths::try_install_dir().expect("must resolve");
+        assert_eq!(dir, other.path());
+        assert_eq!(mode, fastf::util::paths::DirMode::EnvOverride);
+        unsafe {
+            std::env::remove_var("FASTF_INSTALL_DIR");
+        }
+    });
+}
+
+#[test]
+fn bootstrap_lands_in_user_dir_for_system_install() {
+    with_user_dir_env(|tmp| {
+        fastf::bootstrap::ensure_bootstrapped().expect("bootstrap must succeed");
+        let data = tmp.join("fastf");
+        assert!(data.join("config.toml").is_file(), "config.toml written");
+        for slug in ["music-video", "photography", "video-production"] {
+            assert!(
+                data.join("templates")
+                    .join(slug)
+                    .join("template.yaml")
+                    .is_file(),
+                "bundled template {slug} written"
+            );
+        }
+        // Idempotent on a second run.
+        fastf::bootstrap::ensure_bootstrapped().expect("second bootstrap is a no-op");
+    });
+}
+
+#[test]
+fn mangen_writes_man_pages() {
+    // Drives the real binary (mangen lives in main.rs, not the lib). The env
+    // override is explicit so the child never touches real user data — though
+    // mangen also skips bootstrap entirely by design.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_fastf"))
+        .arg("mangen")
+        .arg(tmp.path())
+        .env("FASTF_INSTALL_DIR", tmp.path())
+        .output()
+        .expect("spawn fastf mangen");
+    assert!(out.status.success(), "mangen failed: {out:?}");
+    let main_page = tmp.path().join("fastf.1");
+    assert!(main_page.is_file(), "fastf.1 must be generated");
+    assert!(fs::metadata(&main_page).unwrap().len() > 0);
+    // Bootstrap must NOT have run (no config.toml written next to the pages).
+    assert!(!tmp.path().join("config.toml").exists());
+}

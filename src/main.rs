@@ -386,6 +386,22 @@ enum Commands {
         shell: String,
     },
 
+    /// Show where fastf keeps its data (config, templates, counters) and why
+    #[command(after_help = "fastf resolves its data directory in this order:\n  \
+            1. FASTF_INSTALL_DIR environment variable (if set)\n  \
+            2. Portable mode: the binary's own directory, if it already contains\n     \
+               a config.toml or templates/ folder\n  \
+            3. Your user config directory (~/.config/fastf on Linux,\n     \
+               %APPDATA%\\fastf on Windows)")]
+    Paths,
+
+    /// Generate man pages into a directory (used by packaging)
+    #[command(hide = true)]
+    Mangen {
+        /// Output directory for the generated .1 files
+        dir: std::path::PathBuf,
+    },
+
     /// Launch the local browser UI for Fast Folder
     #[command(
         after_help = "Starts a small loopback-only HTTP server and opens the Fast Folder\n\
@@ -568,10 +584,20 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    // Bootstrap on every run (idempotent — no-op after first run)
-    bootstrap::ensure_bootstrapped()?;
-
     let cli = Cli::parse();
+
+    // Fail early with a clean error if no data directory can be resolved
+    // (e.g. $HOME unset) — everything downstream assumes it exists.
+    fastf::util::paths::try_install_dir()?;
+
+    // Bootstrap on every run (idempotent — no-op after first run). Skipped for
+    // completions/mangen so packaging steps never write to the user's home.
+    if !matches!(
+        cli.command,
+        Some(Commands::Completions { .. }) | Some(Commands::Mangen { .. })
+    ) {
+        bootstrap::ensure_bootstrapped()?;
+    }
 
     match cli.command {
         // No subcommand → interactive TUI
@@ -721,6 +747,8 @@ fn run() -> Result<()> {
         }
 
         Some(Commands::Completions { shell }) => generate_completions(&shell),
+        Some(Commands::Paths) => cli::paths_cmd::run(),
+        Some(Commands::Mangen { dir }) => generate_man_pages(&dir),
 
         Some(Commands::Ui {
             address,
@@ -744,6 +772,16 @@ fn warn_unknown(unknown: &[String]) {
             u
         );
     }
+}
+
+/// Generate the full man-page set (fastf.1 + one page per subcommand) into
+/// `dir`. Reached only via the hidden `fastf mangen` subcommand — release
+/// packaging (GitHub workflow, PKGBUILD) is the intended caller.
+fn generate_man_pages(dir: &std::path::Path) -> Result<()> {
+    use clap::CommandFactory;
+    std::fs::create_dir_all(dir)?;
+    clap_mangen::generate_to(Cli::command(), dir)?;
+    Ok(())
 }
 
 fn generate_completions(shell: &str) -> Result<()> {

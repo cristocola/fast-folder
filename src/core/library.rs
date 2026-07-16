@@ -596,6 +596,123 @@ fn set_phase(progress: &Mutex<Progress>, phase: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Unregister / delete / rename (v1.0)
+// ---------------------------------------------------------------------------
+
+/// Unregister a project: remove its `PROJECT_INFO.md` so it stops being a
+/// project. The folder and everything else inside it are untouched.
+pub fn unregister_project(project: &Project) -> Result<()> {
+    let pinfo = project_info::pinfo_path(&project.path);
+    if !pinfo.is_file() {
+        anyhow::bail!(
+            "'{}' has no PROJECT_INFO.md — already unregistered?",
+            project.name
+        );
+    }
+    fs::remove_file(&pinfo)?;
+    remove_from_base_cache(project);
+    Ok(())
+}
+
+/// Permanently delete a project's folder (recursive).
+///
+/// Guards before any removal: the folder must still contain a
+/// `PROJECT_INFO.md` (never `remove_dir_all` an arbitrary path) and must be a
+/// direct child of its base. Callers additionally restrict operations to
+/// configured bases and confirm with the user — same convention as move.
+pub fn delete_project(project: &Project) -> Result<()> {
+    let path = project
+        .path
+        .canonicalize()
+        .unwrap_or_else(|_| project.path.clone());
+    let base = project
+        .base
+        .canonicalize()
+        .unwrap_or_else(|_| project.base.clone());
+    if path.parent() != Some(base.as_path()) {
+        anyhow::bail!(
+            "refusing to delete: {} is not a direct child of its base {}",
+            path.display(),
+            base.display()
+        );
+    }
+    if !project_info::pinfo_path(&path).is_file() {
+        anyhow::bail!(
+            "refusing to delete: {} has no PROJECT_INFO.md",
+            path.display()
+        );
+    }
+    fs::remove_dir_all(&path)?;
+    remove_from_base_cache(project);
+    Ok(())
+}
+
+/// Rename a project's folder in place (same base). Same-parent `fs::rename`
+/// is atomic; the metadata `folder`/`path` are patched best-effort (display
+/// truth only, like move) and the base cache is updated. Returns the renamed
+/// [`Project`].
+pub fn rename_project(project: &Project, new_folder: &str) -> Result<Project> {
+    let sanitized = naming::sanitize_name(new_folder.trim());
+    if sanitized.is_empty() {
+        anyhow::bail!("new folder name is empty");
+    }
+    // Discovery skips dot-prefixed dirs (staging folders) — a dot name would
+    // make the project invisible.
+    if sanitized.starts_with('.') {
+        anyhow::bail!("folder names may not start with '.'");
+    }
+    if sanitized == project.name {
+        anyhow::bail!("'{}' is already the folder's name", sanitized);
+    }
+
+    let base = project
+        .base
+        .canonicalize()
+        .unwrap_or_else(|_| project.base.clone());
+    let new_path = base.join(&sanitized);
+    if new_path.exists() {
+        anyhow::bail!("rename target already exists: {}", new_path.display());
+    }
+    fs::rename(&project.path, &new_path)?;
+
+    let mut renamed = project.clone();
+    renamed.path = new_path.canonicalize().unwrap_or(new_path);
+    renamed.name = sanitized.clone();
+    renamed.base = base.clone();
+
+    // Keep the displayed metadata truthful; discovery never reads `folder` or
+    // `path`, so a failure here is a warning, not a failed rename.
+    let pinfo = project_info::pinfo_path(&renamed.path);
+    if pinfo.exists()
+        && let Err(err) = project_info::write_frontmatter(&pinfo, |meta| {
+            meta.folder = sanitized.clone();
+            meta.path = renamed.path.display().to_string();
+        })
+    {
+        eprintln!("warning: could not update PROJECT_INFO.md folder/path: {err:#}");
+    }
+
+    remove_from_base_cache(project);
+    cache_upsert(&base, &renamed);
+    Ok(renamed)
+}
+
+/// Drop a project's entry from its base cache, best-effort (mirrors the
+/// old-side bookkeeping of `move_project_with`).
+fn remove_from_base_cache(project: &Project) {
+    let base = project
+        .base
+        .canonicalize()
+        .unwrap_or_else(|_| project.base.clone());
+    let dir = project
+        .path
+        .strip_prefix(&base)
+        .map(to_forward_slashes)
+        .unwrap_or_else(|_| project.name.clone());
+    cache_remove(&base, &dir);
+}
+
+// ---------------------------------------------------------------------------
 // Resolution + counter self-heal
 // ---------------------------------------------------------------------------
 
@@ -1077,5 +1194,57 @@ mod tests {
         let err = resolve(&cfg, "shared").unwrap_err().to_string();
         assert!(err.contains("ambiguous"), "err: {err}");
         assert!(err.contains("ID0011") && err.contains("ID0012"));
+    }
+
+    #[test]
+    fn rename_sanitizes_and_rejects_bad_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        let cfg = cfg_for(base, &[]);
+        let project = discover(&cfg).remove(0);
+
+        // Illegal filesystem chars are sanitized, not fatal.
+        let renamed = rename_project(&project, "New: Name?").unwrap();
+        assert_eq!(renamed.name, "New_ Name_");
+        assert!(renamed.path.is_dir());
+        assert!(!project.path.exists());
+
+        // Dot-prefixed names would be invisible to discovery → rejected.
+        let err = rename_project(&renamed, ".hidden").unwrap_err().to_string();
+        assert!(err.contains("may not start with '.'"), "err: {err}");
+        // Same-name rename is a no-op error, not a silent success.
+        let err = rename_project(&renamed, "New_ Name_")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already the folder's name"), "err: {err}");
+        assert!(renamed.path.is_dir(), "folder intact after failed renames");
+    }
+
+    #[test]
+    fn unregister_and_delete_guard_rails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        fs::write(base.join("proj_a").join("keep.txt"), "data").unwrap();
+        let cfg = cfg_for(base, &[]);
+        let project = discover(&cfg).remove(0);
+
+        // Unregister removes only the metadata file.
+        unregister_project(&project).unwrap();
+        assert!(project.path.join("keep.txt").is_file());
+        assert!(!project_info::pinfo_path(&project.path).exists());
+        // Double-unregister is a clean error.
+        assert!(unregister_project(&project).is_err());
+
+        // Delete refuses a folder without PROJECT_INFO.md (the guard rail).
+        let err = delete_project(&project).unwrap_err().to_string();
+        assert!(err.contains("no PROJECT_INFO.md"), "err: {err}");
+        assert!(project.path.is_dir());
+
+        // Re-register (rewrite metadata) → delete removes the whole folder.
+        write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        delete_project(&project).unwrap();
+        assert!(!project.path.exists());
     }
 }

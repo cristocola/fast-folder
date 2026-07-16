@@ -1,0 +1,35 @@
+name: "Photography Shoot"
+slug: "photography"
+description: "Photography project with RAW, Selects, Edits, and Delivery folders"
+version: "1"
+
+naming_pattern: "{date}_{client}_{shoot_type}_{id}"
+
+id:
+  prefix: "ID"
+  digits: 4
+
+variables:
+  - slug: client
+    label: "Client Name"
+    type: text
+    required: true
+    transform: title_underscore
+
+  - slug: shoot_type
+    label: "Shoot Type"
+    type: select
+    options: ["Portrait", "Wedding", "Event", "Commercial", "Product", "Other"]
+    default: "Portrait"
+
+structure:
+  - name: "01_RAW"
+  - name: "02_Selects"
+  - name: "03_Edits"
+    children:
+      - name: "01_Retouched"
+      - name: "02_BW"
+  - name: "04_Delivery"
+    children:
+      - name: "01_Web"
+      - name: "02_Print"

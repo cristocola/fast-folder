@@ -64,7 +64,9 @@ cargo install --git https://github.com/cristocola/fast-folder
 fastf                        # pick a bundled template, answer the prompts, done
 ```
 
-Four templates are bundled on first run. `general` is the zero-setup starting point for any kind of work: it creates a dated, numbered folder (`2026-07-16_Spring_Campaign_ID0048`) with an inbox subfolder, and you shape it into your own convention from there. The other three (`music-video`, `photography`, `video-production`) show what a deeper domain template looks like. Five more examples live in [`examples/templates/`](examples/templates/): `rust-project`, `python-project`, `web-project`, `finance-monthly`, and `research-note`. Copy any of them into your templates directory to use it.
+Two universal templates are bundled on first run. `general` is the zero-setup starting point: a dated, numbered folder (`2026-07-16_Spring_Campaign_ID0048`) with an inbox subfolder, ready for any kind of work. `client-project` adds working and delivery folders plus a brief that fills itself in with the client's name and project details.
+
+Domain-specific templates live in the [`examples/templates/`](examples/templates/) gallery: `music-video`, `photography`, `video-production`, `rust-project`, `python-project`, `web-project`, `finance-monthly`, and `research-note`. Copy any folder into your templates directory to adopt it, then edit it to match your own convention.
 
 ## What it does
 

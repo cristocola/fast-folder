@@ -1,5 +1,10 @@
 /// First-run bootstrap: create config.toml and templates/ if missing,
-/// and write the four bundled default templates.
+/// and write the two bundled default templates.
+///
+/// Bundled templates are deliberately universal (any profession, any kind of
+/// work). Domain-specific templates (music video, photography, code
+/// scaffolds, finance, research) live in the `examples/templates/` gallery
+/// in the repo — users copy a folder into their templates dir to adopt one.
 use anyhow::Result;
 use std::fs;
 
@@ -28,57 +33,12 @@ structure:
   - name: "00_Inbox"
 "#;
 
-static MUSIC_VIDEO_YAML: &str = r#"name: "Music Video"
-slug: "music-video"
-description: "Music video production project folder"
+static CLIENT_PROJECT_YAML: &str = r#"name: "Client Project"
+slug: "client-project"
+description: "Standard client engagement folder with a pre-filled brief"
 version: "1"
 
-naming_pattern: "{date}_{artist}_{title}_{client_type}_{id}"
-
-id:
-  prefix: "ID"
-  digits: 4
-
-variables:
-  - slug: artist
-    label: "Artist / Band Name"
-    type: text
-    required: true
-    transform: title_underscore
-
-  - slug: title
-    label: "Project Title"
-    type: text
-    required: true
-    transform: title_underscore
-
-  - slug: client_type
-    label: "Client Type"
-    type: select
-    options: ["Client", "Personal", "Collab", "Spec"]
-    default: "Client"
-
-structure:
-  - name: "01_Assets"
-    children:
-      - name: "01_Audio"
-      - name: "02_Footage"
-      - name: "03_Images"
-  - name: "02_Export"
-    children:
-      - name: "01_Finals"
-      - name: "02_WIP"
-  - name: "03_Project_Files"
-"#;
-
-static MUSIC_VIDEO_GITIGNORE: &str = "*.tmp\n.DS_Store\nThumbs.db\n";
-
-static PHOTOGRAPHY_YAML: &str = r#"name: "Photography Shoot"
-slug: "photography"
-description: "Photography project with RAW, Selects, Edits, and Delivery folders"
-version: "1"
-
-naming_pattern: "{date}_{client}_{shoot_type}_{id}"
+naming_pattern: "{date}_{client}_{project}_{id}"
 
 id:
   prefix: "ID"
@@ -91,69 +51,39 @@ variables:
     required: true
     transform: title_underscore
 
-  - slug: shoot_type
-    label: "Shoot Type"
+  - slug: project
+    label: "Project Title"
+    type: text
+    required: true
+    transform: title_underscore
+
+  - slug: tier
+    label: "Engagement Type"
     type: select
-    options: ["Portrait", "Wedding", "Event", "Commercial", "Product", "Other"]
-    default: "Portrait"
+    options: ["Client", "Internal", "Personal"]
+    default: "Client"
 
 structure:
-  - name: "01_RAW"
-  - name: "02_Selects"
-  - name: "03_Edits"
-    children:
-      - name: "01_Retouched"
-      - name: "02_BW"
-  - name: "04_Delivery"
-    children:
-      - name: "01_Web"
-      - name: "02_Print"
+  - name: "00_Inbox"
+  - name: "01_Working"
+  - name: "02_Delivery"
+
+tags: ["client-work"]
+tag_from: ["tier"]
 "#;
 
-static VIDEO_PRODUCTION_YAML: &str = r#"name: "Video Production"
-slug: "video-production"
-description: "Generic video production project"
-version: "1"
+static CLIENT_PROJECT_BRIEF: &str = r#"# {project}
 
-naming_pattern: "{date}_{project}_{client}_{id}"
+- Client: {client}
+- Type: {tier}
+- Start date: {date}
+- Project ID: {id}
 
-id:
-  prefix: "ID"
-  digits: 4
+## Scope
 
-variables:
-  - slug: project
-    label: "Project Name"
-    type: text
-    required: true
-    transform: title_underscore
+## Deliverables
 
-  - slug: client
-    label: "Client / Company"
-    type: text
-    required: true
-    transform: title_underscore
-
-structure:
-  - name: "01_Assets"
-    children:
-      - name: "01_Footage"
-      - name: "02_Audio"
-      - name: "03_Graphics"
-      - name: "04_References"
-  - name: "02_Production"
-    children:
-      - name: "01_Scripts"
-      - name: "02_Storyboards"
-  - name: "03_Post"
-    children:
-      - name: "01_Project_Files"
-      - name: "02_Renders"
-      - name: "03_VFX"
-  - name: "04_Delivery"
-    children:
-      - name: "01_Finals"
-      - name: "02_Review"
+## Notes
 "#;
 
 /// Ensure the installation is bootstrapped:
@@ -186,16 +116,15 @@ pub fn ensure_bootstrapped() -> Result<()> {
     let is_empty = fs::read_dir(&templates_dir)?.next().is_none();
     if is_empty {
         write_bundled_template("general", GENERAL_YAML)?;
-        write_bundled_template("music-video", MUSIC_VIDEO_YAML)?;
-        write_bundled_template("photography", PHOTOGRAPHY_YAML)?;
-        write_bundled_template("video-production", VIDEO_PRODUCTION_YAML)?;
-        // Bundled asset: music-video ships a starter .gitignore in its files/ tree.
+        write_bundled_template("client-project", CLIENT_PROJECT_YAML)?;
+        // Bundled file: client-project ships a brief that demonstrates
+        // content interpolation out of the box.
         fs::write(
-            paths::template_files_dir("music-video").join(".gitignore"),
-            MUSIC_VIDEO_GITIGNORE,
+            paths::template_files_dir("client-project").join("BRIEF.md"),
+            CLIENT_PROJECT_BRIEF,
         )?;
         println!(
-            "fastf: initialized in {} — {}\n       4 default templates written to templates/",
+            "fastf: initialized in {} — {}\n       2 default templates written to templates/",
             install.display(),
             mode.label()
         );

@@ -88,7 +88,7 @@ fast-folder/
     │                           `--foo` tokens surface via `warn_unknown()` instead of
     │                           silently dropping (v0.5).
     ├── bootstrap.rs          — First-run setup: creates config.toml, counters.toml, templates/
-    │                           (the three bundled YAMLs no longer declare PROJECT_INFO.md —
+    │                           (the four bundled YAMLs (general, music-video, photography, video-production) no longer declare PROJECT_INFO.md —
     │                           auto-gen owns it now)
     ├── util/
     │   ├── mod.rs
@@ -406,7 +406,7 @@ form's base `<select>` (feeds the existing `PlanRequest.base_dir`). CLI stays
 
 **Atomic mutation** (v0.4): `write_frontmatter(path, |meta| { ... })` reads → splits → parses → applies the closure → re-serializes via `serde_yaml::to_string` → writes via `.tmp` + rename. Body bytes are byte-identical after a no-op mutation — the dedicated integration test asserts this. `append_journal_entry(path, msg)` does the same atomic dance for the body. Both require frontmatter to exist; otherwise return a structured error naming the path.
 
-The bundled templates (`music-video`, `photography`, `video-production`) no longer declare a `PROJECT_INFO.md` content file — auto-gen owns that file. **As of v0.5, `PROJECT_INFO.md` at the project root is a reserved filename**: `Template::load_from_file` and `save_to_file` silently strip any `files[].path == "PROJECT_INFO.md"` entry (case-insensitive on the leaf, root-only — `docs/PROJECT_INFO.md` is allowed). Older user-built templates that declared their own `PROJECT_INFO.md` keep loading; the entry is just ignored. The TUI template builder rejects the name inline. If you want a custom notes file, use a different name (e.g. `NOTES.md`).
+The bundled templates (`general`, `music-video`, `photography`, `video-production` — `general` added 2026-07-16: `{date}_{name}_{id}` naming, one `00_Inbox` folder, the zero-setup default) no longer declare a `PROJECT_INFO.md` content file — auto-gen owns that file. **As of v0.5, `PROJECT_INFO.md` at the project root is a reserved filename**: `Template::load_from_file` and `save_to_file` silently strip any `files[].path == "PROJECT_INFO.md"` entry (case-insensitive on the leaf, root-only — `docs/PROJECT_INFO.md` is allowed). Older user-built templates that declared their own `PROJECT_INFO.md` keep loading; the entry is just ignored. The TUI template builder rejects the name inline. If you want a custom notes file, use a different name (e.g. `NOTES.md`).
 
 The reservation is enforced via `core::project_info::path_is_reserved()` against the hard-coded constant `RESERVED_FILENAME = "PROJECT_INFO.md"`. **v0.9:** the filename is now fixed everywhere — the old `cfg.project_info_filename` / `project_info_enabled` config knobs are gone (metadata is the project's identity, so it is mandatory and always `PROJECT_INFO.md`).
 

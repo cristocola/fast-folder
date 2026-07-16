@@ -1,10 +1,32 @@
 /// First-run bootstrap: create config.toml and templates/ if missing,
-/// and write the three bundled default templates.
+/// and write the four bundled default templates.
 use anyhow::Result;
 use std::fs;
 
 use crate::core::config::Config;
 use crate::util::paths;
+
+static GENERAL_YAML: &str = r#"name: "General Project"
+slug: "general"
+description: "Universal dated project folder for any kind of work"
+version: "1"
+
+naming_pattern: "{date}_{name}_{id}"
+
+id:
+  prefix: "ID"
+  digits: 4
+
+variables:
+  - slug: name
+    label: "Project Name"
+    type: text
+    required: true
+    transform: title_underscore
+
+structure:
+  - name: "00_Inbox"
+"#;
 
 static MUSIC_VIDEO_YAML: &str = r#"name: "Music Video"
 slug: "music-video"
@@ -163,6 +185,7 @@ pub fn ensure_bootstrapped() -> Result<()> {
     // Write bundled templates only if the directory is empty
     let is_empty = fs::read_dir(&templates_dir)?.next().is_none();
     if is_empty {
+        write_bundled_template("general", GENERAL_YAML)?;
         write_bundled_template("music-video", MUSIC_VIDEO_YAML)?;
         write_bundled_template("photography", PHOTOGRAPHY_YAML)?;
         write_bundled_template("video-production", VIDEO_PRODUCTION_YAML)?;
@@ -172,7 +195,7 @@ pub fn ensure_bootstrapped() -> Result<()> {
             MUSIC_VIDEO_GITIGNORE,
         )?;
         println!(
-            "fastf: initialized in {} — {}\n       3 default templates written to templates/",
+            "fastf: initialized in {} — {}\n       4 default templates written to templates/",
             install.display(),
             mode.label()
         );

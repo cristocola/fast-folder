@@ -5,17 +5,19 @@ A template is a folder inside your templates directory. It holds a metadata mani
 ## Anatomy of a template
 
 ```
-templates/rust-project/
-├── template.yaml        # metadata: variables, naming, structure, globs
-└── files/               # the file spec, reproduced into every new project
-    ├── Cargo.toml       # {name}, {license}, {id}, {date} are interpolated
-    ├── .gitignore
-    └── src/lib.rs
+templates/client-project/
+├── template.yaml            # metadata: variables, naming, structure, globs
+└── files/                   # the file spec, reproduced into every new project
+    ├── BRIEF.md             # {client}, {project}, {date} are filled in
+    ├── 02_Delivery/
+    │   └── Delivery_Note_{client}.md
+    └── assets/
+        └── logo.png         # binary, copied exactly
 ```
 
 Everything under `files/` is copied into each new project:
 
-- File and folder names are interpolated. A file named `Deliver_Note_{artist}.md` is renamed per project.
+- File and folder names are interpolated. A file named `Delivery_Note_{client}.md` is renamed per project.
 - UTF-8 text files up to 1 MiB have their `{tokens}` substituted.
 - Binary and oversized files are copied byte for byte. A logo or a 200 MB delivery video works fine.
 
@@ -26,49 +28,55 @@ There is no per-file configuration. The directory is the spec, which also makes 
 The manifest holds metadata only. The file spec lives in `files/`.
 
 ```yaml
-name: "Rust Project"
-slug: "rust-project"
-description: "Cargo-style Rust project scaffold"
+name: "Client Project"
+slug: "client-project"
+description: "Standard client engagement folder"
 version: "1"
 
 # Built-in tokens: {date} {YYYY} {MM} {DD} {id}
 # Variable tokens: any {slug} defined below
-naming_pattern: "{name}"
+naming_pattern: "{date}_{client}_{project}_{id}"
 
 id:
-  prefix: "RS"
-  digits: 3           # RS047
+  prefix: "ID"
+  digits: 4           # ID0047
 
 variables:
-  - slug: name
-    label: "Crate name"
+  - slug: client
+    label: "Client name"
     type: text            # text | select
     required: true
-    transform: lower_underscore   # none | title_underscore | upper_underscore | lower_underscore
+    transform: title_underscore   # none | title_underscore | upper_underscore | lower_underscore
 
-  - slug: license
-    label: "License"
+  - slug: project
+    label: "Project title"
+    type: text
+    required: true
+    transform: title_underscore
+
+  - slug: tier
+    label: "Engagement tier"
     type: select
-    options: ["MIT", "Apache-2.0", "GPL-3.0"]
-    default: "MIT"
+    options: ["Standard", "Premium", "Internal"]
+    default: "Standard"
 
 structure:                 # empty dirs to guarantee (archive safe)
-  - name: "src"
-  - name: "tests"
-  - name: "examples"
+  - name: "00_Inbox"
+  - name: "01_Working"
+  - name: "02_Delivery"
 
 # Optional globs, relative to files/:
 verbatim: ["*.svg"]        # copy literally even if text, preserving literal {braces}
 exclude: [".DS_Store", "*.tmp"]
 
 # Optional auto tags:
-tags: ["music-video", "creative"]   # every project from this template gets these
-tag_from: ["client_type", "artist"] # derived from variable values: client_type/Indie
+tags: ["client-work"]      # every project from this template gets these
+tag_from: ["tier"]         # derived from variable values: tier/Premium
 
 # Optional per-template override of the global post_create config:
 post_create:
-  git_init: true
-  reveal: false
+  reveal: true
+  git_init: false
 ```
 
 Non-empty folders are implied by the paths of files in `files/`. Only truly empty directories need listing under `structure:`.
@@ -90,7 +98,7 @@ Two variable types exist: `text` (free input) and `select` (pick from a list, wi
 |---|---|
 | `{date}` | `2026-04-17` (respects the `date_format` setting) |
 | `{YYYY}` `{MM}` `{DD}` | `2026` `04` `17` |
-| `{id}` | `RS047` |
+| `{id}` | `ID0047` |
 | `{anything_else}` | value of the matching variable |
 
 Two interpolation rules are worth knowing:

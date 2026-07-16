@@ -2087,7 +2087,7 @@ fn bootstrap_lands_in_user_dir_for_system_install() {
         fastf::bootstrap::ensure_bootstrapped().expect("bootstrap must succeed");
         let data = tmp.join("fastf");
         assert!(data.join("config.toml").is_file(), "config.toml written");
-        for slug in ["music-video", "photography", "video-production"] {
+        for slug in ["general", "music-video", "photography", "video-production"] {
             assert!(
                 data.join("templates")
                     .join(slug)

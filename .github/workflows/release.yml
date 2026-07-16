@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Manual dry-run of the build jobs without creating a release
+  # (the release job below is tag-gated).
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          bin="target/${{ matrix.target }}/release/fastf"
+          version="${GITHUB_REF_NAME#refs/tags/}"
+          [ "${GITHUB_REF_TYPE}" = "tag" ] || version="dev-${GITHUB_SHA::7}"
+          staging="fastf-${version}-${{ matrix.target }}"
+          mkdir -p "$staging/completions" "$staging/man"
+          "$bin" --version
+          for sh in bash zsh fish; do
+            "$bin" completions "$sh" > "$staging/completions/fastf.$sh"
+          done
+          "$bin" mangen "$staging/man"
+          cp "$bin" LICENSE README.md "$staging/"
+          cp packaging/fastf.desktop "$staging/"
+          mkdir -p "$staging/icons"
+          cp packaging/icons/fastf-*.png "$staging/icons/"
+          tar czf "$staging.tar.gz" "$staging"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = "target/${{ matrix.target }}/release/fastf.exe"
+          $version = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "dev-" + $env:GITHUB_SHA.Substring(0,7) }
+          $staging = "fastf-$version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path "$staging/completions" -Force | Out-Null
+          & $bin --version
+          & $bin completions powershell | Out-File -Encoding utf8 "$staging/completions/_fastf.ps1"
+          Copy-Item $bin, LICENSE, README.md $staging
+          Compress-Archive -Path $staging -DestinationPath "$staging.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.target }}
+          path: |
+            fastf-*.tar.gz
+            fastf-*.zip
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Checksums
+        run: sha256sum fastf-* > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            fastf-*
+            SHA256SUMS
+          generate_release_notes: true

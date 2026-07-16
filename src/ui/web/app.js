@@ -24,6 +24,8 @@ const state = {
   creating: false,
   reconciling: false,
   moving: false,
+  offline: false,
+  sort: loadSort(),
   selected: new Set(),
   bulkBase: "",
   gitInit: false,
@@ -52,6 +54,19 @@ function loadAppearance() {
   } catch {
     return defaults;
   }
+}
+
+function loadSort() {
+  const defaults = { key: "created", dir: "desc" };
+  try {
+    return { ...defaults, ...JSON.parse(localStorage.getItem("fastf-sort") || "{}") };
+  } catch {
+    return defaults;
+  }
+}
+
+function saveSort() {
+  try { localStorage.setItem("fastf-sort", JSON.stringify(state.sort)); } catch {}
 }
 
 function applyAppearance() {
@@ -114,6 +129,7 @@ const icons = {
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   note: '<path d="M5 4a1 1 0 0 1 1-1h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1Z"/><path d="M14 3v5h5M8 13h8M8 17h5"/>',
 };
 
@@ -131,16 +147,60 @@ function esc(value = "") {
 }
 
 async function api(route, options = {}) {
-  const response = await fetch(route, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(route, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch {
+    // A network-level failure on loopback means the server is gone.
+    setOffline(true);
+    throw new Error("Fast Folder server is not responding — is `fastf ui` still running?");
+  }
+  setOffline(false);
   const payload = await response.json();
   if (!response.ok || payload.ok === false) {
     throw new Error(payload.error || "Fast Folder could not complete the request.");
   }
   return payload;
 }
+
+// Fixed "server offline" banner, managed imperatively (no full render, so an
+// in-progress form never loses focus when the connection flaps).
+function setOffline(offline) {
+  if (state.offline === offline) return;
+  state.offline = offline;
+  const existing = document.querySelector("#offline-banner");
+  if (offline) {
+    if (existing) return;
+    const node = document.createElement("div");
+    node.id = "offline-banner";
+    node.className = "offline-banner";
+    node.innerHTML = `${icon("info")}<span>Connection to Fast Folder lost — retrying…</span>`;
+    document.body.append(node);
+  } else if (existing) {
+    existing.remove();
+    toast("Reconnected to Fast Folder.");
+  }
+}
+
+// Health watch: notice a dead server without waiting for the next user action,
+// and refresh the workspace when it comes back.
+setInterval(async () => {
+  if (document.hidden || !state.data) return;
+  const wasOffline = state.offline;
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    if (!response.ok) throw new Error();
+    setOffline(false);
+    if (wasOffline) {
+      try { await loadState(false); render(); } catch {}
+    }
+  } catch {
+    setOffline(true);
+  }
+}, 5000);
 
 function toast(message, error = false) {
   const node = document.createElement("div");
@@ -253,6 +313,14 @@ function navButton(view, iconName, label) {
 
 function render() {
   if (!state.data) return;
+  // Rebuilding the whole page steals focus from whatever the user is typing
+  // in. Remember the focused element (by id) + caret and restore it after.
+  const active = document.activeElement;
+  const focusId = active && active.id && app.contains(active) ? active.id : null;
+  const caret = focusId && typeof active.selectionStart === "number"
+    ? [active.selectionStart, active.selectionEnd]
+    : null;
+
   let content;
   if (state.view === "create") content = createPage();
   else if (state.view === "template-editor") content = templateEditorPage();
@@ -267,6 +335,16 @@ function render() {
   bindDrawer();
   bindApplyModal();
   bindGenericModal();
+
+  if (focusId) {
+    const restored = document.getElementById(focusId);
+    if (restored) {
+      restored.focus();
+      if (caret && typeof restored.setSelectionRange === "function") {
+        try { restored.setSelectionRange(caret[0], caret[1]); } catch {}
+      }
+    }
+  }
 }
 
 function dashboardPage() {
@@ -434,7 +512,7 @@ function createPage() {
             <div id="create-error">${state.previewError ? `<div class="error-box" style="margin-top:14px">${esc(state.previewError)}</div>` : ""}</div>
             <div class="create-actions">
               <span class="field-hint">Nothing is written until you create.</span>
-              <button class="button button-primary" type="submit" ${state.creating ? "disabled" : ""}>${state.creating ? "Creating…" : `${icon("bolt")} Create project`}</button>
+              <button class="button button-primary" type="submit" ${state.creating ? "disabled" : ""}>${state.creating ? '<span class="spinner"></span> Creating…' : `${icon("bolt")} Create project`}</button>
             </div>
           </form>
         </div>
@@ -856,8 +934,33 @@ function lightTreeMarkup(nodes = []) {
   return nodes.map((node) => `<div class="light-tree-node"><span>${icon("folder")}${esc(node.name)}</span>${node.children?.length ? `<div>${lightTreeMarkup(node.children)}</div>` : ""}</div>`).join("");
 }
 
+// Client-side sort of the already-loaded project list, driven by the header
+// buttons. Default (created desc) matches the backend's newest-first order.
+function sortedProjects(projects) {
+  const { key, dir } = state.sort;
+  const mul = dir === "asc" ? 1 : -1;
+  const value = (p) => {
+    if (key === "name") return (p.name || "").toLowerCase();
+    if (key === "base") return (p.base_label || "").toLowerCase();
+    if (key === "template") return (templateName(p.template) || "").toLowerCase();
+    if (key === "status") return p.exists ? 0 : 1;
+    return p.created_at || "";
+  };
+  return [...projects].sort((a, b) => {
+    const va = value(a);
+    const vb = value(b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * mul;
+  });
+}
+
+function sortHeader(key, label) {
+  const active = state.sort.key === key;
+  const arrow = active ? (state.sort.dir === "asc" ? "↑" : "↓") : "";
+  return `<button type="button" class="eyebrow sort-header ${active ? "active" : ""}" data-sort-key="${key}" title="Sort by ${label}">${label}${arrow ? `<span class="sort-arrow">${arrow}</span>` : ""}</button>`;
+}
+
 function projectsPage() {
-  const projects = state.searchResults ?? state.data.projects;
+  const projects = sortedProjects(state.searchResults ?? state.data.projects);
   return `
     <section class="page">
       <div class="page-header">
@@ -878,7 +981,7 @@ function projectsPage() {
       <div class="panel project-list">
         <div class="project-row project-header-row">
           <label class="project-select"><input type="checkbox" data-select-all ${allSelected(projects) ? "checked" : ""}></label>
-          <div class="eyebrow">Project</div><div class="eyebrow">Base</div><div class="eyebrow">Template</div><div class="eyebrow">Created</div><div class="eyebrow">Status</div><span></span>
+          ${sortHeader("name", "Project")}${sortHeader("base", "Base")}${sortHeader("template", "Template")}${sortHeader("created", "Created")}${sortHeader("status", "Status")}<span></span>
         </div>
         <div id="project-results">${projectRows(projects)}</div>
       </div>
@@ -984,13 +1087,14 @@ function projectDataSettings(config) {
       </div>
       <div class="settings-section">
         <h3>Fast Folder data</h3>
-        <p>Your current installation is portable. These files contain its templates, configuration, and counter. Projects live in your bases, each with a disposable <code>.fastf-index.json</code> cache.</p>
+        <p>These files contain your templates, configuration, and counter. Projects live in your bases, each with a disposable <code>.fastf-index.json</code> cache.</p>
         <div class="data-summary">
           ${dataSummary("Projects found", state.data.projects.length)}
           ${dataSummary("Templates", state.data.templates.length)}
           ${dataSummary("Current counter", state.data.counter)}
         </div>
-        <div class="data-location"><span>Installation</span><strong title="${esc(state.data.install_dir)}">${esc(shortPath(state.data.install_dir))}</strong></div>
+        <div class="data-location"><span>Data folder</span><strong title="${esc(state.data.install_dir)}">${esc(shortPath(state.data.install_dir))}</strong></div>
+        <div class="data-location"><span>Resolved via</span><strong>${esc(state.data.dir_mode || "unknown")}</strong></div>
         <div class="data-actions">
           <button class="button button-secondary" type="button" data-open-path="${esc(state.data.install_dir)}">${icon("external")} Open data folder</button>
           <button class="button button-secondary" type="button" data-open-path="${esc(state.data.templates_dir)}">${icon("layers")} Open templates</button>
@@ -1180,6 +1284,16 @@ function bindProjectBulk() {
     render();
   });
   document.querySelector("[data-bulk-move]")?.addEventListener("click", moveSelected);
+  document.querySelectorAll("[data-sort-key]").forEach((button) => button.addEventListener("click", () => {
+    const key = button.dataset.sortKey;
+    if (state.sort.key === key) {
+      state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+    } else {
+      state.sort = { key, dir: key === "created" ? "desc" : "asc" };
+    }
+    saveSort();
+    render();
+  }));
 }
 
 function scheduleProjectSearch() {
@@ -1198,7 +1312,7 @@ async function runProjectSearch() {
   }
   const node = document.querySelector("#project-results");
   if (node) {
-    node.innerHTML = projectRows(state.searchResults);
+    node.innerHTML = projectRows(sortedProjects(state.searchResults));
     bindProjectRows();
     document.querySelectorAll("#project-results [data-open-path]").forEach((button) => button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -1441,7 +1555,13 @@ async function addTemplateFileFromPath() {
 }
 
 async function deleteTemplateFile(path) {
-  if (!window.confirm(`Remove ${path} from this template?`)) return;
+  const ok = await confirmModal({
+    title: "Remove template file",
+    body: `Remove <strong class="mono">${esc(path)}</strong> from this template? Projects already created keep their copy.`,
+    confirmLabel: "Remove file",
+    danger: true,
+  });
+  if (!ok) return;
   await runFileOp("/api/templates/file-delete", { slug: state.templateOriginalSlug, path }, `Removed ${path}.`);
 }
 
@@ -1491,8 +1611,16 @@ function bindTemplateAutomation() {
   });
 }
 
-function closeTemplateEditor() {
-  if (state.templateDirty && !window.confirm("Discard the unsaved template changes?")) return;
+async function closeTemplateEditor() {
+  if (state.templateDirty) {
+    const ok = await confirmModal({
+      title: "Discard changes",
+      body: "This template has unsaved changes. Discard them?",
+      confirmLabel: "Discard",
+      danger: true,
+    });
+    if (!ok) return;
+  }
   state.templateEditor = null;
   state.templateOriginalSlug = null;
   state.templateDirty = false;
@@ -1536,7 +1664,14 @@ async function saveTemplate() {
 
 async function deleteTemplate() {
   const slug = state.templateOriginalSlug;
-  if (!slug || !window.confirm(`Delete the template “${state.templateEditor.name}”? Projects already created from it will not be removed.`)) return;
+  if (!slug) return;
+  const ok = await confirmModal({
+    title: "Delete template",
+    body: `Delete the template <strong>${esc(state.templateEditor.name)}</strong>? Projects already created from it are not touched.`,
+    confirmLabel: "Delete template",
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await api("/api/templates/delete", {
       method: "POST",
@@ -1586,7 +1721,7 @@ async function createProject(event) {
   const baseDir = document.querySelector("#base-dir")?.value ?? state.data.config.base_dir;
   state.creating = true;
   const submit = event.currentTarget.querySelector('[type="submit"]');
-  if (submit) { submit.disabled = true; submit.textContent = "Creating…"; }
+  if (submit) { submit.disabled = true; submit.innerHTML = '<span class="spinner"></span> Creating…'; }
   try {
     const result = await api("/api/create", {
       method: "POST",
@@ -1826,7 +1961,7 @@ function registerPage() {
           ${editorField("Created date", "Override the recorded date", `<input class="input" type="date" id="register-created" value="${esc(reg.created)}" ${reg.useToday ? "disabled" : ""}>`, false, "full")}
         </div>
         <div class="settings-footer">
-          <button class="button button-primary" type="submit" ${reg.busy ? "disabled" : ""}>${reg.busy ? "Registering…" : `${icon("folderPlus")} Register folder`}</button>
+          <button class="button button-primary" type="submit" ${reg.busy ? "disabled" : ""}>${reg.busy ? '<span class="spinner"></span> Registering…' : `${icon("folderPlus")} Register folder`}</button>
         </div>
       </form>
     </section>`;
@@ -1905,7 +2040,13 @@ async function doRegister(overwrite) {
   } catch (error) {
     reg.busy = false;
     if (/already exists/i.test(error.message) && !overwrite) {
-      if (window.confirm(`${error.message}\n\nOverwrite the existing metadata file and register anyway?`)) {
+      const ok = await confirmModal({
+        title: "Metadata already exists",
+        body: `${esc(error.message)}<br><br>Overwrite the existing metadata file and register anyway?`,
+        confirmLabel: "Overwrite",
+        danger: true,
+      });
+      if (ok) {
         reg.busy = true;
         render();
         await doRegister(true);
@@ -1985,6 +2126,12 @@ function detailBody(data) {
       <button class="button button-secondary" data-detail-apply>${icon("bolt")} Apply template</button>
       <button class="button button-secondary" data-detail-copy>${icon("copy")} Copy path</button>
     </div>
+    ${record ? `
+    <div class="drawer-actions drawer-manage">
+      <button class="button button-secondary" data-detail-rename ${data.exists ? "" : "disabled"}>${icon("edit")} Rename</button>
+      <button class="button button-secondary" data-detail-unregister title="Forget this project — files stay on disk">${icon("close")} Unregister</button>
+      <button class="button button-danger" data-detail-delete ${data.exists ? "" : "disabled"}>${icon("trash")} Delete…</button>
+    </div>` : ""}
     ${!meta ? `<div class="drawer-empty">${icon("info")}<p>No metadata file found. This folder predates Fast Folder metadata or was hand-edited. Register it or apply a template to add one.</p></div>` : `
       <div class="drawer-section">
         <div class="drawer-section-head">${icon("tag")}<h3>Tags</h3></div>
@@ -2097,7 +2244,7 @@ function showMoveProgress(jobId, projectName, baseName) {
 
     (async () => {
       let status = "done";
-      while (true) {
+      while (document.body.contains(overlay)) {
         let job;
         try {
           const res = await api(`/api/job/${encodeURIComponent(jobId)}`);
@@ -2145,9 +2292,11 @@ function phaseLabel(job) {
 
 // Poll one move/copy job to a terminal state, calling `onUpdate(job)` each tick.
 // Returns "done" | "cancelled" | "failed". A 404 (evicted after finishing) = done.
-async function pollMoveJob(jobId, onUpdate) {
+// `isAlive` lets a caller stop the loop when its overlay leaves the DOM, so a
+// navigation mid-poll can never leave this ticking forever.
+async function pollMoveJob(jobId, onUpdate, isAlive = () => true) {
   if (!jobId) return "done";
-  while (true) {
+  while (isAlive()) {
     let job;
     try {
       job = (await api(`/api/job/${encodeURIComponent(jobId)}`)).job;
@@ -2160,6 +2309,7 @@ async function pollMoveJob(jobId, onUpdate) {
     if (job.status === "done" || job.phase === "done") return "done";
     await new Promise((r) => setTimeout(r, 350));
   }
+  return "done";
 }
 
 // Move every checked project into the chosen base (skipping any already there).
@@ -2249,7 +2399,7 @@ function runBulkMove(projects, base) {
           if (fill()) fill().style.width = Math.round(((i + inner) / total) * 100) + "%";
           node.classList.toggle("job-verifying", job.phase === "verifying");
           if (label()) label().textContent = `${project.name} — ${phaseLabel(job)} (${i + 1}/${total})`;
-        });
+        }, () => document.body.contains(overlay));
         currentJobId = null;
         if (status === "done") done++;
         else if (status === "cancelled") { cancelled++; break; }
@@ -2297,6 +2447,9 @@ function bindDrawer() {
   document.querySelector("[data-detail-copy]")?.addEventListener("click", () => copyPath(state.detail.path));
   document.querySelector("[data-detail-apply]")?.addEventListener("click", () => openApplyModal(state.detail.path));
   document.querySelector("[data-detail-move]")?.addEventListener("click", moveProject);
+  document.querySelector("[data-detail-rename]")?.addEventListener("click", renameProject);
+  document.querySelector("[data-detail-unregister]")?.addEventListener("click", unregisterProject);
+  document.querySelector("[data-detail-delete]")?.addEventListener("click", deleteProjectFolder);
   document.querySelectorAll("[data-remove-tag]").forEach((button) => button.addEventListener("click", () => mutateTag("remove", button.dataset.removeTag)));
   document.querySelector("#add-tag-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2308,6 +2461,84 @@ function bindDrawer() {
     const value = document.querySelector("#add-note-input").value.trim();
     if (value) addNote(value);
   });
+}
+
+// Current folder name of the project shown in the drawer.
+function detailFolderName() {
+  const data = state.detail?.data || {};
+  return data.metadata?.folder || data.record?.name || state.detail.path.split("/").pop();
+}
+
+async function renameProject() {
+  const current = detailFolderName();
+  const name = await promptModal({
+    title: "Rename project folder",
+    body: "The folder is renamed in place — the project ID, metadata, and files stay the same.",
+    label: "New folder name",
+    value: current,
+    confirmLabel: "Rename",
+  });
+  if (name === null || !name.trim() || name.trim() === current) return;
+  try {
+    const result = await api("/api/project/rename", {
+      method: "POST",
+      body: JSON.stringify({ path: state.detail.path, folder: name.trim() }),
+    });
+    state.searchResults = null;
+    await loadState(false);
+    toast(`Renamed to ${result.name}.`);
+    await openProjectDetail(result.path);
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function unregisterProject() {
+  const name = detailFolderName();
+  const ok = await confirmModal({
+    title: "Unregister project",
+    body: `Remove <strong>${esc(name)}</strong> from Fast Folder? The folder and every file inside stay on disk — only the <span class="mono">PROJECT_INFO.md</span> metadata file is removed.`,
+    confirmLabel: "Unregister",
+  });
+  if (!ok) return;
+  try {
+    await api("/api/project/unregister", {
+      method: "POST",
+      body: JSON.stringify({ path: state.detail.path }),
+    });
+    state.detail = null;
+    state.searchResults = null;
+    await loadState(false);
+    render();
+    toast("Unregistered — files kept on disk.");
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function deleteProjectFolder() {
+  const name = detailFolderName();
+  const ok = await confirmModal({
+    title: "Delete project folder",
+    body: `This permanently deletes <strong class="mono">${esc(shortPath(state.detail.path))}</strong> and <strong>everything inside it</strong>. This cannot be undone.`,
+    confirmLabel: "Delete forever",
+    danger: true,
+    typedPhrase: name,
+  });
+  if (!ok) return;
+  try {
+    await api("/api/project/delete", {
+      method: "POST",
+      body: JSON.stringify({ path: state.detail.path, confirm_name: name }),
+    });
+    state.detail = null;
+    state.searchResults = null;
+    await loadState(false);
+    render();
+    toast("Project deleted.");
+  } catch (error) {
+    toast(error.message, true);
+  }
 }
 
 async function mutateTag(action, tag) {
@@ -2471,14 +2702,92 @@ function openFromFolderModal() {
 }
 
 function closeModal() {
+  // Dismissing a confirm/prompt (scrim, ✕, Escape) answers "no".
+  if (state.modal?.kind === "confirm") { resolveDialog(false); return; }
+  if (state.modal?.kind === "prompt") { resolveDialog(null); return; }
   state.modal = null;
   render();
+}
+
+// ---------------------------------------------------------------------------
+// Promise-based confirm / prompt dialogs (replace native confirm()/prompt(),
+// which look alien in the --app window and can detach from it).
+// ---------------------------------------------------------------------------
+
+// Ask a yes/no question. `danger: true` styles the confirm button red;
+// `typedPhrase` requires typing the phrase before the button enables (used for
+// destructive actions like deleting a project folder). `body` is HTML — the
+// caller escapes any dynamic parts.
+function confirmModal({ title, body, confirmLabel = "Confirm", danger = false, typedPhrase = null }) {
+  return new Promise((resolve) => {
+    state.modal = { kind: "confirm", title, body, confirmLabel, danger, typedPhrase, typed: "", resolve };
+    render();
+  });
+}
+
+// Ask for a single line of text. Resolves with the value, or null on cancel.
+function promptModal({ title, body = "", label = "", value = "", confirmLabel = "OK" }) {
+  return new Promise((resolve) => {
+    state.modal = { kind: "prompt", title, body, label, value, confirmLabel, resolve };
+    render();
+  });
+}
+
+function resolveDialog(result) {
+  const resolve = state.modal?.resolve;
+  state.modal = null;
+  render();
+  if (resolve) resolve(result);
 }
 
 function genericModalMarkup() {
   if (!state.modal) return "";
   if (state.modal.kind === "from-folder") return fromFolderModalMarkup();
+  if (state.modal.kind === "confirm") return confirmModalMarkup();
+  if (state.modal.kind === "prompt") return promptModalMarkup();
   return "";
+}
+
+function confirmModalMarkup() {
+  const modal = state.modal;
+  const typedOk = !modal.typedPhrase || modal.typed === modal.typedPhrase;
+  return `
+    <div class="overlay" data-close-modal></div>
+    <div class="modal modal-confirm" role="dialog" aria-modal="true">
+      <div class="modal-head"><h2>${esc(modal.title)}</h2><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <div class="modal-body">
+        <p class="modal-sub">${modal.body}</p>
+        ${modal.typedPhrase ? `
+          <div class="field">
+            <div class="field-row"><label for="dialog-typed">Type <strong class="mono">${esc(modal.typedPhrase)}</strong> to confirm</label></div>
+            <input class="input mono" id="dialog-typed" value="${esc(modal.typed)}" autocomplete="off" spellcheck="false">
+          </div>` : ""}
+      </div>
+      <div class="modal-foot">
+        <button class="button button-secondary" data-dialog-cancel>Cancel</button>
+        <button class="button ${modal.danger ? "button-danger" : "button-primary"}" data-dialog-ok ${typedOk ? "" : "disabled"}>${esc(modal.confirmLabel)}</button>
+      </div>
+    </div>`;
+}
+
+function promptModalMarkup() {
+  const modal = state.modal;
+  return `
+    <div class="overlay" data-close-modal></div>
+    <div class="modal modal-confirm" role="dialog" aria-modal="true">
+      <div class="modal-head"><h2>${esc(modal.title)}</h2><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <div class="modal-body">
+        ${modal.body ? `<p class="modal-sub">${modal.body}</p>` : ""}
+        <div class="field">
+          ${modal.label ? `<div class="field-row"><label for="dialog-prompt">${esc(modal.label)}</label></div>` : ""}
+          <input class="input" id="dialog-prompt" value="${esc(modal.value)}" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="button button-secondary" data-dialog-cancel>Cancel</button>
+        <button class="button button-primary" data-dialog-ok>${esc(modal.confirmLabel)}</button>
+      </div>
+    </div>`;
 }
 
 function fromFolderModalMarkup() {
@@ -2504,6 +2813,44 @@ function fromFolderModalMarkup() {
 function bindGenericModal() {
   if (!state.modal) return;
   document.querySelectorAll("[data-close-modal]").forEach((element) => element.addEventListener("click", closeModal));
+  if (state.modal.kind === "confirm") {
+    document.querySelector("[data-dialog-cancel]")?.addEventListener("click", () => resolveDialog(false));
+    document.querySelector("[data-dialog-ok]")?.addEventListener("click", () => {
+      const modal = state.modal;
+      if (!modal.typedPhrase || modal.typed === modal.typedPhrase) resolveDialog(true);
+    });
+    const typed = document.querySelector("#dialog-typed");
+    if (typed) {
+      typed.focus();
+      // Enable/disable the danger button in place — no render, no focus loss.
+      typed.addEventListener("input", (event) => {
+        state.modal.typed = event.target.value;
+        const ok = state.modal.typed === state.modal.typedPhrase;
+        const button = document.querySelector("[data-dialog-ok]");
+        if (button) button.disabled = !ok;
+      });
+      typed.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && state.modal.typed === state.modal.typedPhrase) resolveDialog(true);
+      });
+    } else {
+      document.querySelector("[data-dialog-ok]")?.focus();
+    }
+    return;
+  }
+  if (state.modal.kind === "prompt") {
+    document.querySelector("[data-dialog-cancel]")?.addEventListener("click", () => resolveDialog(null));
+    const input = document.querySelector("#dialog-prompt");
+    input?.addEventListener("input", (event) => { state.modal.value = event.target.value; });
+    input?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") resolveDialog(state.modal.value);
+    });
+    document.querySelector("[data-dialog-ok]")?.addEventListener("click", () => resolveDialog(state.modal.value));
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+    return;
+  }
   if (state.modal.kind === "from-folder") {
     document.querySelector("#ff-source")?.addEventListener("input", (event) => { state.modal.source = event.target.value; });
     document.querySelector("#ff-slug")?.addEventListener("input", (event) => { state.modal.slug = event.target.value; });
@@ -2601,5 +2948,5 @@ window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", (
 });
 
 loadState().catch((error) => {
-  app.innerHTML = `<div class="boot-screen"><div class="boot-logo"><span></span><span></span></div><div class="boot-wordmark">Fast Folder could not start</div><div style="max-width:420px;color:#9eb0a7;font-size:12px;text-align:center;line-height:1.6">${esc(error.message)}</div></div>`;
+  app.innerHTML = `<div class="boot-screen"><div class="boot-logo"><span></span><span></span></div><div class="boot-wordmark">Fast Folder could not start</div><div class="boot-error-detail">${esc(error.message)}</div></div>`;
 });

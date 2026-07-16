@@ -1,0 +1,131 @@
+# Template authoring guide
+
+A template is a folder inside your templates directory. It holds a metadata manifest and a file tree that gets reproduced into every project built from it. You can author templates three ways: step by step in the TUI (`fastf template new`), visually in the browser UI (`fastf ui`), or by editing the files directly. All three produce the same on-disk format.
+
+## Anatomy of a template
+
+```
+templates/rust-project/
+├── template.yaml        # metadata: variables, naming, structure, globs
+└── files/               # the file spec, reproduced into every new project
+    ├── Cargo.toml       # {name}, {license}, {id}, {date} are interpolated
+    ├── .gitignore
+    └── src/lib.rs
+```
+
+Everything under `files/` is copied into each new project:
+
+- File and folder names are interpolated. A file named `Deliver_Note_{artist}.md` is renamed per project.
+- UTF-8 text files up to 1 MiB have their `{tokens}` substituted.
+- Binary and oversized files are copied byte for byte. A logo or a 200 MB delivery video works fine.
+
+There is no per-file configuration. The directory is the spec, which also makes sharing trivial: a template is a folder, so copy the folder. Version it in git, send it to a teammate, or drop a gallery example from [`examples/templates/`](../examples/templates/) into your own templates directory.
+
+## template.yaml
+
+The manifest holds metadata only. The file spec lives in `files/`.
+
+```yaml
+name: "Rust Project"
+slug: "rust-project"
+description: "Cargo-style Rust project scaffold"
+version: "1"
+
+# Built-in tokens: {date} {YYYY} {MM} {DD} {id}
+# Variable tokens: any {slug} defined below
+naming_pattern: "{name}"
+
+id:
+  prefix: "RS"
+  digits: 3           # RS047
+
+variables:
+  - slug: name
+    label: "Crate name"
+    type: text            # text | select
+    required: true
+    transform: lower_underscore   # none | title_underscore | upper_underscore | lower_underscore
+
+  - slug: license
+    label: "License"
+    type: select
+    options: ["MIT", "Apache-2.0", "GPL-3.0"]
+    default: "MIT"
+
+structure:                 # empty dirs to guarantee (archive safe)
+  - name: "src"
+  - name: "tests"
+  - name: "examples"
+
+# Optional globs, relative to files/:
+verbatim: ["*.svg"]        # copy literally even if text, preserving literal {braces}
+exclude: [".DS_Store", "*.tmp"]
+
+# Optional auto tags:
+tags: ["music-video", "creative"]   # every project from this template gets these
+tag_from: ["client_type", "artist"] # derived from variable values: client_type/Indie
+
+# Optional per-template override of the global post_create config:
+post_create:
+  git_init: true
+  reveal: false
+```
+
+Non-empty folders are implied by the paths of files in `files/`. Only truly empty directories need listing under `structure:`.
+
+## Variables and transforms
+
+Two variable types exist: `text` (free input) and `select` (pick from a list, with an optional default). Each variable can declare a transform applied to the value before it lands in names:
+
+| Transform | Input | Output |
+|---|---|---|
+| `none` | `Ariana Grande` | `Ariana Grande` |
+| `title_underscore` | `ariana grande` | `Ariana_Grande` |
+| `upper_underscore` | `ariana grande` | `ARIANA_GRANDE` |
+| `lower_underscore` | `Ariana Grande` | `ariana_grande` |
+
+## Naming pattern tokens
+
+| Token | Example |
+|---|---|
+| `{date}` | `2026-04-17` (respects the `date_format` setting) |
+| `{YYYY}` `{MM}` `{DD}` | `2026` `04` `17` |
+| `{id}` | `RS047` |
+| `{anything_else}` | value of the matching variable |
+
+Two interpolation rules are worth knowing:
+
+- In file **content**, `__` sequences are preserved exactly, so Python's `__init__` and `__version__` survive.
+- In folder and file **names**, empty optional variables collapse so you never get dangling underscores (`{a}_{empty}_{b}` becomes `a_b`).
+
+Templates always use `/` as the path separator, on every platform. fastf translates to `\` on Windows at runtime. Path escape guards reject `..`, absolute paths, and drive letters both when a template loads and again at write time.
+
+## Generating a template from a real folder
+
+Point fastf at an existing project and get a ready-to-edit template:
+
+```bash
+fastf template from-folder ./my-project my-template
+fastf template from-folder ./delivery-kit client-kit --bundle-assets
+```
+
+Text files become editable template files. With `--bundle-assets`, binary and large files are copied into the template byte for byte (fastf confirms the total size first). The project's own `PROJECT_INFO.md` is skipped, since fastf owns that file.
+
+## Reserved filename
+
+`PROJECT_INFO.md` at the project root is reserved. fastf generates it on every `fastf new` and `fastf register`, and templates that try to declare their own root-level file with that name have the entry silently stripped. A nested `docs/PROJECT_INFO.md` is fine. If you want a custom notes file in your template, pick another name such as `NOTES.md`.
+
+## Post-create actions
+
+Configure globally in `config.toml` or override per template with a `post_create:` block. All fields default to off:
+
+```toml
+[post_create]
+git_init = true
+reveal = false
+open_in_editor = false   # opens config.editor (or $EDITOR) with the project folder
+print_path = false       # prints the absolute path, useful for pipelines: $(fastf new ...)
+commands = []            # shell commands; {path} is replaced with the project's absolute path
+```
+
+A template-level `post_create:` replaces the global block entirely. Commands run synchronously through the system shell, so only use templates you trust.

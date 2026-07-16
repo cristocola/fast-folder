@@ -827,11 +827,14 @@ mod tests {
     fn write_project(base: &Path, folder: &str, id: &str, template: &str, created: &str) {
         let dir = base.join(folder);
         fs::create_dir_all(&dir).unwrap();
+        // Backslashes in a double-quoted YAML scalar are escape sequences —
+        // a raw Windows path (`C:\Users\...`) makes the whole frontmatter
+        // unparseable, so escape them.
+        let path_yaml = dir.display().to_string().replace('\\', "\\\\");
         let fm = format!(
             "---\nid: {id}\ntemplate: {template}\ntemplate_name: \"{template} name\"\n\
-             created: \"{created}\"\nfolder: {folder}\npath: \"{}\"\nvariables: {{}}\ntags: []\n\
-             ---\n\n# Project Info\n",
-            dir.display()
+             created: \"{created}\"\nfolder: {folder}\npath: \"{path_yaml}\"\nvariables: {{}}\ntags: []\n\
+             ---\n\n# Project Info\n"
         );
         fs::write(dir.join(project_info::RESERVED_FILENAME), fm).unwrap();
     }

@@ -27,14 +27,23 @@ fn with_fresh_install<R>(body: impl FnOnce(&Path) -> R) -> R {
     // Recover from poisoned lock — we don't hold any invariants that panics could violate.
     let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().expect("tempdir");
-    // Safe here: the SERIAL mutex guarantees no other test thread races on this env var.
+    // Safe here: the SERIAL mutex guarantees no other test thread races on these env vars.
+    // Home is redirected into the sandbox too: an unconfigured base_dir falls
+    // back to the home directory, and tests must never scan the real one.
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let old_home = std::env::var_os(home_var);
     unsafe {
         std::env::set_var("FASTF_INSTALL_DIR", tmp.path());
+        std::env::set_var(home_var, tmp.path());
     }
     fs::create_dir_all(tmp.path().join("templates")).unwrap();
     let result = body(tmp.path());
     unsafe {
         std::env::remove_var("FASTF_INSTALL_DIR");
+        match old_home {
+            Some(value) => std::env::set_var(home_var, value),
+            None => std::env::remove_var(home_var),
+        }
     }
     drop(guard);
     result

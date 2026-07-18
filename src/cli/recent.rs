@@ -126,9 +126,31 @@ pub fn print_plain(filtered: &[&Project]) {
 ///
 /// Displays the projects in a `dialoguer::Select` loop.  Selecting a project
 /// enters `project_action_menu`.
+/// Clamp a Select item label to the terminal width so dialoguer never has to
+/// redraw a soft-wrapped line (the Windows console miscounts wrapped rows,
+/// leaving ghosted characters as the selection moves). Budget = columns minus
+/// the theme's "> " item prefix minus a last-column safety margin. Labels must
+/// stay ANSI-free — `truncate_str` is unicode-width-aware, but styled labels
+/// would reintroduce the redraw problem this exists to avoid.
+fn clamp_label(label: &str, columns: usize) -> String {
+    const PREFIX: usize = 3;
+    let budget = columns.saturating_sub(PREFIX);
+    if budget == 0 {
+        // Width unknown (size() reports 0 off-terminal) — leave untouched.
+        return label.to_string();
+    }
+    dialoguer::console::truncate_str(label, budget, "…").into_owned()
+}
+
+fn terminal_columns() -> usize {
+    let (_rows, columns) = dialoguer::console::Term::stdout().size();
+    columns as usize
+}
+
 pub fn run_picker(filtered: &[&Project]) -> Result<()> {
     use dialoguer::Select;
 
+    let columns = terminal_columns();
     let id_w = filtered.iter().map(|p| p.id.len()).max().unwrap_or(4);
     let tmpl_w = filtered.iter().map(|p| p.template.len()).max().unwrap_or(8);
     let base_w = filtered
@@ -170,6 +192,7 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
                     base_w = base_w,
                 )
             })
+            .map(|label| clamp_label(&label, columns))
             .chain(std::iter::once("[Quit]".to_string()))
             .collect();
 
@@ -266,9 +289,15 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
             .interact()?;
 
         if choice == move_idx {
+            let columns = terminal_columns();
             let mut labels: Vec<String> = other_bases
                 .iter()
-                .map(|b| format!("{}  ({})", library::base_label(b), b.display()))
+                .map(|b| {
+                    clamp_label(
+                        &format!("{}  ({})", library::base_label(b), b.display()),
+                        columns,
+                    )
+                })
                 .collect();
             labels.push("[Cancel]".to_string());
             let sel = Select::new()
@@ -572,4 +601,42 @@ pub fn open(query: &str) -> Result<()> {
         project.path.display().to_string().dimmed()
     );
     crate::core::post_create::reveal_folder(&project.path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_label;
+    use dialoguer::console::measure_text_width;
+
+    #[test]
+    fn clamp_leaves_short_labels_unchanged() {
+        assert_eq!(
+            clamp_label("ID0001  general  proj", 80),
+            "ID0001  general  proj"
+        );
+    }
+
+    #[test]
+    fn clamp_elides_long_labels_within_budget() {
+        let label = "x".repeat(200);
+        let out = clamp_label(&label, 40);
+        assert!(out.ends_with('…'));
+        assert!(measure_text_width(&out) <= 37);
+    }
+
+    #[test]
+    fn clamp_is_wide_char_safe() {
+        // CJK chars are double-width; the clamp must count display columns,
+        // not chars, and never split a wide char in half.
+        let label = "プロジェクト".repeat(20);
+        let out = clamp_label(&label, 30);
+        assert!(out.ends_with('…'));
+        assert!(measure_text_width(&out) <= 27);
+    }
+
+    #[test]
+    fn clamp_passes_through_when_width_unknown() {
+        let label = "y".repeat(200);
+        assert_eq!(clamp_label(&label, 0), label);
+    }
 }

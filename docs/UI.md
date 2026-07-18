@@ -54,7 +54,8 @@ non-loopback address.
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET  | `/api/health` | Health check |
-| GET  | `/api/state` | Config, templates, discovered projects, counter, data paths |
+| GET  | `/api/state` | Config, templates, discovered projects, counter, data paths, `base_configured` + `suggested_base` (first-run onboarding) |
+| POST | `/api/base/init` | First-run onboarding: create the chosen projects folder if missing and set it as `base_dir` (`{path}`; accepts `~/…`, must be absolute) |
 | POST | `/api/preview` | Validate variables, return a project plan (no writes) |
 | POST | `/api/create` | Create a project + run post-create; returns `{project, job_id}` (`job_id` set only when large assets are copied in the background) |
 | GET  | `/api/job/<id>` | Poll a background copy/move job's progress (`copying`→`verifying`→`finalizing`→`done`; 404 once evicted after completion) |
@@ -83,13 +84,33 @@ non-loopback address.
 | POST | `/api/reconcile` | Resume interrupted copies + finish/roll-back interrupted moves across all bases; returns `{report}` (`resumed`/`completed`/`rolled_back`/`unrecoverable`) |
 | POST | `/api/counter` | Set the global ID counter (`{value}`) |
 
-Write routes (`create`, `settings`, template save/from-folder/delete, template
+Write routes (`create`, `settings`, `base/init`, template save/from-folder/delete, template
 `file-save`/`file-add`/`file-delete`, `project/tag`, `project/note`,
 `project/move`, `register`, `apply`, `reindex`, `counter`) serialize through a process-wide mutex
 (`WRITE_LOCK`) so concurrent requests can't corrupt files. Read routes
 (`/api/search`, `/api/project`, `/api/job/<id>`, `/api/template-files`, the GET
 state route) are lock-free. Static GET routes serve only the four embedded
 frontend files.
+
+**First-run onboarding (v1.0.2).** When no base is configured anywhere
+(`base_dir` empty and `bases` empty), `/api/state` reports
+`base_configured: false` plus a `suggested_base` (the user's home `Projects`
+folder). The frontend then shows a welcome dialog that explains the base
+concept, pre-fills the suggestion, notes that more bases can be added later
+under Settings > Library bases, and submits to `/api/base/init`, which creates
+the folder and saves it as `base_dir`. Dismissing the dialog skips it for the
+session; it returns on the next launch until a base is set.
+
+**Health watch + sleep recovery (v1.0.2).** The frontend polls `/api/health`
+every 5 s (single in-flight request, 2.5 s abort timeout) to drive the offline
+banner, and re-checks immediately on `visibilitychange`. If a poll tick arrives
+more than 10 minutes late, the renderer's timers were frozen (system suspend or
+deep window throttling) — Chromium can wake from that with corrupted surfaces
+and stuck native popups, so the page reloads itself for a clean slate (or
+refreshes in place when unsaved template edits would be lost). The `--app`
+launcher also passes `--disable-backgrounding-occluded-windows` and
+`--disable-renderer-backgrounding` to keep the window from being throttled
+into that state in the first place.
 
 **Template file editing (v0.8).** The template editor's Files section works
 directly on the `files/` subtree on disk — `template-files` lists it, `file-save`

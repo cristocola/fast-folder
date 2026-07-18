@@ -157,41 +157,90 @@ fn open_browser(url: &str, app: bool) {
 /// hands back the window's [`Child`](std::process::Child) so `run` can tie the
 /// server's lifetime to it.
 fn open_app_window(url: &str) -> Option<Result<std::process::Child, std::io::Error>> {
+    let browser = find_app_browser()?;
     let profile = chromium_profile_dir();
-    for browser in [
+    let spawn = std::process::Command::new(browser)
+        .arg(format!("--app={url}"))
+        // X11 window-class hints; harmless no-ops on other platforms.
+        .arg("--class=FastFolderUI")
+        .arg("--name=FastFolderUI")
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg("--window-size=1440,940")
+        .arg("--no-first-run")
+        // Keep the renderer alive while the window sits occluded or idle for
+        // hours — deep background throttling is what left long-running app
+        // windows frozen with corrupted (white) surfaces on resume.
+        .arg("--disable-backgrounding-occluded-windows")
+        .arg("--disable-renderer-backgrounding")
+        .spawn();
+    Some(spawn)
+}
+
+#[cfg(not(windows))]
+fn find_app_browser() -> Option<std::path::PathBuf> {
+    [
         "chromium",
         "google-chrome",
         "google-chrome-stable",
         "chromium-browser",
-    ] {
-        if which(browser) {
-            let spawn = std::process::Command::new(browser)
-                .arg(format!("--app={url}"))
-                .arg("--class=FastFolderUI")
-                .arg("--name=FastFolderUI")
-                .arg(format!("--user-data-dir={}", profile.display()))
-                .arg("--window-size=1440,940")
-                .arg("--no-first-run")
-                .spawn();
-            return Some(spawn);
+    ]
+    .iter()
+    .find_map(|name| which(name))
+}
+
+/// Chrome before Edge: if the user installed Chrome they chose it; Edge is the
+/// always-present fallback on Windows 10/11 and supports the same `--app=` /
+/// `--user-data-dir` flags. PATH is probed first (respects custom setups),
+/// then the well-known install locations (browsers aren't normally on PATH).
+#[cfg(windows)]
+fn find_app_browser() -> Option<std::path::PathBuf> {
+    for name in ["chrome.exe", "msedge.exe", "chromium.exe"] {
+        if let Some(path) = which(name) {
+            return Some(path);
         }
     }
-    None
+    let candidates: [(&str, &str); 5] = [
+        ("ProgramFiles", r"Google\Chrome\Application\chrome.exe"),
+        ("ProgramFiles(x86)", r"Google\Chrome\Application\chrome.exe"),
+        ("LOCALAPPDATA", r"Google\Chrome\Application\chrome.exe"),
+        // Edge installs under the x86 Program Files even on 64-bit Windows.
+        (
+            "ProgramFiles(x86)",
+            r"Microsoft\Edge\Application\msedge.exe",
+        ),
+        ("ProgramFiles", r"Microsoft\Edge\Application\msedge.exe"),
+    ];
+    candidates.iter().find_map(|(env, rel)| {
+        let base = std::env::var_os(env)?;
+        let path = std::path::PathBuf::from(base).join(rel);
+        path.is_file().then_some(path)
+    })
 }
 
+#[cfg(windows)]
 fn chromium_profile_dir() -> std::path::PathBuf {
-    let base = std::env::var_os("XDG_CACHE_HOME")
+    std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("fast-folder-ui")
+        .join("chromium")
+}
+
+#[cfg(not(windows))]
+fn chromium_profile_dir() -> std::path::PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    base.join("fast-folder-ui").join("chromium")
+        .unwrap_or_else(std::env::temp_dir)
+        .join("fast-folder-ui")
+        .join("chromium")
 }
 
-fn which(binary: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| dir.join(binary).is_file())
+fn which(binary: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(binary))
+        .find(|candidate| candidate.is_file())
 }
 
 #[cfg(target_os = "windows")]

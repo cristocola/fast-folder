@@ -4,24 +4,29 @@ Windows 10 and 11 are fully supported. Every release ships two Windows artifacts
 
 | Artifact | What it is |
 |---|---|
-| `fastf-vX.Y.Z-x86_64.msi` | Installer. Installs `fastf.exe` and adds it to your PATH automatically. |
-| `fastf-vX.Y.Z-x86_64-pc-windows-msvc.zip` | Portable archive with `fastf.exe`, completions, and man pages. |
+| `fastf-vX.Y.Z-x86_64.msi` | Installer with a setup wizard. Installs the CLI, adds it to your PATH, and creates a Start Menu app for the browser UI. |
+| `fastf-vX.Y.Z-x86_64-pc-windows-msvc.zip` | Portable archive with `fastf.exe`, the `fastf-ui.exe` launcher, PowerShell completions, and the docs. |
 
 ## Option 1: MSI installer (recommended)
 
-1. Download the `.msi` from the releases page and run it.
-2. Open a **new** terminal (PowerShell or cmd). PATH changes only apply to terminals started after the install.
-3. Verify:
+1. Download the `.msi` from the releases page and run it. A standard setup wizard walks you through the license and the install folder.
+2. Launch **Fast Folder** from the Start Menu. It opens the browser UI in its own app window, with no console attached. Closing the window stops fastf.
+3. For the CLI, open a **new** terminal (PowerShell or cmd). PATH changes only apply to terminals started after the install. Verify:
 
 ```powershell
 fastf --version
 ```
 
-The installer places `fastf.exe` under `Program Files\fastf` and adds that directory to the PATH. Upgrading is just running a newer MSI. Uninstall from Windows Settings > Apps like any other program.
+The installer places two programs under `Program Files\fastf` and adds that directory to the PATH:
+
+- `fastf.exe` is the CLI and TUI.
+- `fastf-ui.exe` is what the Start Menu shortcut runs. It is the same program in app-window mode, equivalent to `fastf ui --app`.
+
+Upgrading is just running a newer MSI. Uninstall from Windows Settings > Apps like any other program. Uninstalling removes the shortcut and the PATH entry.
 
 ## Option 2: portable zip
 
-1. Download and extract the `.zip`. Inside is a folder containing `fastf.exe`.
+1. Download and extract the `.zip`. Inside is a folder containing `fastf.exe` and `fastf-ui.exe`.
 2. Move the folder somewhere permanent, for example `C:\Tools\fastf`.
 3. Add that folder to your PATH. Two ways:
 
@@ -68,7 +73,9 @@ fastf config set base-dir C:/Users/you/Projects   # equally fine
 
 ## Browser UI
 
-`fastf ui` works the same as on Linux. With Chrome or Chromium installed, `fastf ui --app` opens a dedicated app window, and closing that window stops the server. Without one it falls back to your default browser.
+`fastf ui` works the same as on Linux. `fastf ui --app` opens a dedicated app window using Chrome if you have it, or Microsoft Edge otherwise. Edge ships with Windows, so the app window works on every stock machine. Closing the window stops the server. If neither browser can be found it falls back to a tab in your default browser.
+
+The Start Menu shortcut runs `fastf-ui.exe`, which is exactly this app mode without a console window.
 
 ## Building from source on Windows
 

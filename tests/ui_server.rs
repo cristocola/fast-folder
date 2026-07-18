@@ -21,14 +21,23 @@ static SERIAL: Mutex<()> = Mutex::new(());
 fn with_fresh_install<R>(body: impl FnOnce(&Path) -> R) -> R {
     let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().expect("tempdir");
-    // Safe: SERIAL guarantees no other test thread races on this process-wide var.
+    // Safe: SERIAL guarantees no other test thread races on these process-wide
+    // vars. Home is redirected into the sandbox too: an unconfigured base_dir
+    // falls back to the home directory, and tests must never scan the real one.
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let old_home = std::env::var_os(home_var);
     unsafe {
         std::env::set_var("FASTF_INSTALL_DIR", tmp.path());
+        std::env::set_var(home_var, tmp.path());
     }
     fs::create_dir_all(tmp.path().join("templates")).unwrap();
     let result = body(tmp.path());
     unsafe {
         std::env::remove_var("FASTF_INSTALL_DIR");
+        match old_home {
+            Some(value) => std::env::set_var(home_var, value),
+            None => std::env::remove_var(home_var),
+        }
     }
     drop(guard);
     result
@@ -962,5 +971,41 @@ fn rename_round_trips_and_rejects_collisions() {
         .unwrap_err();
         assert!(err.to_string().contains("already exists"), "err: {err}");
         assert!(new_root.is_dir(), "failed rename must leave project intact");
+    });
+}
+
+#[test]
+fn base_init_onboards_first_run() {
+    with_fresh_install(|install| {
+        // Fresh install: nothing configured, a conventional folder suggested.
+        // (The harness redirects home into the sandbox, so the `~` shorthand
+        // and the unconfigured-base fallback both resolve to `install`.)
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        assert_eq!(state["base_configured"], false);
+        let suggested = state["suggested_base"].as_str().unwrap();
+        assert!(suggested.ends_with("Projects"), "suggested: {suggested}");
+
+        // Init with the ~ shorthand: folder created, config points at it.
+        let value = json(
+            "POST",
+            "/api/base/init",
+            serde_json::json!({"path": "~/My Projects"}),
+        );
+        assert_eq!(value["ok"], true);
+        let created = install.join("My Projects");
+        assert!(created.is_dir(), "base folder should be created");
+        let cfg = Config::load().unwrap();
+        assert_eq!(
+            cfg.base_dir,
+            created.canonicalize().unwrap().display().to_string()
+        );
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        assert_eq!(state["base_configured"], true);
+
+        // Relative paths are rejected — the base must never depend on the
+        // server's working directory.
+        let err =
+            ui::route_request("POST", "/api/base/init", br#"{"path":"relative/dir"}"#).unwrap_err();
+        assert!(err.to_string().contains("absolute"), "err: {err}");
     });
 }

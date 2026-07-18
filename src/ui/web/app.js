@@ -880,7 +880,7 @@ function fileEditor(template) {
         <button type="button" class="button button-secondary" data-file-new>${icon("plus")} New text file</button>
       </div>
       <div class="file-add-row">
-        <input class="input mono" id="file-src" placeholder="/home/you/asset.mp4 (source on disk)" autocomplete="off">
+        <div class="input-with-action"><input class="input mono" id="file-src" placeholder="/home/you/asset.mp4 (source on disk)" autocomplete="off">${browseButton("file", "file-src")}</div>
         <input class="input mono" id="file-dest" placeholder="assets/asset.mp4 (optional)" autocomplete="off">
         <button type="button" class="button button-secondary" data-file-add-path>${icon("upload")} Add from path</button>
       </div>
@@ -1082,7 +1082,7 @@ function generalSettings(config) {
       <div class="settings-section">
         <h3>Project defaults</h3>
         <p>These values become the starting point for every new project. You can still override the location during creation.</p>
-        ${settingsInput("settings-base-dir", "Base directory", "Where new projects are created", config.base_dir, "mono")}
+        ${settingsInput("settings-base-dir", "Base directory", "Where new projects are created", config.base_dir, "mono", "text", browseButton("folder", "settings-base-dir"))}
         ${settingsSelect("settings-default-template", "Default template", "Preselect a template when creating", config.default_template, [{value:"", label:"Always ask"}, ...state.data.templates.map((template) => ({value: template.slug, label: template.name}))])}
         ${settingsInput("settings-date-format", "Date format", "strftime pattern used in names", config.date_format, "mono")}
       </div>
@@ -1111,7 +1111,7 @@ function projectDataSettings(config) {
         <p>Fast Folder discovers projects from the <code>PROJECT_INFO.md</code> in each folder. Your base directory is always indexed; list any extra folders here (one path per line) to include them too.</p>
         <div class="settings-row">
           <div class="settings-label"><strong>Extra base directories</strong><span>One absolute path per line. Missing folders are skipped.</span></div>
-          <textarea id="settings-bases" class="input mono" rows="3" placeholder="/mnt/proj/01_PROJECTS">${esc((config.bases || []).join("\n"))}</textarea>
+          <div class="input-with-action"><textarea id="settings-bases" class="input mono" rows="3" placeholder="/mnt/proj/01_PROJECTS">${esc((config.bases || []).join("\n"))}</textarea>${browseButton("folder", "settings-bases")}</div>
         </div>
       </div>
       <div class="settings-section">
@@ -1203,8 +1203,18 @@ function densityChoice(value, label) {
   return `<button class="${state.appearance.density === value ? "active" : ""}" type="button" data-density-choice="${value}">${label}</button>`;
 }
 
-function settingsInput(id, label, hint, value, className = "", type = "text") {
-  return `<div class="settings-row"><div class="settings-label"><strong>${label}</strong><span>${hint}</span></div><input id="${id}" class="input ${className}" type="${type}" ${type === "number" ? 'min="0"' : ""} value="${esc(value)}"></div>`;
+function settingsInput(id, label, hint, value, className = "", type = "text", action = "") {
+  const input = `<input id="${id}" class="input ${className}" type="${type}" ${type === "number" ? 'min="0"' : ""} value="${esc(value)}">`;
+  const control = action ? `<div class="input-with-action">${input}${action}</div>` : input;
+  return `<div class="settings-row"><div class="settings-label"><strong>${label}</strong><span>${hint}</span></div>${control}</div>`;
+}
+
+// A "Browse…" button that opens the OS folder/file picker (via
+// /api/pick-path — the server runs on this machine) and writes the chosen
+// path into the input/textarea with the given id. Bound generically in
+// bindCommon via [data-browse].
+function browseButton(kind, id) {
+  return `<button type="button" class="button button-secondary browse-button" data-browse="${kind}:${id}">${icon("folder")} Browse</button>`;
 }
 
 function settingsSelect(id, label, hint, value, options) {
@@ -1226,6 +1236,32 @@ function emptySearch(message) {
 }
 
 function bindCommon() {
+  document.querySelectorAll("[data-browse]").forEach((button) => button.addEventListener("click", async () => {
+    const [kind, id] = button.dataset.browse.split(":");
+    const target = document.getElementById(id);
+    if (!target || button.disabled) return;
+    button.disabled = true;
+    try {
+      const start = target.tagName === "TEXTAREA" ? "" : target.value.trim();
+      const result = await api("/api/pick-path", { method: "POST", body: JSON.stringify({ kind, start }) });
+      if (result.path) {
+        // Textareas hold one path per line (the bases list) — append; plain
+        // inputs are replaced. Fire "input" so existing listeners see it.
+        if (target.tagName === "TEXTAREA") {
+          const existing = target.value.trimEnd();
+          target.value = existing ? `${existing}\n${result.path}` : result.path;
+        } else {
+          target.value = result.path;
+        }
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+        target.focus();
+      }
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  }));
   document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => {
     state.view = button.dataset.view;
     render();
@@ -1977,7 +2013,7 @@ function registerPage() {
         <div class="settings-section">
           <h3>Folder</h3>
           <p>The absolute path to the folder you want to onboard.</p>
-          ${editorField("Folder path", "Nothing inside is changed unless you fill structure", `<input class="input mono" id="register-path" value="${esc(reg.path)}" placeholder="/home/you/old-project">`, true, "full")}
+          ${editorField("Folder path", "Nothing inside is changed unless you fill structure", `<div class="input-with-action"><input class="input mono" id="register-path" value="${esc(reg.path)}" placeholder="/home/you/old-project">${browseButton("folder", "register-path")}</div>`, true, "full")}
         </div>
         <div class="settings-section">
           <h3>Template <span class="optional">optional</span></h3>
@@ -2800,7 +2836,7 @@ function onboardModalMarkup() {
         <p class="modal-sub">Pick a home for your projects. Every new project is created inside this base folder, and Fast Folder keeps its library there.</p>
         <div class="field">
           <div class="field-row"><label for="onboard-base">Projects base folder</label></div>
-          <input class="input mono" id="onboard-base" value="${esc(modal.path)}" autocomplete="off" spellcheck="false">
+          <div class="input-with-action"><input class="input mono" id="onboard-base" value="${esc(modal.path)}" autocomplete="off" spellcheck="false">${browseButton("folder", "onboard-base")}</div>
         </div>
         <p class="modal-sub">The folder is created for you if it does not exist yet. You can also work with several bases, for example a second drive or a network share. Add them anytime under Settings &gt; Library bases.</p>
         ${modal.error ? `<div class="error-box">${esc(modal.error)}</div>` : ""}
@@ -2881,7 +2917,7 @@ function fromFolderModalMarkup() {
       <div class="modal-head"><h2>Generate from folder</h2><button class="icon-button" data-close-modal>${icon("close")}</button></div>
       <div class="modal-body scroll">
         <p class="modal-sub">Scan an existing folder and turn its structure and text files into a reusable template. Binary and large files are skipped unless you bundle them.</p>
-        ${editorField("Source folder", "Absolute path to scan", `<input class="input mono" id="ff-source" value="${esc(modal.source || "")}" placeholder="/home/you/example-project">`, true, "full")}
+        ${editorField("Source folder", "Absolute path to scan", `<div class="input-with-action"><input class="input mono" id="ff-source" value="${esc(modal.source || "")}" placeholder="/home/you/example-project">${browseButton("folder", "ff-source")}</div>`, true, "full")}
         ${editorField("New template slug", "Letters, numbers, '-' or '_'", `<input class="input mono" id="ff-slug" value="${esc(modal.slug || "")}" placeholder="my-template">`, true, "full")}
         <label class="inline-check ff-bundle"><input type="checkbox" id="ff-bundle" ${modal.bundle ? "checked" : ""}> Bundle binary &amp; large files (copy them into the template — can be large)</label>
         ${modal.error ? `<div class="error-box">${esc(modal.error)}</div>` : ""}

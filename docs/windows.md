@@ -10,7 +10,7 @@ Windows 10 and 11 are fully supported. Every release ships two Windows artifacts
 ## Option 1: MSI installer (recommended)
 
 1. Download the `.msi` from the releases page and run it. A standard setup wizard walks you through the license and the install folder.
-2. Launch **Fast Folder** from the Start Menu. It opens the browser UI in its own app window, with no console attached. Closing the window stops fastf.
+2. Launch **Fast Folder** from the Start Menu. It opens the browser UI in its own app window, with no console attached. Closing the window stops fastf. On the first launch it asks where your projects should live, suggesting `C:\Users\<you>\Projects`, and creates that folder for you (the terminal TUI asks the same on its first run).
 3. For the CLI, open a **new** terminal (PowerShell or cmd). PATH changes only apply to terminals started after the install. Verify:
 
 ```powershell

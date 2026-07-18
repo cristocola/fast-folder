@@ -2129,3 +2129,26 @@ fn mangen_writes_man_pages() {
     // Bootstrap must NOT have run (no config.toml written next to the pages).
     assert!(!tmp.path().join("config.toml").exists());
 }
+
+#[test]
+fn init_base_dir_shared_onboarding_core() {
+    with_fresh_install(|install| {
+        use fastf::core::config;
+
+        // Suggestion is <home>/Projects (home is sandboxed to `install`).
+        let suggested = config::suggested_base_dir().unwrap();
+        assert_eq!(suggested, install.join("Projects"));
+
+        // `~` expands against home; the folder is created and persisted.
+        let resolved = config::init_base_dir("~/Client Work").unwrap();
+        assert!(resolved.is_dir());
+        assert_eq!(
+            Config::load().unwrap().base_dir,
+            resolved.display().to_string()
+        );
+
+        // Relative and empty paths are rejected.
+        assert!(config::init_base_dir("relative/path").is_err());
+        assert!(config::init_base_dir("   ").is_err());
+    });
+}

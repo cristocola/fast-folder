@@ -2,6 +2,8 @@
 
 Every interactive step in fastf has a scriptable equivalent. Use the TUI when exploring and flags when automating. This page covers the full command surface. For template authoring see [templates.md](templates.md), for the project model see [projects.md](projects.md), and for the browser UI see [UI.md](UI.md).
 
+On the very first launch (TUI or browser UI) fastf asks where your projects should live and suggests `~/Projects` (`C:\Users\<you>\Projects` on Windows). The folder is created for you, and you can add more bases later under Settings > Library bases. Until a base is set, an unconfigured fastf falls back to your home directory.
+
 ## Command overview
 
 | Command | Description |

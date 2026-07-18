@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -6,7 +6,7 @@ use crate::util::paths;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
-    /// Base directory for new projects. Empty = current working directory.
+    /// Base directory for new projects. Empty = the user's home directory.
     #[serde(default)]
     pub base_dir: String,
 
@@ -176,4 +176,43 @@ impl Config {
             }
         })
     }
+}
+
+/// The conventional default projects base offered by first-run onboarding:
+/// `<home>/Projects` (`C:\Users\<user>\Projects` on Windows).
+pub fn suggested_base_dir() -> Option<std::path::PathBuf> {
+    paths::home_dir().map(|home| home.join("Projects"))
+}
+
+/// First-run onboarding core, shared by the TUI prompt and the web UI's
+/// `/api/base/init`: expand a leading `~`, require an absolute path (the base
+/// must never depend on the working directory), create the folder if missing,
+/// and persist it as `base_dir`. Returns the resolved path.
+pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        bail!("Choose a folder for your projects first");
+    }
+    let expanded = if raw == "~" {
+        paths::home_dir().context("cannot expand '~': no home directory found")?
+    } else if let Some(rest) = raw
+        .strip_prefix("~/")
+        .or_else(|| raw.strip_prefix("~\\"))
+        .filter(|rest| !rest.is_empty())
+    {
+        paths::home_dir()
+            .context("cannot expand '~': no home directory found")?
+            .join(rest)
+    } else {
+        std::path::PathBuf::from(raw)
+    };
+    if !expanded.is_absolute() {
+        bail!("The base folder must be an absolute path (got '{raw}')");
+    }
+    fs::create_dir_all(&expanded).with_context(|| format!("creating {}", expanded.display()))?;
+    let resolved = expanded.canonicalize().unwrap_or(expanded);
+    let mut config = Config::load()?;
+    config.base_dir = resolved.display().to_string();
+    config.save()?;
+    Ok(resolved)
 }

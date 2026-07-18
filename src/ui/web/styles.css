@@ -2722,3 +2722,18 @@ html[data-theme="dark"] .quick-chip { background: var(--surface); }
   text-align: center;
   line-height: 1.6;
 }
+
+/* Path input + native Browse button (folder/file picker) */
+.input-with-action {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.input-with-action .input {
+  flex: 1;
+  min-width: 0;
+}
+.browse-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}

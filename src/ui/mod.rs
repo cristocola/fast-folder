@@ -99,6 +99,16 @@ struct BaseInitRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct PickRequest {
+    /// "folder" (default) or "file".
+    #[serde(default)]
+    kind: String,
+    /// Optional starting directory for the dialog.
+    #[serde(default)]
+    start: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct TemplateSaveRequest {
     original_slug: Option<String>,
     template: Template,
@@ -345,6 +355,13 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             let _guard = lock_writes()?;
             Ok(Response::Json(init_base(request)?))
         }
+        // No WRITE_LOCK: the picker writes nothing and can stay open for a
+        // while — holding the lock would block every other UI write meanwhile.
+        ("POST", "/api/pick-path") => {
+            let request: PickRequest =
+                serde_json::from_slice(body).context("invalid pick request")?;
+            Ok(Response::Json(pick_path(request)?))
+        }
         ("POST", "/api/templates/save") => {
             let request: TemplateSaveRequest =
                 serde_json::from_slice(body).context("invalid template save request")?;
@@ -544,8 +561,8 @@ fn load_state() -> Result<Value> {
         // First-run onboarding: true once any base is configured; the
         // suggestion is the conventional per-user projects folder.
         "base_configured": !config.base_dir.trim().is_empty() || !config.bases.is_empty(),
-        "suggested_base": paths::home_dir()
-            .map(|home| home.join("Projects").display().to_string())
+        "suggested_base": crate::core::config::suggested_base_dir()
+            .map(|path| path.display().to_string())
             .unwrap_or_default(),
         // Projects with an in-flight/interrupted copy or move, for the banner.
         "provisioning": crate::core::provisioning::list_incomplete(&config),
@@ -841,37 +858,174 @@ fn folder_json(node: &FolderNode, variables: &HashMap<String, String>, date_form
 }
 
 /// `POST /api/base/init` — first-run onboarding: create the chosen projects
-/// folder (if missing) and make it the default base. Accepts `~/…` shorthand;
-/// requires an absolute path so the base never lands relative to the server's
-/// working directory.
+/// folder (if missing) and make it the default base. The shared core
+/// (`config::init_base_dir`, also behind the TUI's first-run prompt) accepts
+/// `~/…` shorthand and requires an absolute path.
 fn init_base(request: BaseInitRequest) -> Result<Value> {
-    let raw = request.path.trim();
-    if raw.is_empty() {
-        bail!("Choose a folder for your projects first");
-    }
-    let expanded = if raw == "~" {
-        paths::home_dir().context("cannot expand '~': no home directory found")?
-    } else if let Some(rest) = raw
-        .strip_prefix("~/")
-        .or_else(|| raw.strip_prefix("~\\"))
-        .filter(|rest| !rest.is_empty())
-    {
-        paths::home_dir()
-            .context("cannot expand '~': no home directory found")?
-            .join(rest)
-    } else {
-        std::path::PathBuf::from(raw)
+    let resolved = crate::core::config::init_base_dir(&request.path)?;
+    Ok(json!({ "ok": true, "base_dir": resolved.display().to_string() }))
+}
+
+#[derive(Clone, Copy)]
+enum PickKind {
+    Folder,
+    File,
+}
+
+/// One native dialog at a time — a second Browse click while one is open
+/// errors instead of stacking OS dialogs.
+static PICKER_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `POST /api/pick-path` — open the OS folder/file picker on this machine
+/// (the server and the browser are the same machine — loopback only) and
+/// return the chosen absolute path, or `null` when the user cancels.
+fn pick_path(request: PickRequest) -> Result<Value> {
+    let kind = match request.kind.as_str() {
+        "" | "folder" => PickKind::Folder,
+        "file" => PickKind::File,
+        other => bail!("unknown picker kind '{other}' (expected 'folder' or 'file')"),
     };
-    if !expanded.is_absolute() {
-        bail!("The base folder must be an absolute path (got '{raw}')");
+    let start = request.start.trim();
+    let start = if !start.is_empty() && Path::new(start).is_dir() {
+        Some(start.to_string())
+    } else {
+        None
+    };
+    if PICKER_BUSY.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        bail!("A file dialog is already open — finish or cancel it first");
     }
-    std::fs::create_dir_all(&expanded)
-        .with_context(|| format!("creating {}", expanded.display()))?;
-    let resolved = expanded.canonicalize().unwrap_or(expanded);
-    let mut config = Config::load()?;
-    config.base_dir = resolved.display().to_string();
-    config.save()?;
-    Ok(json!({ "ok": true, "base_dir": config.base_dir }))
+    let picked = native_pick(kind, start.as_deref());
+    PICKER_BUSY.store(false, std::sync::atomic::Ordering::SeqCst);
+    Ok(json!({ "ok": true, "path": picked? }))
+}
+
+/// Windows: WinForms dialogs via PowerShell (present on every supported
+/// Windows). `-STA` is required for shell dialogs; CREATE_NO_WINDOW keeps a
+/// console from flashing when the server runs under the windowless fastf-ui
+/// launcher.
+#[cfg(target_os = "windows")]
+fn native_pick(kind: PickKind, start: Option<&str>) -> Result<Option<String>> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let start_line = match start {
+        Some(dir) => format!("$d.InitialDirectory = '{}'; ", dir.replace('\'', "''")),
+        None => String::new(),
+    };
+    let script = match kind {
+        PickKind::Folder => format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $d = New-Object System.Windows.Forms.FolderBrowserDialog; \
+             $d.Description = 'Choose a folder'; $d.ShowNewFolderButton = $true; \
+             {start_line}\
+             if ($d.ShowDialog() -eq 'OK') {{ [Console]::Out.Write($d.SelectedPath) }}"
+        ),
+        PickKind::File => format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $d = New-Object System.Windows.Forms.OpenFileDialog; \
+             $d.Title = 'Choose a file'; \
+             {start_line}\
+             if ($d.ShowDialog() -eq 'OK') {{ [Console]::Out.Write($d.FileName) }}"
+        ),
+    };
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-STA", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .context("running the PowerShell file dialog")?;
+    let picked = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(if picked.is_empty() {
+        None
+    } else {
+        Some(picked)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn native_pick(kind: PickKind, _start: Option<&str>) -> Result<Option<String>> {
+    let script = match kind {
+        PickKind::Folder => "POSIX path of (choose folder)",
+        PickKind::File => "POSIX path of (choose file)",
+    };
+    let output = std::process::Command::new("osascript")
+        .args(["-e", script])
+        .output()
+        .context("running the macOS file dialog")?;
+    if !output.status.success() {
+        return Ok(None); // cancelled
+    }
+    let picked = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(if picked.is_empty() {
+        None
+    } else {
+        Some(picked)
+    })
+}
+
+/// Linux: kdialog first (KDE), then zenity (GNOME and most others). A missing
+/// binary falls through to the next; a nonzero exit is a user cancel.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn native_pick(kind: PickKind, start: Option<&str>) -> Result<Option<String>> {
+    let start_dir = start
+        .map(str::to_string)
+        .or_else(|| paths::home_dir().map(|home| home.display().to_string()))
+        .unwrap_or_else(|| ".".to_string());
+    let attempts: [(&str, Vec<String>); 2] = match kind {
+        PickKind::Folder => [
+            (
+                "kdialog",
+                vec![
+                    "--getexistingdirectory".into(),
+                    start_dir.clone(),
+                    "--title".into(),
+                    "Choose a folder".into(),
+                ],
+            ),
+            (
+                "zenity",
+                vec![
+                    "--file-selection".into(),
+                    "--directory".into(),
+                    "--title=Choose a folder".into(),
+                    format!("--filename={start_dir}/"),
+                ],
+            ),
+        ],
+        PickKind::File => [
+            (
+                "kdialog",
+                vec![
+                    "--getopenfilename".into(),
+                    start_dir.clone(),
+                    "--title".into(),
+                    "Choose a file".into(),
+                ],
+            ),
+            (
+                "zenity",
+                vec![
+                    "--file-selection".into(),
+                    "--title=Choose a file".into(),
+                    format!("--filename={start_dir}/"),
+                ],
+            ),
+        ],
+    };
+    for (binary, args) in attempts {
+        match std::process::Command::new(binary).args(&args).output() {
+            Ok(output) if output.status.success() => {
+                let picked = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                return Ok(if picked.is_empty() {
+                    None
+                } else {
+                    Some(picked)
+                });
+            }
+            Ok(_) => return Ok(None), // dialog shown, user cancelled
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).context(format!("running {binary}")),
+        }
+    }
+    bail!("No dialog tool found (install kdialog or zenity), or type the path manually")
 }
 
 fn save_settings(value: Value) -> Result<()> {

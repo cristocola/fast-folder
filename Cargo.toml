@@ -16,6 +16,13 @@ categories = ["command-line-utilities", "filesystem"]
 name = "fastf"
 path = "src/main.rs"
 
+# Windowless launcher for the browser UI — what the Windows Start Menu
+# shortcut runs. Built everywhere (keeps clippy/tests uniform); only the
+# Windows artifacts ship it.
+[[bin]]
+name = "fastf-ui"
+path = "src/bin/fastf-ui.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"

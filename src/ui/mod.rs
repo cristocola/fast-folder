@@ -94,6 +94,11 @@ struct OpenRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct BaseInitRequest {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct TemplateSaveRequest {
     original_slug: Option<String>,
     template: Template,
@@ -334,6 +339,12 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
                 json!({"ok": true, "config": Config::load()?}),
             ))
         }
+        ("POST", "/api/base/init") => {
+            let request: BaseInitRequest =
+                serde_json::from_slice(body).context("invalid base init request")?;
+            let _guard = lock_writes()?;
+            Ok(Response::Json(init_base(request)?))
+        }
         ("POST", "/api/templates/save") => {
             let request: TemplateSaveRequest =
                 serde_json::from_slice(body).context("invalid template save request")?;
@@ -530,6 +541,12 @@ fn load_state() -> Result<Value> {
         "install_dir": paths::install_dir(),
         "dir_mode": paths::try_install_dir().map(|(_, m)| m.label()).unwrap_or("unknown"),
         "templates_dir": paths::templates_dir(),
+        // First-run onboarding: true once any base is configured; the
+        // suggestion is the conventional per-user projects folder.
+        "base_configured": !config.base_dir.trim().is_empty() || !config.bases.is_empty(),
+        "suggested_base": paths::home_dir()
+            .map(|home| home.join("Projects").display().to_string())
+            .unwrap_or_default(),
         // Projects with an in-flight/interrupted copy or move, for the banner.
         "provisioning": crate::core::provisioning::list_incomplete(&config),
     }))
@@ -821,6 +838,40 @@ fn folder_json(node: &FolderNode, variables: &HashMap<String, String>, date_form
             .map(|child| folder_json(child, variables, date_format))
             .collect::<Vec<_>>(),
     })
+}
+
+/// `POST /api/base/init` — first-run onboarding: create the chosen projects
+/// folder (if missing) and make it the default base. Accepts `~/…` shorthand;
+/// requires an absolute path so the base never lands relative to the server's
+/// working directory.
+fn init_base(request: BaseInitRequest) -> Result<Value> {
+    let raw = request.path.trim();
+    if raw.is_empty() {
+        bail!("Choose a folder for your projects first");
+    }
+    let expanded = if raw == "~" {
+        paths::home_dir().context("cannot expand '~': no home directory found")?
+    } else if let Some(rest) = raw
+        .strip_prefix("~/")
+        .or_else(|| raw.strip_prefix("~\\"))
+        .filter(|rest| !rest.is_empty())
+    {
+        paths::home_dir()
+            .context("cannot expand '~': no home directory found")?
+            .join(rest)
+    } else {
+        std::path::PathBuf::from(raw)
+    };
+    if !expanded.is_absolute() {
+        bail!("The base folder must be an absolute path (got '{raw}')");
+    }
+    std::fs::create_dir_all(&expanded)
+        .with_context(|| format!("creating {}", expanded.display()))?;
+    let resolved = expanded.canonicalize().unwrap_or(expanded);
+    let mut config = Config::load()?;
+    config.base_dir = resolved.display().to_string();
+    config.save()?;
+    Ok(json!({ "ok": true, "base_dir": config.base_dir }))
 }
 
 fn save_settings(value: Value) -> Result<()> {
@@ -1494,8 +1545,13 @@ fn open_path(path: &Path) -> Result<()> {
     if !path.exists() {
         bail!("Path does not exist: {}", path.display());
     }
+    // `start ""` = ShellExecute's default verb, which respects the user's
+    // chosen file manager (hardcoding explorer.exe would not). Mirrors
+    // core::post_create::reveal_folder — keep the two in sync.
     #[cfg(target_os = "windows")]
-    std::process::Command::new("explorer").arg(path).spawn()?;
+    std::process::Command::new("cmd")
+        .args(["/c", "start", "", &path.display().to_string()])
+        .spawn()?;
     #[cfg(target_os = "macos")]
     std::process::Command::new("open").arg(path).spawn()?;
     #[cfg(all(unix, not(target_os = "macos")))]

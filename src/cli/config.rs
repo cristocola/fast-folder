@@ -34,7 +34,7 @@ pub fn show() -> Result<()> {
         "  {:<26} {}",
         "base_dir:".green(),
         if config.base_dir.is_empty() {
-            format!("{} (current directory)", base.display())
+            format!("{} (home directory — not configured)", base.display())
         } else {
             base.display().to_string()
         }

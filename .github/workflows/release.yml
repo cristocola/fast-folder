@@ -74,7 +74,8 @@ jobs:
           New-Item -ItemType Directory -Path "$staging/completions" -Force | Out-Null
           & $bin --version
           & $bin completions powershell | Out-File -Encoding utf8 "$staging/completions/_fastf.ps1"
-          Copy-Item $bin, LICENSE, README.md $staging
+          Copy-Item $bin, "target/${{ matrix.target }}/release/fastf-ui.exe", LICENSE, README.md $staging
+          Copy-Item -Recurse docs "$staging/docs"
           Compress-Archive -Path $staging -DestinationPath "$staging.zip"
 
       - name: Build MSI (Windows)
@@ -87,10 +88,17 @@ jobs:
           # Pin WiX v5: v6+ requires accepting the paid Open Source
           # Maintenance Fee EULA (error WIX7015) in CI.
           dotnet tool install --global wix --version 5.0.2
+          # The UI dialog set lives in a versioned extension whose major must
+          # match the wix tool (5.x) — pinned like the tool itself.
+          wix extension add --global WixToolset.UI.wixext/5.0.2
           wix build packaging/wix/main.wxs `
+            -ext WixToolset.UI.wixext `
             -d Version=$msiVersion `
             -d BinPath=target/${{ matrix.target }}/release/fastf.exe `
+            -d UiBinPath=target/${{ matrix.target }}/release/fastf-ui.exe `
             -d LicensePath=LICENSE `
+            -d LicenseRtfPath=packaging/wix/LICENSE.rtf `
+            -d IconPath=packaging/icons/fastf.ico `
             -arch x64 `
             -o "fastf-$name-x86_64.msi"
 

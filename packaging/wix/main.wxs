@@ -1,17 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   WiX authoring for the fastf Windows installer (built with WiX v5:
-  `wix build` in .github/workflows/release.yml).
+  `wix build` in .github/workflows/release.yml, with WixToolset.UI.wixext
+  for the install wizard).
 
   Preprocessor variables, passed with -d on the command line:
-    Version     numeric x.y.z (MSI requires numeric versions, no "v" prefix)
-    BinPath     path to the built fastf.exe
-    LicensePath path to the repo LICENSE file
+    Version        numeric x.y.z (MSI requires numeric versions, no "v" prefix)
+    BinPath        path to the built fastf.exe
+    UiBinPath      path to the built fastf-ui.exe (windowless UI launcher)
+    LicensePath    path to the repo LICENSE file (installed as LICENSE.txt)
+    LicenseRtfPath path to packaging/wix/LICENSE.rtf (wizard license page)
+    IconPath       path to packaging/icons/fastf.ico
 
   The UpgradeCode GUID is the product's permanent identity: never change it,
   or upgrades stop replacing older installs. Per-file GUIDs are auto-generated.
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
       Name="fastf"
       Manufacturer="Cristo Cola"
@@ -25,11 +30,27 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of fastf is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- Install wizard: welcome, license, install-dir chooser, progress,
+         finish. The InstallDirectory attribute seeds the chooser with our
+         INSTALLFOLDER default. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtfPath)" />
+
+    <!-- Shown in Add/Remove Programs and used by the Start Menu shortcut. -->
+    <Icon Id="FastfIco" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="FastfIco" />
+
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="fastf">
 
         <Component Id="MainExecutable">
           <File Id="FastfExe" Source="$(var.BinPath)" Name="fastf.exe" KeyPath="yes" />
+        </Component>
+
+        <!-- Windowless launcher the Start Menu shortcut targets: opens the
+             browser UI in an app window without flashing a console. -->
+        <Component Id="UiLauncher">
+          <File Id="FastfUiExe" Source="$(var.UiBinPath)" Name="fastf-ui.exe" KeyPath="yes" />
         </Component>
 
         <Component Id="LicenseFile">
@@ -59,6 +80,32 @@
         </Component>
 
       </Directory>
+    </StandardDirectory>
+
+    <!-- Start Menu "Fast Folder" entry — the Windows counterpart of
+         packaging/fastf.desktop (the app-window mode of `fastf ui`,
+         via the windowless fastf-ui.exe launcher). Non-advertised so
+         launching never triggers an MSI repair. The HKCU RegistryValue as
+         KeyPath is the official WiX pattern for a perMachine shortcut (a
+         Shortcut cannot be a KeyPath); it trips ICE38/ICE43 only under
+         opt-in `wix msi validate`, which we do not run - do not "fix" it. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="9482bab3-276d-4e10-b9f0-8f49efb82681">
+        <Shortcut
+            Id="FastFolderShortcut"
+            Name="Fast Folder"
+            Description="Create and manage structured project folders from templates"
+            Target="[INSTALLFOLDER]fastf-ui.exe"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="FastfIco" />
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\fastf"
+            Name="StartMenuShortcut"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+      </Component>
     </StandardDirectory>
   </Package>
 </Wix>

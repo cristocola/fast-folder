@@ -82,6 +82,18 @@ fn is_portable_data_dir(dir: &Path) -> bool {
     dir.join("config.toml").is_file() || dir.join("templates").is_dir()
 }
 
+/// The user's home directory (`%USERPROFILE%` on Windows, `$HOME` elsewhere).
+/// Hand-rolled like `user_config_dir` — no `dirs` crate.
+pub fn home_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let var = "USERPROFILE";
+    #[cfg(not(windows))]
+    let var = "HOME";
+    std::env::var_os(var)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
 /// Per-user config directory, hand-rolled (no `dirs` crate — two env lookups).
 #[cfg(windows)]
 fn user_config_dir() -> Result<PathBuf> {

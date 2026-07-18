@@ -34,6 +34,7 @@ const state = {
   detailBusy: false,
   apply: null,
   modal: null,
+  onboardDismissed: false,
   register: {
     path: "",
     template: "",
@@ -186,12 +187,37 @@ function setOffline(offline) {
 }
 
 // Health watch: notice a dead server without waiting for the next user action,
-// and refresh the workspace when it comes back.
-setInterval(async () => {
-  if (document.hidden || !state.data) return;
+// refresh the workspace when it comes back, and recover from long sleeps.
+// A tick gap far beyond the 5s interval means the renderer's timers were
+// frozen (system suspend, hours of deep throttling) — Chromium can come back
+// from that with corrupted surfaces and stuck native popups, so reload for a
+// clean slate. All state lives on the server; a reload loses nothing except
+// unsaved template edits, which get an in-place refresh instead.
+let healthBusy = false;
+let lastHealthTick = Date.now();
+const STALE_RELOAD_GAP = 10 * 60 * 1000;
+
+async function healthTick() {
+  const gap = Date.now() - lastHealthTick;
+  lastHealthTick = Date.now();
+  if (gap > STALE_RELOAD_GAP && state.data) {
+    if (state.templateDirty) {
+      try { await loadState(); } catch {}
+    } else {
+      location.reload();
+    }
+    return;
+  }
+  if (document.hidden || !state.data || healthBusy) return;
+  healthBusy = true;
   const wasOffline = state.offline;
   try {
-    const response = await fetch("/api/health", { cache: "no-store" });
+    // Timeout so a wedged request can't wedge the watcher: ticks are guarded
+    // by `healthBusy`, so a hung fetch would otherwise stop the polling.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    const response = await fetch("/api/health", { cache: "no-store", signal: controller.signal });
+    clearTimeout(timer);
     if (!response.ok) throw new Error();
     setOffline(false);
     if (wasOffline) {
@@ -199,8 +225,17 @@ setInterval(async () => {
     }
   } catch {
     setOffline(true);
+  } finally {
+    healthBusy = false;
   }
-}, 5000);
+}
+
+setInterval(healthTick, 5000);
+// Waking the window (alt-tab back, un-minimize) checks immediately instead of
+// waiting out the interval — the stale-gap reload above also triggers here.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) healthTick();
+});
 
 function toast(message, error = false) {
   const node = document.createElement("div");
@@ -2705,6 +2740,8 @@ function closeModal() {
   // Dismissing a confirm/prompt (scrim, ✕, Escape) answers "no".
   if (state.modal?.kind === "confirm") { resolveDialog(false); return; }
   if (state.modal?.kind === "prompt") { resolveDialog(null); return; }
+  // Don't re-nag within this session; it reappears next launch until a base is set.
+  if (state.modal?.kind === "onboard") state.onboardDismissed = true;
   state.modal = null;
   render();
 }
@@ -2745,7 +2782,53 @@ function genericModalMarkup() {
   if (state.modal.kind === "from-folder") return fromFolderModalMarkup();
   if (state.modal.kind === "confirm") return confirmModalMarkup();
   if (state.modal.kind === "prompt") return promptModalMarkup();
+  if (state.modal.kind === "onboard") return onboardModalMarkup();
   return "";
+}
+
+// ---------------------------------------------------------------------------
+// First-run onboarding: choose the projects base folder
+// ---------------------------------------------------------------------------
+
+function onboardModalMarkup() {
+  const modal = state.modal;
+  return `
+    <div class="overlay" data-close-modal></div>
+    <div class="modal modal-confirm" role="dialog" aria-modal="true">
+      <div class="modal-head"><h2>Welcome to Fast Folder</h2><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <div class="modal-body">
+        <p class="modal-sub">Pick a home for your projects. Every new project is created inside this base folder, and Fast Folder keeps its library there.</p>
+        <div class="field">
+          <div class="field-row"><label for="onboard-base">Projects base folder</label></div>
+          <input class="input mono" id="onboard-base" value="${esc(modal.path)}" autocomplete="off" spellcheck="false">
+        </div>
+        <p class="modal-sub">The folder is created for you if it does not exist yet. You can also work with several bases, for example a second drive or a network share. Add them anytime under Settings &gt; Library bases.</p>
+        ${modal.error ? `<div class="error-box">${esc(modal.error)}</div>` : ""}
+      </div>
+      <div class="modal-foot">
+        <button class="button button-secondary" data-close-modal>Not now</button>
+        <button class="button button-primary" data-onboard-ok ${modal.busy ? "disabled" : ""}>Use this folder</button>
+      </div>
+    </div>`;
+}
+
+async function submitOnboard() {
+  const modal = state.modal;
+  if (!modal || modal.kind !== "onboard" || modal.busy) return;
+  modal.busy = true;
+  modal.error = "";
+  render();
+  try {
+    await api("/api/base/init", { method: "POST", body: JSON.stringify({ path: modal.path }) });
+    state.modal = null;
+    await loadState(false);
+    render();
+    toast("Projects base folder is set.");
+  } catch (error) {
+    modal.busy = false;
+    modal.error = error.message;
+    render();
+  }
 }
 
 function confirmModalMarkup() {
@@ -2851,6 +2934,16 @@ function bindGenericModal() {
     }
     return;
   }
+  if (state.modal.kind === "onboard") {
+    const input = document.querySelector("#onboard-base");
+    input?.addEventListener("input", (event) => { state.modal.path = event.target.value; });
+    input?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") submitOnboard();
+    });
+    document.querySelector("[data-onboard-ok]")?.addEventListener("click", submitOnboard);
+    if (input && document.activeElement !== input) input.focus();
+    return;
+  }
   if (state.modal.kind === "from-folder") {
     document.querySelector("#ff-source")?.addEventListener("input", (event) => { state.modal.source = event.target.value; });
     document.querySelector("#ff-slug")?.addEventListener("input", (event) => { state.modal.slug = event.target.value; });
@@ -2893,6 +2986,10 @@ async function runFromFolder() {
 
 async function loadState(renderAfter = true) {
   state.data = await api("/api/state");
+  // First run: no base configured anywhere — walk the user through picking one.
+  if (!state.data.base_configured && !state.onboardDismissed && !state.modal) {
+    state.modal = { kind: "onboard", path: state.data.suggested_base || "", busy: false, error: "" };
+  }
   if (state.view === "template-editor" && !state.templateEditor) {
     const source = initialEditTemplate === "new"
       ? newTemplateDraft()

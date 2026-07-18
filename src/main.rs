@@ -484,7 +484,7 @@ enum ConfigAction {
     Show,
     /// Set a configuration value
     #[command(after_help = "Valid keys:\n  \
-            base-dir                    Directory where new projects are created (default: current directory)\n  \
+            base-dir                    Directory where new projects are created (default: home directory)\n  \
             bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \

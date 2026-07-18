@@ -124,12 +124,16 @@ impl Config {
         Ok(())
     }
 
-    /// Resolve base directory: configured path, or current working directory.
+    /// Resolve base directory: configured path, or the user's home directory.
+    /// Home (not the cwd) is the unconfigured fallback so an empty `base_dir`
+    /// never scatters projects or `.fastf-index.json` caches into whatever
+    /// directory a command happens to run from. The cwd remains only as a
+    /// last resort when the home env var itself is missing.
     pub fn resolve_base_dir(&self) -> std::path::PathBuf {
         if self.base_dir.is_empty() {
-            // If the cwd is gone (deleted underneath us), fall back to "." —
-            // downstream fs ops then fail with a clear io error instead of a panic.
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            paths::home_dir()
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
         } else {
             std::path::PathBuf::from(&self.base_dir)
         }

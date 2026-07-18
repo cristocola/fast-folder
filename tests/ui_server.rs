@@ -1009,3 +1009,16 @@ fn base_init_onboards_first_run() {
         assert!(err.to_string().contains("absolute"), "err: {err}");
     });
 }
+
+#[test]
+fn pick_path_rejects_unknown_kind() {
+    with_fresh_install(|_install| {
+        // Validation happens before any dialog could spawn, so this is safe
+        // headless. The happy path needs a desktop and stays a manual test.
+        let err = ui::route_request("POST", "/api/pick-path", br#"{"kind":"bogus"}"#).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown picker kind"),
+            "err: {err}"
+        );
+    });
+}

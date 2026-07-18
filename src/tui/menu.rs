@@ -26,6 +26,7 @@ pub fn run() -> Result<()> {
         println!("{}{}", " ".repeat(pad), tagline.dimmed());
         println!();
     }
+    onboard_first_run(&initial)?;
 
     loop {
         // Reload config each iteration so changes in settings are reflected immediately
@@ -79,6 +80,61 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// First-run onboarding, mirroring the web UI's welcome dialog: when no base
+/// is configured anywhere, ask where projects should live (defaulting to the
+/// conventional `<home>/Projects`) and create + persist it via the shared
+/// `config::init_base_dir`. Enter accepts the suggestion; an empty answer
+/// skips (the prompt returns on the next launch until a base is set).
+fn onboard_first_run(cfg: &Config) -> Result<()> {
+    if !cfg.base_dir.trim().is_empty() || !cfg.bases.is_empty() {
+        return Ok(());
+    }
+    let suggested = crate::core::config::suggested_base_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    println!(
+        "  {}",
+        "Welcome! Let's pick a home for your projects.".bold()
+    );
+    println!(
+        "  {}",
+        "Every new project is created inside this base folder.".dimmed()
+    );
+    println!(
+        "  {}",
+        "You can add more bases later (a second drive, a network share)".dimmed()
+    );
+    println!("  {}", "under Settings → Library bases.".dimmed());
+    println!();
+    loop {
+        let answer: String = Input::new()
+            .with_prompt("Projects base folder (empty to skip)")
+            .with_initial_text(&suggested)
+            .allow_empty(true)
+            .interact_text()?;
+        if answer.trim().is_empty() {
+            println!(
+                "  {}",
+                "Skipped — set it anytime in Settings → Project basics.".dimmed()
+            );
+            println!();
+            return Ok(());
+        }
+        match crate::core::config::init_base_dir(&answer) {
+            Ok(resolved) => {
+                println!(
+                    "{}  Projects base set to {}",
+                    "✓".green().bold(),
+                    resolved.display().to_string().bold()
+                );
+                println!();
+                return Ok(());
+            }
+            Err(error) => println!("{} {}", "error:".red().bold(), error),
+        }
+    }
 }
 
 fn menu_create() -> Result<()> {

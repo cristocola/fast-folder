@@ -56,6 +56,7 @@ non-loopback address.
 | GET  | `/api/health` | Health check |
 | GET  | `/api/state` | Config, templates, discovered projects, counter, data paths, `base_configured` + `suggested_base` (first-run onboarding) |
 | POST | `/api/base/init` | First-run onboarding: create the chosen projects folder if missing and set it as `base_dir` (`{path}`; accepts `~/…`, must be absolute) |
+| POST | `/api/pick-path` | Open the native OS folder/file picker on the server's machine (`{kind: "folder"\|"file", start?}`); returns `{path}` or `path: null` on cancel. One dialog at a time; kdialog/zenity on Linux, PowerShell dialogs on Windows |
 | POST | `/api/preview` | Validate variables, return a project plan (no writes) |
 | POST | `/api/create` | Create a project + run post-create; returns `{project, job_id}` (`job_id` set only when large assets are copied in the background) |
 | GET  | `/api/job/<id>` | Poll a background copy/move job's progress (`copying`→`verifying`→`finalizing`→`done`; 404 once evicted after completion) |
@@ -99,7 +100,16 @@ folder). The frontend then shows a welcome dialog that explains the base
 concept, pre-fills the suggestion, notes that more bases can be added later
 under Settings > Library bases, and submits to `/api/base/init`, which creates
 the folder and saves it as `base_dir`. Dismissing the dialog skips it for the
-session; it returns on the next launch until a base is set.
+session; it returns on the next launch until a base is set. The TUI runs the
+same flow as a prompt on launch — both surfaces share
+`config::init_base_dir` / `config::suggested_base_dir`.
+
+**Native path pickers (v1.0.2).** Every manual path input (onboarding,
+register, generate-from-folder source, template file-add source, Settings base
+directory and Library bases) has a Browse button wired to `/api/pick-path`,
+which opens the real OS dialog server-side (same machine as the browser). The
+bases textarea appends the picked folder as a new line instead of replacing.
+Only one dialog can be open at once; a second request errors cleanly.
 
 **Health watch + sleep recovery (v1.0.2).** The frontend polls `/api/health`
 every 5 s (single in-flight request, 2.5 s abort timeout) to drive the offline

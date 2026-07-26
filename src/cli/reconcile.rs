@@ -48,6 +48,29 @@ pub fn run() -> Result<()> {
             report.rolled_back
         );
     }
+    if report.swept > 0 {
+        println!(
+            "   {} {} abandoned temporary file(s) removed",
+            "swept".dimmed(),
+            report.swept
+        );
+    }
+    if !report.incomplete.is_empty() {
+        println!(
+            "   {} {} project(s) were never finished being created:",
+            "incomplete".yellow().bold(),
+            report.incomplete.len()
+        );
+        for item in &report.incomplete {
+            println!("     - {}", item.yellow());
+        }
+        println!(
+            "     {}",
+            "These cannot be rebuilt automatically (the values you typed are gone). \
+             Delete the folder and run `fastf new` again."
+                .dimmed()
+        );
+    }
     if !report.unrecoverable.is_empty() {
         println!(
             "   {} {} item(s) could not be recovered:",

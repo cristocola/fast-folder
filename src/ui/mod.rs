@@ -698,7 +698,9 @@ fn spawn_copy_job(root: PathBuf, jobs: Vec<crate::core::assets::CopyJob>) -> Str
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
     register_job(&id, &progress, &cancel);
 
-    // Durable record before any copy starts.
+    // `create_inner` already wrote the marker listing these jobs and left the
+    // project flagged in-progress; rewriting it here is harmless and keeps this
+    // entry point self-contained if it is ever called on its own.
     let _ = provisioning::write_create_marker(&root, &jobs);
 
     thread::spawn(move || {
@@ -724,6 +726,8 @@ fn spawn_copy_job(root: PathBuf, jobs: Vec<crate::core::assets::CopyJob>) -> Str
             }
         }
         provisioning::clear_create(&root);
+        // The last deferred file has landed, so the project is finally complete.
+        let _ = crate::core::project_info::clear_provisioning(&root);
         if let Ok(mut p) = progress.lock() {
             p.status = "done".to_string();
             p.phase = "done".to_string();

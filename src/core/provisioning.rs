@@ -193,6 +193,15 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         kind: "create".to_string(),
                         pending,
                     });
+                } else if crate::core::project_info::is_provisioning(&path) {
+                    // Metadata says half-built but the marker is gone — an
+                    // interrupted create. Surface it so the UI banner shows it
+                    // rather than the project looking finished.
+                    out.push(Incomplete {
+                        path: path.display().to_string(),
+                        kind: "create".to_string(),
+                        pending: 0,
+                    });
                 }
             } else if name.starts_with(MARKER_MOVE_PREFIX)
                 && name.ends_with(".json")
@@ -218,6 +227,13 @@ pub struct ReconcileReport {
     pub completed: usize,
     /// Staged moves rolled back (staging removed, source left intact).
     pub rolled_back: usize,
+    /// Abandoned `.part` / `.tmp` scratch files removed.
+    pub swept: usize,
+    /// Projects still flagged half-built that reconcile cannot finish by itself.
+    /// An interrupted `fastf new` interpolates template text from variables the
+    /// user typed, and those died with the process — so the honest move is to
+    /// name them and let the user delete or recreate.
+    pub incomplete: Vec<String>,
     /// Items that could not be recovered (e.g. a create source template file is
     /// gone) — surfaced to the user, marker left in place.
     pub unrecoverable: Vec<String>,
@@ -228,13 +244,68 @@ impl ReconcileReport {
         self.resumed == 0
             && self.completed == 0
             && self.rolled_back == 0
+            && self.swept == 0
+            && self.incomplete.is_empty()
             && self.unrecoverable.is_empty()
     }
 }
 
-/// Reconcile all incomplete provisioning across every base. Resumes create
-/// copies, finishes or rolls back staged moves. Best-effort — a per-item failure
+/// Leave scratch files alone until they are this old.
+///
+/// A `.part` may belong to a copy running *right now* in another process (the
+/// browser UI's background job holds no lock), and deleting it would break a
+/// perfectly healthy operation. An hour is far longer than any copy still making
+/// progress, and far shorter than "forever" — which is how long these lingered.
+const SCRATCH_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// True when `path` is abandoned scratch: a `.part` or `.tmp` older than
+/// [`SCRATCH_MIN_AGE`]. Unreadable metadata → `false`, i.e. leave it alone.
+fn is_abandoned_scratch(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if !name.ends_with(".part") && !crate::util::atomic::is_temp_file(name) {
+        return false;
+    }
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .and_then(|m| m.elapsed().map_err(std::io::Error::other))
+        .is_ok_and(|age| age >= SCRATCH_MIN_AGE)
+}
+
+/// Remove abandoned scratch files under `root`. Recursive, because
+/// `assets::copy_file` writes its `.part` next to the destination, which can sit
+/// arbitrarily deep inside a project.
+fn sweep_scratch(root: &Path, report: &mut ReconcileReport) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            // Never descend through a link: its target is outside this tree.
+            Ok(ft) if ft.is_symlink() => continue,
+            Ok(ft) if ft.is_dir() => sweep_scratch(&path, report),
+            Ok(_) => {
+                if is_abandoned_scratch(&path) && crate::util::fs_retry::remove_file(&path).is_ok()
+                {
+                    report.swept += 1;
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+}
+
+/// Reconcile all incomplete provisioning across every base: resume create
+/// copies, finish or roll back staged moves, sweep abandoned scratch files, and
+/// report projects that are still half-built. Best-effort — a per-item failure
 /// is recorded, never fatal.
+///
+/// It used to look only for markers, which is why an interrupted `fastf new`
+/// could strand 300 MB while this cheerfully reported "all projects fully
+/// provisioned". A check that only looks in one place must not speak as if it
+/// looked everywhere.
 pub fn reconcile(cfg: &Config) -> ReconcileReport {
     let mut report = ReconcileReport::default();
     for base in cfg.effective_bases() {
@@ -244,10 +315,24 @@ pub fn reconcile(cfg: &Config) -> ReconcileReport {
         for entry in read_dir.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
-            if path.is_dir() && create_marker_path(&path).exists() {
-                reconcile_create(&path, &mut report);
+            if path.is_dir() {
+                if create_marker_path(&path).exists() {
+                    reconcile_create(&path, &mut report);
+                }
+                // Flagged in the metadata but with no marker to work from: a
+                // create that died before its files landed. Nothing here can
+                // rebuild it — the variables the user typed are gone — so name
+                // it rather than pretending everything is fine.
+                if crate::core::project_info::is_provisioning(&path) {
+                    report.incomplete.push(path.display().to_string());
+                }
+                sweep_scratch(&path, &mut report);
             } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
                 reconcile_move(&base, &path, &mut report);
+            } else if is_abandoned_scratch(&path)
+                && crate::util::fs_retry::remove_file(&path).is_ok()
+            {
+                report.swept += 1;
             }
         }
     }

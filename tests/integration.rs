@@ -1080,6 +1080,7 @@ fn query_predicates_each_operator() {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect::<BTreeMap<_, _>>(),
             tags: tags.iter().map(|s| s.to_string()).collect(),
+            provisioning: false,
         }
     };
 

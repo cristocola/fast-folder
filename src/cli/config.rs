@@ -154,6 +154,12 @@ fn parse_usize(value: &str) -> Result<usize> {
 }
 
 pub fn set(key: &str, value: &str) -> Result<()> {
+    // Load-mutate-save is a read-modify-write, so it needs the same
+    // cross-process lock as ID allocation. Without it, two concurrent
+    // `config set` calls each write back their own copy of the whole file and
+    // one update is silently lost. A release-mode test caught this; the debug
+    // build happened to be slow enough to serialize the processes by luck.
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let mut config = Config::load()?;
     let normalized = key.replace('-', "_");
     match normalized.as_str() {

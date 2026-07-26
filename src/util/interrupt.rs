@@ -119,11 +119,15 @@ fn install_platform() {
     extern "C" fn handler(_signum: i32) {
         flag();
     }
+    // Go through a plain function pointer before the integer cast. Casting the
+    // function *item* straight to an integer is accepted by the compiler but
+    // relies on its size matching, which clippy rightly refuses.
+    let handler_ptr = handler as extern "C" fn(i32) as libc::sighandler_t;
     // SAFETY: `handler` only performs an atomic store (and `exit` on the second
     // signal), both of which are safe from a signal context.
     unsafe {
-        libc::signal(libc::SIGINT, handler as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, handler as libc::sighandler_t);
+        libc::signal(libc::SIGINT, handler_ptr);
+        libc::signal(libc::SIGTERM, handler_ptr);
     }
 }
 

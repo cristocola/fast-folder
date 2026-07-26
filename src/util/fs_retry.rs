@@ -114,16 +114,39 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     retry(|| std::fs::rename(from, to))
 }
 
+/// Last resort after a failed removal: on Windows, clear read-only attributes
+/// and try once more. On Unix there is nothing to clear, so the original error
+/// stands.
+///
+/// These are split by platform rather than written with `#[cfg]` inside the
+/// expression: the Unix arm of the inlined version collapsed to
+/// `or_else(|e| Err(e))`, which is both pointless and a clippy error — invisible
+/// from Windows, because that code only compiles on Linux.
+#[cfg(windows)]
+fn retry_without_readonly(path: &Path, err: io::Error, recursive: bool) -> io::Result<()> {
+    if !is_transient(&err) && err.kind() != io::ErrorKind::PermissionDenied {
+        return Err(err);
+    }
+    if recursive {
+        clear_readonly_tree(path);
+        retry(|| std::fs::remove_dir_all(path))
+    } else {
+        clear_readonly(path);
+        std::fs::remove_file(path)
+    }
+}
+
+#[cfg(not(windows))]
+fn retry_without_readonly(_path: &Path, err: io::Error, _recursive: bool) -> io::Result<()> {
+    Err(err)
+}
+
 /// [`std::fs::remove_file`] with transient-contention retries.
 pub fn remove_file(path: &Path) -> io::Result<()> {
-    retry(|| std::fs::remove_file(path)).or_else(|err| {
-        #[cfg(windows)]
-        if is_transient(&err) || err.kind() == io::ErrorKind::PermissionDenied {
-            clear_readonly(path);
-            return std::fs::remove_file(path);
-        }
-        Err(err)
-    })
+    match retry(|| std::fs::remove_file(path)) {
+        Ok(()) => Ok(()),
+        Err(err) => retry_without_readonly(path, err, false),
+    }
 }
 
 /// [`std::fs::remove_dir_all`] with transient-contention retries, plus a
@@ -131,14 +154,7 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
 pub fn remove_dir_all(path: &Path) -> io::Result<()> {
     match retry(|| std::fs::remove_dir_all(path)) {
         Ok(()) => Ok(()),
-        Err(err) => {
-            #[cfg(windows)]
-            if is_transient(&err) || err.kind() == io::ErrorKind::PermissionDenied {
-                clear_readonly_tree(path);
-                return retry(|| std::fs::remove_dir_all(path));
-            }
-            Err(err)
-        }
+        Err(err) => retry_without_readonly(path, err, true),
     }
 }
 

@@ -28,16 +28,39 @@ use anyhow::Result;
 /// Environment variable naming the failpoint to trip.
 pub const FAULT_ENV: &str = "FASTF_FAULT";
 
+#[cfg(debug_assertions)]
+thread_local! {
+    /// Per-thread arming, used by in-process tests.
+    ///
+    /// The environment variable is process-global, and `cargo test` runs tests
+    /// in parallel threads — so an env-armed failpoint fires inside *every*
+    /// concurrently running test that happens to touch the same code. That cost
+    /// three separate flaky failures before this existed. A thread-local is
+    /// scoped exactly to the test that armed it, needs no lock, and cannot leak
+    /// into a sibling. The env var remains for subprocess tests, which are a
+    /// different process and so cannot be affected by anyone else's thread.
+    static THREAD_FAULT: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Trip point `name` if it is the one currently armed.
 ///
 /// Call at a boundary where a crash must be survivable, e.g.
 /// `faults::check("move:before-commit-rename")?;`
 #[cfg(debug_assertions)]
 pub fn check(name: &str) -> Result<()> {
-    let Ok(armed) = std::env::var(FAULT_ENV) else {
-        return Ok(());
+    // Thread-local first: an in-process test's arming must not be visible to
+    // tests running in parallel.
+    let armed = THREAD_FAULT.with(|f| f.borrow().clone());
+    let armed = match armed {
+        Some(value) => value,
+        None => match std::env::var(FAULT_ENV) {
+            Ok(value) => value,
+            Err(_) => return Ok(()),
+        },
     };
-    // `point[:mode]`
+
+    // `point[:mode]` — split from the right, since point names contain colons.
     let (point, mode) = match armed.rsplit_once(':') {
         Some((point, mode @ ("abort" | "error"))) => (point, mode),
         _ => (armed.as_str(), "error"),
@@ -51,6 +74,18 @@ pub fn check(name: &str) -> Result<()> {
         std::process::abort();
     }
     anyhow::bail!("injected fault at '{name}'")
+}
+
+/// Arm a failpoint for the current thread only, for the duration of `body`.
+///
+/// Preferred over setting `FASTF_FAULT` in an in-process test: it cannot affect
+/// another test running in parallel, so no lock is needed.
+#[cfg(all(test, debug_assertions))]
+pub fn with_thread_fault<R>(spec: &str, body: impl FnOnce() -> R) -> R {
+    THREAD_FAULT.with(|f| *f.borrow_mut() = Some(spec.to_string()));
+    let out = body();
+    THREAD_FAULT.with(|f| *f.borrow_mut() = None);
+    out
 }
 
 /// Release builds have no failpoints at all.
@@ -76,34 +111,17 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "move:after-commit-before-source-removal",
 ];
 
-/// Serializes every test that arms a failpoint.
-///
-/// `FASTF_FAULT` is a process-wide environment variable, so a test that arms one
-/// is visible to every other test in the same binary. This lives here, beside the
-/// state it guards, so anything reaching for fault injection finds the lock too —
-/// the alternative (a private mutex per test module) looks right and silently
-/// races, which is exactly how the move-failpoint test started failing whenever
-/// it ran alongside this module's own tests.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[cfg(all(test, debug_assertions))]
 mod tests {
     use super::*;
 
+    /// Thread-local arming: no shared state, so no lock and no interference.
     fn with_fault<R>(value: &str, body: impl FnOnce() -> R) -> R {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: the lock keeps other tests in this binary off the variable.
-        unsafe { std::env::set_var(FAULT_ENV, value) };
-        let out = body();
-        unsafe { std::env::remove_var(FAULT_ENV) };
-        out
+        with_thread_fault(value, body)
     }
 
     #[test]
     fn unarmed_points_pass_through() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe { std::env::remove_var(FAULT_ENV) };
         assert!(check("create:mid-copy").is_ok());
     }
 

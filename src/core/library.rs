@@ -1295,6 +1295,261 @@ mod tests {
         assert!(!provisioning::staging_path(new_base, "proj_a").exists());
     }
 
+    /// Removing a project must drop its cache entry, or `recent` keeps listing
+    /// something that is gone until the staleness gate happens to fire.
+    #[test]
+    fn delete_unregister_and_rename_all_drop_the_old_cache_entry() {
+        let cached_dirs = |base: &Path| -> Vec<String> {
+            load_cache(base)
+                .map(|c| c.entries.into_iter().map(|e| e.dir).collect())
+                .unwrap_or_default()
+        };
+
+        // delete
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "gone", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_project(base, "stays", "ID0002", "gen", "2026-01-02T00:00:00Z");
+        write_cache(base, &scan_base(base)).unwrap();
+        let doomed = scan_base(base)
+            .into_iter()
+            .find(|p| p.name == "gone")
+            .unwrap();
+        delete_project(&doomed).unwrap();
+        let dirs = cached_dirs(base);
+        assert!(!dirs.contains(&"gone".to_string()), "stale entry: {dirs:?}");
+        assert!(dirs.contains(&"stays".to_string()), "collateral: {dirs:?}");
+
+        // unregister
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "dropme", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_cache(base, &scan_base(base)).unwrap();
+        let p = scan_base(base).into_iter().next().unwrap();
+        unregister_project(&p).unwrap();
+        assert!(
+            !cached_dirs(base).contains(&"dropme".to_string()),
+            "unregister must drop the cache entry"
+        );
+        assert!(base.join("dropme").is_dir(), "the folder itself stays");
+
+        // rename
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "before", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_cache(base, &scan_base(base)).unwrap();
+        let p = scan_base(base).into_iter().next().unwrap();
+        rename_project(&p, "after").unwrap();
+        let dirs = cached_dirs(base);
+        assert!(!dirs.contains(&"before".to_string()), "old entry: {dirs:?}");
+        assert!(dirs.contains(&"after".to_string()), "new entry: {dirs:?}");
+    }
+
+    /// `resolve` has three distinct outcomes and each must stay distinguishable:
+    /// nothing matched, exactly one, or an ambiguous set.
+    #[test]
+    fn resolve_distinguishes_no_match_exact_and_ambiguous() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "alpha_one", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_project(base, "alpha_two", "ID0012", "gen", "2026-01-02T00:00:00Z");
+        let cfg = cfg_for(base, &[]);
+
+        // Exactly one → the project.
+        assert_eq!(resolve(&cfg, "ID0001").unwrap().name, "alpha_one");
+        assert_eq!(resolve(&cfg, "alpha_two").unwrap().id, "ID0012");
+
+        // Nothing matched → a "no project matches" error, not an ambiguity one.
+        let err = resolve(&cfg, "nothing_like_this").unwrap_err().to_string();
+        assert!(
+            err.contains("no project matches"),
+            "expected a not-found error, got: {err}"
+        );
+
+        // Several matched → an ambiguity error listing the candidates.
+        let err = resolve(&cfg, "alpha").unwrap_err().to_string();
+        assert!(
+            err.contains("ambiguous") && err.contains("ID0001") && err.contains("ID0012"),
+            "expected an ambiguity error naming the candidates, got: {err}"
+        );
+
+        // An exact ID wins over a prefix that would also match it.
+        assert_eq!(resolve(&cfg, "ID0001").unwrap().id, "ID0001");
+    }
+
+    /// `max_id` must be read-only — it runs from `plan()`, and a preview that
+    /// writes a cache breaks the "dry run touches nothing" guarantee. It must
+    /// also see projects a stale cache does not mention.
+    #[test]
+    fn max_id_is_read_only_and_sees_past_a_stale_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "a", "ID0007", "gen", "2026-01-01T00:00:00Z");
+        let cfg = cfg_for(base, &[]);
+
+        // No cache yet: max_id must scan, and must not create one.
+        assert_eq!(max_id(&cfg), 7);
+        assert!(
+            !cache_path(base).exists(),
+            "max_id must never write a cache — plan()/preview calls it"
+        );
+
+        // With a cache that predates a newly added project, the staleness gate
+        // must send it back to the folders rather than under-reporting.
+        write_cache(base, &scan_base(base)).unwrap();
+        let file = fs::File::options()
+            .write(true)
+            .open(cache_path(base))
+            .unwrap();
+        file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+            .unwrap();
+        drop(file);
+        write_project(base, "b", "ID0042", "gen", "2026-01-03T00:00:00Z");
+        assert_eq!(
+            max_id(&cfg),
+            42,
+            "a stale cache must not hide a project from the counter floor"
+        );
+    }
+
+    /// An upsert must leave every *other* entry alone.
+    ///
+    /// The retain predicate drops the entry being replaced; inverted, it would
+    /// drop everything else instead and quietly reduce the cache to a single
+    /// project. Discovery would then self-heal on the next staleness check, so
+    /// the damage is invisible until someone wonders why `recent` went blank.
+    #[test]
+    fn cache_upsert_replaces_one_entry_and_preserves_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        for (folder, id) in [("a", "ID0001"), ("b", "ID0002"), ("c", "ID0003")] {
+            write_project(base, folder, id, "gen", "2026-01-01T00:00:00Z");
+        }
+        // Seed a full cache.
+        let all = scan_base(base);
+        assert_eq!(all.len(), 3);
+        write_cache(base, &all).unwrap();
+
+        // Re-upsert one of them with changed metadata.
+        let mut updated = all.iter().find(|p| p.name == "b").unwrap().clone();
+        updated.tags = vec!["urgent".to_string()];
+        cache_upsert(base, &updated);
+
+        let cache = load_cache(base).expect("cache still readable");
+        assert_eq!(
+            cache.entries.len(),
+            3,
+            "upsert must not drop the other entries, got {:?}",
+            cache.entries.iter().map(|e| &e.dir).collect::<Vec<_>>()
+        );
+        let names: std::collections::HashSet<&str> =
+            cache.entries.iter().map(|e| e.dir.as_str()).collect();
+        assert!(names.contains("a") && names.contains("b") && names.contains("c"));
+
+        // Exactly one entry for the upserted project, carrying the new data.
+        let b: Vec<_> = cache.entries.iter().filter(|e| e.dir == "b").collect();
+        assert_eq!(b.len(), 1, "no duplicate entry for the upserted project");
+        assert_eq!(b[0].tags, vec!["urgent".to_string()]);
+    }
+
+    /// `refresh_cache` must actually re-read the metadata and write it back —
+    /// silently doing nothing would leave `recent`/`search` showing stale tags
+    /// after every tag mutation.
+    #[test]
+    fn refresh_cache_picks_up_edited_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_cache(base, &scan_base(base)).unwrap();
+        assert!(
+            load_cache(base).unwrap().entries[0].tags.is_empty(),
+            "starts untagged"
+        );
+
+        let dir = base.join("proj");
+        project_info::write_frontmatter(&project_info::pinfo_path(&dir), |meta| {
+            meta.tags = vec!["shipped".to_string()];
+        })
+        .unwrap();
+
+        refresh_cache(&dir);
+
+        let cache = load_cache(base).expect("cache readable");
+        assert_eq!(
+            cache.entries[0].tags,
+            vec!["shipped".to_string()],
+            "refresh_cache must write the edited metadata back"
+        );
+    }
+
+    /// The staleness gate: a cache older than its base must be rescanned, and a
+    /// cache newer than its base must be trusted. Getting the comparison wrong
+    /// either way costs correctness or a rescan on every command.
+    #[test]
+    fn cache_staleness_gate_compares_the_right_way_round() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+
+        write_cache(base, &scan_base(base)).unwrap();
+        let cache_file = cache_path(base);
+
+        // Set the cache's mtime explicitly rather than relying on write order:
+        // writing the cache *into* the base bumps the base's own mtime to the
+        // same instant, which makes "is it newer?" a coin flip.
+        let set_cache_mtime = |offset_secs: i64| {
+            let when = if offset_secs >= 0 {
+                std::time::SystemTime::now() + std::time::Duration::from_secs(offset_secs as u64)
+            } else {
+                std::time::SystemTime::now()
+                    - std::time::Duration::from_secs(offset_secs.unsigned_abs())
+            };
+            let file = fs::File::options().write(true).open(&cache_file).unwrap();
+            file.set_modified(when).unwrap();
+        };
+
+        set_cache_mtime(3600); // cache clearly newer than the base
+        assert!(
+            !cache_is_stale(base),
+            "a cache newer than its base must be trusted"
+        );
+
+        set_cache_mtime(-3600); // cache clearly older than the base
+        assert!(
+            cache_is_stale(base),
+            "a cache older than its base must be rescanned"
+        );
+
+        // And a missing cache is always stale.
+        fs::remove_file(&cache_file).unwrap();
+        assert!(cache_is_stale(base));
+    }
+
+    /// Metadata with an empty `created` falls back to the folder's own mtime, so
+    /// projects still sort sensibly instead of collapsing to one timestamp.
+    #[test]
+    fn empty_created_falls_back_to_the_folder_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let dir = base.join("proj");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            project_info::pinfo_path(&dir),
+            "---\nid: ID0001\ntemplate: t\ntemplate_name: T\ncreated: \"\"\n\
+             folder: proj\npath: x\nvariables: {}\ntags: []\n---\n",
+        )
+        .unwrap();
+
+        let found = scan_base(base);
+        assert_eq!(found.len(), 1);
+        let created = &found[0].created;
+        assert!(!created.is_empty(), "must fall back, not stay blank");
+        assert!(
+            created.starts_with("20") && created.ends_with('Z'),
+            "expected an ISO-8601 UTC timestamp, got {created:?}"
+        );
+    }
+
     /// The staged (copying) move must refuse a project containing links.
     ///
     /// Reached through the private pre-flight because the public entry point
@@ -1306,30 +1561,38 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
         write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
-        let link = base.join("proj_a/linked");
+        // Join components separately: `join("proj_a/linked")` yields a
+        // mixed-separator path on Windows (`...\proj_a/linked`), and `cmd` then
+        // reads `/linked` as a switch — which is precisely how this test came to
+        // "skip" silently while reporting success.
+        let link = base.join("proj_a").join("linked");
         let target = base.join("shared");
         fs::create_dir_all(&target).unwrap();
 
-        let made = {
-            #[cfg(windows)]
-            {
-                std::process::Command::new("cmd")
-                    .args(["/c", "mklink", "/J"])
-                    .arg(&link)
-                    .arg(&target)
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-            }
-            #[cfg(unix)]
-            {
-                std::os::unix::fs::symlink(&target, &link).is_ok()
-            }
-        };
-        if !made {
-            eprintln!("skipping: the OS refused to create a link");
-            return;
+        // A silent skip here would be worse than no test: it reports "ok" while
+        // asserting nothing, which is exactly how the mutation run found that
+        // `refuse_if_contains_links` could be replaced with `Ok(())` and stay
+        // green. Junctions need no elevation on Windows and symlinks work
+        // normally on Unix, so failing to create one is a real problem — say so
+        // loudly rather than passing.
+        #[cfg(windows)]
+        {
+            let out = std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(&link)
+                .arg(&target)
+                .output()
+                .expect("running mklink");
+            assert!(
+                out.status.success(),
+                "could not create a junction (needs no elevation on Windows):\n\
+                 stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).expect("creating a symlink");
 
         let project = scan_base(base).into_iter().next().unwrap();
         let err = refuse_if_contains_links(&project)
@@ -1365,7 +1628,6 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
-        use crate::util::faults::TEST_LOCK as FAULT_SERIAL;
         const MOVE_POINTS: &[&str] = &[
             "move:after-staging",
             "move:after-verify",
@@ -1374,7 +1636,6 @@ mod tests {
         ];
 
         for point in MOVE_POINTS {
-            let _guard = FAULT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
             let tmp1 = tempfile::tempdir().unwrap();
             let tmp2 = tempfile::tempdir().unwrap();
             let (old_base, new_base) = (tmp1.path(), tmp2.path());
@@ -1387,12 +1648,13 @@ mod tests {
             let progress = Mutex::new(Progress::new(&[]));
             let cancel = AtomicBool::new(false);
 
-            // SAFETY: FAULT_SERIAL keeps other tests off the variable.
-            unsafe { std::env::set_var(crate::util::faults::FAULT_ENV, point) };
-            let result = staged_copy_verify_commit(
-                &project, new_base, &new_path, "proj_a", &progress, &cancel,
-            );
-            unsafe { std::env::remove_var(crate::util::faults::FAULT_ENV) };
+            // Armed per-thread, so a move test running in parallel cannot see
+            // this fault — an env var would fire inside every one of them.
+            let result = crate::util::faults::with_thread_fault(point, || {
+                staged_copy_verify_commit(
+                    &project, new_base, &new_path, "proj_a", &progress, &cancel,
+                )
+            });
 
             assert!(result.is_err(), "[{point}] should have failed");
 

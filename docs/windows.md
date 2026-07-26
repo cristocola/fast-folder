@@ -71,6 +71,22 @@ fastf config set base-dir C:\Users\you\Projects
 fastf config set base-dir C:/Users/you/Projects   # equally fine
 ```
 
+## Folder names
+
+Windows reserves a handful of names and quietly rewrites others, so fastf adjusts anything that would not survive:
+
+| You type | fastf creates | Why |
+|---|---|---|
+| `CON`, `NUL`, `COM1`, `LPT9` | `CON_`, `NUL_`, `COM1_`, `LPT9_` | MS-DOS device names, still reserved. Applies with an extension too (`CON.txt`). |
+| `Draft.` or `Draft ` | `Draft` | Windows drops trailing dots and spaces, so the folder would not match the name fastf recorded. |
+| control characters | `_` | Illegal in Windows filenames. |
+
+These rules run on every platform, not just Windows, so a project created on Linux still opens here.
+
+## Editing templates in Notepad
+
+Save `template.yaml` as **UTF-8**. Notepad and `Out-File -Encoding utf8` in Windows PowerShell 5.1 add a byte-order mark; fastf skips it, so either encoding loads. If a template fails to parse, the error names the file and reminds you to check the encoding.
+
 ## Browser UI
 
 `fastf ui` works the same as on Linux. `fastf ui --app` opens a dedicated app window using Chrome if you have it, or Microsoft Edge otherwise. Edge ships with Windows, so the app window works on every stock machine. Closing the window stops the server. If neither browser can be found it falls back to a tab in your default browser.

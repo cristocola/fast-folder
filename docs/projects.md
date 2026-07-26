@@ -82,7 +82,14 @@ The source is never removed until the destination is verified. If a move is inte
 fastf reconcile
 ```
 
-`reconcile` scans every base for interrupted work and finishes or rolls it back: background asset copies resume from their durable marker, and interrupted moves either complete (if the commit already happened) or roll back with the source intact. The browser UI shows a banner with a Retry button when it detects interrupted work. An unreconciled crash is always safe, just untidy.
+`reconcile` scans every base for interrupted work and reports or repairs it:
+
+- **Background asset copies** resume from their durable marker.
+- **Interrupted moves** either complete (if the commit already happened) or roll back with the source intact. Before removing a source, fastf confirms the destination really is the same project — a folder merely having the right name is not proof.
+- **Abandoned temporary files** left by a killed copy are swept once they are over an hour old. The delay is deliberate: a `.part` file may belong to a copy running right now in another window.
+- **Projects that were never finished being created** are listed. A project interrupted mid-create is still visible in `fastf recent`, marked as unfinished. `reconcile` cannot rebuild one — the values you typed are gone with the process — so it names the folder and leaves the decision to you: delete it and run `fastf new` again.
+
+The browser UI shows a banner with a Retry button when it detects interrupted work. An unreconciled crash is always safe, just untidy.
 
 ## Onboarding folders fastf did not create
 

@@ -15,3 +15,7 @@ packaging/aur/**/*.pkg.tar.zst
 # fastf's own disposable per-base discovery cache — never commit it
 # (lands in the repo when a run's effective base resolves to the CWD)
 .fastf-index.json
+
+# cargo-mutants working directory (mutation testing scratch)
+mutants.out/
+mutants.out.old/

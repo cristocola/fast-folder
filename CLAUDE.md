@@ -4,6 +4,24 @@
 
 `fastf` (Fast Folder Creator) is a portable Rust CLI tool for creating structured project folders from **folder templates**. Universal use cases: code, research, finance, music video, photography, and film production workflows. Single-folder portable distribution — config, templates, and the counter live next to the binary.
 
+**v1.1: hardening.** Closes seven defects found by testing the v1.0.2 release
+binary on Windows 11, none of which the (green) suite caught. Two lost data: a
+cross-filesystem move silently dropped junctions and symlinks while
+`verify_tree` — built on the same blind walk — reported success and the source
+was deleted; and `reconcile` could remove a good source because it inferred "the
+commit landed" from a name existing. Two were concurrency: ten simultaneous
+creates minted eight distinct IDs (`ui::WRITE_LOCK` is in-process and cannot see
+a CLI), and `create_inner`'s `exists()`-then-`create_dir_all()` let two racers
+merge into one folder. One was interruption: a killed `fastf new` stranded 300 MB
+with no metadata, invisible to every command while `reconcile` claimed all was
+well. The rest were Windows papercuts (`\\?\` leaking everywhere, a BOM breaking
+`template.yaml` with a misleading error, reserved device names, trailing dots,
+case-only rename). New modules: `util::{lockfile, atomic, fs_retry, interrupt,
+faults, paths::display_path}`. Fault injection then found two more bugs — a
+rollback gap and an unchecked cache version — and the new release-mode CI job
+caught a third (`config set` losing updates). 183 → 246 tests. See the "v1.1
+hardening gotchas" section below.
+
 **v1.0: production release.** Distribution-ready: data-dir precedence (env override → portable → user config dir), GitHub Actions CI + release binaries (linux-gnu, linux-musl static, windows-msvc — NO macOS, cristoc can't test it), AUR packages `fast-folder` (source) + `fast-folder-bin` (musl repack) in `packaging/aur/`, man pages via hidden `fastf mangen` (clap_mangen), `fastf paths`, project **unregister/delete/rename** (library + UI routes + TUI action menu), and a web-UI polish pass (promise-based confirm/prompt dialogs replacing native `confirm()`, offline banner + health poll, sortable projects table, focus-preserving `render()`, spinners). Crate `0.11.0 → 1.0.0`; 176 tests. See "Data-dir resolution (v1.0)" and "Unregister / delete / rename (v1.0)" below.
 
 **v0.11: durable provisioning + verified moves.** Two flows that write bulk data are now crash-safe and never lose data. (1) **Deferred create copies** write a durable `.fastf-provisioning.json` marker into the new project root before the background copy starts; each file is flipped `done` as it lands and the marker is deleted on completion. (2) **Moves** never remove the source until the destination is copied **and** verified: same-filesystem moves stay an instant atomic `fs::rename`, while cross-filesystem / network moves stage the copy into a dot-prefixed `.<folder>.fastf-part` folder guarded by a `.fastf-move-<folder>.json` marker, run `assets::verify_tree` (size + count + existence), atomically rename into place, and only then remove the source. Both flows report live `copy → verify → finalize` progress (`assets::Progress.phase`) and are cancellable. **`fastf reconcile`** (and a UI banner + `POST /api/reconcile`, also driven by `/api/state`'s `provisioning` list) resumes interrupted copies and finishes-or-rolls-back interrupted moves. New core module `src/core/provisioning.rs`; UI `POST /api/project/move` now returns a `job_id` (backgrounded) and `POST /api/job/<id>/cancel` cancels. Crate `0.10.0 → 0.11.0`; 164 tests. See "Durable provisioning + verified moves (v0.11)" below.
@@ -36,7 +54,15 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (176 total: 89 unit/lib + 55 core in integration.rs + 32 UI in ui_server.rs)
+# Test (246 total: 127 unit/lib + 57 integration.rs + 34 ui_server.rs
+#       + 4 crash_recovery.rs + 4 concurrency.rs + 8 hostile_fs.rs
+#       + 7 windows_semantics.rs + 5 properties.rs)
+# `cargo test --release` runs 238: failpoint tests are #[cfg(debug_assertions)].
+#
+# Fault injection — trip a named boundary deterministically:
+#   FASTF_FAULT=create:mid-copy cargo test           # returns an error there
+#   FASTF_FAULT=move:before-commit-rename:abort ...  # kills the process there
+# See util::faults::ALL_FAULT_POINTS for the list.
 cargo test
 cargo test <test_name>   # run a single test by name
 
@@ -68,12 +94,21 @@ fast-folder/
 │   └── UI.md                 — Browser-UI reference (architecture, HTTP API, dev live-reload)
 ├── Launch Fast Folder UI.desktop — desktop launcher (Exec=`fastf ui --app`)
 ├── tests/
-│   ├── integration.rs        — 48 hermetic core tests using FASTF_INSTALL_DIR + tempfile
+│   ├── integration.rs        — hermetic core tests using FASTF_INSTALL_DIR + tempfile
 │   │                           (write_template splits an inline files: block onto disk)
-│   └── ui_server.rs          — 23 tests driving fastf::ui::route_request (v0.6/v0.7 core
-│                               + v0.8 bundled-file reproduce + background copy job +
-│                               template file list/save/add/delete + reserved/traversal guard
-│                               + from-folder bundling report)
+│   ├── ui_server.rs          — drives fastf::ui::route_request (no socket)
+│   ├── crash_recovery.rs     — v1.1. Every create failpoint asserted against the same
+│   │                           invariants, plus real subprocesses killed with abort
+│   │                           (debug-only: failpoints are compiled out of release)
+│   ├── concurrency.rs        — v1.1. Races real PROCESSES (not threads — a thread test
+│   │                           passes against an in-process Mutex while prod stays broken)
+│   ├── windows_semantics.rs  — v1.1. Reserved names, trailing dots, control chars,
+│   │                           unicode, >MAX_PATH, case-only rename, read-only files,
+│   │                           a real sharing violation, junction handling
+│   ├── hostile_fs.rs         — v1.1. Corrupt caches/markers/metadata, absent bases,
+│   │                           vanishing paths — degrade, never panic, never lose data
+│   └── properties.rs         — v1.1. proptest; above all that sanitize_name output is
+│                               always creatable (verified by creating it)
 └── src/
     ├── lib.rs                — Library entry: exposes core/, cli/, tui/, ui/, util/, bootstrap/
     │                           so integration tests can import fastf::...
@@ -98,7 +133,19 @@ fast-folder/
     │                           auto-gen owns it now)
     ├── util/
     │   ├── mod.rs
+    │   ├── atomic.rs         — v1.1. THE atomic write (temp+fsync+rename). Replaced four
+    │   │                       ad-hoc copies; Config/Counters used a bare fs::write.
+    │   ├── lockfile.rs       — v1.1. DataLock: cross-process lock over the data dir.
+    │   │                       share_mode(0) on Windows (no FFI), flock on Unix.
+    │   ├── fs_retry.rs       — v1.1. rename/remove retried past Windows sharing
+    │   │                       violations; clears read-only attrs. No-op on Unix.
+    │   ├── interrupt.rs      — v1.1. Ctrl-C sets a flag the copy loop polls, so an
+    │   │                       interrupted create unwinds and rolls back.
+    │   ├── faults.rs         — v1.1. Named failpoints (FASTF_FAULT), error|abort modes.
+    │   │                       Compiled out of release entirely.
     │   └── paths.rs          — install_dir(): FASTF_INSTALL_DIR override, else current_exe().
+    │                           v1.1: display_path() strips the Windows verbatim
+    │                           prefix for display + metadata ONLY, never for fs calls.
     │                           config/counters/templates paths. (No projects_index_path — v0.9
     │                           discovers projects from the filesystem, not a jsonl next to the binary.)
     ├── core/
@@ -616,8 +663,8 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - v0.10: the UI create form's `#base-dir` is now a `<select>` — it fires `change`, not `input` (the preview listener was updated accordingly). The frontend `effectiveBases()`/`baseLabel()` helpers mirror `Config::effective_bases()`/`library::base_label` with trailing-slash-insensitive dedup; the server re-validates and canonicalizes on every move anyway.
 - v0.11: `move_project_with` is the progress/cancel engine; `move_project` wraps it with throwaway handles (the CLI path stays synchronous but still verifies). The staged path is only reached when `fs::rename` fails — a same-fs test can't exercise it, so the unit tests call the private `staged_copy_verify_commit` directly. Don't route a move through `copy_file` (interpolation) — moves are ALWAYS verbatim (`jobs_for_tree` + `copy_job`, or `copy_tree`).
 - v0.11: `assets::verify_tree` compares `{rel → size}` sets and MUST ignore transient scaffolding (`is_transient`: cache, `.fastf-provisioning.json`, `.fastf-move-*`, `*.part`) on BOTH sides — otherwise verifying a project that itself carries a stale marker fails spuriously. Verification is size + count + existence by design (not hashing — that doubles I/O over network); if you ever add hashing, make it opt-in.
-- v0.11: the create marker is written in `spawn_copy_job` (UI) — the synchronous CLI `fastf new`/`project::create` copies everything inline and needs no marker. Don't add marker-writing to `create_inner`; only the deferred (UI) path can be interrupted with work outstanding.
-- v0.11: reconcile decides a move's fate purely by "does `final` exist?" — if yes the commit happened (finish source removal), else roll back (discard staging, source intact). It never resumes a half-copy (simpler + safe). Keep the commit as the single atomic `rename(temp,final)` so this stays a clean boolean.
+- ~~v0.11: the create marker is written in `spawn_copy_job` (UI) — the synchronous CLI needs no marker.~~ **REVERSED in v1.1.** This conflated *synchronous* with *uninterruptible*: Ctrl-C, a crash or a reboot killed `fastf new` mid-copy and left a folder with no metadata, invisible to every command. `create_inner` now writes both the metadata (first, flagged `provisioning: true`) and the marker.
+- ~~v0.11: reconcile decides a move's fate purely by "does `final` exist?"~~ **TIGHTENED in v1.1.** Existence alone is not proof the commit landed — a rolled-back move leaves the name free and anything may take it, so removing the source on that inference could destroy a good project. The marker now records the project `id`, and `confirm_commit` requires both an id match and `verify_tree` before anything is removed. The commit is still the single atomic `rename(temp,final)`.
 - v0.11: `POST /api/project/move` runs OFF `WRITE_LOCK` (background thread) so a slow network copy can't block other UI writes — mirroring the create copy job. The two base-cache writes it does are atomic + best-effort (last-writer-wins, self-heals via the staleness gate), so not holding the global lock is safe. Don't re-add `lock_writes()` to that arm.
 - v0.11: `scan_base` skips dot-prefixed dirs — required so a staged move's `.<folder>.fastf-part` (which contains a full copy incl. `PROJECT_INFO.md`) isn't discovered as a duplicate mid-move. Real projects are never dot-prefixed, so this is free.
 - v0.11: `JOBS` map value is `JobHandle { progress, cancel }` (was a bare `Arc<Mutex<Progress>>`). `register_job` evicts finished handles on each new job; a `/api/job/<id>` 404 still means "done" to the frontend. `Progress` gained `phase` — set it alongside `status` at terminal states.
@@ -646,6 +693,61 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
 - v1.0.2: **onboarding is universal** — the shared core is `config::init_base_dir(raw)` (trim → `~` expansion → absolute-only → `create_dir_all` → canonicalize → persist `base_dir`) + `config::suggested_base_dir()` (`<home>/Projects`). The web UI's `/api/base/init` and the TUI's `onboard_first_run` (menu.rs, runs before the main loop when `base_dir` AND `bases` are both empty; empty answer skips, reappears next launch) are thin shells over it. Don't duplicate the expansion/validation anywhere else — call the core fn.
 - v1.0.2: **native path pickers** — `POST /api/pick-path {kind: "folder"|"file", start?}` opens the OS dialog server-side (loopback = same machine): Linux kdialog→zenity (missing binary falls through, nonzero exit = cancel → `path: null`), Windows PowerShell WinForms dialogs (`-STA` required; `CREATE_NO_WINDOW` creation flag so no console flashes under the windowless fastf-ui), macOS osascript. Guarded by a `PICKER_BUSY` AtomicBool (one dialog at a time) and deliberately does NOT take `WRITE_LOCK` (a dialog can sit open for minutes). Frontend: `browseButton(kind, id)` + a generic `[data-browse="kind:id"]` handler in `bindCommon` that sets the target input's value and dispatches an `input` event (textareas append a line — the bases list). Wired on: onboard-base, register-path, ff-source, file-src (file kind), settings-base-dir, settings-bases.
 - v1.0.2: Test count 176 → 183.
+
+### v1.1 hardening gotchas
+
+- v1.1: **`util::lockfile::DataLock` is the cross-process lock** over the data
+  dir (`.fastf.lock`). Any read-modify-write of `counters.toml` or `config.toml`
+  must hold it — `ui::WRITE_LOCK` is an in-process `Mutex` and cannot see a CLI
+  running alongside the UI. Windows uses `share_mode(0)` (no FFI); Unix uses
+  `flock`. Both are released by the OS on process death, so there is no stale
+  lock to recover. **Never hold it across a prompt or a post-create hook** —
+  `cli::new` re-plans inside the lock and runs `project::run_post_create`
+  outside it for exactly that reason.
+- v1.1: `create_inner` claims the folder with `fs::create_dir` (NOT
+  `create_dir_all`, which succeeds on an existing dir and let two racers merge
+  into one folder). Everything after the claim lives in `provision_project` so a
+  failure rolls the folder back; **nothing may sit between the claim and that
+  call** — an early return there skips the rollback and leaks the folder. A
+  failpoint placed one line too early found exactly that bug.
+- v1.1: `PROJECT_INFO.md` is written FIRST with `provisioning: true`, cleared as
+  the last step. The flag is `skip_serializing_if` so finished projects stay
+  byte-identical to older versions. Interrupted creates are **reported, not
+  resumed**: the variables the user typed died with the process, so re-running
+  interpolation would produce `{token}` garbage.
+- v1.1: `assets::AssetEntry` carries an `EntryKind` enum, not an `is_dir` bool.
+  This is deliberate — a new variant makes the compiler point at every consumer
+  that must decide. `walk` reports links instead of skipping them, and
+  `verify_tree` is **deny-by-default**: anything it cannot classify is an error.
+  Verification must never be narrower than the copy it checks, which is how a
+  move used to delete a source whose junctions never reached the destination.
+- v1.1: links are refused only on the **staged** move path
+  (`refuse_if_contains_links`, called after `fs::rename` fails). The
+  same-filesystem rename copies nothing and preserves links perfectly, so
+  refusing there would block the common case for no benefit.
+- v1.1: `util::fs_retry` wraps the destructive fs calls (Windows sharing
+  violations from Defender/indexer, plus read-only attribute clearing). The
+  same-fs `fs::rename` probe in `move_project_with` is deliberately NOT wrapped:
+  its failure is the signal to take the staged path, so retrying would add the
+  full backoff to every cross-drive move.
+- v1.1: `paths::display_path` strips `\\?\` for **display and metadata only**.
+  Filesystem calls keep the canonical path — the verbatim form is what makes
+  paths past MAX_PATH work, and long-path support without it is an opt-in system
+  setting that is off on many machines. Strip at display, never at storage.
+- v1.1: `library::load_cache` rejects a cache whose `version` is not
+  `CACHE_VERSION`. The field existed but was never checked, so a cache from a
+  newer fastf was *trusted* and the projects it failed to describe vanished —
+  which matters because caches travel with projects between machines.
+- v1.1: `util::faults` failpoints are compiled out of release. Tests that trip
+  them are `#[cfg(debug_assertions)]`. `FASTF_FAULT` and the interrupt flag are
+  process-global, so their test locks (`faults::TEST_LOCK`,
+  `interrupt::TEST_LOCK`) live beside the state they guard — a private mutex per
+  test module looks right and silently races.
+- v1.1: concurrency tests must spawn **processes**, not threads. A thread test
+  passes against an in-process `Mutex` while production stays broken.
+- v1.1: Test count 183 → 246 (238 in release; the gap is the failpoint tests).
+  New suites: `crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`,
+  `hostile_fs.rs`, `properties.rs` (proptest).
 
 ## Browser UI (`fastf ui`, v0.7 + v0.8 jobs)
 

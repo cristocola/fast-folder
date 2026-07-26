@@ -117,11 +117,12 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Persist the config atomically — a crash mid-write must never truncate it.
     pub fn save(&self) -> Result<()> {
         let path = paths::config_path();
         let raw = toml::to_string_pretty(self).context("serializing config")?;
-        fs::write(&path, raw).with_context(|| format!("writing {}", path.display()))?;
-        Ok(())
+        crate::util::atomic::write(&path, raw)
+            .with_context(|| format!("writing {}", path.display()))
     }
 
     /// Resolve base directory: configured path, or the user's home directory.

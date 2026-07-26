@@ -134,7 +134,10 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
     let resolved_created =
         resolve_created(&canonical, opts.use_today, opts.created_override.as_deref())?;
 
-    // 4. Load global state.
+    // 4. Load global state. The data lock is held from here to the end of the
+    //    function so the ID this register mints (or recovers) cannot collide
+    //    with a concurrent `fastf new` or another register.
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let cfg = Config::load()?;
     let mut counters = Counters::load()?;
 

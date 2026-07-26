@@ -192,7 +192,9 @@ impl Template {
             Err(_) => return,
         };
         for entry in entries {
-            if entry.is_dir || entry.size > crate::core::assets::TEXT_MAX_BYTES {
+            // Only plain files carry editable text; dirs, links and special
+            // files have nothing to scan into the buffer.
+            if !entry.is_file() || entry.size > crate::core::assets::TEXT_MAX_BYTES {
                 continue;
             }
             if let Ok(text) = fs::read_to_string(files_dir.join(&entry.rel)) {

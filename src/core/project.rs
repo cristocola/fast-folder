@@ -89,7 +89,7 @@ pub fn print_dry_run(plan: &ProjectPlan, template: &Template, config: &Config) {
     if let Ok(entries) = assets::walk(&template.files_dir()) {
         let files: Vec<String> = entries
             .iter()
-            .filter(|e| !e.is_dir && !assets::is_excluded(&e.rel, &template.exclude))
+            .filter(|e| e.is_file() && !assets::is_excluded(&e.rel, &template.exclude))
             .map(|e| assets::interp_rel(&e.rel, &plan.vars, &config.date_format))
             .filter(|rel| !crate::core::project_info::path_is_reserved(rel))
             .collect();
@@ -309,16 +309,28 @@ fn create_inner(
     run_post: bool,
     defer_over: Option<u64>,
 ) -> Result<Vec<assets::CopyJob>> {
-    if plan.root_path.exists() {
-        anyhow::bail!(
-            "project folder already exists: {}",
-            plan.root_path.display()
-        );
+    // Claim the project folder with a single atomic operation.
+    //
+    // This used to be `exists()` followed by `create_dir_all()`. Because
+    // `create_dir_all` succeeds on a directory that is already there, two
+    // concurrent creates could both pass the check and then both write into the
+    // same folder — the second silently overwriting the first's files and
+    // PROJECT_INFO.md. `create_dir` fails with `AlreadyExists` instead, so the
+    // filesystem itself arbitrates and exactly one caller can ever win.
+    if let Some(parent) = plan.root_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
-
-    // Create root folder
-    fs::create_dir_all(&plan.root_path)
-        .with_context(|| format!("creating {}", plan.root_path.display()))?;
+    if let Err(err) = fs::create_dir(&plan.root_path) {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::bail!(
+                "project folder already exists: {}",
+                plan.root_path.display()
+            );
+        }
+        return Err(err).with_context(|| format!("creating {}", plan.root_path.display()));
+    }
 
     // Create subfolder structure
     create_structure(
@@ -394,20 +406,32 @@ fn create_inner(
 
     // Post-create actions (opt-in). Template override > config default.
     if run_post {
-        let actions = resolve_post_create(template, config);
-        if !actions.is_empty() {
-            println!();
-            if let Err(e) = crate::core::post_create::run(&actions, &abs_path, config) {
-                eprintln!(
-                    "{} post-create step failed: {}",
-                    "warning:".yellow().bold(),
-                    e
-                );
-            }
-        }
+        run_post_create(&abs_path, template, config);
     }
 
     Ok(deferred)
+}
+
+/// Run the resolved post-create actions for a finished project.
+///
+/// Split out of [`create`] so a caller can run these *outside* the data lock:
+/// they spawn the user's editor and arbitrary shell commands from a template's
+/// `commands` list, and holding a process-wide lock across those would stall
+/// every other fastf for as long as they take. ID allocation needs the lock;
+/// running someone's `npm install` does not.
+pub fn run_post_create(root: &Path, template: &Template, config: &Config) {
+    let actions = resolve_post_create(template, config);
+    if actions.is_empty() {
+        return;
+    }
+    println!();
+    if let Err(e) = crate::core::post_create::run(&actions, root, config) {
+        eprintln!(
+            "{} post-create step failed: {}",
+            "warning:".yellow().bold(),
+            e
+        );
+    }
 }
 
 pub fn resolve_post_create(
@@ -447,9 +471,15 @@ pub fn apply_plan(
             if crate::core::project_info::path_is_reserved(&rel) {
                 continue;
             }
+            // Links and special files in a template are not reproducible; the
+            // create path skips them with a warning, so the plan must not
+            // promise them either.
+            if !entry.is_dir() && !entry.is_file() {
+                continue;
+            }
             let path = target.join(&rel);
             let exists = path.exists();
-            out.push(match (entry.is_dir, exists) {
+            out.push(match (entry.is_dir(), exists) {
                 (true, true) => ApplyAction::SkipFolder(path),
                 (true, false) => ApplyAction::CreateFolder(path),
                 (false, true) => ApplyAction::SkipFile(path),
@@ -625,9 +655,23 @@ fn copy_template_files(
         }
         let dest = dest_root.join(&rel);
 
-        if entry.is_dir {
+        if entry.is_dir() {
             fs::create_dir_all(&dest)
                 .with_context(|| format!("creating directory {}", dest.display()))?;
+            continue;
+        }
+
+        // A link or special file in a template cannot be reproduced faithfully.
+        // Skipping is right here (unlike a move, nothing is deleted afterwards),
+        // but it must be *said* — a silently missing file in a new project is
+        // the kind of thing a user discovers days later.
+        if !entry.is_file() {
+            eprintln!(
+                "{} skipped '{}' from template '{}' — links and special files are not reproduced",
+                "warning:".yellow().bold(),
+                entry.rel,
+                template.slug
+            );
             continue;
         }
 

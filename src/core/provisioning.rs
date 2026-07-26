@@ -476,6 +476,272 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
 mod tests {
     use super::*;
 
+    /// Backdate a file so the age gate treats it as abandoned.
+    fn age_file(path: &Path, secs: u64) {
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+        let file = fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(when).unwrap();
+    }
+
+    /// This predicate decides what gets **deleted**, so both directions matter:
+    /// it must never claim a real file, and it must actually claim old scratch.
+    #[test]
+    fn is_abandoned_scratch_only_claims_old_scratch_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        let make = |name: &str, age: u64| {
+            let p = dir.join(name);
+            fs::write(&p, "x").unwrap();
+            age_file(&p, age);
+            p
+        };
+
+        // Old scratch → claimed.
+        assert!(is_abandoned_scratch(&make("blob.bin.part", 7200)));
+        assert!(is_abandoned_scratch(&make("config.toml.42.0.tmp", 7200)));
+
+        // Recent scratch → left alone. A `.part` may belong to a copy running
+        // right now in another process, and deleting it would break it.
+        assert!(!is_abandoned_scratch(&make("fresh.bin.part", 0)));
+        assert!(!is_abandoned_scratch(&make("fresh.toml.1.0.tmp", 0)));
+
+        // Real files are never claimed, however old.
+        for name in ["notes.md", "PROJECT_INFO.md", "movie.mov", "partial", "tmp"] {
+            let p = make(name, 7200);
+            assert!(
+                !is_abandoned_scratch(&p),
+                "{name} is real content and must never be swept"
+            );
+        }
+
+        // A path that does not exist cannot be claimed.
+        assert!(!is_abandoned_scratch(&dir.join("ghost.part")));
+    }
+
+    /// The age gate is an hour, and it is the only thing standing between the
+    /// sweep and an in-flight copy.
+    #[test]
+    fn scratch_age_gate_is_an_hour() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("edge.part");
+        fs::write(&p, "x").unwrap();
+
+        age_file(&p, 3599); // just inside the window
+        assert!(!is_abandoned_scratch(&p), "59m59s is still too recent");
+        age_file(&p, 3601); // just past it
+        assert!(is_abandoned_scratch(&p), "1h0m1s is abandoned");
+    }
+
+    /// The sweep must reach nested scratch and leave everything else alone.
+    #[test]
+    fn sweep_scratch_removes_only_abandoned_scratch_recursively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("assets/deep")).unwrap();
+
+        let old_part = root.join("assets/deep/big.bin.part");
+        fs::write(&old_part, "abandoned").unwrap();
+        age_file(&old_part, 7200);
+
+        let fresh_part = root.join("assets/active.bin.part");
+        fs::write(&fresh_part, "in flight").unwrap();
+
+        let real = root.join("assets/deep/keep.mov");
+        fs::write(&real, "irreplaceable").unwrap();
+        age_file(&real, 999_999);
+
+        let mut report = ReconcileReport::default();
+        sweep_scratch(root, &mut report);
+
+        assert_eq!(report.swept, 1, "exactly the one abandoned file");
+        assert!(!old_part.exists(), "abandoned scratch should be gone");
+        assert!(fresh_part.exists(), "an in-flight copy must not be touched");
+        assert_eq!(
+            fs::read_to_string(&real).unwrap(),
+            "irreplaceable",
+            "real content must survive the sweep"
+        );
+    }
+
+    /// `clear_move` must actually remove the marker, or reconcile would keep
+    /// re-processing a move that already finished.
+    #[test]
+    fn clear_move_removes_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_move_marker(
+            base,
+            "proj",
+            &base.join("src"),
+            &base.join(".t"),
+            &base.join("dst"),
+            "copying",
+            "ID0001",
+        )
+        .unwrap();
+        assert!(move_marker_path(base, "proj").exists());
+
+        clear_move(base, "proj");
+        assert!(
+            !move_marker_path(base, "proj").exists(),
+            "the marker must be gone, or reconcile reprocesses a finished move"
+        );
+    }
+
+    /// The UI banner is driven by this: it must report pending work and stay
+    /// quiet otherwise.
+    #[test]
+    fn list_incomplete_reports_pending_work_and_nothing_else() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+
+        // A finished project produces no entry.
+        let done = base.join("done");
+        fs::create_dir_all(&done).unwrap();
+        fs::write(
+            crate::core::project_info::pinfo_path(&done),
+            "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
+             created: 2026-01-01T00:00:00Z\nfolder: done\npath: x\n\
+             variables: {}\ntags: []\n---\n",
+        )
+        .unwrap();
+        assert!(
+            list_incomplete(&cfg).is_empty(),
+            "a clean base must be quiet"
+        );
+
+        // A project with a marker and a pending job is reported.
+        let busy = base.join("busy");
+        fs::create_dir_all(&busy).unwrap();
+        write_create_marker(
+            &busy,
+            &[CopyJob {
+                src: base.join("a.bin"),
+                dest: busy.join("a.bin"),
+                bytes: 10,
+            }],
+        )
+        .unwrap();
+
+        let items = list_incomplete(&cfg);
+        assert_eq!(items.len(), 1, "got {items:?}");
+        assert_eq!(items[0].kind, "create");
+        assert_eq!(items[0].pending, 1, "the outstanding copy must be counted");
+
+        // Once the copy is marked done, nothing is pending any more.
+        mark_done(&busy, &busy.join("a.bin"));
+        assert_eq!(list_incomplete(&cfg)[0].pending, 0);
+    }
+
+    /// Resume must accept only a file that is genuinely complete. A destination
+    /// of the wrong size is a truncated copy, and treating it as done would
+    /// silently leave a corrupt file in the project forever.
+    #[test]
+    fn reconcile_create_recopies_a_truncated_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let root = base.join("proj");
+        fs::create_dir_all(&root).unwrap();
+
+        let src = base.join("asset.bin");
+        let data = vec![5u8; 4096];
+        fs::write(&src, &data).unwrap();
+
+        // A destination that exists but is short — a copy killed mid-write.
+        let dest = root.join("asset.bin");
+        fs::write(&dest, vec![5u8; 100]).unwrap();
+
+        write_create_marker(
+            &root,
+            &[CopyJob {
+                src: src.clone(),
+                dest: dest.clone(),
+                bytes: data.len() as u64,
+            }],
+        )
+        .unwrap();
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.resumed, 1, "the short file must be re-copied");
+        assert_eq!(
+            fs::read(&dest).unwrap(),
+            data,
+            "the destination must end up complete"
+        );
+        assert!(!create_marker_path(&root).exists(), "marker cleared");
+
+        // A destination that is already the right size is left alone and
+        // counted as done rather than re-copied.
+        write_create_marker(
+            &root,
+            &[CopyJob {
+                src,
+                dest,
+                bytes: data.len() as u64,
+            }],
+        )
+        .unwrap();
+        let report = reconcile(&cfg);
+        assert_eq!(report.resumed, 0, "a complete file needs no work");
+        assert!(!create_marker_path(&root).exists());
+    }
+
+    /// After a committed move, the source is removed — but only when there is a
+    /// distinct source still there to remove.
+    #[test]
+    fn reconcile_move_handles_an_already_removed_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let pinfo = "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
+                     created: 2026-01-01T00:00:00Z\nfolder: f\npath: x\n\
+                     variables: {}\ntags: []\n---\n";
+
+        // The commit landed and the source was already cleaned up: reconcile
+        // just has to tidy the marker away, without erroring.
+        let final_path = base.join("moved");
+        fs::create_dir_all(&final_path).unwrap();
+        fs::write(crate::core::project_info::pinfo_path(&final_path), pinfo).unwrap();
+        let gone_src = base.join("already_removed");
+
+        write_move_marker(
+            base,
+            "already_removed",
+            &gone_src,
+            &staging_path(base, "already_removed"),
+            &final_path,
+            "finalizing",
+            "ID0001",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.completed, 1, "report: {report:?}");
+        assert!(
+            report.unrecoverable.is_empty(),
+            "a missing source is the expected end state, not a failure"
+        );
+        assert!(final_path.is_dir(), "the destination must survive");
+        assert!(
+            !move_marker_path(base, "already_removed").exists(),
+            "marker cleared"
+        );
+    }
+
     #[test]
     fn create_marker_round_trip_and_mark_done() {
         let tmp = tempfile::tempdir().unwrap();

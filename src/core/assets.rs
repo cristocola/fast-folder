@@ -32,6 +32,13 @@ pub const TEXT_MAX_BYTES: u64 = 1024 * 1024;
 /// (never needs interpolation) — the background copier does pure byte copies.
 pub const JOB_DEFER_BYTES: u64 = 4 * 1024 * 1024;
 
+// Enforced at compile time, not merely tested: the background copier has no
+// variables to interpolate with, so a file large enough to be deferred but small
+// enough to still be interpolated would be written out with its `{tokens}`
+// unsubstituted. Lowering `JOB_DEFER_BYTES` below `TEXT_MAX_BYTES` fails the
+// build rather than shipping that.
+const _: () = assert!(JOB_DEFER_BYTES >= TEXT_MAX_BYTES);
+
 /// A single deferred file copy (always a verbatim byte copy — see
 /// [`JOB_DEFER_BYTES`]). Produced by the eager create phase, run by a UI
 /// background thread with progress.
@@ -383,13 +390,15 @@ pub fn verify_tree(src: &Path, dst: &Path) -> Result<()> {
             Some(_) => {}
         }
     }
-    if dst_files.len() < src_files.len() {
-        anyhow::bail!(
-            "verification failed: destination has {} files, source has {}",
-            dst_files.len(),
-            src_files.len()
-        );
-    }
+    // There used to be a `dst_files.len() < src_files.len()` check here. It was
+    // unreachable: the loop above requires every source file to be present at
+    // the destination, so by this point `dst >= src` always holds. Mutation
+    // testing surfaced it — no test could distinguish flipping the comparison,
+    // because the branch could never be taken either way.
+    //
+    // Extra files at the destination are deliberately *not* an error. The
+    // property that has to hold before a source is deleted is "everything made
+    // it across", and a surplus does not threaten that.
     Ok(())
 }
 
@@ -718,6 +727,149 @@ mod tests {
             err.contains("verification failed") && err.contains("linked"),
             "expected a verification failure naming the link, got: {err}"
         );
+    }
+
+    /// A file at exactly the interpolation cap is still interpolated; one past it
+    /// is copied verbatim. The threshold ordering itself is a compile-time
+    /// assertion next to the constants.
+    #[test]
+    fn text_cap_decides_interpolate_versus_verbatim() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Aurora".to_string());
+
+        // Comfortably under the cap → interpolated.
+        let small = tmp.path().join("small.txt");
+        fs::write(&small, "hello {name}").unwrap();
+        let dest = tmp.path().join("out_small.txt");
+        copy_file(&small, &dest, false, &vars, "%Y-%m-%d").unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "hello Aurora");
+
+        // Same file, forced verbatim → braces survive untouched.
+        let dest = tmp.path().join("out_verbatim.txt");
+        copy_file(&small, &dest, true, &vars, "%Y-%m-%d").unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "hello {name}");
+    }
+
+    /// `walk` must distinguish the kinds, not just "exists".
+    #[test]
+    fn walk_classifies_each_entry_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("a_dir/nested")).unwrap();
+        fs::write(root.join("b_file.txt"), "x").unwrap();
+        fs::write(root.join("a_dir/nested/deep.bin"), vec![0u8; 10]).unwrap();
+
+        let entries = walk(root).unwrap();
+        let kind_of = |rel: &str| entries.iter().find(|e| e.rel == rel).map(|e| e.kind);
+
+        assert_eq!(kind_of("a_dir"), Some(EntryKind::Dir));
+        assert_eq!(kind_of("a_dir/nested"), Some(EntryKind::Dir));
+        assert_eq!(kind_of("b_file.txt"), Some(EntryKind::File));
+        assert_eq!(kind_of("a_dir/nested/deep.bin"), Some(EntryKind::File));
+
+        // The predicates must actually discriminate — `is_dir()` returning a
+        // constant would still satisfy a test that only counted entries.
+        let dirs = entries.iter().filter(|e| e.is_dir()).count();
+        let files = entries.iter().filter(|e| e.is_file()).count();
+        assert_eq!(dirs, 2, "exactly the two directories");
+        assert_eq!(files, 2, "exactly the two files");
+        assert!(entries.iter().filter(|e| e.is_dir()).all(|e| !e.is_file()));
+        // Sizes are only meaningful for files.
+        assert_eq!(kind_of("b_file.txt").map(|_| ()), Some(()));
+        assert_eq!(
+            entries.iter().find(|e| e.rel == "a_dir").map(|e| e.size),
+            Some(0)
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| e.rel == "a_dir/nested/deep.bin")
+                .map(|e| e.size),
+            Some(10)
+        );
+    }
+
+    /// Verification asks one question: did everything make it across? A surplus
+    /// at the destination does not threaten that, so it is tolerated — only
+    /// missing or short files block a move from removing its source.
+    #[test]
+    fn verify_tree_requires_everything_arrived_but_tolerates_extras() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(src.join("a.txt"), "same").unwrap();
+        fs::write(dst.join("a.txt"), "same").unwrap();
+        verify_tree(&src, &dst).unwrap();
+
+        // An unrelated extra file at the destination is not a failure.
+        fs::write(dst.join("stranger.txt"), "unexpected").unwrap();
+        verify_tree(&src, &dst)
+            .expect("extra files at the destination must not block verification");
+
+        // But anything missing from the destination does block it — this is the
+        // guarantee that stands between a move and deleting a good source.
+        fs::write(src.join("b.txt"), "must arrive").unwrap();
+        let err = verify_tree(&src, &dst).unwrap_err().to_string();
+        assert!(err.contains("missing at destination"), "got: {err}");
+    }
+
+    /// Each clause of `is_transient` must be load-bearing on its own.
+    #[test]
+    fn is_transient_recognizes_every_scaffolding_kind_independently() {
+        // Cache.
+        assert!(is_transient(crate::core::library::CACHE_FILENAME));
+        // Create marker.
+        assert!(is_transient(crate::core::provisioning::MARKER_CREATE));
+        // Move marker (prefix match).
+        assert!(is_transient(".fastf-move-anything.json"));
+        // Half-written copy.
+        assert!(is_transient("blob.bin.part"));
+        // Atomic-write scratch.
+        assert!(is_transient("config.toml.999.0.tmp"));
+        // Nested, matched on the basename.
+        assert!(is_transient("deep/sub/blob.bin.part"));
+
+        // And real content is never transient.
+        for real in [
+            "README.md",
+            "notes.txt",
+            "assets/logo.svg",
+            "partial",       // "part" is not a suffix match
+            "tmp",           // nor is "tmp"
+            "my.part.thing", // only a trailing .part counts
+        ] {
+            assert!(!is_transient(real), "{real} must not be treated as scratch");
+        }
+    }
+
+    /// The glob matcher backtracks; the wildcard bookkeeping is easy to get
+    /// subtly wrong in ways a couple of happy-path cases miss.
+    #[test]
+    fn glob_match_backtracks_correctly() {
+        // A `*` that must give back characters before matching.
+        assert!(glob_match("*.txt", "a.b.txt"));
+        assert!(glob_match("*b*", "abc"));
+        assert!(glob_match("a*b*c", "axxbyyc"));
+        assert!(!glob_match("a*b*c", "axxbyy"));
+        // Trailing wildcards may consume nothing.
+        assert!(glob_match("a*", "a"));
+        assert!(glob_match("a**", "a"));
+        assert!(glob_match("*", ""));
+        // `?` is exactly one character.
+        assert!(glob_match("a?c", "abc"));
+        assert!(!glob_match("a?c", "ac"));
+        assert!(!glob_match("a?c", "abbc"));
+        // Anchoring: a pattern must consume the whole string.
+        assert!(!glob_match("abc", "abcd"));
+        assert!(!glob_match("abcd", "abc"));
+        assert!(glob_match("", ""));
+        assert!(!glob_match("", "x"));
+        // Repeated wildcards must not double-count.
+        assert!(glob_match("*a*a*", "banana"));
+        assert!(!glob_match("*z*z*", "banana"));
     }
 
     #[test]

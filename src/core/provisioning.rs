@@ -638,6 +638,97 @@ mod tests {
         assert_eq!(list_incomplete(&cfg)[0].pending, 0);
     }
 
+    /// `reconcile` walks the base root and deletes things there. It must remove
+    /// abandoned scratch and *nothing else*.
+    ///
+    /// A base is the user's own folder — it can hold anything. Two mutants
+    /// survived here that would each have destroyed real files: loosening the
+    /// marker-name test makes every `.json` at the root look like a move marker
+    /// (and get deleted), and loosening the sweep condition calls `remove_file`
+    /// on whatever it is currently looking at.
+    #[test]
+    fn reconcile_sweeps_only_scratch_from_a_base_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        // Things a user might legitimately keep beside their projects.
+        let bystanders = [
+            "notes.md",
+            "budget.xlsx",
+            "settings.json",         // NOT a move marker
+            "fastf-move-notes.json", // no leading dot: still not a marker
+            ".fastf-move-notes.txt", // marker prefix, wrong extension
+        ];
+        for name in bystanders {
+            fs::write(base.join(name), format!("contents of {name}")).unwrap();
+        }
+
+        // Recent scratch: may belong to a copy running right now.
+        fs::write(base.join("fresh.bin.part"), "in flight").unwrap();
+
+        // Abandoned scratch: the only thing that should go.
+        let stale = base.join("abandoned.bin.part");
+        fs::write(&stale, "leftover").unwrap();
+        age_file(&stale, 7200);
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.swept, 1, "exactly one file should be swept");
+        assert!(!stale.exists(), "abandoned scratch should be gone");
+        assert!(
+            base.join("fresh.bin.part").exists(),
+            "recent scratch may be an in-flight copy and must survive"
+        );
+        for name in bystanders {
+            assert_eq!(
+                fs::read_to_string(base.join(name)).unwrap(),
+                format!("contents of {name}"),
+                "{name} is the user's file and must never be touched"
+            );
+        }
+    }
+
+    /// The sweep must not descend through a link: its target lives outside the
+    /// tree being cleaned, and deleting from there is not this function's call.
+    #[test]
+    fn sweep_scratch_does_not_follow_links_out_of_the_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let outside_scratch = outside.join("elsewhere.bin.part");
+        fs::write(&outside_scratch, "not ours to delete").unwrap();
+        age_file(&outside_scratch, 7200);
+
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+
+        let link = root.join("linked");
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, &link).is_ok();
+        assert!(made, "could not create a directory link");
+
+        let mut report = ReconcileReport::default();
+        sweep_scratch(&root, &mut report);
+
+        assert_eq!(report.swept, 0, "nothing inside the tree to sweep");
+        assert!(
+            outside_scratch.exists(),
+            "the sweep followed a link and deleted a file outside its tree"
+        );
+    }
+
     /// Resume must accept only a file that is genuinely complete. A destination
     /// of the wrong size is a truncated copy, and treating it as done would
     /// silently leave a corrupt file in the project forever.

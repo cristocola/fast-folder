@@ -355,6 +355,10 @@ function render() {
   const caret = focusId && typeof active.selectionStart === "number"
     ? [active.selectionStart, active.selectionEnd]
     : null;
+  // The page scrolls inside `.content`, not the window, so a full redraw throws
+  // that element away and the new one starts at the top. Ticking a checkbox
+  // half-way down the projects list therefore snapped the view back to row one.
+  const scrollTop = app.querySelector(".content")?.scrollTop ?? 0;
 
   let content;
   if (state.view === "create") content = createPage();
@@ -378,6 +382,15 @@ function render() {
       if (caret && typeof restored.setSelectionRange === "function") {
         try { restored.setSelectionRange(caret[0], caret[1]); } catch {}
       }
+    }
+  }
+
+  // Put the reader back where they were. Clamped, because the new page may be
+  // shorter than the old one (a search that narrowed the list, say).
+  if (scrollTop > 0) {
+    const content = app.querySelector(".content");
+    if (content) {
+      content.scrollTop = Math.min(scrollTop, content.scrollHeight - content.clientHeight);
     }
   }
 }
@@ -1012,7 +1025,7 @@ function projectsPage() {
       <div class="search-legend">
         <span><b>tag:</b>draft</span><span><b>template=</b>music-video</span><span><b>artist=</b>Aria*</span><span><b>created&gt;</b>2026-01-01</span><span>or any free text</span>
       </div>
-      ${bulkBar(projects)}
+      <div id="bulk-bar-slot">${bulkBar(projects)}</div>
       <div class="panel project-list">
         <div class="project-row project-header-row">
           <label class="project-select"><input type="checkbox" data-select-all ${allSelected(projects) ? "checked" : ""}></label>
@@ -1333,9 +1346,56 @@ function bindProjectRows() {
       const path = box.dataset.selectPath;
       if (box.checked) state.selected.add(path);
       else state.selected.delete(path);
-      render();
+      // Update in place instead of redrawing the page. A full `render()` here
+      // rebuilt the whole list to change one tick — which destroyed the
+      // scrolling container and threw the reader back to the first row.
+      refreshSelectionUi();
     });
   });
+}
+
+// Reflect `state.selected` without rebuilding the page: the row highlight, the
+// select-all box, and the bulk toolbar are the only things a selection changes.
+function refreshSelectionUi() {
+  document.querySelectorAll("[data-select-path]").forEach((box) => {
+    const selected = state.selected.has(box.dataset.selectPath);
+    box.checked = selected;
+    box.closest(".project-row")?.classList.toggle("selected", selected);
+  });
+
+  const projects = state.searchResults ?? state.data.projects;
+  const selectAll = document.querySelector("[data-select-all]");
+  if (selectAll) selectAll.checked = allSelected(projects);
+
+  const slot = document.querySelector("#bulk-bar-slot");
+  if (slot) {
+    // The toolbar appearing (or going) changes the slot's height, which shoves
+    // every row below it up or down. Absorb that into the scroll position so
+    // the row the reader just clicked stays exactly where it was.
+    const scroller = document.querySelector(".content");
+    const before = slot.offsetHeight;
+    slot.innerHTML = bulkBar(projects);
+    const delta = slot.offsetHeight - before;
+    if (scroller && delta !== 0 && scroller.scrollTop > 0) {
+      scroller.scrollTop += delta;
+    }
+    // The toolbar's controls are recreated, so their handlers must be too.
+    bindBulkBarControls();
+  }
+}
+
+// The toolbar's own controls. Split out because `refreshSelectionUi` rebuilds
+// just that markup, so these handlers have to be reattached without touching
+// the page-level ones (select-all, sort) that survive.
+function bindBulkBarControls() {
+  document.querySelector("#bulk-base-select")?.addEventListener("change", (event) => {
+    state.bulkBase = event.target.value;
+  });
+  document.querySelector("[data-bulk-clear]")?.addEventListener("click", () => {
+    state.selected.clear();
+    refreshSelectionUi();
+  });
+  document.querySelector("[data-bulk-move]")?.addEventListener("click", moveSelected);
 }
 
 // Bulk-select toolbar (page-level, outside #project-results). Bound on full
@@ -1345,16 +1405,9 @@ function bindProjectBulk() {
     const projects = state.searchResults ?? state.data.projects;
     if (event.target.checked) projects.forEach((p) => state.selected.add(p.path));
     else projects.forEach((p) => state.selected.delete(p.path));
-    render();
+    refreshSelectionUi();
   });
-  document.querySelector("#bulk-base-select")?.addEventListener("change", (event) => {
-    state.bulkBase = event.target.value;
-  });
-  document.querySelector("[data-bulk-clear]")?.addEventListener("click", () => {
-    state.selected.clear();
-    render();
-  });
-  document.querySelector("[data-bulk-move]")?.addEventListener("click", moveSelected);
+  bindBulkBarControls();
   document.querySelectorAll("[data-sort-key]").forEach((button) => button.addEventListener("click", () => {
     const key = button.dataset.sortKey;
     if (state.sort.key === key) {

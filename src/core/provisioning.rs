@@ -111,6 +111,12 @@ struct MoveMarker {
     temp: String,
     final_path: String,
     phase: String,
+    /// The moved project's ID. Recovery uses it to confirm that whatever now
+    /// sits at `final_path` really is this project before removing the source.
+    /// Older markers (written before this field existed) default to empty, which
+    /// recovery treats as "cannot confirm" — the safe direction.
+    #[serde(default)]
+    id: String,
 }
 
 /// The staging-folder path for a cross-filesystem move (`.<folder>.fastf-part`
@@ -123,7 +129,10 @@ fn move_marker_path(target_base: &Path, folder: &str) -> PathBuf {
     target_base.join(format!("{MARKER_MOVE_PREFIX}{folder}.json"))
 }
 
-/// Write the staged-move marker at the target base root.
+/// Write the staged-move marker at the target base root. `id` is the moved
+/// project's ID, which recovery uses to confirm the destination's identity
+/// before it removes anything.
+#[allow(clippy::too_many_arguments)]
 pub fn write_move_marker(
     target_base: &Path,
     folder: &str,
@@ -131,6 +140,7 @@ pub fn write_move_marker(
     temp: &Path,
     final_path: &Path,
     phase: &str,
+    id: &str,
 ) -> Result<()> {
     let marker = MoveMarker {
         version: MARKER_VERSION,
@@ -139,6 +149,7 @@ pub fn write_move_marker(
         temp: temp.display().to_string(),
         final_path: final_path.display().to_string(),
         phase: phase.to_string(),
+        id: id.to_string(),
     };
     write_atomic(&move_marker_path(target_base, folder), &marker)
 }
@@ -304,20 +315,63 @@ fn reconcile_move(base: &Path, marker_path: &Path, report: &mut ReconcileReport)
     let src = PathBuf::from(&marker.src);
     let temp = PathBuf::from(&marker.temp);
 
-    if final_path.exists() {
-        // Commit already landed. Clean up any source the crash didn't reach.
-        if src.exists() && src != final_path {
-            let _ = fs::remove_dir_all(&src);
-        }
-        let _ = fs::remove_file(marker_path);
-        report.completed += 1;
-    } else {
+    if !final_path.exists() {
         // Nothing committed — discard the partial copy; the source is untouched.
-        let _ = fs::remove_dir_all(&temp);
+        let _ = crate::util::fs_retry::remove_dir_all(&temp);
         let _ = fs::remove_file(marker_path);
         report.rolled_back += 1;
+        return;
     }
-    let _ = base; // base kept for symmetry / future per-base cache refresh
+
+    // Something exists at the destination. "Exists" alone is NOT proof the
+    // commit landed: a rolled-back move leaves the name free, and anything could
+    // have taken it since. Removing the source on that inference could destroy a
+    // perfectly good project, so confirm identity first.
+    if src.exists() && src != final_path {
+        if let Err(why) = confirm_commit(&marker, &src, &final_path) {
+            report.unrecoverable.push(format!(
+                "{}: {why}. Source left at {} — resolve by hand.",
+                marker.final_path,
+                src.display()
+            ));
+            return; // marker stays, so the next reconcile retries
+        }
+        if let Err(err) = crate::util::fs_retry::remove_dir_all(&src) {
+            report.unrecoverable.push(format!(
+                "{}: could not remove source ({err})",
+                src.display()
+            ));
+            return;
+        }
+    }
+    let _ = fs::remove_file(marker_path);
+    report.completed += 1;
+    let _ = base; // kept for symmetry / future per-base cache refresh
+}
+
+/// Confirm that `final_path` really holds the project the marker describes,
+/// before its source is removed. Two independent checks:
+///
+/// 1. The destination's `PROJECT_INFO.md` carries the marker's ID — this is what
+///    distinguishes "our completed move" from "an unrelated folder that happens
+///    to have the same name".
+/// 2. Every file still present in the source exists at the destination with the
+///    same size, so a half-finished copy can never license a deletion.
+fn confirm_commit(marker: &MoveMarker, src: &Path, final_path: &Path) -> Result<()> {
+    if marker.id.is_empty() {
+        anyhow::bail!("marker predates identity checking, cannot confirm the destination");
+    }
+    match crate::core::project_info::read_metadata(final_path) {
+        Ok(Some(meta)) if meta.id == marker.id => {}
+        Ok(Some(meta)) => anyhow::bail!(
+            "destination holds a different project (found {}, expected {})",
+            meta.id,
+            marker.id
+        ),
+        Ok(None) => anyhow::bail!("destination has no readable project metadata"),
+        Err(err) => anyhow::bail!("destination metadata unreadable ({err})"),
+    }
+    assets::verify_tree(src, final_path)
 }
 
 // ---------------------------------------------------------------------------
@@ -325,11 +379,7 @@ fn reconcile_move(base: &Path, marker_path: &Path, report: &mut ReconcileReport)
 // ---------------------------------------------------------------------------
 
 fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let raw = serde_json::to_string_pretty(value)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, raw)?;
-    fs::rename(&tmp, path)?;
-    Ok(())
+    crate::util::atomic::write_json(path, value)
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
@@ -401,7 +451,7 @@ mod tests {
         fs::write(temp.join("keep.txt"), "partial").unwrap();
         // The final target does not exist yet → the commit never happened.
         let final_path = base.join("committed_target_that_does_not_exist");
-        write_move_marker(base, "proj", &src, &temp, &final_path, "copying").unwrap();
+        write_move_marker(base, "proj", &src, &temp, &final_path, "copying", "ID0001").unwrap();
 
         let cfg = Config {
             base_dir: base.display().to_string(),
@@ -415,6 +465,112 @@ mod tests {
             "important",
             "source untouched"
         );
+        assert!(!move_marker_path(base, "proj").exists(), "marker cleared");
+    }
+
+    /// The regression this whole identity check exists for: a rolled-back move
+    /// leaves the target name free, and anything may take it afterwards. If
+    /// reconcile treated "a folder is there" as proof the commit landed, it
+    /// would delete a perfectly good source.
+    #[test]
+    fn reconcile_refuses_to_delete_source_when_destination_is_a_different_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        let src = base.join("proj");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("irreplaceable.txt"), "the user's actual work").unwrap();
+
+        // An unrelated project now occupies the destination name.
+        let final_path = base.join("moved_proj");
+        fs::create_dir_all(&final_path).unwrap();
+        fs::write(
+            final_path.join(crate::core::project_info::RESERVED_FILENAME),
+            "---\nid: ID9999\ntemplate: other\ntemplate_name: Other\n\
+             created: 2026-01-01T00:00:00Z\nfolder: moved_proj\npath: x\n\
+             variables: {}\ntags: []\n---\n",
+        )
+        .unwrap();
+
+        let temp = staging_path(base, "proj");
+        write_move_marker(base, "proj", &src, &temp, &final_path, "copying", "ID0001").unwrap();
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.completed, 0, "must not claim the move completed");
+        assert!(
+            src.join("irreplaceable.txt").exists(),
+            "source was deleted despite the destination being a different project"
+        );
+        assert!(
+            report.unrecoverable.iter().any(|m| m.contains("ID9999")),
+            "should report the identity mismatch, got {:?}",
+            report.unrecoverable
+        );
+        assert!(
+            move_marker_path(base, "proj").exists(),
+            "marker must survive so the next reconcile retries"
+        );
+    }
+
+    /// The genuine crash-after-commit case must still finish cleanly.
+    #[test]
+    fn reconcile_completes_move_when_destination_is_the_same_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let pinfo = |id: &str| {
+            format!(
+                "---\nid: {id}\ntemplate: t\ntemplate_name: T\n\
+                 created: 2026-01-01T00:00:00Z\nfolder: f\npath: x\n\
+                 variables: {{}}\ntags: []\n---\n"
+            )
+        };
+
+        // Crash happened after the commit rename but before source removal, so
+        // both sides hold identical content.
+        let src = base.join("proj");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("a.txt"), "same").unwrap();
+        fs::write(
+            src.join(crate::core::project_info::RESERVED_FILENAME),
+            pinfo("ID0001"),
+        )
+        .unwrap();
+
+        let final_path = base.join("moved_proj");
+        fs::create_dir_all(&final_path).unwrap();
+        fs::write(final_path.join("a.txt"), "same").unwrap();
+        fs::write(
+            final_path.join(crate::core::project_info::RESERVED_FILENAME),
+            pinfo("ID0001"),
+        )
+        .unwrap();
+
+        let temp = staging_path(base, "proj");
+        write_move_marker(
+            base,
+            "proj",
+            &src,
+            &temp,
+            &final_path,
+            "finalizing",
+            "ID0001",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.completed, 1, "report: {report:?}");
+        assert!(!src.exists(), "source should be removed once confirmed");
+        assert!(final_path.exists(), "destination survives");
         assert!(!move_marker_path(base, "proj").exists(), "marker cleared");
     }
 }

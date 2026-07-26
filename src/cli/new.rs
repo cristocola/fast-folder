@@ -50,10 +50,10 @@ pub fn run(args: NewArgs) -> Result<()> {
     // Collect variable values (flags → interactive fallback)
     let raw_vars = collect_vars(&tmpl, &args.vars)?;
 
-    // Load counters
-    let mut counters = Counters::load()?;
-
-    // Build plan
+    // Preview plan — read-only, so no lock is taken. The ID shown here is
+    // advisory: the committed one is allocated under the lock below, and only
+    // differs if another fastf creates a project while the prompt is open.
+    let counters = Counters::load()?;
     let plan = project::plan(&tmpl, &raw_vars, &config, &counters)?;
 
     if args.dry_run {
@@ -76,8 +76,27 @@ pub fn run(args: NewArgs) -> Result<()> {
         }
     }
 
-    project::create(&plan, &tmpl, &mut counters, &config, !args.no_post)?;
+    // Allocate the ID and claim the folder under the cross-process data lock.
+    // The counter is re-read and the plan recomputed inside the lock: another
+    // fastf may have taken an ID while the confirmation prompt was open, and
+    // reusing the previewed value is exactly how duplicate IDs were minted.
+    // Post-create runs after the lock is released — see `run_post_create`.
+    let plan = {
+        let _lock = crate::util::lockfile::DataLock::acquire()?;
+        let mut counters = Counters::load()?;
+        let plan = project::plan(&tmpl, &raw_vars, &config, &counters)?;
+        project::create(&plan, &tmpl, &mut counters, &config, false)?;
+        plan
+    };
     project::print_success(&plan, &tmpl);
+
+    if !args.no_post {
+        let root = plan
+            .root_path
+            .canonicalize()
+            .unwrap_or_else(|_| plan.root_path.clone());
+        project::run_post_create(&root, &tmpl, &config);
+    }
 
     // "Open project folder?" prompt — skip in non-interactive / headless modes
     // and when `reveal` would already run as a post-create action (avoid double-open).

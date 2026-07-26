@@ -132,17 +132,53 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
     }
 }
 
-/// One physical entry discovered under a template's `files/` directory.
+/// What a walked entry actually is.
+///
+/// An enum rather than a pair of bools on purpose: adding a variant makes the
+/// compiler point at every consumer that must decide what to do with it. `walk`
+/// used to silently drop anything that was not a plain file or directory, which
+/// is how a cross-filesystem move came to delete a project's junctions — the
+/// copy skipped them, and the verification, built on the same walk, was blind to
+/// the very same entries on both sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    Dir,
+    File,
+    /// A symlink, Windows junction, or other reparse point. Never followed.
+    Symlink,
+    /// Anything else (fifo, socket, device node). Recorded, never copied.
+    Other,
+}
+
+/// One physical entry discovered under a directory tree.
 pub struct AssetEntry {
-    /// Path relative to `files/`, forward-slash separated, **uninterpolated**.
+    /// Path relative to the walk root, forward-slash separated, **uninterpolated**.
     pub rel: String,
-    pub is_dir: bool,
+    pub kind: EntryKind,
     pub size: u64,
+}
+
+impl AssetEntry {
+    pub fn is_dir(&self) -> bool {
+        self.kind == EntryKind::Dir
+    }
+
+    /// A plain file — the only kind that gets copied.
+    pub fn is_file(&self) -> bool {
+        self.kind == EntryKind::File
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        self.kind == EntryKind::Symlink
+    }
 }
 
 /// Recursively list every entry under `files_dir` (directories included so that
 /// deliberately-empty folders are reproduced). Returns an empty vec when the
 /// directory does not exist. Results are sorted so parents precede children.
+///
+/// Links are **reported, not followed** — descending through one could leave the
+/// tree entirely or loop forever.
 pub fn walk(files_dir: &Path) -> Result<Vec<AssetEntry>> {
     let mut out = Vec::new();
     if !files_dir.exists() {
@@ -158,16 +194,26 @@ fn walk_inner(root: &Path, current: &Path, out: &mut Vec<AssetEntry>) -> Result<
     for entry in fs::read_dir(current).with_context(|| format!("reading {}", current.display()))? {
         let entry = entry?;
         let path = entry.path();
+        // `DirEntry::file_type` does not follow links, so a symlink to a
+        // directory reports as a symlink rather than a dir — the link itself is
+        // the thing being described, which is what the caller needs to know.
         let ft = entry.file_type()?;
         let rel = path
             .strip_prefix(root)
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        if ft.is_dir() {
+
+        if ft.is_symlink() {
             out.push(AssetEntry {
                 rel,
-                is_dir: true,
+                kind: EntryKind::Symlink,
+                size: 0,
+            });
+        } else if ft.is_dir() {
+            out.push(AssetEntry {
+                rel,
+                kind: EntryKind::Dir,
                 size: 0,
             });
             walk_inner(root, &path, out)?;
@@ -175,13 +221,33 @@ fn walk_inner(root: &Path, current: &Path, out: &mut Vec<AssetEntry>) -> Result<
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             out.push(AssetEntry {
                 rel,
-                is_dir: false,
+                kind: EntryKind::File,
                 size,
             });
+        } else {
+            out.push(AssetEntry {
+                rel,
+                kind: EntryKind::Other,
+                size: 0,
+            });
         }
-        // symlinks / fifos / etc. are intentionally skipped
     }
     Ok(())
+}
+
+/// Relative paths of every link (symlink or Windows junction) inside a tree.
+///
+/// Used as a move pre-flight: fastf refuses to move a project containing links
+/// rather than dropping them. Recreating one faithfully needs elevation or
+/// Developer Mode on Windows, and following it would silently restructure the
+/// project and could duplicate a large shared asset library — so refusing is the
+/// only option that can neither lose nor corrupt data.
+pub fn find_links(root: &Path) -> Result<Vec<String>> {
+    Ok(walk(root)?
+        .into_iter()
+        .filter(AssetEntry::is_symlink)
+        .map(|e| e.rel)
+        .collect())
 }
 
 /// Recursively copy a directory tree, byte-for-byte — **no interpolation**
@@ -197,28 +263,41 @@ pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     for entry in walk(src)? {
         let rel = entry.rel.replace('/', std::path::MAIN_SEPARATOR_STR);
         let target = dst.join(&rel);
-        if entry.is_dir {
-            fs::create_dir_all(&target)
-                .with_context(|| format!("creating {}", target.display()))?;
-        } else {
-            let source = src.join(&rel);
-            fs::copy(&source, &target)
-                .with_context(|| format!("copying {} → {}", source.display(), target.display()))?;
+        match entry.kind {
+            EntryKind::Dir => {
+                fs::create_dir_all(&target)
+                    .with_context(|| format!("creating {}", target.display()))?;
+            }
+            EntryKind::File => {
+                let source = src.join(&rel);
+                fs::copy(&source, &target).with_context(|| {
+                    format!("copying {} → {}", source.display(), target.display())
+                })?;
+            }
+            // Refuse rather than drop: a caller that removes the source after a
+            // "successful" copy would destroy whatever this pointed at.
+            EntryKind::Symlink | EntryKind::Other => anyhow::bail!(
+                "cannot copy '{}': it is a link or special file. \
+                 Copying it faithfully is not supported, and skipping it would silently lose data.",
+                entry.rel
+            ),
         }
     }
     Ok(())
 }
 
 /// Disposable/transient files that must not count toward a copy or verification:
-/// the per-base cache, provisioning/move markers, and half-written `.part` temps.
-/// A tree copy skips them and verification ignores them on both sides, so a move
-/// of a project that itself carries stale scaffolding still verifies cleanly.
+/// the per-base cache, provisioning/move markers, half-written `.part` temps, and
+/// the `.tmp` scratch files left by [`crate::util::atomic`]. A tree copy skips
+/// them and verification ignores them on both sides, so moving a project that
+/// itself carries stale scaffolding still verifies cleanly.
 fn is_transient(rel: &str) -> bool {
     let base = rel.rsplit('/').next().unwrap_or(rel);
     base == crate::core::library::CACHE_FILENAME
         || base == crate::core::provisioning::MARKER_CREATE
         || base.starts_with(crate::core::provisioning::MARKER_MOVE_PREFIX)
         || base.ends_with(".part")
+        || crate::util::atomic::is_temp_file(base)
 }
 
 /// Enumerate a source tree into the directory creates + per-file [`CopyJob`]s
@@ -226,20 +305,33 @@ fn is_transient(rel: &str) -> bool {
 /// ones) come first so a plain create-then-copy is ordering-safe. Transient
 /// scaffolding files are skipped. Used by the staged (cross-filesystem / network)
 /// move so the copy can report live progress and honor cancellation.
+///
+/// Errors on a link or special file. Callers pre-flight with [`find_links`] and
+/// refuse the move up front, so this is the backstop that guarantees no caller
+/// can ever reach the "copied, verified, now delete the source" step while
+/// having silently skipped something.
 pub fn jobs_for_tree(src: &Path, dst: &Path) -> Result<(Vec<PathBuf>, Vec<CopyJob>)> {
     let mut dirs = Vec::new();
     let mut files = Vec::new();
     for entry in walk(src)? {
         let rel = entry.rel.replace('/', std::path::MAIN_SEPARATOR_STR);
         let target = dst.join(&rel);
-        if entry.is_dir {
-            dirs.push(target);
-        } else if !is_transient(&entry.rel) {
-            files.push(CopyJob {
-                src: src.join(&rel),
-                dest: target,
-                bytes: entry.size,
-            });
+        match entry.kind {
+            EntryKind::Dir => dirs.push(target),
+            EntryKind::File => {
+                if !is_transient(&entry.rel) {
+                    files.push(CopyJob {
+                        src: src.join(&rel),
+                        dest: target,
+                        bytes: entry.size,
+                    });
+                }
+            }
+            EntryKind::Symlink | EntryKind::Other => anyhow::bail!(
+                "cannot copy '{}': it is a link or special file. \
+                 Copying it faithfully is not supported, and skipping it would silently lose data.",
+                entry.rel
+            ),
         }
     }
     Ok((dirs, files))
@@ -251,18 +343,36 @@ pub fn jobs_for_tree(src: &Path, dst: &Path) -> Result<(Vec<PathBuf>, Vec<CopyJo
 /// a move removes its source — it catches the real network-share failure mode
 /// (a truncated or dropped-connection copy) without the cost of re-hashing every
 /// byte. Returns a descriptive error on the first discrepancy.
+///
+/// **Deny by default.** Anything the walk cannot classify as a plain file or a
+/// directory fails verification instead of being skipped. The previous version
+/// skipped links on *both* sides, so their sizes agreed trivially and a copy that
+/// had dropped them verified clean — which is precisely how a move could delete a
+/// source whose junctions never reached the destination. Verification must never
+/// be narrower than the copy it is checking.
 pub fn verify_tree(src: &Path, dst: &Path) -> Result<()> {
-    let sizes = |root: &Path| -> Result<HashMap<String, u64>> {
+    let sizes = |root: &Path, side: &str| -> Result<HashMap<String, u64>> {
         let mut map = HashMap::new();
         for entry in walk(root)? {
-            if !entry.is_dir && !is_transient(&entry.rel) {
-                map.insert(entry.rel, entry.size);
+            if is_transient(&entry.rel) {
+                continue;
+            }
+            match entry.kind {
+                EntryKind::Dir => {}
+                EntryKind::File => {
+                    map.insert(entry.rel, entry.size);
+                }
+                EntryKind::Symlink | EntryKind::Other => anyhow::bail!(
+                    "verification failed: {side} contains '{}', a link or special file \
+                     that cannot be verified",
+                    entry.rel
+                ),
             }
         }
         Ok(map)
     };
-    let src_files = sizes(src)?;
-    let dst_files = sizes(dst)?;
+    let src_files = sizes(src, "source")?;
+    let dst_files = sizes(dst, "destination")?;
 
     for (rel, src_size) in &src_files {
         match dst_files.get(rel) {
@@ -511,6 +621,113 @@ mod tests {
         assert!(dst.join("empty_dir").is_dir());
         // Refuses to merge into an existing target.
         assert!(copy_tree(&src, &dst).is_err());
+    }
+
+    /// Create a directory link inside a test tree, cross-platform.
+    ///
+    /// Windows junctions need no elevation (unlike symlinks, which require
+    /// Developer Mode), so `mklink /J` is the portable-enough choice there.
+    /// Returns `false` when the OS refused, so a test can skip rather than fail
+    /// on a machine with restrictive policy.
+    fn make_dir_link(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
+    /// The data-loss regression. A junction inside a project used to be invisible
+    /// to `walk`, so a staged move copied around it and `verify_tree` — walking
+    /// the same blind way — reported success. The source was then deleted.
+    #[test]
+    fn links_are_reported_not_silently_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("real_asset_library");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("payload.txt"), "irreplaceable").unwrap();
+
+        let src = tmp.path().join("project");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("normal.txt"), "ordinary").unwrap();
+        if !make_dir_link(&src.join("linked"), &target) {
+            eprintln!("skipping: OS refused to create a directory link");
+            return;
+        }
+
+        // walk sees it, and classifies it as a link rather than dropping it.
+        let entries = walk(&src).unwrap();
+        let link = entries
+            .iter()
+            .find(|e| e.rel == "linked")
+            .expect("the link must appear in the walk");
+        assert!(link.is_symlink(), "kind was {:?}", link.kind);
+
+        assert_eq!(find_links(&src).unwrap(), vec!["linked".to_string()]);
+
+        // Every copy path refuses rather than silently dropping it.
+        let dst = tmp.path().join("dst");
+        assert!(
+            copy_tree(&src, &dst)
+                .unwrap_err()
+                .to_string()
+                .contains("link"),
+            "copy_tree must refuse a link"
+        );
+        assert!(
+            jobs_for_tree(&src, &dst)
+                .unwrap_err()
+                .to_string()
+                .contains("link"),
+            "jobs_for_tree must refuse a link"
+        );
+    }
+
+    /// Verification must be deny-by-default: a link it cannot check is an error,
+    /// never a skip. Skipping on both sides is what made the sizes agree and let
+    /// a lossy copy "verify".
+    #[test]
+    fn verify_tree_refuses_trees_containing_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        fs::create_dir_all(&target).unwrap();
+
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(src.join("a.txt"), "x").unwrap();
+        fs::write(dst.join("a.txt"), "x").unwrap();
+        // Identical but for a link the destination never received.
+        if !make_dir_link(&src.join("linked"), &target) {
+            eprintln!("skipping: OS refused to create a directory link");
+            return;
+        }
+
+        let err = verify_tree(&src, &dst).unwrap_err().to_string();
+        assert!(
+            err.contains("verification failed") && err.contains("linked"),
+            "expected a verification failure naming the link, got: {err}"
+        );
+    }
+
+    #[test]
+    fn atomic_write_temp_files_are_transient() {
+        // A `.tmp` left by a concurrent atomic write must not break a move's
+        // verification the way an uncounted file would.
+        assert!(is_transient("config.toml.1234.0.tmp"));
+        assert!(is_transient("sub/dir/.fastf-index.json"));
+        assert!(is_transient("big.bin.part"));
+        assert!(!is_transient("notes.md"));
     }
 
     #[test]

@@ -528,7 +528,7 @@ fn load_state() -> Result<Value> {
         .map(|template| {
             let mut value = serde_json::to_value(template).unwrap_or_else(|_| json!({}));
             let file_count = crate::core::assets::walk(&template.files_dir())
-                .map(|entries| entries.iter().filter(|entry| !entry.is_dir).count())
+                .map(|entries| entries.iter().filter(|entry| entry.is_file()).count())
                 .unwrap_or(0);
             if let Value::Object(map) = &mut value {
                 map.insert("file_count".to_string(), json!(file_count));
@@ -606,17 +606,25 @@ fn create_project(request: CreateRequest) -> Result<Value> {
         variables: request.variables,
         base_dir: request.base_dir,
     };
-    let (template, config, mut counters, plan) = configured_plan(&plan_request)?;
-    // Fast path: structure + text/small files + counter + index + PROJECT_INFO.md.
-    // Large bundled assets come back as jobs to copy in the background so the
-    // request returns immediately and the project is usable at once.
-    let deferred = project::create_deferred(
-        &plan,
-        &template,
-        &mut counters,
-        &config,
-        crate::core::assets::JOB_DEFER_BYTES,
-    )?;
+    // Allocate the ID and claim the folder under the cross-process data lock.
+    // `WRITE_LOCK` only serializes writers inside *this* process, so without
+    // this a `fastf new` in a terminal could mint the same ID as the UI.
+    // The plan is recomputed inside the lock so it sees a current counter.
+    let (template, config, plan, deferred) = {
+        let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+        let (template, config, mut counters, plan) = configured_plan(&plan_request)?;
+        // Fast path: structure + text/small files + counter + index + PROJECT_INFO.md.
+        // Large bundled assets come back as jobs to copy in the background so the
+        // request returns immediately and the project is usable at once.
+        let deferred = project::create_deferred(
+            &plan,
+            &template,
+            &mut counters,
+            &config,
+            crate::core::assets::JOB_DEFER_BYTES,
+        )?;
+        (template, config, plan, deferred)
+    };
 
     let actions = PostCreate {
         git_init: request.git_init,
@@ -1392,7 +1400,7 @@ fn list_template_files(slug: &str) -> Result<Value> {
     let entries = crate::core::assets::walk(&dir)?;
     let files: Vec<Value> = entries
         .iter()
-        .filter(|entry| !entry.is_dir)
+        .filter(|entry| entry.is_file())
         .map(|entry| {
             let content = if entry.size <= crate::core::assets::TEXT_MAX_BYTES {
                 fs::read_to_string(dir.join(&entry.rel)).ok()

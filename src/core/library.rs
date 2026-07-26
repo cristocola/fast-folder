@@ -303,9 +303,12 @@ fn load_cache(base: &Path) -> Option<Cache> {
     serde_json::from_str::<Cache>(&raw).ok()
 }
 
-/// Write the cache for `base` atomically (`.tmp` + rename). Best-effort: a
-/// failure is returned but callers ignore it — the cache is disposable and the
-/// folders remain the truth.
+/// Write the cache for `base` atomically. Best-effort: a failure is returned but
+/// callers ignore it — the cache is disposable and the folders remain the truth.
+///
+/// Uses the shared [`crate::util::atomic`] writer, whose temp name carries the
+/// process id: two fastf processes refreshing the same base cache no longer
+/// collide on a single fixed `.tmp` path.
 fn write_cache(base: &Path, projects: &[Project]) -> Result<()> {
     let cache = Cache {
         version: CACHE_VERSION,
@@ -314,12 +317,7 @@ fn write_cache(base: &Path, projects: &[Project]) -> Result<()> {
             .map(|p| CacheEntry::from_project(p, base))
             .collect(),
     };
-    let raw = serde_json::to_string_pretty(&cache)?;
-    let final_path = cache_path(base);
-    let tmp_path = final_path.with_extension("json.tmp");
-    fs::write(&tmp_path, raw)?;
-    fs::rename(&tmp_path, &final_path)?;
-    Ok(())
+    crate::util::atomic::write_json(&cache_path(base), &cache)
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +452,10 @@ pub fn move_project_with(
 
     // Fast path: same-filesystem rename is atomic and instant — no staging,
     // no verification needed (there is no window in which data is half-there).
+    // It also preserves links perfectly, because nothing is copied, so the link
+    // check below deliberately applies only to the staged fallback.
     if fs::rename(&project.path, &new_path).is_err() {
+        refuse_if_contains_links(project)?;
         staged_copy_verify_commit(project, &new_base, &new_path, &folder, progress, cancel)?;
     }
     set_phase(progress, "finalizing");
@@ -487,6 +488,40 @@ pub fn move_project_with(
     Ok(moved)
 }
 
+/// Refuse a staged (copying) move when the project contains links.
+///
+/// A cross-filesystem move copies the tree and then deletes the source. Windows
+/// junctions and symlinks cannot be reproduced faithfully without elevation or
+/// Developer Mode, and following them would silently restructure the project and
+/// could duplicate a whole shared asset library. Previously they were simply
+/// dropped — and because verification walked the destination the same blind way,
+/// the copy "verified" and the source was deleted, taking the links with it.
+///
+/// Refusing is the only outcome that can neither lose nor corrupt data. The user
+/// keeps a working project and an actionable message.
+fn refuse_if_contains_links(project: &Project) -> Result<()> {
+    let links = assets::find_links(&project.path)?;
+    if links.is_empty() {
+        return Ok(());
+    }
+    let shown: Vec<&str> = links.iter().take(5).map(String::as_str).collect();
+    let more = links.len().saturating_sub(shown.len());
+    anyhow::bail!(
+        "'{}' contains {} link{} that a cross-drive move cannot reproduce:\n  {}{}\n\
+         Nothing has been changed. Move the folder with a tool that preserves links \
+         (or remove the links first), then run `fastf reindex`.",
+        project.name,
+        links.len(),
+        if links.len() == 1 { "" } else { "s" },
+        shown.join("\n  "),
+        if more > 0 {
+            format!("\n  ...and {more} more")
+        } else {
+            String::new()
+        }
+    )
+}
+
 /// The staged cross-filesystem move body: marker → copy-to-staging → verify →
 /// commit rename → remove source. Any failure (including cancel) before the
 /// commit leaves the source fully intact.
@@ -506,8 +541,16 @@ fn staged_copy_verify_commit(
     if temp.exists() {
         let _ = fs::remove_dir_all(&temp);
     }
-    provisioning::write_move_marker(new_base, folder, &project.path, &temp, new_path, "copying")
-        .ok();
+    provisioning::write_move_marker(
+        new_base,
+        folder,
+        &project.path,
+        &temp,
+        new_path,
+        "copying",
+        &project.id,
+    )
+    .ok();
 
     // Enumerate the source tree and copy it verbatim into staging with progress.
     let (dirs, files) = assets::jobs_for_tree(&project.path, &temp)?;
@@ -571,6 +614,7 @@ fn staged_copy_verify_commit(
         &temp,
         new_path,
         "finalizing",
+        &project.id,
     )
     .ok();
     fs::rename(&temp, new_path)

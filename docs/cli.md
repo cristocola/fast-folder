@@ -144,6 +144,17 @@ fastf move my-crate /mnt/proj/01_PROJECTS
 
 Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Cross-filesystem moves stage a copy, verify it, commit atomically, and only then remove the source. An interrupted move is recovered by `fastf reconcile` and never loses data.
 
+**Symlinks and junctions.** A move to another drive has to copy, and a link cannot be reproduced faithfully there — recreating one needs elevation or Developer Mode on Windows, and following it would silently restructure your project and could duplicate a whole shared asset library. So fastf refuses, names the links it found, and changes nothing:
+
+```
+error: '2026-07-26_Shoot_ID0047' contains 1 link that a cross-drive move cannot reproduce:
+  linked
+Nothing has been changed. Move the folder with a tool that preserves links
+(or remove the links first), then run `fastf reindex`.
+```
+
+Moves *within* the same drive are unaffected: they are a rename, nothing is copied, and links travel along untouched.
+
 ## Templates
 
 ```bash

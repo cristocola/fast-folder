@@ -117,11 +117,12 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Persist the config atomically — a crash mid-write must never truncate it.
     pub fn save(&self) -> Result<()> {
         let path = paths::config_path();
         let raw = toml::to_string_pretty(self).context("serializing config")?;
-        fs::write(&path, raw).with_context(|| format!("writing {}", path.display()))?;
-        Ok(())
+        crate::util::atomic::write(&path, raw)
+            .with_context(|| format!("writing {}", path.display()))
     }
 
     /// Resolve base directory: configured path, or the user's home directory.
@@ -211,7 +212,15 @@ pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
     }
     fs::create_dir_all(&expanded).with_context(|| format!("creating {}", expanded.display()))?;
     let resolved = expanded.canonicalize().unwrap_or(expanded);
+    // Another load-mutate-save, so it takes the same cross-process lock as
+    // `config set`. No caller holds the lock already (the lock is not
+    // reentrant): the web UI's `/api/base/init` takes only `WRITE_LOCK`, and the
+    // TUI's onboarding runs before anything else.
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let mut config = Config::load()?;
+    // Stored canonical, rendered readable at the display sites. Keeping the
+    // verbatim form here is what preserves long-path support when this base is
+    // later used for filesystem work.
     config.base_dir = resolved.display().to_string();
     config.save()?;
     Ok(resolved)

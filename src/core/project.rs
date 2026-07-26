@@ -53,7 +53,15 @@ pub fn plan(
 
     // Interpolate folder name. Use `interpolate_name` so empty variables don't
     // leave `__` gaps or leading/trailing underscores in the folder name.
-    let folder_name = interpolate_name(&template.naming_pattern, &vars, &config.date_format);
+    // Sanitize the assembled result as well as the individual variables: the
+    // pattern itself can contribute a trailing dot or a literal reserved device
+    // name that no single variable is responsible for. `sanitize_name` is
+    // idempotent, so the double pass is free.
+    let folder_name = sanitize_name(&interpolate_name(
+        &template.naming_pattern,
+        &vars,
+        &config.date_format,
+    ));
 
     let base = config.resolve_base_dir();
     let root_path = base.join(&folder_name);
@@ -89,7 +97,7 @@ pub fn print_dry_run(plan: &ProjectPlan, template: &Template, config: &Config) {
     if let Ok(entries) = assets::walk(&template.files_dir()) {
         let files: Vec<String> = entries
             .iter()
-            .filter(|e| !e.is_dir && !assets::is_excluded(&e.rel, &template.exclude))
+            .filter(|e| e.is_file() && !assets::is_excluded(&e.rel, &template.exclude))
             .map(|e| assets::interp_rel(&e.rel, &plan.vars, &config.date_format))
             .filter(|rel| !crate::core::project_info::path_is_reserved(rel))
             .collect();
@@ -238,7 +246,13 @@ pub fn print_success(plan: &ProjectPlan, template: &Template) {
 fn print_project_path(path: &std::path::Path, folder_name: &str) {
     let parent = path
         .parent()
-        .map(|p| format!("{}{}", p.display(), std::path::MAIN_SEPARATOR))
+        .map(|p| {
+            format!(
+                "{}{}",
+                crate::util::paths::display_path(p),
+                std::path::MAIN_SEPARATOR
+            )
+        })
         .unwrap_or_default();
     println!(
         "  {} {}{}",
@@ -309,16 +323,102 @@ fn create_inner(
     run_post: bool,
     defer_over: Option<u64>,
 ) -> Result<Vec<assets::CopyJob>> {
-    if plan.root_path.exists() {
-        anyhow::bail!(
-            "project folder already exists: {}",
-            plan.root_path.display()
-        );
+    // Claim the project folder with a single atomic operation.
+    //
+    // This used to be `exists()` followed by `create_dir_all()`. Because
+    // `create_dir_all` succeeds on a directory that is already there, two
+    // concurrent creates could both pass the check and then both write into the
+    // same folder — the second silently overwriting the first's files and
+    // PROJECT_INFO.md. `create_dir` fails with `AlreadyExists` instead, so the
+    // filesystem itself arbitrates and exactly one caller can ever win.
+    if let Some(parent) = plan.root_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    if let Err(err) = fs::create_dir(&plan.root_path) {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::bail!(
+                "project folder already exists: {}",
+                plan.root_path.display()
+            );
+        }
+        return Err(err).with_context(|| format!("creating {}", plan.root_path.display()));
     }
 
-    // Create root folder
-    fs::create_dir_all(&plan.root_path)
-        .with_context(|| format!("creating {}", plan.root_path.display()))?;
+    // From here the folder is ours, so any failure rolls it back rather than
+    // leaving a half-built project. This covers Ctrl-C (which surfaces as an
+    // ordinary error from the copy loop), a full disk, and a template file
+    // vanishing mid-copy. The counter is only saved on the success path, so a
+    // rolled-back create does not burn an ID either.
+    match provision_project(plan, template, counters, config, run_post, defer_over) {
+        Ok(deferred) => Ok(deferred),
+        Err(err) => {
+            if let Err(cleanup) = crate::util::fs_retry::remove_dir_all(&plan.root_path) {
+                eprintln!(
+                    "{} could not remove the partial project at {} ({cleanup}) — \
+                     run `fastf reconcile` to clean up",
+                    "warning:".yellow().bold(),
+                    plan.root_path.display()
+                );
+            }
+            Err(err)
+        }
+    }
+}
+
+/// Everything after the folder has been claimed. Split out so `create_inner`
+/// can roll the folder back on any failure.
+///
+/// Nothing may sit between the claim and this call: an early return in that gap
+/// would skip the rollback and leak the folder. The `create:after-root-dir`
+/// failpoint lives *here*, inside the protected region, for exactly that reason
+/// — it caught the bug when it was placed one line too early.
+fn provision_project(
+    plan: &ProjectPlan,
+    template: &Template,
+    counters: &mut Counters,
+    config: &Config,
+    run_post: bool,
+    defer_over: Option<u64>,
+) -> Result<Vec<assets::CopyJob>> {
+    crate::util::faults::check("create:after-root-dir")?;
+
+    // Compute tags: literal template tags + auto-derived tags from tag_from.
+    // Empty variable values are skipped (no "slug/" orphan tags).
+    let tags: Vec<String> = {
+        let mut t: Vec<String> = template.tags.clone();
+        for slug in &template.tag_from {
+            let value = plan.vars.get(slug).map(|s| s.as_str()).unwrap_or("");
+            if !value.is_empty() {
+                t.push(format!("{slug}/{value}"));
+            }
+        }
+        t
+    };
+
+    // PROJECT_INFO.md goes down FIRST, flagged as in-progress.
+    //
+    // It used to be written last, after every file had been copied. Killing a
+    // create mid-copy therefore left a folder with no metadata — and since a
+    // folder is a project only if it has metadata, `recent`, `search`, `reindex`
+    // and `reconcile` were all blind to it. A 500 MB template interrupted at
+    // 60 ms stranded 300 MB that no fastf command could see or clean up.
+    //
+    // Writing it first inverts that: the project is visible from the moment the
+    // folder exists, and the `provisioning` flag says plainly that it is not
+    // finished. This is a hard error, not a warning — without metadata we would
+    // be recreating the very orphan this is meant to prevent.
+    crate::core::project_info::write(plan, template, &tags).context("writing project metadata")?;
+    crate::core::project_info::mark_provisioning(&plan.root_path)
+        .context("flagging project as in-progress")?;
+
+    crate::util::faults::check("create:after-pinfo")?;
+
+    // Durable marker alongside the metadata, so recovery has a to-do list even
+    // if the frontmatter is later hand-edited. Best-effort: the flag above is
+    // the primary signal.
+    let _ = crate::core::provisioning::write_create_marker(&plan.root_path, &[]);
 
     // Create subfolder structure
     create_structure(
@@ -340,6 +440,8 @@ fn create_inner(
         defer_over,
     )?;
 
+    crate::util::faults::check("create:before-counter-save")?;
+
     // Persist the new global counter value
     counters.set_value(plan.counter_value);
     counters.save().context("saving counters")?;
@@ -349,28 +451,21 @@ fn create_inner(
         .canonicalize()
         .unwrap_or_else(|_| plan.root_path.clone());
 
-    // Compute tags: literal template tags + auto-derived tags from tag_from.
-    // Empty variable values are skipped (no "slug/" orphan tags).
-    let tags: Vec<String> = {
-        let mut t: Vec<String> = template.tags.clone();
-        for slug in &template.tag_from {
-            let value = plan.vars.get(slug).map(|s| s.as_str()).unwrap_or("");
-            if !value.is_empty() {
-                t.push(format!("{slug}/{value}"));
-            }
+    // Everything that runs inline has landed. If files were deferred to a
+    // background job, the project stays flagged and the marker now lists those
+    // copies — the job clears both when the last one lands (see
+    // `ui::spawn_copy_job`). Otherwise the project is complete right here.
+    if deferred.is_empty() {
+        crate::core::provisioning::clear_create(&plan.root_path);
+        if let Err(e) = crate::core::project_info::clear_provisioning(&plan.root_path) {
+            eprintln!(
+                "{} could not clear the in-progress flag: {}",
+                "warning:".yellow().bold(),
+                e
+            );
         }
-        t
-    };
-
-    // PROJECT_INFO.md — best-effort, never fails the create. This file IS the
-    // project's identity (filesystem-as-truth), so it's written before the cache
-    // and before post-create so editors/file managers opened by reveal see it.
-    if let Err(e) = crate::core::project_info::write(plan, template, &tags) {
-        eprintln!(
-            "{} could not write project metadata: {}",
-            "warning:".yellow().bold(),
-            e
-        );
+    } else {
+        let _ = crate::core::provisioning::write_create_marker(&plan.root_path, &deferred);
     }
 
     // Update the base's disposable cache so `recent`/`search` reflect the new
@@ -394,20 +489,32 @@ fn create_inner(
 
     // Post-create actions (opt-in). Template override > config default.
     if run_post {
-        let actions = resolve_post_create(template, config);
-        if !actions.is_empty() {
-            println!();
-            if let Err(e) = crate::core::post_create::run(&actions, &abs_path, config) {
-                eprintln!(
-                    "{} post-create step failed: {}",
-                    "warning:".yellow().bold(),
-                    e
-                );
-            }
-        }
+        run_post_create(&abs_path, template, config);
     }
 
     Ok(deferred)
+}
+
+/// Run the resolved post-create actions for a finished project.
+///
+/// Split out of [`create`] so a caller can run these *outside* the data lock:
+/// they spawn the user's editor and arbitrary shell commands from a template's
+/// `commands` list, and holding a process-wide lock across those would stall
+/// every other fastf for as long as they take. ID allocation needs the lock;
+/// running someone's `npm install` does not.
+pub fn run_post_create(root: &Path, template: &Template, config: &Config) {
+    let actions = resolve_post_create(template, config);
+    if actions.is_empty() {
+        return;
+    }
+    println!();
+    if let Err(e) = crate::core::post_create::run(&actions, root, config) {
+        eprintln!(
+            "{} post-create step failed: {}",
+            "warning:".yellow().bold(),
+            e
+        );
+    }
 }
 
 pub fn resolve_post_create(
@@ -447,9 +554,15 @@ pub fn apply_plan(
             if crate::core::project_info::path_is_reserved(&rel) {
                 continue;
             }
+            // Links and special files in a template are not reproducible; the
+            // create path skips them with a warning, so the plan must not
+            // promise them either.
+            if !entry.is_dir() && !entry.is_file() {
+                continue;
+            }
             let path = target.join(&rel);
             let exists = path.exists();
-            out.push(match (entry.is_dir, exists) {
+            out.push(match (entry.is_dir(), exists) {
                 (true, true) => ApplyAction::SkipFolder(path),
                 (true, false) => ApplyAction::CreateFolder(path),
                 (false, true) => ApplyAction::SkipFile(path),
@@ -614,6 +727,11 @@ fn copy_template_files(
     let mut deferred = Vec::new();
     let files_dir = template.files_dir();
     for entry in assets::walk(&files_dir)? {
+        // Between files is the safe place to notice Ctrl-C: nothing is
+        // half-written, and unwinding here lets `create_inner` roll the whole
+        // partial project back.
+        crate::util::interrupt::check()?;
+        crate::util::faults::check("create:mid-copy")?;
         if assets::is_excluded(&entry.rel, &template.exclude) {
             continue;
         }
@@ -625,9 +743,23 @@ fn copy_template_files(
         }
         let dest = dest_root.join(&rel);
 
-        if entry.is_dir {
+        if entry.is_dir() {
             fs::create_dir_all(&dest)
                 .with_context(|| format!("creating directory {}", dest.display()))?;
+            continue;
+        }
+
+        // A link or special file in a template cannot be reproduced faithfully.
+        // Skipping is right here (unlike a move, nothing is deleted afterwards),
+        // but it must be *said* — a silently missing file in a new project is
+        // the kind of thing a user discovers days later.
+        if !entry.is_file() {
+            eprintln!(
+                "{} skipped '{}' from template '{}' — links and special files are not reproduced",
+                "warning:".yellow().bold(),
+                entry.rel,
+                template.slug
+            );
             continue;
         }
 
@@ -669,4 +801,126 @@ fn copy_template_files(
         }
     }
     Ok(deferred)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::template::IdConfig;
+    use crate::util::interrupt::TEST_LOCK as SERIAL;
+
+    /// A template on disk with a `files/` subtree, since `create` copies from
+    /// the real directory rather than from `Template.files`.
+    fn template_on_disk(dir: &Path, file_count: usize) -> Template {
+        let files = dir.join("files");
+        fs::create_dir_all(&files).unwrap();
+        for i in 0..file_count {
+            fs::write(files.join(format!("asset{i}.txt")), format!("body {i}")).unwrap();
+        }
+        Template {
+            name: "Test".to_string(),
+            slug: "test".to_string(),
+            naming_pattern: "{id}_proj".to_string(),
+            id: IdConfig {
+                prefix: "T".to_string(),
+                digits: 3,
+            },
+            dir: dir.to_path_buf(),
+            ..Default::default()
+        }
+    }
+
+    /// Ctrl-C during a create must leave nothing behind.
+    ///
+    /// The flag is raised directly rather than by sending a real console control
+    /// event: on Windows that reaches the entire process group, test runner
+    /// included. This drives exactly the code path a real Ctrl-C reaches —
+    /// `interrupt::check()` inside the copy loop — without the collateral.
+    #[test]
+    fn interrupted_create_rolls_back_and_leaves_no_partial_project() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        // SAFETY: the SERIAL lock keeps other tests in this binary off these vars.
+        unsafe {
+            std::env::set_var("FASTF_INSTALL_DIR", tmp.path());
+        }
+
+        let template = template_on_disk(&tmp.path().join("tpl"), 3);
+        let base = tmp.path().join("base");
+        fs::create_dir_all(&base).unwrap();
+        let config = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let mut counters = Counters::default();
+        let plan = plan(&template, &HashMap::new(), &config, &counters).unwrap();
+        let root = plan.root_path.clone();
+
+        crate::util::interrupt::raise_for_test();
+        let result = create(&plan, &template, &mut counters, &config, false);
+        crate::util::interrupt::reset();
+
+        assert!(result.is_err(), "an interrupted create must fail");
+        assert!(
+            !root.exists(),
+            "partial project left behind at {}",
+            root.display()
+        );
+        assert_eq!(
+            Counters::load().unwrap().get(),
+            0,
+            "a rolled-back create must not burn an ID"
+        );
+
+        unsafe {
+            std::env::remove_var("FASTF_INSTALL_DIR");
+        }
+    }
+
+    /// The success path must end with no in-progress markings at all — otherwise
+    /// every healthy project would look half-built to `reconcile`.
+    #[test]
+    fn successful_create_clears_provisioning_state() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        // SAFETY: as above.
+        unsafe {
+            std::env::set_var("FASTF_INSTALL_DIR", tmp.path());
+        }
+        crate::util::interrupt::reset();
+
+        let template = template_on_disk(&tmp.path().join("tpl"), 2);
+        let base = tmp.path().join("base");
+        fs::create_dir_all(&base).unwrap();
+        let config = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let mut counters = Counters::default();
+        let plan = plan(&template, &HashMap::new(), &config, &counters).unwrap();
+
+        create(&plan, &template, &mut counters, &config, false).unwrap();
+
+        let root = &plan.root_path;
+        assert!(root.join("asset0.txt").is_file(), "files were copied");
+        assert!(
+            !root.join(crate::core::provisioning::MARKER_CREATE).exists(),
+            "create marker should be cleared"
+        );
+        assert!(
+            !crate::core::project_info::is_provisioning(root),
+            "provisioning flag should be cleared"
+        );
+        // And the frontmatter stays byte-compatible with older versions: the
+        // flag is skipped entirely when false, not written as `provisioning: false`.
+        let pinfo = fs::read_to_string(crate::core::project_info::pinfo_path(root)).unwrap();
+        assert!(
+            !pinfo.contains("provisioning"),
+            "finished metadata must not carry the flag:\n{pinfo}"
+        );
+
+        unsafe {
+            std::env::remove_var("FASTF_INSTALL_DIR");
+        }
+    }
 }

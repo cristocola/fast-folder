@@ -80,6 +80,21 @@ pub struct Metadata {
     /// written before tagging was introduced valid — they simply get no tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// `true` while the project is still being built.
+    ///
+    /// Metadata is written *first* now, immediately after the folder is claimed,
+    /// so an interrupted create leaves something visible instead of an orphan
+    /// folder no fastf command could see. This flag distinguishes "still filling
+    /// in" from "finished", and is cleared as the last step of a good create.
+    ///
+    /// Skipped when false, so a finished project's frontmatter is byte-identical
+    /// to what earlier versions wrote — the round-trip tests rely on that.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub provisioning: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Metadata {
@@ -103,9 +118,15 @@ impl Metadata {
             template_name: tmpl.name.clone(),
             created: crate::core::library::now_iso8601(),
             folder: plan.folder_name.clone(),
-            path: plan.root_path.display().to_string(),
+            // `display_path`, not `.display()`: register (and any caller that
+            // canonicalizes first) hands us a `\\?\`-prefixed path on Windows,
+            // and that prefix would then be baked into the project's metadata
+            // forever. This field is display-truth only — discovery never reads
+            // it — so the readable form is the correct one to store.
+            path: crate::util::paths::display_path(&plan.root_path),
             variables,
             tags,
+            provisioning: false,
         }
     }
 }
@@ -195,8 +216,32 @@ pub fn render(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> String {
 pub fn write(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<()> {
     let path = pinfo_path(&plan.root_path);
     let body = render(plan, tmpl, tags);
-    fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    // Atomic: this file *is* the project's identity, so a half-written one would
+    // make the project unreadable rather than merely stale.
+    crate::util::atomic::write(&path, body).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Flag a project as still being built. Set immediately after the folder is
+/// claimed so an interrupted create leaves a *visible, labelled* partial project
+/// instead of an orphan folder that discovery cannot see.
+pub fn mark_provisioning(project_root: &Path) -> Result<()> {
+    write_frontmatter(&pinfo_path(project_root), |meta| meta.provisioning = true)
+}
+
+/// Clear the in-progress flag — the project is complete. Last step of a
+/// successful create, after every file has landed.
+pub fn clear_provisioning(project_root: &Path) -> Result<()> {
+    write_frontmatter(&pinfo_path(project_root), |meta| meta.provisioning = false)
+}
+
+/// True when a project's metadata says it was never finished being built.
+/// Cheap enough for a depth-1 sweep; unreadable metadata reports `false` so a
+/// hand-edited file is never mistaken for a broken create.
+pub fn is_provisioning(project_root: &Path) -> bool {
+    read_metadata(project_root)
+        .ok()
+        .flatten()
+        .is_some_and(|meta| meta.provisioning)
 }
 
 /// Read the raw markdown body for the project's metadata file.

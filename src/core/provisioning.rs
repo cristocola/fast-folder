@@ -111,6 +111,12 @@ struct MoveMarker {
     temp: String,
     final_path: String,
     phase: String,
+    /// The moved project's ID. Recovery uses it to confirm that whatever now
+    /// sits at `final_path` really is this project before removing the source.
+    /// Older markers (written before this field existed) default to empty, which
+    /// recovery treats as "cannot confirm" — the safe direction.
+    #[serde(default)]
+    id: String,
 }
 
 /// The staging-folder path for a cross-filesystem move (`.<folder>.fastf-part`
@@ -123,7 +129,10 @@ fn move_marker_path(target_base: &Path, folder: &str) -> PathBuf {
     target_base.join(format!("{MARKER_MOVE_PREFIX}{folder}.json"))
 }
 
-/// Write the staged-move marker at the target base root.
+/// Write the staged-move marker at the target base root. `id` is the moved
+/// project's ID, which recovery uses to confirm the destination's identity
+/// before it removes anything.
+#[allow(clippy::too_many_arguments)]
 pub fn write_move_marker(
     target_base: &Path,
     folder: &str,
@@ -131,6 +140,7 @@ pub fn write_move_marker(
     temp: &Path,
     final_path: &Path,
     phase: &str,
+    id: &str,
 ) -> Result<()> {
     let marker = MoveMarker {
         version: MARKER_VERSION,
@@ -139,6 +149,7 @@ pub fn write_move_marker(
         temp: temp.display().to_string(),
         final_path: final_path.display().to_string(),
         phase: phase.to_string(),
+        id: id.to_string(),
     };
     write_atomic(&move_marker_path(target_base, folder), &marker)
 }
@@ -182,6 +193,15 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         kind: "create".to_string(),
                         pending,
                     });
+                } else if crate::core::project_info::is_provisioning(&path) {
+                    // Metadata says half-built but the marker is gone — an
+                    // interrupted create. Surface it so the UI banner shows it
+                    // rather than the project looking finished.
+                    out.push(Incomplete {
+                        path: path.display().to_string(),
+                        kind: "create".to_string(),
+                        pending: 0,
+                    });
                 }
             } else if name.starts_with(MARKER_MOVE_PREFIX)
                 && name.ends_with(".json")
@@ -207,6 +227,13 @@ pub struct ReconcileReport {
     pub completed: usize,
     /// Staged moves rolled back (staging removed, source left intact).
     pub rolled_back: usize,
+    /// Abandoned `.part` / `.tmp` scratch files removed.
+    pub swept: usize,
+    /// Projects still flagged half-built that reconcile cannot finish by itself.
+    /// An interrupted `fastf new` interpolates template text from variables the
+    /// user typed, and those died with the process — so the honest move is to
+    /// name them and let the user delete or recreate.
+    pub incomplete: Vec<String>,
     /// Items that could not be recovered (e.g. a create source template file is
     /// gone) — surfaced to the user, marker left in place.
     pub unrecoverable: Vec<String>,
@@ -217,13 +244,68 @@ impl ReconcileReport {
         self.resumed == 0
             && self.completed == 0
             && self.rolled_back == 0
+            && self.swept == 0
+            && self.incomplete.is_empty()
             && self.unrecoverable.is_empty()
     }
 }
 
-/// Reconcile all incomplete provisioning across every base. Resumes create
-/// copies, finishes or rolls back staged moves. Best-effort — a per-item failure
+/// Leave scratch files alone until they are this old.
+///
+/// A `.part` may belong to a copy running *right now* in another process (the
+/// browser UI's background job holds no lock), and deleting it would break a
+/// perfectly healthy operation. An hour is far longer than any copy still making
+/// progress, and far shorter than "forever" — which is how long these lingered.
+const SCRATCH_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// True when `path` is abandoned scratch: a `.part` or `.tmp` older than
+/// [`SCRATCH_MIN_AGE`]. Unreadable metadata → `false`, i.e. leave it alone.
+fn is_abandoned_scratch(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if !name.ends_with(".part") && !crate::util::atomic::is_temp_file(name) {
+        return false;
+    }
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .and_then(|m| m.elapsed().map_err(std::io::Error::other))
+        .is_ok_and(|age| age >= SCRATCH_MIN_AGE)
+}
+
+/// Remove abandoned scratch files under `root`. Recursive, because
+/// `assets::copy_file` writes its `.part` next to the destination, which can sit
+/// arbitrarily deep inside a project.
+fn sweep_scratch(root: &Path, report: &mut ReconcileReport) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            // Never descend through a link: its target is outside this tree.
+            Ok(ft) if ft.is_symlink() => continue,
+            Ok(ft) if ft.is_dir() => sweep_scratch(&path, report),
+            Ok(_) => {
+                if is_abandoned_scratch(&path) && crate::util::fs_retry::remove_file(&path).is_ok()
+                {
+                    report.swept += 1;
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+}
+
+/// Reconcile all incomplete provisioning across every base: resume create
+/// copies, finish or roll back staged moves, sweep abandoned scratch files, and
+/// report projects that are still half-built. Best-effort — a per-item failure
 /// is recorded, never fatal.
+///
+/// It used to look only for markers, which is why an interrupted `fastf new`
+/// could strand 300 MB while this cheerfully reported "all projects fully
+/// provisioned". A check that only looks in one place must not speak as if it
+/// looked everywhere.
 pub fn reconcile(cfg: &Config) -> ReconcileReport {
     let mut report = ReconcileReport::default();
     for base in cfg.effective_bases() {
@@ -233,10 +315,24 @@ pub fn reconcile(cfg: &Config) -> ReconcileReport {
         for entry in read_dir.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
-            if path.is_dir() && create_marker_path(&path).exists() {
-                reconcile_create(&path, &mut report);
+            if path.is_dir() {
+                if create_marker_path(&path).exists() {
+                    reconcile_create(&path, &mut report);
+                }
+                // Flagged in the metadata but with no marker to work from: a
+                // create that died before its files landed. Nothing here can
+                // rebuild it — the variables the user typed are gone — so name
+                // it rather than pretending everything is fine.
+                if crate::core::project_info::is_provisioning(&path) {
+                    report.incomplete.push(path.display().to_string());
+                }
+                sweep_scratch(&path, &mut report);
             } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
                 reconcile_move(&base, &path, &mut report);
+            } else if is_abandoned_scratch(&path)
+                && crate::util::fs_retry::remove_file(&path).is_ok()
+            {
+                report.swept += 1;
             }
         }
     }
@@ -304,20 +400,63 @@ fn reconcile_move(base: &Path, marker_path: &Path, report: &mut ReconcileReport)
     let src = PathBuf::from(&marker.src);
     let temp = PathBuf::from(&marker.temp);
 
-    if final_path.exists() {
-        // Commit already landed. Clean up any source the crash didn't reach.
-        if src.exists() && src != final_path {
-            let _ = fs::remove_dir_all(&src);
-        }
-        let _ = fs::remove_file(marker_path);
-        report.completed += 1;
-    } else {
+    if !final_path.exists() {
         // Nothing committed — discard the partial copy; the source is untouched.
-        let _ = fs::remove_dir_all(&temp);
+        let _ = crate::util::fs_retry::remove_dir_all(&temp);
         let _ = fs::remove_file(marker_path);
         report.rolled_back += 1;
+        return;
     }
-    let _ = base; // base kept for symmetry / future per-base cache refresh
+
+    // Something exists at the destination. "Exists" alone is NOT proof the
+    // commit landed: a rolled-back move leaves the name free, and anything could
+    // have taken it since. Removing the source on that inference could destroy a
+    // perfectly good project, so confirm identity first.
+    if src.exists() && src != final_path {
+        if let Err(why) = confirm_commit(&marker, &src, &final_path) {
+            report.unrecoverable.push(format!(
+                "{}: {why}. Source left at {} — resolve by hand.",
+                marker.final_path,
+                src.display()
+            ));
+            return; // marker stays, so the next reconcile retries
+        }
+        if let Err(err) = crate::util::fs_retry::remove_dir_all(&src) {
+            report.unrecoverable.push(format!(
+                "{}: could not remove source ({err})",
+                src.display()
+            ));
+            return;
+        }
+    }
+    let _ = fs::remove_file(marker_path);
+    report.completed += 1;
+    let _ = base; // kept for symmetry / future per-base cache refresh
+}
+
+/// Confirm that `final_path` really holds the project the marker describes,
+/// before its source is removed. Two independent checks:
+///
+/// 1. The destination's `PROJECT_INFO.md` carries the marker's ID — this is what
+///    distinguishes "our completed move" from "an unrelated folder that happens
+///    to have the same name".
+/// 2. Every file still present in the source exists at the destination with the
+///    same size, so a half-finished copy can never license a deletion.
+fn confirm_commit(marker: &MoveMarker, src: &Path, final_path: &Path) -> Result<()> {
+    if marker.id.is_empty() {
+        anyhow::bail!("marker predates identity checking, cannot confirm the destination");
+    }
+    match crate::core::project_info::read_metadata(final_path) {
+        Ok(Some(meta)) if meta.id == marker.id => {}
+        Ok(Some(meta)) => anyhow::bail!(
+            "destination holds a different project (found {}, expected {})",
+            meta.id,
+            marker.id
+        ),
+        Ok(None) => anyhow::bail!("destination has no readable project metadata"),
+        Err(err) => anyhow::bail!("destination metadata unreadable ({err})"),
+    }
+    assets::verify_tree(src, final_path)
 }
 
 // ---------------------------------------------------------------------------
@@ -325,11 +464,7 @@ fn reconcile_move(base: &Path, marker_path: &Path, report: &mut ReconcileReport)
 // ---------------------------------------------------------------------------
 
 fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let raw = serde_json::to_string_pretty(value)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, raw)?;
-    fs::rename(&tmp, path)?;
-    Ok(())
+    crate::util::atomic::write_json(path, value)
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
@@ -340,6 +475,363 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Backdate a file so the age gate treats it as abandoned.
+    fn age_file(path: &Path, secs: u64) {
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+        let file = fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(when).unwrap();
+    }
+
+    /// This predicate decides what gets **deleted**, so both directions matter:
+    /// it must never claim a real file, and it must actually claim old scratch.
+    #[test]
+    fn is_abandoned_scratch_only_claims_old_scratch_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        let make = |name: &str, age: u64| {
+            let p = dir.join(name);
+            fs::write(&p, "x").unwrap();
+            age_file(&p, age);
+            p
+        };
+
+        // Old scratch → claimed.
+        assert!(is_abandoned_scratch(&make("blob.bin.part", 7200)));
+        assert!(is_abandoned_scratch(&make("config.toml.42.0.tmp", 7200)));
+
+        // Recent scratch → left alone. A `.part` may belong to a copy running
+        // right now in another process, and deleting it would break it.
+        assert!(!is_abandoned_scratch(&make("fresh.bin.part", 0)));
+        assert!(!is_abandoned_scratch(&make("fresh.toml.1.0.tmp", 0)));
+
+        // Real files are never claimed, however old.
+        for name in ["notes.md", "PROJECT_INFO.md", "movie.mov", "partial", "tmp"] {
+            let p = make(name, 7200);
+            assert!(
+                !is_abandoned_scratch(&p),
+                "{name} is real content and must never be swept"
+            );
+        }
+
+        // A path that does not exist cannot be claimed.
+        assert!(!is_abandoned_scratch(&dir.join("ghost.part")));
+    }
+
+    /// The age gate is an hour, and it is the only thing standing between the
+    /// sweep and an in-flight copy.
+    #[test]
+    fn scratch_age_gate_is_an_hour() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("edge.part");
+        fs::write(&p, "x").unwrap();
+
+        age_file(&p, 3599); // just inside the window
+        assert!(!is_abandoned_scratch(&p), "59m59s is still too recent");
+        age_file(&p, 3601); // just past it
+        assert!(is_abandoned_scratch(&p), "1h0m1s is abandoned");
+    }
+
+    /// The sweep must reach nested scratch and leave everything else alone.
+    #[test]
+    fn sweep_scratch_removes_only_abandoned_scratch_recursively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("assets/deep")).unwrap();
+
+        let old_part = root.join("assets/deep/big.bin.part");
+        fs::write(&old_part, "abandoned").unwrap();
+        age_file(&old_part, 7200);
+
+        let fresh_part = root.join("assets/active.bin.part");
+        fs::write(&fresh_part, "in flight").unwrap();
+
+        let real = root.join("assets/deep/keep.mov");
+        fs::write(&real, "irreplaceable").unwrap();
+        age_file(&real, 999_999);
+
+        let mut report = ReconcileReport::default();
+        sweep_scratch(root, &mut report);
+
+        assert_eq!(report.swept, 1, "exactly the one abandoned file");
+        assert!(!old_part.exists(), "abandoned scratch should be gone");
+        assert!(fresh_part.exists(), "an in-flight copy must not be touched");
+        assert_eq!(
+            fs::read_to_string(&real).unwrap(),
+            "irreplaceable",
+            "real content must survive the sweep"
+        );
+    }
+
+    /// `clear_move` must actually remove the marker, or reconcile would keep
+    /// re-processing a move that already finished.
+    #[test]
+    fn clear_move_removes_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_move_marker(
+            base,
+            "proj",
+            &base.join("src"),
+            &base.join(".t"),
+            &base.join("dst"),
+            "copying",
+            "ID0001",
+        )
+        .unwrap();
+        assert!(move_marker_path(base, "proj").exists());
+
+        clear_move(base, "proj");
+        assert!(
+            !move_marker_path(base, "proj").exists(),
+            "the marker must be gone, or reconcile reprocesses a finished move"
+        );
+    }
+
+    /// The UI banner is driven by this: it must report pending work and stay
+    /// quiet otherwise.
+    #[test]
+    fn list_incomplete_reports_pending_work_and_nothing_else() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+
+        // A finished project produces no entry.
+        let done = base.join("done");
+        fs::create_dir_all(&done).unwrap();
+        fs::write(
+            crate::core::project_info::pinfo_path(&done),
+            "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
+             created: 2026-01-01T00:00:00Z\nfolder: done\npath: x\n\
+             variables: {}\ntags: []\n---\n",
+        )
+        .unwrap();
+        assert!(
+            list_incomplete(&cfg).is_empty(),
+            "a clean base must be quiet"
+        );
+
+        // A project with a marker and a pending job is reported.
+        let busy = base.join("busy");
+        fs::create_dir_all(&busy).unwrap();
+        write_create_marker(
+            &busy,
+            &[CopyJob {
+                src: base.join("a.bin"),
+                dest: busy.join("a.bin"),
+                bytes: 10,
+            }],
+        )
+        .unwrap();
+
+        let items = list_incomplete(&cfg);
+        assert_eq!(items.len(), 1, "got {items:?}");
+        assert_eq!(items[0].kind, "create");
+        assert_eq!(items[0].pending, 1, "the outstanding copy must be counted");
+
+        // Once the copy is marked done, nothing is pending any more.
+        mark_done(&busy, &busy.join("a.bin"));
+        assert_eq!(list_incomplete(&cfg)[0].pending, 0);
+    }
+
+    /// `reconcile` walks the base root and deletes things there. It must remove
+    /// abandoned scratch and *nothing else*.
+    ///
+    /// A base is the user's own folder — it can hold anything. Two mutants
+    /// survived here that would each have destroyed real files: loosening the
+    /// marker-name test makes every `.json` at the root look like a move marker
+    /// (and get deleted), and loosening the sweep condition calls `remove_file`
+    /// on whatever it is currently looking at.
+    #[test]
+    fn reconcile_sweeps_only_scratch_from_a_base_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        // Things a user might legitimately keep beside their projects.
+        let bystanders = [
+            "notes.md",
+            "budget.xlsx",
+            "settings.json",         // NOT a move marker
+            "fastf-move-notes.json", // no leading dot: still not a marker
+            ".fastf-move-notes.txt", // marker prefix, wrong extension
+        ];
+        for name in bystanders {
+            fs::write(base.join(name), format!("contents of {name}")).unwrap();
+        }
+
+        // Recent scratch: may belong to a copy running right now.
+        fs::write(base.join("fresh.bin.part"), "in flight").unwrap();
+
+        // Abandoned scratch: the only thing that should go.
+        let stale = base.join("abandoned.bin.part");
+        fs::write(&stale, "leftover").unwrap();
+        age_file(&stale, 7200);
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.swept, 1, "exactly one file should be swept");
+        assert!(!stale.exists(), "abandoned scratch should be gone");
+        assert!(
+            base.join("fresh.bin.part").exists(),
+            "recent scratch may be an in-flight copy and must survive"
+        );
+        for name in bystanders {
+            assert_eq!(
+                fs::read_to_string(base.join(name)).unwrap(),
+                format!("contents of {name}"),
+                "{name} is the user's file and must never be touched"
+            );
+        }
+    }
+
+    /// The sweep must not descend through a link: its target lives outside the
+    /// tree being cleaned, and deleting from there is not this function's call.
+    #[test]
+    fn sweep_scratch_does_not_follow_links_out_of_the_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let outside_scratch = outside.join("elsewhere.bin.part");
+        fs::write(&outside_scratch, "not ours to delete").unwrap();
+        age_file(&outside_scratch, 7200);
+
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+
+        let link = root.join("linked");
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, &link).is_ok();
+        assert!(made, "could not create a directory link");
+
+        let mut report = ReconcileReport::default();
+        sweep_scratch(&root, &mut report);
+
+        assert_eq!(report.swept, 0, "nothing inside the tree to sweep");
+        assert!(
+            outside_scratch.exists(),
+            "the sweep followed a link and deleted a file outside its tree"
+        );
+    }
+
+    /// Resume must accept only a file that is genuinely complete. A destination
+    /// of the wrong size is a truncated copy, and treating it as done would
+    /// silently leave a corrupt file in the project forever.
+    #[test]
+    fn reconcile_create_recopies_a_truncated_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let root = base.join("proj");
+        fs::create_dir_all(&root).unwrap();
+
+        let src = base.join("asset.bin");
+        let data = vec![5u8; 4096];
+        fs::write(&src, &data).unwrap();
+
+        // A destination that exists but is short — a copy killed mid-write.
+        let dest = root.join("asset.bin");
+        fs::write(&dest, vec![5u8; 100]).unwrap();
+
+        write_create_marker(
+            &root,
+            &[CopyJob {
+                src: src.clone(),
+                dest: dest.clone(),
+                bytes: data.len() as u64,
+            }],
+        )
+        .unwrap();
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.resumed, 1, "the short file must be re-copied");
+        assert_eq!(
+            fs::read(&dest).unwrap(),
+            data,
+            "the destination must end up complete"
+        );
+        assert!(!create_marker_path(&root).exists(), "marker cleared");
+
+        // A destination that is already the right size is left alone and
+        // counted as done rather than re-copied.
+        write_create_marker(
+            &root,
+            &[CopyJob {
+                src,
+                dest,
+                bytes: data.len() as u64,
+            }],
+        )
+        .unwrap();
+        let report = reconcile(&cfg);
+        assert_eq!(report.resumed, 0, "a complete file needs no work");
+        assert!(!create_marker_path(&root).exists());
+    }
+
+    /// After a committed move, the source is removed — but only when there is a
+    /// distinct source still there to remove.
+    #[test]
+    fn reconcile_move_handles_an_already_removed_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let pinfo = "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
+                     created: 2026-01-01T00:00:00Z\nfolder: f\npath: x\n\
+                     variables: {}\ntags: []\n---\n";
+
+        // The commit landed and the source was already cleaned up: reconcile
+        // just has to tidy the marker away, without erroring.
+        let final_path = base.join("moved");
+        fs::create_dir_all(&final_path).unwrap();
+        fs::write(crate::core::project_info::pinfo_path(&final_path), pinfo).unwrap();
+        let gone_src = base.join("already_removed");
+
+        write_move_marker(
+            base,
+            "already_removed",
+            &gone_src,
+            &staging_path(base, "already_removed"),
+            &final_path,
+            "finalizing",
+            "ID0001",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.completed, 1, "report: {report:?}");
+        assert!(
+            report.unrecoverable.is_empty(),
+            "a missing source is the expected end state, not a failure"
+        );
+        assert!(final_path.is_dir(), "the destination must survive");
+        assert!(
+            !move_marker_path(base, "already_removed").exists(),
+            "marker cleared"
+        );
+    }
 
     #[test]
     fn create_marker_round_trip_and_mark_done() {
@@ -401,7 +893,7 @@ mod tests {
         fs::write(temp.join("keep.txt"), "partial").unwrap();
         // The final target does not exist yet → the commit never happened.
         let final_path = base.join("committed_target_that_does_not_exist");
-        write_move_marker(base, "proj", &src, &temp, &final_path, "copying").unwrap();
+        write_move_marker(base, "proj", &src, &temp, &final_path, "copying", "ID0001").unwrap();
 
         let cfg = Config {
             base_dir: base.display().to_string(),
@@ -415,6 +907,112 @@ mod tests {
             "important",
             "source untouched"
         );
+        assert!(!move_marker_path(base, "proj").exists(), "marker cleared");
+    }
+
+    /// The regression this whole identity check exists for: a rolled-back move
+    /// leaves the target name free, and anything may take it afterwards. If
+    /// reconcile treated "a folder is there" as proof the commit landed, it
+    /// would delete a perfectly good source.
+    #[test]
+    fn reconcile_refuses_to_delete_source_when_destination_is_a_different_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        let src = base.join("proj");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("irreplaceable.txt"), "the user's actual work").unwrap();
+
+        // An unrelated project now occupies the destination name.
+        let final_path = base.join("moved_proj");
+        fs::create_dir_all(&final_path).unwrap();
+        fs::write(
+            final_path.join(crate::core::project_info::RESERVED_FILENAME),
+            "---\nid: ID9999\ntemplate: other\ntemplate_name: Other\n\
+             created: 2026-01-01T00:00:00Z\nfolder: moved_proj\npath: x\n\
+             variables: {}\ntags: []\n---\n",
+        )
+        .unwrap();
+
+        let temp = staging_path(base, "proj");
+        write_move_marker(base, "proj", &src, &temp, &final_path, "copying", "ID0001").unwrap();
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.completed, 0, "must not claim the move completed");
+        assert!(
+            src.join("irreplaceable.txt").exists(),
+            "source was deleted despite the destination being a different project"
+        );
+        assert!(
+            report.unrecoverable.iter().any(|m| m.contains("ID9999")),
+            "should report the identity mismatch, got {:?}",
+            report.unrecoverable
+        );
+        assert!(
+            move_marker_path(base, "proj").exists(),
+            "marker must survive so the next reconcile retries"
+        );
+    }
+
+    /// The genuine crash-after-commit case must still finish cleanly.
+    #[test]
+    fn reconcile_completes_move_when_destination_is_the_same_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let pinfo = |id: &str| {
+            format!(
+                "---\nid: {id}\ntemplate: t\ntemplate_name: T\n\
+                 created: 2026-01-01T00:00:00Z\nfolder: f\npath: x\n\
+                 variables: {{}}\ntags: []\n---\n"
+            )
+        };
+
+        // Crash happened after the commit rename but before source removal, so
+        // both sides hold identical content.
+        let src = base.join("proj");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("a.txt"), "same").unwrap();
+        fs::write(
+            src.join(crate::core::project_info::RESERVED_FILENAME),
+            pinfo("ID0001"),
+        )
+        .unwrap();
+
+        let final_path = base.join("moved_proj");
+        fs::create_dir_all(&final_path).unwrap();
+        fs::write(final_path.join("a.txt"), "same").unwrap();
+        fs::write(
+            final_path.join(crate::core::project_info::RESERVED_FILENAME),
+            pinfo("ID0001"),
+        )
+        .unwrap();
+
+        let temp = staging_path(base, "proj");
+        write_move_marker(
+            base,
+            "proj",
+            &src,
+            &temp,
+            &final_path,
+            "finalizing",
+            "ID0001",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Default::default()
+        };
+        let report = reconcile(&cfg);
+
+        assert_eq!(report.completed, 1, "report: {report:?}");
+        assert!(!src.exists(), "source should be removed once confirmed");
+        assert!(final_path.exists(), "destination survives");
         assert!(!move_marker_path(base, "proj").exists(), "marker cleared");
     }
 }

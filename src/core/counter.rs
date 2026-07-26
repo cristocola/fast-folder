@@ -25,11 +25,13 @@ impl Counters {
         Ok(c)
     }
 
+    /// Persist the counter atomically. A truncated `counters.toml` would reset
+    /// ID allocation, so this write must never be observable half-done.
     pub fn save(&self) -> Result<()> {
         let path = paths::counters_path();
         let raw = toml::to_string_pretty(self).context("serializing counters")?;
-        fs::write(&path, raw).with_context(|| format!("writing {}", path.display()))?;
-        Ok(())
+        crate::util::atomic::write(&path, raw)
+            .with_context(|| format!("writing {}", path.display()))
     }
 
     /// Current global counter value (last used ID).

@@ -35,12 +35,18 @@ pub fn run() -> Result<()> {
 
         let parent = base
             .parent()
-            .map(|p| format!("{}{}", p.display(), std::path::MAIN_SEPARATOR))
+            .map(|p| {
+                format!(
+                    "{}{}",
+                    crate::util::paths::display_path(p),
+                    std::path::MAIN_SEPARATOR
+                )
+            })
             .unwrap_or_default();
         let name = base
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| base.to_string_lossy().into_owned());
+            .unwrap_or_else(|| crate::util::paths::display_path(&base));
 
         println!(
             "  {}  {}{}",

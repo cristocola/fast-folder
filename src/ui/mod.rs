@@ -325,7 +325,7 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
 }
 
 /// Pure request router — no socket involved. Maps `(method, route, body)` to a
-/// [`Response`]. Write routes take the process-wide [`WRITE_LOCK`] internally.
+/// [`Response`]. Write routes take the process-wide `WRITE_LOCK` internally.
 pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response> {
     match (method, route) {
         ("GET", "/api/health") => Ok(Response::Json(json!({"ok": true}))),

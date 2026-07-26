@@ -41,6 +41,10 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# Property tests for the pure logic (naming, globs, the query parser). Exhaustive
+# generated input finds the cases handwritten tests miss — the "sanitize_name
+# output is always a creatable filename" property is the one that matters most.
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [profile.release]
 opt-level = 3

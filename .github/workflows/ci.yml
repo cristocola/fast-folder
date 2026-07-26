@@ -34,3 +34,60 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+
+  # Optimizations change timing, and the concurrency suite races real processes.
+  # A release run is the one most likely to surface an ordering bug that the
+  # debug build's slower code paths happen to hide.
+  #
+  # Fault injection is compiled out of release builds, so the tests that trip
+  # failpoints are `#[cfg(debug_assertions)]` and simply do not exist here. The
+  # debug job above is what covers crash recovery.
+  test-release:
+    name: test --release (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --release
+
+  # `rust-version` in Cargo.toml is a promise to users on older toolchains, and
+  # nothing verified it — the stated MSRV could break with no signal at all.
+  msrv:
+    name: minimum supported Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "MSRV is $version"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets
+
+  # Catches advisories against dependencies. This is the job that would have
+  # flagged serde_yaml as unmaintained.
+  audit:
+    name: dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  docs:
+    name: docs build clean
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps --locked

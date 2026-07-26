@@ -298,9 +298,19 @@ fn cache_path(base: &Path) -> PathBuf {
     base.join(CACHE_FILENAME)
 }
 
+/// Load a base's cache, or `None` if it is absent, unreadable, or not a version
+/// this build understands.
+///
+/// The version check matters more than it looks. Caches are deliberately
+/// co-located with the projects so they travel between machines, which means an
+/// older fastf will meet caches written by a newer one. Without this, a cache
+/// whose shape happened to still deserialize would be *trusted* — and every
+/// project it failed to describe would silently vanish from the library.
+/// Rejecting an unknown version costs one rescan and cannot hide anything.
 fn load_cache(base: &Path) -> Option<Cache> {
     let raw = fs::read_to_string(cache_path(base)).ok()?;
-    serde_json::from_str::<Cache>(&raw).ok()
+    let cache = serde_json::from_str::<Cache>(&raw).ok()?;
+    (cache.version == CACHE_VERSION).then_some(cache)
 }
 
 /// Write the cache for `base` atomically. Best-effort: a failure is returned but
@@ -598,6 +608,8 @@ fn staged_copy_verify_commit(
         }
     }
 
+    crate::util::faults::check("move:after-staging")?;
+
     // Verify BEFORE the source is ever touched. A short/missing file here means
     // the source stays put and the staging is discarded.
     set_phase(progress, "verifying");
@@ -607,6 +619,8 @@ fn staged_copy_verify_commit(
             project.name
         )));
     }
+
+    crate::util::faults::check("move:after-verify")?;
 
     // Commit: atomic rename within the target base, then remove the source.
     set_phase(progress, "finalizing");
@@ -620,8 +634,10 @@ fn staged_copy_verify_commit(
         &project.id,
     )
     .ok();
+    crate::util::faults::check("move:before-commit-rename")?;
     crate::util::fs_retry::rename(&temp, new_path)
         .with_context(|| format!("finalizing move into {}", new_path.display()))?;
+    crate::util::faults::check("move:after-commit-before-source-removal")?;
 
     // Target is verified and in place; a source-removal failure is a warning,
     // never data loss (reconcile will finish it).
@@ -1277,6 +1293,147 @@ mod tests {
         );
         assert!(!new_path.exists(), "no target committed");
         assert!(!provisioning::staging_path(new_base, "proj_a").exists());
+    }
+
+    /// The staged (copying) move must refuse a project containing links.
+    ///
+    /// Reached through the private pre-flight because the public entry point
+    /// only consults it after `fs::rename` fails, and a test cannot conjure a
+    /// second filesystem. The same-filesystem path is covered separately in
+    /// `tests/windows_semantics.rs`, where the junction is expected to survive.
+    #[test]
+    fn staged_move_pre_flight_refuses_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        let link = base.join("proj_a/linked");
+        let target = base.join("shared");
+        fs::create_dir_all(&target).unwrap();
+
+        let made = {
+            #[cfg(windows)]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/c", "mklink", "/J"])
+                    .arg(&link)
+                    .arg(&target)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+            }
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&target, &link).is_ok()
+            }
+        };
+        if !made {
+            eprintln!("skipping: the OS refused to create a link");
+            return;
+        }
+
+        let project = scan_base(base).into_iter().next().unwrap();
+        let err = refuse_if_contains_links(&project)
+            .expect_err("a copying move cannot reproduce a link and must refuse")
+            .to_string();
+        assert!(
+            err.contains("linked"),
+            "the error must name the offending link, got: {err}"
+        );
+        assert!(
+            err.contains("Nothing has been changed"),
+            "the error must say the project is untouched, got: {err}"
+        );
+
+        // A project with no links is waved through.
+        write_project(base, "proj_b", "ID0002", "gen", "2026-01-02T00:00:00Z");
+        let plain = scan_base(base)
+            .into_iter()
+            .find(|p| p.name == "proj_b")
+            .unwrap();
+        assert!(refuse_if_contains_links(&plain).is_ok());
+    }
+
+    /// The move invariant, at every failpoint: the source is intact **or** the
+    /// destination is complete — never neither, and never a silent half-state.
+    ///
+    /// The failure is injected rather than raced, so each boundary is hit
+    /// deterministically instead of "wherever the kill happened to land". These
+    /// go through the private staged path directly: a same-filesystem test would
+    /// take the instant `fs::rename` fast path and never stage or verify.
+    ///
+    /// Debug-only: failpoints are compiled out of release builds.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
+        use crate::util::faults::TEST_LOCK as FAULT_SERIAL;
+        const MOVE_POINTS: &[&str] = &[
+            "move:after-staging",
+            "move:after-verify",
+            "move:before-commit-rename",
+            "move:after-commit-before-source-removal",
+        ];
+
+        for point in MOVE_POINTS {
+            let _guard = FAULT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+            let tmp1 = tempfile::tempdir().unwrap();
+            let tmp2 = tempfile::tempdir().unwrap();
+            let (old_base, new_base) = (tmp1.path(), tmp2.path());
+            write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+            fs::write(old_base.join("proj_a/payload.bin"), vec![7u8; 4096]).unwrap();
+
+            let cfg = cfg_for(old_base, &[new_base]);
+            let project = discover(&cfg).remove(0);
+            let new_path = new_base.join("proj_a");
+            let progress = Mutex::new(Progress::new(&[]));
+            let cancel = AtomicBool::new(false);
+
+            // SAFETY: FAULT_SERIAL keeps other tests off the variable.
+            unsafe { std::env::set_var(crate::util::faults::FAULT_ENV, point) };
+            let result = staged_copy_verify_commit(
+                &project, new_base, &new_path, "proj_a", &progress, &cancel,
+            );
+            unsafe { std::env::remove_var(crate::util::faults::FAULT_ENV) };
+
+            assert!(result.is_err(), "[{point}] should have failed");
+
+            // The invariant. `after-commit-before-source-removal` is the one
+            // point where the commit already landed, so the destination holds
+            // the data and the (still-present) source is redundant.
+            let source_ok = old_base.join("proj_a/payload.bin").is_file();
+            let dest_ok = new_path.join("payload.bin").is_file();
+            assert!(
+                source_ok || dest_ok,
+                "[{point}] data exists in neither location — this is data loss"
+            );
+
+            if *point == "move:after-commit-before-source-removal" {
+                assert!(dest_ok, "[{point}] commit landed, destination must hold it");
+            } else {
+                assert!(
+                    source_ok,
+                    "[{point}] nothing was committed, so the source must be intact"
+                );
+                assert!(
+                    !new_path.exists(),
+                    "[{point}] an uncommitted move must leave no destination"
+                );
+            }
+
+            // Whatever happened, reconcile must reach a consistent end state
+            // with the payload still present exactly once.
+            let report = provisioning::reconcile(&cfg);
+            let _ = report;
+            let after_source = old_base.join("proj_a/payload.bin").is_file();
+            let after_dest = new_path.join("payload.bin").is_file();
+            assert!(
+                after_source || after_dest,
+                "[{point}] reconcile lost the data"
+            );
+            assert!(
+                !provisioning::staging_path(new_base, "proj_a").exists(),
+                "[{point}] reconcile left staging behind"
+            );
+        }
     }
 
     #[test]

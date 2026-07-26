@@ -369,6 +369,11 @@ fn create_inner(
 
 /// Everything after the folder has been claimed. Split out so `create_inner`
 /// can roll the folder back on any failure.
+///
+/// Nothing may sit between the claim and this call: an early return in that gap
+/// would skip the rollback and leak the folder. The `create:after-root-dir`
+/// failpoint lives *here*, inside the protected region, for exactly that reason
+/// — it caught the bug when it was placed one line too early.
 fn provision_project(
     plan: &ProjectPlan,
     template: &Template,
@@ -377,6 +382,8 @@ fn provision_project(
     run_post: bool,
     defer_over: Option<u64>,
 ) -> Result<Vec<assets::CopyJob>> {
+    crate::util::faults::check("create:after-root-dir")?;
+
     // Compute tags: literal template tags + auto-derived tags from tag_from.
     // Empty variable values are skipped (no "slug/" orphan tags).
     let tags: Vec<String> = {
@@ -406,6 +413,8 @@ fn provision_project(
     crate::core::project_info::mark_provisioning(&plan.root_path)
         .context("flagging project as in-progress")?;
 
+    crate::util::faults::check("create:after-pinfo")?;
+
     // Durable marker alongside the metadata, so recovery has a to-do list even
     // if the frontmatter is later hand-edited. Best-effort: the flag above is
     // the primary signal.
@@ -430,6 +439,8 @@ fn provision_project(
         false,
         defer_over,
     )?;
+
+    crate::util::faults::check("create:before-counter-save")?;
 
     // Persist the new global counter value
     counters.set_value(plan.counter_value);
@@ -720,6 +731,7 @@ fn copy_template_files(
         // half-written, and unwinding here lets `create_inner` roll the whole
         // partial project back.
         crate::util::interrupt::check()?;
+        crate::util::faults::check("create:mid-copy")?;
         if assets::is_excluded(&entry.rel, &template.exclude) {
             continue;
         }

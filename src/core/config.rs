@@ -212,7 +212,15 @@ pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
     }
     fs::create_dir_all(&expanded).with_context(|| format!("creating {}", expanded.display()))?;
     let resolved = expanded.canonicalize().unwrap_or(expanded);
+    // Another load-mutate-save, so it takes the same cross-process lock as
+    // `config set`. No caller holds the lock already (the lock is not
+    // reentrant): the web UI's `/api/base/init` takes only `WRITE_LOCK`, and the
+    // TUI's onboarding runs before anything else.
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let mut config = Config::load()?;
+    // Stored canonical, rendered readable at the display sites. Keeping the
+    // verbatim form here is what preserves long-path support when this base is
+    // later used for filesystem work.
     config.base_dir = resolved.display().to_string();
     config.save()?;
     Ok(resolved)

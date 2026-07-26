@@ -118,7 +118,7 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
 
     match result {
         Ok(()) => {
-            fs::rename(&tmp, &job.dest)
+            crate::util::fs_retry::rename(&tmp, &job.dest)
                 .with_context(|| format!("finalizing {}", job.dest.display()))
                 .inspect_err(|_| {
                     let _ = fs::remove_file(&tmp);
@@ -495,7 +495,7 @@ pub fn copy_file(
         }
     }
 
-    fs::rename(&tmp, dest)
+    crate::util::fs_retry::rename(&tmp, dest)
         .with_context(|| format!("finalizing {}", dest.display()))
         .inspect_err(|_| {
             let _ = fs::remove_file(&tmp);

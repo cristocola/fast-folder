@@ -1250,6 +1250,20 @@ mod tests {
         staged_copy_verify_commit(&project, new_base, &new_path, "proj_a", &progress, &cancel)
             .unwrap();
 
+        // Progress must actually advance. The phase and the per-file counter are
+        // the only feedback during a multi-minute network copy, so a counter
+        // that silently stops updating looks exactly like a hung move.
+        {
+            let p = progress.lock().unwrap();
+            assert_eq!(p.phase, "finalizing", "the phase should have advanced");
+            assert!(p.total_files >= 3, "files counted: {}", p.total_files);
+            assert_eq!(
+                p.done_files, p.total_files,
+                "every copied file must be reported done"
+            );
+            assert!(p.copied_bytes >= 8000, "bytes copied: {}", p.copied_bytes);
+        }
+
         // Copied verbatim, verified, committed, source removed.
         assert_eq!(
             fs::read(new_path.join("assets/big.bin")).unwrap(),

@@ -749,6 +749,23 @@ mod tests {
         let dest = tmp.path().join("out_verbatim.txt");
         copy_file(&small, &dest, true, &vars, "%Y-%m-%d").unwrap();
         assert_eq!(fs::read_to_string(&dest).unwrap(), "hello {name}");
+
+        // A comfortably large — but still under the cap — text file must also be
+        // interpolated. A README of a few hundred KB is ordinary in a template,
+        // and shipping it with raw `{tokens}` would be a silent regression.
+        let big = tmp.path().join("big.md");
+        let body = format!("{}\n# {{name}}\n", "filler line\n".repeat(20_000));
+        fs::write(&big, &body).unwrap();
+        assert!(
+            (body.len() as u64) < TEXT_MAX_BYTES && body.len() > 200_000,
+            "fixture should be large but under the cap ({} bytes)",
+            body.len()
+        );
+        let dest = tmp.path().join("out_big.md");
+        copy_file(&big, &dest, false, &vars, "%Y-%m-%d").unwrap();
+        let out = fs::read_to_string(&dest).unwrap();
+        assert!(out.ends_with("# Aurora\n"), "large text must interpolate");
+        assert!(!out.contains("{name}"));
     }
 
     /// `walk` must distinguish the kinds, not just "exists".

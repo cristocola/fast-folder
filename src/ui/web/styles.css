@@ -854,6 +854,20 @@ button {
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--accent-strong) 40%, transparent);
   background: color-mix(in srgb, var(--accent-strong) 10%, var(--surface));
+  background-color: color-mix(in srgb, var(--accent-strong) 14%, var(--surface));
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 12px color-mix(in srgb, #000 22%, transparent);
+}
+
+/* The wrapper carries the stickiness, not the bar itself: a sticky element can
+   only travel within its own parent's box, and the bar's parent is exactly as
+   tall as the bar — so sticking it directly did nothing at all. Selecting
+   happens all the way down a long list, and a toolbar that exists only at the
+   top of the page is invisible precisely when it is needed. */
+#bulk-bar-slot {
+  position: sticky;
+  top: 0;
+  z-index: 5;
 }
 .bulk-bar .bulk-count { font-size: 13px; font-weight: 600; }
 .bulk-bar .bulk-spacer { flex: 1; }

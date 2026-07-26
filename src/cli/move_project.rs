@@ -99,8 +99,12 @@ pub fn run(args: MoveArgs) -> Result<()> {
     println!(
         "   {} {}",
         "from".dimmed(),
-        project.path.display().to_string().dimmed()
+        crate::util::paths::display_path(&project.path).dimmed()
     );
-    println!("   {} {}", "to  ".dimmed(), moved.path.display());
+    println!(
+        "   {} {}",
+        "to  ".dimmed(),
+        crate::util::paths::display_path(&moved.path)
+    );
     Ok(())
 }

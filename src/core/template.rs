@@ -171,8 +171,20 @@ impl Template {
     pub fn load_from_file(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("reading template {}", path.display()))?;
-        let mut t: Self = serde_yaml::from_str(&raw)
-            .with_context(|| format!("parsing template {}", path.display()))?;
+        // Strip a UTF-8 BOM. Notepad, PowerShell's `Out-File -Encoding utf8`,
+        // and plenty of other Windows editors add one by default, and serde_yaml
+        // then fails with a thoroughly misleading `missing field \`slug\``
+        // pointing at line 1 column 2 — while `slug` is sitting right there.
+        // `project_info::split_frontmatter_body` has stripped it for years; the
+        // template loader simply never got the same treatment.
+        let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+        let mut t: Self = serde_yaml::from_str(raw).with_context(|| {
+            format!(
+                "parsing template {}\n  (if you edited this file on Windows, \
+                 check it is saved as UTF-8 without a BOM)",
+                path.display()
+            )
+        })?;
         t.dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         t.scan_files();
         // Silently strip file entries colliding with the reserved auto-gen
@@ -192,7 +204,9 @@ impl Template {
             Err(_) => return,
         };
         for entry in entries {
-            if entry.is_dir || entry.size > crate::core::assets::TEXT_MAX_BYTES {
+            // Only plain files carry editable text; dirs, links and special
+            // files have nothing to scan into the buffer.
+            if !entry.is_file() || entry.size > crate::core::assets::TEXT_MAX_BYTES {
                 continue;
             }
             if let Ok(text) = fs::read_to_string(files_dir.join(&entry.rel)) {

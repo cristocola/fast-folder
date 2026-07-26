@@ -298,14 +298,27 @@ fn cache_path(base: &Path) -> PathBuf {
     base.join(CACHE_FILENAME)
 }
 
+/// Load a base's cache, or `None` if it is absent, unreadable, or not a version
+/// this build understands.
+///
+/// The version check matters more than it looks. Caches are deliberately
+/// co-located with the projects so they travel between machines, which means an
+/// older fastf will meet caches written by a newer one. Without this, a cache
+/// whose shape happened to still deserialize would be *trusted* — and every
+/// project it failed to describe would silently vanish from the library.
+/// Rejecting an unknown version costs one rescan and cannot hide anything.
 fn load_cache(base: &Path) -> Option<Cache> {
     let raw = fs::read_to_string(cache_path(base)).ok()?;
-    serde_json::from_str::<Cache>(&raw).ok()
+    let cache = serde_json::from_str::<Cache>(&raw).ok()?;
+    (cache.version == CACHE_VERSION).then_some(cache)
 }
 
-/// Write the cache for `base` atomically (`.tmp` + rename). Best-effort: a
-/// failure is returned but callers ignore it — the cache is disposable and the
-/// folders remain the truth.
+/// Write the cache for `base` atomically. Best-effort: a failure is returned but
+/// callers ignore it — the cache is disposable and the folders remain the truth.
+///
+/// Uses the shared [`crate::util::atomic`] writer, whose temp name carries the
+/// process id: two fastf processes refreshing the same base cache no longer
+/// collide on a single fixed `.tmp` path.
 fn write_cache(base: &Path, projects: &[Project]) -> Result<()> {
     let cache = Cache {
         version: CACHE_VERSION,
@@ -314,12 +327,7 @@ fn write_cache(base: &Path, projects: &[Project]) -> Result<()> {
             .map(|p| CacheEntry::from_project(p, base))
             .collect(),
     };
-    let raw = serde_json::to_string_pretty(&cache)?;
-    let final_path = cache_path(base);
-    let tmp_path = final_path.with_extension("json.tmp");
-    fs::write(&tmp_path, raw)?;
-    fs::rename(&tmp_path, &final_path)?;
-    Ok(())
+    crate::util::atomic::write_json(&cache_path(base), &cache)
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +462,13 @@ pub fn move_project_with(
 
     // Fast path: same-filesystem rename is atomic and instant — no staging,
     // no verification needed (there is no window in which data is half-there).
+    // It also preserves links perfectly, because nothing is copied, so the link
+    // check below deliberately applies only to the staged fallback.
+    // Deliberately NOT `fs_retry::rename`: this call is *expected* to fail on a
+    // cross-device move, and that failure is the signal to take the staged path.
+    // Retrying would add the full backoff to every cross-drive move for nothing.
     if fs::rename(&project.path, &new_path).is_err() {
+        refuse_if_contains_links(project)?;
         staged_copy_verify_commit(project, &new_base, &new_path, &folder, progress, cancel)?;
     }
     set_phase(progress, "finalizing");
@@ -468,7 +482,7 @@ pub fn move_project_with(
     let pinfo = project_info::pinfo_path(&moved.path);
     if pinfo.exists()
         && let Err(err) = project_info::write_frontmatter(&pinfo, |meta| {
-            meta.path = moved.path.display().to_string();
+            meta.path = crate::util::paths::display_path(&moved.path);
         })
     {
         eprintln!("warning: could not update PROJECT_INFO.md path: {err:#}");
@@ -485,6 +499,40 @@ pub fn move_project_with(
 
     set_phase(progress, "done");
     Ok(moved)
+}
+
+/// Refuse a staged (copying) move when the project contains links.
+///
+/// A cross-filesystem move copies the tree and then deletes the source. Windows
+/// junctions and symlinks cannot be reproduced faithfully without elevation or
+/// Developer Mode, and following them would silently restructure the project and
+/// could duplicate a whole shared asset library. Previously they were simply
+/// dropped — and because verification walked the destination the same blind way,
+/// the copy "verified" and the source was deleted, taking the links with it.
+///
+/// Refusing is the only outcome that can neither lose nor corrupt data. The user
+/// keeps a working project and an actionable message.
+fn refuse_if_contains_links(project: &Project) -> Result<()> {
+    let links = assets::find_links(&project.path)?;
+    if links.is_empty() {
+        return Ok(());
+    }
+    let shown: Vec<&str> = links.iter().take(5).map(String::as_str).collect();
+    let more = links.len().saturating_sub(shown.len());
+    anyhow::bail!(
+        "'{}' contains {} link{} that a cross-drive move cannot reproduce:\n  {}{}\n\
+         Nothing has been changed. Move the folder with a tool that preserves links \
+         (or remove the links first), then run `fastf reindex`.",
+        project.name,
+        links.len(),
+        if links.len() == 1 { "" } else { "s" },
+        shown.join("\n  "),
+        if more > 0 {
+            format!("\n  ...and {more} more")
+        } else {
+            String::new()
+        }
+    )
 }
 
 /// The staged cross-filesystem move body: marker → copy-to-staging → verify →
@@ -506,8 +554,16 @@ fn staged_copy_verify_commit(
     if temp.exists() {
         let _ = fs::remove_dir_all(&temp);
     }
-    provisioning::write_move_marker(new_base, folder, &project.path, &temp, new_path, "copying")
-        .ok();
+    provisioning::write_move_marker(
+        new_base,
+        folder,
+        &project.path,
+        &temp,
+        new_path,
+        "copying",
+        &project.id,
+    )
+    .ok();
 
     // Enumerate the source tree and copy it verbatim into staging with progress.
     let (dirs, files) = assets::jobs_for_tree(&project.path, &temp)?;
@@ -552,6 +608,8 @@ fn staged_copy_verify_commit(
         }
     }
 
+    crate::util::faults::check("move:after-staging")?;
+
     // Verify BEFORE the source is ever touched. A short/missing file here means
     // the source stays put and the staging is discarded.
     set_phase(progress, "verifying");
@@ -562,6 +620,8 @@ fn staged_copy_verify_commit(
         )));
     }
 
+    crate::util::faults::check("move:after-verify")?;
+
     // Commit: atomic rename within the target base, then remove the source.
     set_phase(progress, "finalizing");
     provisioning::write_move_marker(
@@ -571,14 +631,17 @@ fn staged_copy_verify_commit(
         &temp,
         new_path,
         "finalizing",
+        &project.id,
     )
     .ok();
-    fs::rename(&temp, new_path)
+    crate::util::faults::check("move:before-commit-rename")?;
+    crate::util::fs_retry::rename(&temp, new_path)
         .with_context(|| format!("finalizing move into {}", new_path.display()))?;
+    crate::util::faults::check("move:after-commit-before-source-removal")?;
 
     // Target is verified and in place; a source-removal failure is a warning,
     // never data loss (reconcile will finish it).
-    if let Err(err) = fs::remove_dir_all(&project.path) {
+    if let Err(err) = crate::util::fs_retry::remove_dir_all(&project.path) {
         eprintln!(
             "warning: moved to {} but could not remove source {} ({err}) — remove it manually",
             new_path.display(),
@@ -609,7 +672,7 @@ pub fn unregister_project(project: &Project) -> Result<()> {
             project.name
         );
     }
-    fs::remove_file(&pinfo)?;
+    crate::util::fs_retry::remove_file(&pinfo)?;
     remove_from_base_cache(project);
     Ok(())
 }
@@ -642,7 +705,7 @@ pub fn delete_project(project: &Project) -> Result<()> {
             path.display()
         );
     }
-    fs::remove_dir_all(&path)?;
+    crate::util::fs_retry::remove_dir_all(&path)?;
     remove_from_base_cache(project);
     Ok(())
 }
@@ -670,10 +733,33 @@ pub fn rename_project(project: &Project, new_folder: &str) -> Result<Project> {
         .canonicalize()
         .unwrap_or_else(|_| project.base.clone());
     let new_path = base.join(&sanitized);
-    if new_path.exists() {
-        anyhow::bail!("rename target already exists: {}", new_path.display());
+
+    // A rename that only changes capitalisation is legitimate — and common, when
+    // tidying up a folder name. On Windows `exists()` is case-insensitive, so the
+    // target "already exists": it is the source. Detect that and go through a
+    // temporary name, which is the only way the OS will apply the new casing.
+    let case_only_change = sanitized.eq_ignore_ascii_case(&project.name);
+    if case_only_change {
+        let mut staging = base.join(format!(".{sanitized}.fastf-case"));
+        let mut attempt = 0;
+        while staging.exists() {
+            attempt += 1;
+            staging = base.join(format!(".{sanitized}.fastf-case{attempt}"));
+        }
+        crate::util::fs_retry::rename(&project.path, &staging)?;
+        if let Err(err) = crate::util::fs_retry::rename(&staging, &new_path) {
+            // Put it back rather than leaving the project under a dot-prefixed
+            // name, which discovery skips — that would make it vanish.
+            let _ = fs::rename(&staging, &project.path);
+            return Err(anyhow::anyhow!(err)
+                .context(format!("renaming '{}' to '{}'", project.name, sanitized)));
+        }
+    } else {
+        if new_path.exists() {
+            anyhow::bail!("rename target already exists: {}", new_path.display());
+        }
+        crate::util::fs_retry::rename(&project.path, &new_path)?;
     }
-    fs::rename(&project.path, &new_path)?;
 
     let mut renamed = project.clone();
     renamed.path = new_path.canonicalize().unwrap_or(new_path);
@@ -686,7 +772,7 @@ pub fn rename_project(project: &Project, new_folder: &str) -> Result<Project> {
     if pinfo.exists()
         && let Err(err) = project_info::write_frontmatter(&pinfo, |meta| {
             meta.folder = sanitized.clone();
-            meta.path = renamed.path.display().to_string();
+            meta.path = crate::util::paths::display_path(&renamed.path);
         })
     {
         eprintln!("warning: could not update PROJECT_INFO.md folder/path: {err:#}");
@@ -1053,6 +1139,49 @@ mod tests {
         assert_eq!(projects[0].base, canon);
     }
 
+    /// Renaming only the capitalisation is legitimate and used to be refused:
+    /// `exists()` is case-insensitive on Windows, so the target "already
+    /// existed" — it was the source.
+    #[test]
+    fn rename_allows_case_only_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let dir = base.join("myproject");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            project_info::pinfo_path(&dir),
+            "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
+             created: 2026-01-01T00:00:00Z\nfolder: myproject\npath: x\n\
+             variables: {}\ntags: []\n---\n",
+        )
+        .unwrap();
+        fs::write(dir.join("keep.txt"), "content").unwrap();
+
+        let project = scan_base(base).into_iter().next().unwrap();
+        let renamed = rename_project(&project, "MyProject").unwrap();
+
+        assert_eq!(renamed.name, "MyProject");
+        assert!(renamed.path.join("keep.txt").is_file(), "content survived");
+        // The folder really carries the new casing on disk.
+        let on_disk = fs::read_dir(base)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .find(|n| n.eq_ignore_ascii_case("myproject"))
+            .expect("project folder present");
+        assert_eq!(on_disk, "MyProject");
+        // No staging folder stranded — a dot-prefixed name is invisible to
+        // discovery, so a leftover would make the project disappear.
+        assert!(
+            !fs::read_dir(base)
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().contains("fastf-case")),
+            "case-rename staging folder left behind"
+        );
+        assert_eq!(scan_base(base).len(), 1, "still exactly one project");
+    }
+
     #[test]
     fn move_project_round_trip() {
         let tmp1 = tempfile::tempdir().unwrap();
@@ -1079,9 +1208,15 @@ mod tests {
             fs::read_to_string(moved.path.join("assets/raw_{x}.txt")).unwrap(),
             "keep {braces}"
         );
-        // Metadata `path` patched.
+        // Metadata `path` patched — in the readable form, not the `\\?\`
+        // verbatim one that `canonicalize` hands back on Windows.
         let meta = read_project_meta(&moved.path).unwrap();
-        assert_eq!(meta.path, moved.path.display().to_string());
+        assert_eq!(meta.path, crate::util::paths::display_path(&moved.path));
+        assert!(
+            !meta.path.starts_with(r"\\?\"),
+            "verbatim prefix leaked into metadata: {}",
+            meta.path
+        );
         assert_eq!(meta.id, "ID0001");
         // Caches on both sides are fresh.
         let old_cache = load_cache(&old_base.canonicalize().unwrap()).unwrap();
@@ -1114,6 +1249,20 @@ mod tests {
 
         staged_copy_verify_commit(&project, new_base, &new_path, "proj_a", &progress, &cancel)
             .unwrap();
+
+        // Progress must actually advance. The phase and the per-file counter are
+        // the only feedback during a multi-minute network copy, so a counter
+        // that silently stops updating looks exactly like a hung move.
+        {
+            let p = progress.lock().unwrap();
+            assert_eq!(p.phase, "finalizing", "the phase should have advanced");
+            assert!(p.total_files >= 3, "files counted: {}", p.total_files);
+            assert_eq!(
+                p.done_files, p.total_files,
+                "every copied file must be reported done"
+            );
+            assert!(p.copied_bytes >= 8000, "bytes copied: {}", p.copied_bytes);
+        }
 
         // Copied verbatim, verified, committed, source removed.
         assert_eq!(
@@ -1158,6 +1307,409 @@ mod tests {
         );
         assert!(!new_path.exists(), "no target committed");
         assert!(!provisioning::staging_path(new_base, "proj_a").exists());
+    }
+
+    /// Removing a project must drop its cache entry, or `recent` keeps listing
+    /// something that is gone until the staleness gate happens to fire.
+    #[test]
+    fn delete_unregister_and_rename_all_drop_the_old_cache_entry() {
+        let cached_dirs = |base: &Path| -> Vec<String> {
+            load_cache(base)
+                .map(|c| c.entries.into_iter().map(|e| e.dir).collect())
+                .unwrap_or_default()
+        };
+
+        // delete
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "gone", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_project(base, "stays", "ID0002", "gen", "2026-01-02T00:00:00Z");
+        write_cache(base, &scan_base(base)).unwrap();
+        let doomed = scan_base(base)
+            .into_iter()
+            .find(|p| p.name == "gone")
+            .unwrap();
+        delete_project(&doomed).unwrap();
+        let dirs = cached_dirs(base);
+        assert!(!dirs.contains(&"gone".to_string()), "stale entry: {dirs:?}");
+        assert!(dirs.contains(&"stays".to_string()), "collateral: {dirs:?}");
+
+        // unregister
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "dropme", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_cache(base, &scan_base(base)).unwrap();
+        let p = scan_base(base).into_iter().next().unwrap();
+        unregister_project(&p).unwrap();
+        assert!(
+            !cached_dirs(base).contains(&"dropme".to_string()),
+            "unregister must drop the cache entry"
+        );
+        assert!(base.join("dropme").is_dir(), "the folder itself stays");
+
+        // rename
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "before", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_cache(base, &scan_base(base)).unwrap();
+        let p = scan_base(base).into_iter().next().unwrap();
+        rename_project(&p, "after").unwrap();
+        let dirs = cached_dirs(base);
+        assert!(!dirs.contains(&"before".to_string()), "old entry: {dirs:?}");
+        assert!(dirs.contains(&"after".to_string()), "new entry: {dirs:?}");
+    }
+
+    /// `resolve` has three distinct outcomes and each must stay distinguishable:
+    /// nothing matched, exactly one, or an ambiguous set.
+    #[test]
+    fn resolve_distinguishes_no_match_exact_and_ambiguous() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "alpha_one", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_project(base, "alpha_two", "ID0012", "gen", "2026-01-02T00:00:00Z");
+        let cfg = cfg_for(base, &[]);
+
+        // Exactly one → the project.
+        assert_eq!(resolve(&cfg, "ID0001").unwrap().name, "alpha_one");
+        assert_eq!(resolve(&cfg, "alpha_two").unwrap().id, "ID0012");
+
+        // Nothing matched → a "no project matches" error, not an ambiguity one.
+        let err = resolve(&cfg, "nothing_like_this").unwrap_err().to_string();
+        assert!(
+            err.contains("no project matches"),
+            "expected a not-found error, got: {err}"
+        );
+
+        // Several matched → an ambiguity error listing the candidates.
+        let err = resolve(&cfg, "alpha").unwrap_err().to_string();
+        assert!(
+            err.contains("ambiguous") && err.contains("ID0001") && err.contains("ID0012"),
+            "expected an ambiguity error naming the candidates, got: {err}"
+        );
+
+        // An exact ID wins over a prefix that would also match it.
+        assert_eq!(resolve(&cfg, "ID0001").unwrap().id, "ID0001");
+    }
+
+    /// `max_id` must be read-only — it runs from `plan()`, and a preview that
+    /// writes a cache breaks the "dry run touches nothing" guarantee. It must
+    /// also see projects a stale cache does not mention.
+    #[test]
+    fn max_id_is_read_only_and_sees_past_a_stale_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "a", "ID0007", "gen", "2026-01-01T00:00:00Z");
+        let cfg = cfg_for(base, &[]);
+
+        // No cache yet: max_id must scan, and must not create one.
+        assert_eq!(max_id(&cfg), 7);
+        assert!(
+            !cache_path(base).exists(),
+            "max_id must never write a cache — plan()/preview calls it"
+        );
+
+        // With a cache that predates a newly added project, the staleness gate
+        // must send it back to the folders rather than under-reporting.
+        write_cache(base, &scan_base(base)).unwrap();
+        let file = fs::File::options()
+            .write(true)
+            .open(cache_path(base))
+            .unwrap();
+        file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+            .unwrap();
+        drop(file);
+        write_project(base, "b", "ID0042", "gen", "2026-01-03T00:00:00Z");
+        assert_eq!(
+            max_id(&cfg),
+            42,
+            "a stale cache must not hide a project from the counter floor"
+        );
+    }
+
+    /// An upsert must leave every *other* entry alone.
+    ///
+    /// The retain predicate drops the entry being replaced; inverted, it would
+    /// drop everything else instead and quietly reduce the cache to a single
+    /// project. Discovery would then self-heal on the next staleness check, so
+    /// the damage is invisible until someone wonders why `recent` went blank.
+    #[test]
+    fn cache_upsert_replaces_one_entry_and_preserves_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        for (folder, id) in [("a", "ID0001"), ("b", "ID0002"), ("c", "ID0003")] {
+            write_project(base, folder, id, "gen", "2026-01-01T00:00:00Z");
+        }
+        // Seed a full cache.
+        let all = scan_base(base);
+        assert_eq!(all.len(), 3);
+        write_cache(base, &all).unwrap();
+
+        // Re-upsert one of them with changed metadata.
+        let mut updated = all.iter().find(|p| p.name == "b").unwrap().clone();
+        updated.tags = vec!["urgent".to_string()];
+        cache_upsert(base, &updated);
+
+        let cache = load_cache(base).expect("cache still readable");
+        assert_eq!(
+            cache.entries.len(),
+            3,
+            "upsert must not drop the other entries, got {:?}",
+            cache.entries.iter().map(|e| &e.dir).collect::<Vec<_>>()
+        );
+        let names: std::collections::HashSet<&str> =
+            cache.entries.iter().map(|e| e.dir.as_str()).collect();
+        assert!(names.contains("a") && names.contains("b") && names.contains("c"));
+
+        // Exactly one entry for the upserted project, carrying the new data.
+        let b: Vec<_> = cache.entries.iter().filter(|e| e.dir == "b").collect();
+        assert_eq!(b.len(), 1, "no duplicate entry for the upserted project");
+        assert_eq!(b[0].tags, vec!["urgent".to_string()]);
+    }
+
+    /// `refresh_cache` must actually re-read the metadata and write it back —
+    /// silently doing nothing would leave `recent`/`search` showing stale tags
+    /// after every tag mutation.
+    #[test]
+    fn refresh_cache_picks_up_edited_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        write_cache(base, &scan_base(base)).unwrap();
+        assert!(
+            load_cache(base).unwrap().entries[0].tags.is_empty(),
+            "starts untagged"
+        );
+
+        let dir = base.join("proj");
+        project_info::write_frontmatter(&project_info::pinfo_path(&dir), |meta| {
+            meta.tags = vec!["shipped".to_string()];
+        })
+        .unwrap();
+
+        refresh_cache(&dir);
+
+        let cache = load_cache(base).expect("cache readable");
+        assert_eq!(
+            cache.entries[0].tags,
+            vec!["shipped".to_string()],
+            "refresh_cache must write the edited metadata back"
+        );
+    }
+
+    /// The staleness gate: a cache older than its base must be rescanned, and a
+    /// cache newer than its base must be trusted. Getting the comparison wrong
+    /// either way costs correctness or a rescan on every command.
+    #[test]
+    fn cache_staleness_gate_compares_the_right_way_round() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+
+        write_cache(base, &scan_base(base)).unwrap();
+        let cache_file = cache_path(base);
+
+        // Set the cache's mtime explicitly rather than relying on write order:
+        // writing the cache *into* the base bumps the base's own mtime to the
+        // same instant, which makes "is it newer?" a coin flip.
+        let set_cache_mtime = |offset_secs: i64| {
+            let when = if offset_secs >= 0 {
+                std::time::SystemTime::now() + std::time::Duration::from_secs(offset_secs as u64)
+            } else {
+                std::time::SystemTime::now()
+                    - std::time::Duration::from_secs(offset_secs.unsigned_abs())
+            };
+            let file = fs::File::options().write(true).open(&cache_file).unwrap();
+            file.set_modified(when).unwrap();
+        };
+
+        set_cache_mtime(3600); // cache clearly newer than the base
+        assert!(
+            !cache_is_stale(base),
+            "a cache newer than its base must be trusted"
+        );
+
+        set_cache_mtime(-3600); // cache clearly older than the base
+        assert!(
+            cache_is_stale(base),
+            "a cache older than its base must be rescanned"
+        );
+
+        // And a missing cache is always stale.
+        fs::remove_file(&cache_file).unwrap();
+        assert!(cache_is_stale(base));
+    }
+
+    /// Metadata with an empty `created` falls back to the folder's own mtime, so
+    /// projects still sort sensibly instead of collapsing to one timestamp.
+    #[test]
+    fn empty_created_falls_back_to_the_folder_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let dir = base.join("proj");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            project_info::pinfo_path(&dir),
+            "---\nid: ID0001\ntemplate: t\ntemplate_name: T\ncreated: \"\"\n\
+             folder: proj\npath: x\nvariables: {}\ntags: []\n---\n",
+        )
+        .unwrap();
+
+        let found = scan_base(base);
+        assert_eq!(found.len(), 1);
+        let created = &found[0].created;
+        assert!(!created.is_empty(), "must fall back, not stay blank");
+        assert!(
+            created.starts_with("20") && created.ends_with('Z'),
+            "expected an ISO-8601 UTC timestamp, got {created:?}"
+        );
+    }
+
+    /// The staged (copying) move must refuse a project containing links.
+    ///
+    /// Reached through the private pre-flight because the public entry point
+    /// only consults it after `fs::rename` fails, and a test cannot conjure a
+    /// second filesystem. The same-filesystem path is covered separately in
+    /// `tests/windows_semantics.rs`, where the junction is expected to survive.
+    #[test]
+    fn staged_move_pre_flight_refuses_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        // Join components separately: `join("proj_a/linked")` yields a
+        // mixed-separator path on Windows (`...\proj_a/linked`), and `cmd` then
+        // reads `/linked` as a switch — which is precisely how this test came to
+        // "skip" silently while reporting success.
+        let link = base.join("proj_a").join("linked");
+        let target = base.join("shared");
+        fs::create_dir_all(&target).unwrap();
+
+        // A silent skip here would be worse than no test: it reports "ok" while
+        // asserting nothing, which is exactly how the mutation run found that
+        // `refuse_if_contains_links` could be replaced with `Ok(())` and stay
+        // green. Junctions need no elevation on Windows and symlinks work
+        // normally on Unix, so failing to create one is a real problem — say so
+        // loudly rather than passing.
+        #[cfg(windows)]
+        {
+            let out = std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(&link)
+                .arg(&target)
+                .output()
+                .expect("running mklink");
+            assert!(
+                out.status.success(),
+                "could not create a junction (needs no elevation on Windows):\n\
+                 stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).expect("creating a symlink");
+
+        let project = scan_base(base).into_iter().next().unwrap();
+        let err = refuse_if_contains_links(&project)
+            .expect_err("a copying move cannot reproduce a link and must refuse")
+            .to_string();
+        assert!(
+            err.contains("linked"),
+            "the error must name the offending link, got: {err}"
+        );
+        assert!(
+            err.contains("Nothing has been changed"),
+            "the error must say the project is untouched, got: {err}"
+        );
+
+        // A project with no links is waved through.
+        write_project(base, "proj_b", "ID0002", "gen", "2026-01-02T00:00:00Z");
+        let plain = scan_base(base)
+            .into_iter()
+            .find(|p| p.name == "proj_b")
+            .unwrap();
+        assert!(refuse_if_contains_links(&plain).is_ok());
+    }
+
+    /// The move invariant, at every failpoint: the source is intact **or** the
+    /// destination is complete — never neither, and never a silent half-state.
+    ///
+    /// The failure is injected rather than raced, so each boundary is hit
+    /// deterministically instead of "wherever the kill happened to land". These
+    /// go through the private staged path directly: a same-filesystem test would
+    /// take the instant `fs::rename` fast path and never stage or verify.
+    ///
+    /// Debug-only: failpoints are compiled out of release builds.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
+        const MOVE_POINTS: &[&str] = &[
+            "move:after-staging",
+            "move:after-verify",
+            "move:before-commit-rename",
+            "move:after-commit-before-source-removal",
+        ];
+
+        for point in MOVE_POINTS {
+            let tmp1 = tempfile::tempdir().unwrap();
+            let tmp2 = tempfile::tempdir().unwrap();
+            let (old_base, new_base) = (tmp1.path(), tmp2.path());
+            write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+            fs::write(old_base.join("proj_a/payload.bin"), vec![7u8; 4096]).unwrap();
+
+            let cfg = cfg_for(old_base, &[new_base]);
+            let project = discover(&cfg).remove(0);
+            let new_path = new_base.join("proj_a");
+            let progress = Mutex::new(Progress::new(&[]));
+            let cancel = AtomicBool::new(false);
+
+            // Armed per-thread, so a move test running in parallel cannot see
+            // this fault — an env var would fire inside every one of them.
+            let result = crate::util::faults::with_thread_fault(point, || {
+                staged_copy_verify_commit(
+                    &project, new_base, &new_path, "proj_a", &progress, &cancel,
+                )
+            });
+
+            assert!(result.is_err(), "[{point}] should have failed");
+
+            // The invariant. `after-commit-before-source-removal` is the one
+            // point where the commit already landed, so the destination holds
+            // the data and the (still-present) source is redundant.
+            let source_ok = old_base.join("proj_a/payload.bin").is_file();
+            let dest_ok = new_path.join("payload.bin").is_file();
+            assert!(
+                source_ok || dest_ok,
+                "[{point}] data exists in neither location — this is data loss"
+            );
+
+            if *point == "move:after-commit-before-source-removal" {
+                assert!(dest_ok, "[{point}] commit landed, destination must hold it");
+            } else {
+                assert!(
+                    source_ok,
+                    "[{point}] nothing was committed, so the source must be intact"
+                );
+                assert!(
+                    !new_path.exists(),
+                    "[{point}] an uncommitted move must leave no destination"
+                );
+            }
+
+            // Whatever happened, reconcile must reach a consistent end state
+            // with the payload still present exactly once.
+            let report = provisioning::reconcile(&cfg);
+            let _ = report;
+            let after_source = old_base.join("proj_a/payload.bin").is_file();
+            let after_dest = new_path.join("payload.bin").is_file();
+            assert!(
+                after_source || after_dest,
+                "[{point}] reconcile lost the data"
+            );
+            assert!(
+                !provisioning::staging_path(new_base, "proj_a").exists(),
+                "[{point}] reconcile left staging behind"
+            );
+        }
     }
 
     #[test]

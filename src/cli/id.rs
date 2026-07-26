@@ -32,22 +32,26 @@ pub fn show() -> Result<()> {
 }
 
 pub fn reset() -> Result<()> {
-    let mut counters = Counters::load()?;
+    // Prompt first, then take the lock: a lock held across a human prompt would
+    // block every other fastf for as long as the terminal sits unattended.
     let ok = Confirm::new()
         .with_prompt("Reset global ID counter to 0?")
         .default(false)
         .interact()?;
-    if ok {
-        counters.reset();
-        counters.save()?;
-        println!("Global ID counter reset to 0.");
-    } else {
+    if !ok {
         println!("Aborted.");
+        return Ok(());
     }
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+    let mut counters = Counters::load()?;
+    counters.reset();
+    counters.save()?;
+    println!("Global ID counter reset to 0.");
     Ok(())
 }
 
 pub fn set(value: u64) -> Result<()> {
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let mut counters = Counters::load()?;
     counters.set_value(value);
     counters.save()?;

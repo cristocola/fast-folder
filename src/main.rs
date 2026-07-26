@@ -585,7 +585,22 @@ fn main() {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
+
+    // Turn Ctrl-C into a flag that long-running work polls, so an interrupted
+    // create unwinds and rolls its partial folder back rather than being killed
+    // part-way through copying a template's assets.
+    fastf::util::interrupt::install();
+
     if let Err(e) = run() {
+        // An interrupt is the user's choice, not a failure. Say so, and exit
+        // 130 (the shell convention for SIGINT) so scripts can tell them apart.
+        if fastf::util::interrupt::is_set() {
+            eprintln!(
+                "{} interrupted — the partial project was removed.",
+                colored::Colorize::yellow("aborted:")
+            );
+            std::process::exit(130);
+        }
         eprintln!("{} {:#}", colored::Colorize::red("error:"), e);
         std::process::exit(1);
     }

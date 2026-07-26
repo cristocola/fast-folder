@@ -82,7 +82,7 @@ non-loopback address.
 | POST | `/api/apply` | Create missing folders/files in an existing folder |
 | POST | `/api/templates/from-folder` | Generate a template from a folder (`{source, slug, force, bundle_assets}`); returns a `report` of counts (folders / text files / bundled + bytes / skipped) |
 | POST | `/api/reindex` | Force a full rescan of every base, rewriting each `.fastf-index.json`; returns `{projects}` |
-| POST | `/api/reconcile` | Resume interrupted copies + finish/roll-back interrupted moves across all bases; returns `{report}` (`resumed`/`completed`/`rolled_back`/`unrecoverable`) |
+| POST | `/api/reconcile` | Recover interrupted work across all bases; returns `{report}` with `resumed` (copies finished), `completed` (moves committed), `rolled_back` (moves undone, source intact), `swept` (abandoned `.part`/`.tmp` files removed), `incomplete` (paths of projects never finished being created — these cannot be rebuilt automatically), and `unrecoverable` |
 | POST | `/api/counter` | Set the global ID counter (`{value}`) |
 
 Write routes (`create`, `settings`, `base/init`, template save/from-folder/delete, template
@@ -92,6 +92,15 @@ Write routes (`create`, `settings`, `base/init`, template save/from-folder/delet
 (`/api/search`, `/api/project`, `/api/job/<id>`, `/api/template-files`, the GET
 state route) are lock-free. Static GET routes serve only the four embedded
 frontend files.
+
+`WRITE_LOCK` is an **in-process** mutex, so it does not see a `fastf` running in
+a terminal. Anything that allocates an ID or rewrites `config.toml` therefore
+also takes `util::lockfile::DataLock`, a lock file over the data directory that
+every fastf process respects — without it, a create in the UI and a
+`fastf new` in a shell could mint the same ID (ten concurrent creates reliably
+produced eight). The data lock is held only across the read-modify-write itself:
+never across a prompt, and never across post-create hooks, which run arbitrary
+user commands.
 
 **First-run onboarding (v1.0.2).** When no base is configured anywhere
 (`base_dir` empty and `bases` empty), `/api/state` reports

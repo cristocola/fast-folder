@@ -148,15 +148,37 @@ A note on the browser UI: the server binds to loopback (`127.0.0.1`) only and ha
 ## Contributing
 
 ```bash
-cargo test                                # unit + integration + UI server tests
+cargo test                                # the whole suite
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 node --check src/ui/web/app.js            # frontend sanity check
 ```
 
-Tests are hermetic: they redirect all state through `FASTF_INSTALL_DIR` into temp directories and never touch a real install. Core flows live in [`tests/integration.rs`](tests/integration.rs), the browser UI request layer in [`tests/ui_server.rs`](tests/ui_server.rs). For frontend work, `FASTF_UI_DIR=src/ui/web fastf ui` serves assets from disk so you can edit and refresh without rebuilding.
+Tests are hermetic: they redirect all state through `FASTF_INSTALL_DIR` (and `HOME`) into temp directories and never touch a real install.
 
-Pull requests are welcome. Please make sure the three checks above pass first.
+| Suite | Covers |
+|---|---|
+| [`integration.rs`](tests/integration.rs) | core flows end to end |
+| [`ui_server.rs`](tests/ui_server.rs) | the browser UI's request layer |
+| [`crash_recovery.rs`](tests/crash_recovery.rs) | interruption at each unsafe boundary, via fault injection |
+| [`concurrency.rs`](tests/concurrency.rs) | several fastf **processes** racing each other |
+| [`windows_semantics.rs`](tests/windows_semantics.rs) | reserved names, long paths, links, read-only files |
+| [`hostile_fs.rs`](tests/hostile_fs.rs) | corrupt caches, markers and metadata |
+| [`properties.rs`](tests/properties.rs) | generated-input properties (proptest) |
+
+Two things worth knowing before you change the copy or move paths:
+
+- **Fault injection.** Boundaries that must survive a crash carry named
+  failpoints. Trip one with `FASTF_FAULT=move:before-commit-rename` (returns an
+  error there) or `FASTF_FAULT=create:mid-copy:abort` (kills the process there).
+  See `util::faults::ALL_FAULT_POINTS`. Compiled out of release builds.
+- **Check Linux from Windows.** `#[cfg(unix)]` code does not compile on a Windows
+  machine, so `cargo clippy --target x86_64-unknown-linux-gnu --all-targets`
+  catches what your local clippy cannot. CI runs both regardless.
+
+For frontend work, `FASTF_UI_DIR=src/ui/web fastf ui` serves assets from disk so you can edit and refresh without rebuilding.
+
+Pull requests are welcome. Please make sure the checks above pass first.
 
 ## License
 

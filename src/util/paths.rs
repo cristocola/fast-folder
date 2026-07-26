@@ -145,6 +145,54 @@ fn user_config_dir_from(xdg: Option<&str>, home: Option<&str>) -> Result<PathBuf
     bail!("neither $XDG_CONFIG_HOME nor $HOME is set")
 }
 
+/// Render a path for humans, stripping Windows' `\\?\` extended-length prefix.
+///
+/// `Path::canonicalize` returns the verbatim form on Windows, so every path that
+/// had been through it surfaced as `\\?\C:\Users\...` — in the create success
+/// line, in `recent`, in `move`, and baked into every project's
+/// `PROJECT_INFO.md`. It is a valid path, but not one anyone wants to read or
+/// paste, and it reads as a bug.
+///
+/// **Display only.** The verbatim form is what makes paths beyond `MAX_PATH`
+/// work, and long-path support without it is an opt-in system setting that is
+/// off on many machines — so filesystem calls keep the canonical path and only
+/// the rendering is cleaned up.
+///
+/// - `\\?\C:\foo`            → `C:\foo`
+/// - `\\?\UNC\server\share`  → `\\server\share`
+/// - anything else           → unchanged
+pub fn display_path(path: &Path) -> String {
+    strip_verbatim(&path.display().to_string())
+}
+
+/// The string half of [`display_path`], split out so Windows-shaped inputs can
+/// be unit-tested on any platform.
+fn strip_verbatim(raw: &str) -> String {
+    const VERBATIM: &str = r"\\?\";
+    const VERBATIM_UNC: &str = r"\\?\UNC\";
+
+    if let Some(rest) = raw.strip_prefix(VERBATIM_UNC) {
+        // `\\?\UNC\server\share` is really `\\server\share`.
+        return format!(r"\\{rest}");
+    }
+    let Some(rest) = raw.strip_prefix(VERBATIM) else {
+        return raw.to_string();
+    };
+    // Only unwrap a plain drive path (`C:\...`). Anything else behind the prefix
+    // — a device path like `\\?\Volume{guid}\` — means something specific and
+    // has to be shown as it is.
+    let bytes = rest.as_bytes();
+    let is_drive_path = bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes.len() == 2 || bytes[2] == b'\\');
+    if is_drive_path {
+        rest.to_string()
+    } else {
+        raw.to_string()
+    }
+}
+
 pub fn config_path() -> PathBuf {
     install_dir().join("config.toml")
 }
@@ -177,6 +225,30 @@ pub fn template_files_dir(slug: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_verbatim_prefix_for_display() {
+        // The exact shape that leaked into create/recent/move output.
+        assert_eq!(
+            strip_verbatim(r"\\?\C:\Users\Cristo\Projects\2026_Thing_ID0001"),
+            r"C:\Users\Cristo\Projects\2026_Thing_ID0001"
+        );
+        assert_eq!(strip_verbatim(r"\\?\E:\"), r"E:\");
+        // UNC round-trips to the familiar double-backslash form.
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\server\share\proj"),
+            r"\\server\share\proj"
+        );
+        // Device paths mean something specific — leave them alone.
+        assert_eq!(
+            strip_verbatim(r"\\?\Volume{9f3a}\data"),
+            r"\\?\Volume{9f3a}\data"
+        );
+        // Ordinary paths are untouched, on either platform.
+        assert_eq!(strip_verbatim(r"C:\already\plain"), r"C:\already\plain");
+        assert_eq!(strip_verbatim("/home/user/projects"), "/home/user/projects");
+        assert_eq!(strip_verbatim(""), "");
+    }
 
     #[test]
     fn portable_marker_detection() {

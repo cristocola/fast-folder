@@ -124,15 +124,58 @@ pub fn id_value(id: &str) -> Option<u64> {
     id[i..].parse::<u64>().ok()
 }
 
+/// MS-DOS device names, still reserved by Win32 today. A file or folder called
+/// any of these — with or without an extension — cannot be created, and the
+/// error Windows returns says nothing useful about why.
+const RESERVED_DEVICE_NAMES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "CONIN$",
+    "CONOUT$",
+];
+
+fn is_reserved_device_name(stem: &str) -> bool {
+    RESERVED_DEVICE_NAMES
+        .iter()
+        .any(|reserved| stem.eq_ignore_ascii_case(reserved))
+}
+
 /// Sanitize a string for use as a folder/file name component.
-/// Strips characters that are problematic on Windows, macOS, or Linux.
+///
+/// Beyond the outright-illegal characters, this covers the two Windows
+/// behaviours that corrupt a name silently rather than failing loudly:
+///
+/// - **Trailing dots and spaces** are stripped by the filesystem itself, so
+///   `"Draft ."` lands on disk as `"Draft"`. fastf would then have recorded a
+///   folder name that does not match reality, and every later lookup, rename or
+///   move against it would miss.
+/// - **Reserved device names** (`CON`, `NUL`, `COM1`, …) cannot be used at all,
+///   extension or not, so an underscore is appended.
+///
+/// Applied on every platform, not only Windows: a project created on Linux and
+/// later opened on Windows needs a name that works in both places, and a
+/// template should not produce different folder names depending on where it runs.
 pub fn sanitize_name(s: &str) -> String {
-    s.chars()
+    let replaced: String = s
+        .chars()
         .map(|c| match c {
             '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            // Illegal in names on Windows, unreadable everywhere else.
+            c if (c as u32) < 0x20 => '_',
             c => c,
         })
-        .collect()
+        .collect();
+
+    // Doing the trim here keeps the recorded name and the name on disk
+    // identical. It also reduces ".." to the empty string, which callers such as
+    // `rename_project` already reject.
+    let trimmed = replaced.trim_end_matches([' ', '.']);
+
+    let stem = trimmed.split('.').next().unwrap_or(trimmed);
+    if is_reserved_device_name(stem) {
+        // `CON` → `CON_`, `CON.txt` → `CON_.txt`.
+        return format!("{}_{}", stem, &trimmed[stem.len()..]);
+    }
+    trimmed.to_string()
 }
 
 /// Reject file paths that would escape the project root.
@@ -227,6 +270,63 @@ mod tests {
     fn test_sanitize() {
         assert_eq!(sanitize_name("hello/world"), "hello_world");
         assert_eq!(sanitize_name("a:b*c"), "a_b_c");
+        // Ordinary names are untouched — including interior dots.
+        assert_eq!(sanitize_name("Release v1.2.3"), "Release v1.2.3");
+        assert_eq!(sanitize_name("Ariana_Grande"), "Ariana_Grande");
+    }
+
+    #[test]
+    fn sanitize_defuses_reserved_device_names() {
+        // Windows cannot create any of these, with or without an extension.
+        assert_eq!(sanitize_name("CON"), "CON_");
+        assert_eq!(sanitize_name("nul"), "nul_");
+        assert_eq!(sanitize_name("COM1"), "COM1_");
+        assert_eq!(sanitize_name("LPT9"), "LPT9_");
+        assert_eq!(sanitize_name("CON.txt"), "CON_.txt");
+        assert_eq!(sanitize_name("aux.tar.gz"), "aux_.tar.gz");
+        // Names that merely start with a reserved word are fine.
+        assert_eq!(sanitize_name("CONTENT"), "CONTENT");
+        assert_eq!(sanitize_name("COM10"), "COM10");
+        assert_eq!(sanitize_name("console"), "console");
+    }
+
+    #[test]
+    fn sanitize_strips_trailing_dots_and_spaces() {
+        // Windows drops these silently, so the name fastf records would not
+        // match the folder that actually appears on disk.
+        assert_eq!(sanitize_name("Draft."), "Draft");
+        assert_eq!(sanitize_name("Draft "), "Draft");
+        assert_eq!(sanitize_name("Draft . . "), "Draft");
+        // Leading whitespace is legal and left alone.
+        assert_eq!(sanitize_name(" Draft"), " Draft");
+        // Dot-only names collapse to empty; callers reject that explicitly.
+        assert_eq!(sanitize_name(".."), "");
+        assert_eq!(sanitize_name("..."), "");
+    }
+
+    #[test]
+    fn sanitize_removes_control_characters() {
+        assert_eq!(sanitize_name("bad\u{0}name"), "bad_name");
+        assert_eq!(sanitize_name("tab\tname"), "tab_name");
+        assert_eq!(sanitize_name("nl\nname"), "nl_name");
+    }
+
+    #[test]
+    fn sanitize_is_idempotent() {
+        // plan() sanitizes each variable and then the assembled folder name, so
+        // applying it twice must not keep changing the result.
+        for input in [
+            "CON",
+            "Draft.",
+            "a:b*c",
+            "..",
+            "Release v1.2.3",
+            "CON.txt",
+            "tab\tname",
+        ] {
+            let once = sanitize_name(input);
+            assert_eq!(sanitize_name(&once), once, "not idempotent for {input:?}");
+        }
     }
 
     #[test]

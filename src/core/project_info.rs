@@ -118,7 +118,12 @@ impl Metadata {
             template_name: tmpl.name.clone(),
             created: crate::core::library::now_iso8601(),
             folder: plan.folder_name.clone(),
-            path: plan.root_path.display().to_string(),
+            // `display_path`, not `.display()`: register (and any caller that
+            // canonicalizes first) hands us a `\\?\`-prefixed path on Windows,
+            // and that prefix would then be baked into the project's metadata
+            // forever. This field is display-truth only — discovery never reads
+            // it — so the readable form is the correct one to store.
+            path: crate::util::paths::display_path(&plan.root_path),
             variables,
             tags,
             provisioning: false,

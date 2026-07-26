@@ -53,7 +53,15 @@ pub fn plan(
 
     // Interpolate folder name. Use `interpolate_name` so empty variables don't
     // leave `__` gaps or leading/trailing underscores in the folder name.
-    let folder_name = interpolate_name(&template.naming_pattern, &vars, &config.date_format);
+    // Sanitize the assembled result as well as the individual variables: the
+    // pattern itself can contribute a trailing dot or a literal reserved device
+    // name that no single variable is responsible for. `sanitize_name` is
+    // idempotent, so the double pass is free.
+    let folder_name = sanitize_name(&interpolate_name(
+        &template.naming_pattern,
+        &vars,
+        &config.date_format,
+    ));
 
     let base = config.resolve_base_dir();
     let root_path = base.join(&folder_name);
@@ -238,7 +246,13 @@ pub fn print_success(plan: &ProjectPlan, template: &Template) {
 fn print_project_path(path: &std::path::Path, folder_name: &str) {
     let parent = path
         .parent()
-        .map(|p| format!("{}{}", p.display(), std::path::MAIN_SEPARATOR))
+        .map(|p| {
+            format!(
+                "{}{}",
+                crate::util::paths::display_path(p),
+                std::path::MAIN_SEPARATOR
+            )
+        })
         .unwrap_or_default();
     println!(
         "  {} {}{}",

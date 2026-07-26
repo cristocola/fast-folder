@@ -303,8 +303,14 @@ fn apply_skips_existing_and_creates_missing() {
 #[test]
 fn create_rejects_parent_escape_via_variable() {
     // Folder-form templates can't author an escaping *path* on disk, but a file
-    // name can interpolate a variable. A malicious `..` value must be caught by
-    // the copy engine's `ensure_relative_safe_path` guard at create time.
+    // name can interpolate a variable. A `..` value must never produce a write
+    // outside the project root.
+    //
+    // There are now two independent guards: `sanitize_name` reduces ".." to the
+    // empty string (it strips trailing dots), and `ensure_relative_safe_path`
+    // rejects what is left. This asserts the *property* — the create fails and
+    // nothing lands outside the root — rather than the wording of whichever
+    // guard fires first, which is an implementation detail.
     with_fresh_install(|install| {
         let yaml = r#"name: Bad
 slug: bad
@@ -333,7 +339,25 @@ files:
         let err = project::create(&plan, &tmpl, &mut counters, &cfg, false)
             .expect_err("escaping file name must be rejected");
         let msg = format!("{err:#}");
-        assert!(msg.contains("..") || msg.contains("relative"), "got: {msg}");
+        assert!(
+            msg.contains("..") || msg.contains("relative") || msg.contains("empty"),
+            "expected a path-safety rejection, got: {msg}"
+        );
+
+        // The guarantee that actually matters: nothing was written above the
+        // base, and the rolled-back create left no partial project behind.
+        assert!(
+            !install.join("keep.txt").exists(),
+            "a file escaped the project root"
+        );
+        assert!(
+            !Path::new(&cfg.base_dir).join("keep.txt").exists(),
+            "a file escaped the project root into the base"
+        );
+        assert!(
+            !plan.root_path.exists(),
+            "failed create must not leave a partial project"
+        );
     });
 }
 
@@ -2020,8 +2044,15 @@ fn move_project_between_bases_full_round_trip() {
         assert!(!project.path.exists(), "source folder should be gone");
 
         // Metadata `path` is patched to the new location; identity unchanged.
+        // Stored in readable form — `canonicalize` yields a `\\?\` path on
+        // Windows and that prefix must not end up baked into the metadata.
         let meta = project_info::read_metadata(&moved.path).unwrap().unwrap();
-        assert_eq!(meta.path, moved.path.display().to_string());
+        assert_eq!(meta.path, fastf::util::paths::display_path(&moved.path));
+        assert!(
+            !meta.path.starts_with(r"\\?\"),
+            "verbatim prefix leaked into metadata: {}",
+            meta.path
+        );
         assert_eq!(meta.id, moved.id);
 
         // Discovery now finds it under the new base only, and resolve works.

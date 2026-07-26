@@ -454,6 +454,9 @@ pub fn move_project_with(
     // no verification needed (there is no window in which data is half-there).
     // It also preserves links perfectly, because nothing is copied, so the link
     // check below deliberately applies only to the staged fallback.
+    // Deliberately NOT `fs_retry::rename`: this call is *expected* to fail on a
+    // cross-device move, and that failure is the signal to take the staged path.
+    // Retrying would add the full backoff to every cross-drive move for nothing.
     if fs::rename(&project.path, &new_path).is_err() {
         refuse_if_contains_links(project)?;
         staged_copy_verify_commit(project, &new_base, &new_path, &folder, progress, cancel)?;
@@ -469,7 +472,7 @@ pub fn move_project_with(
     let pinfo = project_info::pinfo_path(&moved.path);
     if pinfo.exists()
         && let Err(err) = project_info::write_frontmatter(&pinfo, |meta| {
-            meta.path = moved.path.display().to_string();
+            meta.path = crate::util::paths::display_path(&moved.path);
         })
     {
         eprintln!("warning: could not update PROJECT_INFO.md path: {err:#}");
@@ -617,12 +620,12 @@ fn staged_copy_verify_commit(
         &project.id,
     )
     .ok();
-    fs::rename(&temp, new_path)
+    crate::util::fs_retry::rename(&temp, new_path)
         .with_context(|| format!("finalizing move into {}", new_path.display()))?;
 
     // Target is verified and in place; a source-removal failure is a warning,
     // never data loss (reconcile will finish it).
-    if let Err(err) = fs::remove_dir_all(&project.path) {
+    if let Err(err) = crate::util::fs_retry::remove_dir_all(&project.path) {
         eprintln!(
             "warning: moved to {} but could not remove source {} ({err}) — remove it manually",
             new_path.display(),
@@ -653,7 +656,7 @@ pub fn unregister_project(project: &Project) -> Result<()> {
             project.name
         );
     }
-    fs::remove_file(&pinfo)?;
+    crate::util::fs_retry::remove_file(&pinfo)?;
     remove_from_base_cache(project);
     Ok(())
 }
@@ -686,7 +689,7 @@ pub fn delete_project(project: &Project) -> Result<()> {
             path.display()
         );
     }
-    fs::remove_dir_all(&path)?;
+    crate::util::fs_retry::remove_dir_all(&path)?;
     remove_from_base_cache(project);
     Ok(())
 }
@@ -714,10 +717,33 @@ pub fn rename_project(project: &Project, new_folder: &str) -> Result<Project> {
         .canonicalize()
         .unwrap_or_else(|_| project.base.clone());
     let new_path = base.join(&sanitized);
-    if new_path.exists() {
-        anyhow::bail!("rename target already exists: {}", new_path.display());
+
+    // A rename that only changes capitalisation is legitimate — and common, when
+    // tidying up a folder name. On Windows `exists()` is case-insensitive, so the
+    // target "already exists": it is the source. Detect that and go through a
+    // temporary name, which is the only way the OS will apply the new casing.
+    let case_only_change = sanitized.eq_ignore_ascii_case(&project.name);
+    if case_only_change {
+        let mut staging = base.join(format!(".{sanitized}.fastf-case"));
+        let mut attempt = 0;
+        while staging.exists() {
+            attempt += 1;
+            staging = base.join(format!(".{sanitized}.fastf-case{attempt}"));
+        }
+        crate::util::fs_retry::rename(&project.path, &staging)?;
+        if let Err(err) = crate::util::fs_retry::rename(&staging, &new_path) {
+            // Put it back rather than leaving the project under a dot-prefixed
+            // name, which discovery skips — that would make it vanish.
+            let _ = fs::rename(&staging, &project.path);
+            return Err(anyhow::anyhow!(err)
+                .context(format!("renaming '{}' to '{}'", project.name, sanitized)));
+        }
+    } else {
+        if new_path.exists() {
+            anyhow::bail!("rename target already exists: {}", new_path.display());
+        }
+        crate::util::fs_retry::rename(&project.path, &new_path)?;
     }
-    fs::rename(&project.path, &new_path)?;
 
     let mut renamed = project.clone();
     renamed.path = new_path.canonicalize().unwrap_or(new_path);
@@ -730,7 +756,7 @@ pub fn rename_project(project: &Project, new_folder: &str) -> Result<Project> {
     if pinfo.exists()
         && let Err(err) = project_info::write_frontmatter(&pinfo, |meta| {
             meta.folder = sanitized.clone();
-            meta.path = renamed.path.display().to_string();
+            meta.path = crate::util::paths::display_path(&renamed.path);
         })
     {
         eprintln!("warning: could not update PROJECT_INFO.md folder/path: {err:#}");
@@ -1097,6 +1123,49 @@ mod tests {
         assert_eq!(projects[0].base, canon);
     }
 
+    /// Renaming only the capitalisation is legitimate and used to be refused:
+    /// `exists()` is case-insensitive on Windows, so the target "already
+    /// existed" — it was the source.
+    #[test]
+    fn rename_allows_case_only_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let dir = base.join("myproject");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            project_info::pinfo_path(&dir),
+            "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
+             created: 2026-01-01T00:00:00Z\nfolder: myproject\npath: x\n\
+             variables: {}\ntags: []\n---\n",
+        )
+        .unwrap();
+        fs::write(dir.join("keep.txt"), "content").unwrap();
+
+        let project = scan_base(base).into_iter().next().unwrap();
+        let renamed = rename_project(&project, "MyProject").unwrap();
+
+        assert_eq!(renamed.name, "MyProject");
+        assert!(renamed.path.join("keep.txt").is_file(), "content survived");
+        // The folder really carries the new casing on disk.
+        let on_disk = fs::read_dir(base)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .find(|n| n.eq_ignore_ascii_case("myproject"))
+            .expect("project folder present");
+        assert_eq!(on_disk, "MyProject");
+        // No staging folder stranded — a dot-prefixed name is invisible to
+        // discovery, so a leftover would make the project disappear.
+        assert!(
+            !fs::read_dir(base)
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().contains("fastf-case")),
+            "case-rename staging folder left behind"
+        );
+        assert_eq!(scan_base(base).len(), 1, "still exactly one project");
+    }
+
     #[test]
     fn move_project_round_trip() {
         let tmp1 = tempfile::tempdir().unwrap();
@@ -1123,9 +1192,15 @@ mod tests {
             fs::read_to_string(moved.path.join("assets/raw_{x}.txt")).unwrap(),
             "keep {braces}"
         );
-        // Metadata `path` patched.
+        // Metadata `path` patched — in the readable form, not the `\\?\`
+        // verbatim one that `canonicalize` hands back on Windows.
         let meta = read_project_meta(&moved.path).unwrap();
-        assert_eq!(meta.path, moved.path.display().to_string());
+        assert_eq!(meta.path, crate::util::paths::display_path(&moved.path));
+        assert!(
+            !meta.path.starts_with(r"\\?\"),
+            "verbatim prefix leaked into metadata: {}",
+            meta.path
+        );
         assert_eq!(meta.id, "ID0001");
         // Caches on both sides are fresh.
         let old_cache = load_cache(&old_base.canonicalize().unwrap()).unwrap();

@@ -99,7 +99,7 @@ pub fn print_plain(filtered: &[&Project]) {
 
     for p in filtered {
         let date = p.created.get(..date_w).unwrap_or(&p.created);
-        let path_str = p.path.display().to_string();
+        let path_str = crate::util::paths::display_path(&p.path);
         let missing = !p.path.exists();
         let marker = if missing { "✗".red() } else { "•".cyan() };
         println!(
@@ -222,7 +222,7 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
     use dialoguer::{Input, Select};
 
     let path = project.path.as_path();
-    let path_str = path.display().to_string();
+    let path_str = crate::util::paths::display_path(path);
 
     println!();
     println!(
@@ -313,7 +313,7 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
                     println!(
                         "{}  Moved to {}",
                         "✓".green().bold(),
-                        moved.path.display().to_string().bold()
+                        crate::util::paths::display_path(&moved.path).bold()
                     );
                     // The in-memory list still shows the old path — go back so
                     // the user re-enters from a fresh `recent`/`search`.
@@ -591,14 +591,14 @@ pub fn open(query: &str) -> Result<()> {
         anyhow::bail!(
             "project '{}' no longer exists on disk at {}",
             project.id,
-            project.path.display()
+            crate::util::paths::display_path(&project.path)
         );
     }
     println!(
         "{} Opening {} ({})",
         "→".cyan().bold(),
         project.name.bold(),
-        project.path.display().to_string().dimmed()
+        crate::util::paths::display_path(&project.path).dimmed()
     );
     crate::core::post_create::reveal_folder(&project.path)
 }

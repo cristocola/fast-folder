@@ -49,7 +49,7 @@ fastf ui            # same thing in your default browser
 
 Prefer the terminal? Everything the UI does has a CLI or TUI equivalent, and the rest of this README speaks fluent shell.
 
-The whole tool is a single Rust binary under 3 MB with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
+The whole tool is a single self-contained Rust binary (about 3 MB) with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
 
 ## Quick start
 

@@ -19,7 +19,7 @@ well. The rest were Windows papercuts (`\\?\` leaking everywhere, a BOM breaking
 case-only rename). New modules: `util::{lockfile, atomic, fs_retry, interrupt,
 faults, paths::display_path}`. Fault injection then found two more bugs — a
 rollback gap and an unchecked cache version — and the new release-mode CI job
-caught a third (`config set` losing updates). 183 → 246 tests. See the "v1.1
+caught a third (`config set` losing updates). 183 → 263 tests. See the "v1.1
 hardening gotchas" section below.
 
 **v1.0: production release.** Distribution-ready: data-dir precedence (env override → portable → user config dir), GitHub Actions CI + release binaries (linux-gnu, linux-musl static, windows-msvc — NO macOS, cristoc can't test it), AUR packages `fast-folder` (source) + `fast-folder-bin` (musl repack) in `packaging/aur/`, man pages via hidden `fastf mangen` (clap_mangen), `fastf paths`, project **unregister/delete/rename** (library + UI routes + TUI action menu), and a web-UI polish pass (promise-based confirm/prompt dialogs replacing native `confirm()`, offline banner + health poll, sortable projects table, focus-preserving `render()`, spinners). Crate `0.11.0 → 1.0.0`; 176 tests. See "Data-dir resolution (v1.0)" and "Unregister / delete / rename (v1.0)" below.
@@ -54,10 +54,11 @@ cargo build --release --target x86_64-unknown-linux-musl
 cargo run
 cargo run -- new music-video --dry-run
 
-# Test (246 total: 127 unit/lib + 57 integration.rs + 34 ui_server.rs
-#       + 4 crash_recovery.rs + 4 concurrency.rs + 8 hostile_fs.rs
-#       + 7 windows_semantics.rs + 5 properties.rs)
-# `cargo test --release` runs 238: failpoint tests are #[cfg(debug_assertions)].
+# Test (263 on Linux: 148 unit/lib + 56 integration.rs + 34 ui_server.rs
+#       + 4 crash_recovery.rs + 4 concurrency.rs + 9 hostile_fs.rs
+#       + 3 windows_semantics.rs + 5 properties.rs)
+# `cargo test --release` runs 255: failpoint tests are #[cfg(debug_assertions)].
+# windows_semantics.rs reports only 3 here — the rest are #[cfg(windows)].
 #
 # Fault injection — trip a named boundary deterministically:
 #   FASTF_FAULT=create:mid-copy cargo test           # returns an error there
@@ -745,7 +746,8 @@ cargo clippy --all-targets -- -D warnings # lint must be clean
   test module looks right and silently races.
 - v1.1: concurrency tests must spawn **processes**, not threads. A thread test
   passes against an in-process `Mutex` while production stays broken.
-- v1.1: Test count 183 → 246 (238 in release; the gap is the failpoint tests).
+- v1.1: Test count 183 → 263 on Linux (255 in release; the gap is the failpoint
+  tests). `windows_semantics.rs` contributes only 3 outside Windows.
   New suites: `crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`,
   `hostile_fs.rs`, `properties.rs` (proptest).
 

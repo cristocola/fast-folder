@@ -775,7 +775,7 @@ const JOB_STALE_AFTER: Duration = Duration::from_secs(600);
 /// ties the server's lifetime to the app window — this lets it hold shutdown
 /// until in-flight copies land instead of stranding them for reconcile.
 ///
-/// Note this deliberately uses a *different* predicate from [`register_job`]'s
+/// Note this deliberately uses a *different* predicate from `register_job`'s
 /// eviction: being wrong here only means shutting down slightly early, whereas
 /// evicting a live job from the registry would make its `/api/job` poll 404 and
 /// the frontend would report a still-running move as finished.

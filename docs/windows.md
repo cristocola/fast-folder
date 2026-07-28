@@ -52,13 +52,15 @@ Open a new terminal afterwards.
 
 ## Where your data lives
 
-With a normal install, config, templates, and the ID counter live in:
+With a normal install, config and templates live in:
 
 ```
 %APPDATA%\fastf
 ```
 
 Run `fastf paths` at any time to see the resolved location and why it was chosen.
+
+The ID counter is **not** kept there. Each base directory carries its own `.fastf-counter.toml` next to the projects it numbers, which is what lets a dual-boot machine hand out the same next ID from either operating system — the project drive is already mounted by both. `fastf id show` lists every base and the number it records.
 
 **Portable mode:** if you want everything in one folder (USB stick, network share), put an empty `config.toml` next to `fastf.exe` before first run. fastf then keeps all data beside the binary, and the whole folder moves as a unit.
 

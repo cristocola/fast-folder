@@ -4,24 +4,6 @@
 
 `fastf` (Fast Folder Creator) is a Rust CLI tool for creating structured project folders from **folder templates**. Universal use cases: code, research, finance, music video, photography, and film production workflows. Config, templates, and the counter live together in one data dir, resolved in three tiers (env override → portable-next-to-binary → user config dir) — see "Data-dir resolution (v1.0)".
 
-**v1.1: hardening.** Closes seven defects found by testing the v1.0.2 release
-binary on Windows 11, none of which the (green) suite caught. Two lost data: a
-cross-filesystem move silently dropped junctions and symlinks while
-`verify_tree` — built on the same blind walk — reported success and the source
-was deleted; and `reconcile` could remove a good source because it inferred "the
-commit landed" from a name existing. Two were concurrency: ten simultaneous
-creates minted eight distinct IDs (`ui::WRITE_LOCK` is in-process and cannot see
-a CLI), and `create_inner`'s `exists()`-then-`create_dir_all()` let two racers
-merge into one folder. One was interruption: a killed `fastf new` stranded 300 MB
-with no metadata, invisible to every command while `reconcile` claimed all was
-well. The rest were Windows papercuts (`\\?\` leaking everywhere, a BOM breaking
-`template.yaml` with a misleading error, reserved device names, trailing dots,
-case-only rename). New modules: `util::{lockfile, atomic, fs_retry, interrupt,
-faults, paths::display_path}`. Fault injection then found two more bugs — a
-rollback gap and an unchecked cache version — and the new release-mode CI job
-caught a third (`config set` losing updates). 183 → 263 tests. See the "v1.1
-hardening gotchas" section below.
-
 **How it got here.** Each line below is a one-line reminder of a load-bearing
 decision; the full detail lives in the linked section, so don't re-document it
 here.
@@ -41,310 +23,85 @@ here.
   "Unregister / delete / rename".
 - **v1.0.2 — Windows experience + onboarding.** MSI wizard, `fastf-ui` launcher
   bin, first-run base prompt, native path pickers. See the v1.0.2 gotchas.
+- **v1.1 — hardening.** Seven defects that a green suite missed on real Windows 11:
+  two lost data, two were concurrency, one was interruption, the rest Windows
+  papercuts. New `util::` primitives; 183 → 263 tests. See "v1.1 hardening gotchas".
+- **v1.2 — the counter lives in the base, not the data dir.** Removes the dual-boot
+  symlink. See "Global ID counter" and "v1.2 gotchas".
+- **v1.2.1 — the CLI surface gets tests, and five commands stop lying.** An audit of
+  all 19 CLI/TUI modules found 26 defects that a 281-test green suite passed, because
+  nothing exercised the layer between clap and the core. See "Global ID counter"
+  (rewritten) and "v1.2.1 gotchas".
+- **v1.3 — you cannot fall out of the TUI, and there is one door into config.**
+  Error containment, an honest Ctrl-C, `resolve_base_dir_input` as the single
+  validated write path, a reachable `on_name_collision`, move progress + cancel,
+  and `tests/tui_pty.rs`. See "v1.3 gotchas".
 
 ## Build commands
 
+Standard cargo throughout (`build`, `test`, `fmt`); clippy must be clean with
+`--all-targets -- -D warnings`. The non-obvious parts:
+
 ```bash
-# Debug build (fast compile, unoptimized)
-cargo build
-
-# Release build (optimized + stripped)
-cargo build --release
-# Output: target/release/fastf
-
 # Cross-compile for Windows (from Linux)
 cargo build --release --target x86_64-pc-windows-gnu
-# Output: target/x86_64-pc-windows-gnu/release/fastf.exe
 # Requires: rustup target add x86_64-pc-windows-gnu + mingw-w64-gcc (pacman)
 
-# Cross-compile for Linux (from Windows or macOS) — static musl
+# Cross-compile for Linux (from Windows) — static musl
 cargo build --release --target x86_64-unknown-linux-musl
 
-# Run directly
-cargo run
-cargo run -- new music-video --dry-run
-
-# Test (263 on Linux: 148 unit/lib + 56 integration.rs + 34 ui_server.rs
-#       + 4 crash_recovery.rs + 4 concurrency.rs + 9 hostile_fs.rs
-#       + 3 windows_semantics.rs + 5 properties.rs)
-# `cargo test --release` runs 255: failpoint tests are #[cfg(debug_assertions)].
-# windows_semantics.rs reports only 3 here — the rest are #[cfg(windows)].
-#
 # Fault injection — trip a named boundary deterministically:
-#   FASTF_FAULT=create:mid-copy cargo test           # returns an error there
-#   FASTF_FAULT=move:before-commit-rename:abort ...  # kills the process there
+FASTF_FAULT=create:mid-copy cargo test            # returns an error there
+FASTF_FAULT=move:before-commit-rename:abort ...   # kills the process there
 # See util::faults::ALL_FAULT_POINTS for the list.
-cargo test
-cargo test <test_name>   # run a single test by name
 
-# Lint — must be clean with -D warnings
-cargo clippy --all-targets -- -D warnings
-cargo fmt
-
-# Browser UI — same `cargo build` (the server + embedded frontend live in the lib).
-cargo run -- ui --no-open            # serve only (loopback)
-cargo run -- ui --app                # serve + open a Chromium/Chrome app window
-FASTF_UI_DIR=src/ui/web cargo run -- ui   # frontend live-reload (serve assets from disk)
-node --check src/ui/web/app.js       # frontend sanity check
+# Browser UI — same `cargo build` (server + embedded frontend live in the lib)
+FASTF_UI_DIR=src/ui/web cargo run -- ui   # frontend live-reload (assets from disk)
+node --check src/ui/web/app.js            # frontend sanity check — run after every edit
 ```
+
+Test count is **301 on Linux**; `cargo test --release` runs fewer because the
+failpoint tests are `#[cfg(debug_assertions)]`, `windows_semantics.rs` reports
+only 3 of its cases off Windows, and the pty suites are unix-only.
 
 ## Project layout
 
-```
-fast-folder/
-├── Cargo.toml
-├── README.md
-├── CLAUDE.md
-├── LICENSE
-├── .gitignore
-├── .github/workflows/        — ci.yml (fmt/clippy/test, debug + release, ubuntu+windows)
-│                               and release.yml (tag v* → archives, MSI, SHA256SUMS)
-├── packaging/                — fastf.desktop, icons/, wix/main.wxs (MSI authoring),
-│                               aur/{fast-folder,fast-folder-bin}/PKGBUILD + update.sh
-│                               + PUBLISHING.md. The app-menu launcher ships from HERE
-│                               (the old repo-root .desktop file is gone).
-├── examples/
-│   └── templates/            — Gallery templates in folder form (music-video, photography,
-│                               video-production, rust-project, python-project, web-project,
-│                               finance-monthly, research-note), each <slug>/template.yaml
-│                               + files/. NOT bundled — copy a folder into your templates/
-│                               dir to use one.
-├── docs/                     — user-facing reference; update the matching file, not README
-│   ├── cli.md                — command reference + recipes
-│   ├── templates.md          — template authoring
-│   ├── projects.md           — project model, discovery, moves, reconcile
-│   ├── windows.md            — MSI install, PATH, data locations
-│   └── UI.md                 — Browser-UI reference (architecture, HTTP API, dev live-reload)
-├── tests/
-│   ├── integration.rs        — hermetic core tests using FASTF_INSTALL_DIR + tempfile
-│   │                           (write_template splits an inline files: block onto disk)
-│   ├── ui_server.rs          — drives fastf::ui::route_request (no socket)
-│   ├── crash_recovery.rs     — v1.1. Every create failpoint asserted against the same
-│   │                           invariants, plus real subprocesses killed with abort
-│   │                           (debug-only: failpoints are compiled out of release)
-│   ├── concurrency.rs        — v1.1. Races real PROCESSES (not threads — a thread test
-│   │                           passes against an in-process Mutex while prod stays broken)
-│   ├── windows_semantics.rs  — v1.1. Reserved names, trailing dots, control chars,
-│   │                           unicode, >MAX_PATH, case-only rename, read-only files,
-│   │                           a real sharing violation, junction handling
-│   ├── hostile_fs.rs         — v1.1. Corrupt caches/markers/metadata, absent bases,
-│   │                           vanishing paths — degrade, never panic, never lose data
-│   └── properties.rs         — v1.1. proptest; above all that sanitize_name output is
-│                               always creatable (verified by creating it)
-└── src/
-    ├── lib.rs                — Library entry: exposes core/, cli/, tui/, ui/, util/, bootstrap/
-    │                           so integration tests can import fastf::...
-    ├── bin/
-    │   └── fastf-ui.rs       — v1.0.2 windowless launcher bin (`[[bin]] fastf-ui`):
-    │                           windows_subsystem="windows" shim → cli::ui::run(app: true).
-    │                           What the Windows Start Menu shortcut runs; errors via
-    │                           MessageBoxW. Not a server — links the same fastf lib.
-    ├── main.rs               — Binary entry, `use fastf::{bootstrap, cli, tui, ui};`
-    │                           clap commands include Recent (+ --plain --tag), Open, Register,
-    │                           Apply, Tag (Add/Remove/List/Reauto), Search, Note (Add), Notes,
-    │                           TemplateAction::FromFolder, Ui (v0.6 browser-UI launcher →
-    │                           cli::ui::run). The New / Apply / Register arms run
-    │                           their clap `extra` Vec through `cli::new::classify_extra` so
-    │                           bool flags (--yes/--dry-run/--no-preview/--no-post/-y) and
-    │                           `--base-dir=PATH` work BEFORE or AFTER the slug. Unknown
-    │                           `--foo` tokens surface via `warn_unknown()` instead of
-    │                           silently dropping (v0.5).
-    ├── bootstrap.rs          — First-run setup: creates config.toml, counters.toml, templates/
-    │                           (the two bundled templates — general + client-project, universal by design; domain
-    │                           templates live in examples/templates/ — no longer declare PROJECT_INFO.md —
-    │                           auto-gen owns it now)
-    ├── util/
-    │   ├── mod.rs
-    │   ├── atomic.rs         — v1.1. THE atomic write (temp+fsync+rename). Replaced four
-    │   │                       ad-hoc copies; Config/Counters used a bare fs::write.
-    │   ├── lockfile.rs       — v1.1. DataLock: cross-process lock over the data dir.
-    │   │                       share_mode(0) on Windows (no FFI), flock on Unix.
-    │   ├── fs_retry.rs       — v1.1. rename/remove retried past Windows sharing
-    │   │                       violations; clears read-only attrs. No-op on Unix.
-    │   ├── interrupt.rs      — v1.1. Ctrl-C sets a flag the copy loop polls, so an
-    │   │                       interrupted create unwinds and rolls back.
-    │   ├── faults.rs         — v1.1. Named failpoints (FASTF_FAULT), error|abort modes.
-    │   │                       Compiled out of release entirely.
-    │   └── paths.rs          — install_dir(): FASTF_INSTALL_DIR override, else current_exe().
-    │                           v1.1: display_path() strips the Windows verbatim
-    │                           prefix for display + metadata ONLY, never for fs calls.
-    │                           config/counters/templates paths. (No projects_index_path — v0.9
-    │                           discovers projects from the filesystem, not a jsonl next to the binary.)
-    ├── core/
-    │   ├── mod.rs
-    │   ├── assets.rs         — v0.8 copy engine. walk(files_dir) lists the files/ subtree;
-    │   │                        interp_rel() (per-segment name interpolation); is_verbatim/
-    │   │                        is_excluded glob matching; copy_file() (atomic .part+rename,
-    │   │                        UTF-8→interpolate else byte copy, non-UTF-8 auto-verbatim);
-    │   │                        TEXT_MAX_BYTES (1 MiB interpolation cap). Job model:
-    │   │                        JOB_DEFER_BYTES (4 MiB), CopyJob, Progress (Serialize),
-    │   │                        copy_job() (chunked byte copy w/ live progress).
-    │   │                        v0.10: copy_tree(src,dst) — recursive verbatim dir copy
-    │   │                        (move_project's cross-device fallback; never interpolates).
-    │   ├── config.rs         — Config: base_dir, bases (v0.9 extra index dirs),
-    │   │                        editor, date_format, default_template, preview_lines (8),
-    │   │                        post_create, prompt_open_after_create, recent_default_limit,
-    │   │                        confirm_create, show_banner, register_naming_pattern.
-    │   │                        effective_bases() = dedup([base_dir] + bases), canonicalized.
-    │   │                        v0.9 REMOVED project_info_enabled/project_info_filename
-    │   │                        (metadata is mandatory, always PROJECT_INFO.md); old configs
-    │   │                        with those keys still parse (serde ignores unknown fields).
-    │   ├── counter.rs        — Global auto-increment ID (single 'global' field in counters.toml)
-    │   ├── naming.rs         — apply_transform(), interpolate() [raw for file CONTENT],
-    │   │                        interpolate_name() [collapses __ and trims for NAMES],
-    │   │                        sanitize_name(), ensure_relative_safe_path()
-    │   ├── project.rs        — ProjectPlan, plan(), create(run_post), print_dry_run(),
-    │   │                        print_resolved_values(), print_file_previews(), print_tree(),
-    │   │                        apply_plan(), apply(), print_apply_plan(), ApplyAction enum.
-    │   │                        resolve_post_create() is pub so cli/new.rs can check for
-    │   │                        double-open before offering the open prompt. v0.8: files come
-    │   │                        from the template's files/ subtree via copy_template_files()
-    │   │                        (walks core::assets), NOT template.files. create_deferred()
-    │   │                        does the eager work + returns large-file CopyJobs for the UI
-    │   │                        to copy in the background; create() stays fully synchronous.
-    │   ├── project_info.rs   — Metadata struct (incl. tags), render(), write(plan,tmpl,tags),
-    │   │                        read(dir), read_metadata(dir), pinfo_path(dir) [v0.9: fixed
-    │   │                        filename, no cfg]. v0.4: write_frontmatter(path, mutator) for
-    │   │                        atomic in-place tag mutation; append_journal_entry(path, msg)
-    │   │                        for ## Journal section; read_journal_entries(); split_frontmatter_body()
-    │   │                        is pub for byte-identical body round-trips.
-    │   │                        v0.5: pub const RESERVED_FILENAME = "PROJECT_INFO.md" +
-    │   │                        path_is_reserved(p) helper used by Template::strip_reserved_files
-    │   │                        and the TUI template builder to lock the auto-gen filename.
-    │   ├── provisioning.rs   — v0.11 durability layer. Create marker (.fastf-provisioning.json
-    │   │                        in project root): write_create_marker/mark_done/clear_create.
-    │   │                        Move marker (.fastf-move-<folder>.json at target base):
-    │   │                        write_move_marker/clear_move/staging_path. reconcile(cfg) →
-    │   │                        ReconcileReport (resume creates, finish/roll-back moves);
-    │   │                        list_incomplete(cfg) for the UI banner. MARKER_CREATE /
-    │   │                        MARKER_MOVE_PREFIX consts (referenced by assets::is_transient).
-    │   ├── template.rs       — Template (+ post_create, tags, tag_from, v0.8 verbatim/exclude
-    │   │                        globs + dir + files), Variable, FolderNode, FileEntry, IdConfig,
-    │   │                        Transform. validate() is pub and rejects tag_from entries that
-    │   │                        aren't declared variable slugs. v0.8: folder form only —
-    │   │                        load_from_file(<slug>/template.yaml) sets `dir` and scans the
-    │   │                        files/ subtree's UTF-8 text into the `files` buffer (NOT
-    │   │                        serialized — files/ on disk is the source of truth; buffer is
-    │   │                        for editors/previews). save_to_file writes template.yaml +
-    │   │                        flushes text `files` into files/. load_all() iterates subdirs;
-    │   │                        find_by_slug/file_path → <slug>/template.yaml. files_dir().
-    │   │                        strip_reserved_files() still drops root PROJECT_INFO.md.
-    │   ├── query.rs          — v0.4. Predicate enum (Field/After/Before/Tag/Free), Pattern
-    │   │                        (Exact/Prefix), parse() and evaluate(). Bare terms become
-    │   │                        Predicate::Free — case-insensitive substring across vars/tags/
-    │   │                        folder/template/template_name/id (path EXCLUDED).
-    │   ├── vars.rs           — collect_vars() shared by `new` and `apply`
-    │   ├── library.rs        — v0.9 filesystem-as-truth. Project struct; discover(cfg) unions
-    │   │                        effective_bases() newest-first (cache-first + staleness gate);
-    │   │                        scan_base() reads depth-1 folders with PROJECT_INFO.md;
-    │   │                        cache format .fastf-index.json (base-relative `dir`);
-    │   │                        resolve(cfg,query) [replaces index::resolve_project];
-    │   │                        max_id(cfg) [read-only, safe from plan()]; reindex(cfg);
-    │   │                        cache_upsert/cache_remove/refresh_cache; now_iso8601().
-    │   │                        v0.10: Project.base (the base a project was discovered
-    │   │                        under); base_label(base) [short display name];
-    │   │                        move_project(project,new_base) [rename or copy_tree+remove
-    │   │                        fallback, patches metadata `path`, two-sided cache update].
-    │   └── post_create.rs    — PostCreate struct + run(): git_init, reveal, open_in_editor,
-    │                            print_path, commands. Platform-specific reveal_folder()
-    │                            via cfg(windows)/cfg(target_os="macos")/cfg(unix).
-    │                            reveal_folder() and prompt_and_reveal() are pub.
-    ├── cli/
-    │   ├── mod.rs
-    │   ├── new.rs            — `fastf new` with --no-preview, --no-post, --yes flags.
-    │   │                        After print_success(): calls prompt_and_reveal() if:
-    │   │                        not --yes, not --no-post, cfg.prompt_open_after_create,
-    │   │                        stdout is TTY, and reveal not already in resolved post_create.
-    │   │                        Also honors cfg.confirm_create (global --yes equivalent).
-    │   │                        v0.5: hosts `classify_extra(extra) -> ClassifiedExtra` —
-    │   │                        the trailing_var_arg splitter shared by main.rs's New /
-    │   │                        Apply / Register arms.
-    │   ├── template.rs       — list/show/edit/delete (delete removes the whole <slug>/ dir) +
-    │   │                        from_folder() for template generation from existing dirs.
-    │   │                        v0.8: import/export removed (templates are folders — share by
-    │   │                        copying the folder). Phase 4: from_folder(source, slug, force,
-    │   │                        bundle_assets) -> FromFolderReport is the non-interactive core
-    │   │                        (UI + tests); run_from_folder() is the CLI shell (size-confirm +
-    │   │                        summary). scan_source()/execute_scan() split so the CLI confirms
-    │   │                        before writing; bundle_assets copies binary/large files verbatim.
-    │   ├── config.rs         — config show/set. Keys: base-dir, bases (v0.9 comma-list),
-    │   │                        prompt_open_after_create, confirm_create, show_banner,
-    │   │                        recent_default_limit, preview_lines, post_create.* keys,
-    │   │                        register_naming_pattern (rejects patterns without `{id}`).
-    │   │                        v0.9 dropped project-info-enabled/-filename keys.
-    │   ├── id.rs             — id show/reset/set
-    │   ├── paths_cmd.rs      — v1.0. `fastf paths`: resolved data dir + DirMode + each
-    │                            config/counters/templates path.
-    │   ├── reindex.rs        — v0.9. `fastf reindex` → library::reindex(cfg): force full
-    │   │                        rescan of every base + rewrite each .fastf-index.json.
-    │   ├── reconcile.rs      — v0.11. `fastf reconcile` → provisioning::reconcile(cfg): resume
-    │   │                        interrupted copies + finish/roll-back interrupted moves.
-    │   ├── recent.rs         — `fastf recent`: defaults to interactive picker (TTY). v0.9:
-    │   │                        sources from library::discover (no --prune). picker →
-    │   │                        project_action_menu() → Open / Show metadata / Add tag /
-    │   │                        Remove tag / Add journal note / Show journal / Back / Quit.
-    │   │                        Inline tag display from project.tags (from discovery, no reload).
-    │   │                        --tag <name> filter. run_picker(&[&Project]) pub so cli/search
-    │   │                        reuses it. open(query) → library::resolve. --plain / non-TTY
-    │   │                        gives classic list output.
-    │   ├── tag.rs            — v0.4. add/remove/list/reauto. add is idempotent; remove no-ops
-    │   │                        on missing tags; reauto preserves free-form, replaces derived.
-    │   ├── note.rs           — v0.4. note add: inline / `-` (stdin) / omit ($EDITOR via cfg).
-    │   │                        notes: prints filtered ## Journal entries (--since YYYY-MM-DD).
-    │   ├── search.rs         — v0.4. `fastf search <terms...>`. Parses via core::query, walks
-    │   │                        library::discover newest-first, reads metadata per project,
-    │   │                        evaluates predicates (query::evaluate(preds, meta) — v0.9 no
-    │   │                        record arg), renders via run_picker (TTY) or plain list.
-    │   ├── apply.rs          — `fastf apply <slug> <dir>` with --dry-run (skip-only semantics)
-    │   ├── move_project.rs   — v0.10. `fastf move <query> [base]` (module can't be named
-    │   │                        `move` — keyword). resolve → validate target ∈ effective_bases
-    │   │                        (full path OR base_label accepted; TTY picker when omitted) →
-    │   │                        library::move_project. Positional args, no classify_extra.
-    │   ├── ui.rs             — v0.6. `fastf ui` launcher: health-check → open browser
-    │   │                        (--app = Chromium/Chrome app window, else default) → serve.
-    │   │                        Calls fastf::ui::serve(); UiArgs { address, no_open, app }.
-    │   └── register.rs       — `fastf register <path>` writes a PROJECT_INFO.md into an
-    │                            existing folder (its whole job in v0.9 — no index). ID recovered
-    │                            from an ID#### token in the folder name (parse_id_token) if
-    │                            present, else minted from the self-healed floor. cache_upsert
-    │                            after write. Optional --template (full metadata + tags), --apply
-    │                            (requires --template), --rename, --use-today / --created.
-    │                            v0.9: --recursive (+ --dry-run) → run_recursive() onboards every
-    │                            metadata-less direct child of a base (PinfoConflict::Skip).
-    │                            RegisterOutcome carries a library::Project. resolve_created() pub;
-    │                            REGISTERED_SLUG = "(registered)".
-    ├── tui/
-        ├── mod.rs
-        ├── menu.rs           — Interactive TUI menu. ASCII banner (suppressed if !show_banner).
-        │                        Live base dir display. Top-level menu:
-        │                          Create / Recent / Search projects (v0.4) / Manage templates
-        │                          / Settings / Quit.
-        │                        menu_search() prompts for a query string, splits on
-        │                        whitespace, calls cli::search::run.
-        │                        menu_settings() grouped submenus:
-        │                          Project basics / Workflow prompts / Library bases (v0.9) /
-        │                          Recent projects / Post-create actions / ID counter.
-        │                        Every config field has a toggle/edit entry with inline state.
-        │                        v0.10: menu_create() → pick_base_interactively() (base Select
-        │                        when >1 mounted base; index 0 = default → None override).
-        └── template_builder.rs — Step-by-step interactive template create/edit
-                                  (sets post_create: None on new templates).
-                                  v0.5: `collect_file(vars)` always stores user
-                                  input in `FileEntry.template` and prints the
-                                  available `{token}` strings + a post-input
-                                  substitution summary. The "Template vs Raw"
-                                  Select was removed — interpolate() is a no-op
-                                  on text without braces so there's no behavior
-                                  loss vs Raw, and `{slug}` markers just work.
-    └── ui/                   — v0.6 browser UI (full notes in "Browser UI" section below)
-        ├── mod.rs            — loopback HTTP server (std::net, thread-per-conn, no framework)
-        │                        + all API handlers. pub serve() blocks; pub route_request()
-        │                        is the pure router (tested in tests/ui_server.rs); pub
-        │                        health_check(). Write routes take a private WRITE_LOCK.
-        ├── assets.rs         — the 4 frontend files embedded via include_str!; if FASTF_UI_DIR
-        │                        is set, served from disk instead (frontend live-reload).
-        └── web/              — index.html, app.js, styles.css, icon.svg (vanilla JS, no deps)
-```
+`ls` and the module names cover the shape; this is only what a filename doesn't
+tell you. Deep per-file notes are gone on purpose — read the module, then the
+Gotchas sections below for the parts that bite.
+
+- `src/lib.rs` exposes `core/ cli/ tui/ ui/ util/ bootstrap/` so integration tests
+  can `use fastf::…`. `src/main.rs` is the clap binary; its New / Apply / Register
+  arms run their trailing `extra` Vec through `cli::new::classify_extra`.
+- `src/bin/fastf-ui.rs` — second `[[bin]]`, a windowless Windows launcher shim over
+  `cli::ui::run(app: true)`. **Not a second server**; the server lives only in `src/ui/`.
+- `src/bootstrap.rs` — first-run setup. Ships two deliberately universal templates
+  (`general`, `client-project`); domain templates live in `examples/templates/` and
+  are NOT bundled.
+- `src/core/` — the library proper. `library.rs` (filesystem-as-truth discovery),
+  `project.rs` (plan/create/apply), `assets.rs` (the v0.8 copy engine),
+  `provisioning.rs` (crash-safe markers + `reconcile`), `project_info.rs`
+  (`PROJECT_INFO.md` read/write/mutate), `template.rs`, `naming.rs`, `query.rs`,
+  `config.rs`, `counter.rs`, `vars.rs`, `post_create.rs`.
+- `src/util/` — all v1.1 hardening primitives: `lockfile` (cross-process `DataLock`),
+  `atomic` (THE atomic write), `fs_retry` (Windows sharing violations), `interrupt`
+  (Ctrl-C rollback), `faults` (failpoints, compiled out of release), `paths`
+  (`install_dir` resolution + `display_path`).
+- `src/cli/` — one module per subcommand. `move_project.rs` is named that way because
+  `move` is a keyword. Several commands split a non-interactive core from an
+  interactive shell (`register::register_core`, `template::from_folder`) so the UI and
+  tests can call the core without a TTY.
+- `src/tui/` — `menu.rs` (interactive menu + grouped Settings submenus) and
+  `template_builder.rs`.
+- `src/ui/` — browser UI. Has its own CLAUDE.md.
+- `docs/` — user-facing reference (`cli`, `templates`, `projects`, `windows`, `UI`).
+  **When features change, update the matching `docs/` file, not the README.**
+- `examples/templates/` — the gallery, in folder form. Not bundled; copy one into
+  your templates dir to use it.
+- `packaging/` + `.github/workflows/` — release machinery. See the `release` skill.
+- `tests/` — seven binaries: `integration.rs`, `ui_server.rs`, and the five v1.1
+  suites `crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`,
+  `hostile_fs.rs`, `properties.rs` (proptest). See "Testing".
 
 ## Key design decisions
 
@@ -357,21 +114,27 @@ Three `library` fns, mirroring move's conventions (callers restrict to configure
 ### Cross-platform paths
 Folder paths in templates (structure names, file paths) always use `/` as the separator in YAML — Rust's `PathBuf::join()` handles conversion to `\` on Windows at runtime. Users should always enter `/` in templates and `base-dir` config, though Windows also accepts backslashes in config values.
 
-### Global ID counter (v1.2: lives in the base, not the data dir)
-One counter for all templates, `global = 47`, stored as **`<base>/.fastf-counter.toml`** next to that base's `.fastf-index.json`. `fastf id set 46` → next project gets ID0047. IDs stay unique across all project types.
+### Global ID counter (v1.2: lives in the base — v1.2.1: converges across bases)
+One counter for all templates, `global = 47`, stored as **`<base>/.fastf-counter.toml`** next to that base's `.fastf-index.json`. IDs stay unique across all project types.
 
 It moved out of the data directory because of where it must be *readable* from. `%APPDATA%\fastf` on Windows and `~/.config/fastf` on Linux are different files, so a dual-boot machine had two counters and the only workaround was symlinking one home into the other — which breaks the moment either home is encrypted. The projects never had that problem: they already sit on a drive both systems mount, so the number that indexes them now sits there too.
 
-**Both files are written on every create** (`Counters::record`), because they cover different failures. `Counters::floor(cfg)` takes the max of three inputs:
+`Counters::floor(cfg)` takes the max of three inputs:
 1. every mounted base's `.fastf-counter.toml` — shared across operating systems, which is what removed the symlink;
 2. this machine's data-dir `counters.toml` — spans **every base it has written to**, which is what stops an unplugged drive restarting numbering. Dropping this was a real regression: work in an archive base to ID0005, unplug it, create elsewhere → ID0001, and reconnecting gives two projects the same ID. Guarded by `unplugging_a_base_does_not_restart_numbering`;
 3. `library::max_id(cfg)`, the highest ID actually in project metadata — which is why losing a counter file is untidy rather than harmful.
 
-`record` writes only the **target** base, never every mounted one: creating a file in a directory changes its mtime, which would invalidate that base's index-cache staleness gate and force a full rescan. The target base's cache is being rewritten by the create anyway.
+**The number only ever goes up, and every base converges on it.** `Counters::record` writes the target base and then `propagate`s to every other mounted base plus the data dir; `Counters::converge(cfg)` recomputes the full floor and pushes it out (`fastf id sync`, and `fastf id show`, which repairs as it displays). Three bases holding ID0004 / ID0082 / ID0017 all come out at 82. A base's file wins when it is *higher* than that base's own projects — which is what carries the number to a machine that cannot see the other drives; when the projects are higher, the file is raised and pushed out.
 
-`Counters::save_base` is **monotonic**: two machines sharing a base cannot walk the number backwards. `fastf id set` and `POST /api/counter` write the file directly precisely because they must be able to lower it.
+Propagating on **every create** is load-bearing, not tidiness: if Linux mints ID0101 in a base Windows cannot see, the base Windows *can* see has to learn about it now — there is no later.
 
-**Known limit, unchanged from before:** `DataLock` is per data-directory, so two *different machines* writing one shared base are not serialized and can mint the same number. Same-machine concurrency is safe (`tests/concurrency.rs`).
+`Counters::save_base` is monotonic and returns **whether it wrote**, so `propagate` can call `library::touch_cache(base)` only for bases it actually touched. That re-stamp matters: writing into a base bumps its directory mtime, which `cache_is_stale` reads as "a project appeared", so without it every create would force a full rescan of every base. The counter write provably changes no project, so saying the cache is still good is honest — and safe because fastf's own writers are serialized by `DataLock`. Guarded by `propagating_the_counter_does_not_invalidate_other_bases_caches`.
+
+**`Counters::next_value(cfg, counters)` is the one expression for "which ID comes next"** — `project::plan`, `register_core`, and register's rename preview all call it. They did not before, and the preview confirmed `..._ID0001` while the commit wrote `..._ID0011`.
+
+**There is no way to lower it, by construction.** `fastf id set` refuses anything at or below the floor and names what is holding it; `fastf id reset` is gone (kept as a hidden subcommand that explains itself and points at `id sync`); `POST /api/counter` applies the same rule. v1.2.0 let all three *report success* for a write that `floor` then ignored.
+
+**Known limit, unchanged:** `DataLock` is per data-directory, so two *different machines* writing one shared base are not serialized and can mint the same number. Same-machine concurrency is safe (`tests/concurrency.rs`).
 
 ### Template YAML schema (v0.8, folder form)
 `templates/<slug>/template.yaml` is **metadata only** — the file spec lives in the
@@ -568,61 +331,47 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 
 `print_resolved_values()` + `print_file_previews()` — the rich dry-run additions. Show variable values, transforms applied, ID/counter delta, all built-in date tokens, and the first `config.preview_lines` (default 8) of every templated file.
 
-## CLI help quality
-All subcommands have thorough `about` strings and `after_help` examples. Key places:
-- `fastf new --help` — shows variable flag syntax, `=` requirement, examples
-- `fastf config set --help` — lists all valid keys with descriptions and path format notes for both Linux/macOS and Windows
-- `fastf --help` — `long_about` with tool overview and getting-started commands
-
-## TUI main menu (`tui/menu.rs`)
-Below the ASCII banner (hidden when `cfg.show_banner` is false), the current project base directory is shown on every loop iteration (reloads config each time so it reflects settings changes immediately):
-```
-  project base  →  /home/user/  Projects
-```
-Parent path is dimmed, final directory name is bold cyan.
-
-### Top-level menu entries
-```
-> Create new project
-  Recent projects                          ← menu_recent() → straight to interactive picker
-  Search projects                          ← menu_search() → splits query, runs cli::search
-  Register existing folder                 ← menu_register() (v0.5)
-  Manage templates                         ← contains "Apply template to existing folder"
-  View / edit settings
-  Quit
-```
-
-`menu_recent()` delegates directly to `recent::run` — keeps the picker one
-keypress away from the main menu. **v0.9:** there's no prune maintenance (the
-cache self-heals); Settings → Library bases (`menu_settings_bases`) edits the
-`bases` list instead.
-
-`menu_register()` walks: folder path → optional template (Confirm + picker) →
-"Standardize folder name?" (default Yes) → optional `--apply` (only when a
-template is attached) → calls `cli::register::run`. The fs::rename inside
-`register::run` prompts again before moving, so the user has a second chance
-to back out after seeing the proposed new name.
-
-### Settings menu structure (grouped submenus)
-```
-Settings
-├── Project basics               (base dir / template / date / editor)
-├── Workflow prompts             (open prompt / confirm / banner / preview lines)
-├── Library bases                (v0.9 — add/remove extra index dirs)
-├── Recent projects              (default limit)
-├── Post-create actions          (git / reveal / editor / path / commands)
-├── ID counter
-└── Back
-```
-Each toggle entry shows current `[on]`/`[off]` state inline via `label_toggle()`. `toggle_setting(key, current)` calls `config::set` under the hood.
-
 ## Testing
 
-There are **seven** integration binaries — `integration.rs` (core flows),
-`ui_server.rs` (browser-UI request layer), and the five v1.1 suites
+There are **eight** integration binaries — `integration.rs` (core flows),
+`ui_server.rs` (browser-UI request layer), the five v1.1 suites
 `crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`, `hostile_fs.rs`,
-`properties.rs`. See the Project layout tree for what each one owns. Shared
-harness rules:
+`properties.rs`, and the v1.2.1 `cli_surface.rs`. What each guards — the intent,
+not the case list:
+- `crash_recovery.rs` — every create failpoint asserted against the same invariants,
+  plus real subprocesses killed with abort. Debug-only (failpoints are compiled out
+  of release).
+- `concurrency.rs` — races real **processes**, not threads: a thread test passes
+  against an in-process `Mutex` while production stays broken.
+- `cli_surface.rs` — what `fastf <args>` actually does to disk. Every case is a
+  v1.2.0 regression: the bugs lived between clap and the core (flags dropped into
+  `trailing_var_arg`, one caller computing an ID differently from another, a config
+  field read raw instead of resolved), which only a process can see. **Write the
+  test against the broken build first** — two of these passed pre-fix and were
+  relabelled as design guards rather than left to look like regressions they aren't.
+- `tui_pty.rs` (v1.3, unix) — the interactive menu through a real terminal, which
+  is the only place its worst defect was visible: any recoverable error ended the
+  session. Keystrokes must be **spaced**, not burst (`pty::Script` handles the
+  cadence), and `Confirm` takes a bare `y`/`n` with no Enter — a trailing `\r`
+  survives into the next prompt and silently accepts its default.
+- `windows_semantics.rs` — reserved names, trailing dots, control chars, unicode,
+  >MAX_PATH, case-only rename, read-only files, a real sharing violation, junctions.
+- `hostile_fs.rs` — corrupt caches/markers/metadata, absent bases, vanishing paths:
+  **degrade, never panic, never lose data.**
+- `properties.rs` — proptest; above all, that `sanitize_name` output is always
+  creatable (verified by creating it).
+
+`tests/common/mod.rs` is the shared process-driving harness (v1.2.1): a `Sandbox`
+that owns its `FASTF_INSTALL_DIR`, redirects `HOME` into itself, and runs the
+built binary (`run`/`ok`/`fails`/`spawn`), plus `with_bases` for multi-base
+fixtures and `plant_project` for "this base already holds ID0082". It also
+carries `pty::run` (unix, `libc::forkpty`) — `dialoguer` refuses to prompt
+without a TTY, so confirmations and pickers are invisible to a pipe-based test,
+which is exactly where the rename prompt spent v1.2.0 offering one folder name
+and committing another. `#![allow(dead_code)]` because each binary uses a
+different subset. `concurrency.rs` and `cli_surface.rs` both `mod common;`.
+
+Shared harness rules — every new harness must follow all of them:
 - `FASTF_INSTALL_DIR` env var to redirect `paths::install_dir()` to a tempdir per test
 - `tempfile::TempDir` for hermetic sandboxes
 - **Redirect `HOME`/`USERPROFILE` into the sandbox too.** Since v1.0.2 an
@@ -634,41 +383,10 @@ harness rules:
   `interrupt::TEST_LOCK` exist because a private mutex per test module looks
   right and silently races.
 
-`integration.rs` covers: basic round-trip, transforms, counter persistence, duplicate-project rejection, dry-run no-write, apply skip-logic, from-folder round-trip, path-escape rejection (parent, absolute, drive letter), Windows forward-slash paths, gallery-YAML parsing, PROJECT_INFO.md frontmatter, variable capture, metadata round-trip via YAML, config back-compat (removed project_info_* keys still parse), bundled-template deduplication guard, from-folder asset bundling, and **v0.9**: create is discoverable without a jsonl (+ cache written), counter self-heals from existing projects, register recovers an ID from the folder name / mints fresh, `--recursive` onboards children (+ `--dry-run` writes nothing, skips existing metadata), Abort policy on existing metadata. `core/library.rs` unit tests cover discovery (only PROJECT_INFO.md folders), base-relative cache round-trip, staleness rescan, drop-missing, multi-base union+sort, `max_id`, `resolve` (+ ambiguity). `core/naming.rs` covers `parse_id_token` padding + `id_value`.
-
-`ui_server.rs` drives `fastf::ui::route_request` directly (no socket). v0.6 core: health, preview-no-write, create makes the folder + is discovered, `/app.js` served, unknown route 404s. v0.7: search query language + path exclusion, project detail, tag add/remove, note, register, apply preview/create. v0.8: bundled-file reproduce (incl. byte-identical binary), background copy job, template file endpoints (list/save/add/delete + reserved/traversal guard), from-folder bundling. **v0.9:** create writes no `projects.jsonl` and shows via `/api/state`; discovery self-heals a deleted folder; `/api/reindex` rescans; the removed `/api/projects/prune` route now 404s.
-
-Run:
-```bash
-cargo test                                # all tests
-cargo test <test_name>                    # single test
-cargo clippy --all-targets -- -D warnings # lint must be clean
-```
-
-## Crates
-
-| Crate | Purpose |
-|---|---|
-| `clap` (derive) | CLI subcommands and flags |
-| `clap_complete` | Shell completion generation (bash/zsh/fish/powershell) |
-| `clap_mangen` | Man pages via the hidden `fastf mangen` subcommand |
-| `dialoguer` | Interactive prompts — Input, Select, Confirm, MultiSelect |
-| `serde` + `serde_yaml` | Template YAML parsing/serialization; YAML frontmatter in PROJECT_INFO.md |
-| `serde` + `serde_json` | `.fastf-index.json` base caches, provisioning markers, the UI's HTTP API |
-| `serde` + `toml` | config.toml and counters.toml |
-| `chrono` | Date tokens; validates `date_format` at config-set time; ISO-8601 timestamps |
-| `anyhow` | Error handling throughout |
-| `colored` | Terminal color output |
-| `libc` (unix only) | `flock` for the cross-process data lock; the SIGPIPE reset |
-| `tempfile` (dev-dep) | Integration test sandboxes |
-| `proptest` (dev-dep) | v1.1 generated-input properties (`tests/properties.rs`) |
-
-`console` crate removed in v0.2 — was unused. Reach `dialoguer::console` through
-dialoguer instead of adding it back as a direct dep (see the v1.0.2 clamp gotcha).
-
 ## Gotchas
 
 - `dialoguer::Input::interact_text()` takes ownership of `self`. Never reuse an `Input` struct across iterations — recreate it each time.
+- The `console` crate was removed in v0.2 (unused). Reach `dialoguer::console` through dialoguer instead of adding it back as a direct dep — see the v1.0.2 clamp gotcha.
 - `Template` needs `#[derive(Default)]` because `build_template` calls `.unwrap_or_default()`.
 - `Template::validate()` is `pub` (was private before v0.2). Used by the gallery-parse integration test.
 - `Template::save_to_file()` no longer has `#[allow(dead_code)]` — it's reached by both the interactive builder and `from_folder`.
@@ -729,34 +447,14 @@ dialoguer instead of adding it back as a direct dep (see the v1.0.2 clamp gotcha
   records the project `id`, and `confirm_commit` requires an id match **and**
   `verify_tree` before anything is removed. (v0.11 checked existence alone.) The
   commit itself is still the single atomic `rename(temp,final)`.
-- v0.11: `POST /api/project/move` runs OFF `WRITE_LOCK` (background thread) so a slow network copy can't block other UI writes — mirroring the create copy job. The two base-cache writes it does are atomic + best-effort (last-writer-wins, self-heals via the staleness gate), so not holding the global lock is safe. Don't re-add `lock_writes()` to that arm.
 - v0.11: `scan_base` skips dot-prefixed dirs — required so a staged move's `.<folder>.fastf-part` (which contains a full copy incl. `PROJECT_INFO.md`) isn't discovered as a duplicate mid-move. Real projects are never dot-prefixed, so this is free.
 - v0.11: `JOBS` map value is `JobHandle { progress, cancel }` (was a bare `Arc<Mutex<Progress>>`). `register_job` evicts finished handles on each new job; a `/api/job/<id>` 404 still means "done" to the frontend. `Progress` gained `phase` — set it alongside `status` at terminal states.
-- v0.11 (UI polish): the Projects table supports **multi-select bulk move** — a `.project-select` checkbox per row + a select-all header checkbox feed `state.selected` (a `Set` of paths); `bulkBar()` renders the toolbar (target-base `<select>` + `Move N`). `runBulkMove` moves them **sequentially** (one job at a time, never racing base caches) via `pollMoveJob`, skipping projects already in the target. The `.project-row` grid gained a leading `22px` checkbox column (header + rows must both add the `.project-select` cell or the grid misaligns). The row click handler skips `.project-select` so ticking a box doesn't open the drawer. `bindProjectBulk()` (toolbar/select-all) is bound in `bindCommon` only — NOT in `runProjectSearch`'s in-place rebind — to avoid double-binding page-level controls. Move overlays wrap long names via `overflow-wrap: anywhere` on `.success-modal h2/p` + `.job-label`.
 
 - v1.0: `paths::install_dir()` must stay infallible-looking but non-panicking. Never re-add `.expect` there; never memoize the resolution (tests swap `FASTF_INSTALL_DIR` within one process). Portable detection keys on `config.toml`/`templates/` NEXT TO THE EXE — a bare binary copied without them lands in the user config dir by design (first-run banner names the mode).
-- v1.0: `fastf completions` and `fastf mangen` skip `ensure_bootstrapped()` (see the matches! guard in main.rs's `run`). PKGBUILD/release workflows run the built binary for completions + man pages inside packaging sandboxes — bootstrap there would write into the builder's $HOME. Keep any future "no side effects" subcommand in that guard.
-- v1.0.1 (docs overhaul, 2026-07-16): README is compact (~150 lines, hero + quick start + features + install + docs links); the deep material lives in `docs/` — `cli.md` (command reference + recipes), `templates.md` (authoring), `projects.md` (PROJECT_INFO.md/discovery/moves/reconcile), `windows.md` (MSI + PATH), `UI.md` (dev/API). When features change, update the matching docs/ file, not the README. Style rule from cristoc: minimal em dashes and comma chains in user-facing docs.
-- v1.0.1/v1.0.2: **Windows MSI** — `packaging/wix/main.wxs` (WiX v5 authoring; built in release.yml's windows leg via `dotnet tool install --global wix` + `wix build`). Installs fastf.exe + fastf-ui.exe to Program Files, appends INSTALLFOLDER to the system PATH (removed on uninstall), LICENSE included, full WixUI_InstallDir wizard + icon + Start Menu shortcut (v1.0.2 — see the v1.0.2 bullets below). The `UpgradeCode` GUID is permanent — never regenerate it. MSI version must be numeric (tag with the `v` stripped; dev dispatch runs use 0.0.0 — **each dev MSI has a fresh ProductCode at the same 0.0.0 version, so MajorUpgrade won't replace a previously installed dry-run; uninstall the old one first**). The MSI lands in the release assets + SHA256SUMS automatically via the `fastf-*` globs.
-- v1.0: release/packaging live in `.github/workflows/{ci,release}.yml` and `packaging/` (fastf.desktop, icons/ extracted from the official icon.ico, aur/fast-folder + aur/fast-folder-bin + update.sh + PUBLISHING.md). AUR pkgname is `fast-folder` (NOT fastf — fastfetch confusion), the installed command stays `fastf`. Release archives bundle completions + man + desktop + icons; the -bin PKGBUILD installs straight from the musl archive. NO macOS builds — cristoc can't test them.
-- v1.0.1: **`fastf ui --app` ties the server's lifetime to the app window** — `cli::ui::run` serves on a background thread, `child.wait()`s the spawned Chromium process, then exits (after draining `ui::jobs_active()` so an in-flight copy is never stranded). Closing the window fully stops fastf; the next launcher click starts fresh. Only the app-window path does this — terminal `fastf ui`, `--no-open`, and the default-browser fallback still serve until Ctrl-C (a browser tab can't be waited on). `open_app_window` returns the `Child` for this; `open_browser` (already-running path) still spawn-and-drops.
-- v1.0.1: `write_response` assembles the whole HTTP response and sends it in ONE `write_all` — `write!` straight to a `TcpStream` is unbuffered, so each format fragment became its own TCP segment and `health_check`'s single read could land mid-status-line ("HTTP/1.1 " = 9 bytes), flakily reporting a live server as dead (the launcher then tried to re-bind the busy port and died — the "sometimes the icon does nothing" bug). `health_check` also now loops its read until the 12-byte status prefix is complete. Don't revert either side to single-read/multi-write.
-- v1.0.1: `ui::paths_match` canonicalizes both sides when the separator-normalized string compare misses — on Windows one folder arrives spelled multiple ways (`\\?\` verbatim canonical from discovery vs 8.3 short names like `RUNNER~1` from the frontend/tests). String-only comparison broke unregister/delete/rename on Windows CI.
-- v1.0: frontend dialogs — `confirmModal()`/`promptModal()` (app.js) are promise-based and replace native `confirm()`/`prompt()` (which look alien in --app windows). `closeModal()` resolves confirm=false / prompt=null, so Escape/scrim always answer "no". The typed-phrase input toggles the danger button **in place** (no render — rendering would drop focus).
-- v1.0: `render()` saves/restores the focused element by **id** + caret. New interactive inputs must have a stable `id` to survive re-renders. The offline banner (`setOffline`) and job overlays are managed imperatively outside `render()` on purpose.
-- v1.0: `pollMoveJob(jobId, onUpdate, isAlive)` — pass `() => document.body.contains(overlay)` from any overlay-scoped caller, or a navigation mid-poll leaks the loop.
-- v1.0.2 (Windows-experience pass, 2026-07-18): **MSI wizard + shortcut** — `main.wxs` now authors `<ui:WixUI Id="WixUI_InstallDir">` (welcome → license → install-dir → finish; license page reads `packaging/wix/LICENSE.rtf`, hand-written ASCII RTF), `<Icon>`/ARPPRODUCTICON from `packaging/icons/fastf.ico` (copied from the official icon.ico), and a ProgramMenuFolder "Fast Folder" shortcut targeting fastf-ui.exe. The shortcut component uses an HKCU RegistryValue as KeyPath — the official WiX pattern for perMachine shortcuts; it only trips ICE38/43 under opt-in `wix msi validate` (which we don't run) — don't "fix" it. release.yml installs `WixToolset.UI.wixext/5.0.2` (`wix extension add --global` + `-ext`); the extension's major must match the wix tool's major (5.x) — if a patch version is missing on NuGet, fall back to 5.0.1/5.0.0.
 - v1.0.2: **`fastf-ui` launcher bin** (`src/bin/fastf-ui.rs`, second `[[bin]]`) — `#![cfg_attr(windows, windows_subsystem = "windows")]` shim that runs try_install_dir → ensure_bootstrapped → `cli::ui::run(app: true)` so the Start Menu shortcut opens the web UI with no console. NOT a second server (the server still lives only in `src/ui/`). Errors surface via a raw `MessageBoxW` extern (user32, edition-2024 `unsafe extern` — no new dependency); std discards println! when no console is attached. Built on all platforms; only Windows artifacts ship it (MSI + zip; the Linux tar copies just `fastf`).
-- v1.0.2: **Windows browser probing** — `cli::ui::find_app_browser()` is platform-split: unix keeps the exact old chromium/google-chrome list; Windows probes PATH for `chrome.exe`/`msedge.exe`/`chromium.exe` then well-known install dirs (Chrome under ProgramFiles/x86/LOCALAPPDATA, Edge under ProgramFiles(x86) first — Edge lives in x86 PF even on x64). Chrome before Edge (user choice wins; Edge is the guaranteed fallback and supports `--app`/`--user-data-dir`, keeping the `child.wait()` lifetime tie). `which()` now returns the full `PathBuf`. `chromium_profile_dir()` is split too: Windows = `%LOCALAPPDATA%\fast-folder-ui\chromium`; both sides fall back to `std::env::temp_dir()` (the old `"."` fallback wrote a profile into the CWD).
-- v1.0.2: **`ui::open_path` = `reveal_folder` parity** — the web UI's Windows open-folder now uses `cmd /c start "" <path>` (ShellExecute default verb → respects the user's default file manager) instead of hardcoded `explorer.exe`. Keep it in sync with `core::post_create::reveal_folder`; never reintroduce `explorer`.
 - v1.0.2: **conhost ghosting fix** — `cli::recent::clamp_label(label, columns)` truncates picker labels to terminal width (`dialoguer::console::truncate_str`, unicode-width-aware, "…" tail; budget = columns − 3 for the "> " prefix + last-column margin; columns == 0 → passthrough). Applied in `run_picker` and the move-base picker. Wrapped Select lines are what ghosted on the legacy Windows console, so **picker labels must stay single-line, ANSI-free, and clamped** — don't add colored strings to Select items, and use `dialoguer::console` (don't add `console` as a direct dep). Unit tests in `recent.rs`.
-- v1.0.2: Windows zip now also ships `fastf-ui.exe` + `docs/`; `docs/windows.md` documents the wizard, the Start Menu app, and Chrome-or-Edge app windows.
 - v1.0.2: **unconfigured `base_dir` falls back to the HOME directory, not the cwd** (`Config::resolve_base_dir` → `paths::home_dir()`, new pub helper: `%USERPROFILE%`/`$HOME`; cwd only if home is unset). The cwd fallback scattered projects and `.fastf-index.json` caches into whatever directory a command ran from. **Both test harnesses (`with_fresh_install` in integration.rs AND ui_server.rs) now redirect HOME/USERPROFILE into the sandbox** — without that, tests with a default config would scan the developer's real home and self-heal the counter from their real projects (5 register tests broke exactly that way). Any new test harness must do the same.
-- v1.0.2: **web-UI first-run onboarding** — `/api/state` gains `base_configured` + `suggested_base` (home `Projects` folder); new write route `POST /api/base/init {path}` (accepts `~/…`, rejects relative paths, `create_dir_all` + saves `base_dir`). Frontend: `state.modal = {kind:"onboard"}` set in `loadState` when unconfigured; dismiss = skip for the session (`state.onboardDismissed`), reappears next launch. Modal copy mentions multi-base support (Settings → Library bases) by design — cristoc asked for that explicitly.
-- v1.0.2: **frozen-renderer recovery** (the "returned after 7 h and the UI was stuck with a white popup" bug) — the health poll is now a named `healthTick()` with a single-in-flight guard + 2.5 s AbortController timeout, re-run on `visibilitychange`. A tick arriving >10 min late means the renderer's timers were frozen (suspend/deep throttle) → `location.reload()` for fresh surfaces (in-place `loadState()` instead when `state.templateDirty`). `open_app_window` additionally passes `--disable-backgrounding-occluded-windows` + `--disable-renderer-backgrounding`. Root cause is Chromium GPU-surface corruption after long suspend/occlusion — app code can only mitigate, so both the prevention flags and the wake-up reload exist.
 - v1.0.2: **onboarding is universal** — the shared core is `config::init_base_dir(raw)` (trim → `~` expansion → absolute-only → `create_dir_all` → canonicalize → persist `base_dir`) + `config::suggested_base_dir()` (`<home>/Projects`). The web UI's `/api/base/init` and the TUI's `onboard_first_run` (menu.rs, runs before the main loop when `base_dir` AND `bases` are both empty; empty answer skips, reappears next launch) are thin shells over it. Don't duplicate the expansion/validation anywhere else — call the core fn.
-- v1.0.2: **native path pickers** — `POST /api/pick-path {kind: "folder"|"file", start?}` opens the OS dialog server-side (loopback = same machine): Linux kdialog→zenity (missing binary falls through, nonzero exit = cancel → `path: null`), Windows PowerShell WinForms dialogs (`-STA` required; `CREATE_NO_WINDOW` creation flag so no console flashes under the windowless fastf-ui), macOS osascript. Guarded by a `PICKER_BUSY` AtomicBool (one dialog at a time) and deliberately does NOT take `WRITE_LOCK` (a dialog can sit open for minutes). Frontend: `browseButton(kind, id)` + a generic `[data-browse="kind:id"]` handler in `bindCommon` that sets the target input's value and dispatches an `input` event (textareas append a line — the bases list). Wired on: onboard-base, register-path, ff-source, file-src (file kind), settings-base-dir, settings-bases.
-- v1.0.2: Test count 176 → 183.
 
 ### v1.1 hardening gotchas
 
@@ -816,9 +514,10 @@ dialoguer instead of adding it back as a direct dep (see the v1.0.2 clamp gotcha
 
 ### v1.2 gotchas
 
-**Counter in the base.** See "Global ID counter" above. `Counters::load()` is now
-the *legacy* data-dir read and is only one input to `Counters::floor`. Never add
-a writer for it. `naming::id_value` **rejects any id containing a hyphen** — an
+**Counter in the base.** See "Global ID counter" above. `Counters::load()` is the
+*legacy* data-dir read and is only one input to `Counters::floor`; `Counters::save`
+is private, and `propagate` is its only caller, so the data-dir file can never
+drift below the bases it backs up. `naming::id_value` **rejects any id containing a hyphen** — an
 interim build wrote UUID (`019fa635-…-74a0bcb20044`) and word-handle
 (`simple-panda-fennec`) ids, and reading the trailing digits of that UUID would
 put the floor at 20044 and every later project at ID20045+. Such an id must
@@ -845,19 +544,6 @@ realized**; callers must report from that, not from the plan they passed in.
 `config.on_name_collision = "error"` restores the old refuse-a-duplicate
 behaviour.
 
-**`projectRow` renders a bulk-select checkbox, so every view showing project rows
-needs a `#bulk-bar-slot`.** The dashboard had the checkboxes but not the slot, so
-ticking one highlighted the row and did nothing else. `bindProjectBulk` already
-runs on every render and `refreshSelectionUi` already fills the slot when present.
-
-**The frontend strips `\\?\`, the server does not.** `displayPath()` in `app.js`
-mirrors `util::paths::display_path` and is called by `shortPath()` and every
-`title` attribute. The JSON keeps sending canonical paths because the frontend
-echoes `path` back as the **identifier** on every write route, and the verbatim
-prefix is what makes paths past MAX_PATH work. `data-*` attributes stay canonical;
-anything rendered goes through `displayPath`. A server-side `display_path` field
-was tried and reverted — two mechanisms for one job.
-
 **Two tooling traps, both hit while building this.** Do not bulk-edit source with
 PowerShell `Get-Content -Raw` + `Set-Content`: 5.1 reads as the ANSI codepage and
 writes UTF-8, double-encoding every non-ASCII character (this repo is full of
@@ -867,121 +553,89 @@ in `app.js`, including inside an HTML comment — it terminates the string and t
 error points at the following identifier. `node --check src/ui/web/app.js` catches
 it; run it after every frontend edit.
 
+### v1.2.1 gotchas
+
+**The counter converges — see "Global ID counter", which was rewritten for it.**
+The three rules that bite: `next_value` is the only place that computes the next
+ID (three callers drifted before); `propagate` must `touch_cache` every base it
+writes, or creates thrash every cache; and nothing may lower the counter, so `id
+set` / `id reset` / `POST /api/counter` refuse rather than pretend.
+
+**`trailing_var_arg` means clap's `requires`/`conflicts_with` only see flags typed
+*before* the positional.** `register --dry-run` after the path lands in `extra`,
+where `classify_extra` picks it up and the arm decides. So a flag constraint that
+matters has to be enforced **twice**: in the clap attribute *and* in the match arm
+in `main.rs`. Enforcing it only in the attribute is what let `--dry-run` write the
+folder for real when typed after the path.
+
+**Don't read a `Config` field raw when a `resolve_*` exists.** `cli::note` passed
+`&cfg.editor` where everything else calls `cfg.resolve_editor()`, so the
+documented `$EDITOR` fallback never ran and the default install failed with
+`launching editor ''`. Same shape as `resolve_base_dir`.
+
+**`--force` on `template from-folder` must clear `files/` first.** Since v0.8
+that subtree *is* the create spec, so regenerating without clearing merged the old
+generation into the new template and shipped stale files into every project — with
+the manifest's `structure` correctly replaced, so the two disagreed silently.
+
+**Slice a timestamp with `.get(..10)`, never `[..10]`.** Journal timestamps come
+from a parsed markdown body, so a hand-edited `PROJECT_INFO.md` can put anything
+there; byte-slicing panicked mid-character on the first multi-byte one. Two sites
+(`cli::note::notes`, `cli::recent::show_journal`) and `hostile_fs.rs`'s
+degrade-never-panic promise covers metadata, not bodies.
+
+### v1.3 gotchas
+
+**The TUI contains errors; the discriminator is `dialoguer::Error`, not
+`io::Error`.** `tui::menu::contain` reports a failure and returns to the current
+submenu instead of unwinding to `main` (which exited 1 and threw away every
+answer already given). What must *never* be contained is a failure of the prompt
+itself — no TTY, stdin at EOF — because that returns to a loop which prompts and
+fails again forever. The obvious rule, "propagate anything with an `io::Error` in
+the chain", is exactly backwards: a mistyped path fails with `canonicalize`'s
+`NotFound` wrapped in context, which is the case containment exists for.
+`dialoguer` returns one error type and only from prompt calls, so that is the
+test. `is_fatal` has unit tests for both shapes; `tests/tui_pty.rs` drives the
+real flows.
+
+**Menu arms yield a `Result` instead of using `?` inline.** Each `match` builds
+an outcome and passes it to `contain(...)?`. Adding an arm that uses `?` directly
+silently opts that path out of containment.
+
+**Guard `show_cursor` with `is_terminal`.** `Term::show_cursor` emits the escape
+whatever it is writing to, so restoring the cursor unconditionally on the error
+path put a literal `\x1b[?25h` into every piped error — corrupting the output a
+script reads. Caught only by looking at `cat -v` of a piped failure.
+
+**`config::expand_base_path` / `resolve_base_dir_input` are the only way in.**
+The first expands `~` and requires an absolute path; the second adds
+`create_dir_all` + canonicalize. Extra `bases` use the **first** deliberately:
+creating a missing one would plant an empty directory at an unmounted mount
+point and shadow the drive it stands for. Neither takes the lock — `DataLock` is
+not reentrant and `config::set` already holds it.
+
+**Prompt first, then lock, then reload.** `edit_postcreate_commands` collects the
+answer, *then* takes `DataLock` and re-reads config. Holding a loaded `Config`
+across a human prompt and saving it afterwards reverted whatever the browser UI
+or another `config set` had written meanwhile. Its remove path also matches
+commands by text rather than by the index the user saw, since the list may have
+changed while the prompt was open.
+
+**`fastf move` polls, it does not block.** `library::move_project_with` already
+took a `&Mutex<Progress>` and `&AtomicBool`; the CLI runs it on a scoped thread
+and draws from the main one, feeding `interrupt::is_set()` into the cancel flag
+so Ctrl-C aborts before the source is touched. Totals stay zero until the staged
+path scans the tree and never fill in for a same-fs rename — so "nothing to draw"
+is the normal case, not a bug.
+
 ## Browser UI (`fastf ui`)
 
 `fastf ui` starts a local loopback HTTP server and opens the browser UI. The
 server and all API logic live only in the `fastf` lib (`src/ui/`) — no separate
 server binary, no external web directory. (The v1.0.2 `fastf-ui` bin is a
-windowless *launcher shim* over `cli::ui::run`, not a second server.) Full
-reference: `docs/UI.md`.
+windowless *launcher shim* over `cli::ui::run`, not a second server.)
 
-The UI is at feature parity with the CLI (detail drawer, search, register, apply,
-template generate-from-folder + file editor, settings, moves). **`docs/UI.md` is
-the route-by-route reference — read it there rather than re-listing endpoints
-here**, and see "UI gotchas" below for the constraints that bite.
-
-Three thresholds/guards that live only in code, worth knowing before you touch
-the create or template-file paths:
-- `assets::JOB_DEFER_BYTES` (**4 MiB**) is the create cutoff: `POST /api/create`
-  does structure + text/small files + counter + metadata + cache synchronously and
-  returns `{project, job_id}`; anything larger copies on a background thread
-  **outside `WRITE_LOCK`**. `job_id` is `null` when nothing needed deferring.
-- `require_template_exists` gates every template-file op — `files/` on disk is
-  the source of truth, so there is no in-memory buffer and the template must be
-  saved first. The file routes are **independent of `templates/save`**, which
-  writes metadata only.
-- `normalize_template_rel` is the traversal/reserved-name guard on every
-  template-file write.
-
-Layout:
-- `src/ui/mod.rs` — the HTTP server (`std::net::TcpListener`, one thread per
-  connection, no web framework) + all API handlers. `pub fn serve(address)`
-  blocks; `pub fn route_request(method, route, body) -> Response` is the pure
-  router (no socket) and is what `tests/ui_server.rs` drives. `pub fn
-  health_check(address)` lets `fastf ui` detect an already-running server. Write
-  routes serialize through a private `static WRITE_LOCK: Mutex<()>`.
-- `src/ui/assets.rs` — the four frontend files embedded via `include_str!`. If
-  `FASTF_UI_DIR` is set, files are read from disk instead (frontend live-reload).
-- `src/ui/web/` — `index.html`, `app.js`, `styles.css`, `icon.svg` (vanilla JS,
-  no framework/npm/bundler).
-- `src/cli/ui.rs` — the `fastf ui` command: health-check → open browser → serve.
-  `--address`, `--no-open`, `--app` (Chromium/Chrome app window with a dedicated
-  `~/.cache/fast-folder-ui/chromium` profile; falls back to the default browser).
-
-The server calls the library directly (`project::plan`/`create`, `Config`,
-`Counters`, `template`, `library` discovery, `post_create`), so the UI and CLI
-share one source of truth and the same on-disk files. The `Ui` arm in `main.rs`
-forwards to `cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on the router).
-
-### UI gotchas
-- v0.6: Only `GET` (assets + read APIs) and `POST` (writes) are routed —
-  `HEAD`/others 404. Browsers GET, so this is fine; don't be surprised when
-  `curl -I` shows the JSON 404 error body's content-type.
-- v0.6: Adding a new write endpoint? Take `lock_writes()` inside the match arm
-  (like `/api/create`) so it serializes with the other writers; reads don't lock.
-- v0.6: Keep the server **loopback-only**. There is no auth/CSRF. `FASTF_UI_DIR`
-  is the frontend dev override (serve assets from disk instead of embedded).
-- v0.6: Embedded assets mean a frontend edit needs a `cargo build` to ship — but
-  `FASTF_UI_DIR=$PWD/src/ui/web fastf ui` serves from disk for dev without rebuilding.
-- v0.7/v0.8: Path/query GET routes (`/api/project?path=`, `/api/job/<id>`) are
-  matched with `if path.starts_with(...)` guards placed BEFORE the static-asset
-  catch-all (`("GET", path) if !path.starts_with("/api/")`). Order matters — a new
-  `/api/...` GET route must go above the catch-all. Query values are percent-decoded by
-  the in-module `query_param` + `percent_decode` (no url crate); the frontend uses
-  `encodeURIComponent`, which emits `%20` (not `+`) for spaces, so the decoder does
-  NOT treat `+` as space (paths can legitimately contain `+`).
-- v0.7: `register_core` is the non-interactive engine; `fastf register`'s `run` is a
-  thin interactive shell over it (rename preview + pinfo-overwrite prompts there,
-  not in core). `RegisterArgs` (CLI) and `RegisterOptions` (engine) are separate
-  structs — `run` translates one to the other. The CLI rename-confirm shows the
-  exact `old → new` name via a preview computed from `build_plan_vars` +
-  `desired_rename` (shared helpers), reading `counter.get()+1` without incrementing;
-  the engine recomputes the same value and is authoritative.
-- v0.7/v0.9: `PinfoConflict` controls the existing-`PROJECT_INFO.md` policy. `Abort`
-  bails BEFORE any write (so the UI can confirm + retry with `overwrite:true`); `Skip`
-  keeps the existing file (no rewrite, no cache_upsert — used by `--recursive`);
-  `Overwrite` rewrites it. The UI sends `Abort` unless the user confirmed overwrite;
-  the CLI single-register sends `Overwrite`/`Skip` from its prompt.
-- v0.7: The UI `apply` routes pass **raw** variables to `project::apply_plan` /
-  `apply` (no transform/sanitize) — matching `fastf apply`'s semantics, NOT `new`'s.
-  Don't "fix" this to apply transforms; it would diverge the UI from the CLI apply.
-- v0.7: `/api/search` reuses `core::query` exactly, so the deliberate "path excluded
-  from free-text" guarantee holds (there's a regression test). Empty `terms` returns
-  all projects (newest first) — the server-side equivalent of the plain list.
-- v0.7: The frontend renders the drawer + apply modal + generic (from-folder)
-  modal as state-driven layers appended after `shell(content)` in `render()`; each
-  has a `bind*` call. Mutating actions re-fetch + full `render()` (acceptable — the
-  only focus-sensitive surface is the projects search, which updates `#project-results`
-  in place via `runProjectSearch` instead of re-rendering). `(registered)`-slug
-  projects are filtered out of the apply/register template pickers.
-- v0.8: The `JOBS` registry is `static Mutex<Option<HashMap<..>>>` (const-init'd to
-  `None`, lazily filled) keyed by `job-<n>` (`AtomicUsize`). The copy thread updates
-  an `Arc<Mutex<Progress>>`; `spawn_copy_job` evicts finished jobs on each new create
-  so the map stays bounded, so the frontend `pollJob` treats a `/api/job` 404 as done.
-  The background copy must NOT take `WRITE_LOCK` (it only writes inside the new
-  project's folder) — holding it would serialize a 200 MB copy against every other UI
-  write, defeating the point. Deferred files are always verbatim (threshold ≥ text cap),
-  so `copy_job` never needs vars.
-- v0.8: `showSuccess(result)` (frontend) now takes the whole create response (not just
-  `result.project`) so it can read `job_id`. The progress bar updates only the
-  `#job-progress` node inside the imperatively-built success overlay — no `render()`.
-- v0.8 (phase 3): The template editor's **Files section is live-on-disk**, NOT part
-  of the `templateEditor` object. Never re-add a `files` array to `newTemplateDraft`
-  / the save payload — `Template.files` is `#[serde(skip)]`, so it round-trips to
-  nothing; a metadata save deliberately doesn't touch `files/`. File CRUD uses the
-  four dedicated endpoints and re-fetches `state.templateFiles`. Because they act on
-  disk, they need the on-disk slug (`state.templateOriginalSlug`, not the edited
-  slug) and the template to exist — new templates show a "save first" notice.
-- v0.8 (phase 3): file writes reuse `assets::copy_file(force_verbatim=true)` for
-  ingestion (byte copy, atomic `.part`+rename) and `normalize_template_rel` for the
-  traversal/reserved guard. Don't interpolate at ingestion time — a template asset
-  is stored raw and only interpolated at project-create time. `list_template_files`
-  omits directories (empty dirs are the `structure:` section's job).
-- v0.9: `load_state`/`search_projects`/`project_detail` all source from
-  `library::discover(&config)` (no `index::load_all`). They still read each project's
-  metadata fresh for the `tags` field so display stays correct even against a
-  momentarily-stale cache. `project_json(project: &Project, metadata)` takes a
-  discovered `Project`. `/api/reindex` (write route, takes `lock_writes`) calls
-  `library::reindex`; `set_config` accepts a `bases` array (trimmed, non-empty).
-  The `/api/projects/prune` route + `prune_projects` fn are **gone** (the cache
-  self-heals) — a POST to it 404s (regression test).
+**Working on the UI? The detail lives in two places, not here:**
+`src/ui/CLAUDE.md` (loads automatically when you touch `src/ui/`) carries the
+layout, the three create/template-file thresholds, and every UI gotcha;
+`docs/UI.md` is the route-by-route reference. Don't re-list endpoints here.

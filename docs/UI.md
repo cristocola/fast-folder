@@ -83,7 +83,7 @@ non-loopback address.
 | POST | `/api/templates/from-folder` | Generate a template from a folder (`{source, slug, force, bundle_assets}`); returns a `report` of counts (folders / text files / bundled + bytes / skipped) |
 | POST | `/api/reindex` | Force a full rescan of every base, rewriting each `.fastf-index.json`; returns `{projects}` |
 | POST | `/api/reconcile` | Recover interrupted work across all bases; returns `{report}` with `resumed` (copies finished), `completed` (moves committed), `rolled_back` (moves undone, source intact), `swept` (abandoned `.part`/`.tmp` files removed), `incomplete` (paths of projects never finished being created — these cannot be rebuilt automatically), and `unrecoverable` |
-| POST | `/api/counter` | Set the global ID counter (`{value}`) |
+| POST | `/api/counter` | Raise the global ID counter (`{value}`). The counter is the highest ID seen anywhere and only moves up, so a value at or below the current floor is **refused**; the write propagates to every mounted base |
 
 Write routes (`create`, `settings`, `base/init`, template save/from-folder/delete, template
 `file-save`/`file-add`/`file-delete`, `project/tag`, `project/note`,
@@ -208,7 +208,9 @@ binary's own directory when a `config.toml`/`templates/` sits next to it
 `%APPDATA%\fastf`) — which is what a package-manager install uses. `fastf
 paths` prints the resolved dir + mode; `/api/state` exposes it as `dir_mode`.
 Because the UI is the same `fastf` binary, it reads/writes the same
-`config.toml`, `templates/`, and `counters.toml` as the CLI. Projects are
+`config.toml` and `templates/` as the CLI, and the same per-base
+`.fastf-counter.toml` files (the data dir's `counters.toml` is one backup input
+to the floor, not the record). Projects are
 discovered from their `PROJECT_INFO.md` across the configured bases (v0.9 — no
 `projects.jsonl`), each base holding its own `.fastf-index.json` cache.
 

@@ -24,7 +24,7 @@ On the very first launch (TUI or browser UI) fastf asks where your projects shou
 | `fastf reindex` | Force a full rescan of every base |
 | `fastf reconcile` | Recover interrupted copies and moves |
 | `fastf config show` / `set` | View and edit configuration |
-| `fastf id show` / `set` / `reset` | Manage the global ID counter |
+| `fastf id show` / `sync` / `set` | Inspect, synchronize, and raise the global ID counter |
 | `fastf paths` | Show where fastf keeps its data and why |
 | `fastf completions <shell>` | Print shell completions (bash, zsh, fish, PowerShell) |
 
@@ -121,6 +121,8 @@ fastf register ~/Projects --recursive --dry-run                  # preview a bul
 fastf register ~/Projects --recursive                            # onboard every child that lacks metadata
 ```
 
+`--dry-run` belongs to `--recursive`, where there is a list of folders worth previewing; registering a single folder writes its `PROJECT_INFO.md` and nothing else. For the same reason `--recursive` does not accept `--rename`, `--apply`, `--created` or `--yes` — bulk onboarding never prompts and never renames, and a flag that cannot be honoured is refused rather than ignored.
+
 The ID is recovered from an `ID####` token in the folder name when present (a folder named `..._ID0030` keeps ID 30). Otherwise a fresh ID is minted from the self-healing counter. The `created` timestamp defaults to the folder's filesystem creation time, falling back to mtime on filesystems without birth time.
 
 `--rename` renders the template's `naming_pattern` when a template is given, or `config.register_naming_pattern` (default `{date}_{name}_{id}`) without one. It confirms before moving anything on disk unless `--yes` is set.
@@ -140,9 +142,12 @@ fastf apply rust-project ./existing-crate     # creates missing items, never ove
 fastf move ID0047                    # pick the target base interactively
 fastf move ID0047 archive            # target by base label
 fastf move my-crate /mnt/proj/01_PROJECTS
+fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 ```
 
 Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Cross-filesystem moves stage a copy, verify it, commit atomically, and only then remove the source. An interrupted move is recovered by `fastf reconcile` and never loses data.
+
+A cross-filesystem move reports its progress as it goes — the phase (copying, verifying, finalizing), how many files are done, and how much has been copied. **Ctrl-C cancels it safely**: the move aborts before the source is touched, so the worst case is a discarded staging folder that `fastf reconcile` sweeps up. Same-filesystem moves finish instantly and print nothing extra.
 
 **Symlinks and junctions.** A move to another drive has to copy, and a link cannot be reproduced faithfully there — recreating one needs elevation or Developer Mode on Windows, and following it would silently restructure your project and could duplicate a whole shared asset library. So fastf refuses, names the links it found, and changes nothing:
 
@@ -188,6 +193,7 @@ fastf config set confirm-create false            # skip "Create this project?" l
 fastf config set show-banner false
 fastf config set recent-default-limit 50
 fastf config set register-naming-pattern "{id}_{name}"
+fastf config set on-name-collision error          # refuse a duplicate folder name instead of adding _2
 
 # Post-create defaults
 fastf config set post_create.git_init true
@@ -201,16 +207,24 @@ Run `fastf config set --help` for the complete key list with descriptions.
 ## ID counter
 
 ```bash
-fastf id show          # current global counter
-fastf id set 46        # next project becomes ID0047
-fastf id reset         # reset to 0
+fastf id show          # current counter, and what each base records
+fastf id sync          # make every base agree on the highest ID seen anywhere
+fastf id set 100       # raise the counter (next project becomes ID0101)
 ```
 
 One counter serves all templates, so IDs are unique across every project type.
 
 The counter is stored **inside your base folder** as `.fastf-counter.toml`, next to the projects it numbers — not in Fast Folder's config directory. That matters if you use more than one operating system: your project drive is already mounted by both, so both read the same number, with nothing to symlink or keep in sync. A base carried on an external drive brings its numbering with it.
 
-It also self-heals. The next ID is always at least one higher than the highest ID found in your projects, so deleting the counter file, or plugging in a drive that has never seen this machine, can never mint an ID that collides with a project you already have.
+### The number only goes up
+
+The counter is the highest ID seen **anywhere**: in any base's counter file, in Fast Folder's own data directory, or in the projects themselves. Every base converges on that one number.
+
+Say you add three folders as bases, holding `ID0004`, `ID0082` and `ID0017`. Fast Folder takes the largest and writes it into all three, so each records `82` and the next project is `ID0083` no matter which base you create it in. A base's counter file wins when it is *higher* than the projects in that folder — that is what carries the number to a machine that cannot see your other drives. When the projects are higher, the file is raised to match and the new value pushed out to every other base.
+
+This happens on its own: on every create, and on every `fastf id show`. Run `fastf id sync` explicitly after something changed outside Fast Folder — a base mounted for the first time, or projects copied in from another machine.
+
+Because of that, the counter **cannot be lowered**, and there is no `fastf id reset`. A lower number would hand out an ID that already exists, so `fastf id set` refuses any value at or below the current floor and tells you what is holding it.
 
 ## Shell completions
 

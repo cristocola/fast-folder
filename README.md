@@ -78,7 +78,7 @@ Domain-specific templates live in the [`examples/templates/`](examples/templates
 - **Search that understands your projects.** Plain text works (`fastf search ariana`), and so do precise filters: `fastf search template=music-video tag:draft created>2026-01-01`.
 - **Projects can live on several drives.** Index any number of folders, including external drives that come and go. A disconnected drive is skipped quietly and comes back when remounted.
 - **Teams share one project system.** Point every install at the same master folder on a NAS or shared drive. Everyone creates projects through the same convention and searches the same history. Because the metadata travels inside the folders, there is no server and nothing to administer.
-- **Moves that cannot lose data.** `fastf move` relocates a project to another drive by copying, verifying, and only then removing the original. If anything is interrupted mid-move, `fastf reconcile` finishes or rolls it back.
+- **Moves that cannot lose data.** `fastf move` relocates a project to another drive by copying, verifying, and only then removing the original — reporting progress as it goes, and cancellable with Ctrl-C. If anything is interrupted mid-move, `fastf reconcile` finishes or rolls it back.
 - **Adopts your existing folders.** `fastf register` onboards work that fastf did not create, one folder or a whole directory at once.
 - **Optional automation after each create.** Open the new folder, launch your editor, initialize a git repository, or run your own commands.
 - **Cross-platform and path-safe.** Linux and Windows binaries, macOS via source build. Templates use `/` everywhere, and unsafe paths (`..`, absolute) are rejected outright.
@@ -123,7 +123,7 @@ No prebuilt macOS binaries are published because they cannot be tested here, but
 
 ## Where fastf keeps its data
 
-Config, templates, and the ID counter live together in one data folder. Check yours with `fastf paths`.
+Config and templates live together in one data folder. Check yours with `fastf paths`. The ID counter is kept with your projects instead — each base carries its own `.fastf-counter.toml`, so every operating system that mounts the drive reads the same number.
 
 | Priority | Location | When |
 |---|---|---|

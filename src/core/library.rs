@@ -210,7 +210,7 @@ fn dir_mtime(path: &Path) -> Option<SystemTime> {
 /// Re-stamp a base's cache as current, without rereading anything.
 ///
 /// Writing `.fastf-counter.toml` into a base bumps that base's directory mtime,
-/// which [`cache_is_stale`] reads as "a project was added or removed" — so
+/// which `cache_is_stale` reads as "a project was added or removed" — so
 /// propagating the ID counter would otherwise force a full rescan of every base
 /// on every create, defeating the cache entirely. The counter write provably
 /// changes no project, so the honest repair is to say the cache is still good.

@@ -1,0 +1,340 @@
+//! The command surface: what `fastf <args>` actually does to disk.
+//!
+//! Every test here is a regression. Each one reproduces a defect that shipped in
+//! v1.2.0 and passed a 281-test green suite, because the suite exercised
+//! `core/` and `util/` and stopped at the argument-and-prompt layer. The pattern
+//! was always the same shape: a command reported success and did something else.
+//!
+//! These drive the **real binary** rather than calling library functions, since
+//! the bugs lived in the plumbing between clap and the core — flags dropped into
+//! `trailing_var_arg`, one caller computing an ID differently from another, a
+//! config field read raw instead of resolved. Only a process sees that.
+
+mod common;
+
+use common::{Sandbox, ids_in};
+use std::fs;
+
+// ---------------------------------------------------------------------------
+// The ID counter
+// ---------------------------------------------------------------------------
+
+/// `fastf id set` used to write one file that `Counters::floor` then ignored,
+/// print "Global ID counter set to 0", and hand the next project ID0005.
+/// The counter only moves up, so the honest answer to a lower value is a refusal.
+#[test]
+fn id_set_below_the_floor_is_refused() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["new", "race", "--name=One", "--yes", "--no-preview"]);
+    sb.ok(&["new", "race", "--name=Two", "--yes", "--no-preview"]);
+
+    let err = sb.fails(&["id", "set", "1"]);
+    assert!(
+        err.contains("cannot go below 2"),
+        "the refusal must name the floor: {err}"
+    );
+
+    // And the floor is untouched — the next project follows the highest ID.
+    sb.ok(&["new", "race", "--name=Three", "--yes", "--no-preview"]);
+    let ids = ids_in(&sb.base);
+    assert!(
+        ids.contains(&"R0003".to_string()),
+        "expected R0003 after the refusal, got {ids:?}"
+    );
+}
+
+/// Deleting every project must not let the counter fall back and reissue IDs.
+/// `fastf id reset` used to report success and change nothing at all.
+#[test]
+fn id_reset_is_gone_and_says_why() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["new", "race", "--name=One", "--yes", "--no-preview"]);
+
+    let err = sb.fails(&["id", "reset"]);
+    assert!(
+        err.contains("sync"),
+        "the removal must point at the replacement: {err}"
+    );
+}
+
+/// The headline of the v1.2 counter design: three bases holding different
+/// highest IDs must all converge on the largest one.
+#[test]
+fn id_sync_propagates_the_highest_id_to_every_base() {
+    let sb = Sandbox::new();
+    let bases = sb.with_bases(&["dir2", "dir3"]);
+    sb.plant_project(&sb.base, "a", "ID0004");
+    sb.plant_project(&bases[0], "b", "ID0082");
+    sb.plant_project(&bases[1], "c", "ID0017");
+
+    sb.ok(&["id", "sync"]);
+
+    for base in [&sb.base, &bases[0], &bases[1]] {
+        assert_eq!(
+            sb.base_counter(base),
+            82,
+            "every base must record the global maximum, {} did not",
+            base.display()
+        );
+    }
+}
+
+/// A base whose counter file outranks its own projects is authoritative — that
+/// is what carries the number across a machine that cannot see the other bases.
+///
+/// Not a v1.2.0 regression (the floor already consulted base counters); this
+/// pins the rule down so a future simplification of `floor` cannot drop it.
+#[test]
+fn a_base_counter_above_its_projects_is_authoritative() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.plant_project(&sb.base, "small", "ID0004");
+    sb.ok(&["id", "set", "500"]);
+
+    sb.ok(&["new", "race", "--name=Next", "--yes", "--no-preview"]);
+    let ids = ids_in(&sb.base);
+    assert!(
+        ids.contains(&"R0501".to_string()),
+        "the counter file must win over the projects: {ids:?}"
+    );
+}
+
+/// Propagating the counter writes into every base, which bumps each base's
+/// mtime — the same signal the index cache reads as "a project appeared".
+/// Without re-stamping the cache, every create would force a full rescan of
+/// every base, defeating the cache entirely.
+///
+/// Guards the cost of the new propagation rather than an old bug: v1.2.0 never
+/// wrote other bases at all, so it passed this vacuously.
+#[test]
+fn propagating_the_counter_does_not_invalidate_other_bases_caches() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let bases = sb.with_bases(&["dir2"]);
+    sb.plant_project(&bases[0], "other", "ID0002");
+    // Populate every cache.
+    sb.ok(&["recent", "--plain"]);
+
+    let cache = bases[0].join(".fastf-index.json");
+    assert!(cache.is_file(), "the other base should have a cache");
+
+    sb.ok(&["new", "race", "--name=Bump", "--yes", "--no-preview"]);
+
+    let base_m = fs::metadata(&bases[0]).unwrap().modified().unwrap();
+    let cache_m = fs::metadata(&cache).unwrap().modified().unwrap();
+    assert!(
+        cache_m >= base_m,
+        "the other base's cache went stale after an unrelated create"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// register
+// ---------------------------------------------------------------------------
+
+/// `--dry-run` outside `--recursive` was accepted and dropped — the folder was
+/// written for real. It must be refused wherever the flag is typed, including
+/// after the path, where `trailing_var_arg` swallows it.
+#[test]
+fn register_dry_run_is_refused_and_writes_nothing() {
+    let sb = Sandbox::new();
+    let folder = sb.base.join("legacy");
+    fs::create_dir_all(&folder).unwrap();
+    let path = folder.display().to_string();
+
+    for args in [
+        vec!["register", &path, "--dry-run"],
+        vec!["register", "--dry-run", &path],
+    ] {
+        sb.fails(&args);
+        assert!(
+            !folder.join("PROJECT_INFO.md").exists(),
+            "--dry-run wrote metadata anyway (args: {args:?})"
+        );
+    }
+}
+
+/// `--recursive` silently ignored `--rename`, `--apply`, `--created` and
+/// `--yes`: the folder came back unrenamed and stamped with today's date.
+#[test]
+fn recursive_register_refuses_the_flags_it_cannot_honour() {
+    let sb = Sandbox::new();
+    fs::create_dir_all(sb.base.join("child")).unwrap();
+    let base = sb.base.display().to_string();
+
+    for flag in [
+        vec!["--rename"],
+        vec!["--created", "2020-01-01"],
+        vec!["--yes"],
+    ] {
+        let mut args = vec!["register", &base, "--recursive"];
+        args.extend(flag.iter().copied());
+        sb.fails(&args);
+    }
+}
+
+/// The rename prompt computed its preview ID from the legacy data-dir counter
+/// while the commit used the true floor: the confirmation offered
+/// `..._ID0001` and the folder landed as `..._ID0011`. You approve one name and
+/// get another.
+///
+/// This has to go through a pty — `--yes` skips the prompt, and the prompt *is*
+/// the bug.
+#[cfg(unix)]
+#[test]
+fn register_rename_preview_matches_the_committed_name() {
+    use common::pty;
+    use std::time::Duration;
+
+    let sb = Sandbox::new();
+    // A base well ahead of this machine's data-dir counter — the ordinary state
+    // on a second machine, a fresh install, or the other half of a dual boot.
+    sb.plant_project(&sb.base, "existing", "ID0042");
+    let folder = sb.base.join("my old folder");
+    fs::create_dir_all(&folder).unwrap();
+
+    let (output, code) = pty::run(
+        common::FASTF,
+        &["register", &folder.display().to_string(), "--rename"],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &pty::Script::new().line("y").build(),
+        Duration::from_secs(20),
+    );
+    assert_eq!(code, 0, "register failed under a pty:\n{output}");
+
+    // The name the prompt offered.
+    let offered = output
+        .split("→ '")
+        .nth(1)
+        .and_then(|rest| rest.split('\'').next())
+        .unwrap_or_else(|| panic!("no rename prompt in output:\n{output}"))
+        .to_string();
+
+    // The name on disk.
+    let landed = fs::read_dir(&sb.base)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.contains("my_old_folder"))
+        .unwrap_or_else(|| panic!("nothing was renamed:\n{output}"));
+
+    assert_eq!(
+        offered, landed,
+        "the prompt offered a different name than it committed"
+    );
+    assert!(
+        landed.ends_with("ID0043"),
+        "expected the floor (42) + 1, got {landed}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// note / tag / template
+// ---------------------------------------------------------------------------
+
+/// `fastf notes` sliced the timestamp to 10 *bytes*, so a hand-edited
+/// PROJECT_INFO.md with any multi-byte text where the timestamp goes panicked
+/// mid-character. `hostile_fs.rs` promises corrupt metadata degrades, never
+/// panics — it just never covered the journal body.
+#[test]
+fn notes_survives_a_hand_edited_journal_timestamp() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let pinfo = dir.join("PROJECT_INFO.md");
+    let mut text = fs::read_to_string(&pinfo).unwrap();
+    text.push_str("\n## Journal\n\n- 日本語のタイムスタンプ — hand-edited entry\n");
+    fs::write(&pinfo, text).unwrap();
+
+    let out = sb.run(&["notes", "ID0001"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "fastf notes panicked on a hand-edited timestamp:\n{stderr}"
+    );
+    assert!(out.status.success(), "fastf notes failed: {out:?}");
+}
+
+/// `note add` with no message passed the raw `editor` config field, so the
+/// documented `$EDITOR` fallback never happened: an unconfigured install failed
+/// with `launching editor ''`.
+#[test]
+fn note_add_falls_back_to_the_editor_env_var() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "proj", "ID0001");
+
+    // `true` exits 0 and writes nothing, so the note comes back empty — which
+    // only happens if the editor was actually launched.
+    let editor = if cfg!(windows) { "cmd" } else { "true" };
+    let out = sb
+        .command()
+        .args(["note", "add", "ID0001"])
+        .env("EDITOR", editor)
+        .output()
+        .expect("running fastf");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("launching editor ''"),
+        "the $EDITOR fallback was skipped:\n{stderr}"
+    );
+}
+
+/// `tag reauto` on a folder registered without a template failed with
+/// "template '(registered)' not found", which reads like a broken install.
+#[test]
+fn tag_reauto_on_a_registered_project_explains_itself() {
+    let sb = Sandbox::new();
+    let folder = sb.base.join("adopted");
+    fs::create_dir_all(&folder).unwrap();
+    sb.ok(&["register", &folder.display().to_string(), "--yes"]);
+
+    let err = sb.fails(&["tag", "reauto", "ID0001"]);
+    assert!(
+        !err.contains("not found"),
+        "a registered project is not a missing template: {err}"
+    );
+    assert!(
+        err.contains("without a template"),
+        "the message must explain there is nothing to re-derive: {err}"
+    );
+}
+
+/// `template from-folder --force` merged into the previous generation's
+/// `files/`, so a template regenerated from a different folder still carried
+/// the old files — and since v0.8 `files/` is what create copies, they landed
+/// in every new project.
+#[test]
+fn from_folder_force_replaces_the_bundled_files() {
+    let sb = Sandbox::new();
+    let src1 = sb.tmp.path().join("src1");
+    let src2 = sb.tmp.path().join("src2");
+    fs::create_dir_all(&src1).unwrap();
+    fs::create_dir_all(&src2).unwrap();
+    fs::write(src1.join("one.txt"), "one").unwrap();
+    fs::write(src2.join("two.txt"), "two").unwrap();
+
+    sb.ok(&[
+        "template",
+        "from-folder",
+        &src1.display().to_string(),
+        "gen",
+    ]);
+    sb.ok(&[
+        "template",
+        "from-folder",
+        &src2.display().to_string(),
+        "gen",
+        "--force",
+    ]);
+
+    let files = sb.install.join("templates/gen/files");
+    assert!(files.join("two.txt").exists(), "the new file must be there");
+    assert!(
+        !files.join("one.txt").exists(),
+        "--force must replace the template, not merge into it"
+    );
+}

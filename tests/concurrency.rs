@@ -10,104 +10,23 @@
 //! only thing shared between the processes is the sandbox on disk — exactly the
 //! situation on a real machine.
 
+mod common;
+
+use common::{Sandbox, project_dirs};
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-
-const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
+use std::path::PathBuf;
+use std::process::Child;
 
 /// How many processes to race. Enough to lose reliably when unsynchronized —
 /// the original bug showed up as 8 distinct IDs out of 10.
 const RACERS: usize = 10;
 
-struct Sandbox {
-    _tmp: tempfile::TempDir,
-    install: PathBuf,
-    base: PathBuf,
-}
-
-impl Sandbox {
-    fn new() -> Self {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let install = tmp.path().join("install");
-        let base = tmp.path().join("base");
-        fs::create_dir_all(install.join("templates")).unwrap();
-        fs::create_dir_all(&base).unwrap();
-        let sb = Sandbox {
-            _tmp: tmp,
-            install,
-            base,
-        };
-        sb.write_template("race");
-        let out = sb.run(&["config", "set", "base-dir", &sb.base.display().to_string()]);
-        assert!(out.status.success(), "config set base-dir failed: {out:?}");
-        sb
-    }
-
-    fn write_template(&self, slug: &str) {
-        let dir = self.install.join("templates").join(slug);
-        fs::create_dir_all(dir.join("files")).unwrap();
-        fs::write(
-            dir.join("template.yaml"),
-            format!(
-                "name: Race\nslug: {slug}\nnaming_pattern: \"{{id}}_{{name}}\"\n\
-                 id:\n  prefix: R\n  digits: 4\n\
-                 variables:\n  - slug: name\n    label: Name\n    type: text\n\
-                 \x20   required: true\n    transform: none\n"
-            ),
-        )
-        .unwrap();
-        fs::write(dir.join("files/README.md"), "# {name}\n").unwrap();
-    }
-
-    /// Environment shared by every spawned process: same data dir, and HOME
-    /// redirected so an unconfigured base can never reach the real home.
-    fn command(&self) -> Command {
-        let mut cmd = Command::new(FASTF);
-        cmd.env("FASTF_INSTALL_DIR", &self.install).env(
-            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-            self._tmp.path(),
-        );
-        cmd
-    }
-
-    fn run(&self, args: &[&str]) -> std::process::Output {
-        self.command().args(args).output().expect("running fastf")
-    }
-
-    fn spawn(&self, args: &[&str]) -> Child {
-        self.command()
-            .args(args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawning fastf")
-    }
-
-    /// Every project's id, read straight from the metadata on disk.
-    fn ids_on_disk(&self) -> Vec<String> {
-        project_dirs(&self.base)
-            .iter()
-            .filter_map(|dir| {
-                let text = fs::read_to_string(dir.join("PROJECT_INFO.md")).ok()?;
-                text.lines()
-                    .find_map(|l| l.strip_prefix("id:"))
-                    .map(|v| v.trim().to_string())
-            })
-            .collect()
-    }
-}
-
-fn project_dirs(base: &Path) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = fs::read_dir(base)
-        .unwrap()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.join("PROJECT_INFO.md").is_file())
-        .collect();
-    out.sort();
-    out
+/// The racing suite always wants the `race` template installed.
+fn racing_sandbox() -> Sandbox {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb
 }
 
 /// The headline regression: ten simultaneous creates must mint ten distinct IDs.
@@ -117,7 +36,7 @@ fn project_dirs(base: &Path) -> Vec<PathBuf> {
 /// unique across every project.
 #[test]
 fn concurrent_creates_mint_distinct_ids() {
-    let sb = Sandbox::new();
+    let sb = racing_sandbox();
 
     let children: Vec<Child> = (0..RACERS)
         .map(|i| {
@@ -176,7 +95,7 @@ fn concurrent_creates_mint_distinct_ids() {
 /// metadata. `create_dir` now fails atomically, so the filesystem arbitrates.
 #[test]
 fn concurrent_same_name_creates_produce_no_merged_folder() {
-    let sb = Sandbox::new();
+    let sb = racing_sandbox();
 
     let children: Vec<Child> = (0..RACERS)
         .map(|_| sb.spawn(&["new", "race", "--name=Twin", "--yes", "--no-preview"]))
@@ -210,7 +129,7 @@ fn concurrent_same_name_creates_produce_no_merged_folder() {
 /// at once dropped one of the changes and a crash mid-write truncated the file.
 #[test]
 fn concurrent_config_writes_do_not_lose_updates() {
-    let sb = Sandbox::new();
+    let sb = racing_sandbox();
 
     let writes: Vec<(&str, &str)> = vec![
         ("date-format", "%Y%m%d"),
@@ -246,7 +165,7 @@ fn concurrent_config_writes_do_not_lose_updates() {
 /// different code paths.
 #[test]
 fn concurrent_create_and_register_do_not_collide() {
-    let sb = Sandbox::new();
+    let sb = racing_sandbox();
 
     // Folders for register to adopt.
     let adoptees: Vec<PathBuf> = (0..4)

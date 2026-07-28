@@ -39,6 +39,13 @@ serde_json = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Also a dev-dependency so integration tests (separate crates) can drive fastf
+# through a real pty — `dialoguer` refuses to prompt without a TTY, so the
+# confirmations and pickers are otherwise untestable. Already vendored for unix
+# builds, so this adds no new supply-chain surface.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 # Property tests for the pure logic (naming, globs, the query parser). Exhaustive

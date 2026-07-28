@@ -1,0 +1,398 @@
+//! A sandboxed fastf on disk, driven as a **real process**.
+//!
+//! Shared by every suite that needs to exercise the command surface rather than
+//! the library: `concurrency.rs` (which races processes, because a thread test
+//! passes against an in-process `Mutex` while production stays broken) and
+//! `cli_surface.rs` (which asserts what commands actually do to disk, because
+//! the argument-and-prompt layer is where a green suite kept missing bugs).
+//!
+//! Each sandbox owns its `FASTF_INSTALL_DIR` and redirects `HOME` into itself,
+//! so nothing here can reach the developer's real config, templates, counter, or
+//! projects. That redirect is not optional: an unconfigured `base_dir` falls
+//! back to the home directory, and a harness that skips it scans the real one
+//! and self-heals the counter from real projects.
+
+#![allow(dead_code)] // each test binary uses a different subset
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output};
+
+pub const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
+
+pub struct Sandbox {
+    pub tmp: tempfile::TempDir,
+    pub install: PathBuf,
+    pub base: PathBuf,
+}
+
+impl Sandbox {
+    /// A sandbox with one base, configured as `base_dir`.
+    pub fn new() -> Self {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let install = tmp.path().join("install");
+        let base = tmp.path().join("base");
+        fs::create_dir_all(install.join("templates")).unwrap();
+        fs::create_dir_all(&base).unwrap();
+        let sb = Sandbox { tmp, install, base };
+        let out = sb.run(&["config", "set", "base-dir", &sb.base.display().to_string()]);
+        assert!(out.status.success(), "config set base-dir failed: {out:?}");
+        sb
+    }
+
+    /// Add extra library bases (`config set bases`), creating each directory.
+    /// Returns their paths in the order given.
+    pub fn with_bases(&self, names: &[&str]) -> Vec<PathBuf> {
+        let paths: Vec<PathBuf> = names.iter().map(|n| self.tmp.path().join(n)).collect();
+        for p in &paths {
+            fs::create_dir_all(p).unwrap();
+        }
+        let joined = paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let out = self.run(&["config", "set", "bases", &joined]);
+        assert!(out.status.success(), "config set bases failed: {out:?}");
+        paths
+    }
+
+    /// A minimal template whose naming pattern carries the ID, so tests can read
+    /// the minted number straight off the folder name.
+    pub fn write_template(&self, slug: &str) {
+        let dir = self.install.join("templates").join(slug);
+        fs::create_dir_all(dir.join("files")).unwrap();
+        fs::write(
+            dir.join("template.yaml"),
+            format!(
+                "name: Race\nslug: {slug}\nnaming_pattern: \"{{id}}_{{name}}\"\n\
+                 id:\n  prefix: R\n  digits: 4\n\
+                 variables:\n  - slug: name\n    label: Name\n    type: text\n\
+                 \x20   required: true\n    transform: none\n"
+            ),
+        )
+        .unwrap();
+        fs::write(dir.join("files/README.md"), "# {name}\n").unwrap();
+    }
+
+    /// Environment shared by every spawned process: same data dir, and HOME
+    /// redirected so an unconfigured base can never reach the real home.
+    pub fn command(&self) -> Command {
+        let mut cmd = Command::new(FASTF);
+        cmd.env("FASTF_INSTALL_DIR", &self.install).env(
+            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            self.tmp.path(),
+        );
+        cmd
+    }
+
+    pub fn run(&self, args: &[&str]) -> Output {
+        self.command().args(args).output().expect("running fastf")
+    }
+
+    /// `run`, asserting success and returning stdout — for steps that are setup
+    /// rather than the thing under test.
+    pub fn ok(&self, args: &[&str]) -> String {
+        let out = self.run(args);
+        assert!(
+            out.status.success(),
+            "expected `fastf {}` to succeed, got {out:?}",
+            args.join(" ")
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// `run`, asserting failure and returning stderr — for the refusals.
+    pub fn fails(&self, args: &[&str]) -> String {
+        let out = self.run(args);
+        assert!(
+            !out.status.success(),
+            "expected `fastf {}` to fail, got {out:?}",
+            args.join(" ")
+        );
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    }
+
+    pub fn spawn(&self, args: &[&str]) -> Child {
+        self.command()
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawning fastf")
+    }
+
+    /// Every project's id in the primary base, read straight from metadata.
+    pub fn ids_on_disk(&self) -> Vec<String> {
+        ids_in(&self.base)
+    }
+
+    /// The counter value a base records, or 0 when it has no counter file.
+    pub fn base_counter(&self, base: &Path) -> u64 {
+        fs::read_to_string(base.join(".fastf-counter.toml"))
+            .ok()
+            .and_then(|raw| {
+                raw.lines()
+                    .find_map(|l| l.split_once('=').map(|(_, v)| v.trim().to_string()))
+            })
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// This machine's data-directory counter.
+    pub fn local_counter(&self) -> u64 {
+        self.base_counter_at(&self.install.join("counters.toml"))
+    }
+
+    fn base_counter_at(&self, path: &Path) -> u64 {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| {
+                raw.lines()
+                    .find_map(|l| l.split_once('=').map(|(_, v)| v.trim().to_string()))
+            })
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Plant a project with a chosen ID, without going through `fastf new` —
+    /// the fixture for "this base already holds ID0082".
+    pub fn plant_project(&self, base: &Path, folder: &str, id: &str) -> PathBuf {
+        let dir = base.join(folder);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("PROJECT_INFO.md"),
+            format!(
+                "---\nid: {id}\ntemplate: general\ntemplate_name: General\n\
+                 created: 2026-01-01T00:00:00Z\nfolder: {folder}\n\
+                 path: {}\nvariables: {{}}\ntags: []\n---\n\n## Notes\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        dir
+    }
+}
+
+/// Drive fastf through a real terminal.
+///
+/// `dialoguer` refuses to prompt without a TTY, so every confirmation, picker
+/// and interactive preview is invisible to a pipe-based test — which is exactly
+/// where the rename prompt spent v1.2.0 offering one folder name and committing
+/// another. A pty is the only way to see what the user sees.
+///
+/// Unix only, which matches how it is used: the prompts themselves are
+/// cross-platform and covered by the non-interactive paths.
+#[cfg(unix)]
+pub mod pty {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::time::{Duration, Instant};
+
+    /// One scripted keystroke: how long after launch to send it, and what.
+    pub type Keystroke = (Duration, Vec<u8>);
+
+    /// A keystroke script on a fixed cadence.
+    ///
+    /// Keys are spaced rather than burst because `dialoguer` redraws between
+    /// them: sending six arrow presses in one `write` loses most of them, and
+    /// the menu ends up somewhere unintended. The gaps are what make these
+    /// tests deterministic.
+    pub struct Script {
+        steps: Vec<Keystroke>,
+        at_ms: u64,
+    }
+
+    impl Default for Script {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Script {
+        /// Starts after a beat, so the first menu has drawn.
+        pub fn new() -> Self {
+            Script {
+                steps: Vec::new(),
+                at_ms: 800,
+            }
+        }
+
+        fn push(mut self, bytes: &[u8], gap: u64) -> Self {
+            self.steps
+                .push((Duration::from_millis(self.at_ms), bytes.to_vec()));
+            self.at_ms += gap;
+            self
+        }
+
+        /// Move the selection down `n` times.
+        pub fn down(mut self, n: usize) -> Self {
+            for _ in 0..n {
+                self = self.push(b"\x1b[B", 200);
+            }
+            self
+        }
+
+        pub fn enter(self) -> Self {
+            self.push(b"\r", 600)
+        }
+
+        /// Type a line and submit it. For `Input` prompts, which read until Enter.
+        pub fn line(self, text: &str) -> Self {
+            let mut bytes = text.as_bytes().to_vec();
+            bytes.push(b'\r');
+            self.push(&bytes, 600)
+        }
+
+        /// Send raw keys with no Enter. Use this for `Confirm`, which answers on
+        /// the `y`/`n` keypress itself — a trailing `\r` would survive into the
+        /// *next* prompt and silently accept its default.
+        pub fn key(self, text: &str) -> Self {
+            self.push(text.as_bytes(), 600)
+        }
+
+        pub fn ctrl_c(self) -> Self {
+            self.push(b"\x03", 400)
+        }
+
+        /// Wait before the next key — for a step that does real work.
+        pub fn pause(mut self, ms: u64) -> Self {
+            self.at_ms += ms;
+            self
+        }
+
+        pub fn build(self) -> Vec<Keystroke> {
+            self.steps
+        }
+    }
+
+    /// Run `program` with `args` and `env` overrides under a pty, feeding
+    /// `script` on schedule. Returns everything the program wrote (ANSI and
+    /// all) plus its exit code.
+    pub fn run(
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        deadline: Duration,
+    ) -> (String, i32) {
+        // Everything the child needs is built *before* the fork: after it, only
+        // async-signal-safe calls are legal, and `execve` is one — `setenv` is not.
+        let prog = CString::new(program).unwrap();
+        let argv: Vec<CString> = std::iter::once(CString::new(program).unwrap())
+            .chain(args.iter().map(|a| CString::new(*a).unwrap()))
+            .collect();
+        let mut envp: Vec<CString> = std::env::vars_os()
+            .filter(|(k, _)| !env.iter().any(|(name, _)| k.as_bytes() == name.as_bytes()))
+            .map(|(k, v)| {
+                let mut buf = k.as_bytes().to_vec();
+                buf.push(b'=');
+                buf.extend_from_slice(v.as_bytes());
+                CString::new(buf).unwrap()
+            })
+            .collect();
+        for (name, value) in env {
+            let mut buf = name.as_bytes().to_vec();
+            buf.push(b'=');
+            buf.extend_from_slice(value.as_os_str().as_bytes());
+            envp.push(CString::new(buf).unwrap());
+        }
+        let argv_ptr: Vec<*const libc::c_char> = argv
+            .iter()
+            .map(|a| a.as_ptr())
+            .chain(std::iter::once(std::ptr::null()))
+            .collect();
+        let envp_ptr: Vec<*const libc::c_char> = envp
+            .iter()
+            .map(|e| e.as_ptr())
+            .chain(std::iter::once(std::ptr::null()))
+            .collect();
+
+        let mut master: libc::c_int = -1;
+        // SAFETY: null term/winsize request the defaults; `master` is written by
+        // the call and only read in the parent branch.
+        let pid = unsafe {
+            libc::forkpty(
+                &mut master,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert!(pid >= 0, "forkpty failed");
+        if pid == 0 {
+            // SAFETY: async-signal-safe only — the arrays above are already built.
+            unsafe {
+                libc::execve(prog.as_ptr(), argv_ptr.as_ptr(), envp_ptr.as_ptr());
+                libc::_exit(127);
+            }
+        }
+
+        // Non-blocking, or the read below parks forever whenever the child is
+        // thinking and the loop never reaches its own deadline check.
+        // SAFETY: adjusting flags on a descriptor we own.
+        unsafe {
+            let flags = libc::fcntl(master, libc::F_GETFL, 0);
+            libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+
+        let start = Instant::now();
+        let mut out: Vec<u8> = Vec::new();
+        let mut sent = 0usize;
+        let mut status: libc::c_int = 0;
+        let code = loop {
+            if sent < script.len() && start.elapsed() >= script[sent].0 {
+                let bytes = &script[sent].1;
+                // SAFETY: writing to the pty master we own.
+                unsafe { libc::write(master, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
+                sent += 1;
+            }
+            let mut buf = [0u8; 4096];
+            // SAFETY: reading into a buffer we own, from a descriptor we own.
+            let n = unsafe { libc::read(master, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            if n > 0 {
+                out.extend_from_slice(&buf[..n as usize]);
+            }
+            // SAFETY: reaping our own child, non-blocking.
+            let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if reaped == pid {
+                break libc::WEXITSTATUS(status);
+            }
+            if start.elapsed() > deadline {
+                // SAFETY: killing our own child, then reaping it.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
+                break -1;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // SAFETY: closing the descriptor we opened.
+        unsafe { libc::close(master) };
+        (String::from_utf8_lossy(&out).into_owned(), code)
+    }
+}
+
+pub fn project_dirs(base: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = fs::read_dir(base)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && p.join("PROJECT_INFO.md").is_file())
+        .collect();
+    out.sort();
+    out
+}
+
+pub fn ids_in(base: &Path) -> Vec<String> {
+    project_dirs(base)
+        .iter()
+        .filter_map(|dir| {
+            let text = fs::read_to_string(dir.join("PROJECT_INFO.md")).ok()?;
+            text.lines()
+                .find_map(|l| l.strip_prefix("id:"))
+                .map(|v| v.trim().to_string())
+        })
+        .collect()
+}

@@ -8,9 +8,15 @@
 use anyhow::Result;
 use colored::Colorize;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::ui;
+
+/// How long closing the app window waits for an in-flight background copy
+/// before exiting anyway. Any copy still running past this is recoverable via
+/// `fastf reconcile`, so refusing to exit buys nothing and costs a stranded
+/// process.
+const JOB_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct UiArgs {
     pub address: String,
@@ -73,9 +79,27 @@ pub fn run(args: UiArgs) -> Result<()> {
                     let _ = child.wait();
                     // Don't strand an in-flight background copy: let it land
                     // before exiting (it would otherwise wait for reconcile).
+                    //
+                    // Bounded on purpose. This loop used to be unbounded, so a
+                    // job that never reached a terminal status kept `fastf.exe`
+                    // alive forever after the window closed — and the next
+                    // launcher click health-checked successfully against that
+                    // zombie and attached a window to a dead server. Giving up
+                    // is safe: the provisioning marker means an unfinished copy
+                    // is recoverable by `fastf reconcile`, which is exactly the
+                    // design's promise.
                     if ui::jobs_active() {
                         println!("Waiting for a background copy to finish…");
+                        let deadline = Instant::now() + JOB_DRAIN_TIMEOUT;
                         while ui::jobs_active() {
+                            if Instant::now() >= deadline {
+                                eprintln!(
+                                    "{} a background copy is still running after {}s; exiting anyway — run `fastf reconcile` to finish or roll it back",
+                                    "warning:".yellow().bold(),
+                                    JOB_DRAIN_TIMEOUT.as_secs()
+                                );
+                                break;
+                            }
                             thread::sleep(Duration::from_millis(500));
                         }
                     }
@@ -172,6 +196,14 @@ fn open_app_window(url: &str) -> Option<Result<std::process::Child, std::io::Err
         // windows frozen with corrupted (white) surfaces on resume.
         .arg("--disable-backgrounding-occluded-windows")
         .arg("--disable-renderer-backgrounding")
+        // Chromium's native occlusion tracking on Windows decides a window is
+        // hidden when other windows cover it, and can leave the window
+        // permanently unresponsive to input after a long stretch covered — the
+        // "left it open for hours and it stopped taking clicks" report. Nothing
+        // in-page can recover from that: a wedged renderer cannot run the health
+        // tick either. Turning the calculation off costs a little idle CPU on a
+        // window that is already meant to stay live (see the two flags above).
+        .arg("--disable-features=CalculateNativeWinOcclusion")
         .spawn();
     Some(spawn)
 }

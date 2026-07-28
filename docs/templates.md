@@ -104,7 +104,7 @@ Two variable types exist: `text` (free input) and `select` (pick from a list, wi
 Two interpolation rules are worth knowing:
 
 - In file **content**, `__` sequences are preserved exactly, so Python's `__init__` and `__version__` survive.
-- In folder and file **names**, empty optional variables collapse so you never get dangling underscores (`{a}_{empty}_{b}` becomes `a_b`).
+- In folder and file **names**, an empty optional variable takes its leftover separator with it, so you never get a dangling `_` or `-`. This works across mixed separators: with `{user}_{artist}-{title}` and no artist you get `french-Seeping`, not `french_-Seeping`. Single separators are never touched, so a `{date}` keeps its hyphens.
 
 Templates always use `/` as the path separator, on every platform. fastf translates to `\` on Windows at runtime. Path escape guards reject `..`, absolute paths, and drive letters both when a template loads and again at write time.
 

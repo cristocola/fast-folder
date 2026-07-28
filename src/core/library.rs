@@ -605,6 +605,7 @@ fn staged_copy_verify_commit(
         }
         if let Ok(mut p) = progress.lock() {
             p.done_files += 1;
+            p.touch();
         }
     }
 
@@ -655,6 +656,10 @@ fn staged_copy_verify_commit(
 fn set_phase(progress: &Mutex<Progress>, phase: &str) {
     if let Ok(mut p) = progress.lock() {
         p.phase = phase.to_string();
+        // A phase change is real movement: without it, verifying a large tree
+        // looks identical to a dead worker to both `jobs_active` and the
+        // frontend's stall notice.
+        p.touch();
     }
 }
 

@@ -144,9 +144,8 @@ fn create_project_basic_round_trip() {
         assert!(readme.contains("# Hello_World"), "readme was: {readme}");
         assert!(readme.contains("id: T001"));
 
-        // Counter persisted.
-        let fresh = Counters::load().unwrap();
-        assert_eq!(fresh.get(), 1);
+        // Counter persisted — into the base, not the data directory.
+        assert_eq!(Counters::load_base(std::path::Path::new(&cfg.base_dir)), 1);
     });
 }
 
@@ -169,7 +168,7 @@ fn counter_increments_across_runs() {
             project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
         }
 
-        assert_eq!(Counters::load().unwrap().get(), 3);
+        assert_eq!(Counters::load_base(std::path::Path::new(&cfg.base_dir)), 3);
     });
 }
 
@@ -179,6 +178,10 @@ fn existing_project_fails_cleanly() {
         write_template(install, "test", &minimal_template_yaml("test"));
         let mut cfg = Config::default();
         cfg.base_dir = install.join("projects").display().to_string();
+        // The default is now to append `_2`, since a naming pattern need not
+        // contain `{id}`. `error` restores the old refuse-a-duplicate guard,
+        // which is what this test is about.
+        cfg.on_name_collision = "error".to_string();
         fs::create_dir_all(&cfg.base_dir).unwrap();
 
         let tmpl = template::find_by_slug("test").unwrap();
@@ -193,13 +196,73 @@ fn existing_project_fails_cleanly() {
         // Second attempt at same path should fail.
         let counters2 = Counters::load().unwrap();
         let plan2 = project::plan(&tmpl, &vars, &cfg, &counters2).unwrap();
-        // Force the same root_path as the first run by mutating the expected folder name.
+        // Force the same folder name as the first run — the claim derives the
+        // path from `folder_name`, so that is the field to pin.
         let mut plan2 = plan2;
+        plan2.folder_name = plan.folder_name.clone();
         plan2.root_path = plan.root_path.clone();
         let mut counters2 = counters2;
         let err = project::create(&plan2, &tmpl, &mut counters2, &cfg, false)
             .expect_err("second create should fail");
         assert!(err.to_string().contains("already exists"), "got: {err:#}");
+    });
+}
+
+/// With the default `suffix` policy the same name twice is not an error — the
+/// second lands on `_2`. Two real folders, two real projects, never a merge.
+#[test]
+fn a_repeated_name_gets_a_numbered_suffix() {
+    with_fresh_install(|install| {
+        // A pattern with no `{id}`, like the bundled templates now ship.
+        write_template(
+            install,
+            "noid",
+            r#"name: No Id
+slug: noid
+description: fixture
+naming_pattern: "{name}"
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+    transform: title_underscore
+structure:
+  - name: src
+"#,
+        );
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("noid").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "collide".to_string());
+
+        let mut counters = Counters::load().unwrap();
+        let first = project::create(
+            &project::plan(&tmpl, &vars, &cfg, &counters).unwrap(),
+            &tmpl,
+            &mut counters,
+            &cfg,
+            false,
+        )
+        .unwrap();
+        let mut counters = Counters::load().unwrap();
+        let second = project::create(
+            &project::plan(&tmpl, &vars, &cfg, &counters).unwrap(),
+            &tmpl,
+            &mut counters,
+            &cfg,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(first.folder_name, "Collide");
+        assert_eq!(second.folder_name, "Collide_2");
+        assert_ne!(first.id_str, second.id_str, "each still gets its own ID");
+        assert!(second.root_path.is_dir());
+        assert_eq!(library::discover(&cfg).len(), 2);
     });
 }
 
@@ -249,27 +312,119 @@ fn counter_self_heals_from_existing_projects() {
         let mut vars = HashMap::new();
         vars.insert("name".to_string(), "first".to_string());
 
-        // First project → T001; counter advances to 1.
+        // First project → T001; the counter advances to 1.
         let mut counters = Counters::load().unwrap();
         let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
         assert_eq!(plan.id_str, "T001");
 
-        // Simulate a lost/reset counters.toml (e.g. `target/release/` wiped).
-        let mut counters = Counters::load().unwrap();
-        counters.reset();
-        counters.save().unwrap();
+        // The mark is written into the base, not the data directory — that is
+        // what lets a dual-boot machine share one number without a symlink.
+        let base = std::path::Path::new(&cfg.base_dir);
+        assert_eq!(
+            Counters::load_base(base),
+            1,
+            "the base should carry the high-water mark"
+        );
 
-        // Next create must NOT reuse T001 — the floor self-heals to the highest
-        // ID discovered on disk (1), so the new project is T002.
+        // Simulate the counter file being lost (drive reformatted, folder
+        // copied without hidden files, base not yet written by this OS).
+        fs::remove_file(Counters::base_path(base)).unwrap();
+        assert_eq!(Counters::load_base(base), 0);
+
+        // The next create must NOT reuse T001 — the floor falls back to the
+        // highest ID actually present in the projects on disk.
         vars.insert("name".to_string(), "second".to_string());
         let mut counters = Counters::load().unwrap();
         let plan2 = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
         assert_eq!(plan2.id_str, "T002", "counter should self-heal past T001");
         project::create(&plan2, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        // And the persisted counter is now at least 2.
-        assert!(Counters::load().unwrap().get() >= 2);
+        // And the base's mark is rebuilt.
+        assert!(Counters::load_base(base) >= 2);
+    });
+}
+
+/// The point of the move: the counter lives with the projects, so a second
+/// machine reading the same base sees the same number without any shared
+/// config. Simulated by pointing a *fresh* data directory at the same base —
+/// which is exactly what the other half of a dual-boot install looks like.
+#[test]
+fn the_counter_travels_with_the_base_not_the_data_dir() {
+    with_fresh_install(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+        let base = std::path::Path::new(&cfg.base_dir).to_path_buf();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "first".to_string());
+        let mut counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        assert_eq!(plan.id_str, "T001");
+
+        // The mark goes to both places, for different reasons: the base so
+        // another OS mounting the drive sees it, the data dir so it survives
+        // that base being unplugged.
+        assert_eq!(Counters::load_base(&base), 1);
+        assert_eq!(Counters::load().unwrap().get(), 1);
+
+        // A different install dir — the other OS — still sees the mark, because
+        // it reads the base.
+        assert_eq!(
+            Counters::floor(&cfg),
+            1,
+            "the floor must come from the base, not from local state"
+        );
+    });
+}
+
+/// Unplugging a base must not restart numbering.
+///
+/// Storing the mark only in the base looks tidy and is wrong: work in an archive
+/// base up to ID0005, unplug it, create in another base, and the next ID is
+/// ID0001 — then plugging the archive back in gives two projects the same ID.
+/// The data-directory counter spans every base the machine has written to, which
+/// is what closes that hole.
+#[test]
+fn unplugging_a_base_does_not_restart_numbering() {
+    with_fresh_install(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+        let archive = install.join("archive");
+        let main = install.join("main");
+        fs::create_dir_all(&archive).unwrap();
+        fs::create_dir_all(&main).unwrap();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut vars = HashMap::new();
+
+        // Five projects in the archive base.
+        let mut cfg = Config::default();
+        cfg.base_dir = archive.display().to_string();
+        for i in 1..=5 {
+            vars.insert("name".to_string(), format!("arch{i}"));
+            let mut counters = Counters::load().unwrap();
+            let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+            project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        }
+        assert_eq!(Counters::load_base(&archive), 5);
+
+        // Unplug it: gone from disk and from the config.
+        fs::rename(&archive, install.join("archive.unplugged")).unwrap();
+        let mut cfg = Config::default();
+        cfg.base_dir = main.display().to_string();
+
+        vars.insert("name".to_string(), "first on main".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        assert_eq!(
+            plan.id_str, "T006",
+            "numbering restarted after the archive base was unplugged — \
+             reconnecting it would produce two projects with the same ID"
+        );
     });
 }
 
@@ -487,7 +642,7 @@ fn dry_run_does_not_write() {
                 .join(&plan.folder_name)
                 .exists()
         );
-        assert!(Counters::load().unwrap().get() == 0);
+        assert!(Counters::load_base(std::path::Path::new(&cfg.base_dir)) == 0);
     });
 }
 
@@ -1598,7 +1753,7 @@ fn register_minimal_no_template() {
         register_run(register_args(&target)).unwrap();
 
         // Counter bumped to 1 (minted fresh — no ID token in the folder name)
-        assert_eq!(Counters::load().unwrap().get(), 1);
+        assert_eq!(Counters::load_base(install), 1);
 
         // The written metadata carries the registered slug + minted ID.
         let meta = project_info::read_metadata(&target).unwrap().unwrap();
@@ -1736,7 +1891,7 @@ fn register_recovers_id_from_folder_name() {
         let meta = project_info::read_metadata(&target).unwrap().unwrap();
         assert_eq!(meta.id, "ID0030");
         // Counter self-heals up to the recovered value.
-        assert!(Counters::load().unwrap().get() >= 30);
+        assert!(Counters::load_base(install) >= 30);
     });
 }
 

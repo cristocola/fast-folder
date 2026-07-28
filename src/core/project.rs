@@ -12,6 +12,26 @@ use crate::core::naming::{
 };
 use crate::core::template::{FileEntry, FolderNode, Template};
 
+/// How many `_2`, `_3`… variants to try before giving up on a colliding name.
+///
+/// Fifty is far past any believable accident; hitting it means something is
+/// generating names in a loop, and failing is better than continuing.
+pub const MAX_NAME_ATTEMPTS: u32 = 50;
+
+/// The candidate folder name for attempt `n`: the bare name first, then
+/// `name_2`, `name_3`, …
+///
+/// Shared by the preview in [`plan`] and the atomic claim in `create_inner`, so
+/// the name a user is shown is the name the claim tries first.
+pub fn suffixed_name(name: &str, attempt: u32) -> String {
+    if attempt <= 1 {
+        name.to_string()
+    } else {
+        format!("{name}_{attempt}")
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ProjectPlan {
     /// The resolved root folder name (after pattern interpolation).
     pub folder_name: String,
@@ -42,11 +62,16 @@ pub fn plan(
         vars.insert(var.slug.clone(), sanitized);
     }
 
-    // Resolve ID — one global counter across all templates. Self-healing: the
-    // floor is the higher of the counter file and the highest ID discovered
-    // across all bases, so a lost or reset `counters.toml` can never mint an ID
-    // that collides with an existing project.
-    let floor = counters.get().max(crate::core::library::max_id(config));
+    // Resolve ID — one global counter across all templates, whose high-water
+    // mark lives inside each base rather than in the data directory (see
+    // `Counters`). Self-healing: the floor is the highest value seen in any
+    // base's counter file, the legacy data-dir counter, or the projects
+    // themselves — so a lost, reset or unreachable counter file can never mint
+    // an ID that collides with a project already on disk.
+    //
+    // `counters` is still honoured as a floor input so a caller holding an
+    // explicitly-set value (`fastf id set`) is never silently overridden.
+    let floor = counters.get().max(Counters::floor(config));
     let counter_value = floor + 1;
     let id_str = Counters::format_id(&template.id.prefix, template.id.digits, counter_value);
     vars.insert("id".to_string(), id_str.clone());
@@ -57,13 +82,32 @@ pub fn plan(
     // pattern itself can contribute a trailing dot or a literal reserved device
     // name that no single variable is responsible for. `sanitize_name` is
     // idempotent, so the double pass is free.
-    let folder_name = sanitize_name(&interpolate_name(
+    let base_name = sanitize_name(&interpolate_name(
         &template.naming_pattern,
         &vars,
         &config.date_format,
     ));
 
     let base = config.resolve_base_dir();
+
+    // Advisory collision preview. A pattern need not contain `{id}` — the
+    // bundled templates no longer do, since `{date}` already sorts the library —
+    // so two projects created the same day from the same answers genuinely
+    // resolve to the same name, and the user should see the name they will
+    // actually get *before* anything is written.
+    //
+    // This is a plain `exists()` probe and therefore racy. That is fine:
+    // `create_inner` re-resolves it atomically and is the authority. Same
+    // preview-versus-commit relationship the ID itself has.
+    let folder_name = if config.suffix_on_name_collision() {
+        (1..=MAX_NAME_ATTEMPTS)
+            .map(|attempt| suffixed_name(&base_name, attempt))
+            .find(|candidate| !base.join(candidate).exists())
+            .unwrap_or(base_name)
+    } else {
+        base_name
+    };
+
     let root_path = base.join(&folder_name);
 
     Ok(ProjectPlan {
@@ -289,15 +333,19 @@ pub fn print_tree(
 /// cache, and runs post-create actions (if enabled globally or per-template).
 /// The cache update and post-create are best-effort — they never fail the
 /// create operation itself. Copies the whole `files/` subtree inline.
+/// Returns the plan **as actually realized** — the folder name and path may
+/// carry a `_2` suffix that the caller's plan did not, because the atomic claim
+/// is what arbitrates collisions. Callers must report from the returned plan,
+/// not the one they passed in.
 pub fn create(
     plan: &ProjectPlan,
     template: &Template,
     counters: &mut Counters,
     config: &Config,
     run_post: bool,
-) -> Result<()> {
-    create_inner(plan, template, counters, config, run_post, None)?;
-    Ok(())
+) -> Result<ProjectPlan> {
+    let (realized, _) = create_inner(plan, template, counters, config, run_post, None)?;
+    Ok(realized)
 }
 
 /// Like [`create`], but files larger than `defer_over` bytes are **not** copied
@@ -311,7 +359,7 @@ pub fn create_deferred(
     counters: &mut Counters,
     config: &Config,
     defer_over: u64,
-) -> Result<Vec<assets::CopyJob>> {
+) -> Result<(ProjectPlan, Vec<assets::CopyJob>)> {
     create_inner(plan, template, counters, config, false, Some(defer_over))
 }
 
@@ -322,7 +370,24 @@ fn create_inner(
     config: &Config,
     run_post: bool,
     defer_over: Option<u64>,
-) -> Result<Vec<assets::CopyJob>> {
+) -> Result<(ProjectPlan, Vec<assets::CopyJob>)> {
+    //
+    // This used to be `exists()` followed by `create_dir_all()`. Because
+    // `create_dir_all` succeeds on a directory that is already there, two
+    // concurrent creates could both pass the check and then both write into the
+    // same folder — the second silently overwriting the first's files and
+    // PROJECT_INFO.md. `create_dir` fails with `AlreadyExists` instead, so the
+    // filesystem itself arbitrates and exactly one caller can ever win.
+    let parent = plan
+        .root_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    if !parent.as_os_str().is_empty() {
+        fs::create_dir_all(&parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+
     // Claim the project folder with a single atomic operation.
     //
     // This used to be `exists()` followed by `create_dir_all()`. Because
@@ -331,35 +396,72 @@ fn create_inner(
     // same folder — the second silently overwriting the first's files and
     // PROJECT_INFO.md. `create_dir` fails with `AlreadyExists` instead, so the
     // filesystem itself arbitrates and exactly one caller can ever win.
-    if let Some(parent) = plan.root_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    }
-    if let Err(err) = fs::create_dir(&plan.root_path) {
-        if err.kind() == std::io::ErrorKind::AlreadyExists {
-            anyhow::bail!(
-                "project folder already exists: {}",
-                plan.root_path.display()
-            );
+    //
+    // A naming pattern need not contain `{id}`, so losing that race is an
+    // ordinary event rather than an error: walk `name`, `name_2`, `name_3` until
+    // one is claimed. Each attempt is still a single atomic `create_dir`, so two
+    // racing processes land on different suffixes and can never merge — the
+    // property `concurrent_same_name_creates_produce_distinct_suffixed_folders`
+    // pins down.
+    //
+    // The loop deliberately wraps ONLY the claim. Nothing may sit between a
+    // successful claim and `provision_project` (see its doc comment): an early
+    // return in that gap skips the rollback and leaks the folder.
+    let suffixing = config.suffix_on_name_collision();
+    let attempts = if suffixing { MAX_NAME_ATTEMPTS } else { 1 };
+    let mut claimed: Option<(String, PathBuf)> = None;
+    for attempt in 1..=attempts {
+        let candidate = suffixed_name(&plan.folder_name, attempt);
+        let path = parent.join(&candidate);
+        match fs::create_dir(&path) {
+            Ok(()) => {
+                claimed = Some((candidate, path));
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(err).with_context(|| format!("creating {}", path.display()));
+            }
         }
-        return Err(err).with_context(|| format!("creating {}", plan.root_path.display()));
     }
+    let (folder_name, root_path) = match claimed {
+        Some(claim) => claim,
+        None if suffixing => anyhow::bail!(
+            "could not find a free folder name for '{}' after {} attempts in {}",
+            plan.folder_name,
+            MAX_NAME_ATTEMPTS,
+            parent.display()
+        ),
+        None => anyhow::bail!(
+            "project folder already exists: {}",
+            parent.join(&plan.folder_name).display()
+        ),
+    };
+
+    // The realized plan: same ID and variables, but the name and path actually
+    // claimed. Everything downstream — the metadata's `folder` field, the cache
+    // entry, the success message — must use these, or a suffixed project reports
+    // itself under a name that does not exist.
+    let realized = ProjectPlan {
+        folder_name,
+        root_path,
+        ..plan.clone()
+    };
 
     // From here the folder is ours, so any failure rolls it back rather than
     // leaving a half-built project. This covers Ctrl-C (which surfaces as an
     // ordinary error from the copy loop), a full disk, and a template file
     // vanishing mid-copy. The counter is only saved on the success path, so a
     // rolled-back create does not burn an ID either.
-    match provision_project(plan, template, counters, config, run_post, defer_over) {
-        Ok(deferred) => Ok(deferred),
+    match provision_project(&realized, template, counters, config, run_post, defer_over) {
+        Ok(deferred) => Ok((realized, deferred)),
         Err(err) => {
-            if let Err(cleanup) = crate::util::fs_retry::remove_dir_all(&plan.root_path) {
+            if let Err(cleanup) = crate::util::fs_retry::remove_dir_all(&realized.root_path) {
                 eprintln!(
                     "{} could not remove the partial project at {} ({cleanup}) — \
                      run `fastf reconcile` to clean up",
                     "warning:".yellow().bold(),
-                    plan.root_path.display()
+                    realized.root_path.display()
                 );
             }
             Err(err)
@@ -442,14 +544,18 @@ fn provision_project(
 
     crate::util::faults::check("create:before-counter-save")?;
 
-    // Persist the new global counter value
-    counters.set_value(plan.counter_value);
-    counters.save().context("saving counters")?;
-
     let abs_path = plan
         .root_path
         .canonicalize()
         .unwrap_or_else(|_| plan.root_path.clone());
+
+    // Persist the new high-water mark: into the base this project landed in (so
+    // every OS that mounts the drive sees it) and into this machine's data
+    // directory (so it survives that base being unplugged). See `Counters`.
+    counters.set_value(plan.counter_value);
+    if let Some(base) = abs_path.parent() {
+        Counters::record(base, plan.counter_value);
+    }
 
     // Everything that runs inline has landed. If files were deferred to a
     // background job, the project stays flagged and the marker now lists those

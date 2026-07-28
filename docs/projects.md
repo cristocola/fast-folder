@@ -60,7 +60,9 @@ fastf reindex
 
 ## The ID counter self-heals
 
-The global counter and your projects can never drift into collision. When planning a new project, fastf uses `max(counter, highest ID found across all bases) + 1`. Even if the counter file is deleted or reset, the next minted ID stays above every existing project.
+The counter lives **inside each base**, as `.fastf-counter.toml` next to the projects it numbers. Your project drive is already mounted by every operating system you boot, so they all read the same number — nothing to symlink, nothing to keep in sync, and a base on an external drive carries its numbering with it.
+
+It cannot drift into collision with your projects. When planning a new one, fastf takes the highest of: every base's counter file, the highest ID actually present in your projects, and (for upgrades) the old counter from the config directory. Delete the counter file and the next ID still clears every project you have.
 
 ## Moving projects between bases
 

@@ -245,7 +245,7 @@ fn base_vanishing_between_plan_and_create_fails_cleanly() {
         // Either the create recreates the tree and succeeds, or it fails — both
         // are acceptable. What is not acceptable is a panic or a half-project.
         match project::create(&plan, &tmpl, &mut counters, &cfg, false) {
-            Ok(()) => {
+            Ok(_realized) => {
                 assert!(plan.root_path.join("README.md").is_file());
                 assert!(!project_info::is_provisioning(&plan.root_path));
             }

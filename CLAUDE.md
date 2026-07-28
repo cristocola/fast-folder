@@ -357,8 +357,21 @@ Three `library` fns, mirroring move's conventions (callers restrict to configure
 ### Cross-platform paths
 Folder paths in templates (structure names, file paths) always use `/` as the separator in YAML — Rust's `PathBuf::join()` handles conversion to `\` on Windows at runtime. Users should always enter `/` in templates and `base-dir` config, though Windows also accepts backslashes in config values.
 
-### Global ID counter
-One counter for all templates: `counters.toml` with a single `global` field. Every project creation increments it. `fastf id set 46` → next project gets ID0047. This is intentional — IDs are unique across all project types.
+### Global ID counter (v1.2: lives in the base, not the data dir)
+One counter for all templates, `global = 47`, stored as **`<base>/.fastf-counter.toml`** next to that base's `.fastf-index.json`. `fastf id set 46` → next project gets ID0047. IDs stay unique across all project types.
+
+It moved out of the data directory because of where it must be *readable* from. `%APPDATA%\fastf` on Windows and `~/.config/fastf` on Linux are different files, so a dual-boot machine had two counters and the only workaround was symlinking one home into the other — which breaks the moment either home is encrypted. The projects never had that problem: they already sit on a drive both systems mount, so the number that indexes them now sits there too.
+
+**Both files are written on every create** (`Counters::record`), because they cover different failures. `Counters::floor(cfg)` takes the max of three inputs:
+1. every mounted base's `.fastf-counter.toml` — shared across operating systems, which is what removed the symlink;
+2. this machine's data-dir `counters.toml` — spans **every base it has written to**, which is what stops an unplugged drive restarting numbering. Dropping this was a real regression: work in an archive base to ID0005, unplug it, create elsewhere → ID0001, and reconnecting gives two projects the same ID. Guarded by `unplugging_a_base_does_not_restart_numbering`;
+3. `library::max_id(cfg)`, the highest ID actually in project metadata — which is why losing a counter file is untidy rather than harmful.
+
+`record` writes only the **target** base, never every mounted one: creating a file in a directory changes its mtime, which would invalidate that base's index-cache staleness gate and force a full rescan. The target base's cache is being rewritten by the create anyway.
+
+`Counters::save_base` is **monotonic**: two machines sharing a base cannot walk the number backwards. `fastf id set` and `POST /api/counter` write the file directly precisely because they must be able to lower it.
+
+**Known limit, unchanged from before:** `DataLock` is per data-directory, so two *different machines* writing one shared base are not serialized and can mint the same number. Same-machine concurrency is safe (`tests/concurrency.rs`).
 
 ### Template YAML schema (v0.8, folder form)
 `templates/<slug>/template.yaml` is **metadata only** — the file spec lives in the
@@ -800,6 +813,59 @@ dialoguer instead of adding it back as a direct dep (see the v1.0.2 clamp gotcha
   tests). `windows_semantics.rs` contributes only 3 outside Windows.
   New suites: `crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`,
   `hostile_fs.rs`, `properties.rs` (proptest).
+
+### v1.2 gotchas
+
+**Counter in the base.** See "Global ID counter" above. `Counters::load()` is now
+the *legacy* data-dir read and is only one input to `Counters::floor`. Never add
+a writer for it. `naming::id_value` **rejects any id containing a hyphen** — an
+interim build wrote UUID (`019fa635-…-74a0bcb20044`) and word-handle
+(`simple-panda-fennec`) ids, and reading the trailing digits of that UUID would
+put the floor at 20044 and every later project at ID20045+. Such an id must
+contribute nothing.
+
+**`interpolate_name` collapses runs of `_` AND `-`, not just `__`.** A pattern
+like `{date}_{user}_{artist}-{title}` with an empty `artist` used to produce
+`..._french_-Seeping`: the orphaned `_` survived because the run was `_-`. A run
+of two or more separators now collapses to the **last** one — "last wins" is what
+makes a mixed run come out right, because the leading separator belonged to the
+variable that vanished. Runs at either end are dropped, trimming a stray leading
+or trailing `-` too. **Single separators are never touched**, so a `{date}` of
+`2026-07-28` passes through intact — that is the property to protect.
+
+**The `_2` collision suffix.** Bundled patterns keep `{id}`, so a collision is
+rare — but a pattern need not contain one (several gallery templates use
+`{name}` alone), and then the same answers twice in one day collide for real.
+`create_inner` walks `name`, `name_2`, `name_3`, each a single atomic
+`create_dir`, so racing processes land on different suffixes and can never merge.
+The loop wraps **only** the claim — the v1.1 rule still holds: nothing between a
+successful claim and `provision_project`, or the rollback is skipped and the
+folder leaks. `create`/`create_deferred` therefore return the plan **as
+realized**; callers must report from that, not from the plan they passed in.
+`config.on_name_collision = "error"` restores the old refuse-a-duplicate
+behaviour.
+
+**`projectRow` renders a bulk-select checkbox, so every view showing project rows
+needs a `#bulk-bar-slot`.** The dashboard had the checkboxes but not the slot, so
+ticking one highlighted the row and did nothing else. `bindProjectBulk` already
+runs on every render and `refreshSelectionUi` already fills the slot when present.
+
+**The frontend strips `\\?\`, the server does not.** `displayPath()` in `app.js`
+mirrors `util::paths::display_path` and is called by `shortPath()` and every
+`title` attribute. The JSON keeps sending canonical paths because the frontend
+echoes `path` back as the **identifier** on every write route, and the verbatim
+prefix is what makes paths past MAX_PATH work. `data-*` attributes stay canonical;
+anything rendered goes through `displayPath`. A server-side `display_path` field
+was tried and reverted — two mechanisms for one job.
+
+**Two tooling traps, both hit while building this.** Do not bulk-edit source with
+PowerShell `Get-Content -Raw` + `Set-Content`: 5.1 reads as the ANSI codepage and
+writes UTF-8, double-encoding every non-ASCII character (this repo is full of
+`—`, `→`, `…`, `✓`). It silently corrupted nine files and broke a `char` literal.
+Use the Edit tool or Node. And never put a backtick inside a JS template literal
+in `app.js`, including inside an HTML comment — it terminates the string and the
+error points at the following identifier. `node --check src/ui/web/app.js` catches
+it; run it after every frontend edit.
 
 ## Browser UI (`fastf ui`)
 

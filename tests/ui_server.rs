@@ -660,6 +660,32 @@ fn reindex_route_rescans_bases() {
     });
 }
 
+/// The frontend distinguishes "this job finished and was evicted" from "we
+/// could not reach the server" purely by HTTP status: only a 404 counts as
+/// finished, everything else is reported as unknown. `handle_connection` derives
+/// 404 from the `not found:` message prefix, so a missing job MUST keep it.
+///
+/// This replaced a data-safety bug: `app.js` used to treat *any* poll failure as
+/// success, so one dropped request during a slow copy reported a still-running
+/// move as "Moved — verified", and a user deletes a source on that word.
+#[test]
+fn a_missing_job_is_reported_as_not_found() {
+    with_fresh_install(|_install| {
+        let err = ui::route_request("GET", "/api/job/job-does-not-exist", b"").unwrap_err();
+        assert!(
+            err.to_string().starts_with("not found:"),
+            "a missing job must map to 404, got: {err}"
+        );
+
+        let err =
+            ui::route_request("POST", "/api/job/job-does-not-exist/cancel", b"{}").unwrap_err();
+        assert!(
+            err.to_string().starts_with("not found:"),
+            "cancelling a missing job must map to 404, got: {err}"
+        );
+    });
+}
+
 #[test]
 fn prune_route_is_gone() {
     with_fresh_install(|_install| {

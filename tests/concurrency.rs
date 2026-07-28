@@ -149,10 +149,23 @@ fn concurrent_creates_mint_distinct_ids() {
     );
 
     // The counter must also agree with reality, or the next create collides.
-    let counters = fs::read_to_string(sb.install.join("counters.toml")).unwrap();
+    //
+    // It lives in the **base**, not the data directory: the projects already sit
+    // on a drive every OS on the machine can mount, so the number that indexes
+    // them belongs there too. Keeping it in `%APPDATA%` / `~/.config` is what
+    // forced a dual-boot install to symlink one home directory into the other.
+    let counters = fs::read_to_string(sb.base.join(".fastf-counter.toml"))
+        .expect("the base should carry the counter");
     assert!(
         counters.contains(&format!("global = {RACERS}")),
         "counter out of step with {RACERS} projects: {counters}"
+    );
+    // And to the data directory, which is the half that survives a base being
+    // unplugged. The base file is the cross-OS half; this is the cross-base one.
+    let local = fs::read_to_string(sb.install.join("counters.toml")).expect("local counter");
+    assert!(
+        local.contains(&format!("global = {RACERS}")),
+        "local counter out of step with {RACERS} projects: {local}"
     );
 }
 

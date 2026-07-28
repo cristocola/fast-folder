@@ -147,24 +147,143 @@ function esc(value = "") {
     .replaceAll("'", "&#039;");
 }
 
+// An API failure that carries the HTTP status. Callers MUST be able to tell a
+// 404 (the server answered: that thing is gone) from a 0 (we never heard back).
+// Treating those the same is what let a dropped poll report a still-running
+// move as "verified".
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+// Default ceiling on any single request. Without one, a route that blocks on a
+// slow base leaves the calling interaction hanging with no feedback at all —
+// which is indistinguishable from a frozen UI. Routes that are legitimately
+// slow (reindex, from-folder, reconcile) pass their own `timeout`.
+const API_TIMEOUT_MS = 20000;
+
+// Routes that do real filesystem work under the write lock — a full rescan, a
+// recursive delete, a bundled-asset copy. On an external drive or a cloud-synced
+// base these legitimately take minutes, so they get a much longer ceiling. Still
+// bounded: an unbounded wait is what makes the UI look frozen.
+const SLOW_API_TIMEOUT_MS = 10 * 60 * 1000;
+
 async function api(route, options = {}) {
+  const { timeout = API_TIMEOUT_MS, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timer = timeout ? setTimeout(() => controller.abort(), timeout) : null;
   let response;
   try {
     response = await fetch(route, {
       headers: { "Content-Type": "application/json" },
-      ...options,
+      signal: controller.signal,
+      ...fetchOptions,
     });
-  } catch {
-    // A network-level failure on loopback means the server is gone.
+  } catch (error) {
+    // No response at all — the server is gone, or we gave up waiting. Status 0
+    // means "unknown", never "not found".
     setOffline(true);
-    throw new Error("Fast Folder server is not responding — is `fastf ui` still running?");
+    const timedOut = error && error.name === "AbortError";
+    throw new ApiError(
+      timedOut
+        ? "Fast Folder did not respond in time."
+        : "Fast Folder server is not responding — is `fastf ui` still running?",
+      0,
+    );
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   setOffline(false);
-  const payload = await response.json();
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new ApiError("Fast Folder sent a malformed response.", response.status);
+  }
   if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || "Fast Folder could not complete the request.");
+    throw new ApiError(
+      payload.error || "Fast Folder could not complete the request.",
+      response.status,
+    );
   }
   return payload;
+}
+
+// How many times to retry a job poll that failed for a reason other than 404.
+const JOB_POLL_RETRIES = 3;
+
+// A move in flight is recorded here so a page reload (wake-up recovery, a
+// manual refresh, a crashed renderer) can re-attach its progress overlay
+// instead of leaving the job running unwatched.
+const TRANSFER_KEY = "fastf.activeTransfer";
+
+function rememberTransfer(record) {
+  try { sessionStorage.setItem(TRANSFER_KEY, JSON.stringify(record)); } catch {}
+}
+
+function forgetTransfer() {
+  try { sessionStorage.removeItem(TRANSFER_KEY); } catch {}
+}
+
+function recallTransfer() {
+  try { return JSON.parse(sessionStorage.getItem(TRANSFER_KEY) || "null"); } catch { return null; }
+}
+
+// Re-attach the overlay for a move that was running when the page went away.
+// Runs once at boot, after the first `loadState`.
+async function resumeInterruptedTransfer() {
+  const record = recallTransfer();
+  if (!record || !record.jobId) return;
+  const probe = await fetchJob(record.jobId);
+  if (probe.evicted || probe.unknown) {
+    // Already finished (and evicted), or unreachable — nothing to watch.
+    forgetTransfer();
+    return;
+  }
+  const status = await showMoveProgress(record.jobId, record.projectName, record.baseName);
+  forgetTransfer();
+  state.searchResults = null;
+  try { await loadState(false); } catch {}
+  render();
+  if (status === "done") {
+    toast(`Moved ${record.projectName} to ${record.baseName} — verified.`);
+  } else if (status === "unknown") {
+    toast("Move outcome unknown — run `fastf reconcile` to finish or roll it back.", true);
+  }
+}
+
+// Fetch one job snapshot, distinguishing "gone because it finished" from
+// "we could not reach the server".
+//
+// The server evicts a job handle once it reaches a terminal state, so a 404 is
+// the normal way a finished job disappears — that much was always true. What
+// was wrong is that every other failure (a 500, a dropped connection, a
+// timeout) took the same path and was reported as success. During a slow copy
+// to a cloud or network destination a single dropped poll then produced
+// "Moved — verified" for a transfer that was still running, and the user
+// deletes a source on the strength of that word.
+//
+// Returns exactly one of:
+//   { job }              — a live snapshot
+//   { evicted: true }    — the server says this job no longer exists (finished)
+//   { unknown: true }    — we do not know; never report this as success
+async function fetchJob(jobId) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= JOB_POLL_RETRIES; attempt++) {
+    try {
+      return { job: (await api(`/api/job/${encodeURIComponent(jobId)}`)).job };
+    } catch (error) {
+      if (error.status === 404) return { evicted: true };
+      lastError = error;
+      if (attempt < JOB_POLL_RETRIES) {
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+    }
+  }
+  return { unknown: true, error: lastError };
 }
 
 // Fixed "server offline" banner, managed imperatively (no full render, so an
@@ -197,11 +316,21 @@ let healthBusy = false;
 let lastHealthTick = Date.now();
 const STALE_RELOAD_GAP = 10 * 60 * 1000;
 
+// True while a copy or move overlay is on screen. Reloading would destroy it
+// while the job keeps running server-side with nothing polling it — and the
+// laptop-sleep case that triggers the reload is exactly the case where a long
+// transfer to a slow or cloud destination is most likely to be in flight.
+function hasLiveTransfer() {
+  return Boolean(state.moving) || document.querySelector(".job-progress") !== null;
+}
+
 async function healthTick() {
   const gap = Date.now() - lastHealthTick;
   lastHealthTick = Date.now();
   if (gap > STALE_RELOAD_GAP && state.data) {
-    if (state.templateDirty) {
+    if (state.templateDirty || hasLiveTransfer()) {
+      // Refresh in place. The frozen poll loops resume on their own, and
+      // overlays live on `document.body` so `render()` never disturbs them.
       try { await loadState(); } catch {}
     } else {
       location.reload();
@@ -253,9 +382,25 @@ function templateVisual(template) {
   return { icon: "folder", color: "" };
 }
 
+// A path as a human should see it. The server sends canonical paths because the
+// frontend echoes them back as identifiers on every write route, and on Windows
+// canonical means the \\?\ verbatim prefix — which is what makes paths past
+// MAX_PATH work, so it must never be stripped before a filesystem call. It just
+// has no business being on screen: it is unreadable, unpasteable, and reads as a
+// bug. Mirrors util::paths::display_path on the Rust side.
+//
+// Strip at display, never at storage: use this for anything rendered, including
+// title attributes, and keep sending the untouched `path`.
+function displayPath(path) {
+  if (!path) return "";
+  if (path.startsWith("\\\\?\\UNC\\")) return "\\\\" + path.slice(8);
+  if (path.startsWith("\\\\?\\")) return path.slice(4);
+  return path;
+}
+
 function shortPath(path) {
   if (!path) return "Current folder";
-  return path.replace(/^\/home\/[^/]+/, "~");
+  return displayPath(path).replace(/^\/home\/[^/]+/, "~");
 }
 
 function formatDate(value) {
@@ -293,7 +438,7 @@ function shell(content) {
         <div class="sidebar-spacer"></div>
         <div class="storage-card">
           <div class="eyebrow">Project base</div>
-          <div class="storage-path" title="${esc(data.config.base_dir)}">${esc(shortPath(data.config.base_dir))}</div>
+          <div class="storage-path" title="${esc(displayPath(data.config.base_dir))}">${esc(shortPath(data.config.base_dir))}</div>
           <div class="storage-meta"><span>Next project</span><strong>${esc(data.next_id)}</strong></div>
         </div>
       </aside>
@@ -429,6 +574,12 @@ function dashboardPage() {
       </div>
       <section class="section">
         <div class="section-head"><h2 class="section-title">Recent projects</h2><button class="button button-quiet" data-view="projects">View all ${icon("arrow")}</button></div>
+        <!-- These rows carry the same select checkboxes as the Projects tab, so
+             they need the same toolbar to act on them. Without this slot the
+             boxes ticked and highlighted the row but nothing actionable ever
+             appeared, which read as a broken control. refreshSelectionUi fills
+             it; bindProjectBulk, called on every render, wires its buttons. -->
+        <div id="bulk-bar-slot">${bulkBar(data.projects.slice(0, 6))}</div>
         <div class="panel project-list">${projectRows(data.projects.slice(0, 6))}</div>
       </section>
       ${quickStartSection()}
@@ -485,11 +636,11 @@ function projectRows(projects) {
         <div class="project-folder ${project.exists ? "" : "missing"}">${icon("folder")}</div>
         <div class="project-name-copy">
           <strong title="${esc(project.name)}">${esc(project.name)}</strong>
-          <span title="${esc(project.path)}">${esc(shortPath(project.path))}</span>
+          <span title="${esc(displayPath(project.path))}">${esc(shortPath(project.path))}</span>
           ${(project.tags || []).length ? `<div class="row-tags">${(project.tags || []).slice(0, 3).map((tag) => `<span class="row-tag">${esc(tag)}</span>`).join("")}${project.tags.length > 3 ? `<span class="row-tag more">+${project.tags.length - 3}</span>` : ""}</div>` : ""}
         </div>
       </div>
-      <div class="project-cell base-cell" title="${esc(project.base || "")}"><span class="chip">${esc(project.base_label || "—")}</span></div>
+      <div class="project-cell base-cell" title="${esc(displayPath(project.base || ""))}"><span class="chip">${esc(project.base_label || "—")}</span></div>
       <div class="project-cell">${esc(templateName(project.template))}</div>
       <div class="project-cell">${esc(formatDate(project.created_at))}</div>
       <div><span class="status ${project.exists ? "" : "missing"}">${project.exists ? "Available" : "Missing"}</span></div>
@@ -605,7 +756,7 @@ function previewPanel() {
   return `
     <div class="preview">
       <div class="preview-head"><strong>Live preview</strong><span class="preview-badge"><i></i>Ready to create</span></div>
-      <div class="preview-path"><div class="eyebrow">Destination</div><strong title="${esc(preview.root_path)}">${esc(shortPath(preview.root_path))}</strong></div>
+      <div class="preview-path"><div class="eyebrow">Destination</div><strong title="${esc(displayPath(preview.root_path))}">${esc(shortPath(preview.root_path))}</strong></div>
       <div class="preview-body">
         <div class="tree-root">${icon("folder")}<span>${esc(preview.folder_name)}/</span></div>
         <div class="tree">${treeMarkup(preview.folders)}${preview.files.map((file) => `<div class="tree-node"><div class="tree-label file">${esc(file.path)}</div></div>`).join("")}</div>
@@ -785,7 +936,7 @@ function basicTemplateEditor(template) {
     </div>
     <div class="editor-subsection">
       <h3>Project ID</h3>
-      <p>Every Fast Folder project shares one global counter. This controls how that number appears for this template.</p>
+      <p>Every Fast Folder project shares one global counter. This controls how that number appears for this template. The bundled patterns lead with <code>{date}</code> and leave the ID out of the folder name — add <code>{id}</code> to the pattern above if you want it visible.</p>
       <div class="editor-form-grid">
         ${editorField("Prefix", "Text before the number", `<input class="input mono" id="template-id-prefix" value="${esc(template.id?.prefix || "ID")}">`)}
         ${editorField("Digits", "Zero-padded number width", `<input class="input" type="number" min="1" max="12" id="template-id-digits" value="${esc(template.id?.digits || 4)}">`)}
@@ -805,7 +956,7 @@ function templatePatternExample(template) {
   const values = Object.fromEntries((template.variables || []).map((variable) => [variable.slug, variable.default || variable.slug]));
   values.id = `${template.id?.prefix || "ID"}${String(state.data.counter + 1).padStart(template.id?.digits || 4, "0")}`;
   const date = new Date().toISOString().slice(0, 10);
-  return (template.naming_pattern || "{date}_{id}")
+  return (template.naming_pattern || "{date}_{name}")
     .replaceAll("{date}", date)
     .replaceAll("{YYYY}", date.slice(0, 4))
     .replaceAll("{MM}", date.slice(5, 7))
@@ -1141,7 +1292,7 @@ function projectDataSettings(config) {
           ${dataSummary("Templates", state.data.templates.length)}
           ${dataSummary("Current counter", state.data.counter)}
         </div>
-        <div class="data-location"><span>Data folder</span><strong title="${esc(state.data.install_dir)}">${esc(shortPath(state.data.install_dir))}</strong></div>
+        <div class="data-location"><span>Data folder</span><strong title="${esc(displayPath(state.data.install_dir))}">${esc(shortPath(state.data.install_dir))}</strong></div>
         <div class="data-location"><span>Resolved via</span><strong>${esc(state.data.dir_mode || "unknown")}</strong></div>
         <div class="data-actions">
           <button class="button button-secondary" type="button" data-open-path="${esc(state.data.install_dir)}">${icon("external")} Open data folder</button>
@@ -1856,6 +2007,7 @@ async function createProject(event) {
         git_init: state.gitInit,
         reveal: state.reveal,
       }),
+      timeout: SLOW_API_TIMEOUT_MS,
     });
     showSuccess(result);
     await loadState(false);
@@ -1881,12 +2033,14 @@ function showSuccess(result) {
     : "";
   const overlay = document.createElement("div");
   overlay.className = "success-overlay";
+  // project.id on a create response is the short handle, not the full uuid —
+  // see the id/uuid split in ui::plan_json.
   overlay.innerHTML = `
     <div class="success-modal">
       <div class="success-mark">${icon("check")}</div>
       <h2>Project created.</h2>
       <p>Fast Folder created the complete <strong>${esc(project.template_name)}</strong> system with project ID <strong>${esc(project.id)}</strong>.</p>
-      <div class="success-path" title="${esc(project.root_path)}">${esc(project.root_path)}</div>
+      <div class="success-path" title="${esc(displayPath(project.root_path))}">${esc(displayPath(project.root_path))}</div>
       ${progressMarkup}
       <div class="success-actions">
         <button class="button button-secondary" data-close-success>Done</button>
@@ -1914,13 +2068,19 @@ async function pollJob(jobId, overlay) {
   const label = () => node.querySelector(".job-label");
 
   while (document.body.contains(overlay)) {
-    let job;
-    try {
-      const res = await api(`/api/job/${encodeURIComponent(jobId)}`);
-      job = res.job;
-    } catch {
-      break; // evicted → complete
+    const snapshot = await fetchJob(jobId);
+    if (snapshot.evicted) break; // server says it is gone → it finished
+    if (snapshot.unknown) {
+      // Do not claim the copy landed. It may still be running.
+      node.classList.add("job-failed");
+      if (label()) {
+        label().textContent =
+          "Lost contact with Fast Folder — the copy may still be running. Check the project folder, then run `fastf reconcile`.";
+      }
+      toast("Lost contact while copying assets — status unknown.", true);
+      return;
     }
+    const job = snapshot.job;
     const pct = job.total_bytes
       ? Math.min(100, Math.round((job.copied_bytes / job.total_bytes) * 100))
       : 100;
@@ -1932,9 +2092,7 @@ async function pollJob(jobId, overlay) {
       return;
     }
     if (job.status === "done") break;
-    if (label()) {
-      label().textContent = `Copying ${job.current_file || "files"}… ${pct}% (${job.done_files}/${job.total_files})`;
-    }
+    if (label()) label().textContent = phaseLabel(job);
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
@@ -1990,7 +2148,7 @@ function bindSettings() {
 
   document.querySelector("[data-reindex]")?.addEventListener("click", async () => {
     try {
-      const result = await api("/api/reindex", { method: "POST", body: JSON.stringify({}) });
+      const result = await api("/api/reindex", { method: "POST", body: JSON.stringify({}), timeout: SLOW_API_TIMEOUT_MS });
       await loadState(false);
       state.searchResults = null;
       render();
@@ -2227,6 +2385,9 @@ function detailBody(data) {
   const meta = data.metadata;
   const record = data.record;
   const name = meta?.folder || record?.name || data.path.split("/").pop();
+  // Show the short handle, never the raw UUID — a 36-character identifier in
+  // the drawer is exactly the clutter this replaced. Legacy projects have no
+  // short code and fall back to their original sequential id.
   const id = meta?.id || record?.id || "—";
   const templateLabel = meta?.template_name || templateName(record?.template || "") || "—";
   const created = meta?.created || record?.created_at;
@@ -2241,9 +2402,9 @@ function detailBody(data) {
         <div class="drawer-sub"><span class="chip">${esc(id)}</span><span>${esc(templateLabel)}</span><span class="status ${data.exists ? "" : "missing"}">${data.exists ? "Available" : "Missing"}</span></div>
       </div>
     </div>
-    <div class="drawer-path" title="${esc(data.path)}">${esc(shortPath(data.path))}</div>
+    <div class="drawer-path" title="${esc(displayPath(data.path))}">${esc(shortPath(data.path))}</div>
     ${created ? `<div class="drawer-meta-line"><span>Created</span><strong>${esc(formatDate(created))}</strong></div>` : ""}
-    ${record?.base ? `<div class="drawer-meta-line"><span>Base</span><strong title="${esc(record.base)}">${esc(record.base_label || record.base)}</strong></div>` : ""}
+    ${record?.base ? `<div class="drawer-meta-line"><span>Base</span><strong title="${esc(displayPath(record.base))}">${esc(record.base_label || displayPath(record.base))}</strong></div>` : ""}
     ${moveControls(record)}
     <div class="drawer-actions">
       <button class="button button-secondary" data-detail-open ${data.exists ? "" : "disabled"}>${icon("external")} Open</button>
@@ -2329,6 +2490,13 @@ async function moveProject() {
   } else if (status === "cancelled") {
     toast("Move cancelled — original left untouched.");
     render();
+  } else if (status === "unknown") {
+    // Never say "verified" for a transfer whose outcome we did not observe.
+    toast(
+      `Lost contact while moving ${projectName} — outcome unknown. Run \`fastf reconcile\` to finish or roll it back.`,
+      true,
+    );
+    render();
   } else {
     render();
   }
@@ -2355,6 +2523,7 @@ function showMoveProgress(jobId, projectName, baseName) {
         </div>
       </div>`;
     document.body.append(overlay);
+    rememberTransfer({ jobId, projectName, baseName });
     const node = overlay.querySelector("#move-progress");
     const fill = () => node.querySelector(".job-bar-fill");
     const label = () => node.querySelector(".job-label");
@@ -2369,11 +2538,19 @@ function showMoveProgress(jobId, projectName, baseName) {
     (async () => {
       let status = "done";
       while (document.body.contains(overlay)) {
-        let job;
-        try {
-          const res = await api(`/api/job/${encodeURIComponent(jobId)}`);
-          job = res.job;
-        } catch { status = "done"; break; } // evicted after finishing → done
+        const snapshot = await fetchJob(jobId);
+        if (snapshot.evicted) { status = "done"; break; } // evicted after finishing
+        if (snapshot.unknown) {
+          status = "unknown";
+          node.classList.add("job-failed");
+          if (label()) {
+            label().textContent =
+              "Lost contact with Fast Folder — this move may still be running. Your original has NOT been deleted unless the copy was verified.";
+          }
+          await new Promise((r) => setTimeout(r, 2400));
+          break;
+        }
+        const job = snapshot.job;
         const pct = job.total_bytes
           ? Math.min(100, Math.round((job.copied_bytes / job.total_bytes) * 100))
           : (job.phase === "done" ? 100 : 0);
@@ -2399,41 +2576,57 @@ function showMoveProgress(jobId, projectName, baseName) {
         if (label()) label().textContent = "Moved and verified.";
         await new Promise((r) => setTimeout(r, 500));
       }
+      forgetTransfer();
       overlay.remove();
       resolve(status);
     })();
   });
 }
 
+// A job that has not moved for this long is reported as stalled. It is NOT
+// aborted: a copy to a cloud-synced folder or a slow external drive can sit
+// still for minutes while the destination flushes, and killing a legitimately
+// slow transfer would be far worse than the confusion it solves. The user gets
+// an honest note and a Cancel button, and decides.
+const JOB_STALL_NOTICE_MS = 90 * 1000;
+
+function stallNote(job) {
+  if (typeof job.last_progress_at !== "number") return "";
+  const idle = Date.now() - job.last_progress_at;
+  if (idle < JOB_STALL_NOTICE_MS) return "";
+  const minutes = Math.max(1, Math.round(idle / 60000));
+  return ` — no progress for ${minutes} min, the destination may still be syncing`;
+}
+
 // Human phase label for a job progress snapshot, shared by create + move.
 function phaseLabel(job) {
   const pct = job.total_bytes ? Math.min(100, Math.round((job.copied_bytes / job.total_bytes) * 100)) : 100;
-  if (job.phase === "verifying") return `Verifying files… (${job.done_files}/${job.total_files})`;
-  if (job.phase === "finalizing") return "Finalizing…";
   if (job.status === "done" || job.phase === "done") return "Done.";
-  return `Copying ${job.current_file || "files"}… ${pct}% (${job.done_files}/${job.total_files})`;
+  const stalled = stallNote(job);
+  if (job.phase === "verifying") return `Verifying files… (${job.done_files}/${job.total_files})${stalled}`;
+  if (job.phase === "finalizing") return `Finalizing…${stalled}`;
+  return `Copying ${job.current_file || "files"}… ${pct}% (${job.done_files}/${job.total_files})${stalled}`;
 }
 
 // Poll one move/copy job to a terminal state, calling `onUpdate(job)` each tick.
-// Returns "done" | "cancelled" | "failed". A 404 (evicted after finishing) = done.
+// Returns "done" | "cancelled" | "failed" | "unknown". Only a 404 (the server
+// says the job is gone, i.e. it finished) counts as done — see `fetchJob`.
 // `isAlive` lets a caller stop the loop when its overlay leaves the DOM, so a
 // navigation mid-poll can never leave this ticking forever.
 async function pollMoveJob(jobId, onUpdate, isAlive = () => true) {
   if (!jobId) return "done";
   while (isAlive()) {
-    let job;
-    try {
-      job = (await api(`/api/job/${encodeURIComponent(jobId)}`)).job;
-    } catch {
-      return "done";
-    }
+    const snapshot = await fetchJob(jobId);
+    if (snapshot.evicted) return "done";
+    if (snapshot.unknown) return "unknown";
+    const job = snapshot.job;
     if (onUpdate) onUpdate(job);
     if (job.status === "failed") return "failed";
     if (job.status === "cancelled") return "cancelled";
     if (job.status === "done" || job.phase === "done") return "done";
     await new Promise((r) => setTimeout(r, 350));
   }
-  return "done";
+  return "unknown";
 }
 
 // Move every checked project into the chosen base (skipping any already there).
@@ -2463,9 +2656,10 @@ async function moveSelected() {
 
   const parts = [`${result.done} moved`];
   if (result.failed) parts.push(`${result.failed} failed`);
+  if (result.unknown) parts.push(`${result.unknown} unknown — run \`fastf reconcile\``);
   if (result.cancelled) parts.push(`${result.cancelled} cancelled`);
   if (skipped) parts.push(`${skipped} already there`);
-  toast(parts.join(" · "), result.failed > 0);
+  toast(parts.join(" · "), result.failed > 0 || result.unknown > 0);
 }
 
 // Sequential bulk move with one combined overlay (overall bar + per-project
@@ -2501,7 +2695,7 @@ function runBulkMove(projects, base) {
     });
 
     (async () => {
-      let done = 0, failed = 0, cancelled = 0;
+      let done = 0, failed = 0, cancelled = 0, unknown = 0;
       const total = projects.length;
       for (let i = 0; i < total; i++) {
         if (cancelRequested) { cancelled += total - i; break; }
@@ -2527,15 +2721,26 @@ function runBulkMove(projects, base) {
         currentJobId = null;
         if (status === "done") done++;
         else if (status === "cancelled") { cancelled++; break; }
+        else if (status === "unknown") {
+          // We lost contact — the outcome is genuinely unknown, not failed.
+          // Stop rather than firing more moves blind at a server we cannot see.
+          unknown++;
+          break;
+        }
         else failed++;
       }
       node.classList.remove("job-verifying");
-      node.classList.add(failed ? "job-failed" : "job-done");
+      node.classList.add(failed || unknown ? "job-failed" : "job-done");
       if (fill()) fill().style.width = "100%";
-      if (label()) label().textContent = `${done} moved${failed ? `, ${failed} failed` : ""}.`;
-      await new Promise((r) => setTimeout(r, 700));
+      if (label()) {
+        const tail = [failed ? `${failed} failed` : "", unknown ? `${unknown} unknown` : ""]
+          .filter(Boolean)
+          .join(", ");
+        label().textContent = `${done} moved${tail ? `, ${tail}` : ""}.`;
+      }
+      await new Promise((r) => setTimeout(r, unknown ? 2400 : 700));
       overlay.remove();
-      resolve({ done, failed, cancelled });
+      resolve({ done, failed, cancelled, unknown });
     })();
   });
 }
@@ -2546,7 +2751,7 @@ async function reconcileProvisioning() {
   state.reconciling = true;
   render();
   try {
-    const res = await api("/api/reconcile", { method: "POST", body: "{}" });
+    const res = await api("/api/reconcile", { method: "POST", body: "{}", timeout: SLOW_API_TIMEOUT_MS });
     const r = res.report || {};
     const parts = [];
     if (r.resumed) parts.push(`${r.resumed} copy job(s) finished`);
@@ -2654,6 +2859,7 @@ async function deleteProjectFolder() {
     await api("/api/project/delete", {
       method: "POST",
       body: JSON.stringify({ path: state.detail.path, confirm_name: name }),
+      timeout: SLOW_API_TIMEOUT_MS,
     });
     state.detail = null;
     state.searchResults = null;
@@ -2804,7 +3010,7 @@ async function runApply() {
   apply.busy = true;
   apply.error = "";
   try {
-    await api("/api/apply", { method: "POST", body: JSON.stringify({ template: apply.template, variables: apply.variables, target: apply.target }) });
+    await api("/api/apply", { method: "POST", body: JSON.stringify({ template: apply.template, variables: apply.variables, target: apply.target }), timeout: SLOW_API_TIMEOUT_MS });
     const detailPath = state.detail?.path;
     closeApply();
     toast("Template applied.");
@@ -3057,7 +3263,7 @@ async function runFromFolder() {
   modal.error = "";
   render();
   try {
-    const result = await api("/api/templates/from-folder", { method: "POST", body: JSON.stringify({ source: modal.source, slug: modal.slug, force: modal.force, bundle_assets: modal.bundle }) });
+    const result = await api("/api/templates/from-folder", { method: "POST", body: JSON.stringify({ source: modal.source, slug: modal.slug, force: modal.force, bundle_assets: modal.bundle }), timeout: SLOW_API_TIMEOUT_MS });
     await loadState(false);
     const slug = modal.slug;
     state.modal = null;
@@ -3133,6 +3339,11 @@ window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", (
   if (state.appearance.theme === "system") applyAppearance();
 });
 
-loadState().catch((error) => {
-  app.innerHTML = `<div class="boot-screen"><div class="boot-logo"><span></span><span></span></div><div class="boot-wordmark">Fast Folder could not start</div><div class="boot-error-detail">${esc(error.message)}</div></div>`;
-});
+loadState()
+  // Never let transfer recovery fail the boot — it is a bonus, not a
+  // precondition, and throwing here would show "could not start" on a
+  // perfectly healthy workspace.
+  .then(() => resumeInterruptedTransfer().catch(() => {}))
+  .catch((error) => {
+    app.innerHTML = `<div class="boot-screen"><div class="boot-logo"><span></span><span></span></div><div class="boot-wordmark">Fast Folder could not start</div><div class="boot-error-detail">${esc(error.message)}</div></div>`;
+  });

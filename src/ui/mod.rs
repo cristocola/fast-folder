@@ -42,6 +42,31 @@ use crate::util::paths;
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:47831";
 const MAX_REQUEST_SIZE: usize = 2 * 1024 * 1024;
 
+/// How long a connection may sit without making progress before its thread
+/// gives up. [`serve`] spawns one thread per connection and the frontend polls
+/// health every 5 s plus jobs every 350–500 ms, so a stalled socket that is
+/// never reaped leaks a thread on every poll — over hours that accumulates
+/// until the process is wedged. Loopback requests complete in microseconds;
+/// 15 s is a generous ceiling that only ever catches a dead peer.
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Soft cap on concurrent connection threads. The frontend never needs more
+/// than a handful at once; anything past this is a client that stopped reading,
+/// and unbounded `thread::spawn` is how that becomes unrecoverable.
+const MAX_CONNECTIONS: usize = 64;
+
+static LIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// Decrements [`LIVE_CONNECTIONS`] on drop, so the count is correct even if the
+/// connection thread unwinds.
+struct ConnectionSlot;
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        LIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Serializes all write operations (`create`, `settings`, template save/delete)
 /// so concurrent requests can't corrupt Fast Folder's on-disk files. Reads are
 /// lock-free.
@@ -250,7 +275,14 @@ pub fn serve(address: &str) -> Result<()> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let live = LIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed) + 1;
+                if live > MAX_CONNECTIONS {
+                    LIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+                    reject_overloaded(stream);
+                    continue;
+                }
                 thread::spawn(move || {
+                    let _slot = ConnectionSlot;
                     if let Err(error) = handle_connection(stream) {
                         eprintln!("request failed: {error:#}");
                     }
@@ -260,6 +292,14 @@ pub fn serve(address: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Answer 503 without spawning a thread. Shedding load beats queueing it: the
+/// frontend surfaces the error, whereas an unbounded spawn wedges the process.
+fn reject_overloaded(mut stream: TcpStream) {
+    let _ = stream.set_write_timeout(Some(CONNECTION_TIMEOUT));
+    let body = br#"{"ok":false,"error":"server is busy"}"#.to_vec();
+    let _ = write_response(&mut stream, 503, "application/json; charset=utf-8", body);
 }
 
 /// Return `true` if a Fast Folder UI server is already answering on `address`.
@@ -291,9 +331,20 @@ pub fn health_check(address: &str) -> bool {
     buffer[..EXPECTED.len()] == *EXPECTED
 }
 
-fn handle_connection(mut stream: TcpStream) -> Result<()> {
+fn handle_connection(stream: TcpStream) -> Result<()> {
+    handle_connection_with(stream, CONNECTION_TIMEOUT)
+}
+
+/// [`handle_connection`] with an explicit deadline so tests can exercise the
+/// stalled-client path without waiting the production 15 s.
+fn handle_connection_with(mut stream: TcpStream, timeout: Duration) -> Result<()> {
+    // Without a deadline a half-open or stalled socket parks this thread
+    // forever, and `serve` spawns one thread per connection.
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
     let (method, route, body) = read_request(&mut stream)?;
-    let response = route_request(&method, &route, &body);
+    let response = route_request_caught(&method, &route, &body);
 
     match response {
         Ok(Response::Json(value)) => write_response(
@@ -306,11 +357,7 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
             write_response(&mut stream, 200, content_type, bytes)
         }
         Err(error) => {
-            let status = if error.to_string().starts_with("not found:") {
-                404
-            } else {
-                400
-            };
+            let status = status_for(&error.to_string());
             write_response(
                 &mut stream,
                 status,
@@ -321,6 +368,54 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
                 }))?,
             )
         }
+    }
+}
+
+/// Prefix marking an error that came from a panicking handler, so
+/// [`handle_connection`] can answer 500 rather than 400.
+const PANIC_ERROR_PREFIX: &str = "internal error:";
+
+/// Run [`route_request`], turning a panic into a clean 500 instead of letting
+/// the connection thread unwind.
+///
+/// An unwinding thread drops the socket with no response written at all, and the
+/// frontend's `fetch` then hangs until the browser gives up — which is
+/// indistinguishable from a frozen UI. Catching here also keeps one bad request
+/// from taking down anything else: `WRITE_LOCK` is poison-tolerant (see
+/// [`lock_writes`]), so the next write proceeds normally.
+fn route_request_caught(method: &str, route: &str, body: &[u8]) -> Result<Response> {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        route_request(method, route, body)
+    }));
+    match caught {
+        Ok(result) => result,
+        Err(payload) => {
+            let detail = panic_detail(payload.as_ref());
+            eprintln!("handler panicked: {method} {route}: {detail}");
+            bail!("{PANIC_ERROR_PREFIX} {detail}")
+        }
+    }
+}
+
+/// HTTP status for a router error, keyed off the message prefix.
+fn status_for(message: &str) -> u16 {
+    if message.starts_with("not found:") {
+        404
+    } else if message.starts_with(PANIC_ERROR_PREFIX) {
+        500
+    } else {
+        400
+    }
+}
+
+/// Best-effort human message out of a panic payload.
+fn panic_detail(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "panicked".to_string()
     }
 }
 
@@ -505,10 +600,20 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
     }
 }
 
+/// Take the write lock, recovering from poisoning exactly like [`jobs_lock`].
+///
+/// A panic in one write handler must not disable every write route for the rest
+/// of the process. `WRITE_LOCK` guards Fast Folder's *on-disk* files, and every
+/// write path re-reads what it needs from disk under the guard, so there is no
+/// in-memory invariant a panic could leave half-applied — the poison flag has
+/// nothing to protect here. Before this, a single panic anywhere left the UI
+/// looking perfectly alive (reads are lock-free, so lists and search kept
+/// rendering) while every save, rename, tag and create failed until restart.
+///
+/// The `Result` return is kept so the ~20 `lock_writes()?` call sites are
+/// untouched; it is now always `Ok`.
 fn lock_writes() -> Result<std::sync::MutexGuard<'static, ()>> {
-    WRITE_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("write lock poisoned"))
+    Ok(WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 fn load_state() -> Result<Value> {
@@ -546,6 +651,7 @@ fn load_state() -> Result<Value> {
             project_json(project, &metadata)
         })
         .collect();
+
     let counter = Counters::load()?.get();
 
     Ok(json!({
@@ -610,14 +716,16 @@ fn create_project(request: CreateRequest) -> Result<Value> {
     // `WRITE_LOCK` only serializes writers inside *this* process, so without
     // this a `fastf new` in a terminal could mint the same ID as the UI.
     // The plan is recomputed inside the lock so it sees a current counter.
+    //
+    // Fast path: structure + text/small files + counter + cache +
+    // PROJECT_INFO.md. Large bundled assets come back as jobs to copy in the
+    // background so the request returns immediately. `create_deferred` returns
+    // the plan as realized — the folder name may carry a `_2` suffix.
     let (template, config, plan, deferred) = {
         let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-        let (template, config, mut counters, plan) = configured_plan(&plan_request)?;
-        // Fast path: structure + text/small files + counter + index + PROJECT_INFO.md.
-        // Large bundled assets come back as jobs to copy in the background so the
-        // request returns immediately and the project is usable at once.
-        let deferred = project::create_deferred(
-            &plan,
+        let (template, config, mut counters, planned) = configured_plan(&plan_request)?;
+        let (plan, deferred) = project::create_deferred(
+            &planned,
             &template,
             &mut counters,
             &config,
@@ -648,16 +756,39 @@ fn create_project(request: CreateRequest) -> Result<Value> {
     }))
 }
 
+/// A job that has not moved for this long no longer counts as active.
+///
+/// A worker that dies without writing a terminal status leaves `Progress.status`
+/// at `"running"` forever, and `fastf ui --app` waits on exactly that before
+/// exiting — so one dead worker used to keep `fastf.exe` alive indefinitely. The
+/// next launcher click then health-checks successfully against that zombie and
+/// attaches a fresh window to a dead server, which is a UI that is frozen from
+/// the moment it opens.
+///
+/// Generous on purpose: `verify_tree` walks both trees without reporting
+/// progress, and on a slow network or cloud destination that can legitimately
+/// run for minutes. The bounded drain loop in `cli::ui::run` is the real
+/// backstop; this is the cheap first line.
+const JOB_STALE_AFTER: Duration = Duration::from_secs(600);
+
 /// True while any background copy/move job is still running. `fastf ui --app`
 /// ties the server's lifetime to the app window — this lets it hold shutdown
 /// until in-flight copies land instead of stranding them for reconcile.
+///
+/// Note this deliberately uses a *different* predicate from [`register_job`]'s
+/// eviction: being wrong here only means shutting down slightly early, whereas
+/// evicting a live job from the registry would make its `/api/job` poll 404 and
+/// the frontend would report a still-running move as finished.
 pub fn jobs_active() -> bool {
     let guard = jobs_lock();
     guard.as_ref().is_some_and(|jobs| {
         jobs.values().any(|h| {
             h.progress
                 .lock()
-                .map(|p| p.status == "running")
+                .map(|p| {
+                    p.status == "running"
+                        && Duration::from_millis(p.idle_millis()) < JOB_STALE_AFTER
+                })
                 .unwrap_or(false)
         })
     })
@@ -704,38 +835,67 @@ fn spawn_copy_job(root: PathBuf, jobs: Vec<crate::core::assets::CopyJob>) -> Str
     let _ = provisioning::write_create_marker(&root, &jobs);
 
     thread::spawn(move || {
-        for job in &jobs {
-            if let Ok(mut p) = progress.lock() {
-                p.current_file = job
-                    .dest
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-            }
-            if let Err(e) = crate::core::assets::copy_job(job, &progress, &cancel) {
-                let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
+        let watchdog = Arc::clone(&progress);
+        run_worker(&watchdog, "copy", move || {
+            for job in &jobs {
                 if let Ok(mut p) = progress.lock() {
-                    p.status = if cancelled { "cancelled" } else { "failed" }.to_string();
-                    p.error = Some(format!("{e:#}"));
+                    p.current_file = job
+                        .dest
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    p.touch();
                 }
-                return; // marker retained → reconcile can resume/clean up
+                if let Err(e) = crate::core::assets::copy_job(job, &progress, &cancel) {
+                    let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
+                    if let Ok(mut p) = progress.lock() {
+                        p.status = if cancelled { "cancelled" } else { "failed" }.to_string();
+                        p.error = Some(format!("{e:#}"));
+                        p.touch();
+                    }
+                    return; // marker retained → reconcile can resume/clean up
+                }
+                provisioning::mark_done(&root, &job.dest);
+                if let Ok(mut p) = progress.lock() {
+                    p.done_files += 1;
+                    p.touch();
+                }
             }
-            provisioning::mark_done(&root, &job.dest);
+            provisioning::clear_create(&root);
+            // The last deferred file has landed, so the project is finally complete.
+            let _ = crate::core::project_info::clear_provisioning(&root);
             if let Ok(mut p) = progress.lock() {
-                p.done_files += 1;
+                p.status = "done".to_string();
+                p.phase = "done".to_string();
+                p.current_file.clear();
+                p.touch();
             }
-        }
-        provisioning::clear_create(&root);
-        // The last deferred file has landed, so the project is finally complete.
-        let _ = crate::core::project_info::clear_provisioning(&root);
-        if let Ok(mut p) = progress.lock() {
-            p.status = "done".to_string();
-            p.phase = "done".to_string();
-            p.current_file.clear();
-        }
+        });
     });
 
     id
+}
+
+/// Run a background worker body, guaranteeing a terminal [`Progress`] status
+/// even if it panics.
+///
+/// A worker that unwinds silently leaves its job pinned at `"running"` forever.
+/// Nothing ever clears that: [`register_job`]'s eviction only drops terminal
+/// jobs, and `fastf ui --app` waits on [`jobs_active`] before exiting — so one
+/// panicking worker used to strand the process. The frontend also polls the job
+/// forever with no way to learn it died.
+fn run_worker<F>(progress: &Arc<Mutex<crate::core::assets::Progress>>, label: &str, body: F)
+where
+    F: FnOnce(),
+{
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        let detail = panic_detail(payload.as_ref());
+        eprintln!("{label} worker panicked: {detail}");
+        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+        p.status = "failed".to_string();
+        p.error = Some(format!("{PANIC_ERROR_PREFIX} {detail}"));
+        p.touch();
+    }
 }
 
 /// Register a background staged-move job. Returns the job id the frontend polls;
@@ -749,12 +909,19 @@ fn spawn_move_job(project: Project, target: PathBuf) -> String {
 
     let progress_thread = Arc::clone(&progress);
     thread::spawn(move || {
-        match library::move_project_with(&project, &target, &progress_thread, &cancel) {
+        let watchdog = Arc::clone(&progress_thread);
+        run_worker(&watchdog, "move", move || match library::move_project_with(
+            &project,
+            &target,
+            &progress_thread,
+            &cancel,
+        ) {
             Ok(_) => {
                 if let Ok(mut p) = progress_thread.lock() {
                     p.status = "done".to_string();
                     p.phase = "done".to_string();
                     p.current_file.clear();
+                    p.touch();
                 }
             }
             Err(e) => {
@@ -762,9 +929,10 @@ fn spawn_move_job(project: Project, target: PathBuf) -> String {
                 if let Ok(mut p) = progress_thread.lock() {
                     p.status = if cancelled { "cancelled" } else { "failed" }.to_string();
                     p.error = Some(format!("{e:#}"));
+                    p.touch();
                 }
             }
-        }
+        });
     });
 
     id
@@ -778,21 +946,25 @@ fn job_cancel(id: &str) -> Result<Value> {
     let handle = guard
         .as_ref()
         .and_then(|map| map.get(id))
-        .context("job not found")?;
+        .with_context(|| format!("not found: job {id}"))?;
     handle
         .cancel
         .store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(json!({ "ok": true }))
 }
 
-/// `GET /api/job/<id>` — snapshot a background copy job's progress. A missing id
-/// (evicted after completion) is a clean error the frontend treats as "done".
+/// `GET /api/job/<id>` — snapshot a background copy job's progress.
+///
+/// A missing id means the job finished and was evicted. The message MUST keep
+/// the `not found:` prefix so [`status_for`] answers 404: the frontend keys
+/// "finished" on that exact status and treats every other failure as unknown,
+/// so downgrading this to a 400 would make finished jobs look like lost ones.
 fn job_status(id: &str) -> Result<Value> {
     let guard = jobs_lock();
     let handle = guard
         .as_ref()
         .and_then(|map| map.get(id))
-        .context("job not found")?;
+        .with_context(|| format!("not found: job {id}"))?;
     let snapshot = handle
         .progress
         .lock()
@@ -852,6 +1024,8 @@ fn plan_json(template: &Template, config: &Config, plan: &project::ProjectPlan) 
         "template_name": template.name,
         "folder_name": plan.folder_name,
         "root_path": plan.root_path,
+        // `id` stays the frontend's display handle (now the short code); `uuid`
+        // exposes the full identity for anything that needs to be exact.
         "id": plan.id_str,
         "variables": plan.vars,
         "folders": folders,
@@ -1103,8 +1277,17 @@ fn project_json(project: &Project, metadata: &Option<Metadata>) -> Value {
         .map(|item| item.tags.clone())
         .unwrap_or_else(|| project.tags.clone());
     json!({
+        // The full identity, for anything that must be exact (finding a moved
+        // project again, cross-referencing metadata). `handle` is what the UI
+        // actually renders — a 36-character UUID in a table would be worse
+        // than the sequential ids this replaced.
         "id": project.id,
         "template": project.template,
+        // Stays the canonical form: the frontend echoes this back as the
+        // identifier on every write route, and on Windows the `\\?\` prefix is
+        // what makes paths past MAX_PATH work. The frontend strips it for
+        // rendering (`displayPath` in app.js) — strip at display, never at
+        // storage.
         "path": project.path,
         "name": project.name,
         "base": project.base,
@@ -1501,11 +1684,26 @@ fn reindex_all() -> Result<Value> {
 }
 
 /// `POST /api/counter` — set the global ID counter.
+///
+/// Written into the primary base (where new projects go), not the data
+/// directory, so both operating systems on a dual-boot machine read the same
+/// number. See [`Counters`].
 fn set_counter(request: CounterRequest) -> Result<Value> {
-    let mut counters = Counters::load()?;
-    counters.set_value(request.value);
-    counters.save()?;
-    let counter = counters.get();
+    let config = Config::load()?;
+    let base = config.resolve_base_dir();
+    let path = Counters::base_path(&base);
+    // Written directly rather than via `save_base`, which is monotonic: this
+    // route exists precisely so a human can set the value, including downward.
+    let raw = toml::to_string_pretty(&Counters {
+        global: request.value,
+    })
+    .context("serializing counters")?;
+    crate::util::atomic::write(&path, raw)
+        .with_context(|| format!("writing {}", path.display()))?;
+
+    // Report the effective floor, which may be higher than what was just set:
+    // an existing project always wins over a counter typed too low.
+    let counter = Counters::floor(&config);
     Ok(json!({
         "ok": true,
         "counter": counter,
@@ -1731,7 +1929,11 @@ fn read_request(stream: &mut TcpStream) -> Result<(String, String, Vec<u8>)> {
     let header_end;
 
     loop {
-        let read = stream.read(&mut buffer)?;
+        // A timeout here surfaces as an error and ends the thread — that is the
+        // point. See `CONNECTION_TIMEOUT`.
+        let read = stream
+            .read(&mut buffer)
+            .context("reading request header (client stalled or disconnected)")?;
         if read == 0 {
             bail!("connection closed before request completed");
         }
@@ -1765,7 +1967,9 @@ fn read_request(stream: &mut TcpStream) -> Result<(String, String, Vec<u8>)> {
         .unwrap_or(0);
 
     while bytes.len() < header_end + content_length {
-        let read = stream.read(&mut buffer)?;
+        let read = stream
+            .read(&mut buffer)
+            .context("reading request body (client stalled or disconnected)")?;
         if read == 0 {
             bail!("connection closed before body completed");
         }
@@ -1798,6 +2002,7 @@ fn write_response(
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
+        503 => "Service Unavailable",
         _ => "Internal Server Error",
     };
     // Assemble the full response and send it in ONE write. `write!` straight
@@ -1813,4 +2018,128 @@ fn write_response(
     stream.write_all(&response)?;
     stream.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::assets::Progress;
+
+    /// The freeze this fixes: one panic in any write handler used to poison
+    /// `WRITE_LOCK` permanently, and every write route returned "write lock
+    /// poisoned" for the rest of the process. Reads are lock-free, so the UI
+    /// kept rendering lists and search perfectly while nothing could be saved.
+    ///
+    /// This test leaves `WRITE_LOCK` poisoned for the rest of the binary on
+    /// purpose — that is exactly the state the fix must tolerate.
+    #[test]
+    fn write_lock_survives_a_panic_while_it_was_held() {
+        // The only way to poison a mutex is to unwind while holding it. The
+        // panic message below is expected test output, not a failure.
+        let poisoner = thread::spawn(|| {
+            let _guard = WRITE_LOCK.lock().unwrap();
+            panic!("simulated write-handler panic");
+        });
+        assert!(
+            poisoner.join().is_err(),
+            "the poisoner thread must actually panic for this test to mean anything"
+        );
+        assert!(
+            WRITE_LOCK.is_poisoned(),
+            "a panic while holding the lock must poison it — otherwise this test proves nothing"
+        );
+
+        // The next writer must still get in.
+        assert!(
+            lock_writes().is_ok(),
+            "a poisoned WRITE_LOCK must not disable every write route"
+        );
+        // And again, to prove it is not a one-shot recovery.
+        drop(lock_writes());
+        assert!(lock_writes().is_ok());
+    }
+
+    #[test]
+    fn panicking_handlers_map_to_500_and_missing_routes_to_404() {
+        assert_eq!(status_for("not found: GET /api/nope"), 404);
+        assert_eq!(status_for(&format!("{PANIC_ERROR_PREFIX} boom")), 500);
+        assert_eq!(status_for("invalid preview request"), 400);
+    }
+
+    #[test]
+    fn panic_detail_reads_both_payload_shapes() {
+        let str_payload = std::panic::catch_unwind(|| panic!("static message")).unwrap_err();
+        assert_eq!(panic_detail(str_payload.as_ref()), "static message");
+
+        let owned = std::panic::catch_unwind(|| panic!("{}", "owned".to_string())).unwrap_err();
+        assert_eq!(panic_detail(owned.as_ref()), "owned");
+    }
+
+    /// A worker that dies without writing a terminal status leaves its job at
+    /// `"running"` forever. `jobs_active` gates process shutdown in
+    /// `fastf ui --app`, so that used to keep `fastf.exe` alive indefinitely and
+    /// the next launcher click attached to the zombie.
+    #[test]
+    fn a_stalled_job_stops_counting_as_active() {
+        let progress = Arc::new(Mutex::new(Progress::new(&[])));
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let id = next_job_id();
+        register_job(&id, &progress, &cancel);
+
+        // Fresh and running → active.
+        assert!(jobs_active(), "a job that just reported progress is active");
+
+        // Same "running" status, but no movement for longer than the floor.
+        {
+            let mut p = progress.lock().unwrap();
+            p.last_progress_at = p
+                .last_progress_at
+                .saturating_sub(JOB_STALE_AFTER.as_millis() as u64 + 1_000);
+        }
+        assert!(
+            !jobs_active(),
+            "a job stuck at 'running' with no movement must not hold the process open"
+        );
+
+        // Clean up so the shared registry doesn't leak into other unit tests.
+        jobs_lock().as_mut().map(|map| map.remove(&id));
+    }
+
+    /// `serve` spawns one thread per connection with no cap, so a client that
+    /// opens a socket and never finishes its request used to park that thread
+    /// forever. With the frontend polling health every 5 s, stalled sockets
+    /// accumulated until the process was wedged.
+    #[test]
+    fn a_client_that_stalls_mid_request_does_not_park_the_thread_forever() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let address = listener.local_addr().expect("local addr");
+
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            handle_connection_with(stream, Duration::from_millis(200))
+        });
+
+        // Send a partial request line and then just sit there — never the
+        // terminating \r\n\r\n.
+        let mut client = TcpStream::connect(address).expect("connect");
+        client
+            .write_all(b"GET /api/health HT")
+            .expect("partial write");
+
+        let started = std::time::Instant::now();
+        let result = server.join().expect("server thread must not panic");
+
+        assert!(
+            result.is_err(),
+            "a request that never completes must end as an error, not hang"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the handler must give up on its own deadline, took {:?}",
+            started.elapsed()
+        );
+        // Keep the client alive until here so the stall is real rather than a
+        // peer disconnect (which would pass for the wrong reason).
+        drop(client);
+    }
 }

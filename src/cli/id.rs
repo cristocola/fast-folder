@@ -2,12 +2,20 @@ use anyhow::Result;
 use colored::Colorize;
 use dialoguer::Confirm;
 
+use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::template;
 
+/// The base new projects are created in — where `set`/`reset` record the mark.
+fn primary_base(cfg: &Config) -> std::path::PathBuf {
+    cfg.resolve_base_dir()
+}
+
 pub fn show() -> Result<()> {
-    let counters = Counters::load()?;
-    let val = counters.get();
+    let cfg = Config::load()?;
+    // The effective floor, not just one file: the counter now lives in each
+    // base, and the projects on disk are consulted too.
+    let val = Counters::floor(&cfg);
     if val == 0 {
         println!("Global ID counter: 0  (no projects created yet)");
         return Ok(());
@@ -28,6 +36,24 @@ pub fn show() -> Result<()> {
         formatted.green().bold(),
         format!("(next will be {})", val + 1).dimmed()
     );
+
+    // Say where it is kept, because that is the whole point of the change: it
+    // sits with the projects, so both operating systems read the same number.
+    println!();
+    for base in cfg.effective_bases() {
+        if !base.is_dir() {
+            continue;
+        }
+        println!(
+            "  {:<10} {}  {}",
+            Counters::load_base(&base).to_string().green(),
+            crate::core::library::base_label(&base),
+            // `display_path`, not `.display()`: `effective_bases` canonicalizes,
+            // which on Windows yields the `\\?\` verbatim form. Valid, but not
+            // something anyone wants to read.
+            crate::util::paths::display_path(&Counters::base_path(&base)).dimmed()
+        );
+    }
     Ok(())
 }
 
@@ -43,18 +69,43 @@ pub fn reset() -> Result<()> {
         return Ok(());
     }
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    let mut counters = Counters::load()?;
-    counters.reset();
-    counters.save()?;
-    println!("Global ID counter reset to 0.");
+    let cfg = Config::load()?;
+    let base = primary_base(&cfg);
+    // Remove the mark rather than writing 0: `save_base` only moves upward, so
+    // writing 0 would be a no-op and leave the old value in place.
+    let path = Counters::base_path(&base);
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    println!("Global ID counter reset in {}.", base.display());
+    println!(
+        "{}",
+        "  Note: the next ID still clears the highest one already on disk, so \
+         existing projects can never be overwritten."
+            .dimmed()
+    );
     Ok(())
 }
 
 pub fn set(value: u64) -> Result<()> {
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    let mut counters = Counters::load()?;
-    counters.set_value(value);
-    counters.save()?;
-    println!("Global ID counter set to {}.", value);
+    let cfg = Config::load()?;
+    let base = primary_base(&cfg);
+    let current = Counters::load_base(&base);
+    if value < current {
+        // Lowering has to be explicit: `save_base` is monotonic so a
+        // higher-numbered project elsewhere is never clobbered by accident.
+        std::fs::write(
+            Counters::base_path(&base),
+            toml::to_string_pretty(&Counters { global: value })?,
+        )?;
+    } else {
+        Counters::save_base(&base, value)?;
+    }
+    println!(
+        "Global ID counter set to {} in {}.",
+        value,
+        Counters::base_path(&base).display()
+    );
     Ok(())
 }

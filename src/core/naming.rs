@@ -59,19 +59,58 @@ pub fn interpolate(
     result
 }
 
-/// Interpolate a *name* — identical to `interpolate`, then collapse consecutive
-/// underscores left behind by empty variables and trim leading/trailing
-/// underscores. Use this for folder and file *names*, not for file contents.
+/// Characters that act as separators in a name.
+///
+/// An empty variable leaves the separators on *both* sides of it stranded, so
+/// these are the characters a collapse has to consider. Kept deliberately small:
+/// a dot is not included, because collapsing one would eat file extensions.
+const NAME_SEPARATORS: [char; 2] = ['_', '-'];
+
+fn is_name_separator(c: char) -> bool {
+    NAME_SEPARATORS.contains(&c)
+}
+
+/// Interpolate a *name* — identical to [`interpolate`], then tidy the separators
+/// an empty variable leaves behind. Use this for folder and file *names*, never
+/// for file contents.
+///
+/// A run of two or more separators collapses to the **last** one, and runs at
+/// either end are dropped entirely. "Last wins" is what makes a mixed run come
+/// out right: in `{user}_{artist}-{title}` with no artist, the `_` belonged to
+/// the variable that vanished and the `-` is the one the author meant to sit
+/// between the surviving parts, so `french_-Seeping` becomes `french-Seeping`.
+///
+/// This used to collapse only `__`, which meant a pattern separated by anything
+/// other than underscores kept the orphaned separator.
+///
+/// Single separators are never touched, so a date like `2026-07-28` passes
+/// through unchanged.
 pub fn interpolate_name(
     pattern: &str,
     vars: &std::collections::HashMap<String, String>,
     date_format: &str,
 ) -> String {
-    let mut result = interpolate(pattern, vars, date_format);
-    while result.contains("__") {
-        result = result.replace("__", "_");
+    let raw = interpolate(pattern, vars, date_format);
+
+    let mut out = String::with_capacity(raw.len());
+    let mut pending: Option<char> = None;
+    for c in raw.chars() {
+        if is_name_separator(c) {
+            // Remember only the most recent separator of the run.
+            pending = Some(c);
+        } else {
+            if let Some(sep) = pending.take() {
+                // A run before any real content is a leading run — drop it.
+                if !out.is_empty() {
+                    out.push(sep);
+                }
+            }
+            out.push(c);
+        }
     }
-    result.trim_matches('_').to_string()
+    // `pending` still set here means the name ended in separators; dropping it
+    // trims the trailing run.
+    out
 }
 
 /// Recover a numeric ID from a folder name by locating a `<prefix><digits>`
@@ -112,7 +151,18 @@ pub fn parse_id_token(name: &str, prefix: &str) -> Option<u64> {
 /// so it works across templates with different ID prefixes — used to compute the
 /// counter self-heal floor (`library::max_id`). Returns `None` when the string
 /// has no trailing digits.
+///
+/// **Ids containing a hyphen are rejected outright.** A sequential id never has
+/// one, but a UUID (`019fa635-876f-7f41-8831-74a0bcb20044`) and a word handle
+/// (`simple-panda-fennec`) both do — and reading the trailing digits of that
+/// UUID would yield `20044` and shove the counter to `ID20045`. An interim build
+/// wrote ids in both of those shapes, so this guard is not hypothetical: it is
+/// what lets such a project sit in a base harmlessly instead of poisoning every
+/// ID minted afterwards.
 pub fn id_value(id: &str) -> Option<u64> {
+    if id.contains('-') {
+        return None;
+    }
     let bytes = id.as_bytes();
     let mut i = bytes.len();
     while i > 0 && bytes[i - 1].is_ascii_digit() {
@@ -215,15 +265,72 @@ mod tests {
         assert_eq!(to_title_underscore("single"), "Single");
     }
 
+    /// Build a var map from `(slug, value)` pairs.
+    fn vars_of(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     #[test]
     fn test_empty_token_collapses_underscores() {
-        use std::collections::HashMap;
-        let mut vars = HashMap::new();
-        vars.insert("name".to_string(), "Project".to_string());
-        vars.insert("title".to_string(), "".to_string());
-        vars.insert("id".to_string(), "001".to_string());
+        let vars = vars_of(&[("name", "Project"), ("title", ""), ("id", "001")]);
         let result = interpolate_name("{name}_{title}_{id}", &vars, "%Y-%m-%d");
         assert_eq!(result, "Project_001");
+    }
+
+    /// The reported bug: a pattern whose separators are not all underscores.
+    /// `{artist}` is empty, so the `_` in front of it is orphaned and the `-`
+    /// the author put between artist and title is the one that should survive.
+    #[test]
+    fn empty_variable_collapses_a_mixed_separator_run() {
+        let vars = vars_of(&[("username", "french"), ("artist", ""), ("title", "Seeping")]);
+        assert_eq!(
+            interpolate_name("{date}_{username}_{artist}-{title}", &vars, "%Y-%m-%d"),
+            format!("{}_french-Seeping", chrono::Local::now().format("%Y-%m-%d"))
+        );
+    }
+
+    /// A date is full of single hyphens and must survive untouched — only runs
+    /// of two or more separators are collapsed.
+    #[test]
+    fn single_separators_are_never_collapsed() {
+        let vars = vars_of(&[("a", "one"), ("b", "two")]);
+        assert_eq!(interpolate_name("{a}-{b}", &vars, "%Y-%m-%d"), "one-two");
+        assert_eq!(interpolate_name("{a}_{b}", &vars, "%Y-%m-%d"), "one_two");
+        assert_eq!(
+            interpolate_name("2026-07-28_{a}", &vars, "%Y-%m-%d"),
+            "2026-07-28_one"
+        );
+    }
+
+    #[test]
+    fn empty_variables_at_either_end_leave_no_stray_separator() {
+        let vars = vars_of(&[("lead", ""), ("mid", "Body"), ("tail", "")]);
+        // Leading and trailing runs are dropped whatever the separator is.
+        assert_eq!(
+            interpolate_name("{lead}_{mid}_{tail}", &vars, "%Y-%m-%d"),
+            "Body"
+        );
+        assert_eq!(
+            interpolate_name("{lead}-{mid}-{tail}", &vars, "%Y-%m-%d"),
+            "Body"
+        );
+        assert_eq!(
+            interpolate_name("-_{mid}_-", &vars, "%Y-%m-%d"),
+            "Body",
+            "a leading dash would be actively hostile in a shell"
+        );
+    }
+
+    #[test]
+    fn several_empty_variables_in_a_row_collapse_to_one_separator() {
+        let vars = vars_of(&[("a", "One"), ("b", ""), ("c", ""), ("d", "Two")]);
+        assert_eq!(
+            interpolate_name("{a}_{b}_{c}-{d}", &vars, "%Y-%m-%d"),
+            "One-Two"
+        );
     }
 
     #[test]
@@ -264,6 +371,16 @@ mod tests {
         assert_eq!(id_value("T042"), Some(42));
         assert_eq!(id_value("no-digits"), None);
         assert_eq!(id_value(""), None);
+    }
+
+    /// An interim build wrote UUID and word-handle ids. Reading the trailing
+    /// digits of a UUID would put the counter floor at 20044 and every project
+    /// created afterwards would be ID20045+. Such an id must contribute nothing.
+    #[test]
+    fn id_value_rejects_uuid_and_word_handles() {
+        assert_eq!(id_value("019fa635-876f-7f41-8831-74a0bcb20044"), None);
+        assert_eq!(id_value("simple-panda-fennec"), None);
+        assert_eq!(id_value("compass-newt-mayfly"), None);
     }
 
     #[test]

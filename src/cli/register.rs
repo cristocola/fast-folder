@@ -139,7 +139,7 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
     //    with a concurrent `fastf new` or another register.
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let cfg = Config::load()?;
-    let mut counters = Counters::load()?;
+    let counters = Counters::load()?;
 
     // 5. Resolve template (or stub). Variables come in raw; transforms are
     //    applied below. Required variables must already be present.
@@ -174,7 +174,7 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
     // 7. ID: recover an `ID####` token from the folder name (identity that
     //    already lives on disk), else mint fresh from the self-healed floor.
     let id_value = parse_id_token(&folder_name, &tmpl.id.prefix)
-        .unwrap_or_else(|| counters.get().max(library::max_id(&cfg)) + 1);
+        .unwrap_or_else(|| counters.get().max(Counters::floor(&cfg)) + 1);
     let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
 
     let mut plan_vars = build_plan_vars(&tmpl, &opts.vars, &id_str);
@@ -236,12 +236,14 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
         t
     };
 
-    // 11. Persist the counter floor monotonically. A recovered ID lower than
-    //     the counter never lowers it; a minted ID advances it. The counter
-    //     also self-heals from `max_id` on the next create regardless.
-    if id_value > counters.get() {
-        counters.set_value(id_value);
-        counters.save().context("saving counters")?;
+    // 11. Persist the counter floor monotonically into the base this folder
+    //     lives in. `save_base` is itself monotonic, so a recovered ID lower
+    //     than the mark never lowers it. The floor also self-heals from the
+    //     projects on disk on the next create regardless.
+    if id_value > counters.get()
+        && let Some(base) = plan.root_path.parent()
+    {
+        Counters::record(base, id_value);
     }
 
     // 12. Write PROJECT_INFO.md unless we're keeping an existing one.

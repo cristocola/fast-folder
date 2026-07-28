@@ -63,6 +63,16 @@ pub struct Progress {
     /// `"copying" | "verifying" | "finalizing" | "done"`.
     pub phase: String,
     pub error: Option<String>,
+    /// Unix-epoch milliseconds of the last observed movement (bytes copied, a
+    /// file finished, or a phase change).
+    ///
+    /// Two jobs depend on this. The UI tells "slow" from "stuck" with it —
+    /// a copy to a cloud-synced or network destination can legitimately sit for
+    /// minutes, so there is no wall-clock timeout, only an honest "no progress
+    /// for N minutes" note. And [`crate::ui::jobs_active`] uses it as a
+    /// staleness floor so a job whose worker thread died can never report
+    /// itself as running forever and hold the process open.
+    pub last_progress_at: u64,
 }
 
 impl Progress {
@@ -76,8 +86,31 @@ impl Progress {
             status: "running".to_string(),
             phase: "copying".to_string(),
             error: None,
+            last_progress_at: now_millis(),
         }
     }
+
+    /// Record that the job just made progress. Call alongside every mutation
+    /// that represents real movement.
+    pub fn touch(&mut self) {
+        self.last_progress_at = now_millis();
+    }
+
+    /// Milliseconds since the last observed movement. Saturates at 0 if the
+    /// clock moved backwards.
+    pub fn idle_millis(&self) -> u64 {
+        now_millis().saturating_sub(self.last_progress_at)
+    }
+}
+
+/// Unix-epoch milliseconds. The frontend compares this against its own
+/// `Date.now()`, which is sound because the UI is loopback-only — same machine,
+/// same clock.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// A copy that stopped because its cancel flag was set. Callers distinguish this
@@ -117,6 +150,7 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
             writer.write_all(&buf[..n]).context("writing destination")?;
             if let Ok(mut p) = progress.lock() {
                 p.copied_bytes += n as u64;
+                p.touch();
             }
         }
         writer.sync_all().ok();
@@ -151,7 +185,19 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
 pub enum EntryKind {
     Dir,
     File,
-    /// A symlink, Windows junction, or other reparse point. Never followed.
+    /// A symlink, Windows junction, or mount point. Never followed.
+    ///
+    /// NOT "any reparse point". Windows uses reparse points for many things
+    /// that are still ordinary file content — cloud placeholders (OneDrive,
+    /// Google Drive streaming), deduplication, transparent compression. Those
+    /// read back as normal files and must copy as normal files.
+    ///
+    /// The distinction is the *name surrogate* bit in the reparse tag: set only
+    /// for tags that redirect to another name. `std`'s `FileType::is_symlink`
+    /// keys on exactly that bit, so classifying by it is already correct and
+    /// filesystem-agnostic — there is nothing here to special-case per vendor,
+    /// and adding such a case would be wrong the moment a new filter driver
+    /// ships.
     Symlink,
     /// Anything else (fifo, socket, device node). Recorded, never copied.
     Other,

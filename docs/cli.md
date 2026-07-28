@@ -206,7 +206,11 @@ fastf id set 46        # next project becomes ID0047
 fastf id reset         # reset to 0
 ```
 
-One counter serves all templates, so IDs are unique across every project type. The counter also self-heals: the next ID is always at least one higher than the highest ID found on disk, so a reset can never mint a colliding ID while your projects remain discoverable.
+One counter serves all templates, so IDs are unique across every project type.
+
+The counter is stored **inside your base folder** as `.fastf-counter.toml`, next to the projects it numbers — not in Fast Folder's config directory. That matters if you use more than one operating system: your project drive is already mounted by both, so both read the same number, with nothing to symlink or keep in sync. A base carried on an external drive brings its numbering with it.
+
+It also self-heals. The next ID is always at least one higher than the highest ID found in your projects, so deleting the counter file, or plugging in a drive that has never seen this machine, can never mint an ID that collides with a project you already have.
 
 ## Shell completions
 

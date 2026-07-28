@@ -66,6 +66,17 @@ pub struct Config {
     /// `naming_pattern` is used instead and this setting is ignored.
     #[serde(default = "default_register_naming_pattern")]
     pub register_naming_pattern: String,
+
+    /// What to do when the resolved folder name is already taken:
+    /// `"suffix"` (default) appends `_2`, `_3`… , `"error"` refuses.
+    ///
+    /// Rarely reached with the bundled patterns, which end in a unique
+    /// `{id}` — but a pattern need not contain one, and then two projects
+    /// created the same day from the same answers collide for real. Appending a
+    /// suffix is what every file manager does. `"error"` restores the old
+    /// refuse-a-duplicate behaviour for anyone who would rather be stopped.
+    #[serde(default = "default_on_name_collision")]
+    pub on_name_collision: String,
 }
 
 fn default_date_format() -> String {
@@ -84,6 +95,9 @@ fn default_recent_limit() -> usize {
 fn default_register_naming_pattern() -> String {
     "{date}_{name}_{id}".to_string()
 }
+fn default_on_name_collision() -> String {
+    "suffix".to_string()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -100,6 +114,7 @@ impl Default for Config {
             confirm_create: true,
             show_banner: true,
             register_naming_pattern: default_register_naming_pattern(),
+            on_name_collision: default_on_name_collision(),
         }
     }
 }
@@ -123,6 +138,14 @@ impl Config {
         let raw = toml::to_string_pretty(self).context("serializing config")?;
         crate::util::atomic::write(&path, raw)
             .with_context(|| format!("writing {}", path.display()))
+    }
+
+    /// Whether a taken folder name should get a `_2` suffix rather than fail.
+    ///
+    /// Anything other than an explicit `"error"` means suffix, so a typo in the
+    /// config leaves creates working instead of blocking them.
+    pub fn suffix_on_name_collision(&self) -> bool {
+        !self.on_name_collision.trim().eq_ignore_ascii_case("error")
     }
 
     /// Resolve base directory: configured path, or the user's home directory.

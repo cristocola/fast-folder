@@ -71,8 +71,11 @@ pub fn plan(
     //
     // `counters` is still honoured as a floor input so a caller holding an
     // explicitly-set value (`fastf id set`) is never silently overridden.
-    let floor = counters.get().max(Counters::floor(config));
-    let counter_value = floor + 1;
+    //
+    // Read-only by contract: `next_value` consults `library::max_id`, which
+    // never writes, so previewing a plan still touches no disk. Convergence
+    // (which does write) happens on the create path — see `Counters::record`.
+    let counter_value = Counters::next_value(config, counters);
     let id_str = Counters::format_id(&template.id.prefix, template.id.digits, counter_value);
     vars.insert("id".to_string(), id_str.clone());
 
@@ -456,13 +459,21 @@ fn create_inner(
     match provision_project(&realized, template, counters, config, run_post, defer_over) {
         Ok(deferred) => Ok((realized, deferred)),
         Err(err) => {
-            if let Err(cleanup) = crate::util::fs_retry::remove_dir_all(&realized.root_path) {
-                eprintln!(
+            match crate::util::fs_retry::remove_dir_all(&realized.root_path) {
+                // Say it *here* — this is the only code that knows a folder was
+                // removed. `main` used to claim it on every interrupt, including
+                // a Ctrl-C at the menu with nothing in flight.
+                Ok(()) => eprintln!(
+                    "{} removed the partial project at {}",
+                    "rolled back:".yellow().bold(),
+                    crate::util::paths::display_path(&realized.root_path)
+                ),
+                Err(cleanup) => eprintln!(
                     "{} could not remove the partial project at {} ({cleanup}) — \
                      run `fastf reconcile` to clean up",
                     "warning:".yellow().bold(),
-                    realized.root_path.display()
-                );
+                    crate::util::paths::display_path(&realized.root_path)
+                ),
             }
             Err(err)
         }
@@ -554,7 +565,7 @@ fn provision_project(
     // directory (so it survives that base being unplugged). See `Counters`.
     counters.set_value(plan.counter_value);
     if let Some(base) = abs_path.parent() {
-        Counters::record(base, plan.counter_value);
+        Counters::record(config, base, plan.counter_value);
     }
 
     // Everything that runs inline has landed. If files were deferred to a

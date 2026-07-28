@@ -19,6 +19,15 @@ use crate::util::paths;
 ///
 /// It does **not** replace the data-directory counter — see [`Counters::load`].
 /// The two cover different failures, and both are written on every create.
+///
+/// # The number only ever goes up
+///
+/// Every write is monotonic and every base converges on the same value: a create
+/// pushes its new mark into all mounted bases ([`Counters::record`]), and
+/// [`Counters::converge`] repairs any divergence it finds. Nothing lowers it,
+/// which is why `fastf id set` refuses a value below the floor instead of
+/// pretending to accept one — before this rule it wrote a single file that
+/// [`Counters::floor`] then ignored, and reported success for a no-op.
 pub const BASE_COUNTER_FILE: &str = ".fastf-counter.toml";
 
 /// Single global counter shared across all templates.
@@ -58,35 +67,94 @@ impl Counters {
 
     /// Persist this machine's counter atomically. A truncated file would reset
     /// ID allocation, so the write must never be observable half-done.
-    pub fn save(&self) -> Result<()> {
+    ///
+    /// Private on purpose: [`Counters::propagate`] is the only writer, so the
+    /// data-dir file can never drift below the bases it is meant to back up.
+    fn save(&self) -> Result<()> {
         let path = paths::counters_path();
         let raw = toml::to_string_pretty(self).context("serializing counters")?;
         crate::util::atomic::write(&path, raw)
             .with_context(|| format!("writing {}", path.display()))
     }
 
-    /// Record `value` in both places a create must update: the base (shared
-    /// between operating systems) and the data directory (spans every base this
-    /// machine has seen). Best-effort — [`Counters::floor`] also reads the
-    /// highest ID present in the projects themselves, so a failed write costs
-    /// tidiness, not correctness.
+    /// Record `value` everywhere a create must update it: the base the project
+    /// landed in, every other mounted base, and this machine's data directory.
     ///
-    /// Only the target base is written, never every mounted one: creating a file
-    /// in a directory changes its mtime, which would invalidate that base's
-    /// `.fastf-index.json` staleness gate and force a full rescan. The target
-    /// base's cache is being rewritten by this create anyway.
-    pub fn record(base: &Path, value: u64) {
+    /// Propagating to every base is what keeps the number the same on both
+    /// operating systems of a dual-boot machine: if Linux mints ID0101 in a base
+    /// Windows cannot see, the base Windows *can* see has to learn about it now
+    /// — there is no later.
+    ///
+    /// Best-effort throughout: [`Counters::floor`] also reads the highest ID
+    /// present in the projects themselves, so a failed write costs tidiness,
+    /// not correctness.
+    pub fn record(cfg: &Config, base: &Path, value: u64) {
+        // The target base first — its cache is being rewritten by this create
+        // anyway, so its mtime bump is already paid for.
         if let Err(err) = Self::save_base(base, value) {
             eprintln!(
                 "warning: could not record the ID counter in {} ({err})",
                 base.display()
             );
         }
+        Self::propagate(cfg, value);
+    }
+
+    /// Raise every mounted base and the data-dir counter to `value`. Upward
+    /// only, so this can never walk another machine's number backwards, and a
+    /// base already at or above `value` is left untouched.
+    ///
+    /// Each base that is actually written gets its index cache re-stamped: the
+    /// write bumps the base's directory mtime, which the cache reads as "a
+    /// project appeared or vanished". Since a counter write changes no project,
+    /// re-stamping is what stops propagation from forcing a full rescan of every
+    /// base after every create.
+    fn propagate(cfg: &Config, value: u64) {
+        for base in cfg.effective_bases() {
+            if !base.is_dir() {
+                continue;
+            }
+            match Self::save_base(&base, value) {
+                Ok(true) => crate::core::library::touch_cache(&base),
+                Ok(false) => {}
+                Err(err) => eprintln!(
+                    "warning: could not record the ID counter in {} ({err})",
+                    base.display()
+                ),
+            }
+        }
         let mut local = Self::load().unwrap_or_default();
         if value > local.get() {
             local.set_value(value);
             let _ = local.save();
         }
+    }
+
+    /// Bring every base into agreement on the highest ID seen anywhere, and
+    /// return that value.
+    ///
+    /// This is the repair operation behind `fastf id sync`: it recomputes the
+    /// full [`Counters::floor`] (which scans project metadata) and pushes the
+    /// result out. Add a base holding `ID0082` to a library that stops at
+    /// `ID0017` and every base's counter file comes out at 82.
+    ///
+    /// [`Counters::record`] deliberately does *not* call this — it already knows
+    /// the new high-water mark and skips the scan.
+    pub fn converge(cfg: &Config) -> u64 {
+        let floor = Self::floor(cfg);
+        Self::propagate(cfg, floor);
+        floor
+    }
+
+    /// The one expression for "which ID comes next".
+    ///
+    /// `counters` is honoured as a floor input so a caller holding an
+    /// explicitly-set value is never silently overridden. Every caller that
+    /// needs the next ID — `project::plan`, `register_core`, and register's
+    /// rename preview — must go through here: when the preview used its own
+    /// formula it confirmed one folder name and committed a different one.
+    pub fn next_value(cfg: &Config, counters: &Counters) -> u64 {
+        counters.get().max(Self::floor(cfg)) + 1
     }
 
     /// Where a base keeps its counter.
@@ -107,20 +175,23 @@ impl Counters {
             .unwrap_or(0)
     }
 
-    /// Record `value` in `base`, but only ever upward.
+    /// Record `value` in `base`, but only ever upward. Returns whether a write
+    /// actually happened, so callers can repair the base's index cache only when
+    /// there was something to repair.
     ///
     /// Monotonic on purpose: two machines writing the same base must not be able
     /// to walk the number backwards, and a base that has seen higher IDs than
     /// this create knows about keeps its mark.
-    pub fn save_base(base: &Path, value: u64) -> Result<()> {
+    pub fn save_base(base: &Path, value: u64) -> Result<bool> {
         if Self::load_base(base) >= value {
-            return Ok(());
+            return Ok(false);
         }
         let path = Self::base_path(base);
         let raw =
             toml::to_string_pretty(&Self { global: value }).context("serializing counters")?;
         crate::util::atomic::write(&path, raw)
-            .with_context(|| format!("writing {}", path.display()))
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(true)
     }
 
     /// The highest value recorded by any configured base.
@@ -158,11 +229,6 @@ impl Counters {
     /// Set the global counter to a specific value.
     pub fn set_value(&mut self, value: u64) {
         self.global = value;
-    }
-
-    /// Reset the global counter to 0.
-    pub fn reset(&mut self) {
-        self.global = 0;
     }
 
     /// Format a counter value: prefix + zero-padded number.

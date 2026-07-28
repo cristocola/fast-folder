@@ -63,6 +63,12 @@ pub fn run(args: NewArgs) -> Result<()> {
 
     // Show preview and confirm (unless --yes or confirm_create disabled globally)
     project::print_dry_run(&plan, &tmpl, &config);
+    if !args.yes && config.confirm_create && !std::io::stdout().is_terminal() {
+        bail!(
+            "no terminal to confirm on — pass --yes to create without confirming\n  \
+             (or set `fastf config set confirm-create false` to stop asking)"
+        );
+    }
     if !args.yes && config.confirm_create {
         println!();
         let ok = Confirm::new()

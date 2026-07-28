@@ -22,6 +22,10 @@ pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
     let project = library::resolve(&cfg, query)?;
     let path = project_info::pinfo_path(&project.path);
 
+    // Read-modify-write of PROJECT_INFO.md — the write is atomic, so nothing can
+    // be corrupted, but without the lock a tag added here and one added from the
+    // browser UI at the same moment leave only one of them behind.
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     project_info::write_frontmatter(&path, |meta| {
         for tag in new_tags {
             if !meta.tags.contains(tag) {
@@ -48,6 +52,8 @@ pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
     let path = project_info::pinfo_path(&project.path);
 
     let mut removed_count = 0usize;
+    // See `add` — read-modify-write, so it takes the cross-process lock.
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     project_info::write_frontmatter(&path, |meta| {
         let before = meta.tags.len();
         meta.tags.retain(|t| !remove_tags.contains(t));
@@ -118,6 +124,19 @@ pub fn reauto(query: &str) -> Result<()> {
     let project = library::resolve(&cfg, query)?;
     let path = project_info::pinfo_path(&project.path);
 
+    // A registered folder has no template, so there is nothing to re-derive
+    // from. Say that, rather than letting the lookup fail with "template
+    // '(registered)' not found" — which reads like a broken install.
+    if project.template == crate::cli::register::REGISTERED_SLUG {
+        bail!(
+            "{} was registered without a template, so it has no auto-derived tags to re-derive.\n  \
+             Add tags directly with `fastf tag add {} <tag>`, or re-register it with \
+             `fastf register <path> --template <slug>`.",
+            project.id,
+            project.id
+        );
+    }
+
     // Load the current metadata to get variables and current tags.
     let meta = project_info::read_metadata(&project.path)?
         .ok_or_else(|| anyhow::anyhow!("{} has no YAML frontmatter", path.display()))?;
@@ -142,6 +161,8 @@ pub fn reauto(query: &str) -> Result<()> {
     // The set of prefixes to remove (slug/ patterns owned by tag_from).
     let owned_prefixes: Vec<String> = tmpl.tag_from.iter().map(|s| format!("{s}/")).collect();
 
+    // See `add` — read-modify-write, so it takes the cross-process lock.
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     project_info::write_frontmatter(&path, |m| {
         // Keep tags that are NOT derived from tag_from slugs.
         m.tags

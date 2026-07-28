@@ -18,6 +18,26 @@ fn structure_has_tokens(nodes: &[FolderNode]) -> bool {
         .any(|n| n.name.contains('{') || structure_has_tokens(&n.children))
 }
 
+/// Collect variable values, but only if this template actually interpolates
+/// anything — a template of plain folders needs no answers.
+///
+/// `pub` so the TUI can collect **once** and hand the same values to a dry run
+/// and the real run. It used to call `apply::run` twice with an empty map, which
+/// meant answering every prompt a second time to confirm what you had just
+/// previewed.
+pub fn collect_if_needed(
+    tmpl: &crate::core::template::Template,
+    provided: &HashMap<String, String>,
+) -> Result<HashMap<String, String>> {
+    let needs_vars =
+        tmpl.files.iter().any(|f| !f.template.is_empty()) || structure_has_tokens(&tmpl.structure);
+    if needs_vars {
+        collect_vars(tmpl, provided)
+    } else {
+        Ok(HashMap::new())
+    }
+}
+
 pub struct ApplyArgs {
     pub template_slug: String,
     pub target: String,
@@ -52,15 +72,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         }
     }
 
-    // Collect variables if any templated file needs them, or if any folder name
-    // in the structure contains a {token} placeholder.
-    let needs_vars =
-        tmpl.files.iter().any(|f| !f.template.is_empty()) || structure_has_tokens(&tmpl.structure);
-    let raw_vars = if needs_vars {
-        collect_vars(&tmpl, &args.vars)?
-    } else {
-        HashMap::new()
-    };
+    let raw_vars = collect_if_needed(&tmpl, &args.vars)?;
 
     let actions = project::apply_plan(&tmpl, &target, &raw_vars, &config.date_format);
 

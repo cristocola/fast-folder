@@ -20,6 +20,12 @@ pub struct RecentArgs {
 
 pub fn run(args: RecentArgs) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
+    // `--limit 0` used to be clamped to 1, quietly showing a project the user
+    // asked not to see. Refuse instead — a zero-length list is not what anyone
+    // means by it.
+    if args.limit == Some(0) {
+        anyhow::bail!("--limit must be at least 1");
+    }
     let limit = args.limit.unwrap_or(cfg.recent_default_limit).max(1);
 
     // Filesystem-as-truth: discover projects from their PROJECT_INFO.md across
@@ -572,7 +578,9 @@ fn show_journal(project_root: &Path) {
         }
         Ok(entries) => {
             for entry in &entries {
-                let date = &entry.timestamp[..entry.timestamp.len().min(10)];
+                // See `cli::note::notes` — a hand-edited timestamp must not
+                // panic the picker.
+                let date = entry.timestamp.get(..10).unwrap_or(&entry.timestamp);
                 println!("  {} {}  {}", "•".dimmed(), date.dimmed(), entry.message);
             }
         }

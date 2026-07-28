@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use dialoguer::{Input, Select};
 use std::collections::HashMap;
+use std::io::IsTerminal;
 
 use crate::core::template::{Template, VarType};
 
@@ -17,6 +18,23 @@ pub fn collect_vars(
         if let Some(val) = cli_vars.get(&var.slug) {
             result.insert(var.slug.clone(), val.clone());
             continue;
+        }
+
+        // Without a terminal the prompt below fails with dialoguer's bare
+        // "IO error: not a terminal", which tells a script author nothing about
+        // what to do. Name the variable that is missing and the flag that
+        // supplies it. (Optional variables need `--slug=` too — the prompt runs
+        // for them as well.)
+        if !std::io::stdout().is_terminal() {
+            anyhow::bail!(
+                "no terminal to prompt on, and '{}' was not supplied.\n  \
+                 Pass it as a flag: --{}=<value>   (use --{}= for an empty value)\n  \
+                 Every variable of template '{}' must be given this way in a script.",
+                var.label,
+                var.slug,
+                var.slug,
+                tmpl.slug
+            );
         }
 
         let value = match var.var_type {

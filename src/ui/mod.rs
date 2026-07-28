@@ -652,7 +652,10 @@ fn load_state() -> Result<Value> {
         })
         .collect();
 
-    let counter = Counters::load()?.get();
+    // The effective floor, not the data-dir file alone: that file is only one
+    // of three inputs, so on its own it reads stale the moment another base or
+    // a project on disk is ahead of it.
+    let counter = Counters::floor(&config);
 
     Ok(json!({
         "ok": true,
@@ -1683,26 +1686,24 @@ fn reindex_all() -> Result<Value> {
     Ok(json!({"ok": true, "projects": total}))
 }
 
-/// `POST /api/counter` — set the global ID counter.
+/// `POST /api/counter` — raise the global ID counter.
 ///
-/// Written into the primary base (where new projects go), not the data
-/// directory, so both operating systems on a dual-boot machine read the same
-/// number. See [`Counters`].
+/// Same rule as `fastf id set`: the counter is the highest ID seen anywhere, so
+/// it only moves up and a value at or below the floor is refused rather than
+/// accepted-and-ignored. Writing propagates to every mounted base, which is what
+/// keeps both operating systems of a dual-boot machine on one number.
 fn set_counter(request: CounterRequest) -> Result<Value> {
     let config = Config::load()?;
-    let base = config.resolve_base_dir();
-    let path = Counters::base_path(&base);
-    // Written directly rather than via `save_base`, which is monotonic: this
-    // route exists precisely so a human can set the value, including downward.
-    let raw = toml::to_string_pretty(&Counters {
-        global: request.value,
-    })
-    .context("serializing counters")?;
-    crate::util::atomic::write(&path, raw)
-        .with_context(|| format!("writing {}", path.display()))?;
+    let floor = Counters::floor(&config);
+    if request.value <= floor {
+        anyhow::bail!(
+            "The counter cannot go below {floor} — that ID is already in use. \
+             The next project will be ID{:04} either way.",
+            floor + 1
+        );
+    }
+    Counters::record(&config, &config.resolve_base_dir(), request.value);
 
-    // Report the effective floor, which may be higher than what was just set:
-    // an existing project always wins over a counter typed too low.
     let counter = Counters::floor(&config);
     Ok(json!({
         "ok": true,

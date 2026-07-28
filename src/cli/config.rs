@@ -24,10 +24,17 @@ pub fn show() -> Result<()> {
         "Templates dir:".dimmed(),
         paths::templates_dir().display()
     );
+    // The data-dir counter is a backup input, not the record — each base carries
+    // its own `.fastf-counter.toml`. `fastf id show` lists them.
     println!(
         "  {:<26} {}",
-        "Counters file:".dimmed(),
+        "Counter (this machine):".dimmed(),
         paths::counters_path().display()
+    );
+    println!(
+        "  {:<26} {}",
+        "Counter (per base):".dimmed(),
+        "<base>/.fastf-counter.toml  — see `fastf id show`".dimmed()
     );
     println!();
     println!(
@@ -98,6 +105,16 @@ pub fn show() -> Result<()> {
         "register_naming_pattern:".green(),
         config.register_naming_pattern
     );
+    println!(
+        "  {:<26} {}  {}",
+        "on_name_collision:".green(),
+        config.on_name_collision,
+        if config.suffix_on_name_collision() {
+            "(a taken folder name gets _2, _3, …)".dimmed()
+        } else {
+            "(a taken folder name is refused)".dimmed()
+        }
+    );
     println!();
     println!("  {}", "post_create defaults:".bold());
     println!(
@@ -164,8 +181,16 @@ pub fn set(key: &str, value: &str) -> Result<()> {
     let normalized = key.replace('-', "_");
     match normalized.as_str() {
         "base_dir" => {
-            config.base_dir = value.to_string();
-            println!("Set base_dir = {}", value);
+            // Same validation as first-run onboarding — see
+            // `config::resolve_base_dir_input`. Storing the raw string let a
+            // quoted `~/Projects` become a literal directory named `~`, and a
+            // relative path scatter projects wherever the command ran.
+            let resolved = crate::core::config::resolve_base_dir_input(value)?;
+            config.base_dir = resolved.display().to_string();
+            println!(
+                "Set base_dir = {}",
+                crate::util::paths::display_path(&resolved)
+            );
         }
         "editor" => {
             config.editor = value.to_string();
@@ -208,11 +233,24 @@ pub fn set(key: &str, value: &str) -> Result<()> {
         "bases" => {
             // Comma-separated list of extra base directories to index. Empty
             // value clears the list.
-            config.bases = value
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
+            //
+            // Each entry gets the same `~`-expansion and absolute-path check as
+            // base_dir, but an entry that does not *exist* is only a warning:
+            // an unmounted drive is a legitimate base, and discovery already
+            // treats an absent one as honestly empty.
+            let mut resolved = Vec::new();
+            for raw in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                let expanded = crate::core::config::expand_base_path(raw)?;
+                if !expanded.is_dir() {
+                    eprintln!(
+                        "{} {} is not mounted right now — keeping it; it will be indexed when it appears",
+                        "note:".yellow(),
+                        crate::util::paths::display_path(&expanded)
+                    );
+                }
+                resolved.push(expanded.display().to_string());
+            }
+            config.bases = resolved;
             if config.bases.is_empty() {
                 println!("Cleared bases");
             } else {
@@ -246,6 +284,22 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                 config.register_naming_pattern
             );
         }
+        "on_name_collision" => {
+            let v = value.trim().to_lowercase();
+            if v != "suffix" && v != "error" {
+                bail!("expected 'suffix' or 'error'; got '{}'", value.trim());
+            }
+            config.on_name_collision = v;
+            println!(
+                "Set on_name_collision = {}  ({})",
+                config.on_name_collision,
+                if config.suffix_on_name_collision() {
+                    "a taken folder name gets _2, _3, …"
+                } else {
+                    "a taken folder name is refused"
+                }
+            );
+        }
         "post_create.git_init" => {
             config.post_create.git_init = parse_bool(value)?;
             println!("Set post_create.git_init = {}", config.post_create.git_init);
@@ -271,7 +325,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
         other => bail!(
             "unknown config key '{}'. Valid keys: base-dir, bases, editor, default-template, date-format, \
              preview-lines, prompt-open-after-create, confirm-create, show-banner, \
-             recent-default-limit, register-naming-pattern, \
+             recent-default-limit, register-naming-pattern, on-name-collision, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
             other
         ),

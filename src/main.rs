@@ -168,6 +168,10 @@ enum Commands {
 
         /// Target base — full path or its folder name. Omit to pick interactively.
         base: Option<String>,
+
+        /// Skip the confirmation prompt (for scripts).
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Rebuild the project-library cache by rescanning every base
@@ -185,10 +189,13 @@ enum Commands {
         about = "Recover interrupted background copies and staged moves",
         long_about = "Large asset copies (during UI creates) and cross-filesystem moves leave a\n\
             durable marker so a crash mid-copy is never silent data loss. `fastf\n\
-            reconcile` (also run automatically when `fastf ui` launches) walks every\n\
-            base, resumes any pending copies, and either finishes an already-committed\n\
-            move's source removal or rolls an uncommitted one back — the source folder\n\
-            is always left intact when nothing was verified."
+            reconcile` walks every base, resumes any pending copies, and either\n\
+            finishes an already-committed move's source removal or rolls an\n\
+            uncommitted one back — the source folder is always left intact when\n\
+            nothing was verified.\n\n\
+            It is never run automatically: because nothing is deleted until it has\n\
+            been verified, an unreconciled crash is always safe, just untidy. The\n\
+            browser UI shows a banner offering to run it when it finds a marker."
     )]
     Reconcile,
 
@@ -230,8 +237,9 @@ enum Commands {
         #[arg(long)]
         recursive: bool,
 
-        /// With --recursive: preview which folders would be registered, writing nothing.
-        #[arg(long)]
+        /// Preview which folders would be registered, writing nothing.
+        /// Only meaningful with --recursive (a single folder has nothing to preview).
+        #[arg(long, requires = "recursive")]
         dry_run: bool,
 
         /// Template slug to attach (enables --apply and --rename). Omit for a minimal record.
@@ -240,7 +248,7 @@ enum Commands {
 
         /// After registering, run apply-style fill-in of missing template folders/files
         /// (requires --template). Existing files are never overwritten.
-        #[arg(long, requires = "template")]
+        #[arg(long, requires = "template", conflicts_with = "recursive")]
         apply: bool,
 
         /// Standardize the folder name by renaming on disk. With --template:
@@ -248,7 +256,7 @@ enum Commands {
         /// config.register_naming_pattern (default "{date}_{name}_{id}", where
         /// {name} is the sanitized current folder name). Confirms before
         /// moving unless --yes.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "recursive")]
         rename: bool,
 
         /// Use today's date as the project's `created` timestamp
@@ -257,11 +265,11 @@ enum Commands {
         use_today: bool,
 
         /// Explicit `created` date as YYYY-MM-DD (e.g. 2024-06-15).
-        #[arg(long, value_name = "YYYY-MM-DD")]
+        #[arg(long, value_name = "YYYY-MM-DD", conflicts_with = "recursive")]
         created: Option<String>,
 
         /// Skip confirmation prompts (PROJECT_INFO.md overwrite, rename).
-        #[arg(short = 'y', long)]
+        #[arg(short = 'y', long, conflicts_with = "recursive")]
         yes: bool,
 
         /// Variable values as --slug=value flags when --template is set.
@@ -450,6 +458,9 @@ enum TemplateAction {
     Delete {
         /// Template slug (see 'fastf template list')
         slug: String,
+        /// Skip the confirmation prompt (for scripts)
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Generate a template from an existing folder tree (structure + file contents, opt-in assets)
     #[command(
@@ -495,6 +506,7 @@ enum ConfigAction {
             show-banner                 Show ASCII banner in TUI menu (default: true)\n  \
             recent-default-limit        Default --limit for `fastf recent` (default: 20)\n  \
             register-naming-pattern     Pattern for `fastf register --rename` w/o a template (default: \"{date}_{name}_{id}\")\n  \
+            on-name-collision           What to do when the folder name is taken: suffix (add _2, _3…) or error (default: suffix)\n  \
             post_create.git_init        Run `git init` automatically (default: false)\n  \
             post_create.reveal          Open folder in file manager automatically (default: false)\n  \
             post_create.open_in_editor  Open folder in $EDITOR automatically (default: false)\n  \
@@ -510,6 +522,7 @@ enum ConfigAction {
             fastf config set default-template music-video\n  \
             fastf config set date-format %d-%m-%Y\n  \
             fastf config set prompt-open-after-create false\n  \
+            fastf config set on-name-collision error\n  \
             fastf config set post_create.reveal true")]
     Set {
         /// Config key (run `fastf config set --help` for the full list)
@@ -564,13 +577,32 @@ enum NoteAction {
 enum IdAction {
     /// Show the current global ID counter value and what the next project ID will be
     Show,
-    /// Reset the global counter back to 0 (next project will be ID0001)
-    Reset,
-    /// Set the counter to a specific value (next project will be that value + 1)
+    /// Make every base agree on the highest ID seen anywhere
+    #[command(
+        long_about = "The counter is the highest ID seen in any base's counter file, this\n\
+            machine's data directory, or the projects themselves — and every base\n\
+            converges on that one number, so both operating systems of a dual-boot\n\
+            machine hand out the same next ID.\n\n\
+            This happens automatically on every create and every `fastf id show`.\n\
+            Run `sync` explicitly after an external change: a base mounted for the\n\
+            first time, or projects copied in from another machine."
+    )]
+    Sync,
+    /// Raise the counter (it can never be lowered — see `fastf id sync`)
+    #[command(
+        after_help = "The counter only moves up: it is the highest ID seen anywhere, so a\n\
+        lower value would hand out an ID that already exists. Values at or below\n\
+        the current floor are refused with an explanation.\n\n\
+        Examples:\n  \
+            fastf id set 100        # next project becomes ID0101"
+    )]
     Set {
         /// Counter value to set (e.g. 46 means next project gets ID0047)
         value: u64,
     },
+    /// Removed — the counter cannot be reset. Use `fastf id sync`.
+    #[command(hide = true)]
+    Reset,
 }
 
 // ---------------------------------------------------------------------------
@@ -592,17 +624,43 @@ fn main() {
     fastf::util::interrupt::install();
 
     if let Err(e) = run() {
+        // Every dialoguer prompt hides the cursor and shows it again on the way
+        // out — but not when it returns an error, and not when a menu unwinds
+        // past it. Left alone, quitting the TUI with Ctrl-C hands the shell back
+        // an invisible cursor until the user thinks to run `tput cnorm`.
+        restore_cursor();
+
         // An interrupt is the user's choice, not a failure. Say so, and exit
         // 130 (the shell convention for SIGINT) so scripts can tell them apart.
+        //
+        // Deliberately says nothing about a partial project: this fires wherever
+        // Ctrl-C lands, including the main menu with nothing in flight. The
+        // create path prints its own notice when it actually rolls a folder back.
         if fastf::util::interrupt::is_set() {
-            eprintln!(
-                "{} interrupted — the partial project was removed.",
-                colored::Colorize::yellow("aborted:")
-            );
+            eprintln!("{}", colored::Colorize::yellow("aborted."));
             std::process::exit(130);
         }
         eprintln!("{} {:#}", colored::Colorize::red("error:"), e);
         std::process::exit(1);
+    }
+}
+
+/// Undo any prompt's `hide_cursor` before the process leaves. Best-effort on
+/// both streams: prompts draw on stderr, output lands on stdout, and either can
+/// be the terminal.
+///
+/// Guarded by `is_terminal` on each stream. `Term::show_cursor` emits the escape
+/// regardless of what it is writing to, so an unguarded call put a literal
+/// `\x1b[?25h` into every piped error — corrupting exactly the output a script
+/// is reading.
+fn restore_cursor() {
+    use dialoguer::console::Term;
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        let _ = Term::stdout().show_cursor();
+    }
+    if std::io::stderr().is_terminal() {
+        let _ = Term::stderr().show_cursor();
     }
 }
 
@@ -653,7 +711,7 @@ fn run() -> Result<()> {
             TemplateAction::List => cli::template::list(),
             TemplateAction::Show { slug } => cli::template::show(&slug),
             TemplateAction::Edit { slug } => cli::template::edit(&slug),
-            TemplateAction::Delete { slug } => cli::template::delete(&slug),
+            TemplateAction::Delete { slug, yes } => cli::template::delete(&slug, yes),
             TemplateAction::FromFolder {
                 path,
                 slug,
@@ -669,8 +727,9 @@ fn run() -> Result<()> {
 
         Some(Commands::Id { action }) => match action {
             IdAction::Show => cli::id::show(),
-            IdAction::Reset => cli::id::reset(),
+            IdAction::Sync => cli::id::sync(),
             IdAction::Set { value } => cli::id::set(value),
+            IdAction::Reset => cli::id::reset(),
         },
 
         Some(Commands::Recent {
@@ -688,8 +747,8 @@ fn run() -> Result<()> {
         }),
 
         Some(Commands::Open { query }) => cli::recent::open(&query),
-        Some(Commands::Move { query, base }) => {
-            cli::move_project::run(cli::move_project::MoveArgs { query, base })
+        Some(Commands::Move { query, base, yes }) => {
+            cli::move_project::run(cli::move_project::MoveArgs { query, base, yes })
         }
 
         Some(Commands::Reindex) => cli::reindex::run(),
@@ -709,6 +768,24 @@ fn run() -> Result<()> {
         }) => {
             let classified = cli::new::classify_extra(extra);
             warn_unknown(&classified.unknown);
+            // clap's `requires`/`conflicts_with` only see flags written *before*
+            // the path; `trailing_var_arg` swallows anything after it into
+            // `extra`. Re-check here so `fastf register X --dry-run` is refused
+            // wherever the flag was typed — it used to be dropped silently and
+            // the folder written for real.
+            let dry_run = dry_run || classified.flags.dry_run;
+            if dry_run && !recursive {
+                anyhow::bail!(
+                    "--dry-run only applies to --recursive (a single folder has nothing to preview).\n  \
+                     Registering one folder writes its PROJECT_INFO.md and nothing else."
+                );
+            }
+            let yes = yes || classified.flags.yes;
+            if yes && recursive {
+                anyhow::bail!(
+                    "--yes cannot be used with --recursive: bulk registration never prompts"
+                );
+            }
             if recursive {
                 cli::register::run_recursive(cli::register::RecursiveArgs {
                     base: std::path::PathBuf::from(path),
@@ -725,7 +802,7 @@ fn run() -> Result<()> {
                     rename,
                     use_today,
                     created_override: created,
-                    yes: yes || classified.flags.yes,
+                    yes,
                 })
             }
         }

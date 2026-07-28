@@ -174,7 +174,7 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
     // 7. ID: recover an `ID####` token from the folder name (identity that
     //    already lives on disk), else mint fresh from the self-healed floor.
     let id_value = parse_id_token(&folder_name, &tmpl.id.prefix)
-        .unwrap_or_else(|| counters.get().max(Counters::floor(&cfg)) + 1);
+        .unwrap_or_else(|| Counters::next_value(&cfg, &counters));
     let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
 
     let mut plan_vars = build_plan_vars(&tmpl, &opts.vars, &id_str);
@@ -243,7 +243,7 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
     if id_value > counters.get()
         && let Some(base) = plan.root_path.parent()
     {
-        Counters::record(base, id_value);
+        Counters::record(&cfg, base, id_value);
     }
 
     // 12. Write PROJECT_INFO.md unless we're keeping an existing one.
@@ -337,8 +337,12 @@ pub fn run(args: RegisterArgs) -> Result<()> {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         // Preview ID: recover from the folder name if present, else next floor.
+        // This MUST use the same expression `register_core` commits with — when
+        // it read the data-dir counter alone, the prompt offered
+        // `..._ID0001` and the folder came out `..._ID0011`.
+        let counters = Counters::load().unwrap_or_default();
         let id_value = parse_id_token(&current_name, &tmpl.id.prefix)
-            .unwrap_or_else(|| Counters::load().map(|c| c.get()).unwrap_or(0) + 1);
+            .unwrap_or_else(|| Counters::next_value(&cfg, &counters));
         let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
         let mut preview_vars = build_plan_vars(&tmpl, &collected_vars, &id_str);
         if args.template_slug.is_none() {

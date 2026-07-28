@@ -48,13 +48,21 @@ pub fn add(args: NoteAddArgs) -> Result<()> {
         );
     }
 
-    let message = resolve_message(args.message.as_deref(), &cfg.editor)?;
+    // `resolve_editor()`, not the raw field: an unset `editor` (the default)
+    // must fall back to $EDITOR, exactly as post-create does. Passing the raw
+    // field made the documented "omit the message to open your editor" mode fail
+    // with `launching editor ''` on every default install.
+    let message = resolve_message(args.message.as_deref(), &cfg.resolve_editor())?;
     let message = message.trim().to_string();
 
     if message.is_empty() {
         bail!("journal entry is empty — nothing written");
     }
 
+    // Read-modify-write of the journal section — atomic on disk, but two
+    // appends at once (a terminal and the browser UI) would otherwise keep only
+    // one. Taken after the editor closes, never across it.
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     project_info::append_journal_entry(&pinfo, &message)
         .with_context(|| format!("appending journal entry to {}", pinfo.display()))?;
 
@@ -115,7 +123,10 @@ pub fn notes(args: NotesArgs) -> Result<()> {
 
     println!();
     for entry in &filtered {
-        let date = &entry.timestamp[..entry.timestamp.len().min(10)]; // YYYY-MM-DD
+        // `get`, not a byte slice: a hand-edited PROJECT_INFO.md can put any
+        // text where the timestamp goes, and slicing to 10 bytes panicked
+        // mid-character on the first multi-byte one.
+        let date = entry.timestamp.get(..10).unwrap_or(&entry.timestamp);
         println!("  {} {}  {}", "•".dimmed(), date.dimmed(), entry.message);
     }
     println!();
@@ -153,40 +164,87 @@ fn resolve_message(raw: Option<&str>, editor: &str) -> Result<String> {
     }
 }
 
+/// A scratch file that removes itself however the function exits.
+///
+/// The old path was a predictable `/tmp/fastf-note-<pid>.txt` written with
+/// `fs::write`, which follows a symlink someone else planted there, and which
+/// leaked whenever the editor exited non-zero.
+struct ScratchFile(std::path::PathBuf);
+
+impl Drop for ScratchFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Create a scratch file that did not exist a moment ago.
+///
+/// `create_new` is the load-bearing part: it opens with `O_CREAT | O_EXCL`,
+/// which refuses an existing path and does **not** follow a symlink — so a
+/// pre-planted link cannot redirect the write. The name only has to be unlikely
+/// enough to avoid honest collisions; the exclusivity is what provides safety,
+/// and a collision just means trying again.
+fn create_scratch_file() -> Result<(ScratchFile, std::fs::File)> {
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let dir = std::env::temp_dir();
+    for attempt in 0..8u32 {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(attempt);
+        let path = dir.join(format!(
+            "fastf-note-{}-{}-{}.txt",
+            std::process::id(),
+            nanos,
+            attempt
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                // A prompt comment so the editor opens with some context.
+                file.write_all(b"# Enter your journal note. Lines starting with # are ignored.\n")
+                    .context("writing editor temp file")?;
+                file.flush().context("writing editor temp file")?;
+                return Ok((ScratchFile(path), file));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(err).with_context(|| format!("creating {}", path.display()));
+            }
+        }
+    }
+    bail!("could not create a scratch file in {}", dir.display())
+}
+
 /// Open the configured editor and return what the user wrote.
 fn open_in_editor(editor: &str) -> Result<String> {
-    use std::fs;
-
-    let tmp = tempfile_path();
-    // Write a prompt comment so the editor opens with some context.
-    fs::write(
-        &tmp,
-        "# Enter your journal note. Lines starting with # are ignored.\n",
-    )
-    .context("writing editor temp file")?;
+    let (scratch, _handle) = create_scratch_file()?;
 
     let status = std::process::Command::new(editor)
-        .arg(&tmp)
+        .arg(&scratch.0)
         .status()
-        .with_context(|| format!("launching editor '{}'", editor))?;
+        .with_context(|| {
+            format!(
+                "launching editor '{editor}'. Set one with `fastf config set editor <cmd>` \
+                 or $EDITOR, or pass the message inline: fastf note add <id> \"...\""
+            )
+        })?;
 
     if !status.success() {
-        bail!("editor exited with non-zero status");
+        bail!("editor exited with non-zero status — nothing written");
     }
 
-    let raw = fs::read_to_string(&tmp).context("reading editor temp file")?;
-    let _ = fs::remove_file(&tmp);
+    let raw = std::fs::read_to_string(&scratch.0).context("reading editor temp file")?;
 
     // Strip comment lines
-    let message: String = raw
+    Ok(raw
         .lines()
         .filter(|l| !l.trim_start().starts_with('#'))
         .collect::<Vec<_>>()
-        .join("\n");
-
-    Ok(message)
-}
-
-fn tempfile_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("fastf-note-{}.txt", std::process::id()))
+        .join("\n"))
 }

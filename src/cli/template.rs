@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::Confirm;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::core::project;
@@ -86,7 +87,84 @@ pub fn show(slug: &str) -> Result<()> {
         }
     }
 
+    // `t.files` is a load-time scan of *text* files only, so bundled binary
+    // assets in `files/` were invisible here even though every new project gets
+    // them. List what is actually on disk that the scan skipped.
+    let bundled = bundled_assets(&t);
+    if !bundled.is_empty() {
+        println!("\n{}", "Bundled assets (copied byte-for-byte):".bold());
+        for rel in &bundled {
+            println!("  {} {}", "•".cyan(), rel.dimmed());
+        }
+    }
+
+    if !t.verbatim.is_empty() {
+        println!("\n{}", "Verbatim globs (never interpolated):".bold());
+        for g in &t.verbatim {
+            println!("  {} {}", "•".cyan(), g);
+        }
+    }
+    if !t.exclude.is_empty() {
+        println!("\n{}", "Excluded globs (never copied):".bold());
+        for g in &t.exclude {
+            println!("  {} {}", "•".cyan(), g);
+        }
+    }
+    if !t.tags.is_empty() || !t.tag_from.is_empty() {
+        println!("\n{}", "Tags:".bold());
+        for tag in &t.tags {
+            println!("  {} {}", "•".cyan(), tag.yellow());
+        }
+        for slug in &t.tag_from {
+            println!(
+                "  {} {}",
+                "•".cyan(),
+                format!("{slug}/<value of {slug}>").yellow()
+            );
+        }
+    }
+    if let Some(pc) = &t.post_create {
+        println!(
+            "\n{}",
+            "Post-create (overrides the global settings):".bold()
+        );
+        println!("  git_init        {}", pc.git_init);
+        println!("  reveal          {}", pc.reveal);
+        println!("  open_in_editor  {}", pc.open_in_editor);
+        println!("  print_path      {}", pc.print_path);
+        if !pc.commands.is_empty() {
+            println!("  commands        {}", pc.commands.len());
+        }
+    }
+
     Ok(())
+}
+
+/// Files present in the template's `files/` subtree that the load-time text scan
+/// did not pick up — binaries and anything over the text cap. These are copied
+/// into every new project, so `show` has to name them.
+fn bundled_assets(t: &Template) -> Vec<String> {
+    let root = paths::template_files_dir(&t.slug);
+    let known: std::collections::HashSet<&str> = t.files.iter().map(|f| f.path.as_str()).collect();
+    let mut out = Vec::new();
+    collect_relative(&root, &root, &mut out);
+    out.retain(|rel| !known.contains(rel.as_str()));
+    out.sort();
+    out
+}
+
+fn collect_relative(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_relative(root, &path, out);
+        } else if let Ok(rel) = path.strip_prefix(root) {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
 }
 
 /// Create a new template using the interactive builder.
@@ -104,21 +182,31 @@ pub fn edit(slug: &str) -> Result<()> {
     crate::tui::template_builder::build_template(Some(existing))
 }
 
-pub fn delete(slug: &str) -> Result<()> {
+pub fn delete(slug: &str, yes: bool) -> Result<()> {
     let dir = paths::template_dir(slug);
     if !dir.exists() {
         bail!("template '{}' not found", slug);
     }
-    let ok = Confirm::new()
-        .with_prompt(format!("Delete template '{}' and its bundled files?", slug))
-        .default(false)
-        .interact()?;
-    if ok {
-        fs::remove_dir_all(&dir)?;
-        println!("Deleted template '{}'.", slug);
-    } else {
-        println!("Aborted.");
+    if !yes {
+        // Without this the command is simply unusable from a script: it dies on
+        // dialoguer's bare "IO error: not a terminal" with no way forward.
+        if !std::io::stdout().is_terminal() {
+            bail!(
+                "no terminal to confirm on — pass --yes to delete template '{}' without confirming",
+                slug
+            );
+        }
+        let ok = Confirm::new()
+            .with_prompt(format!("Delete template '{}' and its bundled files?", slug))
+            .default(false)
+            .interact()?;
+        if !ok {
+            println!("Aborted.");
+            return Ok(());
+        }
     }
+    fs::remove_dir_all(&dir)?;
+    println!("Deleted template '{}'.", slug);
     Ok(())
 }
 
@@ -176,7 +264,7 @@ pub fn from_folder(
     validate_slug(slug)?;
     ensure_slug_available(slug, force)?;
     let scan = scan_source(&root, bundle_assets)?;
-    execute_scan(scan, slug, &root)
+    execute_scan(scan, slug, &root, force)
 }
 
 /// Interactive CLI wrapper: confirms the total size before bundling assets, then
@@ -205,7 +293,7 @@ pub fn run_from_folder(source: &str, slug: &str, force: bool, bundle_assets: boo
         }
     }
 
-    let report = execute_scan(scan, slug, &root)?;
+    let report = execute_scan(scan, slug, &root, force)?;
     print_from_folder_summary(slug, &report);
     Ok(())
 }
@@ -233,8 +321,21 @@ fn ensure_slug_available(slug: &str, force: bool) -> Result<()> {
 
 /// Materialize a [`ScanResult`] into a template on disk: write `template.yaml` +
 /// the text `files/`, then copy bundled binary assets byte-for-byte.
-fn execute_scan(scan: ScanResult, slug: &str, root: &Path) -> Result<FromFolderReport> {
+fn execute_scan(
+    scan: ScanResult,
+    slug: &str,
+    root: &Path,
+    force: bool,
+) -> Result<FromFolderReport> {
     let files_dir = paths::template_files_dir(slug);
+    // `--force` means regenerate, not merge. Since v0.8 the `files/` subtree is
+    // what create actually copies, so leaving the previous generation's files in
+    // place put them into every new project — invisibly, because the manifest's
+    // `structure` was replaced correctly and only the file tree disagreed.
+    if force && files_dir.exists() {
+        crate::util::fs_retry::remove_dir_all(&files_dir)
+            .with_context(|| format!("clearing {}", files_dir.display()))?;
+    }
     fs::create_dir_all(&files_dir).context("creating template directory")?;
     let dest = paths::template_manifest(slug);
 

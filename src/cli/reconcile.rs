@@ -3,10 +3,14 @@
 //!
 //! Large asset copies during `fastf new` (UI) and cross-filesystem moves leave a
 //! durable marker so a crash mid-copy is never silent data loss. This command
-//! (also run automatically when `fastf ui` launches) walks every base, resumes
-//! pending create copies, and either finishes an already-committed move's source
-//! removal or rolls back an uncommitted one — always leaving the source intact
-//! when nothing was verified.
+//! walks every base, resumes pending create copies, and either finishes an
+//! already-committed move's source removal or rolls back an uncommitted one —
+//! always leaving the source intact when nothing was verified.
+//!
+//! It is **not** run automatically anywhere, despite what the help text claimed
+//! until v1.3: nothing is deleted until it has been verified, so an unreconciled
+//! crash is safe, just untidy. The browser UI surfaces a banner (and
+//! `POST /api/reconcile`) when `provisioning::list_incomplete` finds a marker.
 
 use anyhow::Result;
 use colored::Colorize;

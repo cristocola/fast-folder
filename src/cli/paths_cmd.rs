@@ -19,10 +19,22 @@ pub fn run() -> Result<()> {
         "Config:".green(),
         paths::config_path().display()
     );
+    // Two counter locations, and the base one is the record — saying only
+    // "Counters: <data dir>" made the backup input look authoritative.
     println!(
         "  {:<16} {}",
-        "Counters:".green(),
+        "Counter:".green(),
         paths::counters_path().display()
+    );
+    println!(
+        "  {:<16} {}",
+        "".dimmed(),
+        "this machine's copy — each base also carries .fastf-counter.toml,".dimmed()
+    );
+    println!(
+        "  {:<16} {}",
+        "".dimmed(),
+        "which is the number both operating systems read (`fastf id show`)".dimmed()
     );
     println!(
         "  {:<16} {}",

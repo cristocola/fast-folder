@@ -207,6 +207,27 @@ fn dir_mtime(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// Re-stamp a base's cache as current, without rereading anything.
+///
+/// Writing `.fastf-counter.toml` into a base bumps that base's directory mtime,
+/// which [`cache_is_stale`] reads as "a project was added or removed" — so
+/// propagating the ID counter would otherwise force a full rescan of every base
+/// on every create, defeating the cache entirely. The counter write provably
+/// changes no project, so the honest repair is to say the cache is still good.
+///
+/// Only safe because fastf's own writers are serialized by `DataLock`. A change
+/// made outside fastf during this instant would be masked until the next
+/// `fastf reindex` — the same contract external edits already carry.
+pub fn touch_cache(base: &Path) {
+    let path = cache_path(base);
+    if !path.exists() {
+        return;
+    }
+    if let Ok(file) = fs::OpenOptions::new().write(true).open(&path) {
+        let _ = file.set_times(fs::FileTimes::new().set_modified(SystemTime::now()));
+    }
+}
+
 /// Read the direct children (depth `SCAN_DEPTH`) of `base` and return a
 /// [`Project`] for every subdirectory that carries a `PROJECT_INFO.md`.
 /// Subdirectories without one are skipped — sitting in a base is necessary but
@@ -858,18 +879,23 @@ pub fn resolve(cfg: &Config, query: &str) -> Result<Project> {
 /// to call from `plan()` / preview (which must not touch disk). It reads a fresh
 /// cache when present, else scans the base directly.
 pub fn max_id(cfg: &Config) -> u64 {
-    let mut max = 0u64;
-    for base in cfg.effective_bases() {
-        if !base.is_dir() {
-            continue;
-        }
-        for project in read_base_readonly(&base) {
-            if let Some(value) = naming::id_value(&project.id) {
-                max = max.max(value);
-            }
-        }
-    }
-    max
+    cfg.effective_bases()
+        .iter()
+        .filter(|base| base.is_dir())
+        .map(|base| max_id_in_base(base))
+        .max()
+        .unwrap_or(0)
+}
+
+/// The highest ID held by the projects in **one** base. Read-only, same as
+/// [`max_id`]. Separate because a base's own projects are what decide whether
+/// its `.fastf-counter.toml` is authoritative or needs raising.
+pub fn max_id_in_base(base: &Path) -> u64 {
+    read_base_readonly(base)
+        .iter()
+        .filter_map(|project| naming::id_value(&project.id))
+        .max()
+        .unwrap_or(0)
 }
 
 /// Read a base's projects **without** writing the cache: use a fresh cache if

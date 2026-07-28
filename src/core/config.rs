@@ -208,11 +208,18 @@ pub fn suggested_base_dir() -> Option<std::path::PathBuf> {
     paths::home_dir().map(|home| home.join("Projects"))
 }
 
-/// First-run onboarding core, shared by the TUI prompt and the web UI's
-/// `/api/base/init`: expand a leading `~`, require an absolute path (the base
-/// must never depend on the working directory), create the folder if missing,
-/// and persist it as `base_dir`. Returns the resolved path.
-pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
+/// Expand a leading `~` and require an absolute path. Creates nothing.
+///
+/// **Takes no lock and saves nothing** — that split is mandatory, not cosmetic.
+/// `DataLock` is not reentrant, so a validator that locked could not be called
+/// from `config::set`, which already holds it. Every entry point for a base path
+/// goes through here or [`resolve_base_dir_input`]: onboarding, `fastf config
+/// set base-dir` / `bases`, and the same keys in TUI Settings. When only
+/// onboarding validated, `config set base-dir '~/Projects'` stored a literal `~`
+/// and a relative path was accepted outright — which scattered projects, index
+/// caches and a counter file into whatever directory the command happened to
+/// run from.
+pub fn expand_base_path(raw: &str) -> Result<std::path::PathBuf> {
     let raw = raw.trim();
     if raw.is_empty() {
         bail!("Choose a folder for your projects first");
@@ -231,19 +238,42 @@ pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
         std::path::PathBuf::from(raw)
     };
     if !expanded.is_absolute() {
-        bail!("The base folder must be an absolute path (got '{raw}')");
+        bail!(
+            "The base folder must be an absolute path (got '{raw}').\n  \
+             A relative path would depend on where the command was run, scattering \
+             projects across directories."
+        );
     }
+    Ok(expanded)
+}
+
+/// [`expand_base_path`] plus "make it exist": creates the folder if missing and
+/// returns the canonical path. This is for `base_dir`, the one folder new
+/// projects are written into.
+///
+/// Extra bases deliberately do **not** go through here. Creating a missing one
+/// would plant an empty directory at an unmounted mount point, shadowing the
+/// drive it stands for — an absent base is meant to be skipped, not conjured.
+pub fn resolve_base_dir_input(raw: &str) -> Result<std::path::PathBuf> {
+    let expanded = expand_base_path(raw)?;
     fs::create_dir_all(&expanded).with_context(|| format!("creating {}", expanded.display()))?;
-    let resolved = expanded.canonicalize().unwrap_or(expanded);
-    // Another load-mutate-save, so it takes the same cross-process lock as
+    // Stored canonical, rendered readable at the display sites. Keeping the
+    // verbatim form is what preserves long-path support when this base is later
+    // used for filesystem work.
+    Ok(expanded.canonicalize().unwrap_or(expanded))
+}
+
+/// First-run onboarding core, shared by the TUI prompt and the web UI's
+/// `/api/base/init`: validate via [`resolve_base_dir_input`] and persist the
+/// result as `base_dir`. Returns the resolved path.
+pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
+    let resolved = resolve_base_dir_input(raw)?;
+    // A load-mutate-save, so it takes the same cross-process lock as
     // `config set`. No caller holds the lock already (the lock is not
     // reentrant): the web UI's `/api/base/init` takes only `WRITE_LOCK`, and the
     // TUI's onboarding runs before anything else.
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let mut config = Config::load()?;
-    // Stored canonical, rendered readable at the display sites. Keeping the
-    // verbatim form here is what preserves long-path support when this base is
-    // later used for filesystem work.
     config.base_dir = resolved.display().to_string();
     config.save()?;
     Ok(resolved)

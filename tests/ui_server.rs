@@ -1089,6 +1089,11 @@ fn destructive_route_rechecks_cached_project_identity_before_deleting() {
             metadata.id = "T999".to_string()
         })
         .unwrap();
+        // Keep discovery on the deliberately stale cache entry. Windows may
+        // timestamp the parent directory after the atomic cache rename, which
+        // otherwise makes the cache look stale and causes an authoritative
+        // rescan before this test reaches the destructive-operation guard.
+        fastf::core::library::touch_cache(root.parent().unwrap());
 
         let error = ui::route_request(
             "POST",
@@ -1231,10 +1236,13 @@ fn ui_base_overrides_use_the_shared_absolute_path_resolver() {
                 "base_dir": "~/override"
             }),
         );
-        assert_eq!(
-            Path::new(value["root_path"].as_str().unwrap()).parent(),
-            Some(install.join("override").as_path())
-        );
+        let actual_base = Path::new(value["root_path"].as_str().unwrap())
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        let expected_base = install.join("override").canonicalize().unwrap();
+        assert_eq!(actual_base, expected_base);
 
         let error = ui::route_request("POST", "/api/settings", br#"{"base_dir":"also/relative"}"#)
             .unwrap_err();

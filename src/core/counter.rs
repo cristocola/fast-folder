@@ -150,8 +150,8 @@ impl Counters {
     ///
     /// `counters` is honoured as a floor input so a caller holding an
     /// explicitly-set value is never silently overridden. Every caller that
-    /// needs the next ID — `project::plan`, `register_core`, and register's
-    /// rename preview — must go through here: when the preview used its own
+    /// needs the next ID — `project::plan`, `operations::register`, and the
+    /// register rename preview — must go through here: when preview used its own
     /// formula it confirmed one folder name and committed a different one.
     pub fn next_value(cfg: &Config, counters: &Counters) -> u64 {
         counters.get().max(Self::floor(cfg)) + 1

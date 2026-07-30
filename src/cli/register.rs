@@ -13,14 +13,13 @@
 //! `recent`, `search`, `tag`, and `note`.
 //!
 //! # Architecture
-//! [`register_core`] is the non-interactive engine — no prompts, no `println!`
-//! beyond the `--apply` progress lines. It is what the browser UI calls. The
-//! CLI [`run`] is a thin shell that gathers the interactive confirmations
+//! [`register_core`] is a compatibility adapter over `core::operations`; the
+//! browser UI calls the shared operation directly. The CLI [`run`] is a thin
+//! shell that gathers the interactive confirmations
 //! (rename preview, PROJECT_INFO.md overwrite) and then delegates to
 //! `register_core`, finally printing the success summary.
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use colored::Colorize;
 use dialoguer::Confirm;
 use std::collections::HashMap;
@@ -30,9 +29,8 @@ use std::path::{Path, PathBuf};
 
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::library::{self, Project};
-use crate::core::naming::{apply_transform, interpolate_name, parse_id_token, sanitize_name};
-use crate::core::project::{self, ProjectPlan};
+use crate::core::library::Project;
+use crate::core::naming::{interpolate_name, parse_id_token, sanitize_name};
 use crate::core::project_info;
 use crate::core::template::{self, IdConfig, Template};
 use crate::core::vars::collect_vars;
@@ -40,7 +38,7 @@ use crate::core::vars::collect_vars;
 /// Slug stored in PROJECT_INFO.md frontmatter when a folder is registered
 /// without a template. Surfaces clearly in `recent` listings so the user can
 /// tell "registered" projects apart from "created".
-pub const REGISTERED_SLUG: &str = "(registered)";
+pub const REGISTERED_SLUG: &str = crate::core::operations::REGISTERED_SLUG;
 
 /// What [`register_core`] should do when a `PROJECT_INFO.md` already exists in
 /// the target folder.
@@ -48,7 +46,7 @@ pub const REGISTERED_SLUG: &str = "(registered)";
 pub enum PinfoConflict {
     /// Overwrite the existing file with freshly-rendered metadata.
     Overwrite,
-    /// Keep the existing metadata file untouched (used by `--recursive`).
+    /// Immediate no-op: keep the existing project and perform no follow-ups.
     Skip,
     /// Refuse to register at all — bail *before* any write so the caller can
     /// confirm and retry cleanly. Used by the browser UI.
@@ -67,8 +65,8 @@ pub struct RegisterArgs {
     pub yes: bool,
 }
 
-/// Non-interactive options for [`register_core`]. The browser UI fills these
-/// directly from a form; the CLI builds them after resolving its prompts.
+/// Compatibility options for [`register_core`]. New noninteractive callers use
+/// `core::operations::RegisterOptions`; the CLI builds this adapter after prompts.
 pub struct RegisterOptions {
     pub path: PathBuf,
     pub template_slug: Option<String>,
@@ -109,186 +107,39 @@ pub struct RegisterOutcome {
 /// `PinfoConflict::Abort` collision nothing is committed so callers can re-invoke
 /// after confirming an overwrite.
 pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
-    // 1. Validate path. canonicalize() resolves symlinks so we act on a stable
-    //    absolute path even when the caller passed a relative one.
-    let canonical = opts.path.canonicalize().with_context(|| {
-        format!(
-            "path does not exist or is not accessible: {}",
-            opts.path.display()
-        )
+    let outcome = crate::core::operations::register(crate::core::operations::RegisterOptions {
+        path: opts.path,
+        template_slug: opts.template_slug,
+        vars: opts.vars,
+        apply_structure: opts.apply_structure,
+        rename: opts.rename,
+        use_today: opts.use_today,
+        created_override: opts.created_override,
+        on_pinfo_conflict: match opts.on_pinfo_conflict {
+            PinfoConflict::Overwrite => crate::core::operations::PinfoConflict::Overwrite,
+            PinfoConflict::Skip => crate::core::operations::PinfoConflict::Skip,
+            PinfoConflict::Abort => crate::core::operations::PinfoConflict::Abort,
+        },
     })?;
-    if !canonical.is_dir() {
-        bail!("path is not a directory: {}", canonical.display());
-    }
-
-    // 2. Flag conflict checks (clap covers the CLI, but the public API can be
-    //    called directly — re-check defensively).
-    if opts.apply_structure && opts.template_slug.is_none() {
-        bail!("--apply requires --template");
-    }
-    if opts.use_today && opts.created_override.is_some() {
-        bail!("--use-today and --created are mutually exclusive");
-    }
-
-    // 3. Resolve `created` timestamp (folder mtime / today / explicit date).
-    let resolved_created =
-        resolve_created(&canonical, opts.use_today, opts.created_override.as_deref())?;
-
-    // 4. Load global state. The data lock is held from here to the end of the
-    //    function so the ID this register mints (or recovers) cannot collide
-    //    with a concurrent `fastf new` or another register.
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    let cfg = Config::load()?;
-    let counters = Counters::load()?;
-
-    // 5. Resolve template (or stub). Variables come in raw; transforms are
-    //    applied below. Required variables must already be present.
-    let tmpl = match &opts.template_slug {
-        Some(slug) => template::find_by_slug(slug)?,
-        None => registered_stub_template(),
-    };
-    for var in &tmpl.variables {
-        let value = opts.vars.get(&var.slug).map(|v| v.trim()).unwrap_or("");
-        if var.required && value.is_empty() {
-            bail!("variable '{}' is required", var.label);
-        }
-    }
-
-    // 6. Early PROJECT_INFO.md conflict check. A folder that already has one is
-    //    already a project; for `Abort` bail *before* any write so a UI
-    //    retry-with-overwrite is clean.
-    let pinfo_path_initial = project_info::pinfo_path(&canonical);
-    let pinfo_exists = pinfo_path_initial.exists();
-    if pinfo_exists && opts.on_pinfo_conflict == PinfoConflict::Abort {
-        bail!(
-            "{} already exists — this folder is already a project (confirm overwrite to re-register)",
-            pinfo_path_initial.display()
+    if let Some(error) = &outcome.rename_error {
+        eprintln!(
+            "{} project registered, but rename failed: {}",
+            "warning:".yellow().bold(),
+            error
         );
     }
-
-    let folder_name = canonical
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "registered".to_string());
-
-    // 7. ID: recover an `ID####` token from the folder name (identity that
-    //    already lives on disk), else mint fresh from the self-healed floor.
-    let id_value = parse_id_token(&folder_name, &tmpl.id.prefix)
-        .unwrap_or_else(|| Counters::next_value(&cfg, &counters));
-    let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
-
-    let mut plan_vars = build_plan_vars(&tmpl, &opts.vars, &id_str);
-    // For the no-template rename path, inject a synthetic `{name}` token.
-    if opts.template_slug.is_none() {
-        plan_vars
-            .entry("name".to_string())
-            .or_insert_with(|| slugify_folder_name(&folder_name));
+    if let Some(error) = &outcome.apply_error {
+        eprintln!(
+            "{} project registered, but template apply was incomplete: {}",
+            "warning:".yellow().bold(),
+            error
+        );
     }
-
-    // 8. Build the plan directly. Unlike `project::plan`, `root_path` is the
-    //    canonical path of the existing folder (NOT cfg.base_dir + folder_name).
-    let mut plan = ProjectPlan {
-        folder_name,
-        root_path: canonical.clone(),
-        vars: plan_vars,
-        id_str: id_str.clone(),
-        counter_value: id_value,
-    };
-
-    // 9. Optional rename — render the pattern, move the folder if different.
-    let mut renamed_to = None;
-    if opts.rename
-        && let Some(desired) =
-            desired_rename(&tmpl, opts.template_slug.is_some(), &plan.vars, &cfg)?
-        && desired != plan.folder_name
-    {
-        let parent = plan.root_path.parent().ok_or_else(|| {
-            anyhow::anyhow!(
-                "cannot resolve parent of {} for rename",
-                plan.root_path.display()
-            )
-        })?;
-        let new_path = parent.join(&desired);
-        if new_path.exists() {
-            bail!("rename target already exists: {}", new_path.display());
-        }
-        fs::rename(&plan.root_path, &new_path).with_context(|| {
-            format!(
-                "renaming {} → {}",
-                plan.root_path.display(),
-                new_path.display()
-            )
-        })?;
-        plan.folder_name = desired.clone();
-        plan.root_path = new_path;
-        renamed_to = Some(desired);
-    }
-
-    // 10. Compute tags — literal `tmpl.tags` + auto-derived `slug/value`.
-    let tags: Vec<String> = {
-        let mut t = tmpl.tags.clone();
-        for slug in &tmpl.tag_from {
-            let v = plan.vars.get(slug).map(|s| s.as_str()).unwrap_or("");
-            if !v.is_empty() {
-                t.push(format!("{slug}/{v}"));
-            }
-        }
-        t
-    };
-
-    // 11. Persist the counter floor monotonically into the base this folder
-    //     lives in. `save_base` is itself monotonic, so a recovered ID lower
-    //     than the mark never lowers it. The floor also self-heals from the
-    //     projects on disk on the next create regardless.
-    if id_value > counters.get()
-        && let Some(base) = plan.root_path.parent()
-    {
-        Counters::record(&cfg, base, id_value);
-    }
-
-    // 12. Write PROJECT_INFO.md unless we're keeping an existing one.
-    let mut pinfo_written = false;
-    if !(pinfo_exists && opts.on_pinfo_conflict == PinfoConflict::Skip) {
-        write_metadata(&plan, &tmpl, &tags, &resolved_created)?;
-        pinfo_written = true;
-    }
-
-    // 13. The registered project (as discovery would see it).
-    let project = Project {
-        id: id_str.clone(),
-        template: tmpl.slug.clone(),
-        template_name: tmpl.name.clone(),
-        name: plan.folder_name.clone(),
-        path: plan.root_path.clone(),
-        base: plan
-            .root_path
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default(),
-        created: resolved_created.clone(),
-        tags,
-        exists: true,
-    };
-
-    // 14. Refresh the base cache so the project shows up without a rescan.
-    //     Only when we actually wrote metadata — on Skip, discovery picks up
-    //     the pre-existing file (whose id/tags are authoritative, not ours).
-    if pinfo_written && let Some(base) = project.path.parent() {
-        library::cache_upsert(base, &project);
-    }
-
-    // 15. Optional --apply: fill in missing template structure.
-    let mut applied = false;
-    if opts.apply_structure {
-        project::apply(&tmpl, &plan.root_path, &plan.vars, &cfg)?;
-        applied = true;
-    }
-
     Ok(RegisterOutcome {
-        project,
-        renamed_to,
-        pinfo_written,
-        applied,
+        project: outcome.project,
+        renamed_to: outcome.renamed_to,
+        pinfo_written: outcome.pinfo_written,
+        applied: outcome.applied,
     })
 }
 
@@ -344,7 +195,11 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         let id_value = parse_id_token(&current_name, &tmpl.id.prefix)
             .unwrap_or_else(|| Counters::next_value(&cfg, &counters));
         let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
-        let mut preview_vars = build_plan_vars(&tmpl, &collected_vars, &id_str);
+        let mut preview_vars = if args.template_slug.is_some() {
+            build_plan_vars(&tmpl, &collected_vars, &id_str)?
+        } else {
+            HashMap::from([("id".to_string(), id_str)])
+        };
         if args.template_slug.is_none() {
             preview_vars
                 .entry("name".to_string())
@@ -556,16 +411,10 @@ fn build_plan_vars(
     tmpl: &Template,
     raw_vars: &HashMap<String, String>,
     id_str: &str,
-) -> HashMap<String, String> {
-    let mut plan_vars: HashMap<String, String> = HashMap::new();
-    for var in &tmpl.variables {
-        let raw = raw_vars.get(&var.slug).cloned().unwrap_or_default();
-        let transformed = apply_transform(&raw, &var.transform);
-        let sanitized = sanitize_name(&transformed);
-        plan_vars.insert(var.slug.clone(), sanitized);
-    }
+) -> Result<HashMap<String, String>> {
+    let mut plan_vars = crate::core::vars::rendered_values(tmpl, raw_vars)?;
     plan_vars.insert("id".to_string(), id_str.to_string());
-    plan_vars
+    Ok(plan_vars)
 }
 
 /// Render the rename target for a folder. Returns `Ok(Some(name))` with the
@@ -605,36 +454,8 @@ fn registered_stub_template() -> Template {
         version: "1".to_string(),
         naming_pattern: "{id}".to_string(),
         id: IdConfig::default(),
-        variables: vec![],
-        structure: vec![],
-        files: vec![],
-        verbatim: vec![],
-        exclude: vec![],
-        dir: std::path::PathBuf::new(),
-        post_create: None,
-        tags: vec![],
-        tag_from: vec![],
+        ..Template::default()
     }
-}
-
-/// Two-step metadata write:
-///   1. `project_info::write` renders + writes the full file. `created`
-///      defaults to now because `Metadata::from_plan` uses `now_iso8601()`.
-///   2. `project_info::write_frontmatter` atomically patches the `created`
-///      field to the resolved historical timestamp without touching the body.
-fn write_metadata(
-    plan: &ProjectPlan,
-    tmpl: &Template,
-    tags: &[String],
-    resolved_created: &str,
-) -> Result<()> {
-    project_info::write(plan, tmpl, tags).context("writing project metadata")?;
-    let pinfo_path = project_info::pinfo_path(&plan.root_path);
-    let resolved = resolved_created.to_string();
-    project_info::write_frontmatter(&pinfo_path, |meta| {
-        meta.created = resolved.clone();
-    })
-    .context("patching created timestamp")
 }
 
 /// Resolve the `created` timestamp for a registered folder.
@@ -651,30 +472,7 @@ pub fn resolve_created(
     use_today: bool,
     override_date: Option<&str>,
 ) -> Result<String> {
-    if let Some(s) = override_date {
-        let parsed = NaiveDate::parse_from_str(s, "%Y-%m-%d")
-            .with_context(|| format!("--created '{}' is not a valid YYYY-MM-DD date", s))?;
-        return Ok(format!("{}T00:00:00Z", parsed));
-    }
-    if use_today {
-        return Ok(library::now_iso8601());
-    }
-    let meta =
-        fs::metadata(path).with_context(|| format!("reading metadata of {}", path.display()))?;
-    let systime = meta.created().or_else(|_| meta.modified());
-    match systime {
-        Ok(t) => {
-            let dt: DateTime<Utc> = t.into();
-            Ok(dt.to_rfc3339_opts(SecondsFormat::Secs, true))
-        }
-        Err(_) => {
-            eprintln!(
-                "{} could not determine folder timestamp; using now",
-                "warning:".yellow().bold()
-            );
-            Ok(library::now_iso8601())
-        }
-    }
+    crate::core::operations::resolve_created(path, use_today, override_date)
 }
 
 /// Turn an existing folder basename into the `{name}` token used by

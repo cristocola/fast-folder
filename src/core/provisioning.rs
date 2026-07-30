@@ -1,138 +1,200 @@
-//! Durable provisioning markers (v0.11).
+//! Provisioning journals and recovery.
 //!
-//! Two flows write large amounts of data outside the fast request/response path:
-//! background asset copies during `fastf new` (UI) and staged cross-filesystem
-//! moves. Both leave a small on-disk marker so a crash mid-copy is always
-//! recoverable and never silent data loss:
-//!
-//!   - **Create marker** — `.fastf-provisioning.json` inside the new project
-//!     root, listing the deferred file copies still in flight. Deleted once every
-//!     copy has landed. Its presence means "this project is not fully provisioned."
-//!   - **Move marker** — `.fastf-move-<folder>.json` at the *target* base root,
-//!     recording the source, the `.part` staging folder, and the final path. The
-//!     source is only ever removed after the destination is copied AND verified,
-//!     so reconcile is trivial: finish the commit if it already happened, else
-//!     roll the staging folder back and leave the source untouched.
-//!
-//! Everything here is best-effort and never panics: the folders are the truth,
-//! the markers are just a to-do list for recovery.
+//! Version-1 create/move markers contained arbitrary absolute paths. They are
+//! discovered by filename only, reported as obsolete, and never parsed or
+//! mutated. Version 2 uses validated relative create paths and private move
+//! transactions whose target/staging locations are derived from their owned
+//! directory.
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
 use crate::core::assets::{self, CopyJob, Progress};
 use crate::core::config::Config;
 use crate::core::library;
+use crate::core::template;
+use crate::core::transactions::{self, MoveJournal, MoveManifest, MovePhase, MoveTransaction};
+use crate::core::validated::TemplateSlug;
 
-/// Filename of the per-project create-provisioning marker.
+/// Filename of an obsolete pre-v2 per-project create marker.
 pub const MARKER_CREATE: &str = ".fastf-provisioning.json";
-/// Filename prefix of a per-base staged-move marker (`.fastf-move-<folder>.json`).
+/// Prefix of obsolete pre-v2 move markers at a base root.
 pub const MARKER_MOVE_PREFIX: &str = ".fastf-move-";
+/// Filename of the scoped create journal introduced in v2.
+pub const CREATE_JOURNAL_V2: &str = ".fastf-create-v2.json";
 
-const MARKER_VERSION: u32 = 1;
+const LEGACY_MARKER_VERSION: u32 = 1;
+const CREATE_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
-// Create marker
+// Create journal v2
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct DeferredCopy {
+#[serde(deny_unknown_fields)]
+struct CreateCopy {
+    source: PathBuf,
+    destination: PathBuf,
+    bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateJournal {
+    version: u32,
+    template_slug: String,
+    jobs: Vec<CreateCopy>,
+}
+
+fn create_journal_path(root: &Path) -> PathBuf {
+    root.join(CREATE_JOURNAL_V2)
+}
+
+fn legacy_create_marker_path(root: &Path) -> PathBuf {
+    root.join(MARKER_CREATE)
+}
+
+/// Write the create journal using only paths relative to the template's files
+/// root and the newly claimed project root.
+pub fn write_create_journal(
+    root: &Path,
+    template_slug: &str,
+    template_files: &Path,
+    jobs: &[CopyJob],
+) -> Result<()> {
+    assets::require_real_directory(root, "new project root")?;
+    TemplateSlug::parse(template_slug)?;
+    let mut relative_jobs = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        let source = job.src.strip_prefix(template_files).with_context(|| {
+            format!(
+                "deferred create source {} is outside template files {}",
+                job.src.display(),
+                template_files.display()
+            )
+        })?;
+        let destination = job.dest.strip_prefix(root).with_context(|| {
+            format!(
+                "deferred create destination {} is outside project {}",
+                job.dest.display(),
+                root.display()
+            )
+        })?;
+        validate_native_relative(source)?;
+        validate_native_relative(destination)?;
+        relative_jobs.push(CreateCopy {
+            source: source.to_path_buf(),
+            destination: destination.to_path_buf(),
+            bytes: job.bytes,
+        });
+    }
+    let journal = CreateJournal {
+        version: CREATE_VERSION,
+        template_slug: template_slug.to_string(),
+        jobs: relative_jobs,
+    };
+    crate::util::atomic::write_json(&create_journal_path(root), &journal)
+        .context("writing create journal v2")
+}
+
+/// Remove only the real v2 journal owned by a completed create. The obsolete
+/// v1 filename is intentionally never touched.
+pub fn clear_create(root: &Path) -> Result<()> {
+    remove_owned_file(&create_journal_path(root), "create journal")
+}
+
+/// Whether a rendered project-relative path collides with fastf's v2 journal.
+pub fn path_is_reserved(path: &str) -> bool {
+    !path.contains('/') && !path.contains('\\') && path.eq_ignore_ascii_case(CREATE_JOURNAL_V2)
+}
+
+fn read_create_journal(root: &Path) -> Result<CreateJournal> {
+    let path = create_journal_path(root);
+    require_real_file(&path, "create journal")?;
+    let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    let journal: CreateJournal =
+        serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    if journal.version != CREATE_VERSION {
+        bail!(
+            "unsupported create journal version {} at {}",
+            journal.version,
+            path.display()
+        );
+    }
+    TemplateSlug::parse(&journal.template_slug)?;
+    for job in &journal.jobs {
+        validate_native_relative(&job.source)?;
+        validate_native_relative(&job.destination)?;
+    }
+    Ok(journal)
+}
+
+// ---------------------------------------------------------------------------
+// Obsolete v1 writers retained only for compatibility/testing
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+struct LegacyDeferredCopy {
     src: String,
     dest: String,
     bytes: u64,
     done: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CreateMarker {
+#[derive(Debug, Clone, Serialize)]
+struct LegacyCreateMarker {
     version: u32,
     started_at: String,
-    jobs: Vec<DeferredCopy>,
+    jobs: Vec<LegacyDeferredCopy>,
 }
 
-fn create_marker_path(root: &Path) -> PathBuf {
-    root.join(MARKER_CREATE)
-}
-
-/// Write (or overwrite) the create marker into a new project root, one entry per
-/// deferred copy, all `done: false`. Call this *before* the background copy
-/// starts so a crash has a record to reconcile from.
+/// Compatibility helper for constructing an obsolete marker. Active creates
+/// use [`write_create_journal`]; reconcile never reads this marker's bytes.
+#[doc(hidden)]
 pub fn write_create_marker(root: &Path, jobs: &[CopyJob]) -> Result<()> {
-    let marker = CreateMarker {
-        version: MARKER_VERSION,
+    let marker = LegacyCreateMarker {
+        version: LEGACY_MARKER_VERSION,
         started_at: library::now_iso8601(),
         jobs: jobs
             .iter()
-            .map(|j| DeferredCopy {
-                src: j.src.display().to_string(),
-                dest: j.dest.display().to_string(),
-                bytes: j.bytes,
+            .map(|job| LegacyDeferredCopy {
+                src: job.src.display().to_string(),
+                dest: job.dest.display().to_string(),
+                bytes: job.bytes,
                 done: false,
             })
             .collect(),
     };
-    write_atomic(&create_marker_path(root), &marker)
+    crate::util::atomic::write_json(&legacy_create_marker_path(root), &marker)
 }
 
-/// Flip the entry for `dest` to `done` in a project's create marker. Best-effort:
-/// a missing/unreadable marker is a no-op.
-pub fn mark_done(root: &Path, dest: &Path) {
-    let path = create_marker_path(root);
-    let Some(mut marker) = read_json::<CreateMarker>(&path) else {
-        return;
-    };
-    let target = dest.display().to_string();
-    for job in &mut marker.jobs {
-        if job.dest == target {
-            job.done = true;
-        }
-    }
-    let _ = write_atomic(&path, &marker);
-}
-
-/// Delete a project's create marker — the project is now fully provisioned.
-pub fn clear_create(root: &Path) {
-    let _ = fs::remove_file(create_marker_path(root));
-}
-
-// ---------------------------------------------------------------------------
-// Move marker
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct MoveMarker {
+#[derive(Debug, Clone, Serialize)]
+struct LegacyMoveMarker {
     version: u32,
     started_at: String,
     src: String,
     temp: String,
     final_path: String,
     phase: String,
-    /// The moved project's ID. Recovery uses it to confirm that whatever now
-    /// sits at `final_path` really is this project before removing the source.
-    /// Older markers (written before this field existed) default to empty, which
-    /// recovery treats as "cannot confirm" — the safe direction.
-    #[serde(default)]
     id: String,
 }
 
-/// The staging-folder path for a cross-filesystem move (`.<folder>.fastf-part`
-/// under the target base). Dot-prefixed so discovery skips it.
+/// Conventional v1 staging name, exposed only so diagnostics/tests can identify
+/// old artifacts. V2 never creates or removes it.
 pub fn staging_path(target_base: &Path, folder: &str) -> PathBuf {
     target_base.join(format!(".{folder}.fastf-part"))
 }
 
-fn move_marker_path(target_base: &Path, folder: &str) -> PathBuf {
+pub(crate) fn move_marker_path(target_base: &Path, folder: &str) -> PathBuf {
     target_base.join(format!("{MARKER_MOVE_PREFIX}{folder}.json"))
 }
 
-/// Write the staged-move marker at the target base root. `id` is the moved
-/// project's ID, which recovery uses to confirm the destination's identity
-/// before it removes anything.
 #[allow(clippy::too_many_arguments)]
+#[doc(hidden)]
 pub fn write_move_marker(
     target_base: &Path,
     folder: &str,
@@ -142,8 +204,8 @@ pub fn write_move_marker(
     phase: &str,
     id: &str,
 ) -> Result<()> {
-    let marker = MoveMarker {
-        version: MARKER_VERSION,
+    let marker = LegacyMoveMarker {
+        version: LEGACY_MARKER_VERSION,
         started_at: library::now_iso8601(),
         src: src.display().to_string(),
         temp: temp.display().to_string(),
@@ -151,65 +213,86 @@ pub fn write_move_marker(
         phase: phase.to_string(),
         id: id.to_string(),
     };
-    write_atomic(&move_marker_path(target_base, folder), &marker)
-}
-
-/// Delete a staged-move marker (the move committed or was rolled back).
-pub fn clear_move(target_base: &Path, folder: &str) {
-    let _ = fs::remove_file(move_marker_path(target_base, folder));
+    crate::util::atomic::write_json(&move_marker_path(target_base, folder), &marker)
 }
 
 // ---------------------------------------------------------------------------
-// Recovery
+// Discovery and recovery
 // ---------------------------------------------------------------------------
 
-/// One incomplete provisioning item, for the UI banner / `/api/state`.
 #[derive(Debug, Clone, Serialize)]
 pub struct Incomplete {
-    /// Project root (create) or final target path (move).
     pub path: String,
-    /// `"create"` or `"move"`.
+    /// `create`, `move`, `obsolete-create-v1`, `obsolete-move-v1`, or an
+    /// explicitly invalid v2 kind.
     pub kind: String,
-    /// Files still pending (create) or `0` (move — it's all-or-nothing).
     pub pending: usize,
 }
 
-/// Depth-1 scan of every base for provisioning markers, for display. Cheap and
-/// read-only — no copying is performed.
+/// Cheap read-only discovery used by CLI/UI state. Invalid v2 journals are
+/// surfaced by their owned path and are never followed.
 pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
     let mut out = Vec::new();
-    for base in cfg.effective_bases() {
-        let Ok(read_dir) = fs::read_dir(&base) else {
+    for configured in cfg.effective_bases() {
+        let Ok(base) = configured.canonicalize() else {
             continue;
         };
-        for entry in read_dir.flatten() {
+        if assets::require_real_directory(&base, "configured base").is_err() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&base) else {
+            continue;
+        };
+        for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
-            if path.is_dir() {
-                if let Some(marker) = read_json::<CreateMarker>(&create_marker_path(&path)) {
-                    let pending = marker.jobs.iter().filter(|j| !j.done).count();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if name == transactions::TRANSACTIONS_DIR {
+                if file_type.is_dir() && !file_type.is_symlink() {
+                    list_move_transactions(&base, &path, &mut out);
+                } else {
                     out.push(Incomplete {
                         path: path.display().to_string(),
-                        kind: "create".to_string(),
-                        pending,
+                        kind: "move-v2-invalid".to_string(),
+                        pending: 0,
                     });
+                }
+                continue;
+            }
+            if file_type.is_dir() && !file_type.is_symlink() {
+                if entry_exists_quiet(&legacy_create_marker_path(&path)) {
+                    out.push(Incomplete {
+                        path: legacy_create_marker_path(&path).display().to_string(),
+                        kind: "obsolete-create-v1".to_string(),
+                        pending: 0,
+                    });
+                }
+                if entry_exists_quiet(&create_journal_path(&path)) {
+                    match read_create_journal(&path) {
+                        Ok(journal) => out.push(Incomplete {
+                            path: path.display().to_string(),
+                            kind: "create".to_string(),
+                            pending: journal.jobs.len(),
+                        }),
+                        Err(_) => out.push(Incomplete {
+                            path: create_journal_path(&path).display().to_string(),
+                            kind: "create-v2-invalid".to_string(),
+                            pending: 0,
+                        }),
+                    }
                 } else if crate::core::project_info::is_provisioning(&path) {
-                    // Metadata says half-built but the marker is gone — an
-                    // interrupted create. Surface it so the UI banner shows it
-                    // rather than the project looking finished.
                     out.push(Incomplete {
                         path: path.display().to_string(),
                         kind: "create".to_string(),
                         pending: 0,
                     });
                 }
-            } else if name.starts_with(MARKER_MOVE_PREFIX)
-                && name.ends_with(".json")
-                && let Some(marker) = read_json::<MoveMarker>(&path)
-            {
+            } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
                 out.push(Incomplete {
-                    path: marker.final_path,
-                    kind: "move".to_string(),
+                    path: path.display().to_string(),
+                    kind: "obsolete-move-v1".to_string(),
                     pending: 0,
                 });
             }
@@ -218,25 +301,56 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
     out
 }
 
-/// Outcome of a reconcile pass.
+fn list_move_transactions(base: &Path, root: &Path, out: &mut Vec<Incomplete>) {
+    if assets::require_real_directory(root, "transaction root").is_err() {
+        out.push(Incomplete {
+            path: root.display().to_string(),
+            kind: "move-v2-invalid".to_string(),
+            pending: 0,
+        });
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let operation_dir = entry.path();
+        let valid_dir = entry
+            .file_type()
+            .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink());
+        if valid_dir {
+            match transactions::read_journal(&operation_dir) {
+                Ok(journal) => out.push(Incomplete {
+                    path: base.join(journal.target_folder).display().to_string(),
+                    kind: "move".to_string(),
+                    pending: 0,
+                }),
+                Err(_) => out.push(Incomplete {
+                    path: operation_dir.display().to_string(),
+                    kind: "move-v2-invalid".to_string(),
+                    pending: 0,
+                }),
+            }
+        } else {
+            out.push(Incomplete {
+                path: operation_dir.display().to_string(),
+                kind: "move-v2-invalid".to_string(),
+                pending: 0,
+            });
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct ReconcileReport {
-    /// Create jobs finished (pending copies completed).
     pub resumed: usize,
-    /// Moves whose commit was finished (source removed, marker cleared).
     pub completed: usize,
-    /// Staged moves rolled back (staging removed, source left intact).
     pub rolled_back: usize,
-    /// Abandoned `.part` / `.tmp` scratch files removed.
+    /// Retained for backward-compatible JSON; suffix sweeping no longer exists.
     pub swept: usize,
-    /// Projects still flagged half-built that reconcile cannot finish by itself.
-    /// An interrupted `fastf new` interpolates template text from variables the
-    /// user typed, and those died with the process — so the honest move is to
-    /// name them and let the user delete or recreate.
     pub incomplete: Vec<String>,
-    /// Items that could not be recovered (e.g. a create source template file is
-    /// gone) — surfaced to the user, marker left in place.
     pub unrecoverable: Vec<String>,
+    pub obsolete: Vec<String>,
 }
 
 impl ReconcileReport {
@@ -247,772 +361,862 @@ impl ReconcileReport {
             && self.swept == 0
             && self.incomplete.is_empty()
             && self.unrecoverable.is_empty()
+            && self.obsolete.is_empty()
     }
 }
 
-/// Leave scratch files alone until they are this old.
-///
-/// A `.part` may belong to a copy running *right now* in another process (the
-/// browser UI's background job holds no lock), and deleting it would break a
-/// perfectly healthy operation. An hour is far longer than any copy still making
-/// progress, and far shorter than "forever" — which is how long these lingered.
-const SCRATCH_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-
-/// True when `path` is abandoned scratch: a `.part` or `.tmp` older than
-/// [`SCRATCH_MIN_AGE`]. Unreadable metadata → `false`, i.e. leave it alone.
-fn is_abandoned_scratch(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return false;
-    };
-    if !name.ends_with(".part") && !crate::util::atomic::is_temp_file(name) {
-        return false;
-    }
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .and_then(|m| m.elapsed().map_err(std::io::Error::other))
-        .is_ok_and(|age| age >= SCRATCH_MIN_AGE)
-}
-
-/// Remove abandoned scratch files under `root`. Recursive, because
-/// `assets::copy_file` writes its `.part` next to the destination, which can sit
-/// arbitrarily deep inside a project.
-fn sweep_scratch(root: &Path, report: &mut ReconcileReport) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        match entry.file_type() {
-            // Never descend through a link: its target is outside this tree.
-            Ok(ft) if ft.is_symlink() => continue,
-            Ok(ft) if ft.is_dir() => sweep_scratch(&path, report),
-            Ok(_) => {
-                if is_abandoned_scratch(&path) && crate::util::fs_retry::remove_file(&path).is_ok()
-                {
-                    report.swept += 1;
-                }
-            }
-            Err(_) => continue,
-        }
-    }
-}
-
-/// Reconcile all incomplete provisioning across every base: resume create
-/// copies, finish or roll back staged moves, sweep abandoned scratch files, and
-/// report projects that are still half-built. Best-effort — a per-item failure
-/// is recorded, never fatal.
-///
-/// It used to look only for markers, which is why an interrupted `fastf new`
-/// could strand 300 MB while this cheerfully reported "all projects fully
-/// provisioned". A check that only looks in one place must not speak as if it
-/// looked everywhere.
+/// Reconcile scoped v2 state and report obsolete v1 markers without parsing or
+/// mutating them. Callers that can mutate application state should use
+/// [`reconcile_locked`].
 pub fn reconcile(cfg: &Config) -> ReconcileReport {
     let mut report = ReconcileReport::default();
-    for base in cfg.effective_bases() {
-        let Ok(read_dir) = fs::read_dir(&base) else {
-            continue;
-        };
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if path.is_dir() {
-                if create_marker_path(&path).exists() {
-                    reconcile_create(&path, &mut report);
-                }
-                // Flagged in the metadata but with no marker to work from: a
-                // create that died before its files landed. Nothing here can
-                // rebuild it — the variables the user typed are gone — so name
-                // it rather than pretending everything is fine.
-                if crate::core::project_info::is_provisioning(&path) {
-                    report.incomplete.push(path.display().to_string());
-                }
-                sweep_scratch(&path, &mut report);
-            } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
-                reconcile_move(&base, &path, &mut report);
-            } else if is_abandoned_scratch(&path)
-                && crate::util::fs_retry::remove_file(&path).is_ok()
-            {
-                report.swept += 1;
+    for configured in cfg.effective_bases() {
+        let base = match configured.canonicalize() {
+            Ok(base) if assets::require_real_directory(&base, "configured base").is_ok() => base,
+            _ => {
+                report.unrecoverable.push(format!(
+                    "configured base is unavailable; left all recovery state untouched: {}",
+                    configured.display()
+                ));
+                continue;
             }
-        }
+        };
+        reconcile_base(cfg, &base, &mut report);
     }
     report
 }
 
-/// Finish a project's outstanding deferred copies. A copy already on disk with
-/// the right size counts as done; a missing source is unrecoverable.
-fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
-    let path = create_marker_path(root);
-    let Some(mut marker) = read_json::<CreateMarker>(&path) else {
-        return;
-    };
-    let mut all_done = true;
-    for job in &mut marker.jobs {
-        if job.done {
-            continue;
-        }
-        let dest = PathBuf::from(&job.dest);
-        if dest.exists() && fs::metadata(&dest).map(|m| m.len()).unwrap_or(0) == job.bytes {
-            job.done = true;
-            continue;
-        }
-        let src = PathBuf::from(&job.src);
-        if !src.exists() {
-            all_done = false;
+/// Hold the coarse cross-process mutation lock for the whole pass and reload
+/// configuration beneath it. The argument is retained for source compatibility
+/// but is never authoritative.
+pub fn reconcile_locked(_cfg: &Config) -> ReconcileReport {
+    let mut report = ReconcileReport::default();
+    let _data_lock = match crate::util::lockfile::DataLock::acquire() {
+        Ok(lock) => lock,
+        Err(error) => {
             report
                 .unrecoverable
-                .push(format!("{} (missing source {})", job.dest, job.src));
+                .push(format!("could not serialize reconcile: {error:#}"));
+            return report;
+        }
+    };
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(error) => {
+            report
+                .unrecoverable
+                .push(format!("could not reload configuration: {error:#}"));
+            return report;
+        }
+    };
+    reconcile(&config)
+}
+
+fn reconcile_base(cfg: &Config, base: &Path, report: &mut ReconcileReport) {
+    let entries = match fs::read_dir(base) {
+        Ok(entries) => entries,
+        Err(error) => {
+            report
+                .unrecoverable
+                .push(format!("could not read {}: {error}", base.display()));
+            return;
+        }
+    };
+    let mut transaction_root = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                report
+                    .unrecoverable
+                    .push(format!("could not classify {}: {error}", path.display()));
+                continue;
+            }
+        };
+        if name == transactions::TRANSACTIONS_DIR {
+            if file_type.is_dir() && !file_type.is_symlink() {
+                transaction_root = Some(path);
+            } else {
+                report.unrecoverable.push(format!(
+                    "{}: reserved transaction root is not a real directory; left untouched",
+                    path.display()
+                ));
+            }
             continue;
         }
-        let copy = CopyJob {
-            src,
-            dest,
-            bytes: job.bytes,
-        };
-        let progress = Mutex::new(Progress::new(std::slice::from_ref(&copy)));
-        match assets::copy_job(&copy, &progress, &AtomicBool::new(false)) {
-            Ok(()) => {
-                job.done = true;
-                report.resumed += 1;
+        if file_type.is_dir() && !file_type.is_symlink() {
+            let legacy = legacy_create_marker_path(&path);
+            if entry_exists_quiet(&legacy) {
+                report.obsolete.push(legacy.display().to_string());
             }
-            Err(_) => {
-                all_done = false;
-                report.unrecoverable.push(job.dest.clone());
+            let create_v2 = create_journal_path(&path);
+            if entry_exists_quiet(&create_v2) {
+                reconcile_create(&path, report);
+            } else if crate::core::project_info::is_provisioning(&path) {
+                report.incomplete.push(path.display().to_string());
             }
+        } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
+            report.obsolete.push(path.display().to_string());
         }
     }
-    if all_done {
-        clear_create(root);
-    } else {
-        let _ = write_atomic(&path, &marker);
+    if let Some(root) = transaction_root {
+        reconcile_transactions(cfg, base, &root, report);
     }
 }
 
-/// Finish or roll back a staged move. If the final target already exists the
-/// commit happened — remove any leftover source and clear the marker. Otherwise
-/// roll back: delete the staging folder, leave the source intact.
-fn reconcile_move(base: &Path, marker_path: &Path, report: &mut ReconcileReport) {
-    let Some(marker) = read_json::<MoveMarker>(marker_path) else {
-        let _ = fs::remove_file(marker_path);
-        return;
-    };
-    let final_path = PathBuf::from(&marker.final_path);
-    let src = PathBuf::from(&marker.src);
-    let temp = PathBuf::from(&marker.temp);
-
-    if !final_path.exists() {
-        // Nothing committed — discard the partial copy; the source is untouched.
-        let _ = crate::util::fs_retry::remove_dir_all(&temp);
-        let _ = fs::remove_file(marker_path);
-        report.rolled_back += 1;
-        return;
-    }
-
-    // Something exists at the destination. "Exists" alone is NOT proof the
-    // commit landed: a rolled-back move leaves the name free, and anything could
-    // have taken it since. Removing the source on that inference could destroy a
-    // perfectly good project, so confirm identity first.
-    if src.exists() && src != final_path {
-        if let Err(why) = confirm_commit(&marker, &src, &final_path) {
+fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
+    let journal = match read_create_journal(root) {
+        Ok(journal) => journal,
+        Err(error) => {
             report.unrecoverable.push(format!(
-                "{}: {why}. Source left at {} — resolve by hand.",
-                marker.final_path,
-                src.display()
-            ));
-            return; // marker stays, so the next reconcile retries
-        }
-        if let Err(err) = crate::util::fs_retry::remove_dir_all(&src) {
-            report.unrecoverable.push(format!(
-                "{}: could not remove source ({err})",
-                src.display()
+                "{}: malformed create journal ({error:#}); left untouched",
+                create_journal_path(root).display()
             ));
             return;
         }
+    };
+    let metadata = match crate::core::project_info::read_metadata(root) {
+        Ok(Some(metadata))
+            if metadata.provisioning && metadata.template == journal.template_slug =>
+        {
+            metadata
+        }
+        Ok(Some(metadata)) => {
+            report.unrecoverable.push(format!(
+                "{}: create journal identity mismatch (metadata template '{}', journal '{}')",
+                root.display(),
+                metadata.template,
+                journal.template_slug
+            ));
+            return;
+        }
+        Ok(None) => {
+            report.unrecoverable.push(format!(
+                "{}: create journal has no readable project identity",
+                root.display()
+            ));
+            return;
+        }
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{}: could not verify create identity ({error:#})",
+                root.display()
+            ));
+            return;
+        }
+    };
+    let _ = metadata;
+    let template = match template::find_by_slug(&journal.template_slug) {
+        Ok(template) => template,
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{}: template '{}' is unavailable ({error:#})",
+                root.display(),
+                journal.template_slug
+            ));
+            return;
+        }
+    };
+
+    // An empty journal is the initial pre-copy state. It deliberately carries
+    // no arbitrary absolute paths, but it also cannot prove which inline,
+    // interpolated files had landed before a crash. Report it for inspection
+    // rather than declaring a potentially partial project complete.
+    if journal.jobs.is_empty() {
+        report.incomplete.push(root.display().to_string());
+        return;
     }
-    let _ = fs::remove_file(marker_path);
-    report.completed += 1;
-    let _ = base; // kept for symmetry / future per-base cache refresh
+
+    let mut all_done = true;
+    for entry in &journal.jobs {
+        let source = template.files_dir().join(&entry.source);
+        let destination = root.join(&entry.destination);
+        match fs::symlink_metadata(&destination) {
+            Ok(metadata)
+                if !metadata.file_type().is_symlink()
+                    && metadata.file_type().is_file()
+                    && metadata.len() == entry.bytes =>
+            {
+                continue;
+            }
+            Ok(_) => {
+                all_done = false;
+                report.unrecoverable.push(format!(
+                    "{}: destination is occupied with unexpected type/size; left untouched",
+                    destination.display()
+                ));
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                all_done = false;
+                report.unrecoverable.push(format!(
+                    "{}: could not inspect destination ({error})",
+                    destination.display()
+                ));
+                continue;
+            }
+        }
+        let source_metadata = match fs::symlink_metadata(&source) {
+            Ok(metadata)
+                if !metadata.file_type().is_symlink()
+                    && metadata.file_type().is_file()
+                    && metadata.len() == entry.bytes =>
+            {
+                metadata
+            }
+            Ok(_) => {
+                all_done = false;
+                report.unrecoverable.push(format!(
+                    "{}: create source changed or is unsupported",
+                    source.display()
+                ));
+                continue;
+            }
+            Err(error) => {
+                all_done = false;
+                report.unrecoverable.push(format!(
+                    "{}: create source is unavailable ({error})",
+                    source.display()
+                ));
+                continue;
+            }
+        };
+        let copy = CopyJob {
+            src: source,
+            dest: destination.clone(),
+            bytes: source_metadata.len(),
+        };
+        let progress = Mutex::new(Progress::new(std::slice::from_ref(&copy)));
+        match assets::copy_job(&copy, &progress, &AtomicBool::new(false)) {
+            Ok(()) => report.resumed += 1,
+            Err(error) => {
+                all_done = false;
+                report.unrecoverable.push(format!(
+                    "{}: could not resume create copy ({error:#})",
+                    destination.display()
+                ));
+            }
+        }
+    }
+    if !all_done {
+        return;
+    }
+    if let Err(error) = crate::core::project_info::clear_provisioning(root) {
+        report.unrecoverable.push(format!(
+            "{}: copies complete but provisioning flag could not be cleared ({error:#})",
+            root.display()
+        ));
+        return;
+    }
+    if let Err(error) = clear_create(root) {
+        report.unrecoverable.push(format!(
+            "{}: provisioning completed but journal could not be cleared ({error:#})",
+            root.display()
+        ));
+        return;
+    }
+    library::refresh_cache(root);
 }
 
-/// Confirm that `final_path` really holds the project the marker describes,
-/// before its source is removed. Two independent checks:
-///
-/// 1. The destination's `PROJECT_INFO.md` carries the marker's ID — this is what
-///    distinguishes "our completed move" from "an unrelated folder that happens
-///    to have the same name".
-/// 2. Every file still present in the source exists at the destination with the
-///    same size, so a half-finished copy can never license a deletion.
-fn confirm_commit(marker: &MoveMarker, src: &Path, final_path: &Path) -> Result<()> {
-    if marker.id.is_empty() {
-        anyhow::bail!("marker predates identity checking, cannot confirm the destination");
+fn reconcile_transactions(
+    cfg: &Config,
+    target_base: &Path,
+    root: &Path,
+    report: &mut ReconcileReport,
+) {
+    if let Err(error) = assets::require_real_directory(root, "transaction root") {
+        report
+            .unrecoverable
+            .push(format!("{}: {error:#}; left untouched", root.display()));
+        return;
     }
-    match crate::core::project_info::read_metadata(final_path) {
-        Ok(Some(meta)) if meta.id == marker.id => {}
-        Ok(Some(meta)) => anyhow::bail!(
-            "destination holds a different project (found {}, expected {})",
-            meta.id,
-            marker.id
-        ),
-        Ok(None) => anyhow::bail!("destination has no readable project metadata"),
-        Err(err) => anyhow::bail!("destination metadata unreadable ({err})"),
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "could not read transaction root {} ({error})",
+                root.display()
+            ));
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let operation_dir = entry.path();
+        if !entry
+            .file_type()
+            .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+        {
+            report.unrecoverable.push(format!(
+                "{}: transaction entry is not a real directory; left untouched",
+                operation_dir.display()
+            ));
+            continue;
+        }
+        let journal = match transactions::read_journal(&operation_dir) {
+            Ok(journal) => journal,
+            Err(error) => {
+                report.unrecoverable.push(format!(
+                    "{}: malformed/unknown move journal ({error:#}); left untouched",
+                    operation_dir.display()
+                ));
+                continue;
+            }
+        };
+        reconcile_transaction(cfg, target_base, &operation_dir, journal, report);
     }
-    assets::verify_tree(src, final_path)
 }
 
-// ---------------------------------------------------------------------------
-// Small JSON helpers (atomic write, tolerant read)
-// ---------------------------------------------------------------------------
+fn reconcile_transaction(
+    cfg: &Config,
+    target_base: &Path,
+    operation_dir: &Path,
+    journal: MoveJournal,
+    report: &mut ReconcileReport,
+) {
+    let source_base = match configured_real_base(cfg, &journal.source_base) {
+        Ok(base) => base,
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{}: source base unavailable or no longer configured ({error:#}); left untouched",
+                operation_dir.display()
+            ));
+            return;
+        }
+    };
+    let source = source_base.join(&journal.source_folder);
+    let final_path = target_base.join(&journal.target_folder);
+    let staging = operation_dir.join(transactions::STAGING_DIR);
+    let mut transaction =
+        transactions::transaction_from_journal(target_base, operation_dir, journal.clone());
 
-fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    crate::util::atomic::write_json(path, value)
+    match journal.phase {
+        MovePhase::Copying => {
+            if let Err(error) = confirm_project_identity(&source, &journal.project_id, "source") {
+                report.unrecoverable.push(format!(
+                    "{}: {error:#}; left untouched",
+                    operation_dir.display()
+                ));
+                return;
+            }
+            if entry_exists_quiet(&final_path) {
+                report.unrecoverable.push(format!(
+                    "{}: Copying transaction has an occupied final target; left untouched",
+                    operation_dir.display()
+                ));
+                return;
+            }
+            match transaction.remove() {
+                Ok(()) => report.rolled_back += 1,
+                Err(error) => report.unrecoverable.push(format!(
+                    "{}: could not discard Copying transaction ({error:#})",
+                    operation_dir.display()
+                )),
+            }
+        }
+        MovePhase::ReadyToCommit => {
+            if let Err(error) = confirm_project_identity(&source, &journal.project_id, "source") {
+                report.unrecoverable.push(format!(
+                    "{}: {error:#}; left untouched",
+                    operation_dir.display()
+                ));
+                return;
+            }
+            let staging_exists = entry_exists_quiet(&staging);
+            let final_exists = entry_exists_quiet(&final_path);
+            if staging_exists && !final_exists {
+                if assets::require_real_directory(&staging, "move staging").is_err() {
+                    report.unrecoverable.push(format!(
+                        "{}: staging is not a real directory; left untouched",
+                        operation_dir.display()
+                    ));
+                    return;
+                }
+                match transaction.remove() {
+                    Ok(()) => report.rolled_back += 1,
+                    Err(error) => report.unrecoverable.push(format!(
+                        "{}: could not discard ReadyToCommit staging ({error:#})",
+                        operation_dir.display()
+                    )),
+                }
+                return;
+            }
+            if staging_exists || !final_exists {
+                report.unrecoverable.push(format!(
+                    "{}: ReadyToCommit has an unknown staging/final state; left untouched",
+                    operation_dir.display()
+                ));
+                return;
+            }
+            if let Err(error) = confirm_project_identity(&final_path, &journal.project_id, "final")
+            {
+                report.unrecoverable.push(format!(
+                    "{}: {error:#}; left untouched",
+                    operation_dir.display()
+                ));
+                return;
+            }
+            let manifest = match transactions::read_manifest(operation_dir) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    report.unrecoverable.push(format!(
+                        "{}: move manifest unavailable ({error:#}); left untouched",
+                        operation_dir.display()
+                    ));
+                    return;
+                }
+            };
+            if let Err(error) = manifest.verify_recovery_pair(&source, &final_path) {
+                report.unrecoverable.push(format!(
+                    "{}: source/final comparison failed ({error:#}); left untouched",
+                    operation_dir.display()
+                ));
+                return;
+            }
+            if let Err(error) = transaction.set_phase(MovePhase::CleanupPending) {
+                report.unrecoverable.push(format!(
+                    "{}: could not record CleanupPending ({error:#}); left source untouched",
+                    operation_dir.display()
+                ));
+                return;
+            }
+            finish_cleanup_pending(
+                source_base.as_path(),
+                target_base,
+                &source,
+                &final_path,
+                &journal,
+                transaction,
+                Some(manifest),
+                report,
+            );
+        }
+        MovePhase::CleanupPending => {
+            if let Err(error) = confirm_project_identity(&final_path, &journal.project_id, "final")
+            {
+                report.unrecoverable.push(format!(
+                    "{}: {error:#}; left untouched",
+                    operation_dir.display()
+                ));
+                return;
+            }
+            let source_exists = entry_exists_quiet(&source);
+            let manifest = if source_exists {
+                match transactions::read_manifest(operation_dir) {
+                    Ok(manifest) => Some(manifest),
+                    Err(error) => {
+                        report.unrecoverable.push(format!(
+                            "{}: move manifest unavailable ({error:#}); left source untouched",
+                            operation_dir.display()
+                        ));
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            finish_cleanup_pending(
+                source_base.as_path(),
+                target_base,
+                &source,
+                &final_path,
+                &journal,
+                transaction,
+                manifest,
+                report,
+            );
+        }
+    }
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
-    let raw = fs::read_to_string(path).ok()?;
-    serde_json::from_str::<T>(&raw).ok()
+#[allow(clippy::too_many_arguments)]
+fn finish_cleanup_pending(
+    source_base: &Path,
+    target_base: &Path,
+    source: &Path,
+    final_path: &Path,
+    journal: &MoveJournal,
+    transaction: MoveTransaction,
+    manifest: Option<MoveManifest>,
+    report: &mut ReconcileReport,
+) {
+    if entry_exists_quiet(source) {
+        if let Err(error) = confirm_project_identity(source, &journal.project_id, "source") {
+            report.unrecoverable.push(format!(
+                "{}: {error:#}; left source untouched",
+                transaction.operation_dir.display()
+            ));
+            return;
+        }
+        let Some(manifest) = manifest else {
+            report.unrecoverable.push(format!(
+                "{}: no manifest available; left source untouched",
+                transaction.operation_dir.display()
+            ));
+            return;
+        };
+        if let Err(error) = manifest.verify_recovery_pair(source, final_path) {
+            report.unrecoverable.push(format!(
+                "{}: source/final comparison failed ({error:#}); left source untouched",
+                transaction.operation_dir.display()
+            ));
+            return;
+        }
+        if let Err(error) = crate::util::fs_retry::remove_dir_all(source) {
+            report.unrecoverable.push(format!(
+                "{}: could not remove source ({error})",
+                source.display()
+            ));
+            return;
+        }
+        crate::util::faults::check("move:after-source-cleanup").ok();
+    }
+    if let Err(error) =
+        library::finish_recovered_move(source_base, &journal.source_folder, target_base, final_path)
+    {
+        report.unrecoverable.push(format!(
+            "{}: cleanup succeeded but bookkeeping failed ({error:#}); transaction retained",
+            final_path.display()
+        ));
+        return;
+    }
+    let operation_path = transaction.operation_dir.clone();
+    match transaction.remove() {
+        Ok(()) => report.completed += 1,
+        Err(error) => report.unrecoverable.push(format!(
+            "{}: move completed but transaction could not be removed ({error:#})",
+            operation_path.display()
+        )),
+    }
+}
+
+fn configured_real_base(cfg: &Config, wanted: &Path) -> Result<PathBuf> {
+    let wanted = wanted
+        .canonicalize()
+        .with_context(|| format!("resolving configured base {}", wanted.display()))?;
+    for candidate in cfg.effective_bases() {
+        let Ok(candidate) = candidate.canonicalize() else {
+            continue;
+        };
+        if candidate == wanted {
+            assets::require_real_directory(&candidate, "configured base")?;
+            return Ok(candidate);
+        }
+    }
+    bail!("{} is not a configured real base", wanted.display())
+}
+
+fn confirm_project_identity(path: &Path, expected: &str, label: &str) -> Result<()> {
+    assets::require_real_directory(path, label)?;
+    let pinfo = crate::core::project_info::pinfo_path(path);
+    require_real_file(&pinfo, "PROJECT_INFO.md")?;
+    let metadata = crate::core::project_info::read_metadata(path)?
+        .ok_or_else(|| anyhow::anyhow!("{label} project has no readable identity"))?;
+    if metadata.id != expected {
+        bail!(
+            "{label} project identity mismatch (expected {expected}, found {})",
+            metadata.id
+        );
+    }
+    Ok(())
+}
+
+fn validate_native_relative(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || !path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        bail!("unsafe relative path in create journal: {}", path.display());
+    }
+    Ok(())
+}
+
+fn require_real_file(path: &Path, label: &str) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("{label} is missing: {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        bail!("{label} is not a real file: {}", path.display());
+    }
+    Ok(())
+}
+
+fn remove_owned_file(path: &Path, label: &str) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_symlink() && metadata.file_type().is_file() => {
+            fs::remove_file(path).with_context(|| format!("removing {label} {}", path.display()))
+        }
+        Ok(_) => bail!("refusing to remove replaced {label}: {}", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("inspecting {label} {}", path.display())),
+    }
+}
+
+fn entry_exists_quiet(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Backdate a file so the age gate treats it as abandoned.
-    fn age_file(path: &Path, secs: u64) {
-        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
-        let file = fs::File::options().write(true).open(path).unwrap();
-        file.set_modified(when).unwrap();
-    }
-
-    /// This predicate decides what gets **deleted**, so both directions matter:
-    /// it must never claim a real file, and it must actually claim old scratch.
-    #[test]
-    fn is_abandoned_scratch_only_claims_old_scratch_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        let make = |name: &str, age: u64| {
-            let p = dir.join(name);
-            fs::write(&p, "x").unwrap();
-            age_file(&p, age);
-            p
-        };
-
-        // Old scratch → claimed.
-        assert!(is_abandoned_scratch(&make("blob.bin.part", 7200)));
-        assert!(is_abandoned_scratch(&make("config.toml.42.0.tmp", 7200)));
-
-        // Recent scratch → left alone. A `.part` may belong to a copy running
-        // right now in another process, and deleting it would break it.
-        assert!(!is_abandoned_scratch(&make("fresh.bin.part", 0)));
-        assert!(!is_abandoned_scratch(&make("fresh.toml.1.0.tmp", 0)));
-
-        // Real files are never claimed, however old.
-        for name in ["notes.md", "PROJECT_INFO.md", "movie.mov", "partial", "tmp"] {
-            let p = make(name, 7200);
-            assert!(
-                !is_abandoned_scratch(&p),
-                "{name} is real content and must never be swept"
-            );
-        }
-
-        // A path that does not exist cannot be claimed.
-        assert!(!is_abandoned_scratch(&dir.join("ghost.part")));
-    }
-
-    /// The age gate is an hour, and it is the only thing standing between the
-    /// sweep and an in-flight copy.
-    #[test]
-    fn scratch_age_gate_is_an_hour() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = tmp.path().join("edge.part");
-        fs::write(&p, "x").unwrap();
-
-        age_file(&p, 3599); // just inside the window
-        assert!(!is_abandoned_scratch(&p), "59m59s is still too recent");
-        age_file(&p, 3601); // just past it
-        assert!(is_abandoned_scratch(&p), "1h0m1s is abandoned");
-    }
-
-    /// The sweep must reach nested scratch and leave everything else alone.
-    #[test]
-    fn sweep_scratch_removes_only_abandoned_scratch_recursively() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        fs::create_dir_all(root.join("assets/deep")).unwrap();
-
-        let old_part = root.join("assets/deep/big.bin.part");
-        fs::write(&old_part, "abandoned").unwrap();
-        age_file(&old_part, 7200);
-
-        let fresh_part = root.join("assets/active.bin.part");
-        fs::write(&fresh_part, "in flight").unwrap();
-
-        let real = root.join("assets/deep/keep.mov");
-        fs::write(&real, "irreplaceable").unwrap();
-        age_file(&real, 999_999);
-
-        let mut report = ReconcileReport::default();
-        sweep_scratch(root, &mut report);
-
-        assert_eq!(report.swept, 1, "exactly the one abandoned file");
-        assert!(!old_part.exists(), "abandoned scratch should be gone");
-        assert!(fresh_part.exists(), "an in-flight copy must not be touched");
-        assert_eq!(
-            fs::read_to_string(&real).unwrap(),
-            "irreplaceable",
-            "real content must survive the sweep"
-        );
-    }
-
-    /// `clear_move` must actually remove the marker, or reconcile would keep
-    /// re-processing a move that already finished.
-    #[test]
-    fn clear_move_removes_the_marker() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-        write_move_marker(
-            base,
-            "proj",
-            &base.join("src"),
-            &base.join(".t"),
-            &base.join("dst"),
-            "copying",
-            "ID0001",
-        )
-        .unwrap();
-        assert!(move_marker_path(base, "proj").exists());
-
-        clear_move(base, "proj");
-        assert!(
-            !move_marker_path(base, "proj").exists(),
-            "the marker must be gone, or reconcile reprocesses a finished move"
-        );
-    }
-
-    /// The UI banner is driven by this: it must report pending work and stay
-    /// quiet otherwise.
-    #[test]
-    fn list_incomplete_reports_pending_work_and_nothing_else() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-        let cfg = Config {
+    fn config_for(base: &Path) -> Config {
+        Config {
             base_dir: base.display().to_string(),
-            ..Default::default()
-        };
+            ..Config::default()
+        }
+    }
 
-        // A finished project produces no entry.
-        let done = base.join("done");
-        fs::create_dir_all(&done).unwrap();
+    fn move_config(source: &Path, target: &Path) -> Config {
+        Config {
+            base_dir: source.display().to_string(),
+            bases: vec![target.display().to_string()],
+            ..Config::default()
+        }
+    }
+
+    fn write_project(base: &Path, folder: &str, id: &str) -> PathBuf {
+        let root = base.join(folder);
+        fs::create_dir_all(root.join("empty")).unwrap();
+        fs::write(root.join("payload.part"), [0_u8, 1, 255]).unwrap();
         fs::write(
-            crate::core::project_info::pinfo_path(&done),
-            "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
-             created: 2026-01-01T00:00:00Z\nfolder: done\npath: x\n\
-             variables: {}\ntags: []\n---\n",
-        )
-        .unwrap();
-        assert!(
-            list_incomplete(&cfg).is_empty(),
-            "a clean base must be quiet"
-        );
-
-        // A project with a marker and a pending job is reported.
-        let busy = base.join("busy");
-        fs::create_dir_all(&busy).unwrap();
-        write_create_marker(
-            &busy,
-            &[CopyJob {
-                src: base.join("a.bin"),
-                dest: busy.join("a.bin"),
-                bytes: 10,
-            }],
-        )
-        .unwrap();
-
-        let items = list_incomplete(&cfg);
-        assert_eq!(items.len(), 1, "got {items:?}");
-        assert_eq!(items[0].kind, "create");
-        assert_eq!(items[0].pending, 1, "the outstanding copy must be counted");
-
-        // Once the copy is marked done, nothing is pending any more.
-        mark_done(&busy, &busy.join("a.bin"));
-        assert_eq!(list_incomplete(&cfg)[0].pending, 0);
-    }
-
-    /// `reconcile` walks the base root and deletes things there. It must remove
-    /// abandoned scratch and *nothing else*.
-    ///
-    /// A base is the user's own folder — it can hold anything. Two mutants
-    /// survived here that would each have destroyed real files: loosening the
-    /// marker-name test makes every `.json` at the root look like a move marker
-    /// (and get deleted), and loosening the sweep condition calls `remove_file`
-    /// on whatever it is currently looking at.
-    #[test]
-    fn reconcile_sweeps_only_scratch_from_a_base_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-
-        // Things a user might legitimately keep beside their projects.
-        let bystanders = [
-            "notes.md",
-            "budget.xlsx",
-            "settings.json",         // NOT a move marker
-            "fastf-move-notes.json", // no leading dot: still not a marker
-            ".fastf-move-notes.txt", // marker prefix, wrong extension
-        ];
-        for name in bystanders {
-            fs::write(base.join(name), format!("contents of {name}")).unwrap();
-        }
-
-        // Recent scratch: may belong to a copy running right now.
-        fs::write(base.join("fresh.bin.part"), "in flight").unwrap();
-
-        // Abandoned scratch: the only thing that should go.
-        let stale = base.join("abandoned.bin.part");
-        fs::write(&stale, "leftover").unwrap();
-        age_file(&stale, 7200);
-
-        let cfg = Config {
-            base_dir: base.display().to_string(),
-            ..Default::default()
-        };
-        let report = reconcile(&cfg);
-
-        assert_eq!(report.swept, 1, "exactly one file should be swept");
-        assert!(!stale.exists(), "abandoned scratch should be gone");
-        assert!(
-            base.join("fresh.bin.part").exists(),
-            "recent scratch may be an in-flight copy and must survive"
-        );
-        for name in bystanders {
-            assert_eq!(
-                fs::read_to_string(base.join(name)).unwrap(),
-                format!("contents of {name}"),
-                "{name} is the user's file and must never be touched"
-            );
-        }
-    }
-
-    /// The sweep must not descend through a link: its target lives outside the
-    /// tree being cleaned, and deleting from there is not this function's call.
-    #[test]
-    fn sweep_scratch_does_not_follow_links_out_of_the_tree() {
-        let tmp = tempfile::tempdir().unwrap();
-        let outside = tmp.path().join("outside");
-        fs::create_dir_all(&outside).unwrap();
-        let outside_scratch = outside.join("elsewhere.bin.part");
-        fs::write(&outside_scratch, "not ours to delete").unwrap();
-        age_file(&outside_scratch, 7200);
-
-        let root = tmp.path().join("root");
-        fs::create_dir_all(&root).unwrap();
-
-        let link = root.join("linked");
-        #[cfg(windows)]
-        let made = std::process::Command::new("cmd")
-            .args(["/c", "mklink", "/J"])
-            .arg(&link)
-            .arg(&outside)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        #[cfg(unix)]
-        let made = std::os::unix::fs::symlink(&outside, &link).is_ok();
-        assert!(made, "could not create a directory link");
-
-        let mut report = ReconcileReport::default();
-        sweep_scratch(&root, &mut report);
-
-        assert_eq!(report.swept, 0, "nothing inside the tree to sweep");
-        assert!(
-            outside_scratch.exists(),
-            "the sweep followed a link and deleted a file outside its tree"
-        );
-    }
-
-    /// Resume must accept only a file that is genuinely complete. A destination
-    /// of the wrong size is a truncated copy, and treating it as done would
-    /// silently leave a corrupt file in the project forever.
-    #[test]
-    fn reconcile_create_recopies_a_truncated_destination() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-        let root = base.join("proj");
-        fs::create_dir_all(&root).unwrap();
-
-        let src = base.join("asset.bin");
-        let data = vec![5u8; 4096];
-        fs::write(&src, &data).unwrap();
-
-        // A destination that exists but is short — a copy killed mid-write.
-        let dest = root.join("asset.bin");
-        fs::write(&dest, vec![5u8; 100]).unwrap();
-
-        write_create_marker(
-            &root,
-            &[CopyJob {
-                src: src.clone(),
-                dest: dest.clone(),
-                bytes: data.len() as u64,
-            }],
-        )
-        .unwrap();
-
-        let cfg = Config {
-            base_dir: base.display().to_string(),
-            ..Default::default()
-        };
-        let report = reconcile(&cfg);
-
-        assert_eq!(report.resumed, 1, "the short file must be re-copied");
-        assert_eq!(
-            fs::read(&dest).unwrap(),
-            data,
-            "the destination must end up complete"
-        );
-        assert!(!create_marker_path(&root).exists(), "marker cleared");
-
-        // A destination that is already the right size is left alone and
-        // counted as done rather than re-copied.
-        write_create_marker(
-            &root,
-            &[CopyJob {
-                src,
-                dest,
-                bytes: data.len() as u64,
-            }],
-        )
-        .unwrap();
-        let report = reconcile(&cfg);
-        assert_eq!(report.resumed, 0, "a complete file needs no work");
-        assert!(!create_marker_path(&root).exists());
-    }
-
-    /// After a committed move, the source is removed — but only when there is a
-    /// distinct source still there to remove.
-    #[test]
-    fn reconcile_move_handles_an_already_removed_source() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-        let pinfo = "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
-                     created: 2026-01-01T00:00:00Z\nfolder: f\npath: x\n\
-                     variables: {}\ntags: []\n---\n";
-
-        // The commit landed and the source was already cleaned up: reconcile
-        // just has to tidy the marker away, without erroring.
-        let final_path = base.join("moved");
-        fs::create_dir_all(&final_path).unwrap();
-        fs::write(crate::core::project_info::pinfo_path(&final_path), pinfo).unwrap();
-        let gone_src = base.join("already_removed");
-
-        write_move_marker(
-            base,
-            "already_removed",
-            &gone_src,
-            &staging_path(base, "already_removed"),
-            &final_path,
-            "finalizing",
-            "ID0001",
-        )
-        .unwrap();
-
-        let cfg = Config {
-            base_dir: base.display().to_string(),
-            ..Default::default()
-        };
-        let report = reconcile(&cfg);
-
-        assert_eq!(report.completed, 1, "report: {report:?}");
-        assert!(
-            report.unrecoverable.is_empty(),
-            "a missing source is the expected end state, not a failure"
-        );
-        assert!(final_path.is_dir(), "the destination must survive");
-        assert!(
-            !move_marker_path(base, "already_removed").exists(),
-            "marker cleared"
-        );
-    }
-
-    #[test]
-    fn create_marker_round_trip_and_mark_done() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let job = CopyJob {
-            src: root.join("src.bin"),
-            dest: root.join("dest.bin"),
-            bytes: 10,
-        };
-        write_create_marker(root, std::slice::from_ref(&job)).unwrap();
-        assert!(create_marker_path(root).exists());
-
-        mark_done(root, &job.dest);
-        let marker = read_json::<CreateMarker>(&create_marker_path(root)).unwrap();
-        assert!(marker.jobs[0].done);
-
-        clear_create(root);
-        assert!(!create_marker_path(root).exists());
-    }
-
-    #[test]
-    fn reconcile_resumes_pending_create_copy() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-        let root = base.join("proj");
-        fs::create_dir_all(&root).unwrap();
-        let src = base.join("asset.bin");
-        let data = vec![7u8; 5000];
-        fs::write(&src, &data).unwrap();
-        let dest = root.join("asset.bin");
-        let job = CopyJob {
-            src: src.clone(),
-            dest: dest.clone(),
-            bytes: data.len() as u64,
-        };
-        write_create_marker(&root, std::slice::from_ref(&job)).unwrap();
-
-        let cfg = Config {
-            base_dir: base.display().to_string(),
-            ..Default::default()
-        };
-        let report = reconcile(&cfg);
-        assert_eq!(report.resumed, 1);
-        assert_eq!(fs::read(&dest).unwrap(), data);
-        // Marker cleared once everything landed.
-        assert!(!create_marker_path(&root).exists());
-    }
-
-    #[test]
-    fn reconcile_rolls_back_uncommitted_move_leaving_source_intact() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-        let src = base.join("proj");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("keep.txt"), "important").unwrap();
-        let temp = staging_path(base, "proj");
-        fs::create_dir_all(&temp).unwrap();
-        fs::write(temp.join("keep.txt"), "partial").unwrap();
-        // The final target does not exist yet → the commit never happened.
-        let final_path = base.join("committed_target_that_does_not_exist");
-        write_move_marker(base, "proj", &src, &temp, &final_path, "copying", "ID0001").unwrap();
-
-        let cfg = Config {
-            base_dir: base.display().to_string(),
-            ..Default::default()
-        };
-        let report = reconcile(&cfg);
-        assert_eq!(report.rolled_back, 1);
-        assert!(!temp.exists(), "staging removed");
-        assert_eq!(
-            fs::read_to_string(src.join("keep.txt")).unwrap(),
-            "important",
-            "source untouched"
-        );
-        assert!(!move_marker_path(base, "proj").exists(), "marker cleared");
-    }
-
-    /// The regression this whole identity check exists for: a rolled-back move
-    /// leaves the target name free, and anything may take it afterwards. If
-    /// reconcile treated "a folder is there" as proof the commit landed, it
-    /// would delete a perfectly good source.
-    #[test]
-    fn reconcile_refuses_to_delete_source_when_destination_is_a_different_project() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-
-        let src = base.join("proj");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("irreplaceable.txt"), "the user's actual work").unwrap();
-
-        // An unrelated project now occupies the destination name.
-        let final_path = base.join("moved_proj");
-        fs::create_dir_all(&final_path).unwrap();
-        fs::write(
-            final_path.join(crate::core::project_info::RESERVED_FILENAME),
-            "---\nid: ID9999\ntemplate: other\ntemplate_name: Other\n\
-             created: 2026-01-01T00:00:00Z\nfolder: moved_proj\npath: x\n\
-             variables: {}\ntags: []\n---\n",
-        )
-        .unwrap();
-
-        let temp = staging_path(base, "proj");
-        write_move_marker(base, "proj", &src, &temp, &final_path, "copying", "ID0001").unwrap();
-
-        let cfg = Config {
-            base_dir: base.display().to_string(),
-            ..Default::default()
-        };
-        let report = reconcile(&cfg);
-
-        assert_eq!(report.completed, 0, "must not claim the move completed");
-        assert!(
-            src.join("irreplaceable.txt").exists(),
-            "source was deleted despite the destination being a different project"
-        );
-        assert!(
-            report.unrecoverable.iter().any(|m| m.contains("ID9999")),
-            "should report the identity mismatch, got {:?}",
-            report.unrecoverable
-        );
-        assert!(
-            move_marker_path(base, "proj").exists(),
-            "marker must survive so the next reconcile retries"
-        );
-    }
-
-    /// The genuine crash-after-commit case must still finish cleanly.
-    #[test]
-    fn reconcile_completes_move_when_destination_is_the_same_project() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-        let pinfo = |id: &str| {
+            crate::core::project_info::pinfo_path(&root),
             format!(
-                "---\nid: {id}\ntemplate: t\ntemplate_name: T\n\
-                 created: 2026-01-01T00:00:00Z\nfolder: f\npath: x\n\
+                "---\nid: {id}\ntemplate: general\ntemplate_name: General\n\
+                 created: 2026-01-01T00:00:00Z\nfolder: {folder}\npath: x\n\
                  variables: {{}}\ntags: []\n---\n"
-            )
-        };
-
-        // Crash happened after the commit rename but before source removal, so
-        // both sides hold identical content.
-        let src = base.join("proj");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("a.txt"), "same").unwrap();
-        fs::write(
-            src.join(crate::core::project_info::RESERVED_FILENAME),
-            pinfo("ID0001"),
+            ),
         )
         .unwrap();
+        root
+    }
 
-        let final_path = base.join("moved_proj");
-        fs::create_dir_all(&final_path).unwrap();
-        fs::write(final_path.join("a.txt"), "same").unwrap();
-        fs::write(
-            final_path.join(crate::core::project_info::RESERVED_FILENAME),
-            pinfo("ID0001"),
-        )
-        .unwrap();
-
-        let temp = staging_path(base, "proj");
-        write_move_marker(
-            base,
-            "proj",
-            &src,
-            &temp,
-            &final_path,
-            "finalizing",
+    fn prepared_transaction(
+        source_base: &Path,
+        target_base: &Path,
+    ) -> (PathBuf, MoveManifest, MoveTransaction) {
+        let source = write_project(source_base, "project", "ID0001");
+        let transaction = MoveTransaction::begin(
+            source_base,
+            Path::new("project"),
+            target_base,
+            Path::new("project"),
             "ID0001",
         )
         .unwrap();
+        let manifest = MoveManifest::scan(&source).unwrap();
+        transaction.write_manifest(&manifest).unwrap();
+        (source, manifest, transaction)
+    }
 
-        let cfg = Config {
-            base_dir: base.display().to_string(),
-            ..Default::default()
+    fn fill_staging(
+        source: &Path,
+        manifest: &MoveManifest,
+        transaction: &MoveTransaction,
+    ) -> PathBuf {
+        let staging = transaction.claim_staging().unwrap();
+        let progress = Mutex::new(Progress::new(&[]));
+        transactions::copy_to_staging(
+            manifest,
+            source,
+            &staging,
+            &progress,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        staging
+    }
+
+    #[test]
+    fn obsolete_markers_are_byte_identical_after_reconcile() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("base");
+        let project = base.join("project");
+        let outside = temp.path().join("outside-sentinel");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(&outside, b"untouched").unwrap();
+        let hostile = format!(
+            "{{\"version\":1,\"src\":\"{}\",\"temp\":\"{}\",\"final_path\":\"{}\"}}",
+            outside.display(),
+            outside.display(),
+            outside.display()
+        );
+        let create = legacy_create_marker_path(&project);
+        let moved = move_marker_path(&base, "project");
+        fs::write(&create, hostile.as_bytes()).unwrap();
+        fs::write(&moved, hostile.as_bytes()).unwrap();
+        let before_create = fs::read(&create).unwrap();
+        let before_move = fs::read(&moved).unwrap();
+
+        let first = reconcile(&config_for(&base));
+        let second = reconcile(&config_for(&base));
+        assert_eq!(first.obsolete.len(), 2);
+        assert_eq!(second.obsolete.len(), 2);
+        assert_eq!(fs::read(create).unwrap(), before_create);
+        assert_eq!(fs::read(moved).unwrap(), before_move);
+        assert_eq!(fs::read(outside).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn create_journal_never_serializes_absolute_copy_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let template_files = temp.path().join("template/files");
+        let project = temp.path().join("base/project");
+        fs::create_dir_all(&template_files).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        let source = template_files.join("nested/asset.bin");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, b"payload").unwrap();
+        let job = CopyJob {
+            src: source,
+            dest: project.join("nested/asset.bin"),
+            bytes: 7,
         };
-        let report = reconcile(&cfg);
+        write_create_journal(
+            &project,
+            "general",
+            &template_files,
+            std::slice::from_ref(&job),
+        )
+        .unwrap();
+        let raw = fs::read_to_string(create_journal_path(&project)).unwrap();
+        assert!(!raw.contains(&temp.path().display().to_string()));
+        assert!(raw.contains("nested/asset.bin"));
+    }
 
-        assert_eq!(report.completed, 1, "report: {report:?}");
-        assert!(!src.exists(), "source should be removed once confirmed");
-        assert!(final_path.exists(), "destination survives");
-        assert!(!move_marker_path(base, "proj").exists(), "marker cleared");
+    #[test]
+    fn copying_recovery_discards_only_the_owned_transaction() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_base = temp.path().join("source");
+        let target_base = temp.path().join("target");
+        fs::create_dir(&source_base).unwrap();
+        fs::create_dir(&target_base).unwrap();
+        let (source, manifest, transaction) = prepared_transaction(&source_base, &target_base);
+        let operation = transaction.operation_dir.clone();
+        let staging = fill_staging(&source, &manifest, &transaction);
+        fs::write(target_base.join("real.tmp"), b"bystander").unwrap();
+
+        let report = reconcile(&move_config(&source_base, &target_base));
+        assert_eq!(report.rolled_back, 1, "{report:?}");
+        assert!(source.is_dir());
+        assert!(!operation.exists());
+        assert!(!staging.exists());
+        assert_eq!(
+            fs::read(target_base.join("real.tmp")).unwrap(),
+            b"bystander"
+        );
+    }
+
+    #[test]
+    fn ready_with_staging_rolls_back_and_ready_after_publication_finishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_base = temp.path().join("source");
+        let target_base = temp.path().join("target");
+        fs::create_dir(&source_base).unwrap();
+        fs::create_dir(&target_base).unwrap();
+        let cfg = move_config(&source_base, &target_base);
+
+        let (source, manifest, mut transaction) = prepared_transaction(&source_base, &target_base);
+        fill_staging(&source, &manifest, &transaction);
+        transaction.set_phase(MovePhase::ReadyToCommit).unwrap();
+        let report = reconcile(&cfg);
+        assert_eq!(report.rolled_back, 1, "{report:?}");
+        assert!(source.is_dir());
+        assert!(!target_base.join("project").exists());
+
+        let manifest = MoveManifest::scan(&source).unwrap();
+        let mut transaction = MoveTransaction::begin(
+            &source_base,
+            Path::new("project"),
+            &target_base,
+            Path::new("project"),
+            "ID0001",
+        )
+        .unwrap();
+        transaction.write_manifest(&manifest).unwrap();
+        let staging = fill_staging(&source, &manifest, &transaction);
+        transaction.set_phase(MovePhase::ReadyToCommit).unwrap();
+        fs::rename(&staging, target_base.join("project")).unwrap();
+
+        let first = reconcile(&cfg);
+        let second = reconcile(&cfg);
+        assert_eq!(first.completed, 1, "{first:?}");
+        assert!(second.is_empty(), "recovery must be idempotent: {second:?}");
+        assert!(!source.exists());
+        assert_eq!(
+            fs::read(target_base.join("project/payload.part")).unwrap(),
+            [0_u8, 1, 255]
+        );
+        assert_eq!(
+            fs::read_dir(transactions::transaction_root(&target_base))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn cleanup_pending_retries_but_identity_mismatch_never_mutates() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_base = temp.path().join("source");
+        let target_base = temp.path().join("target");
+        fs::create_dir(&source_base).unwrap();
+        fs::create_dir(&target_base).unwrap();
+        let cfg = move_config(&source_base, &target_base);
+        let (source, manifest, mut transaction) = prepared_transaction(&source_base, &target_base);
+        let staging = fill_staging(&source, &manifest, &transaction);
+        transaction.set_phase(MovePhase::ReadyToCommit).unwrap();
+        let final_path = target_base.join("project");
+        fs::rename(staging, &final_path).unwrap();
+        transaction.set_phase(MovePhase::CleanupPending).unwrap();
+        let operation = transaction.operation_dir.clone();
+
+        crate::core::project_info::write_frontmatter(
+            &crate::core::project_info::pinfo_path(&final_path),
+            |metadata| metadata.id = "ID9999".to_string(),
+        )
+        .unwrap();
+        let mismatch = reconcile(&cfg);
+        assert_eq!(mismatch.completed, 0);
+        assert!(!mismatch.unrecoverable.is_empty());
+        assert!(source.is_dir(), "identity mismatch must preserve source");
+        assert!(operation.is_dir(), "transaction must remain for inspection");
+
+        let repeated = reconcile(&cfg);
+        assert_eq!(repeated.completed, 0);
+        assert!(source.is_dir());
+        assert!(operation.is_dir());
+    }
+
+    #[test]
+    fn malformed_v2_transaction_is_report_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_base = temp.path().join("source");
+        let target_base = temp.path().join("target");
+        fs::create_dir(&source_base).unwrap();
+        fs::create_dir(&target_base).unwrap();
+        let sentinel = source_base.join("sentinel");
+        fs::write(&sentinel, b"keep").unwrap();
+        let root = transactions::ensure_transaction_root(&target_base).unwrap();
+        let operation = root.join("bad-operation");
+        fs::create_dir(&operation).unwrap();
+        let journal = operation.join(transactions::JOURNAL_FILE);
+        fs::write(
+            &journal,
+            format!(
+                "{{\"version\":2,\"operation_id\":\"../escape\",\"project_id\":\"ID0001\",\"source_base\":\"{}\",\"source_folder\":\"../sentinel\",\"target_folder\":\"project\",\"phase\":\"CleanupPending\"}}",
+                source_base.display()
+            ),
+        )
+        .unwrap();
+        let before = fs::read(&journal).unwrap();
+
+        let report = reconcile(&move_config(&source_base, &target_base));
+        assert!(!report.unrecoverable.is_empty());
+        assert_eq!(fs::read(&journal).unwrap(), before);
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
     }
 }

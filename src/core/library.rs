@@ -18,7 +18,7 @@
 //! (`/mnt/proj/...`) is valid when the same base is read on Windows (`D:\...`).
 //! There is no manual prune: the "missing" state is transient and self-heals.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ use crate::core::assets::{self, Progress};
 use crate::core::config::Config;
 use crate::core::naming;
 use crate::core::project_info::{self, Metadata};
-use crate::core::provisioning;
+use crate::core::transactions::{self, MoveManifest, MovePhase, MoveTransaction};
 
 /// Filename of the per-base disposable cache, co-located with the projects.
 pub const CACHE_FILENAME: &str = ".fastf-index.json";
@@ -243,9 +243,9 @@ pub fn scan_base(base: &Path) -> Vec<Project> {
         if !path.is_dir() {
             continue;
         }
-        // Skip dot-prefixed dirs (e.g. a staged move's `.<folder>.fastf-part`,
-        // which carries a copy of PROJECT_INFO.md) so a move in flight never
-        // surfaces as a phantom duplicate project.
+        // Skip dot-prefixed dirs, including `.fastf-transactions`, whose private
+        // staging may carry PROJECT_INFO.md. An in-flight move must never
+        // surface as a phantom duplicate project.
         if entry
             .file_name()
             .to_str()
@@ -419,26 +419,131 @@ pub fn base_label(base: &Path) -> String {
         .unwrap_or_else(|| base.display().to_string())
 }
 
+/// Re-resolve a cached/discovered project against the configured filesystem
+/// boundary before an operation that can rename or delete anything.
+///
+/// Caches are hints only. The project must still be a real (non-symlink) direct
+/// child of a currently configured base, and its real `PROJECT_INFO.md` must
+/// carry the same ID as the candidate supplied by the caller.
+pub fn revalidate_project(cfg: &Config, candidate: &Project) -> Result<Project> {
+    let candidate_base = candidate
+        .base
+        .canonicalize()
+        .with_context(|| format!("resolving project base {}", candidate.base.display()))?;
+    let configured = cfg
+        .effective_bases()
+        .into_iter()
+        .filter_map(|base| base.canonicalize().ok())
+        .find(|base| *base == candidate_base)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "refusing to modify '{}': its base {} is not currently configured",
+                candidate.name,
+                candidate.base.display()
+            )
+        })?;
+    revalidate_project_in_base(candidate, &configured)
+}
+
+/// The compatibility-library boundary does not own a [`Config`], but it still
+/// refuses stale, forged, linked, or non-child project records.
+fn revalidate_recorded_project(candidate: &Project) -> Result<Project> {
+    let base = candidate
+        .base
+        .canonicalize()
+        .with_context(|| format!("resolving project base {}", candidate.base.display()))?;
+    revalidate_project_in_base(candidate, &base)
+}
+
+fn revalidate_project_in_base(candidate: &Project, base: &Path) -> Result<Project> {
+    assets::require_real_directory(base, "project base")?;
+    assets::require_real_directory(&candidate.path, "project source")?;
+    let path = candidate
+        .path
+        .canonicalize()
+        .with_context(|| format!("resolving project {}", candidate.path.display()))?;
+    if path.parent() != Some(base) {
+        anyhow::bail!(
+            "refusing to modify: {} is not a direct child of configured base {}",
+            path.display(),
+            base.display()
+        );
+    }
+
+    let pinfo = project_info::pinfo_path(&path);
+    let pinfo_metadata = match fs::symlink_metadata(&pinfo) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!(
+                "refusing to modify: {} has no PROJECT_INFO.md",
+                path.display()
+            );
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("checking project identity at {}", pinfo.display()));
+        }
+    };
+    if pinfo_metadata.file_type().is_symlink() || !pinfo_metadata.file_type().is_file() {
+        anyhow::bail!(
+            "refusing to modify: {} is not a real PROJECT_INFO.md file",
+            pinfo.display()
+        );
+    }
+    let metadata = project_info::read_metadata(&path)?
+        .ok_or_else(|| anyhow::anyhow!("{} has no readable project identity", pinfo.display()))?;
+    if metadata.id != candidate.id {
+        anyhow::bail!(
+            "refusing to modify '{}': project identity changed (expected {}, found {})",
+            candidate.name,
+            candidate.id,
+            metadata.id
+        );
+    }
+    Ok(project_from_meta(metadata, base, &path))
+}
+
+/// The result of a move that may have published successfully while leaving the
+/// old source for a later, explicitly supervised cleanup.
+#[derive(Debug, Clone)]
+pub struct MoveOutcome {
+    pub project: Project,
+    pub cleanup_pending: bool,
+}
+
 /// Move a project folder into another base directory, keeping its folder name.
 /// Synchronous convenience wrapper over [`move_project_with`] with throwaway
 /// progress/cancel handles — used by `fastf move` (CLI).
 pub fn move_project(project: &Project, new_base: &Path) -> Result<Project> {
+    let outcome = move_project_outcome(project, new_base)?;
+    report_cleanup_pending(&outcome, &project.path);
+    Ok(outcome.project)
+}
+
+/// Compatibility-level move outcome. Application interfaces should use
+/// [`move_project_configured_with_outcome`] so configured-base validation is
+/// reloaded under the mutation lock.
+pub fn move_project_outcome(project: &Project, new_base: &Path) -> Result<MoveOutcome> {
     let progress = Mutex::new(Progress::new(&[]));
     let cancel = AtomicBool::new(false);
-    move_project_with(project, new_base, &progress, &cancel)
+    move_project_with_outcome(project, new_base, &progress, &cancel)
+}
+
+/// Synchronous configured application wrapper with throwaway progress handles.
+pub fn move_project_configured_outcome(project: &Project, new_base: &Path) -> Result<MoveOutcome> {
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+    move_project_configured_with_outcome(project, new_base, &progress, &cancel)
 }
 
 /// Move a project folder into another base directory, keeping its folder name.
 ///
 /// **Safety invariant: the source is never removed until the destination is
 /// fully copied AND verified.** Same-filesystem moves take an instant, atomic
-/// `fs::rename` (verified by atomicity). Cross-filesystem / network moves stage
-/// the copy into a dot-prefixed `.<folder>.fastf-part` folder under the target
-/// base, guarded by a durable `.fastf-move-<folder>.json` marker, verify the
-/// copy (`assets::verify_tree`: size + count + existence), atomically rename the
-/// staging folder into place, and only *then* remove the source. A crash before
-/// the commit rename leaves the source intact and reconcile rolls the staging
-/// back; a crash after it lets reconcile finish the source removal.
+/// `fs::rename`. Cross-filesystem / network moves use a private v2 transaction
+/// below the target base, verify exact path/type/size topology plus a second
+/// source metadata scan, atomically publish the staging directory, and only
+/// then remove the source.
 ///
 /// `progress` drives the UI bar (phase + per-file counts); `cancel` aborts a
 /// staged copy cooperatively, cleaning up the staging folder and marker and
@@ -451,16 +556,113 @@ pub fn move_project_with(
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<Project> {
-    if !new_base.is_dir() {
-        anyhow::bail!("target base does not exist: {}", new_base.display());
-    }
-    let new_base = new_base
+    let outcome = move_project_with_outcome(project, new_base, progress, cancel)?;
+    report_cleanup_pending(&outcome, &project.path);
+    Ok(outcome.project)
+}
+
+/// Move through the compatibility library API while holding the coarse data
+/// lock and revalidating the recorded source base/identity.
+pub fn move_project_with_outcome(
+    project: &Project,
+    new_base: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<MoveOutcome> {
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+    let project = revalidate_recorded_project(project)?;
+    move_project_unlocked(&project, new_base, progress, cancel)
+}
+
+/// Application move entry point. It reloads configuration under the coarse
+/// mutation lock, then revalidates both source and target against that fresh
+/// snapshot before touching either path.
+pub fn move_project_configured_with_outcome(
+    project: &Project,
+    new_base: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<MoveOutcome> {
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+    let cfg = Config::load()?;
+    let project = revalidate_project(&cfg, project)?;
+    let wanted = new_base
         .canonicalize()
-        .unwrap_or_else(|_| new_base.to_path_buf());
+        .with_context(|| format!("resolving target base {}", new_base.display()))?;
+    let target = cfg
+        .effective_bases()
+        .into_iter()
+        .filter_map(|base| base.canonicalize().ok())
+        .find(|base| *base == wanted)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "'{}' is not a currently configured base",
+                new_base.display()
+            )
+        })?;
+    move_project_unlocked(&project, &target, progress, cancel)
+}
+
+/// Exercise the private copy transaction even when the test's two bases share
+/// a filesystem. This is intentionally absent from release builds; production
+/// always lets the OS rename first and stages only after `EXDEV`.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn move_project_staged_for_test(project: &Project, new_base: &Path) -> Result<MoveOutcome> {
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+    let cfg = Config::load()?;
+    let project = revalidate_project(&cfg, project)?;
+    let wanted = new_base
+        .canonicalize()
+        .with_context(|| format!("resolving target base {}", new_base.display()))?;
+    let target = cfg
+        .effective_bases()
+        .into_iter()
+        .filter_map(|base| base.canonicalize().ok())
+        .find(|base| *base == wanted)
+        .ok_or_else(|| anyhow::anyhow!("'{}' is not a configured base", new_base.display()))?;
     let old_base = project
         .base
         .canonicalize()
-        .unwrap_or_else(|_| project.base.clone());
+        .with_context(|| format!("resolving source base {}", project.base.display()))?;
+    if target == old_base {
+        anyhow::bail!("move target is the source base");
+    }
+    let folder = project
+        .path
+        .file_name()
+        .map(PathBuf::from)
+        .context("move source has no folder name")?;
+    let new_path = target.join(&folder);
+    if assets::entry_exists(&new_path)? {
+        anyhow::bail!("move target already exists: {}", new_path.display());
+    }
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+    staged_copy_verify_commit(
+        &project,
+        &target,
+        &new_path,
+        &folder.to_string_lossy(),
+        &progress,
+        &cancel,
+    )
+}
+
+fn move_project_unlocked(
+    project: &Project,
+    new_base: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<MoveOutcome> {
+    assets::require_real_directory(new_base, "target base")?;
+    let new_base = new_base
+        .canonicalize()
+        .with_context(|| format!("resolving target base {}", new_base.display()))?;
+    let old_base = project
+        .base
+        .canonicalize()
+        .with_context(|| format!("resolving source base {}", project.base.display()))?;
     if new_base == old_base {
         anyhow::bail!(
             "'{}' is already in base {}",
@@ -475,9 +677,9 @@ pub fn move_project_with(
             project.path.display()
         )
     })?;
-    let folder = folder_os.to_string_lossy().into_owned();
+    let folder = PathBuf::from(folder_os);
     let new_path = new_base.join(&folder);
-    if new_path.exists() {
+    if assets::entry_exists(&new_path)? {
         anyhow::bail!("move target already exists: {}", new_path.display());
     }
 
@@ -488,189 +690,277 @@ pub fn move_project_with(
     // Deliberately NOT `fs_retry::rename`: this call is *expected* to fail on a
     // cross-device move, and that failure is the signal to take the staged path.
     // Retrying would add the full backoff to every cross-drive move for nothing.
-    if fs::rename(&project.path, &new_path).is_err() {
-        refuse_if_contains_links(project)?;
-        staged_copy_verify_commit(project, &new_base, &new_path, &folder, progress, cancel)?;
+    if assets::entry_exists(&new_path)? {
+        anyhow::bail!("move target already exists: {}", new_path.display());
     }
-    set_phase(progress, "finalizing");
-
-    let mut moved = project.clone();
-    moved.path = new_path.canonicalize().unwrap_or(new_path);
-    moved.base = new_base.clone();
-
-    // Keep the displayed metadata truthful; discovery never reads `path`, so a
-    // failure here is a warning, not a failed move.
-    let pinfo = project_info::pinfo_path(&moved.path);
-    if pinfo.exists()
-        && let Err(err) = project_info::write_frontmatter(&pinfo, |meta| {
-            meta.path = crate::util::paths::display_path(&moved.path);
-        })
-    {
-        eprintln!("warning: could not update PROJECT_INFO.md path: {err:#}");
-    }
-
-    // Two-sided cache update, best-effort.
-    let old_dir = project
-        .path
-        .strip_prefix(&old_base)
-        .map(to_forward_slashes)
-        .unwrap_or_else(|_| project.name.clone());
-    cache_remove(&old_base, &old_dir);
-    cache_upsert(&new_base, &moved);
-
-    set_phase(progress, "done");
-    Ok(moved)
-}
-
-/// Refuse a staged (copying) move when the project contains links.
-///
-/// A cross-filesystem move copies the tree and then deletes the source. Windows
-/// junctions and symlinks cannot be reproduced faithfully without elevation or
-/// Developer Mode, and following them would silently restructure the project and
-/// could duplicate a whole shared asset library. Previously they were simply
-/// dropped — and because verification walked the destination the same blind way,
-/// the copy "verified" and the source was deleted, taking the links with it.
-///
-/// Refusing is the only outcome that can neither lose nor corrupt data. The user
-/// keeps a working project and an actionable message.
-fn refuse_if_contains_links(project: &Project) -> Result<()> {
-    let links = assets::find_links(&project.path)?;
-    if links.is_empty() {
-        return Ok(());
-    }
-    let shown: Vec<&str> = links.iter().take(5).map(String::as_str).collect();
-    let more = links.len().saturating_sub(shown.len());
-    anyhow::bail!(
-        "'{}' contains {} link{} that a cross-drive move cannot reproduce:\n  {}{}\n\
-         Nothing has been changed. Move the folder with a tool that preserves links \
-         (or remove the links first), then run `fastf reindex`.",
-        project.name,
-        links.len(),
-        if links.len() == 1 { "" } else { "s" },
-        shown.join("\n  "),
-        if more > 0 {
-            format!("\n  ...and {more} more")
-        } else {
-            String::new()
+    let outcome = match fs::rename(&project.path, &new_path) {
+        Ok(()) => {
+            let moved = finish_move_bookkeeping(project, &old_base, &new_base, &new_path);
+            MoveOutcome {
+                project: moved,
+                cleanup_pending: false,
+            }
         }
-    )
+        Err(error) if is_cross_device_error(&error) => {
+            return staged_copy_verify_commit(
+                project,
+                &new_base,
+                &new_path,
+                &folder.to_string_lossy(),
+                progress,
+                cancel,
+            );
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "renaming project {} to {}",
+                    project.path.display(),
+                    new_path.display()
+                )
+            });
+        }
+    };
+    set_phase(progress, "finalizing");
+    set_phase(progress, "done");
+    Ok(outcome)
 }
 
-/// The staged cross-filesystem move body: marker → copy-to-staging → verify →
-/// commit rename → remove source. Any failure (including cancel) before the
-/// commit leaves the source fully intact.
+fn is_cross_device_error(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::EXDEV)
+    }
+    #[cfg(windows)]
+    {
+        // ERROR_NOT_SAME_DEVICE
+        error.raw_os_error() == Some(17)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        error.kind() == std::io::ErrorKind::CrossesDevices
+    }
+}
+
+fn report_cleanup_pending(outcome: &MoveOutcome, source: &Path) {
+    if outcome.cleanup_pending {
+        eprintln!(
+            "warning: move published at {}, but source cleanup is pending at {}; \
+             the move transaction was retained",
+            outcome.project.path.display(),
+            source.display()
+        );
+    }
+}
+
+/// The staged cross-filesystem move body. All pre-publication state lives in
+/// one exclusively-created operation directory; cancellation or an ordinary
+/// error before publication removes exactly that directory and leaves the
+/// source untouched. Once publication begins cancellation is deliberately too
+/// late.
 fn staged_copy_verify_commit(
     project: &Project,
     new_base: &Path,
     new_path: &Path,
-    folder: &str,
+    _folder_label: &str,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
-) -> Result<()> {
-    use anyhow::Context;
+) -> Result<MoveOutcome> {
     use std::sync::atomic::Ordering;
 
-    let temp = provisioning::staging_path(new_base, folder);
-    // Clear any stale staging from a previous aborted attempt.
-    if temp.exists() {
-        let _ = fs::remove_dir_all(&temp);
-    }
-    provisioning::write_move_marker(
-        new_base,
-        folder,
-        &project.path,
-        &temp,
-        new_path,
-        "copying",
-        &project.id,
-    )
-    .ok();
-
-    // Enumerate the source tree and copy it verbatim into staging with progress.
-    let (dirs, files) = assets::jobs_for_tree(&project.path, &temp)?;
-    {
-        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-        p.phase = "copying".to_string();
-        p.total_bytes = files.iter().map(|j| j.bytes).sum();
-        p.total_files = files.len();
-        p.done_files = 0;
-        p.copied_bytes = 0;
-    }
-    let abort = |msg: &str| {
-        let _ = fs::remove_dir_all(&temp);
-        provisioning::clear_move(new_base, folder);
-        anyhow::anyhow!("{msg}")
-    };
-
-    fs::create_dir_all(&temp).with_context(|| format!("creating {}", temp.display()))?;
-    for dir in &dirs {
-        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    }
-    for job in &files {
-        if let Ok(mut p) = progress.lock() {
-            p.current_file = job
-                .dest
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
+    let old_base = project
+        .base
+        .canonicalize()
+        .with_context(|| format!("resolving source base {}", project.base.display()))?;
+    let folder = project
+        .path
+        .file_name()
+        .map(PathBuf::from)
+        .context("move source has no folder name")?;
+    crate::util::faults::check("move:before-marker-write")?;
+    let mut transaction =
+        MoveTransaction::begin(&old_base, &folder, new_base, &folder, &project.id)?;
+    let mut published = false;
+    let pre_publication = (|| -> Result<MoveManifest> {
+        let manifest = MoveManifest::scan(&project.path)?;
+        transaction.write_manifest(&manifest)?;
+        {
+            let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
+            state.phase = "copying".to_string();
+            state.total_bytes = manifest.total_bytes();
+            state.total_files = manifest.total_files();
+            state.done_files = 0;
+            state.copied_bytes = 0;
+            state.touch();
         }
-        if let Err(err) = assets::copy_job(job, progress, cancel) {
+        let staging = transaction.claim_staging()?;
+        if let Err(error) =
+            transactions::copy_to_staging(&manifest, &project.path, &staging, progress, cancel)
+        {
             if cancel.load(Ordering::Relaxed) {
-                return Err(abort(&format!("move of '{}' cancelled", project.name)));
+                anyhow::bail!("move of '{}' cancelled", project.name);
             }
-            let _ = fs::remove_dir_all(&temp);
-            provisioning::clear_move(new_base, folder);
-            return Err(err).with_context(|| {
-                format!("failed to copy '{}' to {}", project.name, temp.display())
+            return Err(error)
+                .with_context(|| format!("copying '{}' into private staging", project.name));
+        }
+        crate::util::faults::check("move:after-staging")?;
+        set_phase(progress, "verifying");
+        manifest.verify_destination(&staging)?;
+        manifest.verify_source_unchanged(&project.path)?;
+        crate::util::faults::check("move:after-verify")?;
+        crate::util::faults::check("move:post-verification")?;
+
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("move of '{}' cancelled", project.name);
+        }
+        set_phase(progress, "finalizing");
+        transaction.set_phase(MovePhase::ReadyToCommit)?;
+        crate::util::faults::check("move:before-commit-rename")?;
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("move of '{}' cancelled", project.name);
+        }
+        if assets::entry_exists(new_path)? {
+            anyhow::bail!("move target became occupied: {}", new_path.display());
+        }
+        crate::util::fs_retry::rename(&staging, new_path)
+            .with_context(|| format!("finalizing move into {}", new_path.display()))?;
+        published = true;
+        Ok(manifest)
+    })();
+
+    let manifest = match pre_publication {
+        Ok(manifest) => manifest,
+        Err(error) if !published => {
+            return match transaction.remove() {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(error).context(format!(
+                    "also could not remove the owned transaction: {cleanup:#}"
+                )),
+            };
+        }
+        Err(error) => {
+            // Publication is a point of no return. Preserve the transaction and
+            // return a truthful successful outcome with cleanup pending.
+            eprintln!(
+                "warning: move published at {}, but cleanup is pending ({error:#})",
+                new_path.display()
+            );
+            let moved = moved_view(project, new_base, new_path);
+            return Ok(MoveOutcome {
+                project: moved,
+                cleanup_pending: true,
             });
         }
-        if let Ok(mut p) = progress.lock() {
-            p.done_files += 1;
-            p.touch();
-        }
-    }
+    };
 
-    crate::util::faults::check("move:after-staging")?;
+    let mut cleanup_pending = false;
+    let mut retain_transaction = false;
 
-    // Verify BEFORE the source is ever touched. A short/missing file here means
-    // the source stays put and the staging is discarded.
-    set_phase(progress, "verifying");
-    if let Err(err) = assets::verify_tree(&project.path, &temp) {
-        return Err(abort(&format!(
-            "move of '{}' aborted — {err}. Source left intact.",
-            project.name
-        )));
-    }
-
-    crate::util::faults::check("move:after-verify")?;
-
-    // Commit: atomic rename within the target base, then remove the source.
-    set_phase(progress, "finalizing");
-    provisioning::write_move_marker(
-        new_base,
-        folder,
-        &project.path,
-        &temp,
-        new_path,
-        "finalizing",
-        &project.id,
-    )
-    .ok();
-    crate::util::faults::check("move:before-commit-rename")?;
-    crate::util::fs_retry::rename(&temp, new_path)
-        .with_context(|| format!("finalizing move into {}", new_path.display()))?;
-    crate::util::faults::check("move:after-commit-before-source-removal")?;
-
-    // Target is verified and in place; a source-removal failure is a warning,
-    // never data loss (reconcile will finish it).
-    if let Err(err) = crate::util::fs_retry::remove_dir_all(&project.path) {
+    if let Err(error) = crate::util::faults::check("move:after-publication")
+        .and_then(|()| crate::util::faults::check("move:after-commit-before-source-removal"))
+    {
         eprintln!(
-            "warning: moved to {} but could not remove source {} ({err}) — remove it manually",
+            "warning: move published at {}, but cleanup is pending ({error:#})",
+            new_path.display()
+        );
+        cleanup_pending = true;
+        retain_transaction = true;
+    } else if let Err(error) = transaction.set_phase(MovePhase::CleanupPending) {
+        eprintln!(
+            "warning: move published at {}, but the cleanup phase could not be recorded ({error:#})",
+            new_path.display()
+        );
+        cleanup_pending = true;
+        retain_transaction = true;
+    } else if let Err(error) = crate::util::faults::check("move:before-source-cleanup")
+        .and_then(|()| crate::util::faults::check("move:source-cleanup"))
+    {
+        eprintln!(
+            "warning: move published at {}, but source cleanup is pending at {} ({error:#})",
             new_path.display(),
             project.path.display()
         );
+        cleanup_pending = true;
+        retain_transaction = true;
+    } else if let Err(error) = revalidate_recorded_project(project)
+        .and_then(|_| manifest.verify_recovery_pair(&project.path, new_path))
+        .and_then(|_| crate::util::fs_retry::remove_dir_all(&project.path).map_err(Into::into))
+    {
+        eprintln!(
+            "warning: move published at {}, but source cleanup is pending at {} ({error:#})",
+            new_path.display(),
+            project.path.display()
+        );
+        cleanup_pending = true;
+        retain_transaction = true;
+    } else if let Err(error) = crate::util::faults::check("move:after-source-cleanup") {
+        eprintln!(
+            "warning: source cleanup completed, but transaction cleanup is pending ({error:#})"
+        );
+        retain_transaction = true;
     }
-    provisioning::clear_move(new_base, folder);
+
+    let moved = if cleanup_pending {
+        moved_view(project, new_base, new_path)
+    } else {
+        finish_move_bookkeeping(project, &old_base, new_base, new_path)
+    };
+    if !retain_transaction && let Err(error) = transaction.remove() {
+        eprintln!("warning: could not clear completed move transaction: {error:#}");
+    }
+    set_phase(progress, "done");
+    Ok(MoveOutcome {
+        project: moved,
+        cleanup_pending,
+    })
+}
+
+fn finish_move_bookkeeping(
+    project: &Project,
+    old_base: &Path,
+    new_base: &Path,
+    new_path: &Path,
+) -> Project {
+    let moved = moved_view(project, new_base, new_path);
+
+    let pinfo = project_info::pinfo_path(&moved.path);
+    if let Err(error) = project_info::write_frontmatter(&pinfo, |metadata| {
+        metadata.path = crate::util::paths::display_path(&moved.path);
+        metadata.folder = moved.name.clone();
+    }) {
+        eprintln!("warning: could not update PROJECT_INFO.md after move: {error:#}");
+    }
+
+    let old_dir = project
+        .path
+        .strip_prefix(old_base)
+        .map(to_forward_slashes)
+        .unwrap_or_else(|_| project.name.clone());
+    cache_remove(old_base, &old_dir);
+    cache_upsert(new_base, &moved);
+    moved
+}
+
+fn moved_view(project: &Project, new_base: &Path, new_path: &Path) -> Project {
+    let mut moved = project.clone();
+    moved.path = new_path
+        .canonicalize()
+        .unwrap_or_else(|_| new_path.to_path_buf());
+    moved.base = new_base.to_path_buf();
+    moved
+}
+
+/// Complete bookkeeping for a move recovered from a v2 transaction.
+pub(crate) fn finish_recovered_move(
+    source_base: &Path,
+    source_folder: &Path,
+    target_base: &Path,
+    final_path: &Path,
+) -> Result<()> {
+    let metadata = project_info::read_metadata(final_path)?
+        .ok_or_else(|| anyhow::anyhow!("recovered destination has no readable metadata"))?;
+    let original = project_from_meta(metadata, source_base, &source_base.join(source_folder));
+    finish_move_bookkeeping(&original, source_base, target_base, final_path);
     Ok(())
 }
 
@@ -691,6 +981,21 @@ fn set_phase(progress: &Mutex<Progress>, phase: &str) {
 /// Unregister a project: remove its `PROJECT_INFO.md` so it stops being a
 /// project. The folder and everything else inside it are untouched.
 pub fn unregister_project(project: &Project) -> Result<()> {
+    let project = revalidate_recorded_project(project)?;
+    unregister_project_unlocked(&project)
+}
+
+/// Application entry point for unregistering. Configuration and project
+/// identity are reloaded while holding the mutation lock, so a stale cache or
+/// configuration change cannot authorize removal of a different metadata file.
+pub fn unregister_project_configured(project: &Project) -> Result<()> {
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+    let config = Config::load()?;
+    let project = revalidate_project(&config, project)?;
+    unregister_project_unlocked(&project)
+}
+
+fn unregister_project_unlocked(project: &Project) -> Result<()> {
     let pinfo = project_info::pinfo_path(&project.path);
     if !pinfo.is_file() {
         anyhow::bail!(
@@ -710,6 +1015,20 @@ pub fn unregister_project(project: &Project) -> Result<()> {
 /// direct child of its base. Callers additionally restrict operations to
 /// configured bases and confirm with the user — same convention as move.
 pub fn delete_project(project: &Project) -> Result<()> {
+    let project = revalidate_recorded_project(project)?;
+    delete_project_unlocked(&project)
+}
+
+/// Application entry point for deletion with configured-base and identity
+/// validation performed under the mutation lock.
+pub fn delete_project_configured(project: &Project) -> Result<()> {
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+    let config = Config::load()?;
+    let project = revalidate_project(&config, project)?;
+    delete_project_unlocked(&project)
+}
+
+fn delete_project_unlocked(project: &Project) -> Result<()> {
     let path = project
         .path
         .canonicalize()
@@ -741,6 +1060,20 @@ pub fn delete_project(project: &Project) -> Result<()> {
 /// truth only, like move) and the base cache is updated. Returns the renamed
 /// [`Project`].
 pub fn rename_project(project: &Project, new_folder: &str) -> Result<Project> {
+    let project = revalidate_recorded_project(project)?;
+    rename_project_unlocked(&project, new_folder)
+}
+
+/// Application entry point for rename with configured-base and identity
+/// validation performed under the mutation lock.
+pub fn rename_project_configured(project: &Project, new_folder: &str) -> Result<Project> {
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+    let config = Config::load()?;
+    let project = revalidate_project(&config, project)?;
+    rename_project_unlocked(&project, new_folder)
+}
+
+fn rename_project_unlocked(project: &Project, new_folder: &str) -> Result<Project> {
     let sanitized = naming::sanitize_name(new_folder.trim());
     if sanitized.is_empty() {
         anyhow::bail!("new folder name is empty");
@@ -768,7 +1101,7 @@ pub fn rename_project(project: &Project, new_folder: &str) -> Result<Project> {
     if case_only_change {
         let mut staging = base.join(format!(".{sanitized}.fastf-case"));
         let mut attempt = 0;
-        while staging.exists() {
+        while assets::entry_exists(&staging)? {
             attempt += 1;
             staging = base.join(format!(".{sanitized}.fastf-case{attempt}"));
         }
@@ -781,7 +1114,7 @@ pub fn rename_project(project: &Project, new_folder: &str) -> Result<Project> {
                 .context(format!("renaming '{}' to '{}'", project.name, sanitized)));
         }
     } else {
-        if new_path.exists() {
+        if assets::entry_exists(&new_path)? {
             anyhow::bail!("rename target already exists: {}", new_path.display());
         }
         crate::util::fs_retry::rename(&project.path, &new_path)?;
@@ -937,6 +1270,7 @@ pub fn now_iso8601() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::provisioning;
     use std::thread::sleep;
     use std::time::Duration;
 
@@ -962,6 +1296,13 @@ mod tests {
             bases: extra.iter().map(|p| p.display().to_string()).collect(),
             ..Default::default()
         }
+    }
+
+    fn v2_transaction_count(base: &Path) -> usize {
+        let root = transactions::transaction_root(base);
+        fs::read_dir(root)
+            .map(|entries| entries.flatten().count())
+            .unwrap_or(0)
     }
 
     #[test]
@@ -1269,8 +1610,11 @@ mod tests {
         let (old_base, new_base) = (tmp1.path(), tmp2.path());
         write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
         fs::create_dir_all(old_base.join("proj_a/assets")).unwrap();
+        fs::create_dir_all(old_base.join("proj_a/empty")).unwrap();
         fs::write(old_base.join("proj_a/assets/big.bin"), vec![1u8; 8000]).unwrap();
         fs::write(old_base.join("proj_a/notes_{x}.md"), "keep {braces}").unwrap();
+        fs::write(old_base.join("proj_a/real.tmp"), []).unwrap();
+        fs::write(old_base.join("proj_a/real.part"), [0_u8, 1, 2, 255]).unwrap();
 
         let cfg = cfg_for(old_base, &[new_base]);
         let project = discover(&cfg).remove(0);
@@ -1286,7 +1630,7 @@ mod tests {
         // that silently stops updating looks exactly like a hung move.
         {
             let p = progress.lock().unwrap();
-            assert_eq!(p.phase, "finalizing", "the phase should have advanced");
+            assert_eq!(p.phase, "done", "the phase should have advanced");
             assert!(p.total_files >= 3, "files counted: {}", p.total_files);
             assert_eq!(
                 p.done_files, p.total_files,
@@ -1304,12 +1648,20 @@ mod tests {
             fs::read_to_string(new_path.join("notes_{x}.md")).unwrap(),
             "keep {braces}"
         );
+        assert_eq!(
+            fs::read(new_path.join("real.tmp")).unwrap(),
+            Vec::<u8>::new()
+        );
+        assert_eq!(
+            fs::read(new_path.join("real.part")).unwrap(),
+            [0_u8, 1, 2, 255]
+        );
+        assert!(new_path.join("empty").is_dir());
         assert!(
             !old_base.join("proj_a").exists(),
             "source removed only after verify"
         );
-        // Staging + marker cleaned up.
-        assert!(!provisioning::staging_path(new_base, "proj_a").exists());
+        assert_eq!(v2_transaction_count(new_base), 0);
     }
 
     #[test]
@@ -1337,7 +1689,143 @@ mod tests {
             "source untouched on cancel"
         );
         assert!(!new_path.exists(), "no target committed");
-        assert!(!provisioning::staging_path(new_base, "proj_a").exists());
+        assert_eq!(v2_transaction_count(new_base), 0);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn cleanup_failure_is_a_reported_success_and_retains_the_marker() {
+        let old = tempfile::tempdir().unwrap();
+        let new = tempfile::tempdir().unwrap();
+        write_project(old.path(), "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        fs::write(old.path().join("proj/payload.bin"), [0_u8, 1, 2, 255]).unwrap();
+        let project = scan_base(old.path()).remove(0);
+        let final_path = new.path().join("proj");
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(false);
+
+        let outcome = crate::util::faults::with_thread_fault("move:source-cleanup", || {
+            staged_copy_verify_commit(
+                &project,
+                new.path(),
+                &final_path,
+                "proj",
+                &progress,
+                &cancel,
+            )
+        })
+        .expect("publication remains a successful move");
+
+        assert!(outcome.cleanup_pending);
+        assert_eq!(
+            fs::read(final_path.join("payload.bin")).unwrap(),
+            [0_u8, 1, 2, 255]
+        );
+        assert!(project.path.is_dir(), "failed cleanup leaves source intact");
+        assert_eq!(
+            v2_transaction_count(new.path()),
+            1,
+            "cleanup-pending move must retain its v2 transaction"
+        );
+    }
+
+    #[test]
+    fn conventional_v1_staging_and_marker_are_payload_not_move_authority() {
+        let old = tempfile::tempdir().unwrap();
+        let new = tempfile::tempdir().unwrap();
+        write_project(old.path(), "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        let project = scan_base(old.path()).remove(0);
+        let final_path = new.path().join("proj");
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(false);
+
+        let staging = provisioning::staging_path(new.path(), "proj");
+        fs::create_dir(&staging).unwrap();
+        fs::write(staging.join("sentinel"), b"owned by someone else").unwrap();
+        let marker = provisioning::move_marker_path(new.path(), "proj");
+        fs::write(&marker, b"foreign marker bytes").unwrap();
+        let outcome = staged_copy_verify_commit(
+            &project,
+            new.path(),
+            &final_path,
+            "proj",
+            &progress,
+            &cancel,
+        )
+        .unwrap();
+        assert!(!outcome.cleanup_pending);
+        assert_eq!(
+            fs::read(staging.join("sentinel")).unwrap(),
+            b"owned by someone else"
+        );
+        assert_eq!(fs::read(marker).unwrap(), b"foreign marker bytes");
+    }
+
+    #[test]
+    fn only_the_cross_device_error_licenses_copy_fallback() {
+        #[cfg(unix)]
+        let cross_device = std::io::Error::from_raw_os_error(libc::EXDEV);
+        #[cfg(windows)]
+        let cross_device = std::io::Error::from_raw_os_error(17);
+
+        assert!(is_cross_device_error(&cross_device));
+        assert!(!is_cross_device_error(&std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied"
+        )));
+        assert!(!is_cross_device_error(&std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing"
+        )));
+    }
+
+    #[test]
+    fn stale_project_identity_cannot_authorize_deletion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        fs::write(base.join("proj/sentinel"), b"keep").unwrap();
+        let stale = scan_base(base).remove(0);
+
+        project_info::write_frontmatter(&project_info::pinfo_path(&stale.path), |metadata| {
+            metadata.id = "ID9999".to_string();
+        })
+        .unwrap();
+        let error = delete_project(&stale).unwrap_err();
+        assert!(error.to_string().contains("identity changed"));
+        assert_eq!(fs::read(base.join("proj/sentinel")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn forged_cached_path_cannot_escape_a_configured_base() {
+        let configured = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write_project(
+            configured.path(),
+            "real",
+            "ID0001",
+            "gen",
+            "2026-01-01T00:00:00Z",
+        );
+        write_project(
+            outside.path(),
+            "sentinel",
+            "ID0001",
+            "gen",
+            "2026-01-01T00:00:00Z",
+        );
+        fs::write(outside.path().join("sentinel/keep.bin"), b"keep").unwrap();
+
+        let mut forged = scan_base(configured.path()).remove(0);
+        forged.path = outside.path().join("sentinel");
+        let config = cfg_for(configured.path(), &[]);
+        let error = revalidate_project(&config, &forged).unwrap_err();
+
+        assert!(error.to_string().contains("direct child"), "got: {error}");
+        assert_eq!(
+            fs::read(outside.path().join("sentinel/keep.bin")).unwrap(),
+            b"keep"
+        );
     }
 
     /// Removing a project must drop its cache entry, or `recent` keeps listing
@@ -1640,17 +2128,14 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).expect("creating a symlink");
 
         let project = scan_base(base).into_iter().next().unwrap();
-        let err = refuse_if_contains_links(&project)
+        let err = MoveManifest::scan(&project.path)
             .expect_err("a copying move cannot reproduce a link and must refuse")
             .to_string();
         assert!(
             err.contains("linked"),
             "the error must name the offending link, got: {err}"
         );
-        assert!(
-            err.contains("Nothing has been changed"),
-            "the error must say the project is untouched, got: {err}"
-        );
+        assert!(project.path.is_dir(), "manifest scanning must be read-only");
 
         // A project with no links is waved through.
         write_project(base, "proj_b", "ID0002", "gen", "2026-01-02T00:00:00Z");
@@ -1658,7 +2143,7 @@ mod tests {
             .into_iter()
             .find(|p| p.name == "proj_b")
             .unwrap();
-        assert!(refuse_if_contains_links(&plain).is_ok());
+        assert!(MoveManifest::scan(&plain.path).is_ok());
     }
 
     /// The move invariant, at every failpoint: the source is intact **or** the
@@ -1674,6 +2159,7 @@ mod tests {
     #[test]
     fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
         const MOVE_POINTS: &[&str] = &[
+            "move:before-marker-write",
             "move:after-staging",
             "move:after-verify",
             "move:before-commit-rename",
@@ -1701,7 +2187,14 @@ mod tests {
                 )
             });
 
-            assert!(result.is_err(), "[{point}] should have failed");
+            if *point == "move:after-commit-before-source-removal" {
+                assert!(
+                    result.as_ref().is_ok_and(|outcome| outcome.cleanup_pending),
+                    "[{point}] publication must be reported as cleanup pending"
+                );
+            } else {
+                assert!(result.is_err(), "[{point}] should have failed");
+            }
 
             // The invariant. `after-commit-before-source-removal` is the one
             // point where the commit already landed, so the destination holds
@@ -1729,16 +2222,16 @@ mod tests {
             // Whatever happened, reconcile must reach a consistent end state
             // with the payload still present exactly once.
             let report = provisioning::reconcile(&cfg);
-            let _ = report;
             let after_source = old_base.join("proj_a/payload.bin").is_file();
             let after_dest = new_path.join("payload.bin").is_file();
             assert!(
                 after_source || after_dest,
                 "[{point}] reconcile lost the data"
             );
-            assert!(
-                !provisioning::staging_path(new_base, "proj_a").exists(),
-                "[{point}] reconcile left staging behind"
+            assert_eq!(
+                v2_transaction_count(new_base),
+                0,
+                "[{point}] reconcile left a transaction behind: {report:?}"
             );
         }
     }

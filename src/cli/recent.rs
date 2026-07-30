@@ -585,13 +585,28 @@ fn project_action_menu(
             if sel == other_bases.len() {
                 continue;
             }
-            match library::move_project(project, &other_bases[sel]) {
-                Ok(moved) => {
+            let progress = std::sync::Mutex::new(crate::core::assets::Progress::new(&[]));
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            match crate::core::operations::move_project(
+                project,
+                &other_bases[sel],
+                &progress,
+                &cancel,
+            ) {
+                Ok(outcome) => {
+                    let moved = outcome.project;
                     println!(
                         "{}  Moved to {}",
                         "✓".green().bold(),
                         crate::util::paths::display_path(&moved.path).bold()
                     );
+                    if outcome.cleanup_pending {
+                        eprintln!(
+                            "{} destination is complete, but cleanup is pending at {}",
+                            "warning:".yellow().bold(),
+                            crate::util::paths::display_path(&project.path)
+                        );
+                    }
                     return Ok(ActionLoop::Changed(vec![project.path.clone(), moved.path]));
                 }
                 Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
@@ -603,7 +618,7 @@ fn project_action_menu(
                 .with_prompt("New folder name")
                 .with_initial_text(project.name.clone())
                 .interact_text()?;
-            match library::rename_project(project, &new_name) {
+            match crate::core::operations::rename(project, &new_name) {
                 Ok(renamed) => {
                     println!("{}  Renamed to {}", "✓".green().bold(), renamed.name.bold());
                     return Ok(ActionLoop::Changed(vec![
@@ -626,7 +641,7 @@ fn project_action_menu(
             if !confirmed {
                 continue;
             }
-            match library::unregister_project(project) {
+            match crate::core::operations::unregister(project) {
                 Ok(()) => {
                     println!(
                         "{}  Unregistered {}",
@@ -659,7 +674,7 @@ fn project_action_menu(
                 );
                 continue;
             }
-            match library::delete_project(project) {
+            match crate::core::operations::delete(project) {
                 Ok(()) => {
                     println!("{}  Deleted {}", "✓".green().bold(), path_str.bold());
                     return Ok(ActionLoop::Changed(vec![project.path.clone()]));
@@ -715,8 +730,13 @@ fn project_action_menu(
                 if tag.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
                 } else {
-                    match crate::cli::tag::add(&project.id, &[tag]) {
-                        Ok(()) => {
+                    match crate::core::operations::add_tags(project, &[tag]) {
+                        Ok(_) => {
+                            println!(
+                                "{}  Added 1 tag to {}",
+                                "✓".green().bold(),
+                                project.id.green().bold()
+                            );
                             if reload_after_change {
                                 return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                             }
@@ -732,8 +752,13 @@ fn project_action_menu(
                 if tag.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
                 } else {
-                    match crate::cli::tag::remove(&project.id, &[tag]) {
-                        Ok(()) => {
+                    match crate::core::operations::remove_tags(project, &[tag]) {
+                        Ok(_) => {
+                            println!(
+                                "{}  Removed 1 tag from {}",
+                                "✓".green().bold(),
+                                project.id.green().bold()
+                            );
                             if reload_after_change {
                                 return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                             }
@@ -749,8 +774,7 @@ fn project_action_menu(
                 if msg.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
                 } else {
-                    let pinfo = crate::core::project_info::pinfo_path(path);
-                    if let Err(e) = crate::core::project_info::append_journal_entry(&pinfo, &msg) {
+                    if let Err(e) = crate::core::operations::append_note(project, &msg) {
                         eprintln!("{} {}", "error:".red().bold(), e);
                     } else {
                         println!("{}  Journal entry added.", "✓".green().bold());

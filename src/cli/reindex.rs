@@ -9,13 +9,9 @@
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::core::config::Config;
-use crate::core::library;
-
 pub fn run() -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let (cfg, total) = crate::core::operations::reindex()?;
     let bases = cfg.effective_bases();
-    let total = library::reindex(&cfg);
 
     let indexed = bases.iter().filter(|b| b.is_dir()).count();
     println!(

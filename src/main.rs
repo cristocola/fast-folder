@@ -154,9 +154,11 @@ enum Commands {
         long_about = "Move a project's folder from its current base into another configured base\n\
             (base_dir or one of the `bases` list), keeping the folder name. Targets are\n\
             restricted to configured bases so the moved project stays discoverable.\n\n\
-            Cross-filesystem moves (e.g. btrfs home → NTFS project drive) automatically\n\
-            fall back to a byte-for-byte copy + remove. Both bases' caches and the\n\
-            project's PROJECT_INFO.md path are updated.",
+            Only the operating system's cross-device error enables the copy fallback.\n\
+            It uses a private target-base transaction, copies every regular file and\n\
+            empty directory, verifies exact paths/types/byte lengths plus unchanged\n\
+            source metadata, publishes atomically, and only then removes the source.\n\
+            Keep the project untouched while this copy is running.",
         after_help = "Examples:\n  \
             fastf move ID0047 /mnt/proj/01_PROJECTS   # by full base path\n  \
             fastf move ID0047 01_PROJECTS             # by base folder name\n  \
@@ -184,18 +186,17 @@ enum Commands {
     )]
     Reindex,
 
-    /// Resume interrupted asset copies and finish/roll back interrupted moves
+    /// Recover scoped v2 operations and report obsolete pre-v2 markers
     #[command(
-        about = "Recover interrupted background copies and staged moves",
-        long_about = "Large asset copies (during UI creates) and cross-filesystem moves leave a\n\
-            durable marker so a crash mid-copy is never silent data loss. `fastf\n\
-            reconcile` walks every base, resumes any pending copies, and either\n\
-            finishes an already-committed move's source removal or rolls an\n\
-            uncommitted one back — the source folder is always left intact when\n\
-            nothing was verified.\n\n\
-            It is never run automatically: because nothing is deleted until it has\n\
-            been verified, an unreconciled crash is always safe, just untidy. The\n\
-            browser UI shows a banner offering to run it when it finds a marker."
+        about = "Recover scoped v2 operations and report obsolete pre-v2 markers",
+        long_about = "Scoped v2 journals let `fastf reconcile` safely resume deferred creates,\n\
+            discard unpublished move staging, or finish source cleanup after a\n\
+            verified publication. Identity, configured-base, path, and manifest\n\
+            checks must all pass before it mutates anything.\n\n\
+            Pre-v2 markers contain arbitrary absolute paths, so reconcile never\n\
+            parses them, copies through them, or deletes any path they name. It\n\
+            lists each obsolete marker for manual inspection and leaves it plus\n\
+            all related paths untouched. Reconciliation is explicit and idempotent."
     )]
     Reconcile,
 
@@ -414,7 +415,7 @@ enum Commands {
 
     /// Launch the local browser UI for Fast Folder
     #[command(
-        after_help = "Starts a small loopback-only HTTP server and opens the Fast Folder\n\
+        after_help = "Starts a small local HTTP server and opens the Fast Folder\n\
         UI in your browser. The UI shares the same templates, config, counter,\n\
         and project index as the CLI. Stop it with Ctrl-C.\n\n\
         Examples:\n  \
@@ -424,7 +425,7 @@ enum Commands {
             fastf ui --address 127.0.0.1:47840    # bind a different loopback port"
     )]
     Ui {
-        /// Address to bind (loopback only — do not expose to a network).
+        /// Address to bind. Keep it on loopback; the server has no authentication.
         #[arg(long, default_value = ui::DEFAULT_ADDRESS)]
         address: String,
 

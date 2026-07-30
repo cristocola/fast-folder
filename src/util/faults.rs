@@ -15,9 +15,8 @@
 //! - `error` (default) — the failpoint returns `Err`, so the ordinary unwind and
 //!   rollback run. This is what an interrupt or a full disk looks like.
 //! - `abort` — `std::process::abort()`, no unwinding, no destructors, nothing
-//!   cleaned up. This is what a power cut or `taskkill /F` looks like, and it is
-//!   the only honest way to test that *recovery* works rather than that cleanup
-//!   works.
+//!   cleaned up. This models hard process termination such as `taskkill /F` and
+//!   proves that *recovery* works rather than only testing unwind cleanup.
 //!
 //! Compiled out entirely in release builds: `check` becomes an inlined `Ok(())`
 //! and the environment is never consulted, so a stray `FASTF_FAULT` in a user's
@@ -69,7 +68,7 @@ pub fn check(name: &str) -> Result<()> {
         return Ok(());
     }
     if mode == "abort" {
-        // No unwinding, no destructors, no cleanup — exactly like losing power.
+        // No unwinding, no destructors, no cleanup: a hard process stop.
         eprintln!("fastf: fault injection aborting at '{name}'");
         std::process::abort();
     }
@@ -105,10 +104,18 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "create:after-pinfo",
     "create:mid-copy",
     "create:before-counter-save",
+    "move:before-marker-write",
+    "move:after-transaction-create",
+    "move:mid-copy",
     "move:after-staging",
     "move:after-verify",
+    "move:post-verification",
     "move:before-commit-rename",
+    "move:after-publication",
     "move:after-commit-before-source-removal",
+    "move:before-source-cleanup",
+    "move:source-cleanup",
+    "move:after-source-cleanup",
 ];
 
 #[cfg(all(test, debug_assertions))]

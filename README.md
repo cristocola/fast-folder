@@ -12,6 +12,11 @@
 
 Everyone who works in projects has a folder convention: how a new project should be named, which subfolders it needs, which starter files belong inside. In practice the convention lives in someone's head or a wiki page, and every rushed deadline erodes it a little more. fastf makes the convention executable. You describe the structure once as a template. From then on, creating a project means answering a few questions, and the result is always right: consistent name, complete folder skeleton, starter files pre-filled with your answers, a unique project ID, and metadata that lets you find the project again months later.
 
+fastf is a **single-user** tool for self-contained project trees made from
+ordinary files and directories. Its interfaces on one computer share the same
+state, but it does not coordinate simultaneous writers on multiple computers or
+promise team-wide locking for a shared drive.
+
 It is the same tool for very different people:
 
 - A **video editor** gets a delivery-ready episode folder for every new video.
@@ -19,7 +24,6 @@ It is the same tool for very different people:
 - A **journalist** gets a story folder with places for interviews, footage, and drafts.
 - A **project manager** gets every engagement structured and numbered the same way.
 - A **developer** gets a code scaffold with configs ready to build.
-- A **team or agency** points everyone's fastf at the same master folder on the shared drive. The convention enforces itself, new hires inherit it on day one, and the whole team searches one project history. No server, no database, no accounts. The folders are the system.
 
 One engine drives three interfaces, so you can work whichever way fits the moment:
 
@@ -40,7 +44,8 @@ That screenshot is `fastf ui`: a full point-and-click interface served by the sa
 - **Visual template editor.** Build variables, folder structure, and templated files without touching YAML. Drop real assets (a logo, a delivery video) into a template from a disk path.
 - **Create with live preview.** Fill in variables and watch the folder tree and generated file contents update before anything is written.
 - **Manage everything.** Search with the full query language, tag projects, write journal notes, and bulk-move projects between drives with verified copies.
-- **Local only.** The server binds to `127.0.0.1` and closing the app window shuts it down.
+- **Local only.** The server refuses non-loopback binds and rejects mismatched
+  `Host` or cross-origin requests. Closing the dedicated app window shuts it down.
 
 ```bash
 fastf ui --app      # dedicated app window (Chromium/Chrome), also in your app menu as "Fast Folder"
@@ -77,8 +82,13 @@ Domain-specific templates live in the [`examples/templates/`](examples/templates
 - **Every project is findable again.** Unique IDs, creation dates, tags, and searchable metadata. Jump to any project with `fastf open ID0047`, browse recent work, or keep timestamped journal notes per project.
 - **Search that understands your projects.** Plain text works (`fastf search ariana`), and so do precise filters: `fastf search template=music-video tag:draft created>2026-01-01`.
 - **Projects can live on several drives.** Index any number of folders, including external drives that come and go. A disconnected drive is skipped quietly and comes back when remounted.
-- **Teams share one project system.** Point every install at the same master folder on a NAS or shared drive. Everyone creates projects through the same convention and searches the same history. Because the metadata travels inside the folders, there is no server and nothing to administer.
-- **Moves that cannot lose data.** `fastf move` relocates a project to another drive by copying, verifying, and only then removing the original — reporting progress as it goes, and cancellable with Ctrl-C. If anything is interrupted mid-move, `fastf reconcile` finishes or rolls it back.
+- **Several drives, one person's library.** Keep active and archived projects on local, external, or mounted network storage. A disconnected base is skipped and rediscovered when it returns.
+- **Contained, verified moves.** `fastf move` first tries an OS rename. Across
+  drives it copies every ordinary file (including `.tmp` and `.part` names),
+  verifies file paths and byte lengths, publishes the destination, and only then
+  removes the source. Keep the project untouched while it moves. Scoped v2
+  journals let `fastf reconcile` safely discard unpublished staging or finish a
+  verified cleanup; pre-v2 markers remain report-only and are never followed.
 - **Adopts your existing folders.** `fastf register` onboards work that fastf did not create, one folder or a whole directory at once.
 - **Optional automation after each create.** Open the new folder, launch your editor, initialize a git repository, or run your own commands.
 - **Cross-platform and path-safe.** Linux and Windows binaries, macOS via source build. Templates use `/` everywhere, and unsafe paths (`..`, absolute) are rejected outright.
@@ -143,9 +153,15 @@ Portable mode keeps the classic single-folder layout. To opt in, put an empty `c
 | [docs/UI.md](docs/UI.md) | Browser UI architecture, HTTP API, frontend development |
 | [docs/windows.md](docs/windows.md) | Windows install, PATH setup, data locations |
 
-A note on the browser UI: the server binds to loopback (`127.0.0.1`) only and has no authentication. Keep it that way. With `fastf ui --app`, closing the app window stops the server.
+A note on the browser UI: the server accepts loopback addresses only, validates
+`Host` and same-origin `Origin`, and has no authentication. Keep it local. With
+`fastf ui --app`, closing the app window stops the server.
 
 ## Contributing
+
+The [robustness roadmap](ROADMAP.md) is the canonical release plan and records
+the current phase, acceptance gates, and deferred work. Update it with every
+implementation PR or commit.
 
 ```bash
 cargo test                                # the whole suite

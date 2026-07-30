@@ -2,9 +2,9 @@
 //! configured base.
 //!
 //! Targets are restricted to the effective bases (`base_dir` + config `bases`)
-//! so a moved project always stays discoverable. Cross-filesystem moves (e.g.
-//! btrfs `~` → NTFS `/mnt/proj`) fall back to a verbatim copy + remove inside
-//! `library::move_project`.
+//! so a moved project always stays discoverable. Only EXDEV enables the private
+//! v2 copy transaction; it verifies topology/lengths and source stability before
+//! publication, then removes the source.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -121,7 +121,8 @@ pub fn run(args: MoveArgs) -> Result<()> {
         }
     }
 
-    let moved = run_with_progress(&project, &target)?;
+    let outcome = run_with_progress(&project, &target)?;
+    let moved = &outcome.project;
 
     println!(
         "{}  Moved {} {}",
@@ -139,6 +140,14 @@ pub fn run(args: MoveArgs) -> Result<()> {
         "to  ".dimmed(),
         crate::util::paths::display_path(&moved.path)
     );
+    if outcome.cleanup_pending {
+        eprintln!(
+            "{} destination is complete, but the original could not be removed. \
+             Cleanup is pending at {} and the transaction was retained.",
+            "warning:".yellow().bold(),
+            crate::util::paths::display_path(&project.path)
+        );
+    }
     Ok(())
 }
 
@@ -155,14 +164,14 @@ pub fn run(args: MoveArgs) -> Result<()> {
 fn run_with_progress(
     project: &library::Project,
     target: &std::path::Path,
-) -> Result<library::Project> {
+) -> Result<library::MoveOutcome> {
     let progress = Mutex::new(Progress::new(&[]));
     let cancel = AtomicBool::new(false);
     let live = std::io::stdout().is_terminal();
 
     let moved = std::thread::scope(|scope| {
-        let worker =
-            scope.spawn(|| library::move_project_with(project, target, &progress, &cancel));
+        let worker = scope
+            .spawn(|| crate::core::operations::move_project(project, target, &progress, &cancel));
 
         let mut drew = false;
         while !worker.is_finished() {

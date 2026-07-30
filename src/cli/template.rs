@@ -6,9 +6,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::core::project;
-use crate::core::template::{
-    self, FileEntry, FolderNode, IdConfig, Template, Transform, VarType, Variable,
-};
+use crate::core::template::{self, FileEntry, FolderNode, Template};
 use crate::util::paths;
 
 /// Files larger than this are skipped when generating a template from a folder —
@@ -174,6 +172,7 @@ pub fn new_interactive() -> Result<()> {
 
 /// Edit an existing template using the interactive builder.
 pub fn edit(slug: &str) -> Result<()> {
+    validate_slug(slug)?;
     let path = paths::template_manifest(slug);
     if !path.exists() {
         bail!("template '{}' not found", slug);
@@ -183,6 +182,7 @@ pub fn edit(slug: &str) -> Result<()> {
 }
 
 pub fn delete(slug: &str, yes: bool) -> Result<()> {
+    validate_slug(slug)?;
     let dir = paths::template_dir(slug);
     if !dir.exists() {
         bail!("template '{}' not found", slug);
@@ -210,26 +210,10 @@ pub fn delete(slug: &str, yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Counts returned by a `from-folder` generation, for the CLI summary and the
-/// browser UI result.
-#[derive(Debug, Default, Clone, serde::Serialize)]
-pub struct FromFolderReport {
-    /// Directories reproduced into the template's `structure`.
-    pub folders: usize,
-    /// UTF-8 text files reproduced into `files/` (editable in the builder).
-    pub text_files: usize,
-    /// Binary/large files copied byte-for-byte into `files/` (bundle mode).
-    pub bundled: usize,
-    /// Total bytes of the bundled assets.
-    pub bundled_bytes: u64,
-    /// Binary/large files left out because bundling was off.
-    pub skipped: usize,
-}
+pub type FromFolderReport = crate::core::template_import::FromFolderReport;
 
 /// One binary/large file queued for byte-for-byte bundling into `files/`.
 struct AssetPlan {
-    src: PathBuf,
-    rel: String,
     size: u64,
 }
 
@@ -260,15 +244,11 @@ pub fn from_folder(
     force: bool,
     bundle_assets: bool,
 ) -> Result<FromFolderReport> {
-    let root = validate_source(source)?;
-    validate_slug(slug)?;
-    ensure_slug_available(slug, force)?;
-    let scan = scan_source(&root, bundle_assets)?;
-    execute_scan(scan, slug, &root, force)
+    crate::core::operations::template_from_folder(Path::new(source), slug, force, bundle_assets)
 }
 
 /// Interactive CLI wrapper: confirms the total size before bundling assets, then
-/// prints a summary. `main.rs` calls this; the UI calls [`from_folder`] directly.
+/// prints a summary. The actual mutation is performed by the shared operation.
 pub fn run_from_folder(source: &str, slug: &str, force: bool, bundle_assets: bool) -> Result<()> {
     let root = validate_source(source)?;
     validate_slug(slug)?;
@@ -293,7 +273,7 @@ pub fn run_from_folder(source: &str, slug: &str, force: bool, bundle_assets: boo
         }
     }
 
-    let report = execute_scan(scan, slug, &root, force)?;
+    let report = crate::core::operations::template_from_folder(&root, slug, force, bundle_assets)?;
     print_from_folder_summary(slug, &report);
     Ok(())
 }
@@ -317,88 +297,6 @@ fn ensure_slug_available(slug: &str, force: bool) -> Result<()> {
         );
     }
     Ok(())
-}
-
-/// Materialize a [`ScanResult`] into a template on disk: write `template.yaml` +
-/// the text `files/`, then copy bundled binary assets byte-for-byte.
-fn execute_scan(
-    scan: ScanResult,
-    slug: &str,
-    root: &Path,
-    force: bool,
-) -> Result<FromFolderReport> {
-    let files_dir = paths::template_files_dir(slug);
-    // `--force` means regenerate, not merge. Since v0.8 the `files/` subtree is
-    // what create actually copies, so leaving the previous generation's files in
-    // place put them into every new project — invisibly, because the manifest's
-    // `structure` was replaced correctly and only the file tree disagreed.
-    if force && files_dir.exists() {
-        crate::util::fs_retry::remove_dir_all(&files_dir)
-            .with_context(|| format!("clearing {}", files_dir.display()))?;
-    }
-    fs::create_dir_all(&files_dir).context("creating template directory")?;
-    let dest = paths::template_manifest(slug);
-
-    let ScanResult {
-        structure,
-        text_files,
-        assets,
-        folders,
-        skipped,
-    } = scan;
-    let text_count = text_files.len();
-
-    // Auto-add a `name` variable so the naming_pattern has something to bind.
-    let variables = vec![Variable {
-        slug: "name".to_string(),
-        label: "Project name".to_string(),
-        var_type: VarType::Text,
-        required: true,
-        options: vec![],
-        default: String::new(),
-        transform: Transform::TitleUnderscore,
-    }];
-
-    let template = Template {
-        name: humanize_slug(slug),
-        slug: slug.to_string(),
-        description: format!("Generated from {}", root.display()),
-        version: "1".to_string(),
-        naming_pattern: "{id}_{date}_{name}".to_string(),
-        id: IdConfig {
-            prefix: "ID".to_string(),
-            digits: 4,
-        },
-        variables,
-        structure,
-        files: text_files,
-        verbatim: vec![],
-        exclude: vec![],
-        dir: paths::template_dir(slug),
-        post_create: None,
-        tags: vec![],
-        tag_from: vec![],
-    };
-    template.save_to_file(&dest)?;
-
-    // Bundle the binary/large assets byte-for-byte (interpolation happens later,
-    // at project-create time — assets are stored raw).
-    let empty = std::collections::HashMap::new();
-    let mut bundled_bytes = 0u64;
-    for asset in &assets {
-        let target = files_dir.join(&asset.rel);
-        crate::core::assets::copy_file(&asset.src, &target, true, &empty, "")
-            .with_context(|| format!("bundling {}", asset.rel))?;
-        bundled_bytes += asset.size;
-    }
-
-    Ok(FromFolderReport {
-        folders,
-        text_files: text_count,
-        bundled: assets.len(),
-        bundled_bytes,
-        skipped,
-    })
 }
 
 fn print_from_folder_summary(slug: &str, report: &FromFolderReport) {
@@ -463,33 +361,7 @@ fn human_size(bytes: u64) -> String {
 }
 
 fn validate_slug(slug: &str) -> Result<()> {
-    if slug.is_empty() {
-        bail!("slug must not be empty");
-    }
-    if !slug
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        bail!(
-            "slug '{}' contains invalid characters (allowed: letters, digits, '-', '_')",
-            slug
-        );
-    }
-    Ok(())
-}
-
-fn humanize_slug(slug: &str) -> String {
-    slug.split(['-', '_'])
-        .filter(|s| !s.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    crate::core::validated::TemplateSlug::parse(slug).map(|_| ())
 }
 
 /// Walk `root` once, classifying every file into text (reproduced as an editable
@@ -566,11 +438,7 @@ fn classify_file(root: &Path, path: &Path, size: u64, bundle_assets: bool, out: 
     }
 
     if bundle_assets {
-        out.assets.push(AssetPlan {
-            src: path.to_path_buf(),
-            rel,
-            size,
-        });
+        out.assets.push(AssetPlan { size });
     } else {
         out.skipped += 1;
     }

@@ -81,6 +81,10 @@ post_create:
 
 Non-empty folders are implied by the paths of files in `files/`. Only truly empty directories need listing under `structure:`.
 
+The template `slug` is one directory component and may contain only ASCII
+letters, digits, `-`, and `_`. A `structure` name may use safe nested syntax
+such as `src/components`; it is not limited to one component.
+
 ## Variables and transforms
 
 Two variable types exist: `text` (free input) and `select` (pick from a list, with an optional default). Each variable can declare a transform applied to the value before it lands in names:
@@ -106,7 +110,7 @@ Two interpolation rules are worth knowing:
 - In file **content**, `__` sequences are preserved exactly, so Python's `__init__` and `__version__` survive.
 - In folder and file **names**, an empty optional variable takes its leftover separator with it, so you never get a dangling `_` or `-`. This works across mixed separators: with `{user}_{artist}-{title}` and no artist you get `french-Seeping`, not `french_-Seeping`. Single separators are never touched, so a `{date}` keeps its hyphens.
 
-Templates always use `/` as the path separator, on every platform. fastf translates to `\` on Windows at runtime. Path escape guards reject `..`, absolute paths, and drive letters both when a template loads and again at write time.
+Templates always use `/` as the path separator, on every platform. fastf translates to `\` on Windows at runtime. Path escape guards reject empty and dot components, `..`, absolute paths, and drive letters when a template loads, after tokens are interpolated, and again at the write boundary. That means a safe-looking declaration cannot escape through a variable or custom date format that renders as `..`.
 
 ## Generating a template from a real folder
 

@@ -233,24 +233,7 @@ pub fn sanitize_name(s: &str) -> String {
 /// leading path separators. Callers see the error at template load time (via
 /// `Template::validate`) and again defensively at create time.
 pub fn ensure_relative_safe_path(raw: &str) -> anyhow::Result<()> {
-    if raw.is_empty() {
-        anyhow::bail!("file path is empty");
-    }
-    let normalized = raw.replace('\\', "/");
-    if normalized.starts_with('/') {
-        anyhow::bail!("file path '{}' must be relative (no leading slash)", raw);
-    }
-    // Reject Windows-style drive letters (C:/..., D:\...).
-    let bytes = normalized.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-        anyhow::bail!("file path '{}' must not contain a drive letter", raw);
-    }
-    for segment in normalized.split('/') {
-        if segment == ".." {
-            anyhow::bail!("file path '{}' must not contain '..'", raw);
-        }
-    }
-    Ok(())
+    crate::core::validated::SafeRelativePath::parse(raw).map(|_| ())
 }
 
 #[cfg(test)]

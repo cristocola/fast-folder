@@ -1,26 +1,20 @@
-//! `fastf reconcile` — resume interrupted background copies and finish/roll back
-//! interrupted staged moves.
+//! `fastf reconcile` — recover scoped v2 work and report obsolete v1 markers.
 //!
-//! Large asset copies during `fastf new` (UI) and cross-filesystem moves leave a
-//! durable marker so a crash mid-copy is never silent data loss. This command
-//! walks every base, resumes pending create copies, and either finishes an
-//! already-committed move's source removal or rolls back an uncommitted one —
-//! always leaving the source intact when nothing was verified.
+//! Version-2 create journals contain validated relative paths, while move
+//! transactions live below the configured target base and derive every owned
+//! path from that location. The core reconciler can therefore resume or discard
+//! only scoped work after verifying its identity and state.
 //!
-//! It is **not** run automatically anywhere, despite what the help text claimed
-//! until v1.3: nothing is deleted until it has been verified, so an unreconciled
-//! crash is safe, just untidy. The browser UI surfaces a banner (and
-//! `POST /api/reconcile`) when `provisioning::list_incomplete` finds a marker.
+//! Version-1 markers contain arbitrary absolute paths, so this command never
+//! parses them, follows them, copies through them, or deletes anything they name.
+//! It reports their own paths for manual inspection and leaves all bytes alone.
+//! Reconciliation is explicit, idempotent, and also available through the UI.
 
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::core::config::Config;
-use crate::core::provisioning;
-
 pub fn run() -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
-    let report = provisioning::reconcile(&cfg);
+    let report = crate::core::operations::reconcile();
 
     if report.is_empty() {
         println!(
@@ -30,7 +24,7 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("{}  Reconcile complete.", "✓".green().bold());
+    println!("{}  Reconcile report complete.", "✓".green().bold());
     if report.resumed > 0 {
         println!(
             "   {} {} interrupted copy job(s) finished",
@@ -75,9 +69,25 @@ pub fn run() -> Result<()> {
                 .dimmed()
         );
     }
+    if !report.obsolete.is_empty() {
+        println!(
+            "   {} {} pre-v2 marker(s) were left untouched:",
+            "obsolete".yellow().bold(),
+            report.obsolete.len()
+        );
+        for item in &report.obsolete {
+            println!("     - {}", item.yellow());
+        }
+        println!(
+            "     {}",
+            "Inspect the source and destination yourself. Remove a marker only after \
+             you have confirmed which copy is authoritative."
+                .dimmed()
+        );
+    }
     if !report.unrecoverable.is_empty() {
         println!(
-            "   {} {} item(s) could not be recovered:",
+            "   {} {} item(s) could not be inspected:",
             "unrecoverable".yellow().bold(),
             report.unrecoverable.len()
         );

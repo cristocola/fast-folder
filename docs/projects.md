@@ -97,24 +97,62 @@ Moves are also available from the `fastf recent` action menu and the browser UI 
 
 - Targets must be configured bases, so a moved project always stays discoverable.
 - On the same filesystem, a move is an instant atomic rename.
-- Across filesystems (or to network storage), fastf stages a copy into a hidden temporary folder, verifies it (size, count, existence), commits it with an atomic rename, and only then removes the source.
+- Across filesystems (or to network storage), fastf creates an exclusive
+  `.fastf-transactions/<operation-id>/` directory beneath the target base,
+  copies into its private `staging/` tree, checks exact relative paths, entry
+  types, and byte lengths, confirms that the source metadata did not change,
+  publishes with an atomic rename, and only then removes the source.
+- Every filename is project data. Names ending in `.tmp` or `.part` are copied and verified like any other name.
+- Keep the project untouched while it moves. Editing it from another program during the copy is outside the supported contract.
 
-The source is never removed until the destination is verified. If a move is interrupted by a crash or power loss, nothing is lost: the staged copy either completes or rolls back on the next recovery pass.
+The source is never removed until the destination is published from a verified
+staging tree. If publication succeeds but source cleanup fails, the command
+reports **cleanup pending**, leaves the source and transaction in place, and
+treats the destination as the completed move. `fastf reconcile` can retry that
+cleanup after rechecking both project identities and the saved manifest.
 
-## Crash recovery
+Copy moves preserve regular-file contents and directory topology. They do not
+promise hashes, ACLs, extended attributes, sparse layout, hard-link
+relationships, symlink/junction reproduction, or storage-level durability.
+Links and special entries are refused when copying would be required. The
+checks are intended to prevent application mistakes and ordinary interrupted
+copies; hardware failure, power loss, bit rot, and storage corruption belong to
+the filesystem and backups.
+
+## Process-crash recovery
 
 ```bash
 fastf reconcile
 ```
 
-`reconcile` scans every base for interrupted work and reports or repairs it:
+Version-2 journals authorize only paths fastf can derive and validate. For
+deferred creates, the journal stores a template slug and source/destination
+paths relative to the template and new project. Reconciliation resumes missing
+deferred files only when identity, type, and byte-length checks pass, then clears
+the project's provisioning flag before removing the journal. A provisioning
+flag without a usable v2 journal is reported for manual inspection.
 
-- **Background asset copies** resume from their durable marker.
-- **Interrupted moves** either complete (if the commit already happened) or roll back with the source intact. Before removing a source, fastf confirms the destination really is the same project — a folder merely having the right name is not proof.
-- **Abandoned temporary files** left by a killed copy are swept once they are over an hour old. The delay is deliberate: a `.part` file may belong to a copy running right now in another window.
-- **Projects that were never finished being created** are listed. A project interrupted mid-create is still visible in `fastf recent`, marked as unfinished. `reconcile` cannot rebuild one — the values you typed are gone with the process — so it names the folder and leaves the decision to you: delete it and run `fastf new` again.
+Cross-filesystem moves use a private transaction beneath the target base:
 
-The browser UI shows a banner with a Retry button when it detects interrupted work. An unreconciled crash is always safe, just untidy.
+- `Copying`: the source is authoritative; reconcile discards only that owned
+  transaction.
+- `ReadyToCommit` with staging still present: reconcile discards the transaction
+  and leaves the source for a fresh move.
+- `ReadyToCommit` after publication: reconcile requires matching source/final
+  project identities and path/type/size manifests before entering cleanup.
+- `CleanupPending`: reconcile rechecks the published project and, while the
+  source still exists, the source/final manifests, then retries source removal.
+
+Missing configured bases, identity mismatches, malformed journals, and unknown
+states are reported without mutation. Reconciliation is explicit and
+idempotent.
+
+Create and move markers written before journal v2 are **obsolete and
+report-only**. They contain arbitrary absolute paths, so `reconcile` never
+parses or migrates them, follows their paths, or deletes anything they name. It
+lists each marker and leaves it plus all related paths untouched. Inspect both
+locations before manually removing any obsolete artifact. The browser UI shows
+the same v2 recovery and obsolete-marker report.
 
 ## Onboarding folders fastf did not create
 

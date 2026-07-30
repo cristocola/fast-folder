@@ -19,14 +19,10 @@ use crate::core::library;
 use crate::core::template;
 
 pub fn show() -> Result<()> {
-    let cfg = Config::load()?;
     // Viewing repairs: any base found below the floor is brought up to it.
     // Cheap unless something actually diverged — see `Counters::record`.
-    let val = {
-        let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-        Counters::converge(&cfg)
-    };
-    print_counter(&cfg, val);
+    let outcome = crate::core::operations::converge_counter()?;
+    print_counter(&outcome.config, outcome.value);
     Ok(())
 }
 
@@ -45,10 +41,8 @@ pub fn sync() -> Result<()> {
         })
         .collect();
 
-    let floor = {
-        let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-        Counters::converge(&cfg)
-    };
+    let outcome = crate::core::operations::converge_counter()?;
+    let floor = outcome.value;
 
     let raised = before.iter().filter(|(_, mark)| *mark < floor).count();
     if raised == 0 {
@@ -67,7 +61,7 @@ pub fn sync() -> Result<()> {
         );
     }
     println!();
-    print_counter(&cfg, floor);
+    print_counter(&outcome.config, floor);
     Ok(())
 }
 
@@ -75,31 +69,14 @@ pub fn sync() -> Result<()> {
 /// what is holding it — the number cannot go down, so the only honest answers
 /// are "done" or "here is why not".
 pub fn set(value: u64) -> Result<()> {
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    let cfg = Config::load()?;
-    let floor = Counters::floor(&cfg);
-
-    if value <= floor {
-        bail!(
-            "the counter cannot go below {} — {}.\n  \
-             The next project would be {} either way. Pass a value above {} to raise it.",
-            floor,
-            floor_holder(&cfg, floor),
-            floor + 1,
-            floor
-        );
-    }
-
-    // `record` propagates to every base; no separate converge is needed, since
-    // `value` is by definition above the floor we just computed.
-    Counters::record(&cfg, &cfg.resolve_base_dir(), value);
+    let outcome = crate::core::operations::set_counter(value)?;
     println!(
         "{}  Global ID counter raised to {}.",
         "✓".green().bold(),
         value.to_string().green().bold()
     );
     println!();
-    print_counter(&cfg, Counters::floor(&cfg));
+    print_counter(&outcome.config, outcome.value);
     Ok(())
 }
 
@@ -164,23 +141,4 @@ fn print_counter(cfg: &Config, val: u64) {
             crate::util::paths::display_path(&Counters::base_path(&base)).dimmed()
         );
     }
-}
-
-/// Name whichever input is holding the floor, so a refusal is actionable rather
-/// than just a number.
-fn floor_holder(cfg: &Config, floor: u64) -> String {
-    for base in mounted_bases(cfg) {
-        if library::max_id_in_base(&base) >= floor {
-            return format!(
-                "a project in {} already uses it",
-                library::base_label(&base)
-            );
-        }
-    }
-    for base in mounted_bases(cfg) {
-        if Counters::load_base(&base) >= floor {
-            return format!("base {} records it", library::base_label(&base));
-        }
-    }
-    "this machine's counter records it".to_string()
 }

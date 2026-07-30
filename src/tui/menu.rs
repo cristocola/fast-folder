@@ -834,35 +834,41 @@ fn edit_postcreate_commands() -> Result<()> {
         return Ok(());
     }
 
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    // Re-read inside the lock: the copy above is as old as the prompt.
-    let mut fresh = Config::load()?;
     match edit {
         Edit::Add(cmd) => {
-            fresh.post_create.commands.push(cmd);
-            fresh.save()?;
+            crate::core::operations::update_config(move |fresh| {
+                fresh.post_create.commands.push(cmd);
+                Ok(())
+            })?;
             println!("  {} command added.", "✓".green());
         }
         Edit::Remove(picks) => {
             // Indices refer to the list the user saw. If another process edited
             // the commands meanwhile, removing by position would delete the
             // wrong one — so match on the text and report anything that moved.
-            let mut missed = 0usize;
-            for i in picks {
-                match cmds.get(i) {
-                    Some(target) => {
-                        if let Some(pos) =
-                            fresh.post_create.commands.iter().position(|c| c == target)
-                        {
-                            fresh.post_create.commands.remove(pos);
-                        } else {
-                            missed += 1;
-                        }
+            let mut missed = picks
+                .iter()
+                .filter(|&&index| cmds.get(index).is_none())
+                .count();
+            let targets = picks
+                .into_iter()
+                .filter_map(|index| cmds.get(index).cloned())
+                .collect::<Vec<_>>();
+            crate::core::operations::update_config(|fresh| {
+                for target in targets {
+                    if let Some(position) = fresh
+                        .post_create
+                        .commands
+                        .iter()
+                        .position(|command| command == &target)
+                    {
+                        fresh.post_create.commands.remove(position);
+                    } else {
+                        missed += 1;
                     }
-                    None => missed += 1,
                 }
-            }
-            fresh.save()?;
+                Ok(())
+            })?;
             if missed > 0 {
                 println!(
                     "  {} {missed} command(s) had already changed elsewhere and were left alone.",

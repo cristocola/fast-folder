@@ -11,7 +11,7 @@ use anyhow::{Result, bail};
 use colored::Colorize;
 
 use crate::core::library;
-use crate::core::{config::Config, project_info, template};
+use crate::core::{config::Config, project_info};
 
 // ---------------------------------------------------------------------------
 // Public entry points (called from main.rs)
@@ -19,21 +19,9 @@ use crate::core::{config::Config, project_info, template};
 
 pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let project = library::resolve(&cfg, query)?;
-    let path = project_info::pinfo_path(&project.path);
+    let candidate = library::resolve(&cfg, query)?;
 
-    // Read-modify-write of PROJECT_INFO.md — the write is atomic, so nothing can
-    // be corrupted, but without the lock a tag added here and one added from the
-    // browser UI at the same moment leave only one of them behind.
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    project_info::write_frontmatter(&path, |meta| {
-        for tag in new_tags {
-            if !meta.tags.contains(tag) {
-                meta.tags.push(tag.clone());
-            }
-        }
-    })?;
-    library::refresh_cache(&project.path);
+    crate::core::operations::add_tags(&candidate, new_tags)?;
 
     let n = new_tags.len();
     println!(
@@ -41,31 +29,26 @@ pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
         "✓".green().bold(),
         n,
         if n == 1 { "" } else { "s" },
-        project.id.green().bold()
+        candidate.id.green().bold()
     );
     Ok(())
 }
 
 pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let project = library::resolve(&cfg, query)?;
-    let path = project_info::pinfo_path(&project.path);
+    let candidate = library::resolve(&cfg, query)?;
 
-    let mut removed_count = 0usize;
-    // See `add` — read-modify-write, so it takes the cross-process lock.
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    project_info::write_frontmatter(&path, |meta| {
-        let before = meta.tags.len();
-        meta.tags.retain(|t| !remove_tags.contains(t));
-        removed_count = before - meta.tags.len();
-    })?;
-    library::refresh_cache(&project.path);
+    let before = project_info::read_metadata(&candidate.path)?
+        .map(|metadata| metadata.tags.len())
+        .unwrap_or(0);
+    let after = crate::core::operations::remove_tags(&candidate, remove_tags)?;
+    let removed_count = before.saturating_sub(after.len());
 
     if removed_count == 0 {
         println!(
             "{}  No matching tags found on {} — nothing changed.",
             "i".cyan(),
-            project.id.green().bold()
+            candidate.id.green().bold()
         );
     } else {
         println!(
@@ -73,7 +56,7 @@ pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
             "✓".green().bold(),
             removed_count,
             if removed_count == 1 { "" } else { "s" },
-            project.id.green().bold()
+            candidate.id.green().bold()
         );
     }
     Ok(())
@@ -81,9 +64,9 @@ pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
 
 pub fn list(query: &str) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let project = library::resolve(&cfg, query)?;
+    let candidate = library::resolve(&cfg, query)?;
+    let project = library::revalidate_project(&cfg, &candidate)?;
     let path = project_info::pinfo_path(&project.path);
-
     if !path.exists() {
         bail!(
             "no {} found for project {} — this project may predate the metadata feature",
@@ -122,12 +105,11 @@ pub fn list(query: &str) -> Result<()> {
 pub fn reauto(query: &str) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
     let project = library::resolve(&cfg, query)?;
-    let path = project_info::pinfo_path(&project.path);
 
     // A registered folder has no template, so there is nothing to re-derive
     // from. Say that, rather than letting the lookup fail with "template
     // '(registered)' not found" — which reads like a broken install.
-    if project.template == crate::cli::register::REGISTERED_SLUG {
+    if project.template == crate::core::operations::REGISTERED_SLUG {
         bail!(
             "{} was registered without a template, so it has no auto-derived tags to re-derive.\n  \
              Add tags directly with `fastf tag add {} <tag>`, or re-register it with \
@@ -137,41 +119,7 @@ pub fn reauto(query: &str) -> Result<()> {
         );
     }
 
-    // Load the current metadata to get variables and current tags.
-    let meta = project_info::read_metadata(&project.path)?
-        .ok_or_else(|| anyhow::anyhow!("{} has no YAML frontmatter", path.display()))?;
-
-    // Load the template to get tag_from.
-    let tmpl = template::find_by_slug(&project.template)?;
-
-    // Compute new derived tags from the current variable values.
-    let new_derived: Vec<String> = tmpl
-        .tag_from
-        .iter()
-        .filter_map(|slug| {
-            let value = meta.variables.get(slug)?;
-            if value.is_empty() {
-                None
-            } else {
-                Some(format!("{slug}/{value}"))
-            }
-        })
-        .collect();
-
-    // The set of prefixes to remove (slug/ patterns owned by tag_from).
-    let owned_prefixes: Vec<String> = tmpl.tag_from.iter().map(|s| format!("{s}/")).collect();
-
-    // See `add` — read-modify-write, so it takes the cross-process lock.
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    project_info::write_frontmatter(&path, |m| {
-        // Keep tags that are NOT derived from tag_from slugs.
-        m.tags
-            .retain(|t| !owned_prefixes.iter().any(|pfx| t.starts_with(pfx.as_str())));
-        // Also remove stale literal tags that were part of template.tags
-        // (keep free-form tags the user added manually via `fastf tag add`).
-        m.tags.extend(new_derived.iter().cloned());
-    })?;
-    library::refresh_cache(&project.path);
+    let new_derived = crate::core::operations::replace_auto_tags(&project)?;
 
     println!(
         "{}  Re-derived {} auto-tag{} for {}",

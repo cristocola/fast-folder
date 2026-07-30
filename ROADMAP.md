@@ -28,16 +28,16 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v1.5.1 — shared mutation correctness**
-- Status: **implementation complete; local gates and Linux move smoke passed; CI and Windows smoke pending**
+- Status: **release candidate; local gates, Linux move smoke, and GitHub Linux/Windows CI passed; manual Windows drive smoke pending**
 - Last reviewed: **2026-07-30**
 
 ## Release train
 
 | Release | State | Acceptance gate |
 |---|---|---|
-| v1.4.1 | Implemented; local gates passed | fastf cannot touch a path merely because a filename or pre-v2 marker implies ownership |
-| v1.5.0 | Implemented; Linux smoke passed | scoped v2 move/create journals recover idempotently after process crashes |
-| v1.5.1 | Implemented; local gates passed | every mutation shares validation, locking, authoritative reload, and cache refresh behavior |
+| v1.4.1 | Implemented; CI passed | fastf cannot touch a path merely because a filename or pre-v2 marker implies ownership |
+| v1.5.0 | Implemented; CI and Linux smoke passed | scoped v2 move/create journals recover idempotently after process crashes |
+| v1.5.1 | Release candidate; CI passed | every mutation shares validation, locking, authoritative reload, and cache refresh behavior |
 
 ### v1.4.1 — containment and path safety
 
@@ -171,8 +171,8 @@ Every release must pass:
 - [x] `node --check src/ui/web/app.js`
 - [x] Windows cfg compile: `cargo check --all-targets --target
   x86_64-pc-windows-{gnu,msvc}`
-- [ ] Existing Linux CI target
-- [ ] Existing Windows CI target
+- [x] Existing Linux CI target ([run 30582141476](https://github.com/cristocola/fast-folder/actions/runs/30582141476))
+- [x] Existing Windows CI targets, debug and release ([run 30582141476](https://github.com/cristocola/fast-folder/actions/runs/30582141476))
 
 Regression coverage grows with the relevant release:
 
@@ -205,9 +205,11 @@ This work does not use GitHub issues, a separate ADR system, or a changelog.
 | Release | Evidence |
 |---|---|
 | v1.4.0 | [release](https://github.com/cristocola/fast-folder/releases/tag/v1.4.0) · [tag commit](https://github.com/cristocola/fast-folder/commit/847b020) |
+| v1.4.1–v1.5.1 implementation | [commit](https://github.com/cristocola/fast-folder/commit/f4f7d40) · [Windows portability fix](https://github.com/cristocola/fast-folder/commit/78a2e1d) · [PR #1](https://github.com/cristocola/fast-folder/pull/1) · [passing CI](https://github.com/cristocola/fast-folder/actions/runs/30582141476) |
 
-The v1.4.1, v1.5.0, and v1.5.1 release and implementation commit links will be
-added here when they exist; the checked items above remain in place afterward.
+The v1.5.1 release and tag-commit links will be added after publication; the
+checked items above remain in place afterward. v1.4.1 and v1.5.0 are delivered
+as part of the cohesive v1.5.1 release rather than as separate published tags.
 
 ## Unscheduled backlog
 

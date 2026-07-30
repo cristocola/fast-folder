@@ -1,10 +1,10 @@
 //! Local browser UI for Fast Folder.
 //!
-//! A small, dependency-free HTTP server (loopback only) that drives the
-//! single-page frontend in `web/`. It calls the `fastf` library directly —
-//! `project::plan`/`create`, `Config`, `Counters`, `template`, `library`
-//! (filesystem-as-truth discovery), `post_create` — so the UI shares one source
-//! of truth with the CLI and never parses terminal output.
+//! A small, dependency-free HTTP server intended for loopback use that drives the
+//! single-page frontend in `web/`. Mutations call shared `core::operations`;
+//! reads use the library/config/template readers. The UI therefore shares
+//! validation, locking, and filesystem-as-truth state with CLI/TUI and never
+//! parses terminal output.
 //!
 //! `serve()` is the long-running entry point used by `fastf ui`. `route_request()`
 //! is the pure request handler (no socket) so integration tests can exercise the
@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,7 +26,6 @@ use std::thread;
 use std::time::Duration;
 
 use crate::bootstrap;
-use crate::cli::register;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::library::{self, Project};
@@ -268,8 +267,10 @@ pub enum Response {
 /// Folder's first-run bootstrap before accepting connections. Blocks until the
 /// process is terminated.
 pub fn serve(address: &str) -> Result<()> {
+    let bind_address = resolve_loopback_address(address)?;
     bootstrap::ensure_bootstrapped()?;
-    let listener = TcpListener::bind(address).with_context(|| format!("binding to {address}"))?;
+    let listener =
+        TcpListener::bind(bind_address).with_context(|| format!("binding to {address}"))?;
     println!("Fast Folder UI listening on http://{address}");
 
     for stream in listener.incoming() {
@@ -305,15 +306,17 @@ fn reject_overloaded(mut stream: TcpStream) {
 /// Return `true` if a Fast Folder UI server is already answering on `address`.
 /// Used by `fastf ui` to avoid a second bind and just open the browser.
 pub fn health_check(address: &str) -> bool {
-    let Ok(mut stream) = TcpStream::connect(address) else {
+    let Ok(socket_address) = resolve_loopback_address(address) else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect(socket_address) else {
         return false;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-    if stream
-        .write_all(b"GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .is_err()
-    {
+    let request =
+        format!("GET /api/health HTTP/1.1\r\nHost: {socket_address}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
     // Read until the status line is complete — a single read can return a
@@ -343,8 +346,12 @@ fn handle_connection_with(mut stream: TcpStream, timeout: Duration) -> Result<()
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
 
-    let (method, route, body) = read_request(&mut stream)?;
-    let response = route_request_caught(&method, &route, &body);
+    let local_address = stream
+        .local_addr()
+        .context("reading local socket address")?;
+    let request = read_request(&mut stream)?;
+    let response = validate_request_authority(&request, local_address)
+        .and_then(|()| route_request_caught(&request.method, &request.route, &request.body));
 
     match response {
         Ok(Response::Json(value)) => write_response(
@@ -401,6 +408,8 @@ fn route_request_caught(method: &str, route: &str, body: &[u8]) -> Result<Respon
 fn status_for(message: &str) -> u16 {
     if message.starts_with("not found:") {
         404
+    } else if message.starts_with("forbidden:") {
+        403
     } else if message.starts_with(PANIC_ERROR_PREFIX) {
         500
     } else {
@@ -686,11 +695,10 @@ fn load_state() -> Result<Value> {
     }))
 }
 
-/// `POST /api/reconcile` — resume interrupted background copies and finish or roll
-/// back interrupted staged moves across every base. Best-effort; returns a report.
+/// `POST /api/reconcile` — recover scoped v2 operations and report pre-v2
+/// markers without parsing them or mutating any related path.
 fn reconcile_provisioning() -> Result<Value> {
-    let config = Config::load()?;
-    let report = crate::core::provisioning::reconcile(&config);
+    let report = crate::core::operations::reconcile();
     Ok(json!({ "ok": true, "report": report }))
 }
 
@@ -705,7 +713,9 @@ fn configured_plan(
         .as_ref()
         .filter(|value| !value.trim().is_empty())
     {
-        config.base_dir = base_dir.trim().to_string();
+        config.base_dir = crate::core::config::resolve_base_dir_input(base_dir)?
+            .display()
+            .to_string();
     }
     let counters = Counters::load()?;
     let plan = project::plan(&template, &request.variables, &config, &counters)?;
@@ -718,46 +728,38 @@ fn preview_project(request: PlanRequest) -> Result<Value> {
 }
 
 fn create_project(request: CreateRequest) -> Result<Value> {
-    let plan_request = PlanRequest {
-        template: request.template,
+    let mut created = crate::core::operations::create(crate::core::operations::CreateOptions {
+        template_slug: request.template,
         variables: request.variables,
-        base_dir: request.base_dir,
-    };
-    // Allocate the ID and claim the folder under the cross-process data lock.
-    // `WRITE_LOCK` only serializes writers inside *this* process, so without
-    // this a `fastf new` in a terminal could mint the same ID as the UI.
-    // The plan is recomputed inside the lock so it sees a current counter.
-    //
-    // Fast path: structure + text/small files + counter + cache +
-    // PROJECT_INFO.md. Large bundled assets come back as jobs to copy in the
-    // background so the request returns immediately. `create_deferred` returns
-    // the plan as realized — the folder name may carry a `_2` suffix.
-    let (template, config, plan, deferred) = {
-        let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-        let (template, config, mut counters, planned) = configured_plan(&plan_request)?;
-        let (plan, deferred) = project::create_deferred(
-            &planned,
-            &template,
-            &mut counters,
-            &config,
-            crate::core::assets::JOB_DEFER_BYTES,
-        )?;
-        (template, config, plan, deferred)
-    };
+        base_dir_override: request.base_dir,
+        defer_over: Some(crate::core::assets::JOB_DEFER_BYTES),
+    })?;
+    let mutation_lock = created
+        .take_mutation_lock()
+        .context("create mutation lock was not retained")?;
+    let template = created.template;
+    let config = created.config;
+    let plan = created.plan;
+    let deferred = created.deferred;
 
-    let actions = PostCreate {
-        git_init: request.git_init,
-        reveal: request.reveal,
-        ..PostCreate::default()
-    };
-    if !actions.is_empty() {
-        post_create::run(&actions, &plan.root_path, &config)?;
-    }
+    let mut actions = project::resolve_post_create(&template, &config);
+    actions.git_init = request.git_init;
+    actions.reveal = request.reveal;
 
     let job_id = if deferred.is_empty() {
+        drop(mutation_lock);
+        if !actions.is_empty() {
+            post_create::run(&actions, &plan.root_path, &config)?;
+        }
         None
     } else {
-        Some(spawn_copy_job(plan.root_path.clone(), deferred))
+        Some(spawn_copy_job(
+            plan.root_path.clone(),
+            deferred,
+            mutation_lock,
+            actions,
+            config.clone(),
+        ))
     };
 
     Ok(json!({
@@ -784,7 +786,7 @@ const JOB_STALE_AFTER: Duration = Duration::from_secs(600);
 
 /// True while any background copy/move job is still running. `fastf ui --app`
 /// ties the server's lifetime to the app window — this lets it hold shutdown
-/// until in-flight copies land instead of stranding them for reconcile.
+/// until in-flight copies land instead of leaving recovery journals behind.
 ///
 /// Note this deliberately uses a *different* predicate from `register_job`'s
 /// eviction: being wrong here only means shutting down slightly early, whereas
@@ -829,21 +831,22 @@ fn register_job(
 }
 
 /// Register a background copy job and start its worker thread. Returns the job id
-/// the frontend polls. A durable `.fastf-provisioning.json` marker in `root`
-/// records the deferred copies so a crash mid-copy is recoverable by reconcile;
-/// each file is flipped `done` as it lands and the marker is cleared on success.
-fn spawn_copy_job(root: PathBuf, jobs: Vec<crate::core::assets::CopyJob>) -> String {
+/// the frontend polls. A scoped `.fastf-create-v2.json` journal in `root` records
+/// validated template/project-relative paths so reconcile can safely resume an
+/// interrupted deferred copy. The active worker clears it on success.
+fn spawn_copy_job(
+    root: PathBuf,
+    jobs: Vec<crate::core::assets::CopyJob>,
+    mutation_lock: crate::util::lockfile::DataLock,
+    actions: PostCreate,
+    config: Config,
+) -> String {
     use crate::core::provisioning;
 
     let id = next_job_id();
     let progress = Arc::new(Mutex::new(crate::core::assets::Progress::new(&jobs)));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
     register_job(&id, &progress, &cancel);
-
-    // `create_inner` already wrote the marker listing these jobs and left the
-    // project flagged in-progress; rewriting it here is harmless and keeps this
-    // entry point self-contained if it is ever called on its own.
-    let _ = provisioning::write_create_marker(&root, &jobs);
 
     thread::spawn(move || {
         let watchdog = Arc::clone(&progress);
@@ -864,17 +867,40 @@ fn spawn_copy_job(root: PathBuf, jobs: Vec<crate::core::assets::CopyJob>) -> Str
                         p.error = Some(format!("{e:#}"));
                         p.touch();
                     }
-                    return; // marker retained → reconcile can resume/clean up
+                    return; // v2 journal retained for scoped reconciliation
                 }
-                provisioning::mark_done(&root, &job.dest);
                 if let Ok(mut p) = progress.lock() {
                     p.done_files += 1;
                     p.touch();
                 }
             }
-            provisioning::clear_create(&root);
             // The last deferred file has landed, so the project is finally complete.
-            let _ = crate::core::project_info::clear_provisioning(&root);
+            if let Err(error) = crate::core::project_info::clear_provisioning(&root) {
+                if let Ok(mut p) = progress.lock() {
+                    p.status = "failed".to_string();
+                    p.error = Some(format!("could not clear provisioning state: {error:#}"));
+                    p.touch();
+                }
+                return; // v2 journal retained; reconcile can finish safely
+            }
+            if let Err(error) = provisioning::clear_create(&root) {
+                if let Ok(mut p) = progress.lock() {
+                    p.status = "failed".to_string();
+                    p.error = Some(format!("could not clear create journal: {error:#}"));
+                    p.touch();
+                }
+                return;
+            }
+            // File-dependent actions run only after provisioning is complete,
+            // and never while the coarse data lock is held.
+            drop(mutation_lock);
+            if !actions.is_empty()
+                && let Err(error) = post_create::run(&actions, &root, &config)
+                && let Ok(mut p) = progress.lock()
+            {
+                p.warning = Some(format!("post-create action failed: {error:#}"));
+                p.touch();
+            }
             if let Ok(mut p) = progress.lock() {
                 p.status = "done".to_string();
                 p.phase = "done".to_string();
@@ -910,8 +936,8 @@ where
 }
 
 /// Register a background staged-move job. Returns the job id the frontend polls;
-/// the move runs off `WRITE_LOCK` (it only writes the target staging folder + the
-/// two base caches, both atomic), reporting copy → verify → finalize progress.
+/// the move runs off UI `WRITE_LOCK` but holds `DataLock` for the complete
+/// operation, reporting copy → verify → finalize progress.
 fn spawn_move_job(project: Project, target: PathBuf) -> String {
     let id = next_job_id();
     let progress = Arc::new(Mutex::new(crate::core::assets::Progress::new(&[])));
@@ -921,37 +947,48 @@ fn spawn_move_job(project: Project, target: PathBuf) -> String {
     let progress_thread = Arc::clone(&progress);
     thread::spawn(move || {
         let watchdog = Arc::clone(&progress_thread);
-        run_worker(&watchdog, "move", move || match library::move_project_with(
-            &project,
-            &target,
-            &progress_thread,
-            &cancel,
-        ) {
-            Ok(_) => {
-                if let Ok(mut p) = progress_thread.lock() {
-                    p.status = "done".to_string();
-                    p.phase = "done".to_string();
-                    p.current_file.clear();
-                    p.touch();
+        run_worker(
+            &watchdog,
+            "move",
+            move || match crate::core::operations::move_project(
+                &project,
+                &target,
+                &progress_thread,
+                &cancel,
+            ) {
+                Ok(outcome) => {
+                    if let Ok(mut p) = progress_thread.lock() {
+                        p.status = "done".to_string();
+                        p.phase = "done".to_string();
+                        p.current_file.clear();
+                        p.cleanup_pending = outcome.cleanup_pending;
+                        if outcome.cleanup_pending {
+                            p.warning = Some(format!(
+                                "destination is complete, but source cleanup is pending at {}",
+                                project.path.display()
+                            ));
+                        }
+                        p.touch();
+                    }
                 }
-            }
-            Err(e) => {
-                let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
-                if let Ok(mut p) = progress_thread.lock() {
-                    p.status = if cancelled { "cancelled" } else { "failed" }.to_string();
-                    p.error = Some(format!("{e:#}"));
-                    p.touch();
+                Err(e) => {
+                    let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
+                    if let Ok(mut p) = progress_thread.lock() {
+                        p.status = if cancelled { "cancelled" } else { "failed" }.to_string();
+                        p.error = Some(format!("{e:#}"));
+                        p.touch();
+                    }
                 }
-            }
-        });
+            },
+        );
     });
 
     id
 }
 
 /// `POST /api/job/<id>/cancel` — request cancellation of a running job. The
-/// worker checks the flag between chunks, cleans up its `.part`/staging, and
-/// leaves the source intact (moves) or a resumable marker (creates).
+/// worker checks the flag between chunks, cleans up its exact owned temp/staging
+/// path, and leaves the source intact (moves) or a recoverable journal (creates).
 fn job_cancel(id: &str) -> Result<Value> {
     let guard = jobs_lock();
     let handle = guard
@@ -985,25 +1022,7 @@ fn job_status(id: &str) -> Result<Value> {
 }
 
 fn validate_variables(template: &Template, variables: &HashMap<String, String>) -> Result<()> {
-    for variable in &template.variables {
-        let value = variables
-            .get(&variable.slug)
-            .map(|value| value.trim())
-            .unwrap_or("");
-        if variable.required && value.is_empty() {
-            bail!("{} is required", variable.label);
-        }
-        if variable.var_type == VarType::Select
-            && !value.is_empty()
-            && !variable.options.iter().any(|option| option == value)
-        {
-            bail!(
-                "{} must be one of: {}",
-                variable.label,
-                variable.options.join(", ")
-            );
-        }
-    }
+    crate::core::vars::validated_raw_values(template, variables)?;
     Ok(())
 }
 
@@ -1073,8 +1092,8 @@ enum PickKind {
 /// errors instead of stacking OS dialogs.
 static PICKER_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// `POST /api/pick-path` — open the OS folder/file picker on this machine
-/// (the server and the browser are the same machine — loopback only) and
+/// `POST /api/pick-path` — open the OS folder/file picker on the server machine
+/// (normally also the browser machine because the supported deployment is local) and
 /// return the chosen absolute path, or `null` when the user cancels.
 fn pick_path(request: PickRequest) -> Result<Value> {
     let kind = match request.kind.as_str() {
@@ -1226,52 +1245,60 @@ fn native_pick(kind: PickKind, start: Option<&str>) -> Result<Option<String>> {
 }
 
 fn save_settings(value: Value) -> Result<()> {
-    let mut config = Config::load()?;
-    if let Some(base_dir) = value.get("base_dir").and_then(Value::as_str) {
-        config.base_dir = base_dir.trim().to_string();
-    }
-    if let Some(editor) = value.get("editor").and_then(Value::as_str) {
-        config.editor = editor.trim().to_string();
-    }
-    if let Some(default_template) = value.get("default_template").and_then(Value::as_str) {
-        config.default_template = default_template.to_string();
-    }
-    if let Some(date_format) = value.get("date_format").and_then(Value::as_str) {
-        if date_format.trim().is_empty() {
-            bail!("Date format cannot be empty");
+    crate::core::operations::update_config(|config| {
+        if let Some(base_dir) = value.get("base_dir").and_then(Value::as_str) {
+            config.base_dir = crate::core::config::resolve_base_dir_input(base_dir)?
+                .display()
+                .to_string();
         }
-        config.date_format = date_format.trim().to_string();
-    }
-    if let Some(limit) = value.get("recent_default_limit").and_then(Value::as_u64) {
-        config.recent_default_limit = usize::try_from(limit.max(1)).unwrap_or(20);
-    }
-    if let Some(lines) = value.get("preview_lines").and_then(Value::as_u64) {
-        config.preview_lines = usize::try_from(lines).unwrap_or(8);
-    }
-    if let Some(bases) = value.get("bases").and_then(Value::as_array) {
-        config.bases = bases
-            .iter()
-            .filter_map(Value::as_str)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-    if let Some(enabled) = value
-        .get("prompt_open_after_create")
-        .and_then(Value::as_bool)
-    {
-        config.prompt_open_after_create = enabled;
-    }
-    if let Some(enabled) = value.get("git_init").and_then(Value::as_bool) {
-        config.post_create.git_init = enabled;
-    }
-    if let Some(enabled) = value.get("confirm_create").and_then(Value::as_bool) {
-        config.confirm_create = enabled;
-    }
-    if let Some(enabled) = value.get("show_banner").and_then(Value::as_bool) {
-        config.show_banner = enabled;
-    }
-    config.save()
+        if let Some(editor) = value.get("editor").and_then(Value::as_str) {
+            config.editor = editor.trim().to_string();
+        }
+        if let Some(default_template) = value.get("default_template").and_then(Value::as_str) {
+            config.default_template = default_template.to_string();
+        }
+        if let Some(date_format) = value.get("date_format").and_then(Value::as_str) {
+            if date_format.trim().is_empty() {
+                bail!("Date format cannot be empty");
+            }
+            config.date_format = date_format.trim().to_string();
+        }
+        if let Some(limit) = value.get("recent_default_limit").and_then(Value::as_u64) {
+            config.recent_default_limit = usize::try_from(limit.max(1)).unwrap_or(20);
+        }
+        if let Some(lines) = value.get("preview_lines").and_then(Value::as_u64) {
+            config.preview_lines = usize::try_from(lines).unwrap_or(8);
+        }
+        if let Some(bases) = value.get("bases").and_then(Value::as_array) {
+            config.bases = bases
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(crate::core::config::expand_base_path)
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|path| path.canonicalize().unwrap_or(path).display().to_string())
+                .collect();
+        }
+        if let Some(enabled) = value
+            .get("prompt_open_after_create")
+            .and_then(Value::as_bool)
+        {
+            config.prompt_open_after_create = enabled;
+        }
+        if let Some(enabled) = value.get("git_init").and_then(Value::as_bool) {
+            config.post_create.git_init = enabled;
+        }
+        if let Some(enabled) = value.get("confirm_create").and_then(Value::as_bool) {
+            config.confirm_create = enabled;
+        }
+        if let Some(enabled) = value.get("show_banner").and_then(Value::as_bool) {
+            config.show_banner = enabled;
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1401,7 +1428,7 @@ fn find_project(config: &Config, path: &str) -> Result<library::Project> {
 fn project_unregister(request: UnregisterRequest) -> Result<Value> {
     let config = Config::load()?;
     let project = find_project(&config, &request.path)?;
-    library::unregister_project(&project)?;
+    crate::core::operations::unregister(&project)?;
     Ok(json!({"ok": true}))
 }
 
@@ -1424,7 +1451,7 @@ fn project_delete(request: DeleteProjectRequest) -> Result<Value> {
     if !config.effective_bases().contains(&base) {
         bail!("'{}' is not inside a configured base", request.path);
     }
-    library::delete_project(&project)?;
+    crate::core::operations::delete(&project)?;
     Ok(json!({"ok": true}))
 }
 
@@ -1432,7 +1459,7 @@ fn project_delete(request: DeleteProjectRequest) -> Result<Value> {
 fn project_rename(request: RenameRequest) -> Result<Value> {
     let config = Config::load()?;
     let project = find_project(&config, &request.path)?;
-    let renamed = library::rename_project(&project, &request.folder)?;
+    let renamed = crate::core::operations::rename(&project, &request.folder)?;
     Ok(json!({"ok": true, "path": renamed.path, "name": renamed.name}))
 }
 
@@ -1458,7 +1485,7 @@ fn project_move(request: MoveRequest) -> Result<Value> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .ok_or_else(|| anyhow::anyhow!("project has no folder name"))?;
-    if target.join(&folder).exists() {
+    if crate::core::assets::entry_exists(&target.join(&folder))? {
         bail!(
             "move target already exists: {}",
             target.join(&folder).display()
@@ -1475,24 +1502,13 @@ fn project_tag(request: TagRequest) -> Result<Value> {
     if tag.is_empty() {
         bail!("Tag cannot be empty");
     }
-    let root = Path::new(&request.path);
-    let pinfo = project_info::pinfo_path(root);
-    match request.action.as_str() {
-        "add" => project_info::write_frontmatter(&pinfo, |meta| {
-            if !meta.tags.contains(&tag) {
-                meta.tags.push(tag.clone());
-            }
-        })?,
-        "remove" => project_info::write_frontmatter(&pinfo, |meta| {
-            meta.tags.retain(|existing| existing != &tag);
-        })?,
+    let config = Config::load()?;
+    let candidate = find_project(&config, &request.path)?;
+    let tags = match request.action.as_str() {
+        "add" => crate::core::operations::add_tags(&candidate, &[tag])?,
+        "remove" => crate::core::operations::remove_tags(&candidate, &[tag])?,
         other => bail!("unknown tag action '{other}' (expected 'add' or 'remove')"),
-    }
-    // Keep the base cache's tags fresh so list/search reflect the change.
-    library::refresh_cache(root);
-    let tags = project_info::read_metadata(root)?
-        .map(|meta| meta.tags)
-        .unwrap_or_default();
+    };
     Ok(json!({"ok": true, "tags": tags}))
 }
 
@@ -1502,10 +1518,9 @@ fn project_note(request: NoteRequest) -> Result<Value> {
     if message.is_empty() {
         bail!("Note cannot be empty");
     }
-    let pinfo = project_info::pinfo_path(Path::new(&request.path));
-    project_info::append_journal_entry(&pinfo, message)?;
-    let journal = project_info::read_journal_entries(Path::new(&request.path))
-        .unwrap_or_default()
+    let config = Config::load()?;
+    let candidate = find_project(&config, &request.path)?;
+    let journal = crate::core::operations::append_note(&candidate, message)?
         .iter()
         .map(|entry| json!({"timestamp": entry.timestamp, "message": entry.message}))
         .collect::<Vec<_>>();
@@ -1516,11 +1531,11 @@ fn project_note(request: NoteRequest) -> Result<Value> {
 fn register_folder(request: RegisterRequest) -> Result<Value> {
     let template = request.template.filter(|slug| !slug.trim().is_empty());
     let on_pinfo_conflict = if request.overwrite {
-        register::PinfoConflict::Overwrite
+        crate::core::operations::PinfoConflict::Overwrite
     } else {
-        register::PinfoConflict::Abort
+        crate::core::operations::PinfoConflict::Abort
     };
-    let outcome = register::register_core(register::RegisterOptions {
+    let outcome = crate::core::operations::register(crate::core::operations::RegisterOptions {
         path: PathBuf::from(&request.path),
         template_slug: template,
         vars: request.variables,
@@ -1543,38 +1558,36 @@ fn register_folder(request: RegisterRequest) -> Result<Value> {
             "renamed_to": outcome.renamed_to,
             "pinfo_written": outcome.pinfo_written,
             "applied": outcome.applied,
+            "rename_error": outcome.rename_error,
+            "apply_error": outcome.apply_error,
         }
     }))
 }
 
 /// `POST /api/apply/preview` — dry-run an apply, no disk writes.
 fn apply_preview(request: ApplyRequest) -> Result<Value> {
-    let config = Config::load()?;
-    let template = template::find_by_slug(&request.template)?;
-    validate_variables(&template, &request.variables)?;
-    let target = Path::new(&request.target);
-    if !target.exists() {
-        bail!("target folder does not exist: {}", target.display());
-    }
-    let actions = project::apply_plan(&template, target, &request.variables, &config.date_format);
+    let outcome = crate::core::operations::preview_apply(
+        &request.template,
+        Path::new(&request.target),
+        &request.variables,
+    )?;
     Ok(json!({
         "ok": true,
         "target": request.target,
-        "actions": actions.iter().map(action_json).collect::<Vec<_>>(),
+        "actions": outcome.actions.iter().map(action_json).collect::<Vec<_>>(),
     }))
 }
 
 /// `POST /api/apply` — create missing folders/files in an existing folder.
 fn apply_template(request: ApplyRequest) -> Result<Value> {
-    let config = Config::load()?;
-    let template = template::find_by_slug(&request.template)?;
-    validate_variables(&template, &request.variables)?;
-    let target = Path::new(&request.target);
-    let actions = project::apply_plan(&template, target, &request.variables, &config.date_format);
-    project::apply(&template, target, &request.variables, &config)?;
+    let outcome = crate::core::operations::apply(
+        &request.template,
+        Path::new(&request.target),
+        &request.variables,
+    )?;
     Ok(json!({
         "ok": true,
-        "actions": actions.iter().map(action_json).collect::<Vec<_>>(),
+        "actions": outcome.actions.iter().map(action_json).collect::<Vec<_>>(),
     }))
 }
 
@@ -1592,8 +1605,8 @@ fn action_json(action: &ApplyAction) -> Value {
 /// `bundle_assets` copies binary/large files byte-for-byte; the report carries
 /// the counts (folders / text files / bundled + bytes / skipped) for the UI.
 fn template_from_folder(request: FromFolderRequest) -> Result<Value> {
-    let report = crate::cli::template::from_folder(
-        &request.source,
+    let report = crate::core::operations::template_from_folder(
+        Path::new(&request.source),
         &request.slug,
         request.force,
         request.bundle_assets,
@@ -1691,23 +1704,19 @@ fn require_template_exists(slug: &str) -> Result<()> {
 /// slashes, traversal-safe, and never the reserved auto-gen filename.
 fn normalize_template_rel(path: &str) -> Result<String> {
     let rel = path.trim().replace('\\', "/");
-    if rel.is_empty() {
-        bail!("file path cannot be empty");
-    }
-    crate::core::naming::ensure_relative_safe_path(&rel)?;
-    if project_info::path_is_reserved(&rel) {
+    let rel = crate::core::validated::SafeRelativePath::parse(&rel)?;
+    if project_info::path_is_reserved(rel.as_str()) {
         bail!(
             "'{}' is generated automatically — choose another filename (e.g. NOTES.md)",
             project_info::RESERVED_FILENAME
         );
     }
-    Ok(rel)
+    Ok(rel.as_str().to_string())
 }
 
 /// `POST /api/reindex` — force a full rescan of every base, rewriting caches.
 fn reindex_all() -> Result<Value> {
-    let config = Config::load()?;
-    let total = library::reindex(&config);
+    let (_config, total) = crate::core::operations::reindex()?;
     Ok(json!({"ok": true, "projects": total}))
 }
 
@@ -1718,18 +1727,8 @@ fn reindex_all() -> Result<Value> {
 /// accepted-and-ignored. Writing propagates to every mounted base, which is what
 /// keeps both operating systems of a dual-boot machine on one number.
 fn set_counter(request: CounterRequest) -> Result<Value> {
-    let config = Config::load()?;
-    let floor = Counters::floor(&config);
-    if request.value <= floor {
-        anyhow::bail!(
-            "The counter cannot go below {floor} — that ID is already in use. \
-             The next project will be ID{:04} either way.",
-            floor + 1
-        );
-    }
-    Counters::record(&config, &config.resolve_base_dir(), request.value);
-
-    let counter = Counters::floor(&config);
+    let outcome = crate::core::operations::set_counter(request.value)?;
+    let counter = outcome.value;
     Ok(json!({
         "ok": true,
         "counter": counter,
@@ -1897,19 +1896,7 @@ fn validate_template_for_ui(template: &Template) -> Result<()> {
 }
 
 fn validate_slug(slug: &str) -> Result<()> {
-    if slug.is_empty() {
-        bail!("Slug cannot be empty");
-    }
-    if !slug
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
-    {
-        bail!(
-            "Slug '{}' contains invalid characters; use letters, numbers, '-' or '_'",
-            slug
-        );
-    }
-    Ok(())
+    crate::core::validated::TemplateSlug::parse(slug).map(|_| ())
 }
 
 fn validate_folder_nodes(nodes: &[FolderNode]) -> Result<()> {
@@ -1918,13 +1905,7 @@ fn validate_folder_nodes(nodes: &[FolderNode]) -> Result<()> {
         if name.is_empty() {
             bail!("Folder names cannot be empty");
         }
-        if name.contains('/') || name.contains('\\') {
-            bail!(
-                "Folder '{}' must be one path component; add nested folders separately",
-                name
-            );
-        }
-        crate::core::naming::ensure_relative_safe_path(name)
+        crate::core::validated::SafeRelativePath::parse(name)
             .with_context(|| format!("invalid folder name '{name}'"))?;
         validate_folder_nodes(&node.children)?;
     }
@@ -1949,7 +1930,109 @@ fn open_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_request(stream: &mut TcpStream) -> Result<(String, String, Vec<u8>)> {
+#[derive(Debug)]
+struct HttpRequest {
+    method: String,
+    route: String,
+    body: Vec<u8>,
+    host: Option<String>,
+    origin: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HttpAuthority {
+    host: String,
+    port: u16,
+}
+
+fn resolve_loopback_address(address: &str) -> Result<SocketAddr> {
+    let addresses = address
+        .to_socket_addrs()
+        .with_context(|| format!("resolving UI address {address}"))?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        bail!("UI address did not resolve: {address}");
+    }
+    if addresses
+        .iter()
+        .any(|candidate| !candidate.ip().is_loopback())
+    {
+        bail!("UI address must resolve only to loopback: {address}");
+    }
+    Ok(addresses[0])
+}
+
+fn parse_http_authority(value: &str) -> Result<HttpAuthority> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.bytes().any(|byte| byte.is_ascii_whitespace())
+        || value.contains(['/', '\\', '@', '#', '?'])
+    {
+        bail!("invalid authority");
+    }
+
+    let (host, port) = if let Some(rest) = value.strip_prefix('[') {
+        let (host, suffix) = rest.split_once(']').context("invalid IPv6 authority")?;
+        let port = if suffix.is_empty() {
+            80
+        } else {
+            suffix
+                .strip_prefix(':')
+                .context("invalid IPv6 authority")?
+                .parse::<u16>()
+                .context("invalid authority port")?
+        };
+        (host.to_string(), port)
+    } else {
+        match value.rsplit_once(':') {
+            Some((host, port)) if !host.contains(':') => (
+                host.to_string(),
+                port.parse::<u16>().context("invalid authority port")?,
+            ),
+            _ => (value.to_string(), 80),
+        }
+    };
+
+    let normalized_host = if host.eq_ignore_ascii_case("localhost") {
+        "localhost".to_string()
+    } else {
+        let ip = host
+            .parse::<IpAddr>()
+            .context("host is not a loopback address")?;
+        if !ip.is_loopback() {
+            bail!("host is not a loopback address");
+        }
+        ip.to_string()
+    };
+    Ok(HttpAuthority {
+        host: normalized_host,
+        port,
+    })
+}
+
+fn validate_request_authority(request: &HttpRequest, local_address: SocketAddr) -> Result<()> {
+    let host = request
+        .host
+        .as_deref()
+        .context("forbidden: missing Host header")?;
+    let host = parse_http_authority(host).context("forbidden: invalid Host header")?;
+    if host.port != local_address.port() {
+        bail!("forbidden: Host port does not match the UI listener");
+    }
+
+    if let Some(origin) = request.origin.as_deref() {
+        let authority = origin
+            .strip_prefix("http://")
+            .context("forbidden: Origin must use the UI's http scheme")?;
+        let origin = parse_http_authority(authority).context("forbidden: invalid Origin header")?;
+        if origin != host {
+            bail!("forbidden: Origin is not same-origin with Host");
+        }
+    }
+    Ok(())
+}
+
+fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     let mut bytes = Vec::with_capacity(4096);
     let mut buffer = [0_u8; 4096];
     let header_end;
@@ -1986,11 +2069,26 @@ fn read_request(stream: &mut TcpStream) -> Result<(String, String, Vec<u8>)> {
         .next()
         .context("missing request path")?
         .to_string();
-    let content_length = lines
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
-        .unwrap_or(0);
+    let mut content_length = 0;
+    let mut host = None;
+    let mut origin = None;
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let (name, value) = line.split_once(':').context("malformed request header")?;
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            content_length = value.parse::<usize>().context("invalid Content-Length")?;
+        } else if name.eq_ignore_ascii_case("host") {
+            if host.replace(value.to_string()).is_some() {
+                bail!("duplicate Host header");
+            }
+        } else if name.eq_ignore_ascii_case("origin") && origin.replace(value.to_string()).is_some()
+        {
+            bail!("duplicate Origin header");
+        }
+    }
 
     while bytes.len() < header_end + content_length {
         let read = stream
@@ -2005,11 +2103,13 @@ fn read_request(stream: &mut TcpStream) -> Result<(String, String, Vec<u8>)> {
         }
     }
 
-    Ok((
+    Ok(HttpRequest {
         method,
         route,
-        bytes[header_end..header_end + content_length].to_vec(),
-    ))
+        body: bytes[header_end..header_end + content_length].to_vec(),
+        host,
+        origin,
+    })
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -2027,6 +2127,7 @@ fn write_response(
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         503 => "Service Unavailable",
         _ => "Internal Server Error",
@@ -2088,8 +2189,70 @@ mod tests {
     #[test]
     fn panicking_handlers_map_to_500_and_missing_routes_to_404() {
         assert_eq!(status_for("not found: GET /api/nope"), 404);
+        assert_eq!(status_for("forbidden: invalid Host header"), 403);
         assert_eq!(status_for(&format!("{PANIC_ERROR_PREFIX} boom")), 500);
         assert_eq!(status_for("invalid preview request"), 400);
+    }
+
+    #[test]
+    fn ui_bind_addresses_must_be_loopback() {
+        assert!(resolve_loopback_address("127.0.0.1:47831").is_ok());
+        assert!(resolve_loopback_address("0.0.0.0:47831").is_err());
+        assert!(resolve_loopback_address("192.0.2.1:47831").is_err());
+    }
+
+    fn socket_response(request: impl FnOnce(SocketAddr) -> String) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let address = listener.local_addr().expect("local addr");
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            handle_connection_with(stream, Duration::from_secs(2))
+        });
+        let mut client = TcpStream::connect(address).expect("connect");
+        client
+            .write_all(request(address).as_bytes())
+            .expect("write request");
+        let mut response = String::new();
+        client.read_to_string(&mut response).expect("read response");
+        server
+            .join()
+            .expect("server thread must not panic")
+            .expect("handler must answer");
+        response
+    }
+
+    #[test]
+    fn socket_requests_require_a_loopback_host_for_the_listener_port() {
+        let response = socket_response(|address| {
+            format!(
+                "GET /api/health HTTP/1.1\r\nHost: example.com:{}\r\nConnection: close\r\n\r\n",
+                address.port()
+            )
+        });
+        assert!(response.starts_with("HTTP/1.1 403 Forbidden"), "{response}");
+
+        let response = socket_response(|_| {
+            "GET /api/health HTTP/1.1\r\nConnection: close\r\n\r\n".to_string()
+        });
+        assert!(response.starts_with("HTTP/1.1 403 Forbidden"), "{response}");
+    }
+
+    #[test]
+    fn socket_requests_reject_cross_origin_and_accept_same_origin() {
+        let response = socket_response(|address| {
+            format!(
+                "GET /api/health HTTP/1.1\r\nHost: {address}\r\nOrigin: http://localhost:{}\r\nConnection: close\r\n\r\n",
+                address.port()
+            )
+        });
+        assert!(response.starts_with("HTTP/1.1 403 Forbidden"), "{response}");
+
+        let response = socket_response(|address| {
+            format!(
+                "GET /api/health HTTP/1.1\r\nHost: {address}\r\nOrigin: http://{address}\r\nConnection: close\r\n\r\n"
+            )
+        });
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     }
 
     #[test]

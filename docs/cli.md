@@ -22,7 +22,7 @@ On the very first launch (TUI or browser UI) fastf asks where your projects shou
 | `fastf notes <id>` | Show journal entries |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
-| `fastf reconcile` | Recover interrupted copies and moves |
+| `fastf reconcile` | Recover scoped v2 work and report obsolete pre-v2 markers |
 | `fastf config show` / `set` | View and edit configuration |
 | `fastf id show` / `sync` / `set` | Inspect, synchronize, and raise the global ID counter |
 | `fastf paths` | Show where fastf keeps its data and why |
@@ -40,6 +40,11 @@ fastf new rust-project --no-post              # skip post-create actions
 fastf new rust-project --yes                  # skip the confirmation prompt
 fastf new rust-project --base-dir=/tmp/tests  # override the destination
 ```
+
+`--base-dir` uses the same resolver as configuration: `~/…` is expanded and a
+relative path is rejected. Unsafe template slugs and relative paths (including
+paths that become unsafe only after token interpolation) are rejected before a
+project folder is claimed.
 
 Variables are passed as `--slug=value` flags. Flags work before or after the template slug. For fully non-interactive use, pass every variable explicitly (use `--slug=` for an empty optional value) together with `--yes`.
 
@@ -165,9 +170,16 @@ fastf move my-crate /mnt/proj/01_PROJECTS
 fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 ```
 
-Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Cross-filesystem moves stage a copy, verify it, commit atomically, and only then remove the source. An interrupted move is recovered by `fastf reconcile` and never loses data.
+Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move stages every ordinary file—including legitimate `.tmp` and `.part` names—checks relative paths and byte lengths, commits atomically, and only then removes the source. Keep the project untouched while that copy is running.
 
-A cross-filesystem move reports its progress as it goes — the phase (copying, verifying, finalizing), how many files are done, and how much has been copied. **Ctrl-C cancels it safely**: the move aborts before the source is touched, so the worst case is a discarded staging folder that `fastf reconcile` sweeps up. Same-filesystem moves finish instantly and print nothing extra.
+A cross-filesystem move reports its progress as it goes — the phase (copying,
+verifying, finalizing), how many files are done, and how much has been copied.
+**Ctrl-C cancels it safely before publication**: fastf removes only the private
+transaction owned by that operation and leaves the source untouched. Once
+publication begins, cancellation is too late. If the destination is published
+but source removal fails, the command reports cleanup pending and retains the
+transaction for reconciliation. Same-filesystem moves finish instantly and
+print nothing extra.
 
 **Symlinks and junctions.** A move to another drive has to copy, and a link cannot be reproduced faithfully there — recreating one needs elevation or Developer Mode on Windows, and following it would silently restructure your project and could duplicate a whole shared asset library. So fastf refuses, names the links it found, and changes nothing:
 
@@ -179,6 +191,26 @@ Nothing has been changed. Move the folder with a tool that preserves links
 ```
 
 Moves *within* the same drive are unaffected: they are a rename, nothing is copied, and links travel along untouched.
+
+### Interrupted-operation recovery
+
+```bash
+fastf reconcile
+```
+
+Scoped v2 create journals let `reconcile` finish missing deferred copies after
+validating the template, project identity, relative paths, entry types, and byte
+lengths. Scoped move transactions are either discarded before publication or,
+after a matching destination has been published, advanced through source
+cleanup. Missing bases, mismatched identities, malformed journals, or unknown
+states are reported without mutation. Running the command repeatedly is safe.
+
+Markers written before recovery journal v2 contain arbitrary absolute paths.
+They remain obsolete: `reconcile` lists their own paths but never parses,
+migrates, resumes, rolls back, or deletes through them. It also never sweeps
+files merely because their names end in `.tmp` or `.part`. Inspect source and
+destination manually and remove an obsolete marker only after deciding which
+copy is authoritative.
 
 ## Templates
 

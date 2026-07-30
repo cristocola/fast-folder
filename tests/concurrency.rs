@@ -13,6 +13,7 @@
 mod common;
 
 use common::{Sandbox, project_dirs};
+use fastf::core::project_info;
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
@@ -202,4 +203,46 @@ fn concurrent_create_and_register_do_not_collide() {
         ids.len(),
         "create and register minted colliding IDs: {ids:?}"
     );
+}
+
+/// Tag and note commands both rewrite PROJECT_INFO.md. Racing them must retain
+/// every frontmatter and journal update, not let the last atomic rename erase
+/// changes read by another process before it acquired the mutation lock.
+#[test]
+fn concurrent_tag_and_note_updates_do_not_lose_metadata() {
+    let sb = racing_sandbox();
+    sb.ok(&["new", "race", "--name=Shared", "--yes", "--no-preview"]);
+    let project = project_dirs(&sb.base).pop().expect("created project");
+
+    let mut children = Vec::new();
+    for index in 0..5 {
+        children.push(sb.spawn(&["tag", "add", "R0001", &format!("tag-{index}")]));
+        children.push(sb.spawn(&["note", "add", "R0001", &format!("note-{index}")]));
+    }
+    for mut child in children {
+        let status = child.wait().expect("wait for mutation");
+        assert!(status.success(), "concurrent mutation failed: {status}");
+    }
+
+    let metadata = project_info::read_metadata(&project)
+        .unwrap()
+        .expect("project metadata");
+    let notes = project_info::read_journal_entries(&project).unwrap();
+    for index in 0..5 {
+        assert!(
+            metadata.tags.contains(&format!("tag-{index}")),
+            "lost tag-{index}: {:?}",
+            metadata.tags
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|entry| entry.message == format!("note-{index}")),
+            "lost note-{index}; retained messages: {:?}",
+            notes
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
 }

@@ -9,7 +9,7 @@
 //!
 //! Nothing here aborts a copy mid-file; the granularity is one file. That is a
 //! deliberate trade — a torn file is exactly what we are avoiding, and
-//! `assets::copy_file` writes through a `.part` temp anyway.
+//! `assets::copy_file` writes through an operation-owned unique temp anyway.
 //!
 //! A second Ctrl-C restores the default behaviour, so a genuinely stuck process
 //! can always still be killed from the keyboard.

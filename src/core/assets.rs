@@ -63,6 +63,11 @@ pub struct Progress {
     /// `"copying" | "verifying" | "finalizing" | "done"`.
     pub phase: String,
     pub error: Option<String>,
+    /// A move reached its verified destination but could not remove its source.
+    /// Existing clients may ignore this additive field safely.
+    pub cleanup_pending: bool,
+    /// Non-fatal detail accompanying [`Self::cleanup_pending`].
+    pub warning: Option<String>,
     /// Unix-epoch milliseconds of the last observed movement (bytes copied, a
     /// file finished, or a phase change).
     ///
@@ -86,6 +91,8 @@ impl Progress {
             status: "running".to_string(),
             phase: "copying".to_string(),
             error: None,
+            cleanup_pending: false,
+            warning: None,
             last_progress_at: now_millis(),
         }
     }
@@ -118,26 +125,29 @@ fn now_millis() -> u64 {
 pub const CANCELLED_MSG: &str = "copy cancelled";
 
 /// Copy one deferred (large, verbatim) file into place with chunked progress.
-/// Atomic via `.part` + rename; `progress.copied_bytes` is bumped per chunk so
-/// the UI shows a live bar during a multi-minute copy.
+/// Atomic via an operation-owned unique sibling + rename;
+/// `progress.copied_bytes` is bumped per chunk so the UI shows a live bar
+/// during a multi-minute copy.
 ///
-/// `cancel` is polled between chunks: when set, the partial `.part` is removed
-/// and the copy returns an [`CANCELLED_MSG`] error so no half-written file is
-/// ever left in place.
+/// `cancel` is polled between chunks: when set, the exact partial sibling is
+/// removed and the copy returns a [`CANCELLED_MSG`] error so no half-written
+/// file is ever left in place.
 pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) -> Result<()> {
+    if entry_exists(&job.dest)? {
+        anyhow::bail!(
+            "copy destination is already occupied: {}",
+            job.dest.display()
+        );
+    }
     if let Some(parent) = job.dest.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating parent dirs for {}", job.dest.display()))?;
     }
-    let mut tmp_os = job.dest.as_os_str().to_owned();
-    tmp_os.push(".part");
-    let tmp = PathBuf::from(tmp_os);
+    let (tmp, mut writer) = crate::util::atomic::create_temp_for(&job.dest)?;
 
     let result = (|| -> Result<()> {
         let mut reader =
             fs::File::open(&job.src).with_context(|| format!("opening {}", job.src.display()))?;
-        let mut writer =
-            fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         let mut buf = vec![0u8; 1024 * 1024];
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -153,12 +163,29 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
                 p.touch();
             }
         }
-        writer.sync_all().ok();
+        writer
+            .flush()
+            .with_context(|| format!("flushing {}", tmp.display()))?;
+        writer
+            .sync_all()
+            .with_context(|| format!("syncing {}", tmp.display()))?;
         Ok(())
     })();
+    drop(writer);
 
     match result {
         Ok(()) => {
+            match entry_exists(&job.dest) {
+                Ok(false) => {}
+                Ok(true) => {
+                    let _ = fs::remove_file(&tmp);
+                    anyhow::bail!("copy destination became occupied: {}", job.dest.display());
+                }
+                Err(error) => {
+                    let _ = fs::remove_file(&tmp);
+                    return Err(error);
+                }
+            }
             crate::util::fs_retry::rename(&tmp, &job.dest)
                 .with_context(|| format!("finalizing {}", job.dest.display()))
                 .inspect_err(|_| {
@@ -308,7 +335,8 @@ pub fn find_links(root: &Path) -> Result<Vec<String>> {
 /// must preserve every file exactly, including literal `{braces}`). Fails if
 /// `dst` already exists so a half-typed target never gets merged into.
 pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
-    if dst.exists() {
+    require_real_directory(src, "copy source")?;
+    if entry_exists(dst)? {
         anyhow::bail!("copy target already exists: {}", dst.display());
     }
     fs::create_dir_all(dst).with_context(|| format!("creating {}", dst.display()))?;
@@ -339,31 +367,18 @@ pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Disposable/transient files that must not count toward a copy or verification:
-/// the per-base cache, provisioning/move markers, half-written `.part` temps, and
-/// the `.tmp` scratch files left by [`crate::util::atomic`]. A tree copy skips
-/// them and verification ignores them on both sides, so moving a project that
-/// itself carries stale scaffolding still verifies cleanly.
-fn is_transient(rel: &str) -> bool {
-    let base = rel.rsplit('/').next().unwrap_or(rel);
-    base == crate::core::library::CACHE_FILENAME
-        || base == crate::core::provisioning::MARKER_CREATE
-        || base.starts_with(crate::core::provisioning::MARKER_MOVE_PREFIX)
-        || base.ends_with(".part")
-        || crate::util::atomic::is_temp_file(base)
-}
-
 /// Enumerate a source tree into the directory creates + per-file [`CopyJob`]s
 /// needed to reproduce it verbatim under `dst`. Directories (including empty
-/// ones) come first so a plain create-then-copy is ordering-safe. Transient
-/// scaffolding files are skipped. Used by the staged (cross-filesystem / network)
-/// move so the copy can report live progress and honor cancellation.
+/// ones) come first so a plain create-then-copy is ordering-safe. Every regular
+/// source file is payload, including names ending in `.tmp` or `.part`. Used by
+/// the staged move so the copy can report live progress and honor cancellation.
 ///
 /// Errors on a link or special file. Callers pre-flight with [`find_links`] and
 /// refuse the move up front, so this is the backstop that guarantees no caller
 /// can ever reach the "copied, verified, now delete the source" step while
 /// having silently skipped something.
 pub fn jobs_for_tree(src: &Path, dst: &Path) -> Result<(Vec<PathBuf>, Vec<CopyJob>)> {
+    require_real_directory(src, "move source")?;
     let mut dirs = Vec::new();
     let mut files = Vec::new();
     for entry in walk(src)? {
@@ -371,15 +386,11 @@ pub fn jobs_for_tree(src: &Path, dst: &Path) -> Result<(Vec<PathBuf>, Vec<CopyJo
         let target = dst.join(&rel);
         match entry.kind {
             EntryKind::Dir => dirs.push(target),
-            EntryKind::File => {
-                if !is_transient(&entry.rel) {
-                    files.push(CopyJob {
-                        src: src.join(&rel),
-                        dest: target,
-                        bytes: entry.size,
-                    });
-                }
-            }
+            EntryKind::File => files.push(CopyJob {
+                src: src.join(&rel),
+                dest: target,
+                bytes: entry.size,
+            }),
             EntryKind::Symlink | EntryKind::Other => anyhow::bail!(
                 "cannot copy '{}': it is a link or special file. \
                  Copying it faithfully is not supported, and skipping it would silently lose data.",
@@ -390,8 +401,8 @@ pub fn jobs_for_tree(src: &Path, dst: &Path) -> Result<(Vec<PathBuf>, Vec<CopyJo
     Ok((dirs, files))
 }
 
-/// Verify that `dst` faithfully reproduces `src`: every non-transient file in
-/// `src` exists under `dst` with an identical byte size, and the file counts
+/// Verify that `dst` faithfully reproduces `src`: every file in `src` exists
+/// under `dst` with an identical byte size, and the file counts
 /// match (no source file dropped). This is the guarantee that must hold **before**
 /// a move removes its source — it catches the real network-share failure mode
 /// (a truncated or dropped-connection copy) without the cost of re-hashing every
@@ -404,12 +415,11 @@ pub fn jobs_for_tree(src: &Path, dst: &Path) -> Result<(Vec<PathBuf>, Vec<CopyJo
 /// source whose junctions never reached the destination. Verification must never
 /// be narrower than the copy it is checking.
 pub fn verify_tree(src: &Path, dst: &Path) -> Result<()> {
+    require_real_directory(src, "verification source")?;
+    require_real_directory(dst, "verification destination")?;
     let sizes = |root: &Path, side: &str| -> Result<HashMap<String, u64>> {
         let mut map = HashMap::new();
         for entry in walk(root)? {
-            if is_transient(&entry.rel) {
-                continue;
-            }
             match entry.kind {
                 EntryKind::Dir => {}
                 EntryKind::File => {
@@ -446,6 +456,29 @@ pub fn verify_tree(src: &Path, dst: &Path) -> Result<()> {
     // property that has to hold before a source is deleted is "everything made
     // it across", and a surplus does not threaten that.
     Ok(())
+}
+
+/// Require an existing, non-symlink directory. `Path::is_dir()` follows links
+/// and treats a missing path as `false`; neither is strong enough at a copy
+/// boundary where "missing" must never be mistaken for an empty tree.
+pub fn require_real_directory(path: &Path, label: &str) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("{label} does not exist: {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        anyhow::bail!("{label} is not a real directory: {}", path.display());
+    }
+    Ok(())
+}
+
+/// Does a directory entry occupy this exact path? Unlike `Path::exists`, this
+/// sees broken symlinks and propagates metadata errors instead of treating them
+/// as a free destination.
+pub fn entry_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("inspecting {}", path.display())),
+    }
 }
 
 /// Interpolate a relative path segment-by-segment, so empty variables collapse
@@ -509,7 +542,7 @@ pub fn is_verbatim(rel: &str, verbatim: &[String]) -> bool {
     matches_any(rel, verbatim)
 }
 
-/// Copy one file, atomically (`.part` temp + rename).
+/// Copy one file atomically through a unique sibling temp.
 ///
 /// When `force_verbatim` is false the source is read as UTF-8 and, if that
 /// succeeds, `{token}` interpolation is applied to its contents. A read failure
@@ -528,10 +561,6 @@ pub fn copy_file(
             .with_context(|| format!("creating parent dirs for {}", dest.display()))?;
     }
 
-    let mut tmp_os = dest.as_os_str().to_owned();
-    tmp_os.push(".part");
-    let tmp = PathBuf::from(tmp_os);
-
     let interpolated = if force_verbatim {
         None
     } else {
@@ -542,19 +571,12 @@ pub fn copy_file(
     match interpolated {
         Some(text) => {
             let rendered = crate::core::naming::interpolate(&text, vars, date_format);
-            fs::write(&tmp, rendered).with_context(|| format!("writing {}", tmp.display()))?;
+            crate::util::atomic::write(dest, rendered)?;
         }
         None => {
-            fs::copy(src, &tmp)
-                .with_context(|| format!("copying {} → {}", src.display(), tmp.display()))?;
+            crate::util::atomic::copy(src, dest)?;
         }
     }
-
-    crate::util::fs_retry::rename(&tmp, dest)
-        .with_context(|| format!("finalizing {}", dest.display()))
-        .inspect_err(|_| {
-            let _ = fs::remove_file(&tmp);
-        })?;
     Ok(())
 }
 
@@ -596,6 +618,45 @@ mod tests {
         assert_eq!(fs::read(&dest).unwrap(), data);
         assert_eq!(progress.lock().unwrap().copied_bytes, data.len() as u64);
         assert!(!dest.with_extension("bin.part").exists());
+    }
+
+    #[test]
+    fn copy_job_does_not_treat_a_part_sibling_as_scratch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("source.bin");
+        let dest = tmp.path().join("payload.bin");
+        let part_payload = tmp.path().join("payload.bin.part");
+        fs::write(&src, b"new payload").unwrap();
+        fs::write(&part_payload, b"real sibling payload").unwrap();
+        let job = CopyJob {
+            src,
+            dest: dest.clone(),
+            bytes: 11,
+        };
+        let progress = Mutex::new(Progress::new(std::slice::from_ref(&job)));
+
+        copy_job(&job, &progress, &AtomicBool::new(false)).unwrap();
+        assert_eq!(fs::read(dest).unwrap(), b"new payload");
+        assert_eq!(fs::read(part_payload).unwrap(), b"real sibling payload");
+    }
+
+    #[test]
+    fn copy_job_never_replaces_an_existing_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("source.bin");
+        let dest = tmp.path().join("payload.bin");
+        fs::write(&src, b"new payload").unwrap();
+        fs::write(&dest, b"existing payload").unwrap();
+        let job = CopyJob {
+            src,
+            dest: dest.clone(),
+            bytes: 11,
+        };
+        let progress = Mutex::new(Progress::new(std::slice::from_ref(&job)));
+
+        let error = copy_job(&job, &progress, &AtomicBool::new(false)).unwrap_err();
+        assert!(error.to_string().contains("occupied"));
+        assert_eq!(fs::read(dest).unwrap(), b"existing payload");
     }
 
     #[test]
@@ -676,6 +737,25 @@ mod tests {
         assert!(dst.join("empty_dir").is_dir());
         // Refuses to merge into an existing target.
         assert!(copy_tree(&src, &dst).is_err());
+    }
+
+    #[test]
+    fn missing_tree_is_an_error_not_an_empty_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing");
+        let destination = tmp.path().join("destination");
+        assert!(jobs_for_tree(&missing, &destination).is_err());
+        fs::create_dir(&destination).unwrap();
+        assert!(verify_tree(&missing, &destination).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_symlink_occupies_a_destination_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let occupied = tmp.path().join("occupied");
+        std::os::unix::fs::symlink(tmp.path().join("missing-target"), &occupied).unwrap();
+        assert!(entry_exists(&occupied).unwrap());
     }
 
     /// Create a directory link inside a test tree, cross-platform.
@@ -879,33 +959,22 @@ mod tests {
         assert!(err.contains("missing at destination"), "got: {err}");
     }
 
-    /// Each clause of `is_transient` must be load-bearing on its own.
     #[test]
-    fn is_transient_recognizes_every_scaffolding_kind_independently() {
-        // Cache.
-        assert!(is_transient(crate::core::library::CACHE_FILENAME));
-        // Create marker.
-        assert!(is_transient(crate::core::provisioning::MARKER_CREATE));
-        // Move marker (prefix match).
-        assert!(is_transient(".fastf-move-anything.json"));
-        // Half-written copy.
-        assert!(is_transient("blob.bin.part"));
-        // Atomic-write scratch.
-        assert!(is_transient("config.toml.999.0.tmp"));
-        // Nested, matched on the basename.
-        assert!(is_transient("deep/sub/blob.bin.part"));
+    fn move_jobs_treat_tmp_and_part_names_as_payload() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        fs::create_dir_all(src.join("nested")).unwrap();
+        fs::write(src.join("notes.tmp"), "temporary by name, real by contract").unwrap();
+        fs::write(src.join("nested/render.part"), [0_u8, 1, 2, 255]).unwrap();
 
-        // And real content is never transient.
-        for real in [
-            "README.md",
-            "notes.txt",
-            "assets/logo.svg",
-            "partial",       // "part" is not a suffix match
-            "tmp",           // nor is "tmp"
-            "my.part.thing", // only a trailing .part counts
-        ] {
-            assert!(!is_transient(real), "{real} must not be treated as scratch");
-        }
+        let (_, jobs) = jobs_for_tree(&src, &dst).unwrap();
+        let names: Vec<_> = jobs
+            .iter()
+            .map(|job| job.src.strip_prefix(&src).unwrap().to_path_buf())
+            .collect();
+        assert!(names.contains(&PathBuf::from("notes.tmp")));
+        assert!(names.contains(&PathBuf::from("nested/render.part")));
     }
 
     /// The glob matcher backtracks; the wildcard bookkeeping is easy to get
@@ -933,16 +1002,6 @@ mod tests {
         // Repeated wildcards must not double-count.
         assert!(glob_match("*a*a*", "banana"));
         assert!(!glob_match("*z*z*", "banana"));
-    }
-
-    #[test]
-    fn atomic_write_temp_files_are_transient() {
-        // A `.tmp` left by a concurrent atomic write must not break a move's
-        // verification the way an uncounted file would.
-        assert!(is_transient("config.toml.1234.0.tmp"));
-        assert!(is_transient("sub/dir/.fastf-index.json"));
-        assert!(is_transient("big.bin.part"));
-        assert!(!is_transient("notes.md"));
     }
 
     #[test]

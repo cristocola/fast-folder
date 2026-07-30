@@ -3,7 +3,7 @@
 Loaded when working under `src/ui/`. Moved out of the root CLAUDE.md so it costs
 nothing in sessions that never touch the UI.
 
-`fastf ui` starts a local loopback HTTP server and opens the browser UI. The
+`fastf ui` defaults to a local loopback HTTP server and opens the browser UI. The
 server and all API logic live only in the `fastf` lib (`src/ui/`) — no separate
 server binary, no external web directory. (The v1.0.2 `fastf-ui` bin is a
 windowless *launcher shim* over `cli::ui::run`, not a second server.) Full
@@ -19,21 +19,25 @@ the create or template-file paths:
 - `assets::JOB_DEFER_BYTES` (**4 MiB**) is the create cutoff: `POST /api/create`
   does structure + text/small files + counter + metadata + cache synchronously and
   returns `{project, job_id}`; anything larger copies on a background thread
-  **outside `WRITE_LOCK`**. `job_id` is `null` when nothing needed deferring.
+  outside UI `WRITE_LOCK` but retaining `DataLock` through provisioning.
+  `job_id` is `null` when nothing needed deferring.
 - `require_template_exists` gates every template-file op — `files/` on disk is
   the source of truth, so there is no in-memory buffer and the template must be
   saved first. The file routes are **independent of `templates/save`**, which
   writes metadata only.
-- `normalize_template_rel` is the traversal/reserved-name guard on every
-  template-file write.
+- `normalize_template_rel` delegates to `validated::SafeRelativePath` and is the
+  traversal/reserved-name guard on every template-file write; template slugs use
+  `validated::TemplateSlug` before any `paths::template_*` join.
 
 Layout:
 - `src/ui/mod.rs` — the HTTP server (`std::net::TcpListener`, one thread per
   connection, no web framework) + all API handlers. `pub fn serve(address)`
   blocks; `pub fn route_request(method, route, body) -> Response` is the pure
-  router (no socket) and is what `tests/ui_server.rs` drives. `pub fn
-  health_check(address)` lets `fastf ui` detect an already-running server. Write
-  routes serialize through a private `static WRITE_LOCK: Mutex<()>`.
+  router (no socket) and is what `tests/ui_server.rs` drives. `serve` refuses
+  non-loopback resolutions and socket handling validates loopback `Host` plus a
+  same-authority `Origin` when present. `health_check(address)` detects a running
+  server. Synchronous handler entry uses private process-local `WRITE_LOCK`;
+  shared mutations use cross-process `DataLock`.
 - `src/ui/assets.rs` — the four frontend files embedded via `include_str!`. If
   `FASTF_UI_DIR` is set, files are read from disk instead (frontend live-reload).
 - `src/ui/web/` — `index.html`, `app.js`, `styles.css`, `icon.svg` (vanilla JS,
@@ -42,19 +46,23 @@ Layout:
   `--address`, `--no-open`, `--app` (Chromium/Chrome app window with a dedicated
   `~/.cache/fast-folder-ui/chromium` profile; falls back to the default browser).
 
-The server calls the library directly (`project::plan`/`create`, `Config`,
-`Counters`, `template`, `library` discovery, `post_create`), so the UI and CLI
-share one source of truth and the same on-disk files. The `Ui` arm in `main.rs`
-forwards to `cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on the router).
+The server calls shared `core::operations` for mutations and library/config
+readers for queries, so the UI, TUI, and CLI share validation, locking, and
+on-disk state. The `Ui` arm in `main.rs` forwards to `cli::ui::run`. `Response`
+derives `Debug` (tests `unwrap_err` on the router).
 
 ## UI gotchas
 - v0.6: Only `GET` (assets + read APIs) and `POST` (writes) are routed —
   `HEAD`/others 404. Browsers GET, so this is fine; don't be surprised when
   `curl -I` shows the JSON 404 error body's content-type.
-- v0.6: Adding a new write endpoint? Take `lock_writes()` inside the match arm
-  (like `/api/create`) so it serializes with the other writers; reads don't lock.
-- v0.6: Keep the server **loopback-only**. There is no auth/CSRF. `FASTF_UI_DIR`
-  is the frontend dev override (serve assets from disk instead of embedded).
+- v1.5.1: Adding a write endpoint? Use `lock_writes()` for UI-handler
+  serialization and route the actual application mutation through
+  `core::operations`/`DataLock`. Reads do not take either lock.
+- v1.5.1: The deployment boundary is enforced as **loopback-only**. `serve` and
+  `health_check` reject non-loopback resolutions; socket requests require a
+  loopback `Host` with the listener port and an `http` same-authority `Origin`
+  when supplied. There is still no authentication; `FASTF_UI_DIR` only changes
+  the frontend asset source.
 - v0.6: Embedded assets mean a frontend edit needs a `cargo build` to ship — but
   `FASTF_UI_DIR=$PWD/src/ui/web fastf ui` serves from disk for dev without rebuilding.
 - v0.7/v0.8: Path/query GET routes (`/api/project?path=`, `/api/job/<id>`) are
@@ -64,21 +72,19 @@ forwards to `cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on th
   the in-module `query_param` + `percent_decode` (no url crate); the frontend uses
   `encodeURIComponent`, which emits `%20` (not `+`) for spaces, so the decoder does
   NOT treat `+` as space (paths can legitimately contain `+`).
-- v0.7: `register_core` is the non-interactive engine; `fastf register`'s `run` is a
-  thin interactive shell over it (rename preview + pinfo-overwrite prompts there,
-  not in core). `RegisterArgs` (CLI) and `RegisterOptions` (engine) are separate
-  structs — `run` translates one to the other. The CLI rename-confirm shows the
-  exact `old → new` name via a preview computed from `build_plan_vars` +
-  `desired_rename` (shared helpers), reading `counter.get()+1` without incrementing;
-  the engine recomputes the same value and is authoritative.
-- v0.7/v0.9: `PinfoConflict` controls the existing-`PROJECT_INFO.md` policy. `Abort`
-  bails BEFORE any write (so the UI can confirm + retry with `overwrite:true`); `Skip`
-  keeps the existing file (no rewrite, no cache_upsert — used by `--recursive`);
-  `Overwrite` rewrites it. The UI sends `Abort` unless the user confirmed overwrite;
-  the CLI single-register sends `Overwrite`/`Skip` from its prompt.
-- v0.7: The UI `apply` routes pass **raw** variables to `project::apply_plan` /
-  `apply` (no transform/sanitize) — matching `fastf apply`'s semantics, NOT `new`'s.
-  Don't "fix" this to apply transforms; it would diverge the UI from the CLI apply.
+- v1.5.1: `core::operations::register` is the noninteractive engine; CLI prompts
+  and the UI JSON handler translate into `RegisterOptions`. It revalidates a
+  direct configured-base child under `DataLock`, rejects duplicate recovered
+  IDs, commits metadata first, then reports optional rename/apply failures as
+  partial outcomes.
+- v1.5.1: `PinfoConflict` controls existing `PROJECT_INFO.md`. `Abort` bails
+  before any write so the UI can confirm and retry; `Skip` is an immediate no-op
+  with no validation, rename, apply, or cache mutation; `Overwrite` commits new
+  registration metadata. The UI sends `Abort` until overwrite is confirmed.
+- v1.5.1: CLI/UI preview, create, register, and apply pass raw variables through
+  `core::vars`; required/select/default validation and rendered transforms are
+  centralized. Apply recomputes occupancy beneath `DataLock`, and every existing
+  directory entry is occupied.
 - v0.7: `/api/search` reuses `core::query` exactly, so the deliberate "path excluded
   from free-text" guarantee holds (there's a regression test). Empty `terms` returns
   all projects (newest first) — the server-side equivalent of the plain list.
@@ -92,10 +98,11 @@ forwards to `cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on th
   `None`, lazily filled) keyed by `job-<n>` (`AtomicUsize`). The copy thread updates
   an `Arc<Mutex<Progress>>`; `spawn_copy_job` evicts finished jobs on each new create
   so the map stays bounded, so the frontend `pollJob` treats a `/api/job` 404 as done.
-  The background copy must NOT take `WRITE_LOCK` (it only writes inside the new
-  project's folder) — holding it would serialize a 200 MB copy against every other UI
-  write, defeating the point. Deferred files are always verbatim (threshold ≥ text cap),
-  so `copy_job` never needs vars.
+  The background copy must not take process-local `WRITE_LOCK`, but it owns the
+  `DataLock` returned by `operations::create` until files land and the
+  provisioning flag/journal are cleared. Deferred files are always verbatim
+  (threshold ≥ text cap), so `copy_job` never needs vars. Post-create actions run
+  only after the worker drops `DataLock`.
 - v0.8: `showSuccess(result)` (frontend) now takes the whole create response (not just
   `result.project`) so it can read `job_id`. The progress bar updates only the
   `#job-progress` node inside the imperatively-built success overlay — no `render()`.
@@ -106,8 +113,8 @@ forwards to `cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on th
   four dedicated endpoints and re-fetches `state.templateFiles`. Because they act on
   disk, they need the on-disk slug (`state.templateOriginalSlug`, not the edited
   slug) and the template to exist — new templates show a "save first" notice.
-- v0.8 (phase 3): file writes reuse `assets::copy_file(force_verbatim=true)` for
-  ingestion (byte copy, atomic `.part`+rename) and `normalize_template_rel` for the
+- v1.4.1: file writes reuse `assets::copy_file(force_verbatim=true)` for
+  ingestion (byte copy, exclusive unique-temp + rename) and `normalize_template_rel` for the
   traversal/reserved guard. Don't interpolate at ingestion time — a template asset
   is stored raw and only interpolated at project-create time. `list_template_files`
   omits directories (empty dirs are the `structure:` section's job).
@@ -119,11 +126,21 @@ forwards to `cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on th
   `library::reindex`; `set_config` accepts a `bases` array (trimmed, non-empty).
   The `/api/projects/prune` route + `prune_projects` fn are **gone** (the cache
   self-heals) — a POST to it 404s (regression test).
-- v0.11: `POST /api/project/move` runs OFF `WRITE_LOCK` (background thread) so a slow
-  network copy can't block other UI writes — mirroring the create copy job. The two
-  base-cache writes it does are atomic + best-effort (last-writer-wins, self-heals via
-  the staleness gate), so not holding the global lock is safe. Don't re-add
-  `lock_writes()` to that arm.
+- v1.5.1: `POST /api/project/move` runs off `WRITE_LOCK` on a background thread;
+  `operations::move_project` holds `DataLock` for the complete move and reloads
+  configured source/target identity under it. Other mutations wait; reads and
+  cancellation remain available.
+- v1.5.0: `/api/state` exposes valid/invalid v2 work and
+  `obsolete-create-v1`/`obsolete-move-v1`. `/api/reconcile` may resume deferred
+  v2 creates, discard unpublished v2 moves, or finish verified cleanup. Pre-v2
+  marker bytes and related paths remain untouched. Move jobs may add
+  `cleanup_pending`/`warning` after successful publication.
+- v1.5.1: destructive routes, tags, notes, register, apply, config, counters, and
+  reindex use `core::operations`. Never authorize a mutation from a request path
+  or cached `Project` alone.
+- v1.4.1: UI preview/create `base_dir` overrides and Settings `base_dir` go
+  through `resolve_base_dir_input`; Settings `bases` go through
+  `expand_base_path`. Relative input is rejected and `~` is expanded.
 - v0.11 (UI polish): the Projects table supports **multi-select bulk move** — a
   `.project-select` checkbox per row + a select-all header checkbox feed
   `state.selected` (a `Set` of paths); `bulkBar()` renders the toolbar (target-base
@@ -193,7 +210,7 @@ forwards to `cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on th
   cause is Chromium GPU-surface corruption after long suspend/occlusion — app code can
   only mitigate, so both the prevention flags and the wake-up reload exist.
 - v1.0.2: **native path pickers** — `POST /api/pick-path {kind: "folder"|"file", start?}`
-  opens the OS dialog server-side (loopback = same machine): Linux kdialog→zenity
+  opens the OS dialog server-side (supported loopback use = same machine): Linux kdialog→zenity
   (missing binary falls through, nonzero exit = cancel → `path: null`), Windows
   PowerShell WinForms dialogs (`-STA` required; `CREATE_NO_WINDOW` creation flag so no
   console flashes under the windowless fastf-ui), macOS osascript. Guarded by a

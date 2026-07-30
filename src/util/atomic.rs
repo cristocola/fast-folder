@@ -9,32 +9,59 @@
 //!
 //! The temp name carries the process id and a per-process counter, so two
 //! processes writing the same target never collide on the temp itself. A
-//! leftover `*.tmp` is harmless scaffolding: `reconcile` sweeps it, and readers
-//! ignore it.
+//! leftover unique temp is harmless scaffolding. Recovery never sweeps files
+//! by suffix; only the operation that created an exact temp path may remove it.
 
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Suffix identifying our scratch files. Kept public so the reconcile sweep and
-/// the cache/verification walkers can recognize (and ignore) them.
+/// Suffix used in our unique scratch names. This is diagnostic only: payload
+/// walkers and recovery never infer ownership from a filename suffix.
 pub const TMP_SUFFIX: &str = ".tmp";
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// A unique sibling temp path for `target`, e.g. `config.toml.4812.3.tmp`.
 /// Siblings matter: the rename must stay on one filesystem to be atomic.
-fn temp_path_for(target: &Path) -> PathBuf {
+pub(crate) fn temp_path_for(target: &Path) -> PathBuf {
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut name = target.as_os_str().to_owned();
     name.push(format!(".{}.{}{}", std::process::id(), seq, TMP_SUFFIX));
     PathBuf::from(name)
 }
 
+/// Exclusively claim a unique sibling temp path. The counter makes collisions
+/// exceptional, while `create_new` makes PID reuse or a deliberately planted
+/// filename safe: an active writer never truncates a temp it did not create.
+pub(crate) fn create_temp_for(target: &Path) -> Result<(PathBuf, fs::File)> {
+    const MAX_ATTEMPTS: usize = 64;
+    for _ in 0..MAX_ATTEMPTS {
+        let temp = temp_path_for(target);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => return Ok((temp, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("creating temp file {}", temp.display()));
+            }
+        }
+    }
+    anyhow::bail!(
+        "could not claim a unique temp file for {} after {MAX_ATTEMPTS} attempts",
+        target.display()
+    )
+}
+
 /// Write `contents` to `path` atomically: full write into a sibling temp,
-/// flushed to disk, then renamed over the target. A reader either sees the old
-/// file or the complete new one, never a partial write.
+/// flushed and synced through the OS, then renamed over the target. A reader
+/// either sees the old file or the complete new one, never a partial write.
+/// This is not a storage-level power-loss durability guarantee.
 ///
 /// `fs::rename` replaces an existing destination on both Unix and Windows
 /// (std uses `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING`), so this works for
@@ -47,10 +74,8 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
             .with_context(|| format!("creating parent dirs for {}", path.display()))?;
     }
 
-    let tmp = temp_path_for(path);
+    let (tmp, file) = create_temp_for(path)?;
     let result = (|| -> Result<()> {
-        let file = fs::File::create(&tmp)
-            .with_context(|| format!("creating temp file {}", tmp.display()))?;
         {
             use std::io::Write;
             let mut writer = std::io::BufWriter::new(&file);
@@ -61,12 +86,13 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
                 .flush()
                 .with_context(|| format!("flushing {}", tmp.display()))?;
         }
-        // Durability: the bytes must reach the disk before the rename, or a
-        // power loss can leave a renamed-but-empty file.
+        // Request an OS flush before publication. Propagate failures, while
+        // making no storage-level durability promise.
         file.sync_all()
             .with_context(|| format!("syncing {}", tmp.display()))?;
         Ok(())
     })();
+    drop(file);
 
     if let Err(err) = result {
         let _ = fs::remove_file(&tmp);
@@ -87,8 +113,48 @@ pub fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     write(path, raw)
 }
 
-/// True for the scratch files this module leaves mid-write. Used by the
-/// reconcile sweep and by tree walks that must not count scaffolding.
+/// Stream one file into a unique atomic sibling, propagating write, flush, and
+/// sync failures before publication.
+pub fn copy(src: &Path, path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent dirs for {}", path.display()))?;
+    }
+
+    let (tmp, destination) = create_temp_for(path)?;
+    let result = (|| -> Result<()> {
+        let source = fs::File::open(src).with_context(|| format!("opening {}", src.display()))?;
+        let mut reader = std::io::BufReader::with_capacity(1024 * 1024, source);
+        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, &destination);
+        std::io::copy(&mut reader, &mut writer)
+            .with_context(|| format!("copying {} to {}", src.display(), tmp.display()))?;
+        use std::io::Write;
+        writer
+            .flush()
+            .with_context(|| format!("flushing {}", tmp.display()))?;
+        drop(writer);
+        destination
+            .sync_all()
+            .with_context(|| format!("syncing {}", tmp.display()))?;
+        Ok(())
+    })();
+    drop(destination);
+
+    if let Err(error) = result {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    crate::util::fs_retry::rename(&tmp, path)
+        .with_context(|| format!("finalizing {}", path.display()))
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
+}
+
+/// True for the scratch naming scheme this module creates. This is diagnostic
+/// only: cleanup and tree walking never infer ownership from a suffix.
 pub fn is_temp_file(name: &str) -> bool {
     name.ends_with(TMP_SUFFIX)
 }

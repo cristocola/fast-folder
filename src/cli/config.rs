@@ -176,160 +176,160 @@ pub fn set(key: &str, value: &str) -> Result<()> {
     // `config set` calls each write back their own copy of the whole file and
     // one update is silently lost. A release-mode test caught this; the debug
     // build happened to be slow enough to serialize the processes by luck.
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    let mut config = Config::load()?;
     let normalized = key.replace('-', "_");
-    match normalized.as_str() {
-        "base_dir" => {
-            // Same validation as first-run onboarding — see
-            // `config::resolve_base_dir_input`. Storing the raw string let a
-            // quoted `~/Projects` become a literal directory named `~`, and a
-            // relative path scatter projects wherever the command ran.
-            let resolved = crate::core::config::resolve_base_dir_input(value)?;
-            config.base_dir = resolved.display().to_string();
-            println!(
-                "Set base_dir = {}",
-                crate::util::paths::display_path(&resolved)
-            );
-        }
-        "editor" => {
-            config.editor = value.to_string();
-            println!("Set editor = {}", value);
-        }
-        "default_template" => {
-            config.default_template = value.to_string();
-            println!("Set default_template = {}", value);
-        }
-        "date_format" => {
-            let preview = Local::now().format(value).to_string();
-            if preview.is_empty() {
-                bail!(
-                    "invalid date format '{}' — must be a valid strftime string (e.g. %Y-%m-%d)",
-                    value
+    crate::core::operations::update_config(|config| {
+        match normalized.as_str() {
+            "base_dir" => {
+                // Same validation as first-run onboarding — see
+                // `config::resolve_base_dir_input`. Storing the raw string let a
+                // quoted `~/Projects` become a literal directory named `~`, and a
+                // relative path scatter projects wherever the command ran.
+                let resolved = crate::core::config::resolve_base_dir_input(value)?;
+                config.base_dir = resolved.display().to_string();
+                println!(
+                    "Set base_dir = {}",
+                    crate::util::paths::display_path(&resolved)
                 );
             }
-            config.date_format = value.to_string();
-            println!("Set date_format = {}  (today: {})", value, preview);
-        }
-        "preview_lines" => {
-            config.preview_lines = parse_usize(value)?;
-            println!("Set preview_lines = {}", config.preview_lines);
-        }
-        "prompt_open_after_create" => {
-            config.prompt_open_after_create = parse_bool(value)?;
-            println!(
-                "Set prompt_open_after_create = {}",
-                config.prompt_open_after_create
-            );
-        }
-        "confirm_create" => {
-            config.confirm_create = parse_bool(value)?;
-            println!("Set confirm_create = {}", config.confirm_create);
-        }
-        "show_banner" => {
-            config.show_banner = parse_bool(value)?;
-            println!("Set show_banner = {}", config.show_banner);
-        }
-        "bases" => {
-            // Comma-separated list of extra base directories to index. Empty
-            // value clears the list.
-            //
-            // Each entry gets the same `~`-expansion and absolute-path check as
-            // base_dir, but an entry that does not *exist* is only a warning:
-            // an unmounted drive is a legitimate base, and discovery already
-            // treats an absent one as honestly empty.
-            let mut resolved = Vec::new();
-            for raw in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                let expanded = crate::core::config::expand_base_path(raw)?;
-                if !expanded.is_dir() {
-                    eprintln!(
-                        "{} {} is not mounted right now — keeping it; it will be indexed when it appears",
-                        "note:".yellow(),
-                        crate::util::paths::display_path(&expanded)
+            "editor" => {
+                config.editor = value.to_string();
+                println!("Set editor = {}", value);
+            }
+            "default_template" => {
+                config.default_template = value.to_string();
+                println!("Set default_template = {}", value);
+            }
+            "date_format" => {
+                let preview = Local::now().format(value).to_string();
+                if preview.is_empty() {
+                    bail!(
+                        "invalid date format '{}' — must be a valid strftime string (e.g. %Y-%m-%d)",
+                        value
                     );
                 }
-                resolved.push(expanded.display().to_string());
+                config.date_format = value.to_string();
+                println!("Set date_format = {}  (today: {})", value, preview);
             }
-            config.bases = resolved;
-            if config.bases.is_empty() {
-                println!("Cleared bases");
-            } else {
-                println!("Set bases = {}", config.bases.join(", "));
+            "preview_lines" => {
+                config.preview_lines = parse_usize(value)?;
+                println!("Set preview_lines = {}", config.preview_lines);
             }
-        }
-        "recent_default_limit" => {
-            let n = parse_usize(value)?;
-            if n == 0 {
-                bail!("recent_default_limit must be at least 1");
-            }
-            config.recent_default_limit = n;
-            println!("Set recent_default_limit = {}", config.recent_default_limit);
-        }
-        "register_naming_pattern" => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                bail!("register_naming_pattern cannot be empty");
-            }
-            // `{name}` and `{id}` are the safety net — without them the pattern
-            // would silently rename multiple registered folders to the same path.
-            if !trimmed.contains("{id}") {
-                bail!(
-                    "register_naming_pattern must contain {{id}} so registered folders get unique names; got '{}'",
-                    trimmed
+            "prompt_open_after_create" => {
+                config.prompt_open_after_create = parse_bool(value)?;
+                println!(
+                    "Set prompt_open_after_create = {}",
+                    config.prompt_open_after_create
                 );
             }
-            config.register_naming_pattern = trimmed.to_string();
-            println!(
-                "Set register_naming_pattern = {}",
-                config.register_naming_pattern
-            );
-        }
-        "on_name_collision" => {
-            let v = value.trim().to_lowercase();
-            if v != "suffix" && v != "error" {
-                bail!("expected 'suffix' or 'error'; got '{}'", value.trim());
+            "confirm_create" => {
+                config.confirm_create = parse_bool(value)?;
+                println!("Set confirm_create = {}", config.confirm_create);
             }
-            config.on_name_collision = v;
-            println!(
-                "Set on_name_collision = {}  ({})",
-                config.on_name_collision,
-                if config.suffix_on_name_collision() {
-                    "a taken folder name gets _2, _3, …"
-                } else {
-                    "a taken folder name is refused"
+            "show_banner" => {
+                config.show_banner = parse_bool(value)?;
+                println!("Set show_banner = {}", config.show_banner);
+            }
+            "bases" => {
+                // Comma-separated list of extra base directories to index. Empty
+                // value clears the list.
+                //
+                // Each entry gets the same `~`-expansion and absolute-path check as
+                // base_dir, but an entry that does not *exist* is only a warning:
+                // an unmounted drive is a legitimate base, and discovery already
+                // treats an absent one as honestly empty.
+                let mut resolved = Vec::new();
+                for raw in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    let expanded = crate::core::config::expand_base_path(raw)?;
+                    if !expanded.is_dir() {
+                        eprintln!(
+                            "{} {} is not mounted right now — keeping it; it will be indexed when it appears",
+                            "note:".yellow(),
+                            crate::util::paths::display_path(&expanded)
+                        );
+                    }
+                    resolved.push(expanded.display().to_string());
                 }
-            );
-        }
-        "post_create.git_init" => {
-            config.post_create.git_init = parse_bool(value)?;
-            println!("Set post_create.git_init = {}", config.post_create.git_init);
-        }
-        "post_create.reveal" => {
-            config.post_create.reveal = parse_bool(value)?;
-            println!("Set post_create.reveal = {}", config.post_create.reveal);
-        }
-        "post_create.open_in_editor" => {
-            config.post_create.open_in_editor = parse_bool(value)?;
-            println!(
-                "Set post_create.open_in_editor = {}",
-                config.post_create.open_in_editor
-            );
-        }
-        "post_create.print_path" => {
-            config.post_create.print_path = parse_bool(value)?;
-            println!(
-                "Set post_create.print_path = {}",
-                config.post_create.print_path
-            );
-        }
-        other => bail!(
-            "unknown config key '{}'. Valid keys: base-dir, bases, editor, default-template, date-format, \
+                config.bases = resolved;
+                if config.bases.is_empty() {
+                    println!("Cleared bases");
+                } else {
+                    println!("Set bases = {}", config.bases.join(", "));
+                }
+            }
+            "recent_default_limit" => {
+                let n = parse_usize(value)?;
+                if n == 0 {
+                    bail!("recent_default_limit must be at least 1");
+                }
+                config.recent_default_limit = n;
+                println!("Set recent_default_limit = {}", config.recent_default_limit);
+            }
+            "register_naming_pattern" => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    bail!("register_naming_pattern cannot be empty");
+                }
+                // `{name}` and `{id}` are the safety net — without them the pattern
+                // would silently rename multiple registered folders to the same path.
+                if !trimmed.contains("{id}") {
+                    bail!(
+                        "register_naming_pattern must contain {{id}} so registered folders get unique names; got '{}'",
+                        trimmed
+                    );
+                }
+                config.register_naming_pattern = trimmed.to_string();
+                println!(
+                    "Set register_naming_pattern = {}",
+                    config.register_naming_pattern
+                );
+            }
+            "on_name_collision" => {
+                let v = value.trim().to_lowercase();
+                if v != "suffix" && v != "error" {
+                    bail!("expected 'suffix' or 'error'; got '{}'", value.trim());
+                }
+                config.on_name_collision = v;
+                println!(
+                    "Set on_name_collision = {}  ({})",
+                    config.on_name_collision,
+                    if config.suffix_on_name_collision() {
+                        "a taken folder name gets _2, _3, …"
+                    } else {
+                        "a taken folder name is refused"
+                    }
+                );
+            }
+            "post_create.git_init" => {
+                config.post_create.git_init = parse_bool(value)?;
+                println!("Set post_create.git_init = {}", config.post_create.git_init);
+            }
+            "post_create.reveal" => {
+                config.post_create.reveal = parse_bool(value)?;
+                println!("Set post_create.reveal = {}", config.post_create.reveal);
+            }
+            "post_create.open_in_editor" => {
+                config.post_create.open_in_editor = parse_bool(value)?;
+                println!(
+                    "Set post_create.open_in_editor = {}",
+                    config.post_create.open_in_editor
+                );
+            }
+            "post_create.print_path" => {
+                config.post_create.print_path = parse_bool(value)?;
+                println!(
+                    "Set post_create.print_path = {}",
+                    config.post_create.print_path
+                );
+            }
+            other => bail!(
+                "unknown config key '{}'. Valid keys: base-dir, bases, editor, default-template, date-format, \
              preview-lines, prompt-open-after-create, confirm-create, show-banner, \
              recent-default-limit, register-naming-pattern, on-name-collision, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
-            other
-        ),
-    }
-    config.save()?;
+                other
+            ),
+        }
+        Ok(())
+    })?;
     Ok(())
 }

@@ -15,8 +15,8 @@ here.
 - **v0.10 — base-aware projects.** Every `Project` carries the base it was found
   under; `fastf move` relocates between configured bases. See "Base-aware projects".
 - **v0.11 — durable provisioning + verified moves.** A move never removes the
-  source until the destination is verified; `fastf reconcile` recovers. See
-  "Durable provisioning + verified moves".
+  source until the destination is verified. Its original recovery design is
+  superseded by v1.4.1 containment; see "Durable provisioning + verified moves".
 - **v1.0 — production release.** Three-tier data dir, CI + release binaries
   (linux-gnu, linux-musl, windows-msvc — **no macOS**, cristoc can't test it), AUR
   packages, man pages, unregister/delete/rename. See "Data-dir resolution" and
@@ -40,6 +40,17 @@ here.
   rows get current logical-byte snapshots without changing project metadata,
   cache schemas, `/api/state`, or script-facing CLI output. See "Live project
   sizes".
+- **v1.4.1 — containment before recovery.** Filename suffixes never imply
+  ownership, pre-v2 markers are report-only, move fallback is EXDEV-only, and
+  typed slug/relative-path validation guards every template write. The canonical
+  forward plan is [`ROADMAP.md`](ROADMAP.md).
+- **v1.5.0 — scoped recovery v2.** Cross-device moves use private target-base
+  transactions with typed phases and native-path manifests; deferred creates
+  journal only validated relative paths. Reconcile is scoped and idempotent.
+- **v1.5.1 — one mutation boundary.** CLI, TUI, and UI mutations call
+  `core::operations`, which validates, takes `DataLock`, reloads authoritative
+  state, mutates, and refreshes caches. The browser server enforces loopback and
+  validates `Host`/same-origin `Origin`.
 
 ## Build commands
 
@@ -64,9 +75,10 @@ FASTF_UI_DIR=src/ui/web cargo run -- ui   # frontend live-reload (assets from di
 node --check src/ui/web/app.js            # frontend sanity check — run after every edit
 ```
 
-Test count is **316 on Linux**; `cargo test --release` runs fewer because the
-failpoint tests are `#[cfg(debug_assertions)]`, `windows_semantics.rs` reports
-only 3 of its cases off Windows, and the pty suites are unix-only.
+Debug and release test counts differ because failpoint tests are
+`#[cfg(debug_assertions)]`, several Windows semantics cases run only on Windows,
+and the pty suites are Unix-only. Do not hard-code a total here; run the complete
+gates in [`ROADMAP.md`](ROADMAP.md).
 
 ## Project layout
 
@@ -83,8 +95,11 @@ Gotchas sections below for the parts that bite.
   (`general`, `client-project`); domain templates live in `examples/templates/` and
   are NOT bundled.
 - `src/core/` — the library proper. `library.rs` (filesystem-as-truth discovery),
-  `project.rs` (plan/create/apply), `assets.rs` (the v0.8 copy engine),
-  `provisioning.rs` (crash-safe markers + `reconcile`), `project_info.rs`
+  `operations.rs` (shared mutation boundary), `project.rs` (plan/create/apply),
+  `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus
+  report-only pre-v2 discovery), `template_import.rs` (from-folder engine),
+  `assets.rs` (template-file copy engine), `validated.rs` (typed slugs/relative
+  paths), `project_info.rs`
   (`PROJECT_INFO.md` read/write/mutate), `template.rs`, `naming.rs`, `query.rs`,
   `config.rs`, `counter.rs`, `vars.rs`, `post_create.rs`.
 - `src/util/` — all v1.1 hardening primitives: `lockfile` (cross-process `DataLock`),
@@ -92,10 +107,10 @@ Gotchas sections below for the parts that bite.
   (Ctrl-C rollback), `faults` (failpoints, compiled out of release), `paths`
   (`install_dir` resolution + `display_path`), `tree_size` (all-or-nothing,
   non-following logical-byte snapshots).
-- `src/cli/` — one module per subcommand. `move_project.rs` is named that way because
-  `move` is a keyword. Several commands split a non-interactive core from an
-  interactive shell (`register::register_core`, `template::from_folder`) so the UI and
-  tests can call the core without a TTY.
+- `src/cli/` — one module per subcommand. `move_project.rs` is named that way
+  because `move` is a keyword. CLI modules gather prompts and render outcomes;
+  noninteractive register/from-folder behavior lives under `core/` so UI code
+  never depends on a CLI implementation.
 - `src/tui/` — `menu.rs` (interactive menu + grouped Settings submenus) and
   `template_builder.rs`.
 - `src/ui/` — browser UI. Has its own CLAUDE.md.
@@ -116,7 +131,13 @@ Gotchas sections below for the parts that bite.
 `paths::try_install_dir() -> Result<(PathBuf, DirMode)>` resolves the one data dir (config + templates + counters) with three tiers: (1) `FASTF_INSTALL_DIR` env (tests + power users), (2) **portable mode** — the exe's canonicalized parent iff it contains `config.toml` or `templates/` (keeps binary-plus-data folders working: `target/release/`, USB sticks), (3) **user config dir** — `$XDG_CONFIG_HOME/fastf` / `~/.config/fastf` (unix) or `%APPDATA%\fastf` (Windows), hand-rolled (no `dirs` crate). Tier 3 is what makes a package-manager install to read-only `/usr/bin` work: `ensure_bootstrapped()` lazily `create_dir_all`s the dir on first run. `install_dir() -> PathBuf` keeps its infallible signature (~30 call sites untouched) but never panics — it exits(2) with an actionable message on the unreachable error path; `main.rs` calls `try_install_dir()?` first thing so real users get a pretty anyhow error instead. No memoization (tests swap the env var in-process). Surfaced via `fastf paths` (cli/paths_cmd.rs), a mode line in `config show`, and `dir_mode` in `/api/state`. Bootstrap is **skipped** for `completions`/`mangen` so packaging steps never write to $HOME. (Projects themselves live in the bases; each base carries its own `.fastf-index.json` cache — v0.9.)
 
 ### Unregister / delete / rename (v1.0)
-Three `library` fns, mirroring move's conventions (callers restrict to configured bases; core fns guard the basics): `unregister_project` removes only `PROJECT_INFO.md` + cache entry (files stay); `delete_project` refuses unless the path is a direct child of its base AND still contains `PROJECT_INFO.md`, then `remove_dir_all` + cache_remove; `rename_project` sanitizes the name (rejects empty / dot-prefixed — discovery skips dot dirs / same-name), same-parent atomic `fs::rename`, patches metadata `folder`+`path` best-effort, cache remove+upsert. UI routes (all under WRITE_LOCK): `POST /api/project/unregister {path}`, `/delete {path, confirm_name}` (server re-checks the typed folder name), `/rename {path, folder}`. Drawer buttons gated on `record` (project must be discovered); delete uses a typed-phrase confirm modal. TUI: dynamic tail entries in `project_action_menu` (Rename / Unregister / Delete before Back/Quit — keep them index-relative).
+Three compatibility `library` fns guard direct-child + real matching metadata;
+application interfaces call their `*_configured` variants, which acquire
+`DataLock`, reload config, and revalidate membership/identity before mutation.
+`unregister` removes only `PROJECT_INFO.md` + cache entry (files stay); `delete`
+then removes the tree; `rename` sanitizes, same-parent renames, patches display
+metadata best-effort, and refreshes caches. UI delete still re-checks the typed
+folder name. TUI tail action indices remain dynamic.
 
 ### Cross-platform paths
 Folder paths in templates (structure names, file paths) always use `/` as the separator in YAML — Rust's `PathBuf::join()` handles conversion to `\` on Windows at runtime. Users should always enter `/` in templates and `base-dir` config, though Windows also accepts backslashes in config values.
@@ -137,7 +158,7 @@ Propagating on **every create** is load-bearing, not tidiness: if Linux mints ID
 
 `Counters::save_base` is monotonic and returns **whether it wrote**, so `propagate` can call `library::touch_cache(base)` only for bases it actually touched. That re-stamp matters: writing into a base bumps its directory mtime, which `cache_is_stale` reads as "a project appeared", so without it every create would force a full rescan of every base. The counter write provably changes no project, so saying the cache is still good is honest — and safe because fastf's own writers are serialized by `DataLock`. Guarded by `propagating_the_counter_does_not_invalidate_other_bases_caches`.
 
-**`Counters::next_value(cfg, counters)` is the one expression for "which ID comes next"** — `project::plan`, `register_core`, and register's rename preview all call it. They did not before, and the preview confirmed `..._ID0001` while the commit wrote `..._ID0011`.
+**`Counters::next_value(cfg, counters)` is the one expression for "which ID comes next"** — `project::plan`, `operations::register`, and register's rename preview all call it. They did not before, and the preview confirmed `..._ID0001` while the commit wrote `..._ID0011`.
 
 **There is no way to lower it, by construction.** `fastf id set` refuses anything at or below the floor and names what is holding it; `fastf id reset` is gone (kept as a hidden subcommand that explains itself and points at `id sync`); `POST /api/counter` applies the same rule. v1.2.0 let all three *report success* for a write that `floor` then ignored.
 
@@ -165,19 +186,25 @@ Two separate functions in `core/naming.rs`:
 When adding new code: if you're building a *path component name*, call `interpolate_name`. If you're building *file contents*, call `interpolate`. Do not mix them.
 
 ### Path-escape safety
-`ensure_relative_safe_path()` rejects absolute paths, Windows drive letters, leading separators, and any `..` segment. Enforced in two places:
-1. `Template::validate()` at template-load time (so broken templates fail at `fastf template list`).
-2. At disk-write time (defence in depth): `project::copy_template_files` for
-   creates, `project::apply`, and `ui::normalize_template_rel` for the
-   template-file routes. (Pre-v0.8 this was `create_file()`, which no longer
-   exists — files come from the `files/` subtree via `core::assets` now.)
+`validated::TemplateSlug` accepts one ASCII alphanumeric/`-`/`_` component.
+`validated::SafeRelativePath` normalizes slash styles and rejects empty/dot
+components, absolute/drive paths, and `..`; safe nested paths such as
+`src/components` remain valid. `naming::ensure_relative_safe_path` is only a
+compatibility delegate.
+
+Validation happens before path derivation at template lookup/save and on raw
+`files` plus `structure` entries. `project::plan` then validates every physical
+and structure path again **after interpolation**, before claiming a folder;
+create/apply/UI file routes repeat the typed boundary check. Base overrides use
+`config::resolve_base_dir_input` (`~` expansion + absolute-only + canonicalize),
+including CLI `new`, UI preview/create, and UI settings.
 
 ### Filesystem-as-truth library (`core/library.rs`, v0.9)
 There is **no `projects.jsonl`**. The project list is discovered from the filesystem: a folder is a project iff it holds a `PROJECT_INFO.md`, whose frontmatter `id` is authoritative (folder name is cosmetic, never consulted for discovery). `discover(cfg)` unions `cfg.effective_bases()` (`base_dir` + config `bases`), newest-first.
 
 Each base carries a **disposable** `.fastf-index.json` cache at its root, co-located with the projects so it travels with them and is portable (entries store a base-relative `dir`, valid across `/mnt/…` and `D:\…`). The cache is never authoritative — `discover_base` self-heals: if the base's mtime is newer than the cache (or either can't be stat'd) it rescans + rewrites; otherwise it trusts cached metadata but existence-checks each entry and drops (rewriting away) any whose folder disappeared. **No manual prune, ever** — the "missing" state is transient. `fastf reindex` forces a full rescan for external edits fastf can't observe.
 
-`max_id(cfg)` is **read-only** (reads a fresh cache or scans, never writes) so it's safe to call from `plan()`/preview. `resolve(cfg, query)` replaces the old `index::resolve_project` (exact-id → id-prefix → name-substring). `cache_upsert`/`refresh_cache` keep the cache fresh after create / tag mutations without a rescan. All cache writes are best-effort and atomic (`.tmp` + rename); a cache error never fails a command. Counter self-heals: `plan()` computes the ID from `max(counters.get(), library::max_id(cfg)) + 1`.
+`max_id(cfg)` is **read-only** (reads a fresh cache or scans, never writes) so it's safe to call from `plan()`/preview. `resolve(cfg, query)` replaces the old `index::resolve_project` (exact-id → id-prefix → name-substring). `cache_upsert`/`refresh_cache` keep the cache fresh after create / tag mutations without a rescan. All cache writes are best-effort and atomic (an exclusively created unique sibling + rename); a cache error never fails a command. Counter self-heals: `plan()` computes the ID from `max(counters.get(), library::max_id(cfg)) + 1`.
 
 ### Live project sizes
 
@@ -195,48 +222,58 @@ fresh discovery and walks without `WRITE_LOCK`; its frontend queue runs at most
 two scans, prioritizes an open drawer, and drops old-generation responses after
 state refresh.
 
-### Durable provisioning + verified moves (v0.11)
+### Contained provisioning + recovery v2 (v1.5.0/v1.5.1)
 
-**Invariant:** the source of a move is never removed until the destination is
-copied **and** verified; every in-flight bulk copy has a durable on-disk marker
-so a crash never strands data silently.
+**Invariant:** a move source is never removed until a complete destination has
+been copied, verified, and published. Every ordinary filename is payload;
+`.tmp`, `.part`, cache-looking, and marker-looking names are never skipped. Copy
+and verification roots must be existing real directories, unsupported links and
+special nodes are rejected, and only EXDEV/ERROR_NOT_SAME_DEVICE enables the
+copy fallback.
 
-**Markers** (`src/core/provisioning.rs`):
-- Create — `.fastf-provisioning.json` in the new project root, one entry per
-  deferred copy (`write_create_marker` → `mark_done` per file → `clear_create`).
-- Move — `.fastf-move-<folder>.json` at the *target base* root, recording
-  `src` / `temp` (`.<folder>.fastf-part`) / `final` / `phase`.
+**Move transactions** (`core::transactions`) live exclusively below the target
+base at `.fastf-transactions/<timestamp-pid-counter>/`. `move.json` contains only
+version, operation id, project id, configured source base, validated source and
+target folder components, and `Copying|ReadyToCommit|CleanupPending`; target and
+staging paths are derived from the transaction's owned location. `manifest.json`
+uses native relative `PathBuf`s and records file/directory type, byte length, and
+source modification time. Copying streams regular files into `staging/` with one
+bounded buffer, creates empty directories, verifies exact path/type/size, then
+rescans source metadata before publication. Target occupancy is rechecked with
+`symlink_metadata`.
 
-**`assets` additions:** `Progress.phase` (`copying|verifying|finalizing|done`);
-`copy_job(job, progress, cancel)` polls a `&AtomicBool` between chunks and removes
-its `.part` on cancel (returns `CANCELLED_MSG`); `jobs_for_tree(src,dst)` →
-`(dirs, files)`; `verify_tree(src,dst)` (size + count + existence, ignoring
-transient scaffolding via `is_transient` — cache/markers/`.part`). `copy_tree`
-is retained (unused by move now, still `pub`).
+`library::move_project() -> Result<Project>` remains the compatibility wrapper;
+application callers use `MoveOutcome { project, cleanup_pending }`. Same-filesystem
+moves are a direct rename with no journal. Before publication, cancellation or a
+failure removes only the owned transaction and leaves source. After publication,
+cancellation is too late; a source-removal failure retains `CleanupPending` and
+reports the destination as published.
 
-**`library::move_project`** delegates to `move_project_with(project, new_base,
-&Mutex<Progress>, &AtomicBool)`: same-fs `fs::rename` fast path, else
-`staged_copy_verify_commit` (marker → copy into staging with progress/cancel →
-`verify_tree` → atomic `rename(temp,final)` → patch metadata `path` + both caches
-→ remove source → clear marker). A verify failure or cancel aborts **before** the
-source is touched (staging + marker cleaned). `scan_base` now skips dot-prefixed
-dirs so a staging folder (which contains a `PROJECT_INFO.md`) never surfaces as a
-phantom project.
+**Create v2** writes `.fastf-create-v2.json` with only the validated template
+slug and template/project-relative deferred-copy paths. A completed create clears
+the metadata provisioning flag before removing the journal. An empty initial
+journal cannot prove which inline interpolated files landed, so it is reported
+for inspection; a deferred journal can resume missing files after identity,
+type, and length checks.
 
-**Recovery:** `provisioning::reconcile(cfg)` resumes pending create copies and
-finishes (source removed) or rolls back (staging discarded, source intact) each
-move marker. Surfaced by `fastf reconcile` (CLI), a UI banner + `POST
-/api/reconcile`, and `provisioning::list_incomplete` folded into `/api/state`.
-Reconcile is **not** run on every CLI command (only `fastf reconcile` /the UI) —
-the never-delete-until-verified design means an unreconciled crash is always
-safe, just untidy.
+**Reconcile** holds `DataLock` for the whole pass. `Copying` and an unpublished
+`ReadyToCommit` discard only the owned transaction. A published
+`ReadyToCommit` compares project identity and saved source/final manifests before
+entering cleanup; `CleanupPending` repeats those checks before source removal.
+Missing configured bases, malformed journals, identity mismatches, and unknown
+states are report-only. The pass is idempotent.
 
-**UI:** `POST /api/project/move` pre-flights the cheap guards synchronously, then
-returns `{ ok, job_id }` and runs the move on a background thread **off
-`WRITE_LOCK`** (it only writes the target staging + atomic caches). The `JOBS`
-registry value is now `JobHandle { progress, cancel }`; `POST /api/job/<id>/cancel`
-sets the flag. Frontend: `showMoveProgress` overlay (copy→verify→finalize bar +
-Cancel), `provisioningBanner()` + `reconcileProvisioning()`, `phaseLabel(job)`.
+**Pre-v2 markers** contain arbitrary absolute paths and are never read as
+authority. `list_incomplete` identifies their own paths and reconcile reports
+them as `obsolete` without parsing, migrating, following, copying, deleting, or
+suffix-sweeping. Never resurrect v1 JSON migration.
+
+**Application/UI:** `core::operations` is the shared mutation entry point.
+Background create/move jobs run off UI `WRITE_LOCK` but retain cross-process
+`DataLock` through completion; reads and cancellation remain available.
+`Progress` keeps existing fields and adds optional `cleanup_pending`/`warning`.
+Post-create commands, editors, and reveals run only after provisioning and after
+the mutation lock is released.
 
 ### Base-aware projects (v0.10)
 
@@ -248,17 +285,13 @@ and `project_from_meta(meta, base, dir)`). The cache format is **unchanged**
 `library::base_label(base)` renders the short display name (last path
 component) used by all list surfaces.
 
-**`library::move_project(project, new_base) -> Result<Project>`** relocates a
-project folder into another base, keeping the folder name:
-1. Bails when `new_base` isn't a dir, equals the current base (canonicalized),
-   or `new_base.join(name)` already exists (mirror of register's rename guard).
-2. Tries `fs::rename`; on ANY error falls back to `assets::copy_tree` +
-   `fs::remove_dir_all` — covers EXDEV (btrfs `~` → NTFS `/mnt/proj`) without
-   fragile errno matching. The copy is **verbatim** (no interpolation, ever).
-3. Patches frontmatter `path` via `write_frontmatter` (best-effort warn —
-   discovery never reads `path`, it's display-truth only). `folder` unchanged.
-4. Two-sided cache update, best-effort: `cache_remove(old_base, old_rel_dir)` +
-   `cache_upsert(new_base, &moved)`.
+**`library::move_project(project, new_base) -> Result<Project>`** keeps the
+historical compatibility shape. The current implementation validates an
+unoccupied configured target, tries `fs::rename`, and falls back to the scoped
+v2 transaction engine only for EXDEV/ERROR_NOT_SAME_DEVICE. Permission, sharing,
+missing-path, and all other rename failures return unchanged. Contents are
+always verbatim; metadata and both disposable base caches are refreshed after a
+completed move.
 
 Move targets are **configured bases only** (`effective_bases()`), enforced by
 every caller (CLI `fastf move`, TUI action menu, UI route) so a moved project
@@ -446,31 +479,45 @@ Shared harness rules — every new harness must follow all of them:
 - v0.8: `Template.files`/`dir`/(text buffer) are `#[serde(skip)]`; `verbatim`/`exclude` use `skip_serializing_if = "Vec::is_empty"` so empty globs don't clutter every `template.yaml`. `load_from_file`/`save_to_file` take `&Path` (was `&PathBuf`) — `&PathBuf` still coerces.
 - v0.8: `interp_rel` interpolates each path segment separately (via `interpolate_name`) so `__` collapse/trim happens *within* a name, never across `/`. Don't run `interpolate_name` on the whole slash-joined path.
 - v0.8: Converting old flat `<slug>.yaml` templates → folder form: `template.yaml` (drop the `files:` block) + one real file per entry under `files/`. There is **no migrate command** and no flat-form fallback — an old flat `.yaml` sitting directly in `templates/` is simply ignored by `load_all` (it only reads subdirs with a `template.yaml`).
-- v0.8 (phase 4): `cli::template::from_folder(source, slug, force, bundle_assets)` is the **non-interactive core** (returns `FromFolderReport`) called by the UI route and tests; `run_from_folder` is the **CLI shell** (interactive size-`Confirm` before bundling + colored summary). Don't call the interactive one from the UI/TUI-headless path — `run_from_folder`'s `Confirm` needs a TTY (piping stdin fails with "not a terminal", by design, like every other dialoguer prompt). The `scan_source` → `execute_scan` split exists so the CLI can confirm the total bundle size *before* any write; keep it. Text files (UTF-8 ≤ 64 KB) always reproduce as editable `FileEntry`s; only binary/large files are gated on `bundle_assets` (else counted `skipped`). Bundled assets are copied via `assets::copy_file(force_verbatim=true)` — stored raw, interpolated later at create time. Root `PROJECT_INFO.md` is skipped during scan (fastf owns it).
+- v1.5.1: `core::template_import` is the noninteractive from-folder engine and
+  `core::operations::template_from_folder` is the locked mutation entry point
+  used by CLI and UI. The CLI may perform a read-only pre-scan for its bundle-size
+  confirmation, but the operation rescans beneath `DataLock` before writing.
+  Text files (UTF-8 ≤ 64 KB) become editable template files; binary/large files
+  are bundled only when requested. Root `PROJECT_INFO.md` remains excluded.
 - v0.9: the counter self-heal lives in `project::plan()`: `counter_value = max(counters.get(), library::max_id(config)) + 1`, then `id_str`/`folder_name` derive from it. Doing it in `plan()` (not `create`) keeps `id_str`→`folder_name` consistent and makes preview show the true next ID. `create_inner` persists `plan.counter_value` and drops the old `index::append`, replacing it with `library::cache_upsert(abs_path.parent(), &project)` (base = the new folder's canonical parent, which matches `discover`'s canonicalized bases; even if `strip_prefix` fails the entry falls back to the basename = correct depth-1 `dir`).
 - v0.9: `naming::parse_id_token(name, prefix)` (folder-name ID recovery, register-only) vs `naming::id_value(id)` (trailing-digit extraction for `max_id`, prefix-agnostic). `max_id` uses `id_value` because ids across templates have different prefixes; register uses `parse_id_token` with the template's prefix. Don't swap them.
 - v0.9: discovery is **depth-1** (`SCAN_DEPTH` const in `library.rs`) — direct children of each base only. Matches the user's flat layouts. If you make it configurable, thread it through `scan_base`/`reindex`/`read_base_readonly`, not just `discover`.
 - v0.9: `tag add/remove/reauto` (CLI + UI `project_tag`) call `library::refresh_cache(&project.path)` after mutating the frontmatter so the cache's tags stay fresh without a rescan. `note` doesn't (the cache stores no journal). `load_state`/`search_projects` also read metadata fresh per project for the `tags` field, so UI display is correct even if a cache is momentarily stale.
 - v0.10: `Project.base` must be populated at BOTH construction points (`into_project` and `project_from_meta`) — adding a third constructor without threading the base will compile only if you remember the field, so any new `Project { .. }` literal needs a conscious `base:` decision (usually `path.parent()`). Do NOT add `base` to `CacheEntry` — base-relative portability is the point of the cache format.
-- v0.10: `move_project` deliberately falls back to copy+remove on ANY `fs::rename` error (not just EXDEV) — errno matching is platform-fiddly and the fallback is safe (target-exists is pre-checked). The `copy_tree` copy is verbatim: never route a move through `copy_file`'s interpolation path.
-- v0.10: move targets are validated against `effective_bases()` in the CALLERS (cli/move_project.rs, recent.rs action menu, ui project_move), not inside `library::move_project` — the core fn only guards is_dir/same-base/collision. If you add a new caller, do the configured-bases check there too, or the moved project may land somewhere discovery never looks.
+- v1.4.1: `move_project` falls back to copy **only** for Unix `EXDEV` or
+  Windows `ERROR_NOT_SAME_DEVICE` (17). Permission, sharing, missing-path, and
+  every other rename error returns unchanged. Never broaden that match.
+- v1.4.1: application callers use the `*_configured*_outcome` move entry points,
+  which acquire `DataLock`, reload config, and revalidate source identity/direct
+  child plus target membership under the lock. The legacy `Result<Project>`
+  wrapper remains for library compatibility.
 - v0.10: in `project_action_menu` the Move/Back/Quit indices are dynamic (Move appears only when another mounted base exists) — they're handled by `if choice == move_idx/back_idx/quit_idx` guards ABOVE the numeric `match`. Adding a new fixed action means renumbering only the 0..=5 arms; the tail stays index-independent.
 - v0.10: the UI create form's `#base-dir` is now a `<select>` — it fires `change`, not `input` (the preview listener was updated accordingly). The frontend `effectiveBases()`/`baseLabel()` helpers mirror `Config::effective_bases()`/`library::base_label` with trailing-slash-insensitive dedup; the server re-validates and canonicalizes on every move anyway.
-- v0.11: `move_project_with` is the progress/cancel engine; `move_project` wraps it with throwaway handles (the CLI path stays synchronous but still verifies). The staged path is only reached when `fs::rename` fails — a same-fs test can't exercise it, so the unit tests call the private `staged_copy_verify_commit` directly. Don't route a move through `copy_file` (interpolation) — moves are ALWAYS verbatim (`jobs_for_tree` + `copy_job`, or `copy_tree`).
-- v0.11: `assets::verify_tree` compares `{rel → size}` sets and MUST ignore transient scaffolding (`is_transient`: cache, `.fastf-provisioning.json`, `.fastf-move-*`, `*.part`) on BOTH sides — otherwise verifying a project that itself carries a stale marker fails spuriously. Verification is size + count + existence by design (not hashing — that doubles I/O over network); if you ever add hashing, make it opt-in.
-- v1.1: **every** create path writes the marker, CLI included — `create_inner`
-  writes the metadata first (flagged `provisioning: true`) and then the marker.
-  v0.11 wrote it only in the UI's `spawn_copy_job` on the theory that a
-  synchronous CLI needs none; that conflated *synchronous* with
-  *uninterruptible*, and Ctrl-C or a reboot left a folder with no metadata,
-  invisible to every command. Don't revert it to a UI-only marker.
-- v1.1: reconcile must never infer "the commit landed" from the destination name
-  existing — a rolled-back move leaves that name free and anything may claim it,
-  so removing the source on that inference can destroy a good project. The marker
-  records the project `id`, and `confirm_commit` requires an id match **and**
-  `verify_tree` before anything is removed. (v0.11 checked existence alone.) The
-  commit itself is still the single atomic `rename(temp,final)`.
-- v0.11: `scan_base` skips dot-prefixed dirs — required so a staged move's `.<folder>.fastf-part` (which contains a full copy incl. `PROJECT_INFO.md`) isn't discovered as a duplicate mid-move. Real projects are never dot-prefixed, so this is free.
+- v1.5.0: `move_project_with` is the progress/cancel compatibility engine and
+  `staged_copy_verify_commit` uses `core::transactions`; debug-only forced-staged
+  tests reach it on one filesystem. Moves are verbatim. Every walked source name
+  is payload, including `.tmp`, `.part`, `.fastf-index.json`, and marker-looking
+  names; there is no suffix-based transient filter.
+- v1.5.0: move manifests compare native relative path, entry type, and byte
+  length, then rescan source path/type/size/mtime before publication. They do not
+  hash or promise advanced filesystem metadata. Transaction staging is written
+  directly, with no sibling `.part` convention.
+- v1.5.0: **every** create path writes the v2 journal, CLI included —
+  `create_inner` writes metadata first with `provisioning: true`, then an empty
+  initial journal. Deferred creates replace it with relative copy jobs. Never
+  regress to UI-only journaling.
+- v1.4.1/v1.5.0: pre-v2 reconcile never infers authority from marker contents or
+  destination names. It never deserializes or mutates through those markers.
+  Automatic confirmation/cleanup belongs only to validated v2 state.
+- v1.5.0: `scan_base` skips dot-prefixed directories, including the reserved
+  `.fastf-transactions` root, so private staging containing `PROJECT_INFO.md`
+  cannot appear as a duplicate project.
 - v0.11: `JOBS` map value is `JobHandle { progress, cancel }` (was a bare `Arc<Mutex<Progress>>`). `register_job` evicts finished handles on each new job; a `/api/job/<id>` 404 still means "done" to the frontend. `Progress` gained `phase` — set it alongside `status` at terminal states.
 
 - v1.0: `paths::install_dir()` must stay infallible-looking but non-panicking. Never re-add `.expect` there; never memoize the resolution (tests swap `FASTF_INSTALL_DIR` within one process). Portable detection keys on `config.toml`/`templates/` NEXT TO THE EXE — a bare binary copied without them lands in the user config dir by design (first-run banner names the mode).
@@ -489,17 +536,21 @@ Shared harness rules — every new harness must follow all of them:
   lock to recover. **Never hold it across a prompt or a post-create hook** —
   `cli::new` re-plans inside the lock and runs `project::run_post_create`
   outside it for exactly that reason.
+- v1.5.1: shared `core::operations` mutations hold `DataLock`, reload config and
+  authoritative project identity/state beneath it, then refresh disposable
+  caches. Move and reconcile hold it for their complete operation. A cached
+  `Project` is only a hint and never authorizes deletion by itself.
 - v1.1: `create_inner` claims the folder with `fs::create_dir` (NOT
   `create_dir_all`, which succeeds on an existing dir and let two racers merge
   into one folder). Everything after the claim lives in `provision_project` so a
   failure rolls the folder back; **nothing may sit between the claim and that
   call** — an early return there skips the rollback and leaks the folder. A
   failpoint placed one line too early found exactly that bug.
-- v1.1: `PROJECT_INFO.md` is written FIRST with `provisioning: true`, cleared as
-  the last step. The flag is `skip_serializing_if` so finished projects stay
-  byte-identical to older versions. Interrupted creates are **reported, not
-  resumed**: the variables the user typed died with the process, so re-running
-  interpolation would produce `{token}` garbage.
+- v1.5.0: `PROJECT_INFO.md` is written first with `provisioning: true` and the
+  flag is cleared before the create journal. An empty initial journal is
+  reported because inline interpolation cannot be reconstructed. A deferred v2
+  journal stores already-realized relative copies and can safely resume those
+  verbatim files after validation.
 - v1.1: `assets::AssetEntry` carries an `EntryKind` enum, not an `is_dir` bool.
   This is deliberate — a new variant makes the compiler point at every consumer
   that must decide. `walk` reports links instead of skipping them, and
@@ -636,6 +687,8 @@ The first expands `~` and requires an absolute path; the second adds
 creating a missing one would plant an empty directory at an unmounted mount
 point and shadow the drive it stands for. Neither takes the lock — `DataLock` is
 not reentrant and `config::set` already holds it.
+CLI `new --base-dir`, UI preview/create overrides, and UI Settings use the same
+functions; do not assign those request strings directly to `Config.base_dir`.
 
 **Prompt first, then lock, then reload.** `edit_postcreate_commands` collects the
 answer, *then* takes `DataLock` and re-reads config. Holding a loaded `Config`
@@ -653,7 +706,7 @@ is the normal case, not a bug.
 
 ## Browser UI (`fastf ui`)
 
-`fastf ui` starts a local loopback HTTP server and opens the browser UI. The
+`fastf ui` defaults to a local loopback HTTP server and opens the browser UI. The
 server and all API logic live only in the `fastf` lib (`src/ui/`) — no separate
 server binary, no external web directory. (The v1.0.2 `fastf-ui` bin is a
 windowless *launcher shim* over `cli::ui::run`, not a second server.)

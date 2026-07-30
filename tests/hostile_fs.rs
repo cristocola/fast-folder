@@ -150,9 +150,9 @@ fn metadata_as_a_directory_is_not_fatal() {
     });
 }
 
-/// Corrupt provisioning markers must be discarded, not trusted.
+/// Corrupt provisioning markers must be reported without being parsed or changed.
 #[test]
-fn corrupt_markers_are_discarded_without_touching_data() {
+fn corrupt_markers_are_untouched_and_cannot_touch_data() {
     sandbox(|_install, base| {
         let dir = write_project(base, "proj", &valid_frontmatter("ID0001", "proj"));
         fs::write(dir.join("payload.txt"), "irreplaceable").unwrap();
@@ -162,8 +162,12 @@ fn corrupt_markers_are_discarded_without_touching_data() {
         // Unparseable move marker at the base root.
         fs::write(base.join(".fastf-move-proj.json"), "><").unwrap();
 
+        let create_marker = dir.join(".fastf-provisioning.json");
+        let move_marker = base.join(".fastf-move-proj.json");
+        let create_before = fs::read(&create_marker).unwrap();
+        let move_before = fs::read(&move_marker).unwrap();
         let cfg = config_for(base);
-        let _ = provisioning::reconcile(&cfg);
+        let report = provisioning::reconcile(&cfg);
 
         assert_eq!(
             fs::read_to_string(dir.join("payload.txt")).unwrap(),
@@ -171,13 +175,15 @@ fn corrupt_markers_are_discarded_without_touching_data() {
             "a corrupt marker must never license touching real data"
         );
         assert!(dir.is_dir(), "the project itself must survive");
+        assert_eq!(report.obsolete.len(), 2, "report: {report:?}");
+        assert_eq!(fs::read(create_marker).unwrap(), create_before);
+        assert_eq!(fs::read(move_marker).unwrap(), move_before);
     });
 }
 
-/// A move marker pointing at paths that no longer exist must roll back cleanly
-/// rather than deleting whatever happens to be nearby.
+/// A move marker with dangling paths is obsolete and cannot authorize cleanup.
 #[test]
-fn move_marker_with_dangling_paths_rolls_back_safely() {
+fn move_marker_with_dangling_paths_is_reported_without_mutation() {
     sandbox(|_install, base| {
         let dir = write_project(base, "proj", &valid_frontmatter("ID0001", "proj"));
         fs::write(dir.join("keep.txt"), "still here").unwrap();
@@ -198,7 +204,12 @@ fn move_marker_with_dangling_paths_rolls_back_safely() {
 
         let cfg = config_for(base);
         let report = provisioning::reconcile(&cfg);
-        assert_eq!(report.rolled_back, 1, "report: {report:?}");
+        assert_eq!(report.rolled_back, 0, "report: {report:?}");
+        assert_eq!(report.obsolete.len(), 1, "report: {report:?}");
+        assert!(
+            base.join(".fastf-move-vanished.json").is_file(),
+            "obsolete marker must remain"
+        );
         assert!(
             fs::read_to_string(dir.join("keep.txt")).unwrap() == "still here",
             "an unrelated project must not be touched"

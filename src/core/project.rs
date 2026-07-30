@@ -7,10 +7,9 @@ use std::path::{Path, PathBuf};
 use crate::core::assets;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::naming::{
-    apply_transform, ensure_relative_safe_path, interpolate, interpolate_name, sanitize_name,
-};
+use crate::core::naming::{interpolate, interpolate_name, sanitize_name};
 use crate::core::template::{FileEntry, FolderNode, Template};
+use crate::core::validated::SafeRelativePath;
 
 /// How many `_2`, `_3`… variants to try before giving up on a colliding name.
 ///
@@ -53,14 +52,8 @@ pub fn plan(
     config: &Config,
     counters: &Counters,
 ) -> Result<ProjectPlan> {
-    // Apply transforms to variable values
-    let mut vars: HashMap<String, String> = HashMap::new();
-    for var in &template.variables {
-        let raw = raw_vars.get(&var.slug).cloned().unwrap_or_default();
-        let transformed = apply_transform(&raw, &var.transform);
-        let sanitized = sanitize_name(&transformed);
-        vars.insert(var.slug.clone(), sanitized);
-    }
+    template.validate()?;
+    let mut vars = crate::core::vars::rendered_values(template, raw_vars)?;
 
     // Resolve ID — one global counter across all templates, whose high-water
     // mark lives inside each base rather than in the data directory (see
@@ -78,6 +71,11 @@ pub fn plan(
     let counter_value = Counters::next_value(config, counters);
     let id_str = Counters::format_id(&template.id.prefix, template.id.digits, counter_value);
     vars.insert("id".to_string(), id_str.clone());
+
+    // Validate again after interpolation. Raw template paths can be safe while
+    // a rendered date format or value turns a component into `..` or an
+    // absolute path; reject the plan before even claiming a project folder.
+    validate_rendered_template_paths(template, &vars, &config.date_format)?;
 
     // Interpolate folder name. Use `interpolate_name` so empty variables don't
     // leave `__` gaps or leading/trailing underscores in the folder name.
@@ -470,7 +468,7 @@ fn create_inner(
                 ),
                 Err(cleanup) => eprintln!(
                     "{} could not remove the partial project at {} ({cleanup}) — \
-                     run `fastf reconcile` to clean up",
+                     inspect it and remove it manually when safe",
                     "warning:".yellow().bold(),
                     crate::util::paths::display_path(&realized.root_path)
                 ),
@@ -528,10 +526,16 @@ fn provision_project(
 
     crate::util::faults::check("create:after-pinfo")?;
 
-    // Durable marker alongside the metadata, so recovery has a to-do list even
-    // if the frontmatter is later hand-edited. Best-effort: the flag above is
-    // the primary signal.
-    let _ = crate::core::provisioning::write_create_marker(&plan.root_path, &[]);
+    // Scoped v2 journal alongside the metadata. The initial empty journal makes
+    // an interrupted inline create visible without storing arbitrary absolute
+    // paths; deferred jobs replace it with validated relative copies below.
+    crate::core::provisioning::write_create_journal(
+        &plan.root_path,
+        &template.slug,
+        &template.files_dir(),
+        &[],
+    )
+    .context("writing create journal")?;
 
     // Create subfolder structure
     create_structure(
@@ -573,16 +577,18 @@ fn provision_project(
     // copies — the job clears both when the last one lands (see
     // `ui::spawn_copy_job`). Otherwise the project is complete right here.
     if deferred.is_empty() {
-        crate::core::provisioning::clear_create(&plan.root_path);
-        if let Err(e) = crate::core::project_info::clear_provisioning(&plan.root_path) {
-            eprintln!(
-                "{} could not clear the in-progress flag: {}",
-                "warning:".yellow().bold(),
-                e
-            );
-        }
+        crate::core::project_info::clear_provisioning(&plan.root_path)
+            .context("clearing the in-progress flag")?;
+        crate::core::provisioning::clear_create(&plan.root_path)
+            .context("clearing create journal")?;
     } else {
-        let _ = crate::core::provisioning::write_create_marker(&plan.root_path, &deferred);
+        crate::core::provisioning::write_create_journal(
+            &plan.root_path,
+            &template.slug,
+            &template.files_dir(),
+            &deferred,
+        )
+        .context("updating create journal")?;
     }
 
     // Update the base's disposable cache so `recent`/`search` reflect the new
@@ -659,35 +665,48 @@ pub fn apply_plan(
     target: &Path,
     vars: &HashMap<String, String>,
     date_format: &str,
-) -> Vec<ApplyAction> {
+) -> Result<Vec<ApplyAction>> {
+    template.validate()?;
+    let vars = crate::core::vars::rendered_values(template, vars)?;
+    apply_plan_resolved(template, target, &vars, date_format)
+}
+
+fn apply_plan_resolved(
+    template: &Template,
+    target: &Path,
+    vars: &HashMap<String, String>,
+    date_format: &str,
+) -> Result<Vec<ApplyAction>> {
     let mut out = Vec::new();
-    walk_structure(&template.structure, target, vars, date_format, &mut out);
-    if let Ok(entries) = assets::walk(&template.files_dir()) {
-        for entry in entries {
-            if assets::is_excluded(&entry.rel, &template.exclude) {
-                continue;
-            }
-            let rel = assets::interp_rel(&entry.rel, vars, date_format);
-            if crate::core::project_info::path_is_reserved(&rel) {
-                continue;
-            }
-            // Links and special files in a template are not reproducible; the
-            // create path skips them with a warning, so the plan must not
-            // promise them either.
-            if !entry.is_dir() && !entry.is_file() {
-                continue;
-            }
-            let path = target.join(&rel);
-            let exists = path.exists();
-            out.push(match (entry.is_dir(), exists) {
-                (true, true) => ApplyAction::SkipFolder(path),
-                (true, false) => ApplyAction::CreateFolder(path),
-                (false, true) => ApplyAction::SkipFile(path),
-                (false, false) => ApplyAction::CreateFile(path),
-            });
+    walk_structure(&template.structure, target, vars, date_format, &mut out)?;
+    for entry in assets::walk(&template.files_dir())? {
+        if assets::is_excluded(&entry.rel, &template.exclude) {
+            continue;
         }
+        let raw = SafeRelativePath::parse(&entry.rel)?;
+        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let rel = SafeRelativePath::parse(&rendered)?;
+        if crate::core::project_info::path_is_reserved(rel.as_str())
+            || crate::core::provisioning::path_is_reserved(rel.as_str())
+        {
+            continue;
+        }
+        // Links and special files in a template are not reproducible; the
+        // create path skips them with a warning, so the plan must not promise
+        // them either.
+        if !entry.is_dir() && !entry.is_file() {
+            continue;
+        }
+        let path = rel.join_to(target);
+        let exists = assets::entry_exists(&path)?;
+        out.push(match (entry.is_dir(), exists) {
+            (true, true) => ApplyAction::SkipFolder(path),
+            (true, false) => ApplyAction::CreateFolder(path),
+            (false, true) => ApplyAction::SkipFile(path),
+            (false, false) => ApplyAction::CreateFile(path),
+        });
     }
-    out
+    Ok(out)
 }
 
 fn walk_structure(
@@ -696,19 +715,22 @@ fn walk_structure(
     vars: &HashMap<String, String>,
     date_format: &str,
     out: &mut Vec<ApplyAction>,
-) {
+) -> Result<()> {
     for node in nodes {
-        let actual_name = interpolate_name(&node.name, vars, date_format);
-        let path = parent.join(&actual_name);
-        if path.exists() {
+        let raw = SafeRelativePath::parse(&node.name)?;
+        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let actual_path = SafeRelativePath::parse(&rendered)?;
+        let path = actual_path.join_to(parent);
+        if assets::entry_exists(&path)? {
             out.push(ApplyAction::SkipFolder(path.clone()));
         } else {
             out.push(ApplyAction::CreateFolder(path.clone()));
         }
         if !node.children.is_empty() {
-            walk_structure(&node.children, &path, vars, date_format, out);
+            walk_structure(&node.children, &path, vars, date_format, out)?;
         }
     }
+    Ok(())
 }
 
 /// Apply a template to an existing folder: create missing folders/files, skip
@@ -720,24 +742,16 @@ pub fn apply(
     vars: &HashMap<String, String>,
     config: &Config,
 ) -> Result<()> {
-    if !target.exists() {
-        anyhow::bail!("target folder does not exist: {}", target.display());
-    }
+    assets::require_real_directory(target, "apply target")?;
+    let vars = crate::core::vars::rendered_values(template, vars)?;
 
     // Empty dirs declared in `structure:` first (create-or-skip, printed).
-    for action in apply_plan(template, target, vars, &config.date_format) {
+    for action in apply_plan_resolved(template, target, &vars, &config.date_format)? {
         match action {
             ApplyAction::CreateFolder(p) => {
                 fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
-                println!("  {} {}", "+ folder".green(), p.display());
             }
-            ApplyAction::SkipFolder(p) => {
-                println!(
-                    "  {} {}",
-                    "  folder".dimmed(),
-                    format!("{} (exists)", p.display()).dimmed()
-                );
-            }
+            ApplyAction::SkipFolder(_) => {}
             // Files are copied below via the shared engine (handles binaries).
             ApplyAction::CreateFile(_) | ApplyAction::SkipFile(_) => {}
         }
@@ -747,10 +761,10 @@ pub fn apply(
     copy_template_files(
         template,
         target,
-        vars,
+        &vars,
         &config.date_format,
         true,
-        true,
+        false,
         None,
     )?;
 
@@ -812,12 +826,48 @@ fn create_structure(
     date_format: &str,
 ) -> Result<()> {
     for node in nodes {
-        let actual_name = interpolate_name(&node.name, vars, date_format);
-        let path = parent.join(&actual_name);
+        let raw = SafeRelativePath::parse(&node.name)?;
+        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let actual_path = SafeRelativePath::parse(&rendered)?;
+        let path = actual_path.join_to(parent);
         fs::create_dir_all(&path)
             .with_context(|| format!("creating directory {}", path.display()))?;
         if !node.children.is_empty() {
             create_structure(&node.children, &path, vars, date_format)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_rendered_template_paths(
+    template: &Template,
+    vars: &HashMap<String, String>,
+    date_format: &str,
+) -> Result<()> {
+    fn validate_nodes(
+        nodes: &[FolderNode],
+        vars: &HashMap<String, String>,
+        date_format: &str,
+    ) -> Result<()> {
+        for node in nodes {
+            let raw = SafeRelativePath::parse(&node.name)?;
+            let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+            let rendered = SafeRelativePath::parse(&rendered)?;
+            if crate::core::provisioning::path_is_reserved(rendered.as_str()) {
+                anyhow::bail!("'{}' is reserved for fastf create recovery", rendered);
+            }
+            validate_nodes(&node.children, vars, date_format)?;
+        }
+        Ok(())
+    }
+
+    validate_nodes(&template.structure, vars, date_format)?;
+    for entry in assets::walk(&template.files_dir())? {
+        let raw = SafeRelativePath::parse(&entry.rel)?;
+        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let rendered = SafeRelativePath::parse(&rendered)?;
+        if crate::core::provisioning::path_is_reserved(rendered.as_str()) {
+            anyhow::bail!("'{}' is reserved for fastf create recovery", rendered);
         }
     }
     Ok(())
@@ -852,13 +902,16 @@ fn copy_template_files(
         if assets::is_excluded(&entry.rel, &template.exclude) {
             continue;
         }
-        let rel = assets::interp_rel(&entry.rel, vars, date_format);
-        ensure_relative_safe_path(&rel)?;
+        let raw = SafeRelativePath::parse(&entry.rel)?;
+        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let rel = SafeRelativePath::parse(&rendered)?;
         // fastf owns PROJECT_INFO.md — never let a bundled file clobber it.
-        if crate::core::project_info::path_is_reserved(&rel) {
+        if crate::core::project_info::path_is_reserved(rel.as_str())
+            || crate::core::provisioning::path_is_reserved(rel.as_str())
+        {
             continue;
         }
-        let dest = dest_root.join(&rel);
+        let dest = rel.join_to(dest_root);
 
         if entry.is_dir() {
             fs::create_dir_all(&dest)
@@ -1021,7 +1074,9 @@ mod tests {
         let root = &plan.root_path;
         assert!(root.join("asset0.txt").is_file(), "files were copied");
         assert!(
-            !root.join(crate::core::provisioning::MARKER_CREATE).exists(),
+            !root
+                .join(crate::core::provisioning::CREATE_JOURNAL_V2)
+                .exists(),
             "create marker should be cleared"
         );
         assert!(

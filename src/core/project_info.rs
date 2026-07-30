@@ -279,7 +279,7 @@ pub fn read_metadata(project_root: &Path) -> Result<Option<Metadata>> {
 ///
 /// Reads the file, parses the YAML frontmatter, applies `mutator` to the
 /// typed [`Metadata`], re-serialises, recombines with the original body bytes
-/// unchanged, then writes via a `.tmp` + rename for atomicity.
+/// unchanged, then writes via an operation-owned unique temp + rename.
 ///
 /// Returns an error when:
 /// - The file cannot be read or written.
@@ -312,7 +312,7 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
 ///
 /// If the file has no `## Journal` section one is created before EOF.
 /// Entries are appended in chronological order (oldest first).
-/// The write is atomic: tmp-file + rename.
+/// The write is atomic: unique temp file + rename.
 pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
     let content =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -439,13 +439,9 @@ pub fn split_frontmatter_body(content: &str) -> Option<(&str, &str)> {
     Some((frontmatter_yaml, body))
 }
 
-/// Write `bytes` to `path` atomically via a `.tmp` sibling + rename.
+/// Write `bytes` through the shared unique atomic writer.
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("md.tmp");
-    fs::write(&tmp, bytes).with_context(|| format!("writing tmp {}", tmp.display()))?;
-    fs::rename(&tmp, path)
-        .with_context(|| format!("renaming {} → {}", tmp.display(), path.display()))?;
-    Ok(())
+    crate::util::atomic::write(path, bytes)
 }
 
 #[cfg(test)]
@@ -541,5 +537,23 @@ mod tests {
         assert!(!path_is_reserved("README.md"));
         assert!(!path_is_reserved("project-info.md")); // hyphen, not underscore
         assert!(!path_is_reserved(".fastf-info.md"));
+    }
+
+    #[test]
+    fn metadata_update_does_not_claim_the_conventional_tmp_sibling() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(RESERVED_FILENAME);
+        let conventional = path.with_extension("md.tmp");
+        fs::write(
+            &path,
+            "---\nid: ID0001\ntemplate: test\ntemplate_name: Test\ncreated: 2026-01-01T00:00:00Z\nfolder: project\npath: /project\nvariables: {}\ntags: []\n---\n\n# Project\n",
+        )
+        .unwrap();
+        fs::write(&conventional, b"real payload").unwrap();
+
+        write_frontmatter(&path, |metadata| metadata.tags.push("updated".to_string())).unwrap();
+
+        assert_eq!(fs::read(conventional).unwrap(), b"real payload");
+        assert!(fs::read_to_string(path).unwrap().contains("updated"));
     }
 }

@@ -74,7 +74,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
 
     let raw_vars = collect_if_needed(&tmpl, &args.vars)?;
 
-    let actions = project::apply_plan(&tmpl, &target, &raw_vars, &config.date_format);
+    let actions = project::apply_plan(&tmpl, &target, &raw_vars, &config.date_format)?;
 
     if args.dry_run {
         project::print_apply_plan(&actions);
@@ -115,7 +115,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     }
 
     println!();
-    project::apply(&tmpl, &target, &raw_vars, &config)?;
+    crate::core::operations::apply(&tmpl.slug, &target, &raw_vars)?;
     println!("\n{}  {}", "✓".green().bold(), "Template applied".bold());
     Ok(())
 }

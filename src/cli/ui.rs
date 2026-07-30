@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use crate::ui;
 
 /// How long closing the app window waits for an in-flight background copy
-/// before exiting anyway. Any copy still running past this is recoverable via
-/// `fastf reconcile`, so refusing to exit buys nothing and costs a stranded
-/// process.
+/// before exiting anyway. Scoped v2 recovery state makes unfinished work
+/// visible on the next launch, so refusing to exit indefinitely would only
+/// strand the process.
 const JOB_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct UiArgs {
@@ -78,23 +78,21 @@ pub fn run(args: UiArgs) -> Result<()> {
                     println!("Close the app window to stop the server (or Ctrl-C).");
                     let _ = child.wait();
                     // Don't strand an in-flight background copy: let it land
-                    // before exiting (it would otherwise wait for reconcile).
+                    // before exiting when possible.
                     //
                     // Bounded on purpose. This loop used to be unbounded, so a
                     // job that never reached a terminal status kept `fastf.exe`
                     // alive forever after the window closed — and the next
                     // launcher click health-checked successfully against that
                     // zombie and attached a window to a dead server. Giving up
-                    // is safe: the provisioning marker means an unfinished copy
-                    // is recoverable by `fastf reconcile`, which is exactly the
-                    // design's promise.
+                    // leaves scoped recovery state for an explicit reconcile.
                     if ui::jobs_active() {
                         println!("Waiting for a background copy to finish…");
                         let deadline = Instant::now() + JOB_DRAIN_TIMEOUT;
                         while ui::jobs_active() {
                             if Instant::now() >= deadline {
                                 eprintln!(
-                                    "{} a background copy is still running after {}s; exiting anyway — run `fastf reconcile` to finish or roll it back",
+                                    "{} a background copy is still running after {}s; exiting anyway — inspect the project and use `fastf reconcile` to recover validated v2 work",
                                     "warning:".yellow().bold(),
                                     JOB_DRAIN_TIMEOUT.as_secs()
                                 );

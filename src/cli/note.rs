@@ -37,14 +37,14 @@ pub struct NoteAddArgs {
 
 pub fn add(args: NoteAddArgs) -> Result<()> {
     let cfg = Config::load().unwrap_or_default();
-    let project = library::resolve(&cfg, &args.query)?;
-    let pinfo = project_info::pinfo_path(&project.path);
+    let candidate = library::resolve(&cfg, &args.query)?;
+    let pinfo = project_info::pinfo_path(&candidate.path);
 
     if !pinfo.exists() {
         bail!(
             "no {} found for project {}",
             project_info::RESERVED_FILENAME,
-            project.id
+            candidate.id
         );
     }
 
@@ -59,17 +59,13 @@ pub fn add(args: NoteAddArgs) -> Result<()> {
         bail!("journal entry is empty — nothing written");
     }
 
-    // Read-modify-write of the journal section — atomic on disk, but two
-    // appends at once (a terminal and the browser UI) would otherwise keep only
-    // one. Taken after the editor closes, never across it.
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    project_info::append_journal_entry(&pinfo, &message)
+    crate::core::operations::append_note(&candidate, &message)
         .with_context(|| format!("appending journal entry to {}", pinfo.display()))?;
 
     println!(
         "{}  Journal entry added to {}",
         "✓".green().bold(),
-        project.id.green().bold()
+        candidate.id.green().bold()
     );
     Ok(())
 }

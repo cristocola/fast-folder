@@ -263,8 +263,10 @@ async function resumeInterruptedTransfer() {
   render();
   if (status === "done") {
     toast(`Moved ${record.projectName} to ${record.baseName} — verified.`);
+  } else if (status === "cleanup_pending") {
+    toast(`Moved ${record.projectName}, but source cleanup is pending and the transaction was retained.`, true);
   } else if (status === "unknown") {
-    toast("Move outcome unknown — run `fastf reconcile` to finish or roll it back.", true);
+    toast("Move outcome unknown — inspect both locations; reconcile can recover scoped v2 work or report obsolete markers.", true);
   }
 }
 
@@ -640,8 +642,7 @@ function shell(content) {
     </div>`;
 }
 
-// Banner shown when any project has an interrupted copy or move (durable marker
-// on disk). Retry runs the same reconcile the `fastf reconcile` CLI does.
+// Banner shown when a scoped v2 operation or obsolete marker remains on disk.
 function provisioningBanner() {
   const items = state.data?.provisioning || [];
   if (!items.length) return "";
@@ -655,8 +656,8 @@ function provisioningBanner() {
       <div class="recover-copy">
         ${icon("bolt")}
         <div>
-          <strong>${items.length} ${noun} recovery</strong>
-          <span>An asset copy or move was interrupted — ${esc(detail)}. Your data is safe; finish it now.</span>
+          <strong>${items.length} ${noun} inspection</strong>
+          <span>An asset copy or move was interrupted — ${esc(detail)}. Reconcile can recover validated v2 work; obsolete markers stay untouched.</span>
         </div>
       </div>
       <button class="button button-dark" data-reconcile ${state.reconciling ? "disabled" : ""}>
@@ -862,6 +863,7 @@ function createPage() {
   if (selected && state.selectedTemplate !== selected.slug) {
     state.selectedTemplate = selected.slug;
     initializeVariables(selected);
+    initializeCreateActions(selected);
     queueMicrotask(updatePreview);
   }
   return `
@@ -1790,9 +1792,16 @@ function selectTemplate(slug) {
   if (!template) return;
   state.selectedTemplate = slug;
   initializeVariables(template);
+  initializeCreateActions(template);
   state.view = "create";
   render();
   updatePreview();
+}
+
+function initializeCreateActions(template) {
+  const actions = template?.post_create ?? state.data?.config?.post_create ?? {};
+  state.gitInit = Boolean(actions.git_init);
+  state.reveal = Boolean(actions.reveal);
 }
 
 function bindCreate() {
@@ -2257,7 +2266,7 @@ async function pollJob(jobId, overlay) {
       node.classList.add("job-failed");
       if (label()) {
         label().textContent =
-          "Lost contact with Fast Folder — the copy may still be running. Check the project folder, then run `fastf reconcile`.";
+          "Lost contact with Fast Folder — the copy may still be running. Inspect the project folder; reconcile can resume a validated v2 copy.";
       }
       toast("Lost contact while copying assets — status unknown.", true);
       return;
@@ -2499,7 +2508,9 @@ async function doRegister(overwrite) {
     state.view = "projects";
     state.searchResults = null;
     render();
-    toast(`Registered ${result.project.id}${result.project.renamed_to ? ` as ${result.project.renamed_to}` : ""}.`);
+    const partial = [result.project.rename_error, result.project.apply_error].filter(Boolean);
+    const message = `Registered ${result.project.id}${result.project.renamed_to ? ` as ${result.project.renamed_to}` : ""}.`;
+    toast(partial.length ? `${message} Follow-up incomplete: ${partial.join("; ")}` : message, partial.length > 0);
     openProjectDetail(path);
   } catch (error) {
     reg.busy = false;
@@ -2670,13 +2681,20 @@ async function moveProject() {
     const moved = (state.data.projects || []).find((p) => p.id === projectId);
     if (moved) await openProjectDetail(moved.path);
     else { closeDetail(); }
+  } else if (status === "cleanup_pending") {
+    toast(
+      `Moved ${projectName}, but the original could not be removed. Cleanup is pending; the recovery transaction was retained.`,
+      true,
+    );
+    closeDetail();
+    render();
   } else if (status === "cancelled") {
     toast("Move cancelled — original left untouched.");
     render();
   } else if (status === "unknown") {
     // Never say "verified" for a transfer whose outcome we did not observe.
     toast(
-      `Lost contact while moving ${projectName} — outcome unknown. Run \`fastf reconcile\` to finish or roll it back.`,
+      `Lost contact while moving ${projectName} — outcome unknown. Inspect both locations; reconcile can recover scoped v2 work or report obsolete markers.`,
       true,
     );
     render();
@@ -2748,15 +2766,22 @@ function showMoveProgress(jobId, projectName, baseName) {
           break;
         }
         if (job.status === "cancelled") { status = "cancelled"; break; }
-        if (job.status === "done" || job.phase === "done") { status = "done"; break; }
+        if (job.status === "done" || job.phase === "done") {
+          status = job.cleanup_pending ? "cleanup_pending" : "done";
+          break;
+        }
         if (label()) label().textContent = phaseLabel(job);
         await new Promise((r) => setTimeout(r, 400));
       }
-      if (status === "done") {
+      if (status === "done" || status === "cleanup_pending") {
         node.classList.remove("job-verifying");
         node.classList.add("job-done");
         if (fill()) fill().style.width = "100%";
-        if (label()) label().textContent = "Moved and verified.";
+        if (label()) {
+          label().textContent = status === "cleanup_pending"
+            ? "Moved and verified; source cleanup is pending."
+            : "Moved and verified.";
+        }
         await new Promise((r) => setTimeout(r, 500));
       }
       forgetTransfer();
@@ -2792,7 +2817,7 @@ function phaseLabel(job) {
 }
 
 // Poll one move/copy job to a terminal state, calling `onUpdate(job)` each tick.
-// Returns "done" | "cancelled" | "failed" | "unknown". Only a 404 (the server
+// Returns "done" | "cleanup_pending" | "cancelled" | "failed" | "unknown". Only a 404 (the server
 // says the job is gone, i.e. it finished) counts as done — see `fetchJob`.
 // `isAlive` lets a caller stop the loop when its overlay leaves the DOM, so a
 // navigation mid-poll can never leave this ticking forever.
@@ -2806,7 +2831,9 @@ async function pollMoveJob(jobId, onUpdate, isAlive = () => true) {
     if (onUpdate) onUpdate(job);
     if (job.status === "failed") return "failed";
     if (job.status === "cancelled") return "cancelled";
-    if (job.status === "done" || job.phase === "done") return "done";
+    if (job.status === "done" || job.phase === "done") {
+      return job.cleanup_pending ? "cleanup_pending" : "done";
+    }
     await new Promise((r) => setTimeout(r, 350));
   }
   return "unknown";
@@ -2838,11 +2865,12 @@ async function moveSelected() {
   render();
 
   const parts = [`${result.done} moved`];
+  if (result.cleanupPending) parts.push(`${result.cleanupPending} cleanup pending`);
   if (result.failed) parts.push(`${result.failed} failed`);
-  if (result.unknown) parts.push(`${result.unknown} unknown — run \`fastf reconcile\``);
+  if (result.unknown) parts.push(`${result.unknown} unknown — inspect both locations`);
   if (result.cancelled) parts.push(`${result.cancelled} cancelled`);
   if (skipped) parts.push(`${skipped} already there`);
-  toast(parts.join(" · "), result.failed > 0 || result.unknown > 0);
+  toast(parts.join(" · "), result.failed > 0 || result.unknown > 0 || result.cleanupPending > 0);
 }
 
 // Sequential bulk move with one combined overlay (overall bar + per-project
@@ -2878,7 +2906,7 @@ function runBulkMove(projects, base) {
     });
 
     (async () => {
-      let done = 0, failed = 0, cancelled = 0, unknown = 0;
+      let done = 0, cleanupPending = 0, failed = 0, cancelled = 0, unknown = 0;
       const total = projects.length;
       for (let i = 0; i < total; i++) {
         if (cancelRequested) { cancelled += total - i; break; }
@@ -2903,6 +2931,7 @@ function runBulkMove(projects, base) {
         }, () => document.body.contains(overlay));
         currentJobId = null;
         if (status === "done") done++;
+        else if (status === "cleanup_pending") { done++; cleanupPending++; }
         else if (status === "cancelled") { cancelled++; break; }
         else if (status === "unknown") {
           // We lost contact — the outcome is genuinely unknown, not failed.
@@ -2916,19 +2945,19 @@ function runBulkMove(projects, base) {
       node.classList.add(failed || unknown ? "job-failed" : "job-done");
       if (fill()) fill().style.width = "100%";
       if (label()) {
-        const tail = [failed ? `${failed} failed` : "", unknown ? `${unknown} unknown` : ""]
+        const tail = [cleanupPending ? `${cleanupPending} cleanup pending` : "", failed ? `${failed} failed` : "", unknown ? `${unknown} unknown` : ""]
           .filter(Boolean)
           .join(", ");
         label().textContent = `${done} moved${tail ? `, ${tail}` : ""}.`;
       }
       await new Promise((r) => setTimeout(r, unknown ? 2400 : 700));
       overlay.remove();
-      resolve({ done, failed, cancelled, unknown });
+      resolve({ done, cleanupPending, failed, cancelled, unknown });
     })();
   });
 }
 
-// Retry interrupted copies/moves — same recovery the `fastf reconcile` CLI runs.
+// Recover scoped v2 work and report obsolete pre-v2 markers without following them.
 async function reconcileProvisioning() {
   if (state.reconciling) return;
   state.reconciling = true;
@@ -2937,9 +2966,10 @@ async function reconcileProvisioning() {
     const res = await api("/api/reconcile", { method: "POST", body: "{}", timeout: SLOW_API_TIMEOUT_MS });
     const r = res.report || {};
     const parts = [];
-    if (r.resumed) parts.push(`${r.resumed} copy job(s) finished`);
+    if (r.resumed) parts.push(`${r.resumed} deferred file(s) resumed`);
     if (r.completed) parts.push(`${r.completed} move(s) committed`);
-    if (r.rolled_back) parts.push(`${r.rolled_back} move(s) rolled back`);
+    if (r.rolled_back) parts.push(`${r.rolled_back} unpublished move transaction(s) discarded`);
+    if (r.obsolete && r.obsolete.length) parts.push(`${r.obsolete.length} obsolete marker(s) left untouched`);
     toast(parts.length ? parts.join(", ") : "Nothing to reconcile.");
     if (r.unrecoverable && r.unrecoverable.length) {
       toast(`${r.unrecoverable.length} item(s) could not be recovered.`, true);
@@ -3496,7 +3526,10 @@ async function loadState(renderAfter = true) {
       : "";
     state.selectedTemplate = requestedTemplate || state.data.config.default_template || state.data.templates[0]?.slug;
     const template = state.data.templates.find((item) => item.slug === state.selectedTemplate);
-    if (template) initializeVariables(template);
+    if (template) {
+      initializeVariables(template);
+      initializeCreateActions(template);
+    }
   }
   if (renderAfter) render();
 }

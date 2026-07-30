@@ -24,7 +24,9 @@ pub struct NewArgs {
 pub fn run(args: NewArgs) -> Result<()> {
     let mut config = Config::load()?;
     if let Some(ref dir) = args.base_dir_override {
-        config.base_dir = dir.clone();
+        config.base_dir = crate::core::config::resolve_base_dir_input(dir)?
+            .display()
+            .to_string();
     }
     if args.no_preview {
         config.preview_lines = 0;
@@ -87,13 +89,16 @@ pub fn run(args: NewArgs) -> Result<()> {
     // fastf may have taken an ID while the confirmation prompt was open, and
     // reusing the previewed value is exactly how duplicate IDs were minted.
     // Post-create runs after the lock is released — see `run_post_create`.
-    let plan = {
-        let _lock = crate::util::lockfile::DataLock::acquire()?;
-        let mut counters = Counters::load()?;
-        let plan = project::plan(&tmpl, &raw_vars, &config, &counters)?;
-        project::create(&plan, &tmpl, &mut counters, &config, false)?;
-        plan
-    };
+    let mut created = crate::core::operations::create(crate::core::operations::CreateOptions {
+        template_slug: tmpl.slug.clone(),
+        variables: raw_vars,
+        base_dir_override: args.base_dir_override.clone(),
+        defer_over: None,
+    })?;
+    drop(created.take_mutation_lock());
+    let plan = created.plan;
+    let tmpl = created.template;
+    let config = created.config;
     project::print_success(&plan, &tmpl);
 
     if !args.no_post {

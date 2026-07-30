@@ -34,12 +34,10 @@ Three layers, one binary:
 2. **Server** — `src/ui/mod.rs`: a small loopback HTTP server built on
    `std::net::TcpListener` (one thread per connection, 2 MiB request cap). No web
    framework.
-3. **Domain logic** — the server calls the `fastf` library directly
-   (`core::project::plan`/`create`, `Config`, `Counters`, `core::template`,
-   `core::library` discovery, `core::post_create`). It never shells out to the CLI
-   or parses terminal output, so the UI and CLI share one source of truth and the
-   same on-disk files (config, templates, counter; projects are discovered from
-   their `PROJECT_INFO.md` across the bases).
+3. **Domain logic** — mutation handlers call shared `core::operations` functions;
+   read handlers use `core::library` discovery and the template/config readers.
+   The server never shells out to the CLI or parses terminal output, so the UI,
+   TUI, and CLI use the same validation, locking, and on-disk state.
 
 `fastf ui` lives in `src/cli/ui.rs` (process orchestration + browser launching);
 the HTTP server and all API handlers live in `src/ui/`. `ui::route_request` is a
@@ -48,8 +46,11 @@ tested directly in `tests/ui_server.rs`.
 
 ## HTTP API
 
-Loopback only (`127.0.0.1:47831` by default). No auth/CSRF — **do not** bind to a
-non-loopback address.
+The default is loopback (`127.0.0.1:47831`). The server resolves the requested
+bind address and refuses it unless every result is loopback. Socket requests
+must carry a loopback `Host` whose port matches the listener; when an `Origin`
+header is present it must be `http` and have the same authority. There is no
+authentication, so this remains a local, single-user interface.
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -59,8 +60,8 @@ non-loopback address.
 | POST | `/api/pick-path` | Open the native OS folder/file picker on the server's machine (`{kind: "folder"\|"file", start?}`); returns `{path}` or `path: null` on cancel. One dialog at a time; kdialog/zenity on Linux, PowerShell dialogs on Windows |
 | POST | `/api/preview` | Validate variables, return a project plan (no writes) |
 | POST | `/api/create` | Create a project + run post-create; returns `{project, job_id}` (`job_id` set only when large assets are copied in the background) |
-| GET  | `/api/job/<id>` | Poll a background copy/move job's progress (`copying`→`verifying`→`finalizing`→`done`; 404 once evicted after completion) |
-| POST | `/api/job/<id>/cancel` | Request cancellation of a running job (cleans up its `.part`/staging; source untouched) |
+| GET  | `/api/job/<id>` | Poll a background copy/move job's progress (`copying`→`verifying`→`finalizing`→`done`; 404 once evicted after completion). Additive move fields may report `cleanup_pending` and a `warning` |
+| POST | `/api/job/<id>/cancel` | Request cancellation of a running job (cleans only its exact owned temp/staging path; a move source remains untouched before publication) |
 | POST | `/api/settings` | Update supported `config.toml` values |
 | POST | `/api/templates/save` | Create/update a template's metadata (`template.yaml`) |
 | POST | `/api/templates/delete` | Delete a template (its whole `<slug>/` folder) |
@@ -83,25 +84,23 @@ non-loopback address.
 | POST | `/api/apply` | Create missing folders/files in an existing folder |
 | POST | `/api/templates/from-folder` | Generate a template from a folder (`{source, slug, force, bundle_assets}`); returns a `report` of counts (folders / text files / bundled + bytes / skipped) |
 | POST | `/api/reindex` | Force a full rescan of every base, rewriting each `.fastf-index.json`; returns `{projects}` |
-| POST | `/api/reconcile` | Recover interrupted work across all bases; returns `{report}` with `resumed` (copies finished), `completed` (moves committed), `rolled_back` (moves undone, source intact), `swept` (abandoned `.part`/`.tmp` files removed), `incomplete` (paths of projects never finished being created — these cannot be rebuilt automatically), and `unrecoverable` |
+| POST | `/api/reconcile` | Reconcile scoped v2 creates/moves across all bases. Additive counts report resumed deferred copies, completed published moves, or rolled-back unpublished transactions; `obsolete` lists untouched pre-v2 markers, `incomplete` lists provisioning flags without usable scoped recovery, and `unrecoverable` lists states rejected without mutation. `swept` remains for response compatibility and is always zero |
 | POST | `/api/counter` | Raise the global ID counter (`{value}`). The counter is the highest ID seen anywhere and only moves up, so a value at or below the current floor is **refused**; the write propagates to every mounted base |
 
-Write routes (`create`, `settings`, `base/init`, template save/from-folder/delete, template
-`file-save`/`file-add`/`file-delete`, `project/tag`, `project/note`,
-`project/move`, `register`, `apply`, `reindex`, `counter`) serialize through a process-wide mutex
-(`WRITE_LOCK`) so concurrent requests can't corrupt files. Read routes
+Most synchronous write routes serialize handler entry through a process-wide
+mutex (`WRITE_LOCK`). It is only an in-process UI guard, not the correctness
+boundary. Shared create, register, apply, move, reconcile, configuration,
+counter/reindex, tag/note, rename, unregister, and delete operations acquire the
+cross-process `DataLock`, reload authoritative state beneath it, mutate, and
+refresh caches. Background create and move workers do not hold `WRITE_LOCK`, but
+retain `DataLock` for the complete filesystem operation. Read routes
 (`/api/search`, `/api/project`, `/api/project/size`, `/api/job/<id>`,
 `/api/template-files`, the GET state route) are lock-free. Static GET routes
 serve only the four embedded frontend files.
 
-`WRITE_LOCK` is an **in-process** mutex, so it does not see a `fastf` running in
-a terminal. Anything that allocates an ID or rewrites `config.toml` therefore
-also takes `util::lockfile::DataLock`, a lock file over the data directory that
-every fastf process respects — without it, a create in the UI and a
-`fastf new` in a shell could mint the same ID (ten concurrent creates reliably
-produced eight). The data lock is held only across the read-modify-write itself:
-never across a prompt, and never across post-create hooks, which run arbitrary
-user commands.
+`DataLock` is deliberately one coarse mutation lock: another fastf mutation
+waits, while reads and job cancellation remain available. It is never held
+across a user prompt, editor launch, folder reveal, or post-create command.
 
 **First-run onboarding (v1.0.2).** When no base is configured anywhere
 (`base_dir` empty and `bases` empty), `/api/state` reports
@@ -168,25 +167,32 @@ traversal-guarded and reject the reserved `PROJECT_INFO.md`. `verbatim`/`exclude
 globs are ordinary metadata, edited in the editor and persisted via
 `templates/save`.
 
-**Background copy jobs (v0.8).** `/api/create` copies structure + text/small
-files synchronously and returns immediately; bundled files over 4 MiB are copied
-on a background thread (**not** holding `WRITE_LOCK` — the copy only touches the
-new project's own folder) with chunked progress. The frontend polls
+**Background copy jobs.** `/api/create` copies structure + text/small files
+synchronously and returns immediately; bundled files over 4 MiB are copied on a
+background thread with chunked progress. The worker does not hold the UI-only
+`WRITE_LOCK`, but it retains the shared `DataLock` until every deferred file has
+landed and the create journal/provisioning flag are cleared. The frontend polls
 `/api/job/<id>` (~500 ms) and shows a progress bar; a 404 (job evicted after it
 finishes) is treated as done. `job_id` is `null` when nothing was deferred.
+Template-level post-create policy overrides the global policy consistently. All
+file-dependent post-create actions run only after provisioning completes and
+after the mutation lock is released.
 
-**Durable provisioning + verified moves (v0.11).** Both bulk-data flows are now
-crash-safe. A deferred create writes a durable `.fastf-provisioning.json` marker
-into the project root before copying (cleared on completion). A move returns a
-`job_id` and runs in the background: same-filesystem = instant atomic rename;
-cross-filesystem/network = stage into `.<folder>.fastf-part` (guarded by a
-`.fastf-move-<folder>.json` marker) → verify size+count+existence → atomic rename
-into place → remove source. **The source is never removed until the copy is
-verified.** Jobs report a `phase` (`copying`/`verifying`/`finalizing`/`done`) and
-are cancellable via `/api/job/<id>/cancel`. `/api/state` carries a `provisioning`
-array of anything interrupted; the UI shows a banner whose Retry hits
-`/api/reconcile` (same recovery as the `fastf reconcile` CLI). The move job runs
-off `WRITE_LOCK` (it only writes the target staging + atomic caches).
+**Scoped journals + verified moves.** A deferred create writes
+`.fastf-create-v2.json`, containing only a template slug and validated relative
+copy paths. Reconcile can resume a missing deferred file after checking identity,
+type, and byte length; completion clears the provisioning flag before the
+journal. A move returns a `job_id` and runs in the background: same filesystem =
+direct OS rename with no journal; cross-filesystem/network = exclusive
+`.fastf-transactions/<operation-id>/staging` → verify exact path/type/size and
+unchanged source metadata → publish → record `CleanupPending` → remove source.
+**The source is never removed until the destination is verified and published.**
+Jobs report a `phase` (`copying`/`verifying`/`finalizing`/`done`) and can be
+cancelled before publication. If source removal fails, the job finishes with
+`cleanup_pending: true`, a warning, and the transaction retained for retry.
+Malformed/unknown v2 state is reported without mutation. Pre-v2 markers remain
+obsolete and byte-untouched; reconcile never parses or follows their paths and
+never sweeps suffix-named files.
 
 **Moving projects.** A single project moves from its detail drawer (base select
 + Move button). The Projects table also supports **multi-select**: a checkbox per
@@ -205,11 +211,12 @@ built-in decoder (`encodeURIComponent` on the frontend).
 Templates are folders — sharing is a folder copy, so there are no import/export
 routes (removed in v0.8).
 
-`register_core` (in `src/cli/register.rs`) is the non-interactive engine the
-`/api/register` route calls — the CLI `fastf register` is a thin interactive
-shell over it. On a `PROJECT_INFO.md` collision the route passes
-`PinfoConflict::Abort`, which bails **before** any write so the UI can confirm and
-retry with `overwrite: true` cleanly.
+`core::operations::register` is the non-interactive engine used by both the UI
+and CLI. It accepts direct children of configured bases only, makes `Skip` an
+immediate no-op, rejects duplicate recovered IDs, commits registration before
+optional rename/apply follow-ups, and reports those follow-ups as partial
+outcomes if they fail. On a `PROJECT_INFO.md` collision the UI initially passes
+`PinfoConflict::Abort`, then retries with explicit overwrite after confirmation.
 
 ## Frontend development (live reload)
 
@@ -244,8 +251,9 @@ malformed requests get a clean JSON 400, never a crashed connection thread.
 
 ## Security boundary
 
-The server has no authentication or CSRF protection and can create folders/files,
-change settings, edit/delete templates, open local paths, and optionally run
-`git init`. Keep it bound to loopback. Exposing it to a LAN/Internet would
-require auth, origin validation, strict path authorization, and TLS — none of
-which exist today.
+The server has no authentication and can create folders/files, change settings,
+edit/delete templates, open local paths, and optionally run `git init`. It
+enforces loopback binding, a loopback `Host` with the listener port, and
+same-origin `Origin` when present. Those checks reduce the local attack surface;
+they do not turn the UI into a remotely deployable service. LAN/Internet use
+would additionally require authentication, TLS, and a different security model.

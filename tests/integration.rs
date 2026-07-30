@@ -461,11 +461,9 @@ fn create_rejects_parent_escape_via_variable() {
     // name can interpolate a variable. A `..` value must never produce a write
     // outside the project root.
     //
-    // There are now two independent guards: `sanitize_name` reduces ".." to the
-    // empty string (it strips trailing dots), and `ensure_relative_safe_path`
-    // rejects what is left. This asserts the *property* — the create fails and
-    // nothing lands outside the root — rather than the wording of whichever
-    // guard fires first, which is an implementation detail.
+    // Planning validates rendered paths before a folder is claimed. This
+    // asserts the property — the plan fails and nothing lands outside the root
+    // — rather than the wording of whichever guard fires first.
     with_fresh_install(|install| {
         let yaml = r#"name: Bad
 slug: bad
@@ -489,10 +487,8 @@ files:
         let mut vars = HashMap::new();
         vars.insert("sub".to_string(), "..".to_string());
         let counters = Counters::load().unwrap();
-        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
-        let mut counters = counters;
-        let err = project::create(&plan, &tmpl, &mut counters, &cfg, false)
-            .expect_err("escaping file name must be rejected");
+        let err = project::plan(&tmpl, &vars, &cfg, &counters)
+            .expect_err("escaping file name must be rejected before folder claim");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("..") || msg.contains("relative") || msg.contains("empty"),
@@ -510,8 +506,8 @@ files:
             "a file escaped the project root into the base"
         );
         assert!(
-            !plan.root_path.exists(),
-            "failed create must not leave a partial project"
+            fs::read_dir(&cfg.base_dir).unwrap().next().is_none(),
+            "failed plan must not claim a project folder"
         );
     });
 }
@@ -536,6 +532,76 @@ fn template_validate_rejects_absolute_file_path() {
         msg.contains("relative") || msg.contains("drive letter"),
         "got: {msg}"
     );
+}
+
+#[test]
+fn template_slug_and_structure_paths_are_contained() {
+    with_fresh_install(|install| {
+        let outside = install.join("sentinel");
+        fs::write(&outside, b"untouched").unwrap();
+        let error = template::find_by_slug("../sentinel").unwrap_err();
+        assert!(error.to_string().contains("slug"));
+        assert_eq!(fs::read(&outside).unwrap(), b"untouched");
+
+        let mut invalid_slug = template::Template {
+            name: "Unsafe slug".to_string(),
+            slug: "../escaped".to_string(),
+            naming_pattern: "{id}".to_string(),
+            ..template::Template::default()
+        };
+        let escaped_dir = install.join("escaped");
+        let derived_path = install
+            .join("templates")
+            .join(&invalid_slug.slug)
+            .join("template.yaml");
+        assert!(invalid_slug.save_to_file(&derived_path).is_err());
+        assert!(
+            !escaped_dir.exists(),
+            "slug rejection must happen before creating a derived directory"
+        );
+
+        invalid_slug.slug = "unsafe".to_string();
+        let mut unsafe_template = template::Template {
+            name: "Unsafe".to_string(),
+            slug: "unsafe".to_string(),
+            naming_pattern: "{id}".to_string(),
+            structure: vec![template::FolderNode {
+                name: "../outside".to_string(),
+                children: vec![],
+            }],
+            ..template::Template::default()
+        };
+        assert!(unsafe_template.validate().is_err());
+
+        unsafe_template.structure[0].name = "src/components".to_string();
+        unsafe_template.validate().unwrap();
+    });
+}
+
+#[test]
+fn rendered_structure_escape_is_rejected_before_folder_claim() {
+    with_fresh_install(|install| {
+        let yaml = r#"name: Rendered safety
+slug: rendered-safety
+naming_pattern: "{id}"
+structure:
+  - name: "{date}"
+"#;
+        write_template(install, "rendered-safety", yaml);
+        let base = install.join("projects");
+        fs::create_dir_all(&base).unwrap();
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            date_format: "../outside".to_string(),
+            ..Config::default()
+        };
+        let tmpl = template::find_by_slug("rendered-safety").unwrap();
+        let counters = Counters::load().unwrap();
+        let error = project::plan(&tmpl, &HashMap::new(), &cfg, &counters).unwrap_err();
+        assert!(format!("{error:#}").contains(".."));
+        assert!(!base.join("outside").exists());
+        assert!(fs::read_dir(&base).unwrap().next().is_none());
+    });
 }
 
 #[test]
@@ -1901,6 +1967,12 @@ fn register_recursive_onboards_children_and_previews() {
         let base = install.join("bulk");
         fs::create_dir_all(base.join("Alpha_ID0005")).unwrap();
         fs::create_dir_all(base.join("Beta")).unwrap();
+        Config {
+            base_dir: base.display().to_string(),
+            ..Config::default()
+        }
+        .save()
+        .unwrap();
         // A child that already has metadata must be skipped, untouched.
         let gamma = base.join("Gamma");
         fs::create_dir_all(&gamma).unwrap();
@@ -2153,6 +2225,153 @@ fn register_apply_requires_template() {
         assert!(
             err.to_string().contains("--apply requires --template"),
             "got: {err:#}"
+        );
+    });
+}
+
+#[test]
+fn register_rejects_nested_targets_outside_a_configured_base_child() {
+    with_fresh_install(|install| {
+        let base = install.join("projects");
+        let target = base.join("group/project");
+        fs::create_dir_all(&target).unwrap();
+        Config {
+            base_dir: base.display().to_string(),
+            ..Config::default()
+        }
+        .save()
+        .unwrap();
+
+        let err = register_core(RegisterOptions {
+            path: target.clone(),
+            template_slug: None,
+            vars: HashMap::new(),
+            apply_structure: false,
+            rename: false,
+            use_today: false,
+            created_override: None,
+            on_pinfo_conflict: PinfoConflict::Abort,
+        })
+        .expect_err("nested target must be rejected");
+        assert!(err.to_string().contains("direct child"), "got: {err:#}");
+        assert!(!target.join("PROJECT_INFO.md").exists());
+    });
+}
+
+#[test]
+fn register_rejects_a_duplicate_recovered_id() {
+    with_fresh_install(|install| {
+        let first = install.join("Alpha_ID0005");
+        let duplicate = install.join("Beta_ID0005");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&duplicate).unwrap();
+        register_run(register_args(&first)).unwrap();
+
+        let err = register_run(register_args(&duplicate)).expect_err("duplicate ID must fail");
+        assert!(err.to_string().contains("already used"), "got: {err:#}");
+        assert!(!duplicate.join("PROJECT_INFO.md").exists());
+    });
+}
+
+#[test]
+fn register_skip_is_an_immediate_no_op() {
+    with_fresh_install(|install| {
+        let target = install.join("already-registered");
+        fs::create_dir_all(&target).unwrap();
+        register_run(register_args(&target)).unwrap();
+        let pinfo = target.join("PROJECT_INFO.md");
+        let before = fs::read(&pinfo).unwrap();
+        let counter_before = Counters::load_base(install);
+
+        let outcome = fastf::core::operations::register(fastf::core::operations::RegisterOptions {
+            path: target.clone(),
+            template_slug: None,
+            vars: HashMap::new(),
+            apply_structure: false,
+            rename: true,
+            use_today: false,
+            created_override: None,
+            on_pinfo_conflict: fastf::core::operations::PinfoConflict::Skip,
+        })
+        .unwrap();
+        assert!(!outcome.pinfo_written);
+        assert!(outcome.renamed_to.is_none());
+        assert!(outcome.rename_error.is_none());
+        assert_eq!(fs::read(pinfo).unwrap(), before);
+        assert_eq!(Counters::load_base(install), counter_before);
+        assert!(target.is_dir());
+    });
+}
+
+#[test]
+fn register_reports_rename_failure_after_committing_registration() {
+    with_fresh_install(|install| {
+        write_template(install, "music", &minimal_template_yaml("music"));
+        let target = install.join("legacy");
+        let collision = install.join("T001_Hello");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&collision).unwrap();
+        let outcome = fastf::core::operations::register(fastf::core::operations::RegisterOptions {
+            path: target.clone(),
+            template_slug: Some("music".to_string()),
+            vars: HashMap::from([("name".to_string(), "hello".to_string())]),
+            apply_structure: false,
+            rename: true,
+            use_today: false,
+            created_override: None,
+            on_pinfo_conflict: fastf::core::operations::PinfoConflict::Abort,
+        })
+        .unwrap();
+        assert!(outcome.pinfo_written);
+        assert!(outcome.rename_error.is_some());
+        assert!(outcome.renamed_to.is_none());
+        assert!(target.join("PROJECT_INFO.md").is_file());
+        assert!(collision.is_dir());
+    });
+}
+
+#[test]
+fn register_reports_incomplete_apply_after_committing_registration() {
+    with_fresh_install(|install| {
+        let yaml = r#"name: Apply failure
+slug: blocked
+naming_pattern: "{id}_{name}"
+id:
+  prefix: B
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+structure:
+  - name: blocked
+    children:
+      - name: child
+"#;
+        write_template(install, "blocked", yaml);
+        let target = install.join("legacy");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("blocked"), b"occupied by a file").unwrap();
+
+        let outcome = fastf::core::operations::register(fastf::core::operations::RegisterOptions {
+            path: target.clone(),
+            template_slug: Some("blocked".to_string()),
+            vars: HashMap::from([("name".to_string(), "legacy".to_string())]),
+            apply_structure: true,
+            rename: false,
+            use_today: false,
+            created_override: None,
+            on_pinfo_conflict: fastf::core::operations::PinfoConflict::Abort,
+        })
+        .unwrap();
+        assert!(outcome.pinfo_written);
+        assert!(!outcome.applied);
+        assert!(outcome.apply_error.is_some(), "{outcome:?}");
+        assert!(target.join("PROJECT_INFO.md").is_file());
+        assert_eq!(
+            fs::read(target.join("blocked")).unwrap(),
+            b"occupied by a file"
         );
     });
 }

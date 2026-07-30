@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::core::validated::{SafeRelativePath, TemplateSlug};
 use crate::util::paths;
 
 // ---------------------------------------------------------------------------
@@ -223,12 +224,16 @@ impl Template {
     /// at `path` and flush the in-memory text `files` buffer into the sibling
     /// `files/` directory. Binaries already on disk are untouched.
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
-        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-
         // Defense in depth: never persist a reserved-name file entry.
         let mut snapshot = self.clone();
         snapshot.strip_reserved_files();
+        // Validation must precede even directory creation. A caller commonly
+        // derives `path` from the slug, so creating its parent first would let
+        // an invalid `../slug` cause a filesystem side effect before rejection.
+        snapshot.validate()?;
+
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
 
         let raw = serde_yaml::to_string(&snapshot).context("serializing template")?;
         fs::write(path, raw).with_context(|| format!("writing {}", path.display()))?;
@@ -263,9 +268,7 @@ impl Template {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.slug.is_empty() {
-            bail!("template 'slug' is required");
-        }
+        TemplateSlug::parse(&self.slug).context("template has invalid slug")?;
         if self.name.is_empty() {
             bail!("template 'name' is required");
         }
@@ -282,7 +285,7 @@ impl Template {
         // Reject file paths that escape the project root (absolute, `..`, etc.).
         let mut file_paths = std::collections::HashSet::new();
         for f in &self.files {
-            crate::core::naming::ensure_relative_safe_path(&f.path)
+            SafeRelativePath::parse(&f.path)
                 .with_context(|| format!("template '{}' has invalid file path", self.slug))?;
             if !file_paths.insert(&f.path) {
                 bail!(
@@ -292,6 +295,7 @@ impl Template {
                 );
             }
         }
+        validate_structure(&self.structure, &self.slug)?;
         // tag_from entries must reference declared variable slugs.
         let var_slugs: std::collections::HashSet<&str> =
             self.variables.iter().map(|v| v.slug.as_str()).collect();
@@ -344,7 +348,8 @@ pub fn load_all() -> Result<Vec<Template>> {
 
 /// Find a template by slug.
 pub fn find_by_slug(slug: &str) -> Result<Template> {
-    let path = paths::template_manifest(slug);
+    let slug = TemplateSlug::parse(slug)?;
+    let path = paths::template_manifest(slug.as_str());
     if !path.exists() {
         bail!(
             "template '{}' not found — run `fastf template list` to see available templates",
@@ -352,4 +357,17 @@ pub fn find_by_slug(slug: &str) -> Result<Template> {
         );
     }
     Template::load_from_file(&path)
+}
+
+fn validate_structure(nodes: &[FolderNode], template_slug: &str) -> Result<()> {
+    for node in nodes {
+        SafeRelativePath::parse(&node.name).with_context(|| {
+            format!(
+                "template '{}' has invalid structure path '{}'",
+                template_slug, node.name
+            )
+        })?;
+        validate_structure(&node.children, template_slug)?;
+    }
+    Ok(())
 }

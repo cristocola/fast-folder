@@ -943,7 +943,7 @@ fn move_route_moves_between_configured_bases() {
 }
 
 #[test]
-fn reconcile_route_resumes_pending_copy_and_state_surfaces_it() {
+fn reconcile_route_reports_pre_v2_copy_without_following_it() {
     with_fresh_install(|install| {
         let base = install.join("projects");
         fs::create_dir_all(&base).unwrap();
@@ -970,14 +970,16 @@ fn reconcile_route_resumes_pending_copy_and_state_surfaces_it() {
         let state = json("GET", "/api/state", serde_json::Value::Null);
         assert_eq!(state["provisioning"].as_array().unwrap().len(), 1);
 
-        // /api/reconcile resumes the copy and clears the marker.
+        // /api/reconcile reports the obsolete marker but never parses its
+        // absolute paths or copies through it.
         let value = json("POST", "/api/reconcile", serde_json::json!({}));
         assert_eq!(value["ok"], true);
-        assert_eq!(value["report"]["resumed"], 1);
-        assert_eq!(fs::read(&dest).unwrap(), data);
+        assert_eq!(value["report"]["resumed"], 0);
+        assert_eq!(value["report"]["obsolete"].as_array().unwrap().len(), 1);
+        assert!(!dest.exists());
 
         let state = json("GET", "/api/state", serde_json::Value::Null);
-        assert_eq!(state["provisioning"].as_array().unwrap().len(), 0);
+        assert_eq!(state["provisioning"].as_array().unwrap().len(), 1);
     });
 }
 
@@ -1073,6 +1075,45 @@ fn delete_refuses_paths_that_are_not_projects() {
 }
 
 #[test]
+fn destructive_route_rechecks_cached_project_identity_before_deleting() {
+    with_fresh_install(|install| {
+        let root = create_fixture_project(install);
+        fs::write(root.join("sentinel.bin"), b"must survive").unwrap();
+
+        // Prime the per-base cache with T001, then change the authoritative
+        // metadata without touching the base directory mtime. Discovery may
+        // still return the cached record; the destructive operation must not
+        // trust it.
+        let _ = json("GET", "/api/state", serde_json::Value::Null);
+        fastf::core::project_info::write_frontmatter(&root.join("PROJECT_INFO.md"), |metadata| {
+            metadata.id = "T999".to_string()
+        })
+        .unwrap();
+
+        let error = ui::route_request(
+            "POST",
+            "/api/project/delete",
+            serde_json::json!({
+                "path": root.display().to_string(),
+                "confirm_name": "T001_Hello_World"
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("identity changed"),
+            "got: {error}"
+        );
+        assert_eq!(
+            fs::read(root.join("sentinel.bin")).unwrap(),
+            b"must survive"
+        );
+    });
+}
+
+#[test]
 fn rename_round_trips_and_rejects_collisions() {
     with_fresh_install(|install| {
         let root = create_fixture_project(install);
@@ -1156,6 +1197,48 @@ fn base_init_onboards_first_run() {
         let err =
             ui::route_request("POST", "/api/base/init", br#"{"path":"relative/dir"}"#).unwrap_err();
         assert!(err.to_string().contains("absolute"), "err: {err}");
+    });
+}
+
+#[test]
+fn ui_base_overrides_use_the_shared_absolute_path_resolver() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+
+        for route in ["/api/preview", "/api/create"] {
+            let error = ui::route_request(
+                "POST",
+                route,
+                serde_json::json!({
+                    "template": "test",
+                    "variables": {"name": "contained"},
+                    "base_dir": "relative/projects"
+                })
+                .to_string()
+                .as_bytes(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("absolute"), "got: {error}");
+        }
+
+        let value = json(
+            "POST",
+            "/api/preview",
+            serde_json::json!({
+                "template": "test",
+                "variables": {"name": "contained"},
+                "base_dir": "~/override"
+            }),
+        );
+        assert_eq!(
+            Path::new(value["root_path"].as_str().unwrap()).parent(),
+            Some(install.join("override").as_path())
+        );
+
+        let error = ui::route_request("POST", "/api/settings", br#"{"base_dir":"also/relative"}"#)
+            .unwrap_err();
+        assert!(error.to_string().contains("absolute"), "got: {error}");
     });
 }
 

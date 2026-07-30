@@ -283,7 +283,12 @@ fn project_size_returns_exact_live_logical_bytes() {
         );
 
         assert_eq!(value["ok"], true);
-        assert_eq!(value["path"], path);
+        let returned_path = value["path"].as_str().expect("size response path");
+        assert_eq!(
+            Path::new(returned_path).canonicalize().unwrap(),
+            root.canonicalize().unwrap(),
+            "the response path should identify the requested project",
+        );
         assert_eq!(value["size_bytes"], expected);
     });
 }

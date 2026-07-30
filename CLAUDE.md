@@ -104,6 +104,8 @@ Gotchas sections below for the parts that bite.
 - `examples/templates/` — the gallery, in folder form. Not bundled; copy one into
   your templates dir to use it.
 - `packaging/` + `.github/workflows/` — release machinery. See the `release` skill.
+  Release automation must not mutate installed packages or run system upgrades;
+  Cristo updates `fast-folder` on his machine and smoke-tests it manually.
 - `tests/` — seven binaries: `integration.rs`, `ui_server.rs`, and the five v1.1
   suites `crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`,
   `hostile_fs.rs`, `properties.rs` (proptest). See "Testing".

@@ -43,8 +43,8 @@ cd <repo>/packaging/aur
 
 # Validate locally before pushing (per package):
 cd fast-folder
-makepkg -si                       # full build + install; then smoke-test: fastf paths
-namcap PKGBUILD                   # lint the recipe (pacman -S namcap)
+makepkg -f                        # full build + check; does not install
+namcap PKGBUILD                   # lint if namcap is already installed
 namcap fast-folder-*.pkg.tar.zst  # lint the built package
 cd ..
 
@@ -59,8 +59,10 @@ git add -A && git commit -m "fast-folder 1.0.0-1" && git push   # first push goe
 Notes:
 - **Never hand-edit `.SRCINFO`** — always regenerate with `makepkg --printsrcinfo > .SRCINFO`.
 - The AUR repo must contain PKGBUILD + .SRCINFO at its root; don't push anything else.
-- Final sanity after publishing: `paru -S fast-folder` on a machine (or user) with no
-  prior fastf state → first run bootstraps `~/.config/fastf`, `fastf ui --app` opens,
-  `man fastf` works, tab completion works.
-- Clean-chroot validation (optional, gold standard): `pacman -S devtools`, then
-  `pkgctl build` inside the package dir.
+- **Release automation must not mutate installed packages.** Do not run `paru -S...`,
+  `pacman -S...`, `yay -S...`, or `makepkg -i`/`makepkg -s`. Cristo updates
+  `fast-folder` on his machine and performs installation smoke tests manually.
+- For Cristo's manual final sanity check: first run bootstraps `~/.config/fastf`,
+  `fastf ui --app` opens, `man fastf` works, and tab completion works.
+- Clean-chroot validation (optional, gold standard): if `devtools` is already
+  installed, run `pkgctl build` inside the package directory.

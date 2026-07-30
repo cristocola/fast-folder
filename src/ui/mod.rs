@@ -574,6 +574,14 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             let _guard = lock_writes()?;
             Ok(Response::Json(set_counter(request)?))
         }
+        // Deliberately lock-free: walking a large project on a slow/network
+        // base must never queue writes behind it. Discovery authorizes the
+        // path first; a concurrent external move/delete then produces a null
+        // snapshot rather than a partial or stale value.
+        ("GET", path) if path.starts_with("/api/project/size?") => {
+            let target = query_param(path, "path").context("missing 'path' query parameter")?;
+            Ok(Response::Json(project_size(&target)?))
+        }
         ("GET", path) if path.starts_with("/api/project?") => {
             let target = query_param(path, "path").context("missing 'path' query parameter")?;
             Ok(Response::Json(project_detail(&target)?))
@@ -1354,6 +1362,23 @@ fn project_detail(path: &str) -> Result<Value> {
             "base_label": library::base_label(&p.base),
             "created_at": p.created,
         })),
+    }))
+}
+
+/// `GET /api/project/size?path=<abs>` — a live, non-persisted logical-byte
+/// snapshot for one currently discovered project.
+///
+/// The directory walk is all-or-nothing. If an entry becomes unreadable or the
+/// project disappears after discovery, `size_bytes` is null (`unavailable` to
+/// the frontend) rather than a misleading partial sum.
+fn project_size(path: &str) -> Result<Value> {
+    let config = Config::load()?;
+    let project = find_project(&config, path)?;
+    let size_bytes = crate::util::tree_size::directory_size(&project.path);
+    Ok(json!({
+        "ok": true,
+        "path": project.path,
+        "size_bytes": size_bytes,
     }))
 }
 

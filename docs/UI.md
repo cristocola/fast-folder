@@ -71,6 +71,7 @@ non-loopback address.
 | POST | `/api/open` | Open a path in the system file manager |
 | POST | `/api/search` | Run the `fastf search` query language (`tag:`, `key=`, `key>date`, free text); empty terms returns all |
 | GET  | `/api/project?path=<abs>` | Full metadata + journal for one project |
+| GET  | `/api/project/size?path=<abs>` | Live logical-byte folder size for a currently discovered project; `size_bytes` is `null` when the tree becomes unreadable/unavailable |
 | POST | `/api/project/tag` | Add/remove one tag (`{path, action, tag}`) |
 | POST | `/api/project/note` | Append a journal entry (`{path, message}`) |
 | POST | `/api/project/move` | Move a project into another configured base (`{path, base}`); target must be in `effective_bases()`. Returns `{job_id}` — the move runs in the background (same-fs = instant rename; cross-fs = staged copy → verify → commit → remove source). Poll `/api/job/<id>` |
@@ -89,9 +90,9 @@ Write routes (`create`, `settings`, `base/init`, template save/from-folder/delet
 `file-save`/`file-add`/`file-delete`, `project/tag`, `project/note`,
 `project/move`, `register`, `apply`, `reindex`, `counter`) serialize through a process-wide mutex
 (`WRITE_LOCK`) so concurrent requests can't corrupt files. Read routes
-(`/api/search`, `/api/project`, `/api/job/<id>`, `/api/template-files`, the GET
-state route) are lock-free. Static GET routes serve only the four embedded
-frontend files.
+(`/api/search`, `/api/project`, `/api/project/size`, `/api/job/<id>`,
+`/api/template-files`, the GET state route) are lock-free. Static GET routes
+serve only the four embedded frontend files.
 
 `WRITE_LOCK` is an **in-process** mutex, so it does not see a `fastf` running in
 a terminal. Anything that allocates an ID or rewrites `config.toml` therefore
@@ -130,6 +131,29 @@ refreshes in place when unsaved template edits would be lost). The `--app`
 launcher also passes `--disable-backgrounding-occluded-windows` and
 `--disable-renderer-backgrounding` to keep the window from being throttled
 into that state in the first place.
+
+**Live project sizes.** `/api/state` intentionally contains neither size values
+nor project-tree walks, so the application shell and project metadata render
+without waiting for large or network-hosted folders. After rendering, the
+frontend progressively calls `GET /api/project/size?path=…` for the six Overview
+rows, the current Projects/Search result set, and an open drawer project (drawer
+requests have queue priority). No more than two size requests run concurrently.
+
+The endpoint first requires the absolute path to match a currently discovered
+project, then performs a lock-free, read-only walk. Its response is
+`{"ok":true,"path":"…","size_bytes":1234}`; a project that becomes
+unreadable or disappears between authorization and walking returns
+`size_bytes: null`. Arbitrary paths are rejected. The walk sums regular-file
+logical lengths, including hidden files and `PROJECT_INFO.md`, never follows
+symlinks/junctions, and ignores special nodes. Any read failure makes the whole
+snapshot unavailable rather than partial.
+
+Results live only in frontend session state. A state refresh advances a
+generation and stale in-flight responses are discarded. Rows and the drawer
+show quiet Scanning/Unavailable states; completed values extend through GB/TB
+and expose the exact byte count in a tooltip. Size is deliberately non-sortable,
+Created remains the default sort, and the project table scrolls horizontally
+when its full column set cannot fit.
 
 **Template file editing (v0.8).** The template editor's Files section works
 directly on the `files/` subtree on disk — `template-files` lists it, `file-save`
@@ -173,7 +197,8 @@ race the base caches), skipping any already there. Both single and bulk moves
 show a `copying → verifying → finalizing` progress overlay with a Cancel button;
 selection state lives in `state.selected` (a `Set` of project paths).
 
-The path/query GET routes (`/api/project?path=`, `/api/job/<id>`) are matched
+The path/query GET routes (`/api/project?path=`, `/api/project/size?path=`,
+`/api/job/<id>`) are matched
 before the static-asset catch-all; query values are percent-decoded with a small
 built-in decoder (`encodeURIComponent` on the frontend).
 

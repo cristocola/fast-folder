@@ -262,6 +262,124 @@ fn project_detail_returns_metadata_and_journal() {
 }
 
 #[test]
+fn project_size_returns_exact_live_logical_bytes() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let path = create_project("sized");
+        let root = Path::new(&path);
+        fs::create_dir_all(root.join("nested/empty")).unwrap();
+        fs::write(root.join("nested/data.bin"), [0_u8; 137]).unwrap();
+        fs::write(root.join(".hidden"), b"hidden bytes").unwrap();
+
+        let expected = fs::metadata(root.join("PROJECT_INFO.md")).unwrap().len()
+            + fs::metadata(root.join("README.md")).unwrap().len()
+            + 137
+            + b"hidden bytes".len() as u64;
+        let value = json(
+            "GET",
+            &format!("/api/project/size?path={path}"),
+            serde_json::Value::Null,
+        );
+
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["path"], path);
+        assert_eq!(value["size_bytes"], expected);
+    });
+}
+
+#[test]
+fn project_size_rejects_paths_outside_the_discovered_library() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        create_project("real");
+
+        let stray = install.join("stray");
+        fs::create_dir_all(&stray).unwrap();
+        fs::write(stray.join("PROJECT_INFO.md"), "not in a configured base").unwrap();
+        let error = ui::route_request(
+            "GET",
+            &format!("/api/project/size?path={}", stray.display()),
+            b"",
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("no project found"),
+            "got: {error}"
+        );
+    });
+}
+
+#[test]
+fn project_size_rejects_a_project_that_disappeared() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let path = create_project("gone");
+
+        // Prime discovery/cache, then remove the folder externally. Discovery
+        // existence-checks cached rows, so a later size request cannot be used
+        // to probe a path that is no longer a project.
+        let _ = json("GET", "/api/state", serde_json::Value::Null);
+        fs::remove_dir_all(&path).unwrap();
+        let error =
+            ui::route_request("GET", &format!("/api/project/size?path={path}"), b"").unwrap_err();
+
+        assert!(
+            error.to_string().contains("no project found"),
+            "got: {error}"
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn project_size_reports_unavailable_instead_of_a_partial_total() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let path = create_project("unreadable");
+        let blocked = Path::new(&path).join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("secret.bin"), [9_u8; 211]).unwrap();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let value = json(
+            "GET",
+            &format!("/api/project/size?path={path}"),
+            serde_json::Value::Null,
+        );
+        assert_eq!(value["ok"], true);
+        assert!(value["size_bytes"].is_null());
+
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
+    });
+}
+
+#[test]
+fn state_neither_embeds_nor_requires_project_size_scans() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        let path = create_project("state stays fast");
+        fs::create_dir_all(Path::new(&path).join("deep/tree")).unwrap();
+        fs::write(Path::new(&path).join("deep/tree/payload.bin"), [4_u8; 4096]).unwrap();
+
+        let state = json("GET", "/api/state", serde_json::Value::Null);
+        let project = &state["projects"][0];
+        assert!(project.get("size_bytes").is_none());
+        assert!(project.get("size").is_none());
+    });
+}
+
+#[test]
 fn tag_add_then_remove_roundtrip() {
     with_fresh_install(|install| {
         write_minimal_template(install, "test");

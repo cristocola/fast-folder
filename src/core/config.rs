@@ -45,7 +45,8 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub prompt_open_after_create: bool,
 
-    /// Default `--limit` for `fastf recent` and the TUI's recent menu.
+    /// Page size for the guided TUI's Projects browser and default `--limit`
+    /// for `fastf recent`. The key name is retained for compatibility.
     #[serde(default = "default_recent_limit")]
     pub recent_default_limit: usize,
 

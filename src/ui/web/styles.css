@@ -824,12 +824,17 @@ button {
   font-weight: 690;
 }
 
-.project-list { overflow: hidden; }
+.project-list {
+  /* The extra live-size column is useful data, not a reason to crush project
+     names on narrow windows. Keep the table intact and let it scroll. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 
 .project-row {
-  min-width: 828px;
+  min-width: 932px;
   display: grid;
-  grid-template-columns: 22px minmax(230px, 1.4fr) 120px 120px 110px 90px 34px;
+  grid-template-columns: 22px minmax(230px, 1.4fr) 120px 120px 110px 88px 90px 34px;
   align-items: center;
   gap: 16px;
   padding: 13px 17px;
@@ -937,6 +942,17 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.size-cell { min-width: 0; }
+.project-size {
+  display: inline-block;
+  min-width: 62px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.project-size.loading { color: var(--muted-2); }
+.project-size.unavailable { color: var(--muted-2); }
 
 .id-code {
   color: var(--ink-2);

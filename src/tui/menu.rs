@@ -5,9 +5,10 @@ use std::collections::HashMap;
 
 use crate::cli::new::{self, NewArgs};
 use crate::cli::register::{self, RegisterArgs};
-use crate::cli::{apply, config, id, recent, search, template};
+use crate::cli::{apply, config, id, recent, template};
 use crate::core::config::Config;
 use crate::core::template as core_template;
+use crate::core::{library, query};
 
 const BANNER: &str = r#"  ___        _      ___    _    _
  | __|_ _ __| |_   | __|__| |__| |___ _ _
@@ -92,7 +93,7 @@ pub fn run() -> Result<()> {
             .with_prompt("What would you like to do?")
             .items(&[
                 "Create new project",
-                "Recent projects",
+                "Projects",
                 "Search projects",
                 "Register existing folder",
                 "Manage templates",
@@ -106,7 +107,7 @@ pub fn run() -> Result<()> {
         // menu instead of ending the session.
         match choice {
             0 => contain(menu_create())?,
-            1 => contain(menu_recent())?,
+            1 => contain(menu_projects())?,
             2 => contain(menu_search())?,
             3 => contain(menu_register())?,
             4 => contain(menu_templates())?,
@@ -231,15 +232,19 @@ fn pick_base_interactively() -> Result<Option<String>> {
     Ok(Some(bases[idx].display().to_string()))
 }
 
-fn menu_recent() -> Result<()> {
-    // Interactive picker is the default for `fastf recent`, so just delegate.
-    recent::run(recent::RecentArgs {
-        limit: None,
-        template: None,
-        since: None,
-        tag: None,
-        plain: false,
-    })?;
+fn menu_projects() -> Result<()> {
+    let page_size = Config::load()
+        .unwrap_or_default()
+        .recent_default_limit
+        .max(1);
+    recent::run_paged_browser(
+        page_size,
+        "No projects yet — create one with `fastf new`.",
+        || {
+            let cfg = Config::load().unwrap_or_default();
+            library::discover(&cfg)
+        },
+    )?;
     println!();
     Ok(())
 }
@@ -254,9 +259,14 @@ fn menu_search() -> Result<()> {
         return Ok(());
     }
     let terms: Vec<String> = query.split_whitespace().map(|s| s.to_string()).collect();
-    search::run(search::SearchArgs {
-        terms,
-        plain: false,
+    let predicates = query::parse(&terms);
+    let page_size = Config::load()
+        .unwrap_or_default()
+        .recent_default_limit
+        .max(1);
+    recent::run_paged_browser(page_size, "No projects match that query.", || {
+        let cfg = Config::load().unwrap_or_default();
+        crate::cli::search::matching_projects(&cfg, &predicates)
     })?;
     println!();
     Ok(())
@@ -482,7 +492,7 @@ fn menu_settings() -> Result<()> {
                 "Project basics  (base dir / template / date / editor)",
                 "Workflow prompts  (open prompt / confirm / banner / preview)",
                 "Library bases  (extra folders to index)",
-                "Recent projects  (default limit)",
+                "Projects  (TUI page size / CLI recent limit)",
                 "Post-create actions  (git / reveal / editor / path / commands)",
                 "ID counter",
                 "Back",
@@ -691,11 +701,11 @@ fn menu_settings_recent() -> Result<()> {
     loop {
         let cfg = Config::load().unwrap_or_default();
         let items = [
-            format!("Default list limit  [{}]", cfg.recent_default_limit),
+            format!("Projects page size  [{}]", cfg.recent_default_limit),
             "Back".to_string(),
         ];
         let choice = Select::new()
-            .with_prompt("Recent projects")
+            .with_prompt("Projects")
             .items(&items)
             .default(0)
             .interact()?;
@@ -703,7 +713,7 @@ fn menu_settings_recent() -> Result<()> {
         let outcome = match choice {
             0 => {
                 let val: String = Input::new()
-                    .with_prompt("Default --limit for `fastf recent`")
+                    .with_prompt("TUI page size and default --limit for `fastf recent`")
                     .default(cfg.recent_default_limit.to_string())
                     .interact_text()?;
                 config::set("recent-default-limit", &val)

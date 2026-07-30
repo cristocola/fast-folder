@@ -29,7 +29,7 @@ use anyhow::Result;
 use colored::Colorize;
 use std::io::IsTerminal;
 
-use crate::core::library;
+use crate::core::library::{self, Project};
 use crate::core::{config::Config, project_info, query};
 
 pub struct SearchArgs {
@@ -68,16 +68,8 @@ pub fn run(args: SearchArgs) -> Result<()> {
         return Ok(());
     }
 
-    // For each project (newest first), load its metadata and evaluate. The
-    // authoritative field values live in PROJECT_INFO.md, so read it fresh.
-    let mut matches = Vec::new();
-    for project in &projects {
-        if let Ok(Some(meta)) = project_info::read_metadata(&project.path)
-            && query::evaluate(&predicates, &meta)
-        {
-            matches.push(project);
-        }
-    }
+    let owned_matches = matching_projects_from(projects, &predicates);
+    let matches: Vec<&Project> = owned_matches.iter().collect();
 
     if matches.is_empty() {
         println!("{}", "No projects match that query.".dimmed());
@@ -93,4 +85,23 @@ pub fn run(args: SearchArgs) -> Result<()> {
         crate::cli::recent::print_plain(&matches);
         Ok(())
     }
+}
+
+/// Fresh, newest-first search results shared with the guided TUI's paged
+/// browser. Metadata is read on every call so a tag mutation can immediately
+/// add or remove a row from the result set.
+pub(crate) fn matching_projects(cfg: &Config, predicates: &[query::Predicate]) -> Vec<Project> {
+    matching_projects_from(library::discover(cfg), predicates)
+}
+
+fn matching_projects_from(projects: Vec<Project>, predicates: &[query::Predicate]) -> Vec<Project> {
+    projects
+        .into_iter()
+        .filter(|project| {
+            project_info::read_metadata(&project.path)
+                .ok()
+                .flatten()
+                .is_some_and(|meta| query::evaluate(predicates, &meta))
+        })
+        .collect()
 }

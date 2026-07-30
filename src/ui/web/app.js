@@ -26,6 +26,14 @@ const state = {
   moving: false,
   offline: false,
   sort: loadSort(),
+  // Live folder-size snapshots. These exist only for this frontend session;
+  // every state refresh advances the generation and drops them.
+  projectSizes: new Map(),
+  projectSizeGeneration: 0,
+  projectSizeQueue: [],
+  projectSizeActive: 0,
+  projectSizeActivePaths: new Set(),
+  projectSizePendingRescan: new Set(),
   selected: new Set(),
   bulkBase: "",
   gitInit: false,
@@ -170,6 +178,11 @@ const API_TIMEOUT_MS = 20000;
 // base these legitimately take minutes, so they get a much longer ceiling. Still
 // bounded: an unbounded wait is what makes the UI look frozen.
 const SLOW_API_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Directory walks are real filesystem work (and may touch a network base).
+// Keep the browser's pressure bounded while leaving a slot for a priority
+// drawer request alongside the current list.
+const PROJECT_SIZE_CONCURRENCY = 2;
 
 async function api(route, options = {}) {
   const { timeout = API_TIMEOUT_MS, ...fetchOptions } = options;
@@ -413,7 +426,173 @@ function formatDate(value) {
 function formatBytes(bytes = 0) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  return `${(bytes / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
+}
+
+function projectSizeDisplay(path) {
+  const snapshot = state.projectSizes.get(path);
+  if (snapshot?.status === "ready") {
+    return {
+      label: formatBytes(snapshot.bytes),
+      title: `${new Intl.NumberFormat().format(snapshot.bytes)} bytes`,
+      status: "ready",
+    };
+  }
+  if (snapshot?.status === "unavailable") {
+    return {
+      label: "Unavailable",
+      title: "The folder size could not be read",
+      status: "unavailable",
+    };
+  }
+  return {
+    label: "Scanning…",
+    title: "Calculating live folder size",
+    status: "loading",
+  };
+}
+
+function projectSizeMarkup(path) {
+  const display = projectSizeDisplay(path);
+  return `<span class="project-size ${display.status}" data-size-path="${esc(path)}" title="${esc(display.title)}" aria-label="${esc(display.title)}">${esc(display.label)}</span>`;
+}
+
+function updateProjectSizeNodes(path = null) {
+  document.querySelectorAll("[data-size-path]").forEach((node) => {
+    if (path !== null && node.dataset.sizePath !== path) return;
+    const display = projectSizeDisplay(node.dataset.sizePath);
+    node.className = `project-size ${display.status}`;
+    node.textContent = display.label;
+    node.title = display.title;
+    node.setAttribute("aria-label", display.title);
+  });
+}
+
+function requestProjectSizes(projects, priority = 0) {
+  const generation = state.projectSizeGeneration;
+  const discovered = new Map(
+    (state.data?.projects || []).map((project) => [project.path, project]),
+  );
+  for (const item of projects || []) {
+    const path = typeof item === "string" ? item : item?.path;
+    if (!path) continue;
+
+    const project = discovered.get(path);
+    if (!project?.exists) {
+      state.projectSizes.set(path, { status: "unavailable" });
+      updateProjectSizeNodes(path);
+      continue;
+    }
+
+    const existing = state.projectSizes.get(path);
+    if (existing?.status === "queued") {
+      const queued = state.projectSizeQueue.find(
+        (job) => job.path === path && job.generation === generation,
+      );
+      if (queued && priority > queued.priority) queued.priority = priority;
+      continue;
+    }
+    if (existing) continue;
+
+    // An older snapshot of this same path is still walking. Queue one fresh
+    // pass after it finishes instead of running two recursive scans over the
+    // same tree concurrently.
+    if (state.projectSizeActivePaths.has(path)) {
+      state.projectSizePendingRescan.add(path);
+      state.projectSizes.set(path, { status: "loading" });
+      updateProjectSizeNodes(path);
+      continue;
+    }
+
+    state.projectSizes.set(path, { status: "queued" });
+    state.projectSizeQueue.push({ path, priority, generation });
+  }
+  state.projectSizeQueue.sort((a, b) => b.priority - a.priority);
+  pumpProjectSizeQueue();
+}
+
+function pumpProjectSizeQueue() {
+  while (
+    state.projectSizeActive < PROJECT_SIZE_CONCURRENCY
+    && state.projectSizeQueue.length
+  ) {
+    const job = state.projectSizeQueue.shift();
+    if (job.generation !== state.projectSizeGeneration) continue;
+    state.projectSizeActive += 1;
+    state.projectSizeActivePaths.add(job.path);
+    state.projectSizes.set(job.path, { status: "loading" });
+    updateProjectSizeNodes(job.path);
+    scanProjectSize(job);
+  }
+}
+
+async function scanProjectSize(job) {
+  try {
+    const result = await api(
+      `/api/project/size?path=${encodeURIComponent(job.path)}`,
+      { timeout: SLOW_API_TIMEOUT_MS },
+    );
+    if (
+      job.generation !== state.projectSizeGeneration
+      || state.projectSizePendingRescan.has(job.path)
+    ) return;
+    const bytes = result.size_bytes;
+    if (Number.isFinite(bytes) && bytes >= 0) {
+      state.projectSizes.set(job.path, { status: "ready", bytes });
+    } else {
+      state.projectSizes.set(job.path, { status: "unavailable" });
+    }
+  } catch {
+    if (
+      job.generation === state.projectSizeGeneration
+      && !state.projectSizePendingRescan.has(job.path)
+    ) {
+      // Size is supplementary information. A vanished/unreadable project is a
+      // quiet unavailable state, not a page-level error or toast.
+      state.projectSizes.set(job.path, { status: "unavailable" });
+    }
+  } finally {
+    state.projectSizeActive -= 1;
+    state.projectSizeActivePaths.delete(job.path);
+    const rescan = state.projectSizePendingRescan.delete(job.path);
+    if (job.generation === state.projectSizeGeneration && !rescan) {
+      updateProjectSizeNodes(job.path);
+    }
+    if (rescan) {
+      state.projectSizes.delete(job.path);
+      requestProjectSizes([job.path], 100);
+    }
+    pumpProjectSizeQueue();
+  }
+}
+
+function invalidateProjectSizes(paths) {
+  for (const path of paths) {
+    state.projectSizes.delete(path);
+    state.projectSizeQueue = state.projectSizeQueue.filter((job) => job.path !== path);
+    if (state.projectSizeActivePaths.has(path)) {
+      state.projectSizePendingRescan.add(path);
+    }
+    updateProjectSizeNodes(path);
+  }
+}
+
+function scheduleVisibleProjectSizes() {
+  if (!state.data) return;
+  // The drawer wins queue priority. Active scans are never duplicated or
+  // cancelled; the selected project simply becomes the next pending job.
+  if (state.detail?.path) requestProjectSizes([state.detail.path], 100);
+
+  if (state.view === "dashboard") {
+    requestProjectSizes(state.data.projects.slice(0, 6));
+  } else if (state.view === "projects") {
+    // When global search has just navigated here, wait for its first response
+    // instead of eagerly walking every project behind the pending query.
+    if (state.search.trim() && state.searchResults === null) return;
+    requestProjectSizes(state.searchResults ?? state.data.projects);
+  }
 }
 
 function shell(content) {
@@ -519,6 +698,7 @@ function render() {
   bindDrawer();
   bindApplyModal();
   bindGenericModal();
+  scheduleVisibleProjectSizes();
 
   if (focusId) {
     const restored = document.getElementById(focusId);
@@ -643,6 +823,7 @@ function projectRows(projects) {
       <div class="project-cell base-cell" title="${esc(displayPath(project.base || ""))}"><span class="chip">${esc(project.base_label || "—")}</span></div>
       <div class="project-cell">${esc(templateName(project.template))}</div>
       <div class="project-cell">${esc(formatDate(project.created_at))}</div>
+      <div class="project-cell size-cell">${projectSizeMarkup(project.path)}</div>
       <div><span class="status ${project.exists ? "" : "missing"}">${project.exists ? "Available" : "Missing"}</span></div>
       <button class="row-action" data-open-path="${esc(project.path)}" ${project.exists ? "" : "disabled"} title="Open in file manager">${icon("external")}</button>
     </div>`).join("");
@@ -1180,7 +1361,7 @@ function projectsPage() {
       <div class="panel project-list">
         <div class="project-row project-header-row">
           <label class="project-select"><input type="checkbox" data-select-all ${allSelected(projects) ? "checked" : ""}></label>
-          ${sortHeader("name", "Project")}${sortHeader("base", "Base")}${sortHeader("template", "Template")}${sortHeader("created", "Created")}${sortHeader("status", "Status")}<span></span>
+          ${sortHeader("name", "Project")}${sortHeader("base", "Base")}${sortHeader("template", "Template")}${sortHeader("created", "Created")}<span class="eyebrow">Size</span>${sortHeader("status", "Status")}<span></span>
         </div>
         <div id="project-results">${projectRows(projects)}</div>
       </div>
@@ -1281,7 +1462,7 @@ function projectDataSettings(config) {
       <div class="settings-section">
         <h3>Library behavior</h3>
         <p>Control how much information Fast Folder shows while browsing and previewing projects.</p>
-        ${settingsInput("settings-recent", "Recent project limit", "Number of projects shown by default", config.recent_default_limit, "", "number")}
+        ${settingsInput("settings-recent", "Projects page size", "Guided TUI page size and default limit for fastf recent", config.recent_default_limit, "", "number")}
         ${settingsInput("settings-preview-lines", "File preview lines", "Lines shown for generated file previews", config.preview_lines, "", "number")}
       </div>
       <div class="settings-section">
@@ -1593,6 +1774,7 @@ async function runProjectSearch() {
       event.stopPropagation();
       openPath(button.dataset.openPath);
     }));
+    requestProjectSizes(state.searchResults);
   }
 }
 
@@ -2404,6 +2586,7 @@ function detailBody(data) {
     </div>
     <div class="drawer-path" title="${esc(displayPath(data.path))}">${esc(shortPath(data.path))}</div>
     ${created ? `<div class="drawer-meta-line"><span>Created</span><strong>${esc(formatDate(created))}</strong></div>` : ""}
+    <div class="drawer-meta-line"><span>Size</span><strong>${projectSizeMarkup(data.path)}</strong></div>
     ${record?.base ? `<div class="drawer-meta-line"><span>Base</span><strong title="${esc(displayPath(record.base))}">${esc(record.base_label || displayPath(record.base))}</strong></div>` : ""}
     ${moveControls(record)}
     <div class="drawer-actions">
@@ -2887,6 +3070,7 @@ async function addNote(message) {
   try {
     const result = await api("/api/project/note", { method: "POST", body: JSON.stringify({ path: state.detail.path, message }) });
     if (state.detail.data) state.detail.data.journal = result.journal;
+    invalidateProjectSizes([state.detail.path]);
     render();
     toast("Journal note added.");
   } catch (error) {
@@ -3280,7 +3464,15 @@ async function runFromFolder() {
 }
 
 async function loadState(renderAfter = true) {
-  state.data = await api("/api/state");
+  // Advance before fetching so any in-flight size response immediately becomes
+  // stale. Keep the old displayed snapshots until state itself succeeds.
+  const generation = state.projectSizeGeneration + 1;
+  state.projectSizeGeneration = generation;
+  state.projectSizeQueue = [];
+  const data = await api("/api/state");
+  if (generation !== state.projectSizeGeneration) return;
+  state.data = data;
+  state.projectSizes.clear();
   // First run: no base configured anywhere — walk the user through picking one.
   if (!state.data.base_configured && !state.onboardDismissed && !state.modal) {
     state.modal = { kind: "onboard", path: state.data.suggested_base || "", busy: false, error: "" };

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use colored::Colorize;
-use std::io::IsTerminal;
-use std::path::Path;
+use std::collections::HashMap;
+use std::io::{IsTerminal, Write};
+use std::path::{Path, PathBuf};
 
 use crate::core::config::Config;
 use crate::core::library::{self, Project};
@@ -153,10 +154,63 @@ fn terminal_columns() -> usize {
     columns as usize
 }
 
+/// A project picker has several distant columns, so the default one-character
+/// cursor is not enough to track the selected row across a wide terminal. Keep
+/// the labels themselves ANSI-free (important for clamping/redraw correctness),
+/// then apply one terminal-native reverse-video strip at render time.
+struct ProjectRowTheme {
+    content_width: usize,
+}
+
+impl ProjectRowTheme {
+    fn new(columns: usize) -> Self {
+        // Same budget as `clamp_label`: two prefix columns plus one last-column
+        // safety margin prevents a highlighted row from soft-wrapping.
+        Self {
+            content_width: columns.saturating_sub(3),
+        }
+    }
+}
+
+impl dialoguer::theme::Theme for ProjectRowTheme {
+    fn format_select_prompt_item(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        text: &str,
+        active: bool,
+    ) -> std::fmt::Result {
+        if !active {
+            return write!(f, "  {text}");
+        }
+
+        let padded = if self.content_width == 0 {
+            std::borrow::Cow::Borrowed(text)
+        } else {
+            dialoguer::console::pad_str(
+                text,
+                self.content_width,
+                dialoguer::console::Alignment::Left,
+                None,
+            )
+        };
+        let row = format!("> {padded}");
+        write!(
+            f,
+            "{}",
+            dialoguer::console::Style::new()
+                .for_stderr()
+                .reverse()
+                .bold()
+                .apply_to(row)
+        )
+    }
+}
+
 pub fn run_picker(filtered: &[&Project]) -> Result<()> {
     use dialoguer::Select;
 
     let columns = terminal_columns();
+    let theme = ProjectRowTheme::new(columns);
     let id_w = filtered.iter().map(|p| p.id.len()).max().unwrap_or(4);
     let tmpl_w = filtered.iter().map(|p| p.template.len()).max().unwrap_or(8);
     let base_w = filtered
@@ -202,7 +256,7 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
             .chain(std::iter::once("[Quit]".to_string()))
             .collect();
 
-        let idx = Select::new()
+        let idx = Select::with_theme(&theme)
             .with_prompt(format!("Projects ({} shown) — pick one", filtered.len()))
             .items(&labels)
             .default(0)
@@ -212,8 +266,12 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
             return Ok(());
         }
 
-        match project_action_menu(filtered[idx])? {
+        match project_action_menu(filtered[idx], None, false)? {
             ActionLoop::BackToList => continue,
+            // Preserve the command picker's existing behaviour: it returns to
+            // its current list after a mutation. The guided browser passes
+            // `reload_after_change = true` and refreshes its owned rows.
+            ActionLoop::Changed(_) => continue,
             ActionLoop::Quit => return Ok(()),
         }
     }
@@ -221,10 +279,220 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
 
 enum ActionLoop {
     BackToList,
+    Changed(Vec<PathBuf>),
     Quit,
 }
 
-fn project_action_menu(project: &Project) -> Result<ActionLoop> {
+/// Guided-TUI project browser. Unlike `fastf recent`, this owns and reloads its
+/// full result set, pages it, and computes live sizes only for the current page.
+/// `load` is called again after every mutation so search predicates and page
+/// bounds remain truthful.
+pub fn run_paged_browser<F>(page_size: usize, empty_message: &str, mut load: F) -> Result<()>
+where
+    F: FnMut() -> Vec<Project>,
+{
+    use dialoguer::Select;
+
+    let page_size = page_size.max(1);
+    let mut projects = load();
+    let mut page = 0_usize;
+    // Browser-session snapshots only. Nothing reaches Project or the cache.
+    let mut sizes: HashMap<PathBuf, Option<u64>> = HashMap::new();
+
+    loop {
+        if projects.is_empty() {
+            println!("{}", empty_message.dimmed());
+            return Ok(());
+        }
+
+        let page_count = projects.len().div_ceil(page_size);
+        page = page.min(page_count - 1);
+        let start = page * page_size;
+        let end = (start + page_size).min(projects.len());
+        let current = &projects[start..end];
+
+        scan_page_sizes(current, page, page_count, &mut sizes);
+
+        let columns = terminal_columns();
+        let mut labels = paged_labels(current, &sizes, columns);
+        let previous_idx = if page > 0 {
+            let idx = Some(labels.len());
+            labels.push("Previous page".to_string());
+            idx
+        } else {
+            None
+        };
+        let next_idx = if page + 1 < page_count {
+            let idx = Some(labels.len());
+            labels.push("Next page".to_string());
+            idx
+        } else {
+            None
+        };
+        let back_idx = labels.len();
+        labels.push("Back".to_string());
+
+        let theme = ProjectRowTheme::new(columns);
+        let choice = Select::with_theme(&theme)
+            .with_prompt(format!(
+                "Projects — Page {}/{} ({} total)",
+                page + 1,
+                page_count,
+                projects.len()
+            ))
+            .items(&labels)
+            .default(0)
+            .interact()?;
+
+        if choice < current.len() {
+            // Own the selected snapshot so a successful action can reload the
+            // backing Vec without keeping a borrow into it.
+            let project = current[choice].clone();
+            match project_action_menu(&project, sizes.get(&project.path), true)? {
+                ActionLoop::BackToList => {}
+                ActionLoop::Changed(paths) => {
+                    for path in paths {
+                        sizes.remove(&path);
+                    }
+                    projects = load();
+                    // `page` is clamped at the top of the loop if the final row
+                    // on the last page was removed or stopped matching search.
+                }
+                ActionLoop::Quit => return Ok(()),
+            }
+            continue;
+        }
+        if previous_idx == Some(choice) {
+            page -= 1;
+            continue;
+        }
+        if next_idx == Some(choice) {
+            page += 1;
+            continue;
+        }
+        if choice == back_idx {
+            return Ok(());
+        }
+        unreachable!();
+    }
+}
+
+/// Compute only snapshots absent from this browser session. A visible progress
+/// line is printed before the first potentially slow walk and updated by count.
+fn scan_page_sizes(
+    projects: &[Project],
+    page: usize,
+    page_count: usize,
+    sizes: &mut HashMap<PathBuf, Option<u64>>,
+) {
+    let pending: Vec<&Project> = projects
+        .iter()
+        .filter(|project| !sizes.contains_key(&project.path))
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+
+    println!(
+        "  Scanning project sizes for page {}/{} ({} project{})…",
+        page + 1,
+        page_count,
+        pending.len(),
+        if pending.len() == 1 { "" } else { "s" }
+    );
+    for (index, project) in pending.iter().enumerate() {
+        print!("\r  Size scan {}/{}", index + 1, pending.len());
+        let _ = std::io::stdout().flush();
+        let size = crate::util::tree_size::directory_size(&project.path);
+        sizes.insert(project.path.clone(), size);
+    }
+    println!(
+        "\r  Size scan complete for page {}/{}.   ",
+        page + 1,
+        page_count
+    );
+}
+
+fn paged_labels(
+    projects: &[Project],
+    sizes: &HashMap<PathBuf, Option<u64>>,
+    columns: usize,
+) -> Vec<String> {
+    let id_w = projects.iter().map(|p| p.id.len()).max().unwrap_or(4);
+    let tmpl_w = projects.iter().map(|p| p.template.len()).max().unwrap_or(8);
+    let base_w = projects
+        .iter()
+        .map(|p| library::base_label(&p.base).len())
+        .max()
+        .unwrap_or(4);
+    let size_w = projects
+        .iter()
+        .map(|p| size_label(sizes.get(&p.path).copied().flatten()).len())
+        .max()
+        .unwrap_or(11);
+
+    projects
+        .iter()
+        .map(|project| {
+            let date = project.created.get(..10).unwrap_or(&project.created);
+            let size = size_label(sizes.get(&project.path).copied().flatten());
+            let tag_str = if project.tags.is_empty() {
+                String::new()
+            } else {
+                let shown: Vec<&str> = project.tags.iter().map(String::as_str).take(3).collect();
+                let extra = project.tags.len().saturating_sub(3);
+                if extra > 0 {
+                    format!("  [{}  +{}]", shown.join("  "), extra)
+                } else {
+                    format!("  [{}]", shown.join("  "))
+                }
+            };
+            let label = format!(
+                "{:<id_w$}  {:<tmpl_w$}  {}  {:<base_w$}  Size {:>size_w$}  {}{}",
+                project.id,
+                project.template,
+                date,
+                library::base_label(&project.base),
+                size,
+                project.name,
+                tag_str,
+                id_w = id_w,
+                tmpl_w = tmpl_w,
+                base_w = base_w,
+                size_w = size_w,
+            );
+            clamp_label(&label, columns)
+        })
+        .collect()
+}
+
+fn size_label(size: Option<u64>) -> String {
+    let Some(bytes) = size else {
+        return "unavailable".to_string();
+    };
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    const TIB: f64 = GIB * 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes_f < MIB {
+        format!("{:.1} KB", bytes_f / KIB)
+    } else if bytes_f < GIB {
+        format!("{:.1} MB", bytes_f / MIB)
+    } else if bytes_f < TIB {
+        format!("{:.1} GB", bytes_f / GIB)
+    } else {
+        format!("{:.1} TB", bytes_f / TIB)
+    }
+}
+
+fn project_action_menu(
+    project: &Project,
+    size: Option<&Option<u64>>,
+    reload_after_change: bool,
+) -> Result<ActionLoop> {
     use dialoguer::{Input, Select};
 
     let path = project.path.as_path();
@@ -245,6 +513,9 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
         library::base_label(&project.base).cyan(),
         path_str.dimmed()
     );
+    if let Some(size) = size {
+        println!("    {} {}", "size:".dimmed(), size_label(*size));
+    }
 
     // Other configured bases this project could move to (mounted ones only).
     let other_bases: Vec<std::path::PathBuf> = {
@@ -321,9 +592,7 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
                         "✓".green().bold(),
                         crate::util::paths::display_path(&moved.path).bold()
                     );
-                    // The in-memory list still shows the old path — go back so
-                    // the user re-enters from a fresh `recent`/`search`.
-                    return Ok(ActionLoop::BackToList);
+                    return Ok(ActionLoop::Changed(vec![project.path.clone(), moved.path]));
                 }
                 Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
             }
@@ -337,9 +606,10 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
             match library::rename_project(project, &new_name) {
                 Ok(renamed) => {
                     println!("{}  Renamed to {}", "✓".green().bold(), renamed.name.bold());
-                    // The in-memory list still shows the old name — go back so
-                    // the user re-enters from a fresh `recent`/`search`.
-                    return Ok(ActionLoop::BackToList);
+                    return Ok(ActionLoop::Changed(vec![
+                        project.path.clone(),
+                        renamed.path,
+                    ]));
                 }
                 Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
             }
@@ -363,7 +633,7 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
                         "✓".green().bold(),
                         project.name.bold()
                     );
-                    return Ok(ActionLoop::BackToList);
+                    return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                 }
                 Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
             }
@@ -392,7 +662,7 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
             match library::delete_project(project) {
                 Ok(()) => {
                     println!("{}  Deleted {}", "✓".green().bold(), path_str.bold());
-                    return Ok(ActionLoop::BackToList);
+                    return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                 }
                 Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
             }
@@ -444,8 +714,15 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
                 let tag = input.trim().to_string();
                 if tag.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
-                } else if let Err(e) = crate::cli::tag::add(&project.id, &[tag]) {
-                    eprintln!("{} {}", "error:".red().bold(), e);
+                } else {
+                    match crate::cli::tag::add(&project.id, &[tag]) {
+                        Ok(()) => {
+                            if reload_after_change {
+                                return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                            }
+                        }
+                        Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+                    }
                 }
             }
             // Remove tag
@@ -454,8 +731,15 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
                 let tag = input.trim().to_string();
                 if tag.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
-                } else if let Err(e) = crate::cli::tag::remove(&project.id, &[tag]) {
-                    eprintln!("{} {}", "error:".red().bold(), e);
+                } else {
+                    match crate::cli::tag::remove(&project.id, &[tag]) {
+                        Ok(()) => {
+                            if reload_after_change {
+                                return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                            }
+                        }
+                        Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+                    }
                 }
             }
             // Add journal note
@@ -470,6 +754,9 @@ fn project_action_menu(project: &Project) -> Result<ActionLoop> {
                         eprintln!("{} {}", "error:".red().bold(), e);
                     } else {
                         println!("{}  Journal entry added.", "✓".green().bold());
+                        if reload_after_change {
+                            return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                        }
                     }
                 }
             }
@@ -613,8 +900,9 @@ pub fn open(query: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::clamp_label;
+    use super::{ProjectRowTheme, clamp_label, size_label};
     use dialoguer::console::measure_text_width;
+    use dialoguer::theme::Theme;
 
     #[test]
     fn clamp_leaves_short_labels_unchanged() {
@@ -646,5 +934,35 @@ mod tests {
     fn clamp_passes_through_when_width_unknown() {
         let label = "y".repeat(200);
         assert_eq!(clamp_label(&label, 0), label);
+    }
+
+    #[test]
+    fn size_labels_cover_bytes_through_terabytes() {
+        assert_eq!(size_label(Some(0)), "0 B");
+        assert_eq!(size_label(Some(1024)), "1.0 KB");
+        assert_eq!(size_label(Some(1024_u64.pow(2))), "1.0 MB");
+        assert_eq!(size_label(Some(1024_u64.pow(3))), "1.0 GB");
+        assert_eq!(size_label(Some(1024_u64.pow(4))), "1.0 TB");
+        assert_eq!(size_label(None), "unavailable");
+    }
+
+    #[test]
+    fn selected_project_row_highlight_spans_the_safe_terminal_width() {
+        let theme = ProjectRowTheme::new(24);
+        let mut rendered = String::new();
+        theme
+            .format_select_prompt_item(&mut rendered, "ID001  Project", true)
+            .unwrap();
+
+        let plain = dialoguer::console::strip_ansi_codes(&rendered);
+        assert!(plain.starts_with("> ID001  Project"));
+        assert_eq!(measure_text_width(&plain), 23);
+        assert!(plain.ends_with(' '), "selected row should fill the row");
+
+        let mut inactive = String::new();
+        theme
+            .format_select_prompt_item(&mut inactive, "ID001  Project", false)
+            .unwrap();
+        assert_eq!(inactive, "  ID001  Project");
     }
 }

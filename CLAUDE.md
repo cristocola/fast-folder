@@ -36,6 +36,10 @@ here.
   Error containment, an honest Ctrl-C, `resolve_base_dir_input` as the single
   validated write path, a reachable `on_name_collision`, move progress + cancel,
   and `tests/tui_pty.rs`. See "v1.3 gotchas".
+- **Live sizes — scan on demand, never cache.** Guided TUI pages and visible web
+  rows get current logical-byte snapshots without changing project metadata,
+  cache schemas, `/api/state`, or script-facing CLI output. See "Live project
+  sizes".
 
 ## Build commands
 
@@ -60,7 +64,7 @@ FASTF_UI_DIR=src/ui/web cargo run -- ui   # frontend live-reload (assets from di
 node --check src/ui/web/app.js            # frontend sanity check — run after every edit
 ```
 
-Test count is **301 on Linux**; `cargo test --release` runs fewer because the
+Test count is **316 on Linux**; `cargo test --release` runs fewer because the
 failpoint tests are `#[cfg(debug_assertions)]`, `windows_semantics.rs` reports
 only 3 of its cases off Windows, and the pty suites are unix-only.
 
@@ -86,7 +90,8 @@ Gotchas sections below for the parts that bite.
 - `src/util/` — all v1.1 hardening primitives: `lockfile` (cross-process `DataLock`),
   `atomic` (THE atomic write), `fs_retry` (Windows sharing violations), `interrupt`
   (Ctrl-C rollback), `faults` (failpoints, compiled out of release), `paths`
-  (`install_dir` resolution + `display_path`).
+  (`install_dir` resolution + `display_path`), `tree_size` (all-or-nothing,
+  non-following logical-byte snapshots).
 - `src/cli/` — one module per subcommand. `move_project.rs` is named that way because
   `move` is a keyword. Several commands split a non-interactive core from an
   interactive shell (`register::register_core`, `template::from_folder`) so the UI and
@@ -171,6 +176,22 @@ There is **no `projects.jsonl`**. The project list is discovered from the filesy
 Each base carries a **disposable** `.fastf-index.json` cache at its root, co-located with the projects so it travels with them and is portable (entries store a base-relative `dir`, valid across `/mnt/…` and `D:\…`). The cache is never authoritative — `discover_base` self-heals: if the base's mtime is newer than the cache (or either can't be stat'd) it rescans + rewrites; otherwise it trusts cached metadata but existence-checks each entry and drops (rewriting away) any whose folder disappeared. **No manual prune, ever** — the "missing" state is transient. `fastf reindex` forces a full rescan for external edits fastf can't observe.
 
 `max_id(cfg)` is **read-only** (reads a fresh cache or scans, never writes) so it's safe to call from `plan()`/preview. `resolve(cfg, query)` replaces the old `index::resolve_project` (exact-id → id-prefix → name-substring). `cache_upsert`/`refresh_cache` keep the cache fresh after create / tag mutations without a rescan. All cache writes are best-effort and atomic (`.tmp` + rename); a cache error never fails a command. Counter self-heals: `plan()` computes the ID from `max(counters.get(), library::max_id(cfg)) + 1`.
+
+### Live project sizes
+
+`util::tree_size::directory_size` is the one shared walker for guided-TUI and
+web sizes. It sums regular-file logical lengths recursively (hidden files and
+`PROJECT_INFO.md` included), never follows symlinks/junctions, ignores special
+nodes, uses checked addition, and returns `None` on any read failure rather than
+a partial number. It is crate-internal and read-only.
+
+Sizes never enter `Project`, `.fastf-index.json`, project metadata, or
+`/api/state`. The guided TUI's Projects browser owns page/session snapshots and
+uses `recent_default_limit` as its page size; standalone `fastf recent` and
+`fastf search` output stays unchanged. The browser endpoint authorizes paths via
+fresh discovery and walks without `WRITE_LOCK`; its frontend queue runs at most
+two scans, prioritizes an open drawer, and drops old-generation responses after
+state refresh.
 
 ### Durable provisioning + verified moves (v0.11)
 

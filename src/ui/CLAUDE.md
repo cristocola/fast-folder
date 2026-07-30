@@ -214,6 +214,14 @@ forwards to `cli::ui::run`. `Response` derives `Debug` (tests `unwrap_err` on th
   paths past MAX_PATH work. `data-*` attributes stay canonical; anything rendered goes
   through `displayPath`. A server-side `display_path` field was tried and reverted — two
   mechanisms for one job.
+- Live sizes: **never add size to `Project`, `CacheEntry`, or `/api/state`.** Project
+  contents change outside fastf, so persisted/boot-time sizes are stale or slow by
+  construction. `GET /api/project/size?path=…` authorizes against fresh discovery,
+  then calls the crate-internal all-or-nothing walker without `WRITE_LOCK`; unreadable
+  or concurrently vanished trees return `size_bytes: null`. The frontend owns the
+  only cache (`state.projectSizes`), limits scans to two, prioritizes the drawer, and
+  uses `projectSizeGeneration` to discard responses from before a state refresh.
+  Keep Size non-sortable and keep the project table horizontally scrollable.
 
 Run `node --check src/ui/web/app.js` after every frontend edit — see the root
 CLAUDE.md "Two tooling traps" note for why (backticks inside template literals).

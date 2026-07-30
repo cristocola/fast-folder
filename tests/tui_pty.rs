@@ -21,11 +21,14 @@
 mod common;
 
 use common::{Sandbox, pty};
+use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 
 const DEADLINE: Duration = Duration::from_secs(25);
 
-/// Main-menu indices: Create, Recent, Search, Register, Templates, Settings, Quit.
+/// Main-menu indices: Create, Projects, Search, Register, Templates, Settings, Quit.
+const MENU_PROJECTS: usize = 1;
 const MENU_REGISTER: usize = 3;
 const MENU_SETTINGS: usize = 5;
 const MENU_QUIT: usize = 6;
@@ -142,4 +145,144 @@ fn ctrl_c_at_the_menu_is_honest_and_restores_the_cursor() {
         out.contains("\x1b[?25h"),
         "the cursor must be shown again, or the user's shell is left blind"
     );
+}
+
+fn plant_dated_project(
+    sb: &Sandbox,
+    folder: &str,
+    id: &str,
+    created: &str,
+    payload_bytes: usize,
+) -> PathBuf {
+    let root = sb.plant_project(&sb.base, folder, id);
+    let pinfo = root.join("PROJECT_INFO.md");
+    let raw = fs::read_to_string(&pinfo).unwrap();
+    fs::write(&pinfo, raw.replace("2026-01-01T00:00:00Z", created)).unwrap();
+    fs::write(root.join("payload.bin"), vec![7_u8; payload_bytes]).unwrap();
+    root
+}
+
+#[test]
+fn projects_browser_is_newest_first_sized_and_paged() {
+    let sb = Sandbox::new();
+    sb.ok(&["config", "set", "recent-default-limit", "1"]);
+    plant_dated_project(
+        &sb,
+        "Newest_Project",
+        "ID0003",
+        "2026-03-03T00:00:00Z",
+        2048,
+    );
+    plant_dated_project(
+        &sb,
+        "Middle_Project",
+        "ID0002",
+        "2026-02-02T00:00:00Z",
+        1024,
+    );
+    plant_dated_project(&sb, "Oldest_Project", "ID0001", "2026-01-01T00:00:00Z", 512);
+
+    let script = pty::Script::new()
+        .down(MENU_PROJECTS)
+        .enter()
+        // Page 1: one project, Next, Back.
+        .down(1)
+        .enter()
+        // Page 2: one project, Previous, Next, Back.
+        .down(1)
+        .enter()
+        // Back on page 1: one project, Next, Back.
+        .down(2)
+        .enter()
+        .down(MENU_QUIT)
+        .enter()
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(
+        code, 0,
+        "paged browser should return and quit cleanly:\n{out}"
+    );
+    assert!(
+        out.contains("Projects — Page 1/3"),
+        "page prompt missing:\n{out}"
+    );
+    assert!(
+        out.contains("Projects — Page 2/3"),
+        "next page missing:\n{out}"
+    );
+    assert!(
+        out.contains("Previous page"),
+        "previous control missing:\n{out}"
+    );
+    assert!(out.contains("Next page"), "next control missing:\n{out}");
+    assert!(out.contains("Back"), "back control missing:\n{out}");
+    assert!(
+        out.contains("Scanning project sizes for page 1/3"),
+        "scan progress missing:\n{out}"
+    );
+    assert!(
+        out.contains("Size") && out.contains("KB"),
+        "human size missing:\n{out}"
+    );
+
+    let newest = out.find("Newest_Project").expect("newest project label");
+    let middle = out.find("Middle_Project").expect("middle project label");
+    assert!(
+        newest < middle,
+        "projects were not shown newest first:\n{out}"
+    );
+    assert!(
+        !out.contains("Oldest_Project"),
+        "only visited pages should be scanned/rendered:\n{out}"
+    );
+    assert!(out.contains("Goodbye."));
+}
+
+#[test]
+fn projects_browser_reloads_after_a_project_mutation() {
+    let sb = Sandbox::new();
+    sb.ok(&["config", "set", "recent-default-limit", "1"]);
+    let root = plant_dated_project(
+        &sb,
+        "Mutable_Project",
+        "ID0001",
+        "2026-01-01T00:00:00Z",
+        256,
+    );
+
+    let script = pty::Script::new()
+        .down(MENU_PROJECTS)
+        .enter()
+        .enter() // select the project
+        .down(2) // Add tag
+        .enter()
+        .line("draft")
+        .pause(500)
+        // Reloaded one-project page: project, Back.
+        .down(1)
+        .enter()
+        .down(MENU_QUIT)
+        .enter()
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(
+        code, 0,
+        "mutation should return safely to the browser:\n{out}"
+    );
+    assert!(
+        out.contains("Added 1 tag"),
+        "tag action did not complete:\n{out}"
+    );
+    assert!(
+        out.matches("Scanning project sizes for page 1/1").count() >= 2,
+        "the changed project size should be invalidated and rescanned:\n{out}"
+    );
+    assert!(
+        fs::read_to_string(root.join("PROJECT_INFO.md"))
+            .unwrap()
+            .contains("draft")
+    );
+    assert!(out.contains("Goodbye."));
 }

@@ -58,6 +58,25 @@ There is no prune command because none is needed. For changes fastf could not ob
 fastf reindex
 ```
 
+## Live folder sizes
+
+The guided TUI and browser UI show a current Size snapshot for each project they
+display. Size is the sum of the logical lengths of all regular files below the
+project folder, including hidden files and `PROJECT_INFO.md`. Empty directories
+add zero bytes. Symlinks, Windows junctions, and other links are never followed;
+sockets, devices, and other special filesystem nodes are ignored.
+
+The result is all-or-nothing. If any directory or regular file cannot be read,
+the size is shown as unavailable instead of reporting a misleading partial
+total. Values describe file length, not allocated disk blocks, compression, or
+the size of anything reached through a link.
+
+Sizes are deliberately absent from `PROJECT_INFO.md`, the disposable
+`.fastf-index.json` cache, the in-memory `Project` model, and `/api/state`.
+Project contents can change outside fastf at any time, so a persisted value
+would immediately become stale. Re-enter the TUI Projects browser or use the
+browser UI's Refresh action to obtain a new snapshot.
+
 ## The ID counter self-heals
 
 The counter lives **inside each base**, as `.fastf-counter.toml` next to the projects it numbers. Your project drive is already mounted by every operating system you boot, so they all read the same number — nothing to symlink, nothing to keep in sync, and a base on an external drive carries its numbering with it.

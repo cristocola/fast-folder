@@ -504,7 +504,7 @@ enum ConfigAction {
             prompt-open-after-create    Ask 'Open project folder?' after `fastf new` (default: true)\n  \
             confirm-create              Ask 'Create this project?' in `fastf new` (default: true)\n  \
             show-banner                 Show ASCII banner in TUI menu (default: true)\n  \
-            recent-default-limit        Default --limit for `fastf recent` (default: 20)\n  \
+            recent-default-limit        TUI Projects page size and default `fastf recent --limit` (default: 20)\n  \
             register-naming-pattern     Pattern for `fastf register --rename` w/o a template (default: \"{date}_{name}_{id}\")\n  \
             on-name-collision           What to do when the folder name is taken: suffix (add _2, _3…) or error (default: suffix)\n  \
             post_create.git_init        Run `git init` automatically (default: false)\n  \

@@ -47,6 +47,22 @@ After a successful create, fastf asks `Open project folder? [Y/n]` and opens the
 
 ## Browsing projects
 
+From the guided `fastf` menu, choose **Projects** to browse the complete library
+newest first. The browser is paged, with Previous, Next, and Back controls; each
+prompt shows `Page X/Y`. Only the current page is scanned for live folder sizes,
+and those snapshots are kept only until you leave that Projects session. The
+same paged browser is used after choosing Search from the guided menu. The
+current selection is highlighted across the full terminal row, so columns such
+as Size remain easy to track back to the selected project.
+
+`recent-default-limit` is retained as the configuration key for compatibility.
+It now controls both the guided TUI's Projects page size and the default
+`--limit` for `fastf recent`:
+
+```bash
+fastf config set recent-default-limit 20
+```
+
 ```bash
 fastf recent                         # interactive picker (default on a terminal)
 fastf recent --plain                 # plain list, script friendly
@@ -64,6 +80,10 @@ The picker shows inline tags. Selecting a project opens an action menu: open fol
 ```bash
 fastf recent | grep music-video
 ```
+
+The standalone `fastf recent` and `fastf search` commands retain their existing
+command-line output; live Size fields are exclusive to the guided TUI and
+browser UI, so scripts do not acquire a new column.
 
 Deleted a project folder manually? The next `fastf recent` simply won't list it. The per-base cache heals itself, so there is no prune command. If you moved folders or edited metadata outside fastf, run `fastf reindex`.
 

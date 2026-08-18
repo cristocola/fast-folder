@@ -51,6 +51,10 @@ here.
   `core::operations`, which validates, takes `DataLock`, reloads authoritative
   state, mutates, and refreshes caches. The browser server enforces loopback and
   validates `Host`/same-origin `Origin`.
+- **v1.6.0 — the guided browser stops waiting.** The project list draws before a
+  single folder has been measured; background workers fill the Size column in
+  place. `util::live_select` owns that one key loop, because `dialoguer::Select`
+  cannot repaint while it waits. See "Live project sizes".
 
 ## Build commands
 

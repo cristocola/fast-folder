@@ -51,6 +51,10 @@ here.
   `core::operations`, which validates, takes `DataLock`, reloads authoritative
   state, mutates, and refreshes caches. The browser server enforces loopback and
   validates `Host`/same-origin `Origin`.
+- **v1.6.0 — the guided browser stops waiting.** The project list draws before a
+  single folder has been measured; background workers fill the Size column in
+  place. `util::live_select` owns that one key loop, because `dialoguer::Select`
+  cannot repaint while it waits. See "Live project sizes".
 
 ## Build commands
 
@@ -106,7 +110,9 @@ Gotchas sections below for the parts that bite.
   `atomic` (THE atomic write), `fs_retry` (Windows sharing violations), `interrupt`
   (Ctrl-C rollback), `faults` (failpoints, compiled out of release), `paths`
   (`install_dir` resolution + `display_path`), `tree_size` (all-or-nothing,
-  non-following logical-byte snapshots).
+  non-following logical-byte snapshots), plus the two live-size pieces:
+  `size_scan` (background sizing workers) and `live_select` (the only picker in
+  the codebase that is not `dialoguer::Select`).
 - `src/cli/` — one module per subcommand. `move_project.rs` is named that way
   because `move` is a keyword. CLI modules gather prompts and render outcomes;
   noninteractive register/from-folder behavior lives under `core/` so UI code
@@ -212,15 +218,33 @@ Each base carries a **disposable** `.fastf-index.json` cache at its root, co-loc
 web sizes. It sums regular-file logical lengths recursively (hidden files and
 `PROJECT_INFO.md` included), never follows symlinks/junctions, ignores special
 nodes, uses checked addition, and returns `None` on any read failure rather than
-a partial number. It is crate-internal and read-only.
+a partial number. It is crate-internal and read-only. `directory_size_until`
+adds one thing: a cancel token checked once per directory entry, so teardown is
+bounded on a share. **A cancelled walk also returns `None`**, so a caller that
+cancels must discard the result rather than record it as `unavailable` —
+`size_scan`'s worker is the only caller and does exactly that.
 
 Sizes never enter `Project`, `.fastf-index.json`, project metadata, or
-`/api/state`. The guided TUI's Projects browser owns page/session snapshots and
-uses `recent_default_limit` as its page size; standalone `fastf recent` and
-`fastf search` output stays unchanged. The browser endpoint authorizes paths via
-fresh discovery and walks without `WRITE_LOCK`; its frontend queue runs at most
-two scans, prioritizes an open drawer, and drops old-generation responses after
-state refresh.
+`/api/state`. The browser endpoint authorizes paths via fresh discovery and
+walks without `WRITE_LOCK`; its frontend queue runs at most two scans,
+prioritizes an open drawer, and drops old-generation responses after state
+refresh.
+
+**Nothing blocks on a size.** The guided browser draws its list first and shows
+`scanning…` in a fixed-width cell until a snapshot lands. `util::size_scan`
+owns two workers over one queue; `request` **replaces** that queue with the
+visible page, selected row first, so turning the page or moving the selection
+reprioritizes at once instead of finishing work nobody is looking at. Snapshots
+live in the scanner for one browser session and die with it; a mutation calls
+`forget` so the row is measured again. Standalone `fastf recent` and
+`fastf search` are untouched — no size column, no new output for scripts.
+
+The list repaints itself because `util::live_select` owns the key loop:
+`dialoguer::Select` cannot, since `Term::read_key` has no timeout and a
+read/write-pair `Term` reports `is_term() == false`. The key is read on a
+throwaway thread and collected with `recv_timeout`, which makes the *wait*
+interruptible without the *read* being so. Everything else in the TUI stays on
+`dialoguer`, and `live_select` matches it key for key on purpose.
 
 ### Contained provisioning + recovery v2 (v1.5.0/v1.5.1)
 
@@ -675,6 +699,32 @@ real flows.
 **Menu arms yield a `Result` instead of using `?` inline.** Each `match` builds
 an outcome and passes it to `contain(...)?`. Adding an arm that uses `?` directly
 silently opts that path out of containment.
+
+**Only the render thread may write while a live list is up.** On Windows
+`console`'s `move_cursor_up` derives its target from the *live* console cursor
+position, so one stray `println!` from another thread corrupts every later
+redraw of `live_select`'s block. That is why the old `scan_page_sizes` progress
+output was deleted rather than moved to the scanner, and why the scanner threads
+are silent by construction. The same block is taken back by **line count**
+(`clear_last_lines`), so `live_select`'s items must stay single-line and
+ANSI-free — `clamp_label` and `ProjectRowTheme` are what guarantee that, and a
+styled or unclamped label desynchronises the repaint.
+
+**The Size cell is a fixed width (`SIZE_CELL`), not the page's widest value.**
+Sizing the column to its contents — which the blocking scan did — shifts every
+row sideways each time a background snapshot lands, and a table that reflows
+while you read it is worse than one that is slow. Guarded by
+`a_landing_size_does_not_reflow_the_row`, which compares **display columns**:
+the pending cell's `…` is three bytes and one column, so a byte-offset
+comparison fails a correctly aligned row.
+
+**A pty test that proves "no input was needed" must anchor on the highlight.**
+Ordering alone cannot: within one frame the project rows are written before the
+navigation rows, so `size before Back` is true even when the size only arrived
+after a keypress. `ProjectRowTheme` prefixes only the active row with `> `, so
+`> ID0001 … 3.0 MB` on one line proves the size reached a list whose selection
+had not yet been touched. Verified by breaking it — with the repaint tick raised
+to 60s, `projects_browser_fills_in_sizes_without_any_input` fails.
 
 **Guard `show_cursor` with `is_terminal`.** `Term::show_cursor` emits the escape
 whatever it is writing to, so restoring the cursor unconditionally on the error

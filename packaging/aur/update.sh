@@ -23,9 +23,10 @@ done
 
 cat <<EOF
 
-Done. Next steps (per package):
-  cp $here/fast-folder/{PKGBUILD,.SRCINFO}     ~/aur/fast-folder/
-  cp $here/fast-folder-bin/{PKGBUILD,.SRCINFO} ~/aur/fast-folder-bin/
-  cd ~/aur/fast-folder     && git add -A && git commit -m "fast-folder $version-1"     && git push
-  cd ~/aur/fast-folder-bin && git add -A && git commit -m "fast-folder-bin $version-1" && git push
+Done. Next steps (per package). The AUR clones live beside this repo:
+  aur=~/Projects/2026-05-13_fast_folder_ID0052/aur
+  cp $here/fast-folder/{PKGBUILD,.SRCINFO}     \$aur/fast-folder/
+  cp $here/fast-folder-bin/{PKGBUILD,.SRCINFO} \$aur/fast-folder-bin/
+  cd \$aur/fast-folder     && git add -A && git commit -m "fast-folder $version-1"     && git push
+  cd \$aur/fast-folder-bin && git add -A && git commit -m "fast-folder-bin $version-1" && git push
 EOF

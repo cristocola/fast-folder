@@ -218,8 +218,8 @@ fn projects_browser_is_newest_first_sized_and_paged() {
     assert!(out.contains("Next page"), "next control missing:\n{out}");
     assert!(out.contains("Back"), "back control missing:\n{out}");
     assert!(
-        out.contains("Scanning project sizes for page 1/3"),
-        "scan progress missing:\n{out}"
+        out.contains("scanning…"),
+        "the list should draw before any size is known:\n{out}"
     );
     assert!(
         out.contains("Size") && out.contains("KB"),
@@ -276,13 +276,70 @@ fn projects_browser_reloads_after_a_project_mutation() {
         "tag action did not complete:\n{out}"
     );
     assert!(
-        out.matches("Scanning project sizes for page 1/1").count() >= 2,
+        out.matches("scanning…").count() >= 2,
         "the changed project size should be invalidated and rescanned:\n{out}"
     );
     assert!(
         fs::read_to_string(root.join("PROJECT_INFO.md"))
             .unwrap()
             .contains("draft")
+    );
+    assert!(out.contains("Goodbye."));
+}
+
+/// The headline behaviour: the list is drawn before a single folder has been
+/// walked, and the sizes arrive on their own while nothing is being typed.
+///
+/// The proof is structural rather than a timing race. `ProjectRowTheme` prefixes
+/// only the *highlighted* row with `> `, and the one arrow key in this script
+/// moves that highlight off the project for good. So a row rendered as
+/// `> ID0001 … 3.0 MB` can only have been drawn while the selection was still
+/// untouched — by a repaint the browser drove itself. A keypress-driven design
+/// can produce the first half of this test but never the second.
+#[test]
+fn projects_browser_fills_in_sizes_without_any_input() {
+    let sb = Sandbox::new();
+    sb.ok(&["config", "set", "recent-default-limit", "1"]);
+    // Three whole mebibytes, so the rendered figure is stable: PROJECT_INFO.md
+    // adds a few hundred bytes, which cannot move a one-decimal MB reading.
+    plant_dated_project(
+        &sb,
+        "Measured_Project",
+        "ID0001",
+        "2026-01-01T00:00:00Z",
+        3 * 1024 * 1024,
+    );
+
+    let script = pty::Script::new()
+        .down(MENU_PROJECTS)
+        .enter()
+        // Nothing at all is typed here. Any size that appears in this window was
+        // drawn by the browser on its own.
+        .pause(2500)
+        .down(1) // → Back, the first keystroke since the list opened
+        .enter()
+        .down(MENU_QUIT)
+        .enter()
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "the browser should quit cleanly:\n{out}");
+    let selected_row = |contains: &str| {
+        out.lines()
+            .any(|line| line.contains("> ID0001") && line.contains(contains))
+    };
+
+    assert!(
+        selected_row("scanning…"),
+        "the list must draw before the folder has been walked:\n{out}"
+    );
+    assert!(
+        selected_row("3.0 MB"),
+        "the size never reached the untouched list — the repaint is not live:\n{out}"
+    );
+    assert!(
+        out.contains("> Back"),
+        "the arrow key was never processed, so the anchor proves nothing:\n{out}"
     );
     assert!(out.contains("Goodbye."));
 }

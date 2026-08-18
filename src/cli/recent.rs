@@ -1,11 +1,26 @@
 use anyhow::Result;
 use colored::Colorize;
-use std::collections::HashMap;
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::core::config::Config;
 use crate::core::library::{self, Project};
+use crate::util::size_scan::{SizeCell, SizeScanner};
+
+/// How often the guided browser looks for newly measured folder sizes. The same
+/// cadence `fastf move` draws its progress at: fast enough to look live, slow
+/// enough that a network scan is not competing with the terminal for I/O.
+const SIZE_TICK: Duration = Duration::from_millis(200);
+
+/// Width of the Size cell, fixed at the widest value it can hold
+/// (`unavailable`). Sizing it to the page's current widest value — which is what
+/// the old blocking scan did — reflows every row each time a snapshot lands.
+const SIZE_CELL: usize = 11;
+
+/// Shown until a row has been measured. Says what is happening, rather than
+/// leaving a gap that reads as "empty folder".
+const PENDING_LABEL: &str = "scanning…";
 
 pub struct RecentArgs {
     /// None = use Config::recent_default_limit.
@@ -284,20 +299,27 @@ enum ActionLoop {
 }
 
 /// Guided-TUI project browser. Unlike `fastf recent`, this owns and reloads its
-/// full result set, pages it, and computes live sizes only for the current page.
+/// full result set, pages it, and shows live folder sizes for the current page.
 /// `load` is called again after every mutation so search predicates and page
 /// bounds remain truthful.
+///
+/// Sizes come from `SizeScanner`'s worker threads, and the list is drawn before
+/// any of them has answered. That is the whole point: walking a page of project
+/// trees takes seconds on a network share, and it used to happen inline, so the
+/// list only appeared once every visible row had been measured.
+///
+/// While the list is up, `util::live_select` owns the terminal, so
+/// nothing in here may print — which is why the scan has no progress output of
+/// its own, and why the scanner threads are silent by construction.
 pub fn run_paged_browser<F>(page_size: usize, empty_message: &str, mut load: F) -> Result<()>
 where
     F: FnMut() -> Vec<Project>,
 {
-    use dialoguer::Select;
-
     let page_size = page_size.max(1);
     let mut projects = load();
     let mut page = 0_usize;
     // Browser-session snapshots only. Nothing reaches Project or the cache.
-    let mut sizes: HashMap<PathBuf, Option<u64>> = HashMap::new();
+    let scanner = SizeScanner::new();
 
     loop {
         if projects.is_empty() {
@@ -310,49 +332,54 @@ where
         let start = page * page_size;
         let end = (start + page_size).min(projects.len());
         let current = &projects[start..end];
+        let paths: Vec<PathBuf> = current.iter().map(|p| p.path.clone()).collect();
 
-        scan_page_sizes(current, page, page_count, &mut sizes);
-
-        let columns = terminal_columns();
-        let mut labels = paged_labels(current, &sizes, columns);
+        let mut nav: Vec<String> = Vec::new();
         let previous_idx = if page > 0 {
-            let idx = Some(labels.len());
-            labels.push("Previous page".to_string());
-            idx
+            nav.push("Previous page".to_string());
+            Some(current.len() + nav.len() - 1)
         } else {
             None
         };
         let next_idx = if page + 1 < page_count {
-            let idx = Some(labels.len());
-            labels.push("Next page".to_string());
-            idx
+            nav.push("Next page".to_string());
+            Some(current.len() + nav.len() - 1)
         } else {
             None
         };
-        let back_idx = labels.len();
-        labels.push("Back".to_string());
+        nav.push("Back".to_string());
+        let back_idx = current.len() + nav.len() - 1;
 
+        let columns = terminal_columns();
         let theme = ProjectRowTheme::new(columns);
-        let choice = Select::with_theme(&theme)
-            .with_prompt(format!(
-                "Projects — Page {}/{} ({} total)",
-                page + 1,
-                page_count,
-                projects.len()
-            ))
-            .items(&labels)
-            .default(0)
-            .interact()?;
+        let prompt = format!(
+            "Projects — Page {}/{} ({} total)",
+            page + 1,
+            page_count,
+            projects.len()
+        );
+
+        let choice = crate::util::live_select::select_live(&prompt, 0, &theme, SIZE_TICK, |sel| {
+            // Re-declare the whole visible page every frame, selected row first:
+            // it is the one the user is about to open, and `request` replaces the
+            // queue rather than extending it, so moving the selection or turning
+            // the page reprioritises straight away.
+            scanner.request(&scan_order(&paths, sel));
+            let mut labels = paged_labels(current, &scanner.cells_for(&paths), columns);
+            labels.extend(nav.iter().cloned());
+            labels
+        })?;
 
         if choice < current.len() {
             // Own the selected snapshot so a successful action can reload the
             // backing Vec without keeping a borrow into it.
             let project = current[choice].clone();
-            match project_action_menu(&project, sizes.get(&project.path), true)? {
+            let cell = scanner.cells_for(std::slice::from_ref(&project.path))[0];
+            match project_action_menu(&project, Some(cell), true)? {
                 ActionLoop::BackToList => {}
                 ActionLoop::Changed(paths) => {
                     for path in paths {
-                        sizes.remove(&path);
+                        scanner.forget(&path);
                     }
                     projects = load();
                     // `page` is clamped at the top of the loop if the final row
@@ -377,47 +404,29 @@ where
     }
 }
 
-/// Compute only snapshots absent from this browser session. A visible progress
-/// line is printed before the first potentially slow walk and updated by count.
-fn scan_page_sizes(
-    projects: &[Project],
-    page: usize,
-    page_count: usize,
-    sizes: &mut HashMap<PathBuf, Option<u64>>,
-) {
-    let pending: Vec<&Project> = projects
-        .iter()
-        .filter(|project| !sizes.contains_key(&project.path))
-        .collect();
-    if pending.is_empty() {
-        return;
+/// The visible page's paths with the selected row first, so the row the user is
+/// pointing at is measured next. A navigation row leaves display order alone.
+fn scan_order(paths: &[PathBuf], sel: usize) -> Vec<PathBuf> {
+    let mut ordered = Vec::with_capacity(paths.len());
+    if let Some(selected) = paths.get(sel) {
+        ordered.push(selected.clone());
     }
-
-    println!(
-        "  Scanning project sizes for page {}/{} ({} project{})…",
-        page + 1,
-        page_count,
-        pending.len(),
-        if pending.len() == 1 { "" } else { "s" }
+    ordered.extend(
+        paths
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| *idx != sel)
+            .map(|(_, path)| path.clone()),
     );
-    for (index, project) in pending.iter().enumerate() {
-        print!("\r  Size scan {}/{}", index + 1, pending.len());
-        let _ = std::io::stdout().flush();
-        let size = crate::util::tree_size::directory_size(&project.path);
-        sizes.insert(project.path.clone(), size);
-    }
-    println!(
-        "\r  Size scan complete for page {}/{}.   ",
-        page + 1,
-        page_count
-    );
+    ordered
 }
 
-fn paged_labels(
-    projects: &[Project],
-    sizes: &HashMap<PathBuf, Option<u64>>,
-    columns: usize,
-) -> Vec<String> {
+/// One label per project, in display order, with `sizes` positionally matching.
+///
+/// Every column width here is derived from the projects alone, never from the
+/// sizes, so a label only ever changes in its own Size cell — the table cannot
+/// reflow under the reader as snapshots land.
+fn paged_labels(projects: &[Project], sizes: &[SizeCell], columns: usize) -> Vec<String> {
     let id_w = projects.iter().map(|p| p.id.len()).max().unwrap_or(4);
     let tmpl_w = projects.iter().map(|p| p.template.len()).max().unwrap_or(8);
     let base_w = projects
@@ -425,17 +434,13 @@ fn paged_labels(
         .map(|p| library::base_label(&p.base).len())
         .max()
         .unwrap_or(4);
-    let size_w = projects
-        .iter()
-        .map(|p| size_label(sizes.get(&p.path).copied().flatten()).len())
-        .max()
-        .unwrap_or(11);
 
     projects
         .iter()
-        .map(|project| {
+        .enumerate()
+        .map(|(idx, project)| {
             let date = project.created.get(..10).unwrap_or(&project.created);
-            let size = size_label(sizes.get(&project.path).copied().flatten());
+            let size = cell_label(sizes.get(idx).copied().unwrap_or(SizeCell::Pending));
             let tag_str = if project.tags.is_empty() {
                 String::new()
             } else {
@@ -459,11 +464,20 @@ fn paged_labels(
                 id_w = id_w,
                 tmpl_w = tmpl_w,
                 base_w = base_w,
-                size_w = size_w,
+                size_w = SIZE_CELL,
             );
             clamp_label(&label, columns)
         })
         .collect()
+}
+
+/// The Size cell for one row. Its fixed width belongs to the caller's format
+/// string, not here.
+fn cell_label(cell: SizeCell) -> String {
+    match cell {
+        SizeCell::Pending => PENDING_LABEL.to_string(),
+        SizeCell::Known(bytes) => size_label(bytes),
+    }
 }
 
 fn size_label(size: Option<u64>) -> String {
@@ -488,9 +502,11 @@ fn size_label(size: Option<u64>) -> String {
     }
 }
 
+/// `size` is `None` for surfaces that show no Size column (`fastf recent` and
+/// `fastf search`), and the browser's current cell otherwise.
 fn project_action_menu(
     project: &Project,
-    size: Option<&Option<u64>>,
+    size: Option<SizeCell>,
     reload_after_change: bool,
 ) -> Result<ActionLoop> {
     use dialoguer::{Input, Select};
@@ -513,8 +529,17 @@ fn project_action_menu(
         library::base_label(&project.base).cyan(),
         path_str.dimmed()
     );
-    if let Some(size) = size {
-        println!("    {} {}", "size:".dimmed(), size_label(*size));
+    match size {
+        Some(SizeCell::Known(bytes)) => {
+            println!("    {} {}", "size:".dimmed(), size_label(bytes))
+        }
+        // Say a scan is outstanding rather than silently dropping the line: this
+        // header is printed once and never repainted, so it must not pretend the
+        // size is unknowable.
+        Some(SizeCell::Pending) => {
+            println!("    {} {}", "size:".dimmed(), PENDING_LABEL.dimmed())
+        }
+        None => {}
     }
 
     // Other configured bases this project could move to (mounted ones only).
@@ -924,9 +949,27 @@ pub fn open(query: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProjectRowTheme, clamp_label, size_label};
+    use super::{
+        PENDING_LABEL, Project, ProjectRowTheme, SizeCell, clamp_label, paged_labels, scan_order,
+        size_label,
+    };
     use dialoguer::console::measure_text_width;
     use dialoguer::theme::Theme;
+    use std::path::PathBuf;
+
+    fn project(id: &str, name: &str) -> Project {
+        Project {
+            id: id.to_string(),
+            template: "general".to_string(),
+            template_name: "General".to_string(),
+            name: name.to_string(),
+            path: PathBuf::from("/base").join(name),
+            base: PathBuf::from("/base"),
+            created: "2026-08-18T00:00:00Z".to_string(),
+            tags: Vec::new(),
+            exists: true,
+        }
+    }
 
     #[test]
     fn clamp_leaves_short_labels_unchanged() {
@@ -968,6 +1011,65 @@ mod tests {
         assert_eq!(size_label(Some(1024_u64.pow(3))), "1.0 GB");
         assert_eq!(size_label(Some(1024_u64.pow(4))), "1.0 TB");
         assert_eq!(size_label(None), "unavailable");
+    }
+
+    /// The reason the Size cell is a fixed width. The old browser sized the
+    /// column to the page's widest value, so every row shifted sideways each time
+    /// a background snapshot landed — unreadable while a page fills in.
+    #[test]
+    fn a_landing_size_does_not_reflow_the_row() {
+        let projects = [project("ID0001", "Alpha"), project("ID0002", "Beta")];
+        let pending = paged_labels(&projects, &[SizeCell::Pending; 2], 200);
+        let known = paged_labels(
+            &projects,
+            &[
+                SizeCell::Known(Some(2048)),
+                // The widest cell there is, and the one most likely to stretch a
+                // column that was measured from its contents.
+                SizeCell::Known(None),
+            ],
+            200,
+        );
+
+        // Compared in display columns, not bytes: the pending cell's "…" is three
+        // bytes wide and one column wide, and it is the column that has to line
+        // up. (Rust pads to a char count, which equals the column count for every
+        // character these cells can hold.)
+        for (before, after) in pending.iter().zip(known.iter()) {
+            assert_eq!(
+                name_column(before),
+                name_column(after),
+                "the name column moved when a size landed:\n{before}\n{after}"
+            );
+            assert_eq!(measure_text_width(before), measure_text_width(after));
+        }
+        assert!(pending[0].contains(PENDING_LABEL));
+        assert!(known[0].contains("2.0 KB"));
+        assert!(known[1].contains("unavailable"));
+    }
+
+    /// Which terminal column a row's project name starts at.
+    fn name_column(label: &str) -> usize {
+        let at = label
+            .find("Alpha")
+            .or_else(|| label.find("Beta"))
+            .expect("label carries a project name");
+        measure_text_width(&label[..at])
+    }
+
+    /// The row the user is pointing at is the one they are about to open, so it
+    /// must be measured next rather than in display order.
+    #[test]
+    fn the_selected_row_is_measured_first() {
+        let paths: Vec<PathBuf> = ["a", "b", "c"].iter().map(PathBuf::from).collect();
+
+        assert_eq!(
+            scan_order(&paths, 2),
+            vec![PathBuf::from("c"), PathBuf::from("a"), PathBuf::from("b"),]
+        );
+        assert_eq!(scan_order(&paths, 0), paths);
+        // A navigation row: nothing is promoted, and nothing is lost.
+        assert_eq!(scan_order(&paths, 7), paths);
     }
 
     #[test]

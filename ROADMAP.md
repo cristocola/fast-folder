@@ -27,9 +27,9 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Release: **v1.5.1 — shared mutation correctness**
-- Status: **v1.5.1 released; GitHub and AUR publication verified; manual Windows drive smoke pending**
-- Last reviewed: **2026-07-30**
+- Release: **v1.6.0 — the guided browser stops waiting**
+- Status: **v1.6.0 in release; gates pass locally, publication pending**
+- Last reviewed: **2026-08-18**
 
 ## Release train
 
@@ -38,6 +38,7 @@ responsibility of the filesystem and backups.
 | v1.4.1 | Delivered in v1.5.1; CI passed | fastf cannot touch a path merely because a filename or pre-v2 marker implies ownership |
 | v1.5.0 | Delivered in v1.5.1; CI and Linux smoke passed | scoped v2 move/create journals recover idempotently after process crashes |
 | v1.5.1 | Released; CI, assets, and AUR packages verified | every mutation shares validation, locking, authoritative reload, and cache refresh behavior |
+| v1.6.0 | In release | the guided project browser never waits on a folder size |
 
 ### v1.4.1 — containment and path safety
 
@@ -160,6 +161,41 @@ Recovery rules:
 - [x] Remove or correct any claim that the browser's process mutex serializes
   separate fastf processes.
 
+### v1.6.0 — the guided browser stops waiting
+
+Measuring a project means walking its whole tree, and the browser did that for
+every row of a page before drawing anything. On a network share that is seconds
+of dead interface per page, for a column that is useful but never urgent.
+
+- [x] Draw the project list before any folder has been measured, and show a
+  pending cell rather than a gap.
+- [x] Measure folders on background workers, at most two at a time, taking the
+  selected row first and the rest of the visible page after it.
+- [x] Reprioritize on page and selection changes by replacing the queue rather
+  than appending to it. Leave walks already in flight to finish.
+- [x] Repaint the list in place as results land, with no keypress required.
+- [x] Give the size walk a cancel token checked once per directory entry, so
+  teardown is bounded on a slow filesystem. Discard a cancelled walk instead of
+  recording it as unavailable.
+- [x] Fix the width of the Size cell so a landing snapshot cannot reflow the
+  table under the reader.
+- [x] Drop a project's snapshot when an action changes it, so the row is
+  measured again on return.
+- [x] Keep sizes out of `Project`, `.fastf-index.json`, `PROJECT_INFO.md`, and
+  `/api/state`, and leave `fastf recent` and `fastf search` output unchanged.
+- [x] Restore the terminal from `Drop`, so a panic anywhere inside the picker
+  cannot leave a shell without a cursor.
+
+Regression coverage:
+
+- [x] The size reaches a list whose selection has not been touched
+  (`projects_browser_fills_in_sizes_without_any_input`, anchored on the
+  highlight prefix, verified by breaking the repaint).
+- [x] A landing size does not move the name column, compared in display columns.
+- [x] Scanner queueing, re-measurement after `forget`, unreadable projects, and
+  bounded teardown with work outstanding.
+- [x] Viewport math for a list taller than the terminal.
+
 ## Release and documentation gates
 
 Every release must pass:
@@ -171,11 +207,13 @@ Every release must pass:
 - [x] `node --check src/ui/web/app.js`
 - [x] Windows cfg compile: `cargo check --all-targets --target
   x86_64-pc-windows-{gnu,msvc}`
-- [x] Existing Linux CI target ([main run 30582924136](https://github.com/cristocola/fast-folder/actions/runs/30582924136))
-- [x] Existing Windows CI targets, debug and release ([main run 30582924136](https://github.com/cristocola/fast-folder/actions/runs/30582924136))
-- [x] GitHub Release workflow built Linux GNU/musl archives, the Windows ZIP,
-  and the MSI; every asset matched `SHA256SUMS` ([run 30583196941](https://github.com/cristocola/fast-folder/actions/runs/30583196941)).
-- [x] `makepkg -f` completed for `fast-folder` and `fast-folder-bin`; the source
+- [x] `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --locked` (CI's "docs build
+  clean"; a `pub` item's docs may not link to a `pub(crate)` one)
+- [ ] Existing Linux CI target
+- [ ] Existing Windows CI targets, debug and release
+- [ ] GitHub Release workflow built Linux GNU/musl archives, the Windows ZIP,
+  and the MSI; every asset matched `SHA256SUMS`.
+- [ ] `makepkg -f` completed for `fast-folder` and `fast-folder-bin`; the source
   package's release test suite passed before both AUR repositories were pushed.
 
 Regression coverage grows with the relevant release:
@@ -190,6 +228,8 @@ Regression coverage grows with the relevant release:
   post-verification, post-publication, and before/after source cleanup (v1.5.0).
 - [x] Cross-interface mutation-loss, registration partial-outcome, and browser
   Host/Origin cases (v1.5.1).
+- [x] Guided browser draws before measuring, fills in without input, and never
+  reflows a row as a size lands (v1.6.0).
 
 Manual move smoke and follow-up:
 

@@ -2,6 +2,8 @@ pub mod atomic;
 pub mod faults;
 pub mod fs_retry;
 pub mod interrupt;
+pub(crate) mod live_select;
 pub mod lockfile;
 pub mod paths;
+pub(crate) mod size_scan;
 pub(crate) mod tree_size;

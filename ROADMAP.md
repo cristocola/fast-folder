@@ -254,10 +254,15 @@ than as separate published tags. Their checked items remain above as history.
   `apply::run`, and `apply::collect_if_needed`.
 - **Progress and cancellation for `tree_size::directory_size`.** It is a blocking
   walk with no callback and no cancel flag, so a slow filesystem shows a static
-  `measuring folder size…` for the whole duration. Now that only one project is
-  measured at a time this is tolerable, but the shape to copy already exists in
-  `move_project_with` (`&Mutex<Progress>` + `&AtomicBool`, drawn from a scoped
-  thread).
+  `measuring folder size…` for the whole duration. **Confirmed insufficient in
+  real use (2026-08-18): seconds of stall on a network share, and worth fixing.**
+  Measuring one project instead of a page moved the stall but did not remove it.
+  The shape to copy already exists in `move_project_with` (`&Mutex<Progress>` +
+  `&AtomicBool`, drawn from a scoped thread); the harder half is repainting a row
+  underneath `dialoguer::Select`, which owns the terminal while it blocks on a
+  keypress. A cheap interim exists and was deliberately not taken: demote the
+  size to its own "Show folder size" action row, so opening a project never
+  walks anything.
 - Lazy template loading and one library snapshot for UI state.
 - Deterministic one-pass interpolation with a frozen render context.
 - Further terminal-rendering extraction from core.

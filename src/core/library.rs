@@ -419,6 +419,26 @@ pub fn base_label(base: &Path) -> String {
         .unwrap_or_else(|| base.display().to_string())
 }
 
+/// Every distinct tag across `projects`, deduplicated and alphabetically
+/// ordered.
+///
+/// Takes the projects the caller already holds rather than calling `discover`
+/// itself: this feeds a per-project "which tag?" picker, and re-scanning every
+/// base to populate a suggestion list would make the prompt cost more than the
+/// action. The set is therefore only as fresh as the list handed in, which is
+/// correct — it is a suggestion, not authority.
+pub fn known_tags<'a, I>(projects: I) -> Vec<String>
+where
+    I: IntoIterator<Item = &'a Project>,
+{
+    projects
+        .into_iter()
+        .flat_map(|project| project.tags.iter().cloned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Re-resolve a cached/discovered project against the configured filesystem
 /// boundary before an operation that can rename or delete anything.
 ///
@@ -1288,6 +1308,39 @@ mod tests {
              ---\n\n# Project Info\n"
         );
         fs::write(dir.join(project_info::RESERVED_FILENAME), fm).unwrap();
+    }
+
+    fn project_with_tags(id: &str, tags: &[&str]) -> Project {
+        Project {
+            id: id.to_string(),
+            template: "general".to_string(),
+            template_name: "General".to_string(),
+            name: format!("Folder_{id}"),
+            path: PathBuf::from("/tmp").join(id),
+            base: PathBuf::from("/tmp"),
+            created: "2026-01-01T00:00:00Z".to_string(),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            exists: true,
+        }
+    }
+
+    #[test]
+    fn known_tags_dedupes_across_projects_and_sorts() {
+        let projects = vec![
+            project_with_tags("ID0001", &["draft", "client/Acme"]),
+            project_with_tags("ID0002", &["draft", "urgent"]),
+        ];
+        assert_eq!(
+            known_tags(&projects),
+            vec!["client/Acme", "draft", "urgent"]
+        );
+    }
+
+    #[test]
+    fn known_tags_is_empty_without_tags() {
+        assert!(known_tags(&[] as &[Project]).is_empty());
+        let untagged = vec![project_with_tags("ID0001", &[])];
+        assert!(known_tags(&untagged).is_empty());
     }
 
     fn cfg_for(base: &Path, extra: &[&Path]) -> Config {

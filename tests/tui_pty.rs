@@ -33,6 +33,15 @@ const MENU_REGISTER: usize = 3;
 const MENU_SETTINGS: usize = 5;
 const MENU_QUIT: usize = 6;
 
+/// Project action-menu indices: Open folder, Open in editor, Show metadata,
+/// Add tag, Remove tag, Add note, Show journal, [Move], Rename, Unregister,
+/// Delete, Back, Quit. Named so that inserting a row is a one-line edit here
+/// rather than a hunt through every script.
+const ACTION_ADD_TAG: usize = 3;
+/// With no other base configured the Move row is absent, so the tail is
+/// Rename, Unregister, Delete, Back, Quit.
+const ACTION_BACK_FROM_PROJECT: usize = 10;
+
 fn launch(sb: &Sandbox, script: Vec<pty::Keystroke>) -> (String, i32) {
     pty::run(
         common::FASTF,
@@ -55,6 +64,57 @@ fn the_menu_opens_and_quits_cleanly() {
 
     assert_eq!(code, 0, "quitting should succeed:\n{out}");
     assert!(out.contains("Goodbye."), "expected a clean exit:\n{out}");
+}
+
+/// Esc backs out one level at a time. The failure this guards against is Esc
+/// unwinding the whole session instead of returning to the parent menu.
+#[test]
+fn esc_backs_out_one_level_at_a_time() {
+    let sb = Sandbox::new();
+    let script = pty::Script::new()
+        .down(MENU_SETTINGS)
+        .enter()
+        .enter() // Project basics
+        .esc() // → back to Settings
+        .esc() // → back to the main menu
+        .pause(400)
+        .down(MENU_QUIT)
+        .enter()
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "Esc must not end the session:\n{out}");
+    assert!(
+        out.contains("Goodbye."),
+        "expected to land back on the main menu and quit from it:\n{out}"
+    );
+}
+
+/// At the top level there is no parent to return to, so Esc is Quit — the same
+/// code path as the Quit row.
+#[test]
+fn esc_at_the_main_menu_quits() {
+    let sb = Sandbox::new();
+    let (out, code) = launch(&sb, pty::Script::new().esc().build());
+
+    assert_eq!(code, 0, "Esc should exit cleanly:\n{out}");
+    assert!(out.contains("Goodbye."), "expected a clean exit:\n{out}");
+}
+
+/// The frame reports the library without any action having been taken.
+#[test]
+fn the_menu_frame_reports_library_stats() {
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Framed_Project", "ID0007", "2026-05-05T00:00:00Z", 128);
+
+    let (out, code) = launch(&sb, pty::Script::new().down(MENU_QUIT).enter().build());
+
+    assert_eq!(code, 0, "the frame must not disturb the menu:\n{out}");
+    assert!(
+        out.contains("1 project ·"),
+        "project count missing (and must be singular):\n{out}"
+    );
+    assert!(out.contains("next ID"), "next id missing:\n{out}");
 }
 
 /// The headline regression. Register asks for a path *last*, so a typo used to
@@ -163,7 +223,7 @@ fn plant_dated_project(
 }
 
 #[test]
-fn projects_browser_is_newest_first_sized_and_paged() {
+fn projects_browser_is_newest_first_and_paged() {
     let sb = Sandbox::new();
     sb.ok(&["config", "set", "recent-default-limit", "1"]);
     plant_dated_project(
@@ -217,13 +277,11 @@ fn projects_browser_is_newest_first_sized_and_paged() {
     );
     assert!(out.contains("Next page"), "next control missing:\n{out}");
     assert!(out.contains("Back"), "back control missing:\n{out}");
+    // Paging must not measure anything: sizes are computed when a project is
+    // opened, and this script never opens one.
     assert!(
-        out.contains("Scanning project sizes for page 1/3"),
-        "scan progress missing:\n{out}"
-    );
-    assert!(
-        out.contains("Size") && out.contains("KB"),
-        "human size missing:\n{out}"
+        !out.contains("measuring folder size"),
+        "listing pages must not walk project trees:\n{out}"
     );
 
     let newest = out.find("Newest_Project").expect("newest project label");
@@ -254,12 +312,18 @@ fn projects_browser_reloads_after_a_project_mutation() {
     let script = pty::Script::new()
         .down(MENU_PROJECTS)
         .enter()
-        .enter() // select the project
-        .down(2) // Add tag
+        .enter() // select the project — this is what measures its size
+        .down(ACTION_ADD_TAG)
         .enter()
+        // The sandbox library carries no tags yet, so Add tag falls through to
+        // the free-text prompt rather than offering a pick list.
         .line("draft")
         .pause(500)
-        // Reloaded one-project page: project, Back.
+        // Reloaded one-project page: re-open the project, then Back out.
+        .enter()
+        .pause(500)
+        .down(ACTION_BACK_FROM_PROJECT)
+        .enter()
         .down(1)
         .enter()
         .down(MENU_QUIT)
@@ -276,8 +340,16 @@ fn projects_browser_reloads_after_a_project_mutation() {
         "tag action did not complete:\n{out}"
     );
     assert!(
-        out.matches("Scanning project sizes for page 1/1").count() >= 2,
-        "the changed project size should be invalidated and rescanned:\n{out}"
+        out.contains("size:"),
+        "opening a project should report its measured size:\n{out}"
+    );
+    assert!(
+        out.matches("measuring folder size").count() >= 2,
+        "the changed project's size should be invalidated and re-measured:\n{out}"
+    );
+    assert!(
+        out.contains("tagged"),
+        "the mutation should reach the session activity log:\n{out}"
     );
     assert!(
         fs::read_to_string(root.join("PROJECT_INFO.md"))

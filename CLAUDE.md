@@ -73,6 +73,11 @@ FASTF_FAULT=move:before-commit-rename:abort ...   # kills the process there
 # Browser UI — same `cargo build` (server + embedded frontend live in the lib)
 FASTF_UI_DIR=src/ui/web cargo run -- ui   # frontend live-reload (assets from disk)
 node --check src/ui/web/app.js            # frontend sanity check — run after every edit
+
+# Guided TUI — build + drive it against a disposable 2-base fixture.
+# Isolated by FASTF_INSTALL_DIR + HOME, so it cannot touch the real library.
+dev/tui-sandbox.sh                        # see dev/README.md for the manual pass
+dev/tui-sandbox.sh --reset                # reseed between passes
 ```
 
 Debug and release test counts differ because failpoint tests are
@@ -111,8 +116,9 @@ Gotchas sections below for the parts that bite.
   because `move` is a keyword. CLI modules gather prompts and render outcomes;
   noninteractive register/from-folder behavior lives under `core/` so UI code
   never depends on a CLI implementation.
-- `src/tui/` — `menu.rs` (interactive menu + grouped Settings submenus) and
-  `template_builder.rs`.
+- `src/tui/` — `menu.rs` (interactive menu + grouped Settings submenus),
+  `dashboard.rs` (the main-menu frame: cached library stats + the in-memory
+  session activity log), and `template_builder.rs`.
 - `src/ui/` — browser UI. Has its own CLAUDE.md.
 - `docs/` — user-facing reference (`cli`, `templates`, `projects`, `windows`, `UI`).
   **When features change, update the matching `docs/` file, not the README.**
@@ -215,8 +221,10 @@ nodes, uses checked addition, and returns `None` on any read failure rather than
 a partial number. It is crate-internal and read-only.
 
 Sizes never enter `Project`, `.fastf-index.json`, project metadata, or
-`/api/state`. The guided TUI's Projects browser owns page/session snapshots and
-uses `recent_default_limit` as its page size; standalone `fastf recent` and
+`/api/state`. The guided TUI's Projects browser owns **session** snapshots,
+measured on demand when a project's action menu opens — never per page, because
+scanning a page of large projects stalled the list before it drew. It uses
+`recent_default_limit` as its page size; standalone `fastf recent` and
 `fastf search` output stays unchanged. The browser endpoint authorizes paths via
 fresh discovery and walks without `WRITE_LOCK`; its frontend queue runs at most
 two scans, prioritizes an open drawer, and drops old-generation responses after
@@ -416,6 +424,14 @@ not the case list:
   **degrade, never panic, never lose data.**
 - `properties.rs` — proptest; above all, that `sanitize_name` output is always
   creatable (verified by creating it).
+
+**The TUI's feel is not testable by any of these.** `dev/tui-sandbox.sh` builds
+the working tree and opens the menu against a disposable two-base fixture (six
+projects, both templates, backdated timestamps, one 40 MB project, one
+unregistered folder). `dev/README.md` carries the manual-pass checklist and the
+reasoning behind each fixture element. Run it before shipping anything that
+changes `tui/` or `cli/recent.rs`; the automated gates cannot see a stall, a
+dead keybinding, or a menu that scrolls itself off the screen.
 
 `tests/common/mod.rs` is the shared process-driving harness (v1.2.1): a `Sandbox`
 that owns its `FASTF_INSTALL_DIR`, redirects `HOME` into itself, and runs the
@@ -703,6 +719,48 @@ and draws from the main one, feeding `interrupt::is_set()` into the cancel flag
 so Ctrl-C aborts before the source is touched. Totals stay zero until the staged
 path scans the tree and never fill in for a same-fs rename — so "nothing to draw"
 is the normal case, not a bug.
+
+### TUI speed-and-feel gotchas
+
+**Esc is `interact_opt`, and it also binds `q`.** Every `Select`/`Confirm`/
+`MultiSelect` in `tui::menu` and `cli::recent` goes through `interact_opt`, whose
+`Ok(None)` means Back in a submenu, Quit at the top level (`menu::QUIT`, the same
+arm the Quit row hits), No on a confirmation, and cancel inside an action.
+Cancellation is **not an error**, so `contain`/`is_fatal` are untouched: a prompt
+that genuinely cannot run still fails with `dialoguer::Error` and still ends the
+session. dialoguer maps Esc *and* `q` to cancel — harmless on a Select, but keep
+it in mind before adding any prompt that takes typed text.
+
+**`Input` has no opt variant and swallows Esc**, so text prompts cancel on an
+empty answer and say so in the prompt string. That required adding
+`.allow_empty(true)` in several places whose `if empty { "(cancelled)" }` branch
+was previously unreachable dead code. The three Settings values where empty is
+itself meaningful (base dir, default template, editor) cannot be escaped at all;
+their prompts say what empty does rather than pretend. `core::vars::collect_vars`
+and `tui::template_builder` are deliberately out of scope — making them
+cancellable cascades into `new::run`/`apply::run`, so the create wizard's only
+escape is its final Confirm.
+
+**Sizes are measured when a project is opened, not when a page is listed.** See
+"Live project sizes". `run_paged_browser` still owns the session cache and still
+invalidates on `ActionLoop::Changed`; `paged_labels` has no Size column.
+
+**The action menu's `move_idx` is found by name, not by a literal.** Inserting a
+row above it used to require renumbering it by hand. The fixed `0..=6` arms and
+the pty tests' `ACTION_ADD_TAG` still shift, so update both when adding a row.
+
+**The main-menu frame's stats are cached on purpose.** `dashboard::SessionState`
+computes them once at startup and refreshes only after arms that can change them
+— `discover` plus `Counters::next_value` (which consults `library::max_id`) is
+not free on a spun-down or network base. `next_value` is read-only; never reach
+for `Counters::converge` from the header, which propagates (writes).
+
+**The session activity log is in-memory only and never touches disk.** Mutations
+inside the projects browser report themselves through `recent::ActionEvent`;
+create and register are derived from a `discover` diff instead, because
+`new::run`/`register::run` return `Result<()>` and both return `Ok(())` when the
+user declines at the confirmation — a coarse "created a project" entry would be
+a lie, while an empty diff correctly logs nothing.
 
 ## Browser UI (`fastf ui`)
 

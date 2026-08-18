@@ -73,12 +73,14 @@ pub fn run(args: NewArgs) -> Result<()> {
     }
     if !args.yes && config.confirm_create {
         println!();
+        // Esc is No. This is the one escape hatch in the create flow — variable
+        // collection runs on `Input`, which cannot be escaped at all.
         let ok = Confirm::new()
             .with_prompt("Create this project?")
             .default(true)
-            .interact()?;
+            .interact_opt()?;
 
-        if !ok {
+        if ok != Some(true) {
             println!("Aborted.");
             return Ok(());
         }
@@ -162,19 +164,46 @@ fn resolve_template(slug: Option<&str>, config: &Config) -> Result<Template> {
     pick_template_interactively()
 }
 
+/// Index of `slug` in `templates`, or 0.
+///
+/// `default_template` may name a template that has since been deleted or
+/// renamed; falling back to the top is the behaviour the picker had before it
+/// honoured the setting at all, so a stale setting degrades instead of failing.
+pub(crate) fn default_template_index(templates: &[Template], slug: &str) -> usize {
+    let slug = slug.trim();
+    if slug.is_empty() {
+        return 0;
+    }
+    templates.iter().position(|t| t.slug == slug).unwrap_or(0)
+}
+
 pub fn pick_template_interactively() -> Result<Template> {
     let templates = template::load_all()?;
     if templates.is_empty() {
         bail!("no templates found — run `fastf template new` to create one");
     }
 
+    // The cursor starts on `default_template` when one is configured. This only
+    // ever shows up in the guided menu: `resolve_template` skips this picker
+    // entirely when the setting is set, so on the command line the default
+    // means "don't ask" and here it means "ask, but start on my usual".
+    let cfg = Config::load().unwrap_or_default();
+    let default_idx = default_template_index(&templates, &cfg.default_template);
+
     let labels: Vec<String> = templates
         .iter()
-        .map(|t| {
-            if t.description.is_empty() {
+        .enumerate()
+        .map(|(i, t)| {
+            let base = if t.description.is_empty() {
                 t.name.clone()
             } else {
                 format!("{} — {}", t.name, t.description)
+            };
+            // Plain text, never styled — Select labels must stay ANSI-free.
+            if i == default_idx && !cfg.default_template.trim().is_empty() {
+                format!("{base}  (default)")
+            } else {
+                base
             }
         })
         .collect();
@@ -182,7 +211,7 @@ pub fn pick_template_interactively() -> Result<Template> {
     let idx = Select::new()
         .with_prompt("Select template")
         .items(&labels)
-        .default(0)
+        .default(default_idx)
         .interact()?;
 
     Ok(templates[idx].clone())
@@ -276,6 +305,39 @@ pub fn classify_extra(extra: Vec<String>) -> ClassifiedExtra {
         out.unknown.push(arg);
     }
     out
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::default_template_index;
+    use crate::core::template::Template;
+
+    fn templates(slugs: &[&str]) -> Vec<Template> {
+        slugs
+            .iter()
+            .map(|slug| Template {
+                slug: slug.to_string(),
+                ..Template::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_configured_default_selects_its_own_row() {
+        let list = templates(&["client-project", "general", "music-video"]);
+        assert_eq!(default_template_index(&list, "music-video"), 2);
+        assert_eq!(default_template_index(&list, "  general  "), 1);
+    }
+
+    /// An unset or stale setting must not move the cursor anywhere surprising —
+    /// it falls back to the top, which is where the picker always opened.
+    #[test]
+    fn an_absent_default_falls_back_to_the_first_row() {
+        let list = templates(&["client-project", "general"]);
+        assert_eq!(default_template_index(&list, ""), 0);
+        assert_eq!(default_template_index(&list, "deleted-template"), 0);
+        assert_eq!(default_template_index(&[], "general"), 0);
+    }
 }
 
 #[cfg(test)]

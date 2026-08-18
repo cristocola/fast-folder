@@ -60,8 +60,10 @@ fastf reindex
 
 ## Live folder sizes
 
-The guided TUI and browser UI show a current Size snapshot for each project they
-display. Size is the sum of the logical lengths of all regular files below the
+The browser UI shows a current Size snapshot for each project it displays. The
+guided TUI measures a project when you open its action menu, rather than
+scanning every row of a page before the list can draw. Size is the sum of the
+logical lengths of all regular files below the
 project folder, including hidden files and `PROJECT_INFO.md`. Empty directories
 add zero bytes. Symlinks, Windows junctions, and other links are never followed;
 sockets, devices, and other special filesystem nodes are ignored.
@@ -74,8 +76,8 @@ the size of anything reached through a link.
 Sizes are deliberately absent from `PROJECT_INFO.md`, the disposable
 `.fastf-index.json` cache, the in-memory `Project` model, and `/api/state`.
 Project contents can change outside fastf at any time, so a persisted value
-would immediately become stale. Re-enter the TUI Projects browser or use the
-browser UI's Refresh action to obtain a new snapshot.
+would immediately become stale. Re-open the project in the TUI Projects browser
+or use the browser UI's Refresh action to obtain a new snapshot.
 
 ## The ID counter self-heals
 

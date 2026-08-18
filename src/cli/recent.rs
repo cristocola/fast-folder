@@ -149,7 +149,7 @@ fn clamp_label(label: &str, columns: usize) -> String {
     dialoguer::console::truncate_str(label, budget, "…").into_owned()
 }
 
-fn terminal_columns() -> usize {
+pub(crate) fn terminal_columns() -> usize {
     let (_rows, columns) = dialoguer::console::Term::stdout().size();
     columns as usize
 }
@@ -211,6 +211,7 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
 
     let columns = terminal_columns();
     let theme = ProjectRowTheme::new(columns);
+    let library_tags = library::known_tags(filtered.iter().copied());
     let id_w = filtered.iter().map(|p| p.id.len()).max().unwrap_or(4);
     let tmpl_w = filtered.iter().map(|p| p.template.len()).max().unwrap_or(8);
     let base_w = filtered
@@ -256,17 +257,25 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
             .chain(std::iter::once("[Quit]".to_string()))
             .collect();
 
-        let idx = Select::with_theme(&theme)
+        // Esc (or `q`) leaves the picker, exactly like the `[Quit]` row — which
+        // is also the right thing for the standalone `fastf recent` / `fastf
+        // search` commands this picker serves.
+        let Some(idx) = Select::with_theme(&theme)
             .with_prompt(format!("Projects ({} shown) — pick one", filtered.len()))
             .items(&labels)
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            return Ok(());
+        };
 
         if idx == filtered.len() {
             return Ok(());
         }
 
-        match project_action_menu(filtered[idx], None, false)? {
+        // The standalone commands have no session log; the events are dropped.
+        let mut events = Vec::new();
+        match project_action_menu(filtered[idx], None, &library_tags, false, &mut events)? {
             ActionLoop::BackToList => continue,
             // Preserve the command picker's existing behaviour: it returns to
             // its current list after a mutation. The guided browser passes
@@ -283,11 +292,41 @@ enum ActionLoop {
     Quit,
 }
 
+/// What an action-menu mutation actually did, so the guided TUI can show it in
+/// its session log.
+///
+/// Only successful mutations produce one — opening a folder or reading metadata
+/// changes nothing and reports nothing. The standalone `fastf recent` / `fastf
+/// search` commands collect these into a Vec they drop: they have no session to
+/// log into, and giving them one would mean printing a summary nobody asked for.
+pub struct ActionEvent {
+    pub verb: &'static str,
+    pub subject: String,
+}
+
+impl ActionEvent {
+    fn new(verb: &'static str, subject: impl Into<String>) -> Self {
+        Self {
+            verb,
+            subject: subject.into(),
+        }
+    }
+}
+
 /// Guided-TUI project browser. Unlike `fastf recent`, this owns and reloads its
-/// full result set, pages it, and computes live sizes only for the current page.
-/// `load` is called again after every mutation so search predicates and page
-/// bounds remain truthful.
-pub fn run_paged_browser<F>(page_size: usize, empty_message: &str, mut load: F) -> Result<()>
+/// full result set and pages it. `load` is called again after every mutation so
+/// search predicates and page bounds remain truthful.
+///
+/// Sizes are measured **on demand**, when a project's action menu opens — never
+/// per page. Scanning a page up front stalled the list for as long as the
+/// slowest tree took to walk, which on a fuse/network base is seconds of a
+/// terminal that looks hung. The measurement is cached for the browser session
+/// and invalidated for any path a mutation touched.
+pub fn run_paged_browser<F>(
+    page_size: usize,
+    empty_message: &str,
+    mut load: F,
+) -> Result<Vec<ActionEvent>>
 where
     F: FnMut() -> Vec<Project>,
 {
@@ -298,12 +337,18 @@ where
     let mut page = 0_usize;
     // Browser-session snapshots only. Nothing reaches Project or the cache.
     let mut sizes: HashMap<PathBuf, Option<u64>> = HashMap::new();
+    let mut events: Vec<ActionEvent> = Vec::new();
 
     loop {
         if projects.is_empty() {
             println!("{}", empty_message.dimmed());
-            return Ok(());
+            return Ok(events);
         }
+
+        // Recomputed per iteration so a tag added a moment ago is offered as a
+        // suggestion on the next visit; `projects` is reloaded after every
+        // mutation anyway.
+        let library_tags = library::known_tags(projects.iter());
 
         let page_count = projects.len().div_ceil(page_size);
         page = page.min(page_count - 1);
@@ -311,10 +356,8 @@ where
         let end = (start + page_size).min(projects.len());
         let current = &projects[start..end];
 
-        scan_page_sizes(current, page, page_count, &mut sizes);
-
         let columns = terminal_columns();
-        let mut labels = paged_labels(current, &sizes, columns);
+        let mut labels = paged_labels(current, columns);
         let previous_idx = if page > 0 {
             let idx = Some(labels.len());
             labels.push("Previous page".to_string());
@@ -333,7 +376,8 @@ where
         labels.push("Back".to_string());
 
         let theme = ProjectRowTheme::new(columns);
-        let choice = Select::with_theme(&theme)
+        // Esc (or `q`) is the Back row.
+        let Some(choice) = Select::with_theme(&theme)
             .with_prompt(format!(
                 "Projects — Page {}/{} ({} total)",
                 page + 1,
@@ -342,13 +386,19 @@ where
             ))
             .items(&labels)
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            return Ok(events);
+        };
 
         if choice < current.len() {
             // Own the selected snapshot so a successful action can reload the
             // backing Vec without keeping a borrow into it.
             let project = current[choice].clone();
-            match project_action_menu(&project, sizes.get(&project.path), true)? {
+            let size = *sizes
+                .entry(project.path.clone())
+                .or_insert_with(|| measure_size(&project.path));
+            match project_action_menu(&project, Some(size), &library_tags, true, &mut events)? {
                 ActionLoop::BackToList => {}
                 ActionLoop::Changed(paths) => {
                     for path in paths {
@@ -358,7 +408,7 @@ where
                     // `page` is clamped at the top of the loop if the final row
                     // on the last page was removed or stopped matching search.
                 }
-                ActionLoop::Quit => return Ok(()),
+                ActionLoop::Quit => return Ok(events),
             }
             continue;
         }
@@ -371,53 +421,30 @@ where
             continue;
         }
         if choice == back_idx {
-            return Ok(());
+            return Ok(events);
         }
         unreachable!();
     }
 }
 
-/// Compute only snapshots absent from this browser session. A visible progress
-/// line is printed before the first potentially slow walk and updated by count.
-fn scan_page_sizes(
-    projects: &[Project],
-    page: usize,
-    page_count: usize,
-    sizes: &mut HashMap<PathBuf, Option<u64>>,
-) {
-    let pending: Vec<&Project> = projects
-        .iter()
-        .filter(|project| !sizes.contains_key(&project.path))
-        .collect();
-    if pending.is_empty() {
-        return;
-    }
-
-    println!(
-        "  Scanning project sizes for page {}/{} ({} project{})…",
-        page + 1,
-        page_count,
-        pending.len(),
-        if pending.len() == 1 { "" } else { "s" }
-    );
-    for (index, project) in pending.iter().enumerate() {
-        print!("\r  Size scan {}/{}", index + 1, pending.len());
-        let _ = std::io::stdout().flush();
-        let size = crate::util::tree_size::directory_size(&project.path);
-        sizes.insert(project.path.clone(), size);
-    }
-    println!(
-        "\r  Size scan complete for page {}/{}.   ",
-        page + 1,
-        page_count
-    );
+/// One on-demand size snapshot, with a visible line while the walk runs.
+///
+/// `directory_size` has no progress callback and no cancellation, so a slow
+/// filesystem (ntfs-3g, a network share) shows a static line for the whole
+/// walk. That is acceptable now only because this measures **one** project —
+/// the project the user just chose — instead of a whole page of them.
+fn measure_size(path: &Path) -> Option<u64> {
+    const NOTICE: &str = "  measuring folder size…";
+    print!("{NOTICE}");
+    let _ = std::io::stdout().flush();
+    let size = crate::util::tree_size::directory_size(path);
+    // Wipe the notice so the action-menu header starts on a clean line.
+    print!("\r{}\r", " ".repeat(NOTICE.chars().count()));
+    let _ = std::io::stdout().flush();
+    size
 }
 
-fn paged_labels(
-    projects: &[Project],
-    sizes: &HashMap<PathBuf, Option<u64>>,
-    columns: usize,
-) -> Vec<String> {
+fn paged_labels(projects: &[Project], columns: usize) -> Vec<String> {
     let id_w = projects.iter().map(|p| p.id.len()).max().unwrap_or(4);
     let tmpl_w = projects.iter().map(|p| p.template.len()).max().unwrap_or(8);
     let base_w = projects
@@ -425,17 +452,11 @@ fn paged_labels(
         .map(|p| library::base_label(&p.base).len())
         .max()
         .unwrap_or(4);
-    let size_w = projects
-        .iter()
-        .map(|p| size_label(sizes.get(&p.path).copied().flatten()).len())
-        .max()
-        .unwrap_or(11);
 
     projects
         .iter()
         .map(|project| {
             let date = project.created.get(..10).unwrap_or(&project.created);
-            let size = size_label(sizes.get(&project.path).copied().flatten());
             let tag_str = if project.tags.is_empty() {
                 String::new()
             } else {
@@ -448,18 +469,16 @@ fn paged_labels(
                 }
             };
             let label = format!(
-                "{:<id_w$}  {:<tmpl_w$}  {}  {:<base_w$}  Size {:>size_w$}  {}{}",
+                "{:<id_w$}  {:<tmpl_w$}  {}  {:<base_w$}  {}{}",
                 project.id,
                 project.template,
                 date,
                 library::base_label(&project.base),
-                size,
                 project.name,
                 tag_str,
                 id_w = id_w,
                 tmpl_w = tmpl_w,
                 base_w = base_w,
-                size_w = size_w,
             );
             clamp_label(&label, columns)
         })
@@ -488,12 +507,23 @@ fn size_label(size: Option<u64>) -> String {
     }
 }
 
+/// `size`: the outer `None` means "this caller does not show a size at all"
+/// (`fastf recent` / `fastf search`); `Some(inner)` is a measurement, where the
+/// inner `None` is `tree_size`'s honest "unavailable".
+///
+/// `library_tags`: what "Add tag" offers as suggestions. Supplied by the caller
+/// from the project list it already holds — see `library::known_tags`.
+///
+/// `events`: one entry per successful mutation, for the guided menu's session
+/// log. Read-only actions push nothing.
 fn project_action_menu(
     project: &Project,
-    size: Option<&Option<u64>>,
+    size: Option<Option<u64>>,
+    library_tags: &[String],
     reload_after_change: bool,
+    events: &mut Vec<ActionEvent>,
 ) -> Result<ActionLoop> {
-    use dialoguer::{Input, Select};
+    use dialoguer::{Input, MultiSelect, Select};
 
     let path = project.path.as_path();
     let path_str = crate::util::paths::display_path(path);
@@ -514,7 +544,7 @@ fn project_action_menu(
         path_str.dimmed()
     );
     if let Some(size) = size {
-        println!("    {} {}", "size:".dimmed(), size_label(*size));
+        println!("    {} {}", "size:".dimmed(), size_label(size));
     }
 
     // Other configured bases this project could move to (mounted ones only).
@@ -533,6 +563,7 @@ fn project_action_menu(
     loop {
         let mut items = vec![
             "Open project folder",
+            "Open in editor",
             "Show project metadata",
             "Add tag",
             "Remove tag",
@@ -548,22 +579,28 @@ fn project_action_menu(
         items.push("Delete folder permanently");
         items.push("Back to list");
         items.push("Quit");
-        let move_idx = if other_bases.is_empty() {
-            usize::MAX
-        } else {
-            6
-        };
+        // Found by name, not by a hard-coded index: the tail actions below have
+        // always been index-independent, but this one was a literal that had to
+        // be renumbered by hand every time a row was inserted above it.
+        let move_idx = items
+            .iter()
+            .position(|item| *item == "Move to another base")
+            .unwrap_or(usize::MAX);
         let rename_idx = items.len() - 5;
         let unregister_idx = items.len() - 4;
         let delete_idx = items.len() - 3;
         let back_idx = items.len() - 2;
         let quit_idx = items.len() - 1;
 
-        let choice = Select::new()
+        // Esc (or `q`) is "Back to list".
+        let Some(choice) = Select::new()
             .with_prompt("What would you like to do?")
             .items(&items)
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            return Ok(ActionLoop::BackToList);
+        };
 
         if choice == move_idx {
             let columns = terminal_columns();
@@ -581,10 +618,11 @@ fn project_action_menu(
                 .with_prompt("Move to which base?")
                 .items(&labels)
                 .default(0)
-                .interact()?;
-            if sel == other_bases.len() {
+                .interact_opt()?;
+            // Esc is the `[Cancel]` row.
+            let Some(sel) = sel.filter(|sel| *sel != other_bases.len()) else {
                 continue;
-            }
+            };
             let progress = std::sync::Mutex::new(crate::core::assets::Progress::new(&[]));
             let cancel = std::sync::atomic::AtomicBool::new(false);
             match crate::core::operations::move_project(
@@ -607,6 +645,10 @@ fn project_action_menu(
                             crate::util::paths::display_path(&project.path)
                         );
                     }
+                    events.push(ActionEvent::new(
+                        "moved",
+                        format!("{} → {}", project.id, library::base_label(&moved.base)),
+                    ));
                     return Ok(ActionLoop::Changed(vec![project.path.clone(), moved.path]));
                 }
                 Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
@@ -614,13 +656,20 @@ fn project_action_menu(
             continue;
         }
         if choice == rename_idx {
+            // `Input` has no Esc, so an empty answer is how you back out.
             let new_name: String = Input::new()
-                .with_prompt("New folder name")
+                .with_prompt("New folder name (empty to cancel)")
                 .with_initial_text(project.name.clone())
+                .allow_empty(true)
                 .interact_text()?;
+            if new_name.trim().is_empty() {
+                println!("{}", "  (cancelled)".dimmed());
+                continue;
+            }
             match crate::core::operations::rename(project, &new_name) {
                 Ok(renamed) => {
                     println!("{}  Renamed to {}", "✓".green().bold(), renamed.name.bold());
+                    events.push(ActionEvent::new("renamed", renamed.name.clone()));
                     return Ok(ActionLoop::Changed(vec![
                         project.path.clone(),
                         renamed.path,
@@ -637,8 +686,9 @@ fn project_action_menu(
                     project.name
                 ))
                 .default(false)
-                .interact()?;
-            if !confirmed {
+                .interact_opt()?;
+            // Esc is No.
+            if confirmed != Some(true) {
                 continue;
             }
             match crate::core::operations::unregister(project) {
@@ -648,6 +698,7 @@ fn project_action_menu(
                         "✓".green().bold(),
                         project.name.bold()
                     );
+                    events.push(ActionEvent::new("unregistered", project.name.clone()));
                     return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                 }
                 Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
@@ -677,6 +728,7 @@ fn project_action_menu(
             match crate::core::operations::delete(project) {
                 Ok(()) => {
                     println!("{}  Deleted {}", "✓".green().bold(), path_str.bold());
+                    events.push(ActionEvent::new("deleted", project.name.clone()));
                     return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                 }
                 Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
@@ -709,8 +761,30 @@ fn project_action_menu(
                     );
                 }
             }
-            // Show metadata
+            // Open in editor
             1 => {
+                if !path.exists() {
+                    eprintln!(
+                        "{} project folder no longer exists at {}",
+                        "warning:".yellow().bold(),
+                        path_str
+                    );
+                    continue;
+                }
+                let cfg = Config::load().unwrap_or_default();
+                let editor = cfg.resolve_editor();
+                match crate::core::post_create::open_in_editor(&cfg, path) {
+                    Ok(()) => println!("  {} opened in {}", "✓".green(), editor),
+                    Err(e) => eprintln!(
+                        "{} could not open editor '{}': {}",
+                        "warning:".yellow().bold(),
+                        editor,
+                        e
+                    ),
+                }
+            }
+            // Show metadata
+            2 => {
                 if !path.exists() {
                     eprintln!(
                         "{} project folder no longer exists at {}",
@@ -722,21 +796,29 @@ fn project_action_menu(
                 show_metadata(path);
             }
             // Add tag
-            2 => {
-                let input: String = Input::new()
-                    .with_prompt("Tag to add (e.g. draft  or  client/Acme)")
-                    .interact_text()?;
-                let tag = input.trim().to_string();
-                if tag.is_empty() {
+            3 => {
+                let current = current_tags(project);
+                let offer: Vec<String> = library_tags
+                    .iter()
+                    .filter(|tag| !current.contains(tag))
+                    .cloned()
+                    .collect();
+                let chosen = prompt_tags_to_add(&offer)?;
+                if chosen.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
                 } else {
-                    match crate::core::operations::add_tags(project, &[tag]) {
+                    match crate::core::operations::add_tags(project, &chosen) {
                         Ok(_) => {
                             println!(
-                                "{}  Added 1 tag to {}",
+                                "{}  Added {} to {}",
                                 "✓".green().bold(),
+                                plural_tags(chosen.len()),
                                 project.id.green().bold()
                             );
+                            events.push(ActionEvent::new(
+                                "tagged",
+                                format!("{}  +{}", project.id, chosen.join(" +")),
+                            ));
                             if reload_after_change {
                                 return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                             }
@@ -746,19 +828,39 @@ fn project_action_menu(
                 }
             }
             // Remove tag
-            3 => {
-                let input: String = Input::new().with_prompt("Tag to remove").interact_text()?;
-                let tag = input.trim().to_string();
-                if tag.is_empty() {
+            4 => {
+                let current = current_tags(project);
+                if current.is_empty() {
+                    println!("  {} no tags to remove.", "·".dimmed());
+                    continue;
+                }
+                let picks = MultiSelect::new()
+                    .with_prompt("Tags to remove (Space to toggle, Enter to confirm)")
+                    .items(&current)
+                    .interact_opt()?
+                    .unwrap_or_default(); // Esc = pick nothing = cancel.
+                // Indices refer to the list the user just saw; resolve them to
+                // values before anything is written, exactly as
+                // `edit_postcreate_commands` does.
+                let targets: Vec<String> = picks
+                    .into_iter()
+                    .filter_map(|index| current.get(index).cloned())
+                    .collect();
+                if targets.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
                 } else {
-                    match crate::core::operations::remove_tags(project, &[tag]) {
+                    match crate::core::operations::remove_tags(project, &targets) {
                         Ok(_) => {
                             println!(
-                                "{}  Removed 1 tag from {}",
+                                "{}  Removed {} from {}",
                                 "✓".green().bold(),
+                                plural_tags(targets.len()),
                                 project.id.green().bold()
                             );
+                            events.push(ActionEvent::new(
+                                "untagged",
+                                format!("{}  -{}", project.id, targets.join(" -")),
+                            ));
                             if reload_after_change {
                                 return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                             }
@@ -768,8 +870,11 @@ fn project_action_menu(
                 }
             }
             // Add journal note
-            4 => {
-                let input: String = Input::new().with_prompt("Journal note").interact_text()?;
+            5 => {
+                let input: String = Input::new()
+                    .with_prompt("Journal note (empty to cancel)")
+                    .allow_empty(true)
+                    .interact_text()?;
                 let msg = input.trim().to_string();
                 if msg.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
@@ -778,6 +883,7 @@ fn project_action_menu(
                         eprintln!("{} {}", "error:".red().bold(), e);
                     } else {
                         println!("{}  Journal entry added.", "✓".green().bold());
+                        events.push(ActionEvent::new("noted", project.id.clone()));
                         if reload_after_change {
                             return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                         }
@@ -785,13 +891,83 @@ fn project_action_menu(
                 }
             }
             // Show journal
-            5 => {
+            6 => {
                 show_journal(path);
             }
             // Move / Back / Quit are handled above the match (dynamic indices).
             _ => unreachable!(),
         }
     }
+}
+
+fn plural_tags(count: usize) -> String {
+    // "Added 1 tag" / "Removed 3 tags".
+    format!("{count} tag{}", if count == 1 { "" } else { "s" })
+}
+
+/// This project's tags as they are on disk right now.
+///
+/// The `Project` came from discovery and goes stale the moment this menu
+/// mutates it — `run_picker` in particular never reloads, so a Remove following
+/// an Add in the same visit would otherwise offer the pre-Add list. Falls back
+/// to the discovered snapshot if the metadata cannot be read, which is the same
+/// degrade-never-fail rule the rest of the display code follows.
+fn current_tags(project: &Project) -> Vec<String> {
+    crate::core::project_info::read_metadata(&project.path)
+        .ok()
+        .flatten()
+        .map(|metadata| metadata.tags)
+        .unwrap_or_else(|| project.tags.clone())
+}
+
+/// Ask which tags to add. Empty result means "cancelled".
+///
+/// With nothing to suggest (a fresh library, or a project that already carries
+/// every tag) this is the plain free-text prompt it has always been. Otherwise
+/// the library's existing tags are offered as checkboxes with a trailing row
+/// for typing a new one — picking from a list is what stops `draft`/`drafts`
+/// drift, and multi-select means related tags land in one mutation.
+fn prompt_tags_to_add(offer: &[String]) -> Result<Vec<String>> {
+    use dialoguer::{Input, MultiSelect};
+
+    let ask_freeform = || -> Result<Option<String>> {
+        let input: String = Input::new()
+            .with_prompt("Tag to add (e.g. draft  or  client/Acme)")
+            .allow_empty(true)
+            .interact_text()?;
+        let tag = input.trim().to_string();
+        Ok((!tag.is_empty()).then_some(tag))
+    };
+
+    if offer.is_empty() {
+        return Ok(ask_freeform()?.into_iter().collect());
+    }
+
+    const NEW_TAG_ROW: &str = "+ type a new tag…";
+    let mut items: Vec<&str> = offer.iter().map(String::as_str).collect();
+    items.push(NEW_TAG_ROW);
+    let sentinel = offer.len();
+
+    let picks = MultiSelect::new()
+        .with_prompt("Tags to add (Space to toggle, Enter to confirm)")
+        .items(&items)
+        .interact_opt()?
+        .unwrap_or_default(); // Esc = pick nothing = cancel.
+
+    // Resolve indices to values before anything is written, and never let the
+    // sentinel row become a literal tag named "+ type a new tag…".
+    let mut chosen: Vec<String> = picks
+        .iter()
+        .filter(|&&index| index != sentinel)
+        .filter_map(|&index| offer.get(index).cloned())
+        .collect();
+    if picks.contains(&sentinel)
+        && let Some(typed) = ask_freeform()?
+        && !chosen.contains(&typed)
+    {
+        chosen.push(typed);
+    }
+    Ok(chosen)
 }
 
 /// Render a project's metadata to stdout.

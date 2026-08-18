@@ -98,7 +98,7 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result
     // open_in_editor: spawn the configured editor with the folder.
     if actions.open_in_editor {
         let editor = config.resolve_editor();
-        match spawn_editor(&editor, project_path) {
+        match open_in_editor(config, project_path) {
             Ok(()) => println!("  {} opened in {}", "✓".green(), editor),
             Err(e) => eprintln!(
                 "{} could not open editor '{}': {}",
@@ -150,11 +150,12 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result
 /// reveal already in resolved post_create, non-TTY stdout). This helper
 /// just owns the prompt + reveal call.
 pub fn prompt_and_reveal(path: &Path) -> Result<()> {
+    // Esc is No — the project is already created either way.
     let open = dialoguer::Confirm::new()
         .with_prompt("Open project folder?")
         .default(true)
-        .interact()?;
-    if open {
+        .interact_opt()?;
+    if open == Some(true) {
         reveal_folder(path)?;
     }
     Ok(())
@@ -180,6 +181,18 @@ pub fn reveal_folder(path: &Path) -> Result<()> {
 pub fn reveal_folder(path: &Path) -> Result<()> {
     Command::new("xdg-open").arg(path).status()?;
     Ok(())
+}
+
+/// Open `path` in the user's configured editor.
+///
+/// The one public door to `spawn_editor`, so no caller can reach it holding a
+/// raw `config.editor`: reading that field directly instead of calling
+/// `resolve_editor()` is exactly the v1.2.1 `cli::note` bug, where the
+/// documented `$EDITOR` fallback never ran and a default install failed with
+/// `launching editor ''`. `spawn_editor` itself stays private — it is
+/// `#[cfg]`-split into two bodies, and there is no reason to publish both.
+pub fn open_in_editor(config: &Config, path: &Path) -> Result<()> {
+    spawn_editor(&config.resolve_editor(), path)
 }
 
 #[cfg(windows)]

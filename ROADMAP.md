@@ -29,7 +29,35 @@ responsibility of the filesystem and backups.
 
 - Release: **v1.5.1 — shared mutation correctness**
 - Status: **v1.5.1 released; GitHub and AUR publication verified; manual Windows drive smoke pending**
-- Last reviewed: **2026-07-30**
+- Unreleased on `main`: **guided-TUI speed and feel** (see below) — merged, gated,
+  and manually passed on Linux; not versioned, tagged, or packaged.
+- Last reviewed: **2026-08-18**
+
+### Guided-TUI speed and feel (unreleased)
+
+The TUI is the primary surface in daily use, so five friction points in it were
+fixed together. No config keys were added and no dependencies were introduced.
+
+- [x] Esc (and `q`) backs out of every `Select`/`Confirm`/`MultiSelect`: Back in a
+  submenu, Quit at the top level, No on a confirmation, cancel inside an action.
+  Cancellation is not an error, so `contain`/`is_fatal` are unchanged.
+- [x] Project sizes are measured when a project's action menu opens, never per
+  page. The Size column is gone from the list; the session cache and its
+  invalidation on mutation remain.
+- [x] Tags are picked, not retyped: Remove tag is a checkbox list of the
+  project's own tags, Add tag offers `library::known_tags` plus a new-tag row.
+- [x] "Open in editor" action, via a public `post_create::open_in_editor`;
+  `move_idx` is now found by name instead of a hard-coded index.
+- [x] The template picker preselects `default_template` and marks it
+  `(default)`; `fastf new` behaviour is unchanged.
+- [x] A main-menu frame (`src/tui/dashboard.rs`): rule, base, cached library
+  stats, and an in-memory session activity log. Stats refresh only after arms
+  that can change them; `next_value` stays read-only.
+- [x] `dev/tui-sandbox.sh` + `dev/README.md`: a disposable two-base fixture and
+  the manual-pass checklist, because the automated gates cannot see feel.
+
+Deferred deliberately, tracked in the backlog below: Esc inside the create
+wizard, and progress/cancellation for `tree_size`.
 
 ## Release train
 
@@ -218,6 +246,18 @@ than as separate published tags. Their checked items remain above as history.
 
 ## Unscheduled backlog
 
+- **Cancellable text prompts.** `dialoguer::Input` has no opt variant, so Esc is
+  inert in every text prompt — including `core::vars::collect_vars`, which is the
+  create wizard's variable entry and the place a user will try it most. The only
+  escape today is declining at the final confirm. Fixing it means
+  `collect_vars` returning an optional map, which cascades into `new::run`,
+  `apply::run`, and `apply::collect_if_needed`.
+- **Progress and cancellation for `tree_size::directory_size`.** It is a blocking
+  walk with no callback and no cancel flag, so a slow filesystem shows a static
+  `measuring folder size…` for the whole duration. Now that only one project is
+  measured at a time this is tolerable, but the shape to copy already exists in
+  `move_project_with` (`&Mutex<Progress>` + `&AtomicBool`, drawn from a scoped
+  thread).
 - Lazy template loading and one library snapshot for UI state.
 - Deterministic one-pass interpolation with a frozen render context.
 - Further terminal-rendering extraction from core.

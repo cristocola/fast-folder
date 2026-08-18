@@ -9,12 +9,31 @@ use crate::cli::{apply, config, id, recent, template};
 use crate::core::config::Config;
 use crate::core::template as core_template;
 use crate::core::{library, query};
+use crate::tui::dashboard::{Entry, SessionState};
 
 const BANNER: &str = r#"  ___        _      ___    _    _
  | __|_ _ __| |_   | __|__| |__| |___ _ _
  | _/ _` (_-<  _|  | _/ _ \ / _` / -_) '_|
  |_|\__,_/__/\__|  |_|\___/_\__,_\___|_|"#;
 const BANNER_WIDTH: usize = 40;
+
+// Escape semantics.
+//
+// Every `Select`/`Confirm`/`MultiSelect` here is driven through `interact_opt`,
+// which returns `Ok(None)` on **Esc or `q`**. What that means is decided per
+// prompt — Back in a submenu, Quit at the top level, No on a confirmation,
+// cancel inside an action — but it is never an error, so containment
+// (`contain`/`is_fatal`) is untouched: a prompt that genuinely cannot run still
+// fails with `dialoguer::Error` and still ends the session.
+//
+// `Input` has no opt variant in dialoguer 0.11 and swallows Esc, so text
+// prompts cancel on an empty answer instead. The three Settings values where
+// empty is itself meaningful (base dir, default template, editor) cannot be
+// escaped at all; their prompts say what empty does rather than pretend.
+
+/// Index of the main menu's Quit row. Esc resolves to it, so the two exits are
+/// literally the same code path.
+const QUIT: usize = 6;
 
 /// Should this error end the session, or just be reported?
 ///
@@ -48,6 +67,17 @@ fn contain(result: Result<()>) -> Result<()> {
     }
 }
 
+/// `contain`, plus a `✗` line in the session log. Used by the top-level arms,
+/// which are the ones with a session to report into.
+fn contain_logged(result: Result<()>, session: &mut SessionState, what: &str) -> Result<()> {
+    if let Err(err) = &result
+        && !is_fatal(err)
+    {
+        session.log(Entry::failed(what, format!("{err:#}")));
+    }
+    contain(result)
+}
+
 pub fn run() -> Result<()> {
     // Banner is shown once based on the first config load. Honors show_banner.
     let initial = Config::load().unwrap_or_default();
@@ -61,34 +91,16 @@ pub fn run() -> Result<()> {
     }
     onboard_first_run(&initial)?;
 
+    // Computed once here, then refreshed only by the arms that can change it —
+    // see `dashboard`. A per-iteration refresh walks every base.
+    let mut session = SessionState::new(&Config::load().unwrap_or_default());
+
     loop {
         // Reload config each iteration so changes in settings are reflected immediately
         let cfg = Config::load().unwrap_or_default();
-        let base = cfg.resolve_base_dir();
+        session.render(&cfg);
 
-        let parent = base
-            .parent()
-            .map(|p| {
-                format!(
-                    "{}{}",
-                    crate::util::paths::display_path(p),
-                    std::path::MAIN_SEPARATOR
-                )
-            })
-            .unwrap_or_default();
-        let name = base
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| crate::util::paths::display_path(&base));
-
-        println!(
-            "  {}  {}{}",
-            "project base  →".dimmed(),
-            parent.dimmed(),
-            name.cyan().bold()
-        );
-        println!();
-
+        // Esc (or `q`) quits from the top level, exactly like the Quit row.
         let choice = Select::new()
             .with_prompt("What would you like to do?")
             .items(&[
@@ -101,18 +113,39 @@ pub fn run() -> Result<()> {
                 "Quit",
             ])
             .default(0)
-            .interact()?;
+            .interact_opt()?
+            .unwrap_or(QUIT);
 
         // Every arm is contained: a typo in a path or a setting returns to this
-        // menu instead of ending the session.
+        // menu instead of ending the session. Each arm builds its outcome
+        // first and hands it to `contain` — using `?` inline would silently opt
+        // that path out of containment.
         match choice {
-            0 => contain(menu_create())?,
-            1 => contain(menu_projects())?,
-            2 => contain(menu_search())?,
-            3 => contain(menu_register())?,
+            0 => {
+                let outcome = menu_create(&mut session);
+                contain_logged(outcome, &mut session, "create")?;
+            }
+            1 => {
+                let outcome = menu_projects(&mut session);
+                contain_logged(outcome, &mut session, "browse")?;
+            }
+            2 => {
+                let outcome = menu_search(&mut session);
+                contain_logged(outcome, &mut session, "search")?;
+            }
+            3 => {
+                let outcome = menu_register(&mut session);
+                contain_logged(outcome, &mut session, "register")?;
+            }
+            // Templates change none of the numbers in the header.
             4 => contain(menu_templates())?,
-            5 => contain(menu_settings())?,
-            6 => {
+            5 => {
+                let outcome = menu_settings();
+                contain_logged(outcome, &mut session, "settings")?;
+                // Bases, page size and the counter all live under Settings.
+                session.refresh(&Config::load().unwrap_or_default());
+            }
+            QUIT => {
                 println!("Goodbye.");
                 break;
             }
@@ -178,26 +211,49 @@ fn onboard_first_run(cfg: &Config) -> Result<()> {
     }
 }
 
-fn menu_create() -> Result<()> {
+fn menu_create(session: &mut SessionState) -> Result<()> {
     let tmpl = new::pick_template_interactively()?;
+    let base_dir_override = match pick_base_interactively()? {
+        Some(BaseChoice::Default) => None,
+        Some(BaseChoice::Explicit(path)) => Some(path),
+        None => {
+            println!("{}", "  (cancelled)".dimmed());
+            return Ok(());
+        }
+    };
     let args = NewArgs {
         template_slug: Some(tmpl.slug.clone()),
         vars: HashMap::new(),
         dry_run: false,
-        base_dir_override: pick_base_interactively()?,
+        base_dir_override,
         no_preview: false,
         no_post: false,
         yes: false,
     };
     new::run(args)?;
+    // The diff is what tells the log the folder name — and, when the user
+    // declined at the confirmation, that nothing happened at all.
+    let diff = session.refresh(&Config::load().unwrap_or_default());
+    session.log_added("created", &diff);
     println!();
     Ok(())
 }
 
+/// Which base a new project goes into.
+///
+/// `Default` and a cancellation are different answers, which is why this is not
+/// an `Option<String>`: `None` used to mean "fall through to `config.base_dir`",
+/// so reusing it for Esc would silently create the project instead of
+/// abandoning it.
+enum BaseChoice {
+    Default,
+    Explicit(String),
+}
+
 /// When more than one base is configured, ask which one the new project should
-/// be created in. Returns `None` (= config default) when there's only one base
-/// or the first (default) entry is chosen.
-fn pick_base_interactively() -> Result<Option<String>> {
+/// be created in. `Ok(None)` is a cancellation; `BaseChoice::Default` (also the
+/// answer when there is only one base) defers to `config.base_dir`.
+fn pick_base_interactively() -> Result<Option<BaseChoice>> {
     let cfg = Config::load().unwrap_or_default();
     let bases: Vec<std::path::PathBuf> = cfg
         .effective_bases()
@@ -205,7 +261,7 @@ fn pick_base_interactively() -> Result<Option<String>> {
         .filter(|b| b.is_dir())
         .collect();
     if bases.len() <= 1 {
-        return Ok(None);
+        return Ok(Some(BaseChoice::Default));
     }
     let labels: Vec<String> = bases
         .iter()
@@ -220,24 +276,27 @@ fn pick_base_interactively() -> Result<Option<String>> {
             )
         })
         .collect();
-    let idx = Select::new()
+    let Some(idx) = Select::new()
         .with_prompt("Create the project in which base?")
         .items(&labels)
         .default(0)
-        .interact()?;
+        .interact_opt()?
+    else {
+        return Ok(None);
+    };
     if idx == 0 {
         // The default base — let config.base_dir resolution do its thing.
-        return Ok(None);
+        return Ok(Some(BaseChoice::Default));
     }
-    Ok(Some(bases[idx].display().to_string()))
+    Ok(Some(BaseChoice::Explicit(bases[idx].display().to_string())))
 }
 
-fn menu_projects() -> Result<()> {
+fn menu_projects(session: &mut SessionState) -> Result<()> {
     let page_size = Config::load()
         .unwrap_or_default()
         .recent_default_limit
         .max(1);
-    recent::run_paged_browser(
+    let events = recent::run_paged_browser(
         page_size,
         "No projects yet — create one with `fastf new`.",
         || {
@@ -245,18 +304,31 @@ fn menu_projects() -> Result<()> {
             library::discover(&cfg)
         },
     )?;
+    absorb(session, events);
     println!();
     Ok(())
 }
 
-fn menu_search() -> Result<()> {
+/// Fold a browser session's mutations into the log, and recompute the header
+/// numbers only if there were any.
+fn absorb(session: &mut SessionState, events: Vec<recent::ActionEvent>) {
+    if events.is_empty() {
+        return;
+    }
+    for event in events {
+        session.log(Entry::done(event.verb, event.subject));
+    }
+    session.refresh(&Config::load().unwrap_or_default());
+}
+
+fn menu_search(session: &mut SessionState) -> Result<()> {
     let query: String = Input::new()
         .with_prompt("Search query (e.g. tag:draft  template=music-video  artist=Aria*)")
+        .allow_empty(true)
         .interact_text()?;
     let query = query.trim().to_string();
     if query.is_empty() {
-        println!("{}", "  (cancelled)".dimmed());
-        return Ok(());
+        return cancelled();
     }
     let terms: Vec<String> = query.split_whitespace().map(|s| s.to_string()).collect();
     let predicates = query::parse(&terms);
@@ -264,21 +336,33 @@ fn menu_search() -> Result<()> {
         .unwrap_or_default()
         .recent_default_limit
         .max(1);
-    recent::run_paged_browser(page_size, "No projects match that query.", || {
+    let events = recent::run_paged_browser(page_size, "No projects match that query.", || {
         let cfg = Config::load().unwrap_or_default();
         crate::cli::search::matching_projects(&cfg, &predicates)
     })?;
+    absorb(session, events);
     println!();
     Ok(())
 }
 
 fn menu_apply() -> Result<()> {
-    let slug = prompt_template_slug("Template to apply")?;
-    let target: String = Input::new().with_prompt("Target folder").interact_text()?;
-    let dry_run = Confirm::new()
+    let Some(slug) = prompt_template_slug("Template to apply")? else {
+        return cancelled();
+    };
+    let target: String = Input::new()
+        .with_prompt("Target folder (empty to cancel)")
+        .allow_empty(true)
+        .interact_text()?;
+    if target.trim().is_empty() {
+        return cancelled();
+    }
+    let Some(dry_run) = Confirm::new()
         .with_prompt("Dry run first (preview only)?")
         .default(true)
-        .interact()?;
+        .interact_opt()?
+    else {
+        return cancelled();
+    };
 
     // Collect the variables once and reuse them for both passes. Running apply
     // twice with an empty map meant answering every prompt again just to confirm
@@ -295,11 +379,12 @@ fn menu_apply() -> Result<()> {
     })?;
 
     if dry_run {
+        // Esc here is No — the preview already ran, so there is nothing to undo.
         let proceed = Confirm::new()
             .with_prompt("Apply for real now?")
             .default(false)
-            .interact()?;
-        if proceed {
+            .interact_opt()?;
+        if proceed == Some(true) {
             apply::run(apply::ApplyArgs {
                 template_slug: slug,
                 target,
@@ -314,27 +399,33 @@ fn menu_apply() -> Result<()> {
     Ok(())
 }
 
-fn menu_register() -> Result<()> {
+fn menu_register(session: &mut SessionState) -> Result<()> {
     // 1. Folder path.
     let path: String = Input::new()
-        .with_prompt("Existing folder to register")
+        .with_prompt("Existing folder to register (empty to cancel)")
+        .allow_empty(true)
         .interact_text()?;
     let path = path.trim();
     if path.is_empty() {
-        println!("{}", "  (cancelled)".dimmed());
-        return Ok(());
+        return cancelled();
     }
 
     // 2. Optional template — first ask, then pick if Yes. Skipping is fully
     //    supported: register writes a minimal record with template "(registered)".
-    let use_template = Confirm::new()
+    let Some(use_template) = Confirm::new()
         .with_prompt("Attach a template (enables tags + variable capture)?")
         .default(false)
-        .interact()?;
+        .interact_opt()?
+    else {
+        return cancelled();
+    };
 
     let template_slug = if use_template {
         match core_template::load_all() {
-            Ok(ts) if !ts.is_empty() => Some(prompt_template_slug("Template to attach")?),
+            Ok(ts) if !ts.is_empty() => match prompt_template_slug("Template to attach")? {
+                Some(slug) => Some(slug),
+                None => return cancelled(),
+            },
             Ok(_) => {
                 println!(
                     "  {} no templates available — continuing without one.",
@@ -357,17 +448,24 @@ fn menu_register() -> Result<()> {
     // 3. Standardize folder name. Default Yes; the actual fs::rename inside
     //    register::run() prompts again before moving, so the user has a second
     //    chance to back out once they see the proposed new name.
-    let rename = Confirm::new()
+    let Some(rename) = Confirm::new()
         .with_prompt("Standardize folder name (rename to match pattern)?")
         .default(true)
-        .interact()?;
+        .interact_opt()?
+    else {
+        return cancelled();
+    };
 
     // 4. Optional --apply (only meaningful with a template).
     let apply_structure = if template_slug.is_some() {
-        Confirm::new()
+        match Confirm::new()
             .with_prompt("Fill in missing template folders/files?")
             .default(false)
-            .interact()?
+            .interact_opt()?
+        {
+            Some(answer) => answer,
+            None => return cancelled(),
+        }
     } else {
         false
     };
@@ -382,13 +480,15 @@ fn menu_register() -> Result<()> {
         created_override: None,
         yes: false,
     })?;
+    let diff = session.refresh(&Config::load().unwrap_or_default());
+    session.log_added("registered", &diff);
     println!();
     Ok(())
 }
 
 fn menu_templates() -> Result<()> {
     loop {
-        let choice = Select::new()
+        let Some(choice) = Select::new()
             .with_prompt("Templates")
             .items(&[
                 "Create new template",
@@ -401,7 +501,10 @@ fn menu_templates() -> Result<()> {
                 "Back",
             ])
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            break;
+        };
 
         // Each arm yields a Result rather than using `?` inline, so one
         // contained failure (an unreadable template, a missing source folder)
@@ -409,11 +512,11 @@ fn menu_templates() -> Result<()> {
         let outcome = match choice {
             0 => template::new_interactive(),
             1 => template_from_folder_flow(),
-            2 => prompt_template_slug("Edit template").and_then(|s| template::edit(&s)),
+            2 => with_template_slug("Edit template", template::edit),
             3 => menu_apply(),
             4 => template::list(),
-            5 => prompt_template_slug("Show template").and_then(|s| template::show(&s)),
-            6 => prompt_template_slug("Delete template").and_then(|s| template::delete(&s, false)),
+            5 => with_template_slug("Show template", template::show),
+            6 => with_template_slug("Delete template", |slug| template::delete(slug, false)),
             7 => break,
             _ => unreachable!(),
         };
@@ -425,16 +528,35 @@ fn menu_templates() -> Result<()> {
 
 fn template_from_folder_flow() -> Result<()> {
     let path: String = Input::new()
-        .with_prompt("Source folder to scan")
+        .with_prompt("Source folder to scan (empty to cancel)")
+        .allow_empty(true)
         .interact_text()?;
+    if path.trim().is_empty() {
+        return cancelled();
+    }
     let slug: String = Input::new()
-        .with_prompt("Slug for the new template")
+        .with_prompt("Slug for the new template (empty to cancel)")
+        .allow_empty(true)
         .interact_text()?;
-    let force = Confirm::new()
+    if slug.trim().is_empty() {
+        return cancelled();
+    }
+    let Some(force) = Confirm::new()
         .with_prompt("Overwrite if a template with this slug exists?")
         .default(false)
-        .interact()?;
+        .interact_opt()?
+    else {
+        return cancelled();
+    };
     template::run_from_folder(&path, &slug, force, false)
+}
+
+/// Report an abandoned action and return to the menu. Every cancellation says
+/// the same thing in the same place, so an escaped prompt never looks like a
+/// silent no-op.
+fn cancelled() -> Result<()> {
+    println!("{}", "  (cancelled)".dimmed());
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +569,7 @@ fn menu_id() -> Result<()> {
         // unwritable base — report it and stay rather than dropping the user out.
         contain(id::show())?;
         println!();
-        let choice = Select::new()
+        let Some(choice) = Select::new()
             .with_prompt("ID counter")
             .items(&[
                 "Raise counter value",
@@ -455,16 +577,25 @@ fn menu_id() -> Result<()> {
                 "Back",
             ])
             .default(2)
-            .interact()?;
+            .interact_opt()?
+        else {
+            break;
+        };
 
         let outcome = match choice {
             0 => {
                 let val: String = Input::new()
-                    .with_prompt("Raise counter to (next project will be this + 1)")
+                    .with_prompt(
+                        "Raise counter to (next project will be this + 1, empty to cancel)",
+                    )
+                    .allow_empty(true)
                     .interact_text()?;
-                match val.trim().parse::<u64>() {
-                    Ok(n) => id::set(n),
-                    Err(_) => Err(anyhow::anyhow!("expected a number, got '{}'", val.trim())),
+                match val.trim() {
+                    "" => cancelled(),
+                    trimmed => match trimmed.parse::<u64>() {
+                        Ok(n) => id::set(n),
+                        Err(_) => Err(anyhow::anyhow!("expected a number, got '{trimmed}'")),
+                    },
                 }
             }
             1 => id::sync(),
@@ -486,7 +617,7 @@ fn menu_settings() -> Result<()> {
     loop {
         contain(config::show())?;
         println!();
-        let choice = Select::new()
+        let Some(choice) = Select::new()
             .with_prompt("Settings")
             .items(&[
                 "Project basics  (base dir / template / date / editor)",
@@ -498,7 +629,10 @@ fn menu_settings() -> Result<()> {
                 "Back",
             ])
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            break;
+        };
 
         let outcome = match choice {
             0 => menu_settings_basics(),
@@ -518,7 +652,7 @@ fn menu_settings() -> Result<()> {
 
 fn menu_settings_basics() -> Result<()> {
     loop {
-        let choice = Select::new()
+        let Some(choice) = Select::new()
             .with_prompt("Project basics")
             .items(&[
                 "Set base directory",
@@ -528,7 +662,10 @@ fn menu_settings_basics() -> Result<()> {
                 "Back",
             ])
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            break;
+        };
 
         let outcome = match choice {
             0 => {
@@ -545,8 +682,12 @@ fn menu_settings_basics() -> Result<()> {
                 config::set("base-dir", &val)
             }
             1 => {
+                println!(
+                    "  {}  `fastf new` uses it without asking; this menu preselects it in the picker.",
+                    "Hint:".yellow()
+                );
                 let val: String = Input::new()
-                    .with_prompt("Default template slug (empty = always prompt)")
+                    .with_prompt("Default template slug (empty = no default)")
                     .allow_empty(true)
                     .interact_text()?;
                 config::set("default-template", &val)
@@ -597,11 +738,14 @@ fn menu_settings_workflow() -> Result<()> {
             ),
             "Back".to_string(),
         ];
-        let choice = Select::new()
+        let Some(choice) = Select::new()
             .with_prompt("Workflow prompts")
             .items(&items)
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            break;
+        };
 
         let outcome = match choice {
             0 => toggle_setting("prompt-open-after-create", cfg.prompt_open_after_create),
@@ -657,11 +801,14 @@ fn menu_settings_bases() -> Result<()> {
         }
         items.push("Back".to_string());
 
-        let choice = Select::new()
+        let Some(choice) = Select::new()
             .with_prompt("Library bases")
             .items(&items)
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            break;
+        };
 
         let outcome = if choice == 0 {
             let val: String = Input::new()
@@ -704,11 +851,14 @@ fn menu_settings_recent() -> Result<()> {
             format!("Projects page size  [{}]", cfg.recent_default_limit),
             "Back".to_string(),
         ];
-        let choice = Select::new()
+        let Some(choice) = Select::new()
             .with_prompt("Projects")
             .items(&items)
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            break;
+        };
 
         let outcome = match choice {
             0 => {
@@ -742,11 +892,14 @@ fn menu_settings_postcreate() -> Result<()> {
             ),
             "Back".to_string(),
         ];
-        let choice = Select::new()
+        let Some(choice) = Select::new()
             .with_prompt("Post-create actions (default for new projects)")
             .items(&items)
             .default(0)
-            .interact()?;
+            .interact_opt()?
+        else {
+            break;
+        };
 
         let outcome = match choice {
             0 => toggle_setting("post_create.git_init", pc.git_init),
@@ -788,7 +941,8 @@ fn edit_postcreate_commands() -> Result<()> {
         .with_prompt("Manage commands")
         .items(&["Add a command", "Remove commands", "Done"])
         .default(0)
-        .interact()?;
+        .interact_opt()?
+        .unwrap_or(2); // Esc = Done.
 
     // What the user asked for, decided entirely outside the lock.
     enum Edit {
@@ -823,7 +977,8 @@ fn edit_postcreate_commands() -> Result<()> {
                 MultiSelect::new()
                     .with_prompt("Select commands to remove (Space to toggle, Enter to confirm)")
                     .items(&labels)
-                    .interact()?,
+                    .interact_opt()?
+                    .unwrap_or_default(), // Esc = remove nothing.
             )
         }
         2 => Edit::Nothing,
@@ -893,7 +1048,9 @@ fn toggle_setting(key: &str, current: bool) -> Result<()> {
     Ok(())
 }
 
-fn prompt_template_slug(prompt: &str) -> Result<String> {
+/// `Ok(None)` means the user escaped out of the picker — the caller abandons
+/// whatever it was collecting.
+fn prompt_template_slug(prompt: &str) -> Result<Option<String>> {
     use crate::core::template;
     let templates = template::load_all()?;
     if templates.is_empty() {
@@ -907,8 +1064,17 @@ fn prompt_template_slug(prompt: &str) -> Result<String> {
         .with_prompt(prompt)
         .items(&labels)
         .default(0)
-        .interact()?;
-    Ok(templates[idx].slug.clone())
+        .interact_opt()?;
+    Ok(idx.map(|idx| templates[idx].slug.clone()))
+}
+
+/// Run `action` on a picked template slug, or do nothing when the pick was
+/// escaped. Keeps the Templates menu arms one line each.
+fn with_template_slug(prompt: &str, action: impl FnOnce(&str) -> Result<()>) -> Result<()> {
+    match prompt_template_slug(prompt)? {
+        Some(slug) => action(&slug),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

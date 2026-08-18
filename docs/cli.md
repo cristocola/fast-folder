@@ -54,11 +54,17 @@ After a successful create, fastf asks `Open project folder? [Y/n]` and opens the
 
 From the guided `fastf` menu, choose **Projects** to browse the complete library
 newest first. The browser is paged, with Previous, Next, and Back controls; each
-prompt shows `Page X/Y`. Only the current page is scanned for live folder sizes,
-and those snapshots are kept only until you leave that Projects session. The
-same paged browser is used after choosing Search from the guided menu. The
-current selection is highlighted across the full terminal row, so columns such
-as Size remain easy to track back to the selected project.
+prompt shows `Page X/Y`. The same paged browser is used after choosing Search
+from the guided menu. The current selection is highlighted across the full
+terminal row, so a row stays easy to track across a wide terminal.
+
+Folder sizes are measured when you open a project's action menu, not when a
+page is listed — a page of large projects on a slow or network base would
+otherwise stall the list before it drew. Each measurement is kept until you
+leave that Projects session, and is recomputed if the project changes.
+
+Press **Esc** (or `q`) to back out of any menu; at the top level it quits.
+Text prompts cannot be escaped — submit an empty answer to cancel one.
 
 `recent-default-limit` is retained as the configuration key for compatibility.
 It now controls both the guided TUI's Projects page size and the default
@@ -80,15 +86,20 @@ fastf open ID0047                    # reveal in the system file manager
 fastf open my-crate                  # substring match on project name
 ```
 
-The picker shows inline tags. Selecting a project opens an action menu: open folder, show metadata, add or remove tags, journal notes, move to another base, rename, unregister, or delete. Piping the output engages the plain list automatically:
+The picker shows inline tags. Selecting a project opens an action menu: open
+folder, open in your configured editor, show metadata, add or remove tags,
+journal notes, move to another base, rename, unregister, or delete. Adding a tag
+offers the tags already in your library as checkboxes, plus a row for typing a
+new one; removing tags picks from the ones the project actually has. Piping the
+output engages the plain list automatically:
 
 ```bash
 fastf recent | grep music-video
 ```
 
 The standalone `fastf recent` and `fastf search` commands retain their existing
-command-line output; live Size fields are exclusive to the guided TUI and
-browser UI, so scripts do not acquire a new column.
+command-line output; live sizes are exclusive to the guided TUI and browser UI,
+so scripts do not acquire a new column.
 
 Deleted a project folder manually? The next `fastf recent` simply won't list it. The per-base cache heals itself, so there is no prune command. If you moved folders or edited metadata outside fastf, run `fastf reindex`.
 
@@ -231,7 +242,7 @@ A template is a folder. Share one by copying its folder, and use a gallery examp
 ```bash
 fastf config show
 fastf config set base-dir /path/to/projects
-fastf config set default-template rust-project
+fastf config set default-template rust-project   # see the note below
 fastf config set date-format "%Y-%m-%d"
 fastf config set editor nvim
 
@@ -255,6 +266,10 @@ fastf config set post_create.print_path true
 ```
 
 Run `fastf config set --help` for the complete key list with descriptions.
+
+`default-template` behaves differently on the two surfaces, deliberately:
+`fastf new` uses it without asking, while the guided menu still shows the
+template picker with that template preselected and marked `(default)`.
 
 ## ID counter
 

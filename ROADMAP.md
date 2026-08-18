@@ -38,9 +38,14 @@ responsibility of the filesystem and backups.
 The TUI is the primary surface in daily use, so five friction points in it were
 fixed together. No config keys were added and no dependencies were introduced.
 
-- [x] Esc (and `q`) backs out of every `Select`/`Confirm`/`MultiSelect`: Back in a
-  submenu, Quit at the top level, No on a confirmation, cancel inside an action.
-  Cancellation is not an error, so `contain`/`is_fatal` are unchanged.
+- [ ] **Esc-to-go-back: built, then reverted before release.** It worked in
+  menus but not in text prompts (`dialoguer::Input` has no cancel variant), so
+  the create wizard ignored it; `interact_opt` also binds `q` as a second cancel
+  key. It was the only change that altered how every existing prompt responds to
+  input, so it was backed out to keep the release conservative. The work is in
+  git history at commit `ca27f80` if it is picked up again — it needs a
+  cancellable text prompt first, which means a custom input loop or a different
+  prompt crate.
 - [x] Project sizes are measured when a project's action menu opens, never per
   page. The Size column is gone from the list; the session cache and its
   invalidation on mutation remain.
@@ -56,8 +61,8 @@ fixed together. No config keys were added and no dependencies were introduced.
 - [x] `dev/tui-sandbox.sh` + `dev/README.md`: a disposable two-base fixture and
   the manual-pass checklist, because the automated gates cannot see feel.
 
-Deferred deliberately, tracked in the backlog below: Esc inside the create
-wizard, and progress/cancellation for `tree_size`.
+Deferred deliberately, tracked in the backlog below: cancellable text prompts
+(which Esc needs to be worth having), and progress/cancellation for `tree_size`.
 
 ## Release train
 

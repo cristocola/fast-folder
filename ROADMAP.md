@@ -28,7 +28,7 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v1.6.0 — the guided browser stops waiting**
-- Status: **v1.6.0 in release; gates pass locally, publication pending**
+- Status: **v1.6.0 released; GitHub and AUR publication verified; manual network-share smoke pending**
 - Last reviewed: **2026-08-18**
 
 ## Release train
@@ -38,7 +38,7 @@ responsibility of the filesystem and backups.
 | v1.4.1 | Delivered in v1.5.1; CI passed | fastf cannot touch a path merely because a filename or pre-v2 marker implies ownership |
 | v1.5.0 | Delivered in v1.5.1; CI and Linux smoke passed | scoped v2 move/create journals recover idempotently after process crashes |
 | v1.5.1 | Released; CI, assets, and AUR packages verified | every mutation shares validation, locking, authoritative reload, and cache refresh behavior |
-| v1.6.0 | In release | the guided project browser never waits on a folder size |
+| v1.6.0 | Released; CI, assets, and AUR packages verified | the guided project browser never waits on a folder size |
 
 ### v1.4.1 — containment and path safety
 
@@ -209,11 +209,11 @@ Every release must pass:
   x86_64-pc-windows-{gnu,msvc}`
 - [x] `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --locked` (CI's "docs build
   clean"; a `pub` item's docs may not link to a `pub(crate)` one)
-- [ ] Existing Linux CI target
-- [ ] Existing Windows CI targets, debug and release
-- [ ] GitHub Release workflow built Linux GNU/musl archives, the Windows ZIP,
-  and the MSI; every asset matched `SHA256SUMS`.
-- [ ] `makepkg -f` completed for `fast-folder` and `fast-folder-bin`; the source
+- [x] Existing Linux CI target ([main run 32171192192](https://github.com/cristocola/fast-folder/actions/runs/32171192192))
+- [x] Existing Windows CI targets, debug and release ([main run 32171192192](https://github.com/cristocola/fast-folder/actions/runs/32171192192))
+- [x] GitHub Release workflow built Linux GNU/musl archives, the Windows ZIP,
+  and the MSI; every asset matched `SHA256SUMS` ([run 32171214147](https://github.com/cristocola/fast-folder/actions/runs/32171214147)).
+- [x] `makepkg -f` completed for `fast-folder` and `fast-folder-bin`; the source
   package's release test suite passed before both AUR repositories were pushed.
 
 Regression coverage grows with the relevant release:

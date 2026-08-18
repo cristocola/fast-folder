@@ -207,6 +207,8 @@ Every release must pass:
 - [x] `node --check src/ui/web/app.js`
 - [x] Windows cfg compile: `cargo check --all-targets --target
   x86_64-pc-windows-{gnu,msvc}`
+- [x] `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --locked` (CI's "docs build
+  clean"; a `pub` item's docs may not link to a `pub(crate)` one)
 - [ ] Existing Linux CI target
 - [ ] Existing Windows CI targets, debug and release
 - [ ] GitHub Release workflow built Linux GNU/musl archives, the Windows ZIP,

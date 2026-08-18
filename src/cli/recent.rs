@@ -303,12 +303,12 @@ enum ActionLoop {
 /// `load` is called again after every mutation so search predicates and page
 /// bounds remain truthful.
 ///
-/// Sizes come from [`SizeScanner`]'s worker threads, and the list is drawn before
+/// Sizes come from `SizeScanner`'s worker threads, and the list is drawn before
 /// any of them has answered. That is the whole point: walking a page of project
 /// trees takes seconds on a network share, and it used to happen inline, so the
 /// list only appeared once every visible row had been measured.
 ///
-/// While the list is up, [`crate::util::live_select`] owns the terminal, so
+/// While the list is up, `util::live_select` owns the terminal, so
 /// nothing in here may print — which is why the scan has no progress output of
 /// its own, and why the scanner threads are silent by construction.
 pub fn run_paged_browser<F>(page_size: usize, empty_message: &str, mut load: F) -> Result<()>

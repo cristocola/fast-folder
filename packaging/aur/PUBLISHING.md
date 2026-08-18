@@ -28,9 +28,9 @@ release (pkgver bump + checksums + .SRCINFO).
 3. **Claim the package names** (cloning a non-existent package creates an empty
    repo you may push to):
    ```bash
-   mkdir -p ~/aur
-   git clone ssh://aur@aur.archlinux.org/fast-folder.git     ~/aur/fast-folder
-   git clone ssh://aur@aur.archlinux.org/fast-folder-bin.git ~/aur/fast-folder-bin
+   mkdir -p ~/2026-05-13_fast_folder_ID0052/aur
+   git clone ssh://aur@aur.archlinux.org/fast-folder.git     ~/2026-05-13_fast_folder_ID0052/aur/fast-folder
+   git clone ssh://aur@aur.archlinux.org/fast-folder-bin.git ~/2026-05-13_fast_folder_ID0052/aur/fast-folder-bin
    ```
 
 ## Per-release flow (also for the first release)
@@ -49,8 +49,8 @@ namcap fast-folder-*.pkg.tar.zst  # lint the built package
 cd ..
 
 # Publish (per package):
-cp fast-folder/{PKGBUILD,.SRCINFO} ~/aur/fast-folder/
-cd ~/aur/fast-folder
+cp fast-folder/{PKGBUILD,.SRCINFO} ~/2026-05-13_fast_folder_ID0052/aur/fast-folder/
+cd ~/2026-05-13_fast_folder_ID0052/aur/fast-folder
 git add -A && git commit -m "fast-folder 1.0.0-1" && git push   # first push goes to master
 
 # Repeat for fast-folder-bin.

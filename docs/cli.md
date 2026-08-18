@@ -54,11 +54,19 @@ After a successful create, fastf asks `Open project folder? [Y/n]` and opens the
 
 From the guided `fastf` menu, choose **Projects** to browse the complete library
 newest first. The browser is paged, with Previous, Next, and Back controls; each
-prompt shows `Page X/Y`. Only the current page is scanned for live folder sizes,
-and those snapshots are kept only until you leave that Projects session. The
-same paged browser is used after choosing Search from the guided menu. The
-current selection is highlighted across the full terminal row, so columns such
-as Size remain easy to track back to the selected project.
+prompt shows `Page X/Y`. The same paged browser is used after choosing Search
+from the guided menu. The current selection is highlighted across the full
+terminal row, so columns such as Size remain easy to track back to the selected
+project.
+
+The list appears immediately and never waits for a folder to be measured. Sizes
+are walked in the background — two at a time, the row you have selected first,
+then the rest of the visible page — and each row shows `scanning…` until its
+result arrives, at which point that row updates in place without you pressing
+anything. Only the current page is measured, and the snapshots are kept only
+until you leave that Projects session. On a slow disk or a network share this is
+the difference between a list you can use at once and one that appears seconds
+later.
 
 `recent-default-limit` is retained as the configuration key for compatibility.
 It now controls both the guided TUI's Projects page size and the default

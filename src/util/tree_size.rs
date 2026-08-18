@@ -8,6 +8,10 @@
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// A token that is never set, for callers with nothing to cancel.
+static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// Sum the logical lengths of every regular file below `root`.
 ///
@@ -15,10 +19,21 @@ use std::path::Path;
 /// Symlinks/junctions and special nodes are ignored. `None` means the root was
 /// not a directory, an entry could not be inspected, or the total overflowed.
 pub(crate) fn directory_size(root: &Path) -> Option<u64> {
-    directory_size_inner(root).ok()
+    directory_size_until(root, &NEVER_CANCELLED)
 }
 
-fn directory_size_inner(root: &Path) -> io::Result<u64> {
+/// As [`directory_size`], but abandons the walk once `cancel` is set.
+///
+/// A cancelled walk returns `None` — the same answer an unreadable tree gives,
+/// because the snapshot is all-or-nothing either way. A caller that cancels must
+/// therefore **discard** the result rather than record it: here `None` means "no
+/// answer", not "unavailable". Cancellation is checked once per directory entry,
+/// which is what bounds teardown when the tree lives on a slow network share.
+pub(crate) fn directory_size_until(root: &Path, cancel: &AtomicBool) -> Option<u64> {
+    directory_size_inner(root, cancel).ok()
+}
+
+fn directory_size_inner(root: &Path, cancel: &AtomicBool) -> io::Result<u64> {
     // `symlink_metadata` is load-bearing: `metadata` would follow a root link.
     let root_metadata = fs::symlink_metadata(root)?;
     if is_link_like(&root_metadata) || !root_metadata.file_type().is_dir() {
@@ -30,6 +45,12 @@ fn directory_size_inner(root: &Path) -> io::Result<u64> {
 
     let mut total = 0_u64;
     for entry in fs::read_dir(root)? {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "size walk cancelled",
+            ));
+        }
         let entry = entry?;
         let path = entry.path();
 
@@ -43,7 +64,7 @@ fn directory_size_inner(root: &Path) -> io::Result<u64> {
         }
 
         let bytes = if file_type.is_dir() {
-            directory_size_inner(&path)?
+            directory_size_inner(&path, cancel)?
         } else if file_type.is_file() {
             metadata.len()
         } else {
@@ -82,8 +103,9 @@ fn is_link_like(metadata: &fs::Metadata) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::directory_size;
+    use super::{directory_size, directory_size_until};
     use std::fs;
+    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn counts_nested_hidden_and_metadata_files() {
@@ -180,6 +202,21 @@ mod tests {
 
         assert_eq!(directory_size(&root), Some(11));
         assert_eq!(directory_size(&root.join("dir-link")), None);
+    }
+
+    /// A cancelled walk must not be mistaken for a measured one: it has no
+    /// answer at all, which is why the scanner discards it.
+    #[test]
+    fn a_cancelled_walk_has_no_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("payload.bin"), [0_u8; 32]).unwrap();
+
+        let cancel = AtomicBool::new(true);
+        assert_eq!(directory_size_until(&root, &cancel), None);
+        // The same tree measures fine once nothing is asking us to stop.
+        assert_eq!(directory_size(&root), Some(32));
     }
 
     #[cfg(unix)]

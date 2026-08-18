@@ -66,41 +66,6 @@ fn the_menu_opens_and_quits_cleanly() {
     assert!(out.contains("Goodbye."), "expected a clean exit:\n{out}");
 }
 
-/// Esc backs out one level at a time. The failure this guards against is Esc
-/// unwinding the whole session instead of returning to the parent menu.
-#[test]
-fn esc_backs_out_one_level_at_a_time() {
-    let sb = Sandbox::new();
-    let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter()
-        .enter() // Project basics
-        .esc() // → back to Settings
-        .esc() // → back to the main menu
-        .pause(400)
-        .down(MENU_QUIT)
-        .enter()
-        .build();
-    let (out, code) = launch(&sb, script);
-
-    assert_eq!(code, 0, "Esc must not end the session:\n{out}");
-    assert!(
-        out.contains("Goodbye."),
-        "expected to land back on the main menu and quit from it:\n{out}"
-    );
-}
-
-/// At the top level there is no parent to return to, so Esc is Quit — the same
-/// code path as the Quit row.
-#[test]
-fn esc_at_the_main_menu_quits() {
-    let sb = Sandbox::new();
-    let (out, code) = launch(&sb, pty::Script::new().esc().build());
-
-    assert_eq!(code, 0, "Esc should exit cleanly:\n{out}");
-    assert!(out.contains("Goodbye."), "expected a clean exit:\n{out}");
-}
-
 /// The frame reports the library without any action having been taken.
 #[test]
 fn the_menu_frame_reports_library_stats() {

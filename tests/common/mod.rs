@@ -255,18 +255,6 @@ pub mod pty {
             self.push(b"\x03", 400)
         }
 
-        /// A lone Escape — which every `Select`/`Confirm` in the TUI treats as
-        /// Back.
-        ///
-        /// `console`'s `read_single_char` polls for a continuation byte with a
-        /// zero timeout, so a bare `\x1b` with nothing behind it resolves to
-        /// `Key::Escape` rather than the start of an arrow sequence. That is
-        /// only true because this writes it on its own with a gap after it —
-        /// never merge an Esc into another `push`.
-        pub fn esc(self) -> Self {
-            self.push(b"\x1b", 600)
-        }
-
         /// Wait before the next key — for a step that does real work.
         pub fn pause(mut self, ms: u64) -> Self {
             self.at_ms += ms;

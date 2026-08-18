@@ -73,14 +73,12 @@ pub fn run(args: NewArgs) -> Result<()> {
     }
     if !args.yes && config.confirm_create {
         println!();
-        // Esc is No. This is the one escape hatch in the create flow — variable
-        // collection runs on `Input`, which cannot be escaped at all.
         let ok = Confirm::new()
             .with_prompt("Create this project?")
             .default(true)
-            .interact_opt()?;
+            .interact()?;
 
-        if ok != Some(true) {
+        if !ok {
             println!("Aborted.");
             return Ok(());
         }

@@ -63,9 +63,6 @@ page is listed — a page of large projects on a slow or network base would
 otherwise stall the list before it drew. Each measurement is kept until you
 leave that Projects session, and is recomputed if the project changes.
 
-Press **Esc** (or `q`) to back out of any menu; at the top level it quits.
-Text prompts cannot be escaped — submit an empty answer to cancel one.
-
 `recent-default-limit` is retained as the configuration key for compatibility.
 It now controls both the guided TUI's Projects page size and the default
 `--limit` for `fastf recent`:

@@ -257,17 +257,11 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
             .chain(std::iter::once("[Quit]".to_string()))
             .collect();
 
-        // Esc (or `q`) leaves the picker, exactly like the `[Quit]` row — which
-        // is also the right thing for the standalone `fastf recent` / `fastf
-        // search` commands this picker serves.
-        let Some(idx) = Select::with_theme(&theme)
+        let idx = Select::with_theme(&theme)
             .with_prompt(format!("Projects ({} shown) — pick one", filtered.len()))
             .items(&labels)
             .default(0)
-            .interact_opt()?
-        else {
-            return Ok(());
-        };
+            .interact()?;
 
         if idx == filtered.len() {
             return Ok(());
@@ -376,8 +370,7 @@ where
         labels.push("Back".to_string());
 
         let theme = ProjectRowTheme::new(columns);
-        // Esc (or `q`) is the Back row.
-        let Some(choice) = Select::with_theme(&theme)
+        let choice = Select::with_theme(&theme)
             .with_prompt(format!(
                 "Projects — Page {}/{} ({} total)",
                 page + 1,
@@ -386,10 +379,7 @@ where
             ))
             .items(&labels)
             .default(0)
-            .interact_opt()?
-        else {
-            return Ok(events);
-        };
+            .interact()?;
 
         if choice < current.len() {
             // Own the selected snapshot so a successful action can reload the
@@ -592,15 +582,11 @@ fn project_action_menu(
         let back_idx = items.len() - 2;
         let quit_idx = items.len() - 1;
 
-        // Esc (or `q`) is "Back to list".
-        let Some(choice) = Select::new()
+        let choice = Select::new()
             .with_prompt("What would you like to do?")
             .items(&items)
             .default(0)
-            .interact_opt()?
-        else {
-            return Ok(ActionLoop::BackToList);
-        };
+            .interact()?;
 
         if choice == move_idx {
             let columns = terminal_columns();
@@ -618,11 +604,10 @@ fn project_action_menu(
                 .with_prompt("Move to which base?")
                 .items(&labels)
                 .default(0)
-                .interact_opt()?;
-            // Esc is the `[Cancel]` row.
-            let Some(sel) = sel.filter(|sel| *sel != other_bases.len()) else {
+                .interact()?;
+            if sel == other_bases.len() {
                 continue;
-            };
+            }
             let progress = std::sync::Mutex::new(crate::core::assets::Progress::new(&[]));
             let cancel = std::sync::atomic::AtomicBool::new(false);
             match crate::core::operations::move_project(
@@ -656,16 +641,10 @@ fn project_action_menu(
             continue;
         }
         if choice == rename_idx {
-            // `Input` has no Esc, so an empty answer is how you back out.
             let new_name: String = Input::new()
-                .with_prompt("New folder name (empty to cancel)")
+                .with_prompt("New folder name")
                 .with_initial_text(project.name.clone())
-                .allow_empty(true)
                 .interact_text()?;
-            if new_name.trim().is_empty() {
-                println!("{}", "  (cancelled)".dimmed());
-                continue;
-            }
             match crate::core::operations::rename(project, &new_name) {
                 Ok(renamed) => {
                     println!("{}  Renamed to {}", "✓".green().bold(), renamed.name.bold());
@@ -686,9 +665,8 @@ fn project_action_menu(
                     project.name
                 ))
                 .default(false)
-                .interact_opt()?;
-            // Esc is No.
-            if confirmed != Some(true) {
+                .interact()?;
+            if !confirmed {
                 continue;
             }
             match crate::core::operations::unregister(project) {
@@ -837,8 +815,7 @@ fn project_action_menu(
                 let picks = MultiSelect::new()
                     .with_prompt("Tags to remove (Space to toggle, Enter to confirm)")
                     .items(&current)
-                    .interact_opt()?
-                    .unwrap_or_default(); // Esc = pick nothing = cancel.
+                    .interact()?;
                 // Indices refer to the list the user just saw; resolve them to
                 // values before anything is written, exactly as
                 // `edit_postcreate_commands` does.
@@ -871,10 +848,7 @@ fn project_action_menu(
             }
             // Add journal note
             5 => {
-                let input: String = Input::new()
-                    .with_prompt("Journal note (empty to cancel)")
-                    .allow_empty(true)
-                    .interact_text()?;
+                let input: String = Input::new().with_prompt("Journal note").interact_text()?;
                 let msg = input.trim().to_string();
                 if msg.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
@@ -933,7 +907,6 @@ fn prompt_tags_to_add(offer: &[String]) -> Result<Vec<String>> {
     let ask_freeform = || -> Result<Option<String>> {
         let input: String = Input::new()
             .with_prompt("Tag to add (e.g. draft  or  client/Acme)")
-            .allow_empty(true)
             .interact_text()?;
         let tag = input.trim().to_string();
         Ok((!tag.is_empty()).then_some(tag))
@@ -951,8 +924,7 @@ fn prompt_tags_to_add(offer: &[String]) -> Result<Vec<String>> {
     let picks = MultiSelect::new()
         .with_prompt("Tags to add (Space to toggle, Enter to confirm)")
         .items(&items)
-        .interact_opt()?
-        .unwrap_or_default(); // Esc = pick nothing = cancel.
+        .interact()?;
 
     // Resolve indices to values before anything is written, and never let the
     // sentinel row become a literal tag named "+ type a new tag…".

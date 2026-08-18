@@ -150,12 +150,11 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result
 /// reveal already in resolved post_create, non-TTY stdout). This helper
 /// just owns the prompt + reveal call.
 pub fn prompt_and_reveal(path: &Path) -> Result<()> {
-    // Esc is No — the project is already created either way.
     let open = dialoguer::Confirm::new()
         .with_prompt("Open project folder?")
         .default(true)
-        .interact_opt()?;
-    if open == Some(true) {
+        .interact()?;
+    if open {
         reveal_folder(path)?;
     }
     Ok(())

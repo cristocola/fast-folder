@@ -722,25 +722,6 @@ is the normal case, not a bug.
 
 ### TUI speed-and-feel gotchas
 
-**Esc is `interact_opt`, and it also binds `q`.** Every `Select`/`Confirm`/
-`MultiSelect` in `tui::menu` and `cli::recent` goes through `interact_opt`, whose
-`Ok(None)` means Back in a submenu, Quit at the top level (`menu::QUIT`, the same
-arm the Quit row hits), No on a confirmation, and cancel inside an action.
-Cancellation is **not an error**, so `contain`/`is_fatal` are untouched: a prompt
-that genuinely cannot run still fails with `dialoguer::Error` and still ends the
-session. dialoguer maps Esc *and* `q` to cancel — harmless on a Select, but keep
-it in mind before adding any prompt that takes typed text.
-
-**`Input` has no opt variant and swallows Esc**, so text prompts cancel on an
-empty answer and say so in the prompt string. That required adding
-`.allow_empty(true)` in several places whose `if empty { "(cancelled)" }` branch
-was previously unreachable dead code. The three Settings values where empty is
-itself meaningful (base dir, default template, editor) cannot be escaped at all;
-their prompts say what empty does rather than pretend. `core::vars::collect_vars`
-and `tui::template_builder` are deliberately out of scope — making them
-cancellable cascades into `new::run`/`apply::run`, so the create wizard's only
-escape is its final Confirm.
-
 **Sizes are measured when a project is opened, not when a page is listed.** See
 "Live project sizes". `run_paged_browser` still owns the session cache and still
 invalidates on `ActionLoop::Changed`; `paged_labels` has no Size column.

@@ -78,8 +78,8 @@ Sizes are deliberately absent from `PROJECT_INFO.md`, the disposable
 Project contents can change outside fastf at any time, so a persisted value
 would immediately become stale. Re-enter the TUI Projects browser or use the
 browser UI's Refresh action to obtain a new snapshot. Acting on a project in the
-guided browser — a tag, a rename, a move — drops that project's snapshot, so the
-row is measured again when you return to the list.
+guided browser drops that project's snapshot. Tag it, rename it, or move it, and
+the row is measured again when you return to the list.
 
 ## The ID counter self-heals
 

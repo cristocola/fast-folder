@@ -62,8 +62,10 @@ where
     }
     let sel = default.min(labels.len() - 1);
 
-    term.hide_cursor()?;
-    let mut live = Live {
+    // Teardown lives in `Live::drop`, not after this call: a panic anywhere
+    // inside — including in the caller's `frame` closure — would otherwise unwind
+    // straight past it and leave the shell with no cursor.
+    Live {
         term,
         theme,
         prompt,
@@ -71,10 +73,8 @@ where
         sel,
         offset: 0,
         drawn: 0,
-    };
-    let outcome = live.run(tick, &mut frame);
-    live.finish();
-    outcome
+    }
+    .run(tick, &mut frame)
 }
 
 struct Live<'a> {
@@ -95,6 +95,7 @@ impl Live<'_> {
     where
         F: FnMut(usize) -> Vec<String>,
     {
+        self.term.hide_cursor()?;
         self.render()?;
         loop {
             let key = self.read_key(tick, frame)?;
@@ -215,14 +216,16 @@ impl Live<'_> {
         // Wrapping in both directions, as `Select` does.
         self.sel = (self.sel as isize + delta).rem_euclid(len) as usize;
     }
+}
 
-    /// Take the block back and restore the cursor, on every exit path.
-    ///
-    /// `dialoguer` balances hide/show only on its success path, which is how a
-    /// failed prompt used to leave a shell with no cursor. Only reachable on a
-    /// real terminal (`select_live` refuses anything else), so `show_cursor`
-    /// cannot leak an escape into a pipe.
-    fn finish(&mut self) {
+/// Take the block back and restore the cursor, on every exit path there is.
+///
+/// `dialoguer` balances hide/show only on its success path, which is how a failed
+/// prompt used to leave a shell with no cursor. Only reachable on a real terminal
+/// (`select_live` refuses anything else), so `show_cursor` cannot leak an escape
+/// into a pipe.
+impl Drop for Live<'_> {
+    fn drop(&mut self) {
         if self.drawn > 0 {
             let _ = self.term.clear_last_lines(self.drawn);
             self.drawn = 0;

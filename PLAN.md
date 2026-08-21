@@ -40,7 +40,7 @@ cargo check --all-targets --target x86_64-pc-windows-gnu   # if the target is in
 
 ## Phase 0 (Cristo, not an agent)
 
-- [ ] Commit the in-flight `CLAUDE.md` trim and the untracked `tests/CLAUDE.md` so Phase 1 starts from a clean tree. Phase 17 assumes the "How it got here" and "Testing" sections are already gone from `CLAUDE.md`.
+- [x] Commit the in-flight `CLAUDE.md` trim and the untracked `tests/CLAUDE.md` so Phase 1 starts from a clean tree. Phase 17 assumes the "How it got here" and "Testing" sections are already gone from `CLAUDE.md`.
 
 ---
 
@@ -518,4 +518,4 @@ Other:
 
 | Phase | Date | PR | Notes for later phases |
 |---|---|---|---|
-| | | | |
+| 0 | 2026-08-21 | #6 (`7bccde5`) | CLAUDE.md trim and tests/CLAUDE.md landed; Phase 17 can assume both. |

@@ -196,6 +196,16 @@ Regression coverage:
   bounded teardown with work outstanding.
 - [x] Viewport math for a list taller than the terminal.
 
+### v1.6.1 — correctness and hygiene (in progress)
+
+Track A of [`PLAN.md`](PLAN.md), one phase per session.
+
+- [x] Phase 1: honest output and honest errors — a `config.toml` that does not
+  parse stops every command instead of being replaced by defaults that resolve a
+  different library; real creates and applies no longer print the dry-run
+  header; the Library bases menu commits against configuration reloaded under
+  the lock; the second Ctrl-C restores the cursor.
+
 ## Release and documentation gates
 
 Every release must pass:

@@ -18,7 +18,7 @@ use crate::core::{config::Config, project_info};
 // ---------------------------------------------------------------------------
 
 pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
     let candidate = library::resolve(&cfg, query)?;
 
     crate::core::operations::add_tags(&candidate, new_tags)?;
@@ -35,7 +35,7 @@ pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
 }
 
 pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
     let candidate = library::resolve(&cfg, query)?;
 
     let before = project_info::read_metadata(&candidate.path)?
@@ -63,7 +63,7 @@ pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
 }
 
 pub fn list(query: &str) -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
     let candidate = library::resolve(&cfg, query)?;
     let project = library::revalidate_project(&cfg, &candidate)?;
     let path = project_info::pinfo_path(&project.path);
@@ -103,7 +103,7 @@ pub fn list(query: &str) -> Result<()> {
 /// previously derived tags (identified by `slug/` prefix for slugs in
 /// `template.tag_from`) while keeping free-form tags intact.
 pub fn reauto(query: &str) -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
     let project = library::resolve(&cfg, query)?;
 
     // A registered folder has no template, so there is nothing to re-derive

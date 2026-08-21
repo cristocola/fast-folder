@@ -1262,3 +1262,29 @@ fn pick_path_rejects_unknown_kind() {
         );
     });
 }
+
+/// A `config.toml` that cannot be parsed is the server's problem, not the
+/// browser's: it must answer 5xx with the file named, never fall back to
+/// defaults and describe a different library. `status_for` keys the status off
+/// the message prefix, so that prefix is what this asserts (the same way the
+/// job routes pin `not found:` to 404).
+#[test]
+fn an_unreadable_config_is_a_server_error() {
+    with_fresh_install(|install| {
+        write_config(install);
+        let path = install.join("config.toml");
+        let mut raw = fs::read_to_string(&path).unwrap();
+        raw.push_str("\nthis is = not [valid toml\n");
+        fs::write(&path, raw).unwrap();
+
+        let err = ui::route_request("GET", "/api/state", b"").unwrap_err();
+        assert!(
+            err.to_string().starts_with("server error:"),
+            "an unreadable config must map to 500, got: {err}"
+        );
+        assert!(
+            format!("{err:#}").contains("config.toml"),
+            "the client must be told which file to fix, got: {err:#}"
+        );
+    });
+}

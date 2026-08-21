@@ -77,11 +77,11 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     let actions = project::apply_plan(&tmpl, &target, &raw_vars, &config.date_format)?;
 
     if args.dry_run {
-        project::print_apply_plan(&actions);
+        project::print_apply_plan(&actions, project::PreviewKind::DryRun);
         return Ok(());
     }
 
-    project::print_apply_plan(&actions);
+    project::print_apply_plan(&actions, project::PreviewKind::BeforeCommit);
 
     // Short-circuit if nothing to do
     let will_create = actions.iter().any(|a| {

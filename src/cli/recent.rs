@@ -35,7 +35,7 @@ pub struct RecentArgs {
 }
 
 pub fn run(args: RecentArgs) -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
     // `--limit 0` used to be clamped to 1, quietly showing a project the user
     // asked not to see. Refuse instead — a zero-length list is not what anyone
     // means by it.
@@ -301,7 +301,8 @@ enum ActionLoop {
 /// Guided-TUI project browser. Unlike `fastf recent`, this owns and reloads its
 /// full result set, pages it, and shows live folder sizes for the current page.
 /// `load` is called again after every mutation so search predicates and page
-/// bounds remain truthful.
+/// bounds remain truthful, and its failure ends the browser: a library that
+/// cannot be resolved is not a library to page through.
 ///
 /// Sizes come from `SizeScanner`'s worker threads, and the list is drawn before
 /// any of them has answered. That is the whole point: walking a page of project
@@ -313,10 +314,10 @@ enum ActionLoop {
 /// its own, and why the scanner threads are silent by construction.
 pub fn run_paged_browser<F>(page_size: usize, empty_message: &str, mut load: F) -> Result<()>
 where
-    F: FnMut() -> Vec<Project>,
+    F: FnMut() -> Result<Vec<Project>>,
 {
     let page_size = page_size.max(1);
-    let mut projects = load();
+    let mut projects = load()?;
     let mut page = 0_usize;
     // Browser-session snapshots only. Nothing reaches Project or the cache.
     let scanner = SizeScanner::new();
@@ -381,7 +382,7 @@ where
                     for path in paths {
                         scanner.forget(&path);
                     }
-                    projects = load();
+                    projects = load()?;
                     // `page` is clamped at the top of the loop if the final row
                     // on the last page was removed or stopped matching search.
                 }
@@ -544,7 +545,7 @@ fn project_action_menu(
 
     // Other configured bases this project could move to (mounted ones only).
     let other_bases: Vec<std::path::PathBuf> = {
-        let cfg = Config::load().unwrap_or_default();
+        let cfg = Config::load()?;
         let current = project
             .base
             .canonicalize()
@@ -928,7 +929,7 @@ fn show_journal(project_root: &Path) {
 
 /// `fastf open <query>` — resolve a project and reveal it in the file manager.
 pub fn open(query: &str) -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
     let project = library::resolve(&cfg, query)?;
 
     if !project.path.exists() {

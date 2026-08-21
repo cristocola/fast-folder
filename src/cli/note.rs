@@ -36,7 +36,7 @@ pub struct NoteAddArgs {
 }
 
 pub fn add(args: NoteAddArgs) -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
     let candidate = library::resolve(&cfg, &args.query)?;
     let pinfo = project_info::pinfo_path(&candidate.path);
 
@@ -82,7 +82,7 @@ pub struct NotesArgs {
 }
 
 pub fn notes(args: NotesArgs) -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
     let project = library::resolve(&cfg, &args.query)?;
 
     let entries = project_info::read_journal_entries(&project.path)?;

@@ -170,6 +170,29 @@ fn parse_usize(value: &str) -> Result<usize> {
         .map_err(|_| anyhow::anyhow!("expected a non-negative integer; got '{}'", value))
 }
 
+/// Validate one extra base directory and return the string to store.
+///
+/// Each entry gets the same `~`-expansion and absolute-path check as `base_dir`
+/// (`config::expand_base_path`), but an entry that does not *exist* is only a
+/// note: an unmounted drive is a legitimate base, and discovery already treats
+/// an absent one as honestly empty. `expand_base_path` deliberately creates
+/// nothing — conjuring a missing base would plant an empty directory over a
+/// mount point and shadow the drive it stands for.
+///
+/// Shared with the TUI's Library bases menu so there is one validator rather
+/// than two that can drift.
+pub fn normalize_base_entry(raw: &str) -> Result<String> {
+    let expanded = crate::core::config::expand_base_path(raw)?;
+    if !expanded.is_dir() {
+        eprintln!(
+            "{} {} is not mounted right now — keeping it; it will be indexed when it appears",
+            "note:".yellow(),
+            crate::util::paths::display_path(&expanded)
+        );
+    }
+    Ok(expanded.display().to_string())
+}
+
 pub fn set(key: &str, value: &str) -> Result<()> {
     // Load-mutate-save is a read-modify-write, so it needs the same
     // cross-process lock as ID allocation. Without it, two concurrent
@@ -232,22 +255,9 @@ pub fn set(key: &str, value: &str) -> Result<()> {
             "bases" => {
                 // Comma-separated list of extra base directories to index. Empty
                 // value clears the list.
-                //
-                // Each entry gets the same `~`-expansion and absolute-path check as
-                // base_dir, but an entry that does not *exist* is only a warning:
-                // an unmounted drive is a legitimate base, and discovery already
-                // treats an absent one as honestly empty.
                 let mut resolved = Vec::new();
                 for raw in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                    let expanded = crate::core::config::expand_base_path(raw)?;
-                    if !expanded.is_dir() {
-                        eprintln!(
-                            "{} {} is not mounted right now — keeping it; it will be indexed when it appears",
-                            "note:".yellow(),
-                            crate::util::paths::display_path(&expanded)
-                        );
-                    }
-                    resolved.push(expanded.display().to_string());
+                    resolved.push(normalize_base_entry(raw)?);
                 }
                 config.bases = resolved;
                 if config.bases.is_empty() {

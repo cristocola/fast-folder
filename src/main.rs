@@ -625,11 +625,8 @@ fn main() {
     fastf::util::interrupt::install();
 
     if let Err(e) = run() {
-        // Every dialoguer prompt hides the cursor and shows it again on the way
-        // out — but not when it returns an error, and not when a menu unwinds
-        // past it. Left alone, quitting the TUI with Ctrl-C hands the shell back
-        // an invisible cursor until the user thinks to run `tput cnorm`.
-        restore_cursor();
+        // A prompt that failed or was unwound past left the cursor hidden.
+        fastf::util::interrupt::restore_terminal();
 
         // An interrupt is the user's choice, not a failure. Say so, and exit
         // 130 (the shell convention for SIGINT) so scripts can tell them apart.
@@ -641,28 +638,25 @@ fn main() {
             eprintln!("{}", colored::Colorize::yellow("aborted."));
             std::process::exit(130);
         }
-        eprintln!("{} {:#}", colored::Colorize::red("error:"), e);
+        let rendered = format!("{e:#}");
+        eprintln!("{} {}", colored::Colorize::red("error:"), rendered);
+        if is_config_parse_failure(&rendered) {
+            // The only command that could repair the file also refuses to run
+            // until it is repaired, so say what actually gets the user moving.
+            eprintln!("  hint: fix the file, or delete it to start over with defaults");
+        }
         std::process::exit(1);
     }
 }
 
-/// Undo any prompt's `hide_cursor` before the process leaves. Best-effort on
-/// both streams: prompts draw on stderr, output lands on stdout, and either can
-/// be the terminal.
+/// Does this error chain say that the configuration file itself is unreadable?
 ///
-/// Guarded by `is_terminal` on each stream. `Term::show_cursor` emits the escape
-/// regardless of what it is writing to, so an unguarded call put a literal
-/// `\x1b[?25h` into every piped error — corrupting exactly the output a script
-/// is reading.
-fn restore_cursor() {
-    use dialoguer::console::Term;
-    use std::io::IsTerminal;
-    if std::io::stdout().is_terminal() {
-        let _ = Term::stdout().show_cursor();
-    }
-    if std::io::stderr().is_terminal() {
-        let _ = Term::stderr().show_cursor();
-    }
+/// `Config::load` wraps the TOML failure with `parsing <path>`, so both halves
+/// are present in the rendered chain. Keyed on the pair rather than on either
+/// alone: fastf parses templates and metadata too, and offering to delete one
+/// of those would be terrible advice.
+fn is_config_parse_failure(rendered: &str) -> bool {
+    rendered.contains("parsing") && rendered.contains("config.toml")
 }
 
 fn run() -> Result<()> {
@@ -911,5 +905,31 @@ fn generate_completions(shell: &str) -> Result<()> {
             "unknown shell '{}'. Valid: bash, zsh, fish, powershell",
             other
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_config_parse_failure;
+
+    /// The whole point of the hint: a config that exists but does not parse
+    /// stops every command, and no command can repair it.
+    #[test]
+    fn a_config_parse_failure_earns_the_hint() {
+        assert!(is_config_parse_failure(
+            "parsing /home/u/.config/fastf/config.toml: TOML parse error at line 9, column 1"
+        ));
+    }
+
+    /// "Delete it to start over with defaults" would be ruinous advice about a
+    /// template or a project's metadata.
+    #[test]
+    fn other_parse_failures_do_not() {
+        assert!(!is_config_parse_failure(
+            "parsing /home/u/.config/fastf/templates/general/template.yaml: mapping values are not allowed"
+        ));
+        assert!(!is_config_parse_failure(
+            "reading /home/u/.config/fastf/config.toml: permission denied"
+        ));
     }
 }

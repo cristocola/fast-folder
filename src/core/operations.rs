@@ -541,9 +541,14 @@ pub fn move_project(
     library::move_project_configured_with_outcome(project, target, progress, cancel)
 }
 
-pub fn reconcile() -> crate::core::provisioning::ReconcileReport {
-    let config = Config::load().unwrap_or_default();
-    crate::core::provisioning::reconcile_locked(&config)
+/// Recover scoped v2 work and report what could not be settled automatically.
+///
+/// The configuration is loaded before the pass rather than defaulted: which
+/// bases get walked is the whole question, and answering it with defaults would
+/// report a clean library because it looked in the wrong place.
+pub fn reconcile() -> Result<crate::core::provisioning::ReconcileReport> {
+    let config = Config::load()?;
+    Ok(crate::core::provisioning::reconcile_locked(&config))
 }
 
 // ---------------------------------------------------------------------------

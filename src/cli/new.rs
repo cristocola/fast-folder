@@ -59,12 +59,12 @@ pub fn run(args: NewArgs) -> Result<()> {
     let plan = project::plan(&tmpl, &raw_vars, &config, &counters)?;
 
     if args.dry_run {
-        project::print_dry_run(&plan, &tmpl, &config);
+        project::print_dry_run(&plan, &tmpl, &config, project::PreviewKind::DryRun);
         return Ok(());
     }
 
     // Show preview and confirm (unless --yes or confirm_create disabled globally)
-    project::print_dry_run(&plan, &tmpl, &config);
+    project::print_dry_run(&plan, &tmpl, &config, project::PreviewKind::BeforeCommit);
     if !args.yes && config.confirm_create && !std::io::stdout().is_terminal() {
         bail!(
             "no terminal to confirm on — pass --yes to create without confirming\n  \

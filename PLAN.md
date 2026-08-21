@@ -522,4 +522,4 @@ Other:
 | Phase | Date | PR | Notes for later phases |
 |---|---|---|---|
 | 0 | 2026-08-21 | #6 (`7bccde5`) | CLAUDE.md trim and tests/CLAUDE.md landed; Phase 17 can assume both. |
-| 1 | 2026-08-21 | (this PR) | `Config::load()` propagates everywhere; `PreviewKind` on both printers; `cli::config::normalize_base_entry` is the shared base validator; `util::interrupt::restore_terminal` is the one cursor restore; `operations::reconcile` and `run_paged_browser`'s loader now return `Result`. |
+| 1 | 2026-08-21 | [#7](https://github.com/cristocola/fast-folder/pull/7) | `Config::load()` propagates everywhere; `PreviewKind` on both printers; `cli::config::normalize_base_entry` is the shared base validator; `util::interrupt::restore_terminal` is the one cursor restore; `operations::reconcile` and `run_paged_browser`'s loader now return `Result`. |

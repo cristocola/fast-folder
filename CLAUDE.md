@@ -4,58 +4,6 @@
 
 `fastf` (Fast Folder Creator) is a Rust CLI tool for creating structured project folders from **folder templates**. Universal use cases: code, research, finance, music video, photography, and film production workflows. Config, templates, and the counter live together in one data dir, resolved in three tiers (env override → portable-next-to-binary → user config dir) — see "Data-dir resolution (v1.0)".
 
-**How it got here.** Each line below is a one-line reminder of a load-bearing
-decision; the full detail lives in the linked section, so don't re-document it
-here.
-
-- **v0.8 — a template is a folder.** `templates/<slug>/template.yaml` is metadata
-  only; the sibling `files/` subtree IS the file spec. See "Template YAML schema".
-- **v0.9 — the filesystem is the source of truth.** No `projects.jsonl`; a folder
-  is a project iff it holds a `PROJECT_INFO.md`. See "Filesystem-as-truth library".
-- **v0.10 — base-aware projects.** Every `Project` carries the base it was found
-  under; `fastf move` relocates between configured bases. See "Base-aware projects".
-- **v0.11 — durable provisioning + verified moves.** A move never removes the
-  source until the destination is verified. Its original recovery design is
-  superseded by v1.4.1 containment; see "Durable provisioning + verified moves".
-- **v1.0 — production release.** Three-tier data dir, CI + release binaries
-  (linux-gnu, linux-musl, windows-msvc — **no macOS**, cristoc can't test it), AUR
-  packages, man pages, unregister/delete/rename. See "Data-dir resolution" and
-  "Unregister / delete / rename".
-- **v1.0.2 — Windows experience + onboarding.** MSI wizard, `fastf-ui` launcher
-  bin, first-run base prompt, native path pickers. See the v1.0.2 gotchas.
-- **v1.1 — hardening.** Seven defects that a green suite missed on real Windows 11:
-  two lost data, two were concurrency, one was interruption, the rest Windows
-  papercuts. New `util::` primitives; 183 → 263 tests. See "v1.1 hardening gotchas".
-- **v1.2 — the counter lives in the base, not the data dir.** Removes the dual-boot
-  symlink. See "Global ID counter" and "v1.2 gotchas".
-- **v1.2.1 — the CLI surface gets tests, and five commands stop lying.** An audit of
-  all 19 CLI/TUI modules found 26 defects that a 281-test green suite passed, because
-  nothing exercised the layer between clap and the core. See "Global ID counter"
-  (rewritten) and "v1.2.1 gotchas".
-- **v1.3 — you cannot fall out of the TUI, and there is one door into config.**
-  Error containment, an honest Ctrl-C, `resolve_base_dir_input` as the single
-  validated write path, a reachable `on_name_collision`, move progress + cancel,
-  and `tests/tui_pty.rs`. See "v1.3 gotchas".
-- **Live sizes — scan on demand, never cache.** Guided TUI pages and visible web
-  rows get current logical-byte snapshots without changing project metadata,
-  cache schemas, `/api/state`, or script-facing CLI output. See "Live project
-  sizes".
-- **v1.4.1 — containment before recovery.** Filename suffixes never imply
-  ownership, pre-v2 markers are report-only, move fallback is EXDEV-only, and
-  typed slug/relative-path validation guards every template write. The canonical
-  forward plan is [`ROADMAP.md`](ROADMAP.md).
-- **v1.5.0 — scoped recovery v2.** Cross-device moves use private target-base
-  transactions with typed phases and native-path manifests; deferred creates
-  journal only validated relative paths. Reconcile is scoped and idempotent.
-- **v1.5.1 — one mutation boundary.** CLI, TUI, and UI mutations call
-  `core::operations`, which validates, takes `DataLock`, reloads authoritative
-  state, mutates, and refreshes caches. The browser server enforces loopback and
-  validates `Host`/same-origin `Origin`.
-- **v1.6.0 — the guided browser stops waiting.** The project list draws before a
-  single folder has been measured; background workers fill the Size column in
-  place. `util::live_select` owns that one key loop, because `dialoguer::Select`
-  cannot repaint while it waits. See "Live project sizes".
-
 ## Build commands
 
 Standard cargo throughout (`build`, `test`, `fmt`); clippy must be clean with
@@ -104,8 +52,7 @@ Gotchas sections below for the parts that bite.
   report-only pre-v2 discovery), `template_import.rs` (from-folder engine),
   `assets.rs` (template-file copy engine), `validated.rs` (typed slugs/relative
   paths), `project_info.rs`
-  (`PROJECT_INFO.md` read/write/mutate), `template.rs`, `naming.rs`, `query.rs`,
-  `config.rs`, `counter.rs`, `vars.rs`, `post_create.rs`.
+  (`PROJECT_INFO.md` read/write/mutate).
 - `src/util/` — all v1.1 hardening primitives: `lockfile` (cross-process `DataLock`),
   `atomic` (THE atomic write), `fs_retry` (Windows sharing violations), `interrupt`
   (Ctrl-C rollback), `faults` (failpoints, compiled out of release), `paths`
@@ -117,19 +64,17 @@ Gotchas sections below for the parts that bite.
   because `move` is a keyword. CLI modules gather prompts and render outcomes;
   noninteractive register/from-folder behavior lives under `core/` so UI code
   never depends on a CLI implementation.
-- `src/tui/` — `menu.rs` (interactive menu + grouped Settings submenus) and
-  `template_builder.rs`.
+- `src/tui/` — `menu.rs` carries the interactive menu and the grouped Settings submenus.
 - `src/ui/` — browser UI. Has its own CLAUDE.md.
-- `docs/` — user-facing reference (`cli`, `templates`, `projects`, `windows`, `UI`).
+- `docs/` — the user-facing reference.
   **When features change, update the matching `docs/` file, not the README.**
 - `examples/templates/` — the gallery, in folder form. Not bundled; copy one into
   your templates dir to use it.
 - `packaging/` + `.github/workflows/` — release machinery. See the `release` skill.
   Release automation must not mutate installed packages or run system upgrades;
   Cristo updates `fast-folder` on his machine and smoke-tests it manually.
-- `tests/` — seven binaries: `integration.rs`, `ui_server.rs`, and the five v1.1
-  suites `crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`,
-  `hostile_fs.rs`, `properties.rs` (proptest). See "Testing".
+- `tests/` — integration binaries; see `tests/CLAUDE.md` for what each one
+  guards and the shared harness rules.
 
 ## Key design decisions
 
@@ -410,58 +355,6 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 `print_project_path(path, folder_name)` renders a full path with the parent directory dimmed and the project/folder name bold white, prefixed by a cyan `→`. Used in both dry-run and success output. In success output, `canonicalize()` is called first since the folder exists.
 
 `print_resolved_values()` + `print_file_previews()` — the rich dry-run additions. Show variable values, transforms applied, ID/counter delta, all built-in date tokens, and the first `config.preview_lines` (default 8) of every templated file.
-
-## Testing
-
-There are **eight** integration binaries — `integration.rs` (core flows),
-`ui_server.rs` (browser-UI request layer), the five v1.1 suites
-`crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`, `hostile_fs.rs`,
-`properties.rs`, and the v1.2.1 `cli_surface.rs`. What each guards — the intent,
-not the case list:
-- `crash_recovery.rs` — every create failpoint asserted against the same invariants,
-  plus real subprocesses killed with abort. Debug-only (failpoints are compiled out
-  of release).
-- `concurrency.rs` — races real **processes**, not threads: a thread test passes
-  against an in-process `Mutex` while production stays broken.
-- `cli_surface.rs` — what `fastf <args>` actually does to disk. Every case is a
-  v1.2.0 regression: the bugs lived between clap and the core (flags dropped into
-  `trailing_var_arg`, one caller computing an ID differently from another, a config
-  field read raw instead of resolved), which only a process can see. **Write the
-  test against the broken build first** — two of these passed pre-fix and were
-  relabelled as design guards rather than left to look like regressions they aren't.
-- `tui_pty.rs` (v1.3, unix) — the interactive menu through a real terminal, which
-  is the only place its worst defect was visible: any recoverable error ended the
-  session. Keystrokes must be **spaced**, not burst (`pty::Script` handles the
-  cadence), and `Confirm` takes a bare `y`/`n` with no Enter — a trailing `\r`
-  survives into the next prompt and silently accepts its default.
-- `windows_semantics.rs` — reserved names, trailing dots, control chars, unicode,
-  >MAX_PATH, case-only rename, read-only files, a real sharing violation, junctions.
-- `hostile_fs.rs` — corrupt caches/markers/metadata, absent bases, vanishing paths:
-  **degrade, never panic, never lose data.**
-- `properties.rs` — proptest; above all, that `sanitize_name` output is always
-  creatable (verified by creating it).
-
-`tests/common/mod.rs` is the shared process-driving harness (v1.2.1): a `Sandbox`
-that owns its `FASTF_INSTALL_DIR`, redirects `HOME` into itself, and runs the
-built binary (`run`/`ok`/`fails`/`spawn`), plus `with_bases` for multi-base
-fixtures and `plant_project` for "this base already holds ID0082". It also
-carries `pty::run` (unix, `libc::forkpty`) — `dialoguer` refuses to prompt
-without a TTY, so confirmations and pickers are invisible to a pipe-based test,
-which is exactly where the rename prompt spent v1.2.0 offering one folder name
-and committing another. `#![allow(dead_code)]` because each binary uses a
-different subset. `concurrency.rs` and `cli_surface.rs` both `mod common;`.
-
-Shared harness rules — every new harness must follow all of them:
-- `FASTF_INSTALL_DIR` env var to redirect `paths::install_dir()` to a tempdir per test
-- `tempfile::TempDir` for hermetic sandboxes
-- **Redirect `HOME`/`USERPROFILE` into the sandbox too.** Since v1.0.2 an
-  unconfigured `base_dir` falls back to the home directory, so a harness that
-  skips this scans the developer's real home and self-heals the counter from
-  their real projects. Any new harness must do the same.
-- A `static SERIAL: Mutex<()>` to run tests serially within the test binary (Rust 2024 edition made `std::env::set_var` unsafe — the mutex justifies the `unsafe` block). Each test binary has its own `SERIAL`; that's fine because `FASTF_INSTALL_DIR` is per-process and `cargo test`'s binaries are separate processes.
-- Process-global state needs its lock beside it: `faults::TEST_LOCK` and
-  `interrupt::TEST_LOCK` exist because a private mutex per test module looks
-  right and silently races.
 
 ## Gotchas
 

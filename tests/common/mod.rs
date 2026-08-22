@@ -113,6 +113,29 @@ impl Sandbox {
         String::from_utf8_lossy(&out.stderr).into_owned()
     }
 
+    /// `run` with stdin closed as well as stdout and stderr piped — a process
+    /// with no terminal anywhere, which is what a script or a CI runner gives
+    /// fastf. `run` alone inherits the test runner's stdin, so "there is no
+    /// terminal to prompt on" would depend on how `cargo test` was launched.
+    pub fn run_headless(&self, args: &[&str]) -> Output {
+        self.command()
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("running fastf")
+    }
+
+    /// `run_headless`, asserting failure and returning stderr.
+    pub fn fails_headless(&self, args: &[&str]) -> String {
+        let out = self.run_headless(args);
+        assert!(
+            !out.status.success(),
+            "expected `fastf {}` to fail without a terminal, got {out:?}",
+            args.join(" ")
+        );
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    }
+
     pub fn spawn(&self, args: &[&str]) -> Child {
         self.command()
             .args(args)
@@ -276,6 +299,36 @@ pub mod pty {
         script: &[Keystroke],
         deadline: Duration,
     ) -> (String, i32) {
+        run_with_stdout(program, args, env, script, deadline, None)
+    }
+
+    /// `run`, but with the child's **stdout** pointed at `stdout_file` while
+    /// stdin and stderr stay on the pty.
+    ///
+    /// This is the shape a user gets from `fastf new t > out.txt`: a terminal is
+    /// right there, and only the output is redirected. fastf decided prompt
+    /// availability by probing stdout, so it refused to prompt in exactly the
+    /// case where prompting is fine. The file is what the pty transcript cannot
+    /// show, so tests assert on both.
+    pub fn run_stdout_to(
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        deadline: Duration,
+        stdout_file: &std::path::Path,
+    ) -> (String, i32) {
+        run_with_stdout(program, args, env, script, deadline, Some(stdout_file))
+    }
+
+    fn run_with_stdout(
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        deadline: Duration,
+        stdout_file: Option<&std::path::Path>,
+    ) -> (String, i32) {
         // Everything the child needs is built *before* the fork: after it, only
         // async-signal-safe calls are legal, and `execve` is one — `setenv` is not.
         let prog = CString::new(program).unwrap();
@@ -308,6 +361,25 @@ pub mod pty {
             .chain(std::iter::once(std::ptr::null()))
             .collect();
 
+        // Opened before the fork: after it only async-signal-safe calls are
+        // legal, and `dup2` is one — the open is not worth arguing about.
+        let redirect: libc::c_int = match stdout_file {
+            Some(path) => {
+                let cpath = CString::new(path.as_os_str().as_bytes()).unwrap();
+                // SAFETY: a path we own, standard create/truncate flags.
+                let fd = unsafe {
+                    libc::open(
+                        cpath.as_ptr(),
+                        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                        0o644,
+                    )
+                };
+                assert!(fd >= 0, "opening {} failed", path.display());
+                fd
+            }
+            None => -1,
+        };
+
         let mut master: libc::c_int = -1;
         // SAFETY: null term/winsize request the defaults; `master` is written by
         // the call and only read in the parent branch.
@@ -321,8 +393,13 @@ pub mod pty {
         };
         assert!(pid >= 0, "forkpty failed");
         if pid == 0 {
-            // SAFETY: async-signal-safe only — the arrays above are already built.
+            // SAFETY: async-signal-safe only — the arrays above are already built
+            // and the redirect descriptor is already open.
             unsafe {
+                if redirect >= 0 {
+                    libc::dup2(redirect, 1);
+                    libc::close(redirect);
+                }
                 libc::execve(prog.as_ptr(), argv_ptr.as_ptr(), envp_ptr.as_ptr());
                 libc::_exit(127);
             }
@@ -368,8 +445,13 @@ pub mod pty {
             }
             std::thread::sleep(Duration::from_millis(20));
         };
-        // SAFETY: closing the descriptor we opened.
-        unsafe { libc::close(master) };
+        // SAFETY: closing the descriptors we opened.
+        unsafe {
+            libc::close(master);
+            if redirect >= 0 {
+                libc::close(redirect);
+            }
+        };
         (String::from_utf8_lossy(&out).into_owned(), code)
     }
 }

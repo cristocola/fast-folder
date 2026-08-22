@@ -478,3 +478,373 @@ fn a_real_apply_is_not_labelled_a_dry_run() {
         "the plan is still shown before the commit:\n{committed}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Flags anywhere on the line
+// ---------------------------------------------------------------------------
+//
+// `new`, `apply` and `register` declare their variables as a `trailing_var_arg`
+// bucket, because clap cannot accept arbitrary unknown `--key=value` pairs. The
+// hand-written recognizer that emptied that bucket knew five flags, and only
+// `new` applied all five: `--rename` after the path was warned about and
+// dropped, `--base-dir /path` produced two nonsense warnings, and every flag
+// register declares was invisible. A flag typed on the line is a request; the
+// two honest answers are to honour it or to refuse it.
+
+/// `register --rename` after the path was reported "unrecognized" and the
+/// folder kept its old name — while the same flag before the path worked.
+#[test]
+fn register_honours_every_flag_after_the_path() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let folder = sb.base.join("legacy");
+    fs::create_dir_all(&folder).unwrap();
+
+    let out = sb.run(&[
+        "register",
+        &folder.display().to_string(),
+        "--template=race",
+        "--name=Legacy",
+        "--rename",
+        "--yes",
+    ]);
+    assert!(out.status.success(), "register failed: {out:?}");
+
+    let names: Vec<String> = fs::read_dir(&sb.base)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "R0001_Legacy"),
+        "--rename after the path must rename the folder, got {names:?}"
+    );
+}
+
+/// A design guard, not a regression: both flags are declared, and clap keeps
+/// parsing normally until the *first* token it does not know, so these two
+/// survived the old recognizer. Merging clap's fields with the ones lifted out
+/// of `extra` must not change that — the previously-broken shape is
+/// `--recursive` after a `--slug=value`, which is what
+/// `recursive_register_passes_its_variables_to_every_child` covers.
+#[test]
+fn register_recursive_dry_run_after_the_path_previews_the_children() {
+    let sb = Sandbox::new();
+    let base = sb.tmp.path().join("legacy-base");
+    fs::create_dir_all(base.join("one")).unwrap();
+    fs::create_dir_all(base.join("two")).unwrap();
+
+    let out = sb.run(&["register", &base.display().to_string(), "--recursive", "--dry-run"]);
+    assert!(out.status.success(), "dry run failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("one") && stdout.contains("two"),
+        "the preview must name every child it would register:\n{stdout}"
+    );
+    assert!(
+        !base.join("PROJECT_INFO.md").exists()
+            && !base.join("one/PROJECT_INFO.md").exists()
+            && !base.join("two/PROJECT_INFO.md").exists(),
+        "a dry run must write nothing, anywhere"
+    );
+}
+
+/// `--base-dir /path` (space form) split into two unknown tokens and the
+/// project landed in the configured base instead of the one that was asked for.
+#[test]
+fn new_accepts_a_flag_value_as_a_separate_token() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let elsewhere = sb.tmp.path().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+
+    let out = sb.run(&[
+        "new",
+        "race",
+        "--name=Spaced",
+        "--base-dir",
+        &elsewhere.display().to_string(),
+        "--yes",
+    ]);
+    assert!(out.status.success(), "new failed: {out:?}");
+    assert!(
+        elsewhere.join("R0001_Spaced").is_dir(),
+        "--base-dir <dir> must place the project there: {:?}",
+        common::project_dirs(&sb.base)
+    );
+}
+
+/// A flag fastf does not declare used to be a `warning:` on stderr followed by
+/// a successful create. A typo in a flag name is not a variable and not a
+/// footnote: it stops the command before anything is written.
+#[test]
+fn an_unknown_flag_after_the_slug_is_an_error() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let err = sb.fails(&["new", "race", "--name=x", "--nope", "--yes"]);
+    assert!(
+        err.contains("--nope"),
+        "the refusal must name the flag:\n{err}"
+    );
+    assert!(
+        !err.contains("ignored"),
+        "nothing about it was ignored — it stopped the command:\n{err}"
+    );
+    assert!(
+        common::project_dirs(&sb.base).is_empty(),
+        "an unknown flag must not create a project"
+    );
+}
+
+/// `--name x` looks like a value flag but `name` is a template variable, and
+/// variables only work in `=` form. It used to become an unknown flag plus a
+/// stray token, then fail with "no terminal to prompt on" — which blames the
+/// terminal for a syntax error.
+#[test]
+fn a_variable_in_space_form_says_how_to_write_it() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let err = sb.fails(&["new", "race", "--name", "x", "--yes"]);
+    assert!(
+        err.contains("--name=x"),
+        "the refusal must show the syntax that works:\n{err}"
+    );
+    assert!(
+        common::project_dirs(&sb.base).is_empty(),
+        "nothing is created from a rejected line"
+    );
+}
+
+/// `apply` declares neither `--no-post` nor `--base-dir`, and never ran
+/// post-create actions in the first place. Silently accepting a flag that does
+/// nothing is the same defect in the other direction.
+#[test]
+fn apply_refuses_a_flag_it_does_not_declare() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let target = sb.tmp.path().join("existing");
+    fs::create_dir_all(&target).unwrap();
+    let target = target.display().to_string();
+
+    let err = sb.fails(&["apply", "race", &target, "--name=x", "--no-post", "--yes"]);
+    assert!(
+        err.contains("--no-post"),
+        "the refusal must name the flag:\n{err}"
+    );
+
+    // The flags it does declare still work in either form, before or after.
+    let out = sb.run(&["apply", "race", &target, "--name=x", "-y"]);
+    assert!(out.status.success(), "apply -y after the target: {out:?}");
+}
+
+/// Bulk registration accepted `--template` and every `--slug=value` after it,
+/// then passed an empty variable map to every child: a template with a
+/// `naming_pattern` full of tokens produced identical, near-empty folder names.
+#[test]
+fn recursive_register_passes_its_variables_to_every_child() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let base = sb.tmp.path().join("legacy-base");
+    fs::create_dir_all(base.join("one")).unwrap();
+    fs::create_dir_all(base.join("two")).unwrap();
+
+    let out = sb.run(&[
+        "register",
+        &base.display().to_string(),
+        "--recursive",
+        "--template=race",
+        "--name=Bulk",
+    ]);
+    assert!(out.status.success(), "recursive register failed: {out:?}");
+
+    for child in ["one", "two"] {
+        let pinfo = fs::read_to_string(base.join(child).join("PROJECT_INFO.md"))
+            .unwrap_or_else(|e| panic!("{child} has no metadata: {e}"));
+        assert!(
+            pinfo.contains("name: Bulk"),
+            "{child} did not get the variable it was given:\n{pinfo}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Prompts that know when there is no terminal
+// ---------------------------------------------------------------------------
+//
+// Every prompt-availability guard probed **stdout**, but dialoguer draws on
+// stderr and reads from stdin (or `/dev/tty`). So the probe answered a question
+// nobody asked: `fastf new t > out.txt` refused although a terminal was right
+// there, and `fastf new t 2>/dev/null` passed the guard and died on dialoguer's
+// bare "IO error: not a terminal". Four prompts had no guard at all, and a
+// `move` without `--yes` skipped its confirmation and moved the folder.
+
+/// Assert that a headless run refused because there is no terminal, and named
+/// the way to do it without one.
+fn refuses_without_a_terminal(sb: &Sandbox, args: &[&str], escape: &str) {
+    let err = sb.fails_headless(args);
+    let cmd = args.join(" ");
+    assert!(
+        err.contains("no terminal"),
+        "`fastf {cmd}` must say there is no terminal, not leak dialoguer's error:\n{err}"
+    );
+    assert!(
+        err.contains(escape),
+        "`fastf {cmd}` must name `{escape}` as the way through:\n{err}"
+    );
+}
+
+#[test]
+fn every_prompt_refuses_with_a_way_through() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let target = sb.tmp.path().join("existing");
+    fs::create_dir_all(&target).unwrap();
+    let target = target.display().to_string();
+    let legacy = sb.base.join("legacy");
+    fs::create_dir_all(&legacy).unwrap();
+    let legacy = legacy.display().to_string();
+
+    // apply's confirmation
+    refuses_without_a_terminal(&sb, &["apply", "race", &target, "--name=x"], "--yes");
+    // register's rename confirmation
+    refuses_without_a_terminal(&sb, &["register", &legacy, "--rename"], "--yes");
+    // the template picker `fastf new` falls back to with no slug
+    refuses_without_a_terminal(&sb, &["new"], "fastf new <slug>");
+    // the interactive menu itself
+    refuses_without_a_terminal(&sb, &[], "--help");
+}
+
+/// The menu prints a banner before it asks anything. Failing after the banner
+/// puts decoration on stdout for a session that never existed.
+#[test]
+fn the_menu_refuses_before_it_draws_anything() {
+    let sb = Sandbox::new();
+    let out = sb.run_headless(&[]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        "a menu that cannot run must not draw its banner: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// `fastf move` skipped its confirmation when stdout was not a terminal and
+/// moved the project anyway — the one prompt whose absence changes what happens
+/// on disk.
+#[test]
+fn a_move_without_a_terminal_refuses_instead_of_moving() {
+    let sb = Sandbox::new();
+    let archive = sb.with_bases(&["archive"]).remove(0);
+    let project = sb.plant_project(&sb.base, "proj", "ID0001");
+
+    let err = sb.fails_headless(&["move", "ID0001", "archive"]);
+    assert!(
+        err.contains("no terminal") && err.contains("--yes"),
+        "a move that cannot confirm must refuse and say how:\n{err}"
+    );
+    assert!(project.is_dir(), "the project must still be where it was");
+    assert!(
+        !archive.join("proj").exists(),
+        "nothing may be moved by a confirmation that never happened"
+    );
+
+    // With --yes there is nothing to confirm, so it goes through.
+    let out = sb.run_headless(&["move", "ID0001", "archive", "--yes"]);
+    assert!(out.status.success(), "move --yes failed: {out:?}");
+    assert!(archive.join("proj").is_dir(), "--yes must still move it");
+
+    // No base and no terminal: the picker cannot run, and the usage line is the answer.
+    let err = sb.fails_headless(&["move", "ID0001"]);
+    assert!(
+        err.contains("no terminal") && err.contains("fastf move"),
+        "the base picker must refuse with the noninteractive form:\n{err}"
+    );
+}
+
+/// `template from-folder --bundle-assets` confirms the total size with no way
+/// to answer from a script: no `--yes` existed, so the command was unusable
+/// noninteractively. `--dry-run` reports the same scan without writing.
+#[test]
+fn from_folder_can_be_driven_without_a_terminal() {
+    let sb = Sandbox::new();
+    let src = sb.tmp.path().join("src");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    fs::write(src.join("notes.txt"), "hello {name}").unwrap();
+    fs::write(src.join("blob.bin"), vec![0u8; 128 * 1024]).unwrap();
+    let src = src.display().to_string();
+
+    refuses_without_a_terminal(&sb, &["template", "from-folder", &src, "t1", "--bundle-assets"], "--yes");
+
+    let out = sb.run_headless(&["template", "from-folder", &src, "t2", "--dry-run"]);
+    assert!(out.status.success(), "dry run failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("nothing will be written"),
+        "a dry run must say so:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("notes.txt") && stdout.contains("sub"),
+        "the preview must show what it scanned:\n{stdout}"
+    );
+    assert!(
+        !sb.install.join("templates/t2").exists(),
+        "a dry run must write no template"
+    );
+
+    let out = sb.run_headless(&[
+        "template",
+        "from-folder",
+        &src,
+        "t3",
+        "--bundle-assets",
+        "--yes",
+    ]);
+    assert!(out.status.success(), "from-folder --yes failed: {out:?}");
+    assert!(
+        sb.install.join("templates/t3/files/blob.bin").is_file(),
+        "--yes must accept the bundle prompt and copy the asset"
+    );
+}
+
+/// A terminal is on stderr and stdin; stdout is the output. `fastf new t >
+/// out.txt` refused to prompt because the guard probed the wrong stream.
+#[cfg(unix)]
+#[test]
+fn a_redirected_stdout_still_has_a_terminal_to_prompt_on() {
+    use common::pty;
+    use std::time::Duration;
+
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let captured = sb.tmp.path().join("out.txt");
+
+    let (transcript, code) = pty::run_stdout_to(
+        common::FASTF,
+        &["new", "race", "--name=Redirected"],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        // Confirm answers on the keypress itself — no Enter, or the newline
+        // survives into the next prompt.
+        &pty::Script::new().key("y").pause(400).key("n").build(),
+        Duration::from_secs(20),
+        &captured,
+    );
+    assert_eq!(
+        code, 0,
+        "a redirected stdout must not stop the prompt:\n{transcript}"
+    );
+    assert!(
+        sb.base.join("R0001_Redirected").is_dir(),
+        "the project should exist: {:?}",
+        common::project_dirs(&sb.base)
+    );
+    let captured = fs::read_to_string(&captured).unwrap();
+    assert!(
+        captured.contains("R0001_Redirected"),
+        "the redirected file is where the output went:\n{captured}"
+    );
+}

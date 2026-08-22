@@ -261,6 +261,58 @@ fn project_detail_returns_metadata_and_journal() {
     });
 }
 
+/// `POST /api/open` handed its path straight to the system file manager after
+/// nothing but an `exists()` check, so any page that could reach the loopback
+/// port could make fastf open an arbitrary local folder. Every sibling route
+/// resolves the path through discovery first.
+#[test]
+fn open_refuses_a_path_outside_the_library() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        create_project("real");
+
+        let stray = install.join("stray");
+        fs::create_dir_all(&stray).unwrap();
+        let error = ui::route_request(
+            "POST",
+            "/api/open",
+            serde_json::json!({"path": stray.display().to_string()})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().starts_with("forbidden:"),
+            "an unauthorized path must be refused before anything is spawned, got: {error}"
+        );
+    });
+}
+
+/// `GET /api/project?path=` read `PROJECT_INFO.md` and reported existence for
+/// any absolute path on the machine.
+#[test]
+fn project_detail_refuses_a_path_outside_the_library() {
+    with_fresh_install(|install| {
+        write_minimal_template(install, "test");
+        write_config(install);
+        create_project("real");
+
+        let stray = install.join("stray");
+        fs::create_dir_all(&stray).unwrap();
+        fs::write(stray.join("PROJECT_INFO.md"), "not in a configured base").unwrap();
+        let error = ui::route_request(
+            "GET",
+            &format!("/api/project?path={}", stray.display()),
+            b"",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().starts_with("forbidden:"), "got: {error}");
+    });
+}
+
 #[test]
 fn project_size_returns_exact_live_logical_bytes() {
     with_fresh_install(|install| {

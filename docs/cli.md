@@ -187,7 +187,7 @@ fastf apply rust-project ./existing-crate     # creates missing items, never ove
 ```bash
 fastf move ID0047                    # pick the target base interactively
 fastf move ID0047 archive            # target by base label
-fastf move my-crate /mnt/proj/01_PROJECTS
+fastf move my-crate /mnt/projects/archive
 fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 ```
 
@@ -262,7 +262,7 @@ fastf config set date-format "%Y-%m-%d"
 fastf config set editor nvim
 
 # Extra folders to index beyond base-dir, comma separated
-fastf config set bases "/mnt/proj/01_PROJECTS,/srv/archive"
+fastf config set bases "/mnt/projects/clients,/srv/archive"
 fastf config set bases ""                        # clear the list
 
 # Prompts and UX

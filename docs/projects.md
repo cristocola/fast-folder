@@ -45,7 +45,7 @@ This matters most when two machines share one library. A newer fastf can write a
 fastf looks for projects in your **base directory** (`base-dir`, where new projects are created) plus any extra **bases** you configure:
 
 ```bash
-fastf config set bases "/mnt/proj/01_PROJECTS,/srv/archive"
+fastf config set bases "/mnt/projects/clients,/srv/archive"
 ```
 
 Discovery scans the direct children of each base and treats every folder holding a `PROJECT_INFO.md` as a project. A base that is not mounted is skipped quietly, which makes external drives and network shares practical.

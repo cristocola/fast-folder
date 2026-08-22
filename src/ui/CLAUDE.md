@@ -231,6 +231,28 @@ derives `Debug` (tests `unwrap_err` on the router).
   paths past MAX_PATH work. `data-*` attributes stay canonical; anything rendered goes
   through `displayPath`. A server-side `display_path` field was tried and reverted — two
   mechanisms for one job.
+- v1.6.1: **a route that names a local path authorizes it first.** `find_project`
+  is that boundary for every project route (its error now carries the
+  `forbidden:` prefix, so an unknown path is 403 rather than 400);
+  `authorize_local_path` is the wider one for `/api/open`, which additionally
+  allows the data and templates directories because Settings has a button for
+  each. Matching is `paths_match` over whole paths, **never a prefix** — a
+  prefix test accepts `/base/project-evil` for `/base/project`. `/api/open`
+  authorizes before it spawns anything: it hands the path to the system file
+  manager, so an unchecked one opens whatever the request names.
+- v1.6.1: **the CSP on every response assumes the frontend has no inline
+  script.** `index.html` loads one external `app.js`; `app.js` writes no `on*=`
+  attributes, `javascript:` URLs, or `eval`. Adding any of those makes the page
+  fail silently in the browser with nothing failing in Rust. Inline `style=`
+  attributes are covered (`style-src` keeps `'unsafe-inline'`), and `form-action`
+  stays `'self'` because the template editor's form has no submit handler.
+- v1.6.1: `read_request` bounds the declared `Content-Length` at
+  `MAX_REQUEST_SIZE` **before** the body loop, because `header_end +
+  content_length` overflows otherwise — and it runs before
+  `route_request_caught`'s `catch_unwind`, so that panic killed the connection
+  thread and the client read nothing. A `read_request` failure is now answered
+  with the normal JSON error body and *still* returned as an error, which is what
+  keeps the stalled-client test honest.
 - Live sizes: **never add size to `Project`, `CacheEntry`, or `/api/state`.** Project
   contents change outside fastf, so persisted/boot-time sizes are stale or slow by
   construction. `GET /api/project/size?path=…` authorizes against fresh discovery,

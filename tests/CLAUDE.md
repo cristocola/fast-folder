@@ -1,10 +1,10 @@
 # CLAUDE.md — fastf test suites
 
-There are **nine** integration binaries — `integration.rs` (core flows),
+There are **ten** integration binaries — `integration.rs` (core flows),
 `ui_server.rs` (browser-UI request layer), the five v1.1 suites
 `crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`, `hostile_fs.rs`,
-`properties.rs`, the v1.2.1 `cli_surface.rs`, and the v1.3 `tui_pty.rs`. What
-each guards — the intent, not the case list:
+`properties.rs`, the v1.2.1 `cli_surface.rs`, the v1.3 `tui_pty.rs`, and the
+v1.6.1 `repo_hygiene.rs`. What each guards — the intent, not the case list:
 - `crash_recovery.rs` — every create failpoint asserted against the same invariants,
   plus real subprocesses killed with abort. Debug-only (failpoints are compiled out
   of release).
@@ -27,6 +27,10 @@ each guards — the intent, not the case list:
   **degrade, never panic, never lose data.**
 - `properties.rs` — proptest; above all, that `sanitize_name` output is always
   creatable (verified by creating it).
+- `repo_hygiene.rs` — the repository is published, so no tracked file may name a
+  real home directory, a personal mount point, a local project-folder path, or
+  the maintainer outside an attribution file. Scans `git ls-files`; skips when
+  there is no checkout (the AUR source package runs the suite in a sandbox).
 
 `tests/common/mod.rs` is the shared process-driving harness (v1.2.1): a `Sandbox`
 that owns its `FASTF_INSTALL_DIR`, redirects `HOME` into itself, and runs the

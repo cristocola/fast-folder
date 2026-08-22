@@ -15,7 +15,7 @@
 //!     dropping (and rewriting away) any whose folder has since disappeared.
 //!
 //! Cache entries are **base-relative** (`dir`), so a cache written on Linux
-//! (`/mnt/proj/...`) is valid when the same base is read on Windows (`D:\...`).
+//! (`/mnt/projects/...`) is valid when the same base is read on Windows (`D:\...`).
 //! There is no manual prune: the "missing" state is transient and self-heals.
 
 use anyhow::{Context, Result};
@@ -410,7 +410,7 @@ pub fn cache_remove(base: &Path, dir: &str) {
 // ---------------------------------------------------------------------------
 
 /// Short display label for a base directory: its last path component (e.g.
-/// `01_PROJECTS` for `/mnt/proj/01_PROJECTS`, `cristoc` for `/home/cristoc`).
+/// `01_PROJECTS` for `/mnt/projects/01_PROJECTS`, `alice` for `/home/alice`).
 /// Falls back to the full path for roots like `/`.
 pub fn base_label(base: &Path) -> String {
     base.file_name()

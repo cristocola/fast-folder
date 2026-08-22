@@ -11,6 +11,9 @@ set -euo pipefail
 
 version="${1:?usage: ./update.sh <version, e.g. 1.0.0>}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Where the two AUR clones live. Override with FASTF_AUR_DIR; the default keeps
+# them beside this repository rather than assuming any one machine's layout.
+default_aur=$(cd "$here/../../.." >/dev/null 2>&1 && pwd)/aur
 
 for pkg in fast-folder fast-folder-bin; do
     dir="$here/$pkg"
@@ -23,8 +26,9 @@ done
 
 cat <<EOF
 
-Done. Next steps (per package). The AUR clones live beside this repo:
-  aur=~/Projects/2026-05-13_fast_folder_ID0052/aur
+Done. Next steps (per package). Point \$FASTF_AUR_DIR at your AUR clones
+(defaults to an "aur" directory beside the repository root):
+  aur=\${FASTF_AUR_DIR:-$default_aur}
   cp $here/fast-folder/{PKGBUILD,.SRCINFO}     \$aur/fast-folder/
   cp $here/fast-folder-bin/{PKGBUILD,.SRCINFO} \$aur/fast-folder-bin/
   cd \$aur/fast-folder     && git add -A && git commit -m "fast-folder $version-1"     && git push

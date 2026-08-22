@@ -41,7 +41,7 @@ enum Commands {
             fastf new music-video                        # use named template, fill vars interactively\n  \
             fastf new music-video --dry-run              # preview without creating anything\n  \
             fastf new music-video --artist=\"Ariana Grande\" --title=Lullaby\n  \
-            fastf new music-video --base-dir=/mnt/proj/01_PROJECTS   # create in another base\n  \
+            fastf new music-video --base-dir=/mnt/projects/clients   # create in another base\n  \
             fastf new music-video --yes --artist=\"Bad Bunny\"   # flags + vars in any order\n\n\
             Variables must use = syntax: --artist=\"Bad Bunny\", not --artist \"Bad Bunny\".\n\
             Every flag above works before OR after the template slug, and a --word that is\n\
@@ -159,7 +159,7 @@ enum Commands {
             source metadata, publishes atomically, and only then removes the source.\n\
             Keep the project untouched while this copy is running.",
         after_help = "Examples:\n  \
-            fastf move ID0047 /mnt/proj/01_PROJECTS   # by full base path\n  \
+            fastf move ID0047 /mnt/projects/archive   # by full base path\n  \
             fastf move ID0047 01_PROJECTS             # by base folder name\n  \
             fastf move lullaby                        # interactive base picker (TTY)"
     )]
@@ -525,7 +525,7 @@ enum ConfigAction {
             (Both slash styles work on Windows)\n\n\
             Examples:\n  \
             fastf config set base-dir /Volumes/Drive/Projects\n  \
-            fastf config set bases \"/mnt/proj/01_PROJECTS,/srv/archive\"\n  \
+            fastf config set bases \"/mnt/projects/clients,/srv/archive\"\n  \
             fastf config set default-template music-video\n  \
             fastf config set date-format %d-%m-%Y\n  \
             fastf config set prompt-open-after-create false\n  \

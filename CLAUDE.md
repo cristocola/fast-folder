@@ -73,9 +73,24 @@ Gotchas sections below for the parts that bite.
   your templates dir to use it.
 - `packaging/` + `.github/workflows/` — release machinery. See the `release` skill.
   Release automation must not mutate installed packages or run system upgrades;
-  Cristo updates `fast-folder` on his machine and smoke-tests it manually.
+  the maintainer installs and smoke-tests the released package manually.
 - `tests/` — integration binaries; see `tests/CLAUDE.md` for what each one
   guards and the shared harness rules.
+
+## The repository is public
+
+Nothing tracked here may describe the machine it was written on: no real home
+directory (`/home/<name>`, `C:\Users\<name>`), no personal mount point, no
+local project-folder path, and no maintainer's name in prose. Write
+`/home/user`, `/mnt/projects/...`, and "the maintainer" instead. Attribution is
+the exception and belongs in `LICENSE`, `Cargo.toml`, `README.md`, the
+PKGBUILDs, and the installer, where it is expected.
+
+`tests/repo_hygiene.rs` enforces this over `git ls-files`, so the rule fails the
+build rather than relying on anyone remembering it. It skips when there is no
+git checkout, because the AUR source package runs the suite inside a makepkg
+sandbox. Before tracking a file that was written as a private note, read it as a
+stranger would.
 
 ## Key design decisions
 

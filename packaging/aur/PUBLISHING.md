@@ -60,9 +60,9 @@ Notes:
 - **Never hand-edit `.SRCINFO`** — always regenerate with `makepkg --printsrcinfo > .SRCINFO`.
 - The AUR repo must contain PKGBUILD + .SRCINFO at its root; don't push anything else.
 - **Release automation must not mutate installed packages.** Do not run `paru -S...`,
-  `pacman -S...`, `yay -S...`, or `makepkg -i`/`makepkg -s`. Cristo updates
-  `fast-folder` on his machine and performs installation smoke tests manually.
-- For Cristo's manual final sanity check: first run bootstraps `~/.config/fastf`,
+  `pacman -S...`, `yay -S...`, or `makepkg -i`/`makepkg -s`. The maintainer
+  installs the released package and performs smoke tests manually.
+- Manual final sanity check: first run bootstraps `~/.config/fastf`,
   `fastf ui --app` opens, `man fastf` works, and tab completion works.
 - Clean-chroot validation (optional, gold standard): if `devtools` is already
   installed, run `pkgctl build` inside the package directory.

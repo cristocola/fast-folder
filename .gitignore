@@ -1,6 +1,12 @@
 /target
 /dist
-.claude
+
+# Claude Code's local session state stays out of the repo, but the release
+# routine is part of it (see .claude/skills/release/SKILL.md). Git cannot
+# re-include a file whose parent directory is excluded, so the directory itself
+# must not be ignored — only its contents, minus the negation below.
+.claude/*
+!.claude/skills/
 
 # This repo is itself a registered fastf project on the dev's machine;
 # its auto-generated metadata file is machine-specific (absolute paths).

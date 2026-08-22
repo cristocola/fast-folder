@@ -69,9 +69,9 @@ authentication, so this remains a local, single-user interface.
 | POST | `/api/templates/file-save` | Write a UTF-8 text file into `files/` (empty content = placeholder) |
 | POST | `/api/templates/file-add` | Copy a file from a disk path into `files/` (binaries land byte-identical) |
 | POST | `/api/templates/file-delete` | Remove one file from `files/` |
-| POST | `/api/open` | Open a path in the system file manager |
+| POST | `/api/open` | Open a path in the system file manager. The path must be a currently discovered project, the data directory, or the templates directory; anything else is 403 |
 | POST | `/api/search` | Run the `fastf search` query language (`tag:`, `key=`, `key>date`, free text); empty terms returns all |
-| GET  | `/api/project?path=<abs>` | Full metadata + journal for one project |
+| GET  | `/api/project?path=<abs>` | Full metadata + journal for one project. A path that is not a currently discovered project is 403 |
 | GET  | `/api/project/size?path=<abs>` | Live logical-byte folder size for a currently discovered project; `size_bytes` is `null` when the tree becomes unreadable/unavailable |
 | POST | `/api/project/tag` | Add/remove one tag (`{path, action, tag}`) |
 | POST | `/api/project/note` | Append a journal entry (`{path, message}`) |
@@ -257,3 +257,18 @@ enforces loopback binding, a loopback `Host` with the listener port, and
 same-origin `Origin` when present. Those checks reduce the local attack surface;
 they do not turn the UI into a remotely deployable service. LAN/Internet use
 would additionally require authentication, TLS, and a different security model.
+
+Three further limits on what a request can reach:
+
+- **Every route that names a path resolves it through discovery first.** Only a
+  folder that is currently a project can be read, mutated, or opened; `/api/open`
+  additionally allows the data and templates directories, because Settings has a
+  button for each. Anything else is 403. Membership is whole-path identity, never
+  a prefix, so a sibling folder whose name merely starts the same way is refused.
+- **A declared `Content-Length` over the 2 MiB cap is refused before the body is
+  read**, so no arithmetic on it can overflow. That is what makes the clean-400
+  promise above true rather than aspirational.
+- **Every response carries a `Content-Security-Policy`** of `default-src 'self'`
+  with `frame-ancestors 'none'`. The frontend is same-origin and has no inline
+  script, so `script-src 'self'` holds; adding an inline handler or a
+  `javascript:` URL to `app.js` would break the page silently.

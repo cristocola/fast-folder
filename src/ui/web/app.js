@@ -1458,7 +1458,7 @@ function projectDataSettings(config) {
         <p>Fast Folder discovers projects from the <code>PROJECT_INFO.md</code> in each folder. Your base directory is always indexed; list any extra folders here (one path per line) to include them too.</p>
         <div class="settings-row">
           <div class="settings-label"><strong>Extra base directories</strong><span>One absolute path per line. Missing folders are skipped.</span></div>
-          <div class="input-with-action"><textarea id="settings-bases" class="input mono" rows="3" placeholder="/mnt/proj/01_PROJECTS">${esc((config.bases || []).join("\n"))}</textarea>${browseButton("folder", "settings-bases")}</div>
+          <div class="input-with-action"><textarea id="settings-bases" class="input mono" rows="3" placeholder="/mnt/projects/clients">${esc((config.bases || []).join("\n"))}</textarea>${browseButton("folder", "settings-bases")}</div>
         </div>
       </div>
       <div class="settings-section">

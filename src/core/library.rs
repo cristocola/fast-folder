@@ -1073,6 +1073,20 @@ pub fn rename_project_configured(project: &Project, new_folder: &str) -> Result<
     rename_project_unlocked(&project, new_folder)
 }
 
+/// What to say when a case-only rename could neither commit nor be undone.
+///
+/// The folder is parked under a dot-prefixed staging name at this point, and
+/// discovery skips dot-prefixed directories. Reporting only the rename failure
+/// would be a lie by omission: the project has not stayed put, it has become
+/// invisible, and nothing but this message says where it went.
+fn stranded_rename_message(context: &str, staging: &Path, rollback: &str) -> String {
+    format!(
+        "{context}; the folder is left at {} and could not be put back ({rollback}) \
+         — rename it back by hand to make the project visible again",
+        crate::util::paths::display_path(staging)
+    )
+}
+
 fn rename_project_unlocked(project: &Project, new_folder: &str) -> Result<Project> {
     let sanitized = naming::sanitize_name(new_folder.trim());
     if sanitized.is_empty() {
@@ -1107,11 +1121,19 @@ fn rename_project_unlocked(project: &Project, new_folder: &str) -> Result<Projec
         }
         crate::util::fs_retry::rename(&project.path, &staging)?;
         if let Err(err) = crate::util::fs_retry::rename(&staging, &new_path) {
+            let context = format!("renaming '{}' to '{}'", project.name, sanitized);
             // Put it back rather than leaving the project under a dot-prefixed
-            // name, which discovery skips — that would make it vanish.
-            let _ = fs::rename(&staging, &project.path);
-            return Err(anyhow::anyhow!(err)
-                .context(format!("renaming '{}' to '{}'", project.name, sanitized)));
+            // name, which discovery skips — that would make it vanish. Retried
+            // like every other destructive rename: a Windows sharing violation is
+            // exactly the kind of thing that failed the commit a moment ago.
+            if let Err(rollback) = crate::util::fs_retry::rename(&staging, &project.path) {
+                return Err(anyhow::anyhow!(err).context(stranded_rename_message(
+                    &context,
+                    &staging,
+                    &rollback.to_string(),
+                )));
+            }
+            return Err(anyhow::anyhow!(err).context(context));
         }
     } else {
         if assets::entry_exists(&new_path)? {
@@ -2146,6 +2168,33 @@ mod tests {
         assert!(MoveManifest::scan(&plain.path).is_ok());
     }
 
+    /// The stranded-rename message must name the path the folder is actually at.
+    ///
+    /// This branch is unreachable by a real filesystem failure in a test — it
+    /// needs the commit *and* the rollback to fail — so what is pinned here is
+    /// the thing that matters when it does happen: a user staring at an error
+    /// can find their project again. A dot-prefixed name is invisible to
+    /// discovery, so an error that omits it leaves nothing to go on.
+    #[test]
+    fn a_stranded_case_rename_names_the_folder_it_left_behind() {
+        let staging = Path::new("/library/base/.MyProject.fastf-case");
+        let message = stranded_rename_message(
+            "renaming 'myproject' to 'MyProject'",
+            staging,
+            "Permission denied (os error 13)",
+        );
+        assert!(
+            message.contains("renaming 'myproject' to 'MyProject'"),
+            "{message}"
+        );
+        assert!(message.contains(".MyProject.fastf-case"), "{message}");
+        assert!(message.contains("Permission denied"), "{message}");
+        assert!(
+            message.contains("by hand"),
+            "the user needs a next step, not just a diagnosis: {message}"
+        );
+    }
+
     /// The move invariant, at every failpoint: the source is intact **or** the
     /// destination is complete — never neither, and never a silent half-state.
     ///
@@ -2221,7 +2270,7 @@ mod tests {
 
             // Whatever happened, reconcile must reach a consistent end state
             // with the payload still present exactly once.
-            let report = provisioning::reconcile(&cfg);
+            let report = provisioning::reconcile_unlocked(&cfg);
             let after_source = old_base.join("proj_a/payload.bin").is_file();
             let after_dest = new_path.join("payload.bin").is_file();
             assert!(

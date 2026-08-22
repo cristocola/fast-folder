@@ -160,6 +160,32 @@ pub struct FileEntry {
 // ---------------------------------------------------------------------------
 
 impl Template {
+    /// Every top-level `template.yaml` key this struct is authoritative for.
+    ///
+    /// Two of them are never serialized and are listed anyway. `files` is a
+    /// pre-v0.8 flat block: since the `files/` directory became the spec, such a
+    /// block is ignored on load, and it must keep being *dropped* on save rather
+    /// than surviving as an unknown key that no longer means anything. `dir` is
+    /// an in-memory convenience that never belonged in a manifest. Kept honest by
+    /// `owned_keys_covers_every_serialized_field`.
+    pub const OWNED_KEYS: &'static [&'static str] = &[
+        "name",
+        "slug",
+        "description",
+        "version",
+        "naming_pattern",
+        "id",
+        "variables",
+        "structure",
+        "verbatim",
+        "exclude",
+        "post_create",
+        "tags",
+        "tag_from",
+        "files",
+        "dir",
+    ];
+
     /// The `files/` subtree of this template (the spec reproduced into projects).
     pub fn files_dir(&self) -> PathBuf {
         self.dir.join("files")
@@ -235,8 +261,25 @@ impl Template {
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
 
-        let raw = serde_yaml::to_string(&snapshot).context("serializing template")?;
-        fs::write(path, raw).with_context(|| format!("writing {}", path.display()))?;
+        // `template.yaml` is a file the user owns and may have keys in it that
+        // this build knows nothing about. Merge onto what is already there so an
+        // editor save is an edit, not a rewrite that silently deletes them.
+        let raw = match fs::read_to_string(path) {
+            Ok(existing) => crate::util::yaml::to_string_preserving_unknown(
+                &snapshot,
+                &existing,
+                Template::OWNED_KEYS,
+            )
+            .context("serializing template")?,
+            // No readable manifest yet: this is a new template, or the old file
+            // is unreadable and there is nothing to preserve from it.
+            Err(_) => serde_yaml::to_string(&snapshot).context("serializing template")?,
+        };
+        // Atomic: a manifest truncated by a crash is a template that no longer
+        // loads, and `load_all` is what every create reads.
+        crate::util::atomic::write(path, raw)
+            .with_context(|| format!("writing {}", path.display()))?;
+        crate::util::faults::check("template:mid-save")?;
 
         // Flush text files into files/. Uses `path`'s parent (authoritative)
         // rather than `self.dir`, which may be unset on an in-memory template.
@@ -253,7 +296,8 @@ impl Template {
             } else {
                 &f.content
             };
-            fs::write(&dest, content).with_context(|| format!("writing {}", dest.display()))?;
+            crate::util::atomic::write(&dest, content)
+                .with_context(|| format!("writing {}", dest.display()))?;
         }
         Ok(())
     }
@@ -370,4 +414,39 @@ fn validate_structure(nodes: &[FolderNode], template_slug: &str) -> Result<()> {
         validate_structure(&node.children, template_slug)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A field added to `Template` without being added to `OWNED_KEYS` would be
+    /// preserved from the old manifest instead of updated, so an edit made in the
+    /// TUI builder or the browser editor would appear to save and change nothing.
+    #[test]
+    fn owned_keys_covers_every_serialized_field() {
+        // Populated so nothing is skipped: `verbatim` and `exclude` are omitted
+        // when empty, and the two `#[serde(skip)]` fields never appear at all.
+        let tmpl = Template {
+            name: "T".to_string(),
+            slug: "t".to_string(),
+            naming_pattern: "{id}".to_string(),
+            verbatim: vec!["*.png".to_string()],
+            exclude: vec!["*.tmp".to_string()],
+            ..Template::default()
+        };
+        let serialized = crate::util::yaml::serialized_keys(&tmpl);
+        for key in &serialized {
+            assert!(
+                Template::OWNED_KEYS.contains(&key.as_str()),
+                "`{key}` is serialized into template.yaml but missing from OWNED_KEYS"
+            );
+        }
+        // The two deliberately unserialized keys, listed so that a stale flat
+        // `files:` block keeps being dropped rather than preserved.
+        for key in ["files", "dir"] {
+            assert!(Template::OWNED_KEYS.contains(&key));
+            assert!(!serialized.contains(&key.to_string()));
+        }
+    }
 }

@@ -133,6 +133,62 @@ proptest! {
         let _ = query::evaluate(&preds, &meta);
     }
 
+    /// Whatever a user types into a variable, the metadata fastf writes for it
+    /// must read back — with the same values.
+    ///
+    /// This is the guarantee behind making `render` return a `Result`. It used to
+    /// swallow a serialization failure and write `# yaml-serialize-error: ...`
+    /// between valid `---` delimiters, which parses as an empty document: the
+    /// project was unreadable, and therefore undiscoverable, from birth. Colons,
+    /// quotes, leading dashes, newlines and unicode are all ordinary things to
+    /// type into a client name.
+    #[test]
+    fn rendered_metadata_always_reads_back(
+        values in prop::collection::vec(hostile_text(), 0..4),
+    ) {
+        use fastf::core::template::{Template, Variable, VarType, Transform};
+
+        let mut tmpl = Template {
+            name: "T".to_string(),
+            slug: "t".to_string(),
+            naming_pattern: "{id}".to_string(),
+            ..Template::default()
+        };
+        let mut vars = HashMap::new();
+        for (index, value) in values.iter().enumerate() {
+            let slug = format!("v{index}");
+            tmpl.variables.push(Variable {
+                slug: slug.clone(),
+                label: format!("Var {index}"),
+                var_type: VarType::Text,
+                required: false,
+                options: vec![],
+                default: String::new(),
+                transform: Transform::None,
+            });
+            vars.insert(slug, value.clone());
+        }
+
+        let plan = fastf::core::project::ProjectPlan {
+            folder_name: "ID0001".to_string(),
+            root_path: std::path::PathBuf::from("/tmp/ID0001"),
+            vars: vars.clone(),
+            id_str: "ID0001".to_string(),
+            counter_value: 1,
+        };
+
+        let rendered = project_info::render(&plan, &tmpl, &[]).expect("render must not fail");
+        let (frontmatter, _) = project_info::split_frontmatter_body(&rendered)
+            .ok_or_else(|| TestCaseError::fail("rendered file has no frontmatter"))?;
+        let meta: project_info::Metadata = serde_yaml::from_str(frontmatter)
+            .map_err(|e| TestCaseError::fail(format!("frontmatter unreadable: {e}\n{frontmatter}")))?;
+
+        prop_assert_eq!(&meta.id, "ID0001");
+        for (slug, value) in &vars {
+            prop_assert_eq!(meta.variables.get(slug), Some(value), "variable {}", slug);
+        }
+    }
+
     /// Frontmatter must round-trip byte-identically: fastf rewrites it for tags
     /// and journal notes, and a user's hand-written body must survive untouched.
     #[test]

@@ -116,6 +116,60 @@ fn case_only_rename_round_trips() {
     assert_eq!(library::scan_base(base).len(), 1);
 }
 
+/// A case-only rename that cannot commit must put the project back where it was.
+///
+/// The two-step dance parks the folder under a dot-prefixed staging name, and
+/// discovery skips dot-prefixed directories — so a rollback that does not happen
+/// does not merely fail the rename, it makes the project vanish. On a
+/// case-sensitive filesystem the target of a case-only rename is a genuinely
+/// different path, which is what lets this be tested with a real occupied target
+/// rather than an injected error.
+#[cfg(unix)]
+#[test]
+fn a_case_only_rename_that_cannot_commit_restores_the_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "myproject", "ID0001");
+    fs::write(base.join("myproject/keep.txt"), "content").unwrap();
+
+    // Occupy the target with something that cannot be renamed over.
+    fs::create_dir(base.join("MyProject")).unwrap();
+    fs::write(base.join("MyProject/squatter.txt"), "not ours").unwrap();
+
+    let project = library::scan_base(base).remove(0);
+    let err = library::rename_project(&project, "MyProject")
+        .expect_err("renaming onto an occupied target must fail");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("myproject") && message.contains("MyProject"),
+        "the failure must name both folders: {message}"
+    );
+
+    // The project is back under its original name, intact and discoverable.
+    assert_eq!(
+        fs::read_to_string(base.join("myproject/keep.txt")).unwrap(),
+        "content"
+    );
+    let staged: Vec<String> = fs::read_dir(base)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with('.'))
+        .collect();
+    assert!(
+        staged.is_empty(),
+        "no staging folder may be left: {staged:?}"
+    );
+    let found = library::scan_base(base);
+    assert_eq!(found.len(), 1, "the project must still be discoverable");
+    assert_eq!(found[0].name, "myproject");
+    assert_eq!(
+        fs::read_to_string(base.join("MyProject/squatter.txt")).unwrap(),
+        "not ours",
+        "an unrelated folder must not be touched"
+    );
+}
+
 /// Non-ASCII project names must survive a full create → discover → rename cycle.
 #[test]
 fn non_ascii_names_round_trip_through_discovery() {

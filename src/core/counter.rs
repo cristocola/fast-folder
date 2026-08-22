@@ -126,7 +126,16 @@ impl Counters {
         let mut local = Self::load().unwrap_or_default();
         if value > local.get() {
             local.set_value(value);
-            let _ = local.save();
+            // Warn like the per-base writes above. This is the counter that spans
+            // every base this machine has written to, so losing it is what lets an
+            // unplugged drive restart numbering — not something to find out about
+            // later, from two projects sharing an ID.
+            if let Err(err) = local.save() {
+                eprintln!(
+                    "warning: could not record the ID counter in {} ({err})",
+                    paths::counters_path().display()
+                );
+            }
         }
     }
 

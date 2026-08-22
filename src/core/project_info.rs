@@ -98,6 +98,25 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl Metadata {
+    /// Every top-level frontmatter key this struct is authoritative for.
+    ///
+    /// `util::yaml::to_string_preserving_unknown` needs the list to tell "a key
+    /// we own and no longer emit" (`provisioning` once a create finishes, which
+    /// must be *removed*) from "a key we have never heard of" (which must be
+    /// left exactly where the user put it). Kept honest by
+    /// `owned_keys_covers_every_serialized_field`.
+    pub const OWNED_KEYS: &'static [&'static str] = &[
+        "id",
+        "template",
+        "template_name",
+        "created",
+        "folder",
+        "path",
+        "variables",
+        "tags",
+        "provisioning",
+    ];
+
     /// Build the typed metadata for a freshly-planned project.
     /// `tags` is the combined literal + auto-derived tag list computed in
     /// `project::create()` before writing the file.
@@ -132,14 +151,19 @@ impl Metadata {
 }
 
 /// Build the full markdown body — frontmatter + variables table + Notes section.
-pub fn render(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> String {
+///
+/// Fails rather than substituting a placeholder for frontmatter it could not
+/// serialize. The placeholder this replaced (`# yaml-serialize-error: ...`) wrote
+/// a comment between valid `---` delimiters, which parses as an empty document:
+/// the file looked fine and the project was invisible to discovery from the
+/// moment it was created.
+pub fn render(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<String> {
     let meta = Metadata::from_plan(plan, tmpl, tags.to_vec());
 
     // Serialize frontmatter via serde_yaml so colons, quotes, multibyte values,
     // etc. all escape correctly. serde_yaml's output already ends with `\n`
     // and starts with no leading separator, so we wrap it in `---` lines.
-    let yaml =
-        serde_yaml::to_string(&meta).unwrap_or_else(|e| format!("# yaml-serialize-error: {e}\n"));
+    let yaml = serde_yaml::to_string(&meta).context("serializing project metadata")?;
 
     let mut out = String::new();
     out.push_str("---\n");
@@ -208,14 +232,14 @@ pub fn render(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> String {
     }
 
     out.push_str("## Notes\n\n");
-    out
+    Ok(out)
 }
 
 /// Write `<root>/PROJECT_INFO.md`. Metadata is mandatory in v0.9 (the file is
 /// the project's identity), so there is no "disabled" path.
 pub fn write(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<()> {
     let path = pinfo_path(&plan.root_path);
-    let body = render(plan, tmpl, tags);
+    let body = render(plan, tmpl, tags)?;
     // Atomic: this file *is* the project's identity, so a half-written one would
     // make the project unreadable rather than merely stale.
     crate::util::atomic::write(&path, body).with_context(|| format!("writing {}", path.display()))
@@ -301,7 +325,15 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
 
     mutator(&mut meta);
 
-    let new_yaml = serde_yaml::to_string(&meta).context("re-serialising metadata")?;
+    // Merge rather than re-serialize: a key this build has no field for belongs
+    // to whoever wrote it, and rewriting the document from the struct alone is
+    // what used to delete it.
+    let new_yaml = crate::util::yaml::to_string_preserving_unknown(
+        &meta,
+        frontmatter_yaml,
+        Metadata::OWNED_KEYS,
+    )
+    .context("re-serialising metadata")?;
 
     let new_content = format!("---\n{}---\n{}", new_yaml, body);
 
@@ -447,6 +479,30 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A field added to `Metadata` without being added to `OWNED_KEYS` would be
+    /// preserved from the old file instead of updated — a `tag add` that appears
+    /// to succeed and changes nothing. Catch it here rather than in a bug report.
+    #[test]
+    fn owned_keys_covers_every_serialized_field() {
+        // `provisioning: true` so nothing is skipped and every key is emitted.
+        let meta = Metadata {
+            id: "ID0001".to_string(),
+            template: "t".to_string(),
+            template_name: "T".to_string(),
+            created: "2026-01-01T00:00:00Z".to_string(),
+            folder: "f".to_string(),
+            path: "/p".to_string(),
+            variables: BTreeMap::new(),
+            tags: vec![],
+            provisioning: true,
+        };
+        assert_eq!(
+            crate::util::yaml::serialized_keys(&meta),
+            Metadata::OWNED_KEYS,
+            "OWNED_KEYS must list exactly what Metadata serializes to"
+        );
+    }
 
     #[test]
     fn split_simple_frontmatter() {

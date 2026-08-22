@@ -366,9 +366,17 @@ impl ReconcileReport {
 }
 
 /// Reconcile scoped v2 state and report obsolete v1 markers without parsing or
-/// mutating them. Callers that can mutate application state should use
-/// [`reconcile_locked`].
-pub fn reconcile(cfg: &Config) -> ReconcileReport {
+/// mutating them.
+///
+/// **Mutates without holding [`DataLock`]**, which the name is there to admit:
+/// this pass resumes copies and removes sources, and doing that while another
+/// process is mid-write is exactly what the lock exists to prevent. Every
+/// application caller goes through [`reconcile_locked`]; this entry point is for
+/// tests that supply their own configuration in memory.
+///
+/// [`DataLock`]: crate::util::lockfile::DataLock
+#[doc(hidden)]
+pub fn reconcile_unlocked(cfg: &Config) -> ReconcileReport {
     let mut report = ReconcileReport::default();
     for configured in cfg.effective_bases() {
         let base = match configured.canonicalize() {
@@ -409,7 +417,7 @@ pub fn reconcile_locked(_cfg: &Config) -> ReconcileReport {
             return report;
         }
     };
-    reconcile(&config)
+    reconcile_unlocked(&config)
 }
 
 fn reconcile_base(cfg: &Config, base: &Path, report: &mut ReconcileReport) {
@@ -871,7 +879,17 @@ fn finish_cleanup_pending(
             ));
             return;
         }
-        crate::util::faults::check("move:after-source-cleanup").ok();
+        // `if let Err`, not `.ok()`: discarding this made the boundary
+        // untestable, and it is the one place where the source is already gone
+        // and the bookkeeping is not yet done. Keep the transaction so the next
+        // pass finishes it, and say so rather than reporting a completed move.
+        if let Err(error) = crate::util::faults::check("move:after-source-cleanup") {
+            report.unrecoverable.push(format!(
+                "{}: source removed but bookkeeping is pending ({error:#}); transaction retained",
+                transaction.operation_dir.display()
+            ));
+            return;
+        }
     }
     if let Err(error) =
         library::finish_recovered_move(source_base, &journal.source_folder, target_base, final_path)
@@ -1051,8 +1069,8 @@ mod tests {
         let before_create = fs::read(&create).unwrap();
         let before_move = fs::read(&moved).unwrap();
 
-        let first = reconcile(&config_for(&base));
-        let second = reconcile(&config_for(&base));
+        let first = reconcile_unlocked(&config_for(&base));
+        let second = reconcile_unlocked(&config_for(&base));
         assert_eq!(first.obsolete.len(), 2);
         assert_eq!(second.obsolete.len(), 2);
         assert_eq!(fs::read(create).unwrap(), before_create);
@@ -1099,7 +1117,7 @@ mod tests {
         let staging = fill_staging(&source, &manifest, &transaction);
         fs::write(target_base.join("real.tmp"), b"bystander").unwrap();
 
-        let report = reconcile(&move_config(&source_base, &target_base));
+        let report = reconcile_unlocked(&move_config(&source_base, &target_base));
         assert_eq!(report.rolled_back, 1, "{report:?}");
         assert!(source.is_dir());
         assert!(!operation.exists());
@@ -1122,7 +1140,7 @@ mod tests {
         let (source, manifest, mut transaction) = prepared_transaction(&source_base, &target_base);
         fill_staging(&source, &manifest, &transaction);
         transaction.set_phase(MovePhase::ReadyToCommit).unwrap();
-        let report = reconcile(&cfg);
+        let report = reconcile_unlocked(&cfg);
         assert_eq!(report.rolled_back, 1, "{report:?}");
         assert!(source.is_dir());
         assert!(!target_base.join("project").exists());
@@ -1141,8 +1159,8 @@ mod tests {
         transaction.set_phase(MovePhase::ReadyToCommit).unwrap();
         fs::rename(&staging, target_base.join("project")).unwrap();
 
-        let first = reconcile(&cfg);
-        let second = reconcile(&cfg);
+        let first = reconcile_unlocked(&cfg);
+        let second = reconcile_unlocked(&cfg);
         assert_eq!(first.completed, 1, "{first:?}");
         assert!(second.is_empty(), "recovery must be idempotent: {second:?}");
         assert!(!source.exists());
@@ -1179,13 +1197,13 @@ mod tests {
             |metadata| metadata.id = "ID9999".to_string(),
         )
         .unwrap();
-        let mismatch = reconcile(&cfg);
+        let mismatch = reconcile_unlocked(&cfg);
         assert_eq!(mismatch.completed, 0);
         assert!(!mismatch.unrecoverable.is_empty());
         assert!(source.is_dir(), "identity mismatch must preserve source");
         assert!(operation.is_dir(), "transaction must remain for inspection");
 
-        let repeated = reconcile(&cfg);
+        let repeated = reconcile_unlocked(&cfg);
         assert_eq!(repeated.completed, 0);
         assert!(source.is_dir());
         assert!(operation.is_dir());
@@ -1214,7 +1232,7 @@ mod tests {
         .unwrap();
         let before = fs::read(&journal).unwrap();
 
-        let report = reconcile(&move_config(&source_base, &target_base));
+        let report = reconcile_unlocked(&move_config(&source_base, &target_base));
         assert!(!report.unrecoverable.is_empty());
         assert_eq!(fs::read(&journal).unwrap(), before);
         assert_eq!(fs::read(&sentinel).unwrap(), b"keep");

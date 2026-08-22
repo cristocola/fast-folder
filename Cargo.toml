@@ -53,6 +53,8 @@ tempfile = "3"
 # output is always a creatable filename" property is the one that matters most.
 proptest = { version = "1", default-features = false, features = ["std"] }
 
+# Do not add `panic = "abort"`. The browser UI answers a panicking handler with a
+# 500 via `catch_unwind`, and aborting turns that into a killed process instead.
 [profile.release]
 opt-level = 3
 lto = true

@@ -54,7 +54,7 @@ fastf ui            # same thing in your default browser
 
 Prefer the terminal? Everything the UI does has a CLI or TUI equivalent, and the rest of this README speaks fluent shell.
 
-The whole tool is a single self-contained Rust binary (about 3 MB) with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
+The whole tool is a single self-contained Rust binary (under 4 MB) with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
 
 ## Quick start
 
@@ -181,6 +181,9 @@ Tests are hermetic: they redirect all state through `FASTF_INSTALL_DIR` (and `HO
 | [`windows_semantics.rs`](tests/windows_semantics.rs) | reserved names, long paths, links, read-only files |
 | [`hostile_fs.rs`](tests/hostile_fs.rs) | corrupt caches, markers and metadata |
 | [`properties.rs`](tests/properties.rs) | generated-input properties (proptest) |
+| [`cli_surface.rs`](tests/cli_surface.rs) | what `fastf <args>` actually does to disk, as a process |
+| [`tui_pty.rs`](tests/tui_pty.rs) | the interactive menu through a real terminal (unix) |
+| [`repo_hygiene.rs`](tests/repo_hygiene.rs) | no tracked file describes the machine it was written on |
 
 Two things worth knowing before you change the copy or move paths:
 
@@ -188,9 +191,11 @@ Two things worth knowing before you change the copy or move paths:
   failpoints. Trip one with `FASTF_FAULT=move:before-commit-rename` (returns an
   error there) or `FASTF_FAULT=create:mid-copy:abort` (kills the process there).
   See `util::faults::ALL_FAULT_POINTS`. Compiled out of release builds.
-- **Check Linux from Windows.** `#[cfg(unix)]` code does not compile on a Windows
-  machine, so `cargo clippy --target x86_64-unknown-linux-gnu --all-targets`
-  catches what your local clippy cannot. CI runs both regardless.
+- **Lint the other platform too.** `#[cfg(unix)]` code does not compile on a
+  Windows machine and `#[cfg(windows)]` code does not compile on a Linux one, so
+  `cargo clippy --all-targets --target x86_64-pc-windows-gnu` (or
+  `--target x86_64-unknown-linux-gnu` from Windows) catches what your local
+  clippy cannot. CI lints on both platforms regardless.
 
 For frontend work, `FASTF_UI_DIR=src/ui/web fastf ui` serves assets from disk so you can edit and refresh without rebuilding.
 

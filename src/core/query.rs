@@ -470,14 +470,14 @@ mod tests {
             "test",
             "Test",
             "ProjectFolder",
-            "/home/cristo/Documents/secret-stash",
+            "/home/alice/Documents/secret-stash",
             &[],
             &[],
         );
         // The substring "stash" appears only in path — should NOT match
         assert!(!evaluate(&parse(&["stash".to_string()]), &meta));
-        // "cristo" only in path — should NOT match
-        assert!(!evaluate(&parse(&["cristo".to_string()]), &meta));
+        // The home-directory name appears only in path — should NOT match
+        assert!(!evaluate(&parse(&["alice".to_string()]), &meta));
     }
 
     #[test]

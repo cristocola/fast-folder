@@ -27,7 +27,7 @@ use crate::core::naming::interpolate_name;
 pub const TEXT_MAX_BYTES: u64 = 1024 * 1024;
 
 /// Files larger than this are deferred to a background copy job in the UI so a
-/// slow cross-filesystem copy (btrfs `~` → ntfs `/mnt/base`) never blocks the
+/// slow cross-filesystem copy (for example btrfs to ntfs) never blocks the
 /// request. Must be ≥ [`TEXT_MAX_BYTES`] so every deferred file is verbatim
 /// (never needs interpolation) — the background copier does pure byte copies.
 pub const JOB_DEFER_BYTES: u64 = 4 * 1024 * 1024;

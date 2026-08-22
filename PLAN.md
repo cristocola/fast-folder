@@ -39,7 +39,7 @@ cargo check --all-targets --target x86_64-pc-windows-gnu   # if the target is in
 - **Tests are processes when the bug lived between clap and the core, ptys when it lived in a prompt, and units when the logic is pure.** New harnesses redirect `FASTF_INSTALL_DIR` and `HOME`/`USERPROFILE` into the sandbox.
 - **Release safety.** Never run `paru -S`, `pacman -S`, `makepkg -i/-s`, or anything that mutates installed packages. Build-only validation is fine.
 
-## Phase 0 (Cristo, not an agent)
+## Phase 0 (maintainer, not an agent)
 
 - [x] Commit the in-flight `CLAUDE.md` trim and the untracked `tests/CLAUDE.md` so Phase 1 starts from a clean tree. Phase 17 assumes the "How it got here" and "Testing" sections are already gone from `CLAUDE.md`.
 
@@ -243,14 +243,70 @@ propagates correctly.
 - README fixes limited to the drift items; `Cargo.toml` gets a two-line comment above `[profile.release]`.
 
 **Steps.**
-- [ ] `tests/ui_server.rs` first: a request with `Content-Length: 18446744073709551615` gets a 4xx response (connection not dropped); `POST /api/open` with a path outside every base gets 403 and spawns nothing; with a discovered project path the route passes authorization (stub or skip the spawn on CI; test the authorization function directly for the positive case).
-- [ ] Bound `Content-Length`; authorize `/api/open` and `/api/project`; CSP if the precondition holds.
-- [ ] CI: `node --check`; Windows clippy; tag/version guard. Make the Windows clippy step pass (fix any `#[cfg(windows)]` lint it finds; that is the point).
-- [ ] `.gitignore` negation; `git add .claude/skills/release/SKILL.md`.
-- [ ] README: suite table (9 suites), CI claim, size. `Cargo.toml` comment. `docs/UI.md`: note the 403 and the CSP if added.
-- [ ] Double-check `ROADMAP.md`'s "Release and documentation gates" list includes `node --check` (it does) and add the Windows clippy line.
+- [x] `tests/ui_server.rs` first: a request with `Content-Length: 18446744073709551615` gets a 4xx response (connection not dropped); `POST /api/open` with a path outside every base gets 403 and spawns nothing; with a discovered project path the route passes authorization (stub or skip the spawn on CI; test the authorization function directly for the positive case). *(The Content-Length case lives in `src/ui/mod.rs`'s socket tests and the positive authorization case in its unit tests — see Notes.)*
+- [x] Bound `Content-Length`; authorize `/api/open` and `/api/project`; CSP if the precondition holds.
+- [x] CI: `node --check`; Windows clippy; tag/version guard. Make the Windows clippy step pass (fix any `#[cfg(windows)]` lint it finds; that is the point).
+- [x] `.gitignore` negation; `git add .claude/skills/release/SKILL.md`.
+- [x] README: suite table (9 suites), CI claim, size. `Cargo.toml` comment. `docs/UI.md`: note the 403 and the CSP if added.
+- [x] Double-check `ROADMAP.md`'s "Release and documentation gates" list includes `node --check` (it does) and add the Windows clippy line.
 
 **Acceptance.** CI runs every gate the docs name. The server has no panic path outside `catch_unwind`. `/api/open` cannot open an arbitrary path. The release procedure is in `git log`.
+
+**Notes.** Two tests moved out of `tests/ui_server.rs`, one design decision came
+out wider than written, and one item was already true on paper.
+
+(1) **`tests/ui_server.rs` cannot reach `read_request`** — it drives the pure
+`route_request`, which never touches a socket. The Content-Length case therefore
+sits with the other socket-level cases in `src/ui/mod.rs`'s own `mod tests`,
+which already had the `socket_response` helper. That helper now delegates to a
+`socket_exchange` that returns the handler's `Result` alongside the response
+text, because this case has to assert both halves: the client is answered *and*
+the failure is still reported to the caller. Watched failing first — `attempt to
+add with overflow` at the old `:2109`, with the connection thread dead and the
+client reading nothing.
+
+(2) **The positive `/api/open` case cannot live in an integration test**, because
+an authorized open spawns the system file manager, and a test suite that opens
+file-manager windows is worse than no test. The allow set is instead covered by
+two unit tests over a pure `allowed_local_path(candidates, path)` plus a
+`local_path_candidates(config, install_dir, templates_dir)` that takes both
+directories as arguments so the set is testable without redirecting the process
+environment. The negative cases stay in `tests/ui_server.rs`, and the wiring was
+verified by hand against a real server with `xdg-open` removed from `PATH`: a
+discovered project, the data directory and the templates directory all pass
+authorization and reach the spawn, while `/etc` and a `…-evil` sibling of a real
+project are refused with 403.
+
+(3) **`find_project` became the authorization boundary rather than a second
+helper being added beside it.** Its error now carries the `forbidden:` prefix, so
+every path-addressed route answers 403 instead of 400 for a path that is not a
+project — one rule instead of two nearly identical lookups, which is the
+duplication Phase 5 exists to remove. The existing tests assert on the message
+text, not the status, and the frontend renders the message, so nothing else
+moved. `/api/open` needs the wider set (it also opens the data and templates
+directories, which Settings has buttons for) and that is the one place
+`authorize_local_path` is used.
+
+(4) **The CSP precondition held, so it shipped**, and it is sent on every
+response rather than only the document: it is inert on JSON and it also covers
+someone navigating straight to `/icon.svg`. `form-action` is `'self'`, not
+`'none'` — seven of the eight frontend forms call `preventDefault()`, but the
+template editor's form has no submit handler, and `'none'` would silently change
+what Enter does inside it.
+
+(5) **The Windows clippy leg found nothing to fix.** Both Windows targets are
+already clean locally (`cargo clippy --all-targets --target
+x86_64-pc-windows-{gnu,msvc} -- -D warnings`), so the job is a guard against
+regression rather than a repair. `lint` became a two-OS matrix; `cargo fmt` and
+`node --check` run on the Linux leg only.
+
+(6) **`docs/UI.md:249` already claimed** that "oversized or malformed requests
+get a clean JSON 400, never a crashed connection thread". That was false on both
+counts: the oversized case panicked, and *any* malformed request was dropped
+without a response because `read_request`'s error returned before anything was
+written. `handle_connection_with` now answers with the normal JSON error body
+and still returns the error, which is what keeps the stalled-client test honest.
+The documentation did not need changing; the code did.
 
 ## Phase 5: Dead code out, stale gotchas corrected
 
@@ -288,7 +344,7 @@ A separate session with the `release` skill. Before tagging: all gates, `ROADMAP
 
 # Track B: the guided TUI (release v1.7.0)
 
-Cristo's verdict on PR #3: Esc-to-back and the main-menu frame were right, the implementation was not (Esc worked in some places and not others). Open-in-editor and default-template preselect are not wanted. The track below makes cancel a single mechanism enforced by a test, keeps typed input through validation, stops the browser from rescanning, and then adds the frame, the keys, and the parity items.
+The maintainer's verdict on PR #3: Esc-to-back and the main-menu frame were right, the implementation was not (Esc worked in some places and not others). Open-in-editor and default-template preselect are not wanted. The track below makes cancel a single mechanism enforced by a test, keeps typed input through validation, stops the browser from rescanning, and then adds the frame, the keys, and the parity items.
 
 ## Phase 6: Relocate the terminal picker library (pure move)
 
@@ -390,7 +446,7 @@ Cristo's verdict on PR #3: Esc-to-back and the main-menu frame were right, the i
 
 **Goal.** Give the main menu the context it lacks, make the most-used screen faster to operate, and make `fastf recent`/`fastf search` use the same browser the menu uses.
 
-**Evidence and ideas (Cristo asked for mine; he will check them).**
+**Evidence and ideas (proposed by the implementer; the maintainer reviews them).**
 - The main menu prints only `project base → …` (`menu.rs:84-90`). PR #3's frame was wanted.
 - Action menu today: Open folder, Show metadata, Add tag (typed), Remove tag (typed), Add note, Show journal, Move (conditional), Rename, Unregister, Delete, Back, Quit. Missing: a way to get the path out (copy to clipboard, or print it), tag selection from known tags instead of retyping, `tag reauto`, and sizes in the `fastf recent`/`fastf search` pickers (`project_action_menu(p, None, false)` at `recent.rs:284`).
 - `live_select` handles ↑/↓/j/k/Tab/Enter/Space (`live_select.rs:103-110`). No PageUp/PageDown, Home/End, or filter; with `recent-default-limit` 50 on a 30-row terminal you scroll one row at a time.
@@ -623,4 +679,5 @@ Other:
 | 1 | 2026-08-21 | [#7](https://github.com/cristocola/fast-folder/pull/7) | `Config::load()` propagates everywhere; `PreviewKind` on both printers; `cli::config::normalize_base_entry` is the shared base validator; `util::interrupt::restore_terminal` is the one cursor restore; `operations::reconcile` and `run_paged_browser`'s loader now return `Result`. |
 | 1-3 merged | 2026-08-22 | — | Phases 1-3 merged into `main` as merge commits, oldest first, and their branches deleted. `main` is green on all seven gates. Phase 4 starts from a clean `main` with nothing open. |
 | 3 | 2026-08-22 | [#9](https://github.com/cristocola/fast-folder/pull/9) | Branched on Phase 2 (#7 and #8 both still open) — retarget to `main` after they merge. `util::yaml::to_string_preserving_unknown` + `Metadata::OWNED_KEYS`/`Template::OWNED_KEYS` is how any file fastf does not fully own gets rewritten; `project_info::render` returns `Result`; `provisioning::reconcile` is now `reconcile_unlocked` (Phase 5's `_unlocked` rule starts here); new fault point `template:mid-save`, and `ALL_FAULT_POINTS` is now enforced against the call sites, so Phase 5 must update the list when it deletes code. |
+| 4 | 2026-08-22 | [#10](https://github.com/cristocola/fast-folder/pull/10) | `find_project` is the authorization boundary for every path-addressed UI route and its error is `forbidden:`-prefixed (403); `authorize_local_path`/`allowed_local_path`/`local_path_candidates` are the wider set for `/api/open`; every response carries `CONTENT_SECURITY_POLICY`, which assumes the frontend keeps no inline script; `socket_exchange` is the new socket test helper; CI's `lint` is a two-OS matrix and `release.yml` has a `verify-version` job every later release depends on; `.claude/skills/` is tracked, so the `release` skill is in the repo. |
 | 2 | 2026-08-22 | [#8](https://github.com/cristocola/fast-folder/pull/8) | Branched on Phase 1 (#7 still open) — retarget to `main` after it merges. `cli::extra::classify_extra(extra, &clap::Command)` + per-command `apply_extra`; `RegisterFlags::validate` owns register's constraints; `util::tty::{prompt_available, require_tty}` is the one prompt probe (stderr) and Phase 6/7 should route new prompts through it; `RecursiveArgs` gained `vars`; `template from-folder` gained `--yes`/`--dry-run` and `FromFolderArgs`; `Sandbox::run_headless` and `pty::run_stdout_to` are new harness helpers. |

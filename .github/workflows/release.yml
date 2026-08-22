@@ -14,8 +14,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # A tag is the only thing that decides what version is published, and nothing
+  # checked it against the crate. Pushing v1.7.0 with `version = "1.6.0"` in
+  # Cargo.toml would build, package, and publish a release whose binaries report
+  # a different version than its assets are named for.
+  #
+  # The job runs unconditionally (a skipped job would skip `build` with it on a
+  # workflow_dispatch dry run); the comparison is what is tag-gated.
+  verify-version:
+    name: tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare tag to crate version
+        if: github.ref_type == 'tag'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "tag=$tag crate=$crate"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${crate}; bump the crate or retag"
+            exit 1
+          fi
+
   build:
     name: build (${{ matrix.target }})
+    needs: verify-version
     strategy:
       fail-fast: false
       matrix:

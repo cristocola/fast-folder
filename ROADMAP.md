@@ -218,6 +218,14 @@ Track A of [`PLAN.md`](PLAN.md), one phase per session.
   counter write and a rename that cannot be rolled back both say so; the
   source-cleanup failpoint can fire again, and `reconcile_unlocked` admits it
   does not hold the lock.
+- [x] Phase 4: browser-server hardening, CI gates that match the docs, and the
+  release procedure in git — an absurd `Content-Length` is refused instead of
+  panicking the connection thread outside `catch_unwind`, and a malformed
+  request is answered rather than dropped; `/api/open` and `/api/project` resolve
+  their path through discovery instead of acting on any path on the machine;
+  every response carries a content security policy; CI runs `node --check` and
+  lints Windows code, and the Release workflow refuses a tag that does not match
+  `Cargo.toml`; the release routine is tracked in the repository.
 
 ## Release and documentation gates
 
@@ -230,6 +238,9 @@ Every release must pass:
 - [x] `node --check src/ui/web/app.js`
 - [x] Windows cfg compile: `cargo check --all-targets --target
   x86_64-pc-windows-{gnu,msvc}`
+- [x] Windows clippy: `cargo clippy --all-targets -- -D warnings` on a Windows
+  runner (CI's "fmt + clippy (windows-latest)" leg), so `#[cfg(windows)]` code is
+  linted rather than merely compiled
 - [x] `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --locked` (CI's "docs build
   clean"; a `pub` item's docs may not link to a `pub(crate)` one)
 - [x] Existing Linux CI target ([main run 32171192192](https://github.com/cristocola/fast-folder/actions/runs/32171192192))

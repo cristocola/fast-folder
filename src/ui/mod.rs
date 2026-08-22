@@ -41,6 +41,20 @@ use crate::util::paths;
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:47831";
 const MAX_REQUEST_SIZE: usize = 2 * 1024 * 1024;
 
+/// Sent on every response, not just the document: it costs nothing on JSON and
+/// it also covers someone navigating straight to `/icon.svg`.
+///
+/// `script-src 'self'` is only correct while the frontend has no inline
+/// handlers — `index.html` loads one external `app.js`, and `app.js` writes no
+/// `on*=` attributes, `javascript:` URLs, or `eval`. Adding any of those breaks
+/// the page silently, so add the listener instead. Inline `style=` attributes
+/// do exist, hence `'unsafe-inline'` for styles only. `form-action` stays
+/// `'self'` rather than `'none'` because the template editor's form has no
+/// submit handler and an implicit submit would otherwise change behaviour.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; \
+style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
+base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'";
+
 /// How long a connection may sit without making progress before its thread
 /// gives up. [`serve`] spawns one thread per connection and the frontend polls
 /// health every 5 s plus jobs every 350–500 ms, so a stalled socket that is
@@ -349,7 +363,23 @@ fn handle_connection_with(mut stream: TcpStream, timeout: Duration) -> Result<()
     let local_address = stream
         .local_addr()
         .context("reading local socket address")?;
-    let request = read_request(&mut stream)?;
+    let request = match read_request(&mut stream) {
+        Ok(request) => request,
+        Err(error) => {
+            // Answer before giving up. A client that sent an oversized or
+            // malformed request learns why instead of watching the socket
+            // close; the caller still gets the error, so a stalled connection
+            // is still reported as one.
+            let _ = write_response(
+                &mut stream,
+                status_for(&error.to_string()),
+                "application/json; charset=utf-8",
+                serde_json::to_vec(&json!({"ok": false, "error": format!("{error:#}")}))
+                    .unwrap_or_default(),
+            );
+            return Err(error);
+        }
+    };
     let response = validate_request_authority(&request, local_address)
         .and_then(|()| route_request_caught(&request.method, &request.route, &request.body));
 
@@ -516,7 +546,11 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
         ("POST", "/api/open") => {
             let request: OpenRequest =
                 serde_json::from_slice(body).context("invalid open request")?;
-            open_path(Path::new(&request.path))?;
+            // Authorize before spawning anything: this route hands a path to
+            // the system file manager, so an unchecked one opens whatever the
+            // request names.
+            let target = authorize_local_path(&load_config()?, &request.path)?;
+            open_path(&target)?;
             Ok(Response::Json(json!({"ok": true})))
         }
         ("POST", "/api/search") => {
@@ -1378,17 +1412,18 @@ fn search_projects(request: SearchRequest) -> Result<Value> {
 /// `GET /api/project?path=<abs>` — full metadata + journal for one project.
 fn project_detail(path: &str) -> Result<Value> {
     let config = load_config()?;
-    let root = Path::new(path);
-    let metadata = project_info::read_metadata(root).ok().flatten();
-    let journal = project_info::read_journal_entries(root)
+    // Discovery both authorizes the path and carries template/name/id straight
+    // from the folder's metadata. Without it this route read `PROJECT_INFO.md`
+    // from, and reported the existence of, any absolute path on the machine.
+    let record = find_project(&config, path)?;
+    let root = record.path.clone();
+    let metadata = project_info::read_metadata(&root).ok().flatten();
+    let journal = project_info::read_journal_entries(&root)
         .unwrap_or_default()
         .iter()
         .map(|entry| json!({"timestamp": entry.timestamp, "message": entry.message}))
         .collect::<Vec<_>>();
-    // Discovery carries template/name/id straight from the folder's metadata.
-    let record = library::discover(&config)
-        .into_iter()
-        .find(|p| paths_match(&p.path.display().to_string(), path));
+    let record = Some(record);
 
     Ok(json!({
         "ok": true,
@@ -1425,18 +1460,57 @@ fn project_size(path: &str) -> Result<Value> {
     }))
 }
 
-/// `POST /api/project/move` — move a project folder into another configured
-/// base. Targets are restricted to `effective_bases()` so the moved project
-/// stays discoverable. Returns a `job_id` the frontend polls: a same-filesystem
-/// move finishes near-instantly (the job reports `done`), while a cross-fs /
-/// network move streams copy → verify → finalize progress and can be cancelled.
-/// Runs off WRITE_LOCK so a slow network copy never blocks other UI writes.
 /// Look up a discovered project by its absolute folder path.
+///
+/// This is the authorization boundary for every route that names a path: the
+/// server acts only on a folder that discovery currently reports as a project,
+/// so a request cannot reach an arbitrary location on the machine. The
+/// `forbidden:` prefix is what [`status_for`] turns into a 403.
 fn find_project(config: &Config, path: &str) -> Result<library::Project> {
     library::discover(config)
         .into_iter()
         .find(|p| paths_match(&p.path.display().to_string(), path))
-        .ok_or_else(|| anyhow::anyhow!("no project found at {path}"))
+        .ok_or_else(|| anyhow::anyhow!("forbidden: no project found at {path}"))
+}
+
+/// Every local path the UI is allowed to hand to the system file manager: a
+/// currently discovered project, plus Fast Folder's own data and templates
+/// directories, which Settings offers a button for.
+///
+/// Taking both directories as arguments keeps the set testable without
+/// redirecting the process environment.
+fn local_path_candidates(
+    config: &Config,
+    install_dir: &Path,
+    templates_dir: &Path,
+) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = library::discover(config)
+        .into_iter()
+        .map(|project| project.path)
+        .collect();
+    candidates.push(install_dir.to_path_buf());
+    candidates.push(templates_dir.to_path_buf());
+    candidates
+}
+
+/// Membership by whole-path identity, never by prefix — `/base/proj-evil` must
+/// not pass because `/base/proj` is allowed. [`paths_match`] settles the
+/// several ways Windows spells one folder.
+fn allowed_local_path(candidates: &[PathBuf], path: &str) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .find(|candidate| paths_match(&candidate.display().to_string(), path))
+        .cloned()
+}
+
+/// Authorize a path the frontend asked the server to open locally.
+fn authorize_local_path(config: &Config, path: &str) -> Result<PathBuf> {
+    let candidates = local_path_candidates(config, &paths::install_dir(), &paths::templates_dir());
+    allowed_local_path(&candidates, path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "forbidden: {path} is neither a project folder nor a Fast Folder data directory"
+        )
+    })
 }
 
 /// `POST /api/project/unregister` — remove the project's PROJECT_INFO.md so it
@@ -1479,6 +1553,12 @@ fn project_rename(request: RenameRequest) -> Result<Value> {
     Ok(json!({"ok": true, "path": renamed.path, "name": renamed.name}))
 }
 
+/// `POST /api/project/move` — move a project folder into another configured
+/// base. Targets are restricted to `effective_bases()` so the moved project
+/// stays discoverable. Returns a `job_id` the frontend polls: a same-filesystem
+/// move finishes near-instantly (the job reports `done`), while a cross-fs /
+/// network move streams copy → verify → finalize progress and can be cancelled.
+/// Runs off WRITE_LOCK so a slow network copy never blocks other UI writes.
 fn project_move(request: MoveRequest) -> Result<Value> {
     let config = load_config()?;
     let project = find_project(&config, &request.path)?;
@@ -2052,6 +2132,10 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     let mut bytes = Vec::with_capacity(4096);
     let mut buffer = [0_u8; 4096];
     let header_end;
+    // How much of `bytes` has already been searched for the terminator. Without
+    // it every read rescans the whole buffer from the start, which is O(n2) in
+    // the header size for no benefit.
+    let mut scanned = 0;
 
     loop {
         // A timeout here surfaces as an error and ends the thread — that is the
@@ -2066,10 +2150,13 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         if bytes.len() > MAX_REQUEST_SIZE {
             bail!("request is too large");
         }
-        if let Some(position) = find_bytes(&bytes, b"\r\n\r\n") {
-            header_end = position + 4;
+        if let Some(position) = find_bytes(&bytes[scanned..], b"\r\n\r\n") {
+            header_end = scanned + position + 4;
             break;
         }
+        // Back up three bytes so a terminator split across two reads is still
+        // found on the next pass.
+        scanned = bytes.len().saturating_sub(3);
     }
 
     let header =
@@ -2096,6 +2183,14 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         let value = value.trim();
         if name.eq_ignore_ascii_case("content-length") {
             content_length = value.parse::<usize>().context("invalid Content-Length")?;
+            // Bound it here, not just by watching the body grow: the loop below
+            // adds `header_end + content_length`, and an unbounded value
+            // overflows that add (debug) or wraps it into an inverted slice
+            // range (release). Either way the panic lands in `read_request`,
+            // which runs before `route_request_caught`'s `catch_unwind`.
+            if content_length > MAX_REQUEST_SIZE {
+                bail!("request is too large");
+            }
         } else if name.eq_ignore_ascii_case("host") {
             if host.replace(value.to_string()).is_some() {
                 bail!("duplicate Host header");
@@ -2153,7 +2248,7 @@ fn write_response(
     // TCP segment, and a client's first read can land mid-status-line (the
     // health probe used to see just "HTTP/1.1 " and call the server dead).
     let mut response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: {CONTENT_SECURITY_POLICY}\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -2210,6 +2305,86 @@ mod tests {
         assert_eq!(status_for("invalid preview request"), 400);
     }
 
+    /// The frontend is same-origin and self-contained, so the document must not
+    /// be framable and must not run script the server did not serve.
+    #[test]
+    fn every_response_carries_the_content_security_policy() {
+        let response = socket_response(|address| {
+            format!("GET / HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+        });
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        assert!(
+            response.contains("Content-Security-Policy: default-src 'self'; script-src 'self';"),
+            "the document response must carry the policy: {response}"
+        );
+        assert!(
+            response.contains("frame-ancestors 'none'"),
+            "the UI must not be framable: {response}"
+        );
+    }
+
+    /// A prefix test would accept `/base/project-evil` because `/base/project`
+    /// is allowed. Membership is whole-path identity.
+    #[test]
+    fn the_open_allow_set_matches_whole_paths_not_prefixes() {
+        let candidates = vec![PathBuf::from("/base/project"), PathBuf::from("/data/fastf")];
+
+        assert_eq!(
+            allowed_local_path(&candidates, "/base/project"),
+            Some(PathBuf::from("/base/project"))
+        );
+        assert_eq!(
+            allowed_local_path(&candidates, "/data/fastf"),
+            Some(PathBuf::from("/data/fastf"))
+        );
+        assert_eq!(allowed_local_path(&candidates, "/base/project-evil"), None);
+        assert_eq!(
+            allowed_local_path(&candidates, "/base/project/inside"),
+            None,
+            "a file inside a project is not itself something the UI offers to open"
+        );
+        assert_eq!(allowed_local_path(&candidates, "/etc"), None);
+        assert_eq!(allowed_local_path(&[], "/base/project"), None);
+    }
+
+    /// The three things the UI's open buttons can name: a discovered project
+    /// (the row action, the create-success overlay, the drawer), the data
+    /// directory and the templates directory (Settings). Narrowing this set
+    /// breaks a working button.
+    #[test]
+    fn the_open_allow_set_covers_every_button_the_frontend_offers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let base = temp.path().join("projects");
+        let project = base.join("2026-01-01_Demo_ID0001");
+        fs::create_dir_all(&project).expect("create project folder");
+        fs::write(
+            project.join("PROJECT_INFO.md"),
+            "---\nid: ID0001\ntemplate: general\ntemplate_name: General\ncreated: 2026-01-01T00:00:00Z\nfolder: 2026-01-01_Demo_ID0001\npath: x\nvariables: {}\n---\n",
+        )
+        .expect("write metadata");
+
+        let config = Config {
+            base_dir: base.display().to_string(),
+            ..Config::default()
+        };
+        let install = temp.path().join("data");
+        let templates = install.join("templates");
+
+        let candidates = local_path_candidates(&config, &install, &templates);
+
+        for expected in [&project, &install, &templates] {
+            assert!(
+                allowed_local_path(&candidates, &expected.display().to_string()).is_some(),
+                "{} must stay openable",
+                expected.display()
+            );
+        }
+        assert!(
+            allowed_local_path(&candidates, &base.display().to_string()).is_none(),
+            "the base itself is not a project and has no button"
+        );
+    }
+
     #[test]
     fn ui_bind_addresses_must_be_loopback() {
         assert!(resolve_loopback_address("127.0.0.1:47831").is_ok());
@@ -2217,7 +2392,10 @@ mod tests {
         assert!(resolve_loopback_address("192.0.2.1:47831").is_err());
     }
 
-    fn socket_response(request: impl FnOnce(SocketAddr) -> String) -> String {
+    /// Drive one real connection and return both what the client read and what
+    /// the handler reported. A malformed request is answered *and* reported as
+    /// an error, so a case that cares about the refusal needs both halves.
+    fn socket_exchange(request: impl FnOnce(SocketAddr) -> String) -> (String, Result<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
         let address = listener.local_addr().expect("local addr");
         let server = thread::spawn(move || {
@@ -2230,11 +2408,36 @@ mod tests {
             .expect("write request");
         let mut response = String::new();
         client.read_to_string(&mut response).expect("read response");
-        server
-            .join()
-            .expect("server thread must not panic")
-            .expect("handler must answer");
+        let outcome = server.join().expect("server thread must not panic");
+        (response, outcome)
+    }
+
+    fn socket_response(request: impl FnOnce(SocketAddr) -> String) -> String {
+        let (response, outcome) = socket_exchange(request);
+        outcome.expect("handler must answer");
         response
+    }
+
+    /// `Content-Length: <u64::MAX>` parses into a `usize` on a 64-bit target,
+    /// and `header_end + content_length` then overflowed the add (debug) or
+    /// wrapped into an inverted slice range (release). `read_request` runs
+    /// before `route_request_caught`'s `catch_unwind`, so that panic killed the
+    /// connection thread and the client read nothing at all.
+    #[test]
+    fn an_absurd_content_length_is_refused_rather_than_panicked() {
+        let (response, outcome) = socket_exchange(|address| {
+            format!(
+                "POST /api/create HTTP/1.1\r\nHost: {address}\r\nContent-Length: 18446744073709551615\r\nConnection: close\r\n\r\n"
+            )
+        });
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "the client must be told why, not left with a dropped socket: {response:?}"
+        );
+        assert!(
+            outcome.is_err(),
+            "the handler must still report the refusal to its caller"
+        );
     }
 
     #[test]

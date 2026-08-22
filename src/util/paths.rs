@@ -230,8 +230,8 @@ mod tests {
     fn strips_verbatim_prefix_for_display() {
         // The exact shape that leaked into create/recent/move output.
         assert_eq!(
-            strip_verbatim(r"\\?\C:\Users\Cristo\Projects\2026_Thing_ID0001"),
-            r"C:\Users\Cristo\Projects\2026_Thing_ID0001"
+            strip_verbatim(r"\\?\C:\Users\Alice\Projects\2026_Thing_ID0001"),
+            r"C:\Users\Alice\Projects\2026_Thing_ID0001"
         );
         assert_eq!(strip_verbatim(r"\\?\E:\"), r"E:\");
         // UNC round-trips to the familiar double-backslash form.

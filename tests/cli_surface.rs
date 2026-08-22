@@ -858,3 +858,43 @@ fn a_redirected_stdout_still_has_a_terminal_to_prompt_on() {
         "the redirected file is where the output went:\n{captured}"
     );
 }
+
+/// A counter write that fails must say so.
+///
+/// The data-directory counter is the one that spans every base this machine has
+/// written to, so it is what stops an unplugged drive restarting numbering. Its
+/// two per-base siblings warn when they cannot be written; this one dropped the
+/// error on the floor (`let _ = local.save()`), so the protection could be gone
+/// with nothing on screen to say it.
+///
+/// A read-only data directory is what makes only the *write* fail: the config
+/// still loads, the lock file already exists, and the atomic write cannot claim
+/// its temp sibling. Unix-only because that is where the permission bit is a
+/// one-liner; the code path it exercises is platform-independent.
+#[cfg(unix)]
+#[test]
+fn a_failed_counter_write_warns_instead_of_going_quiet() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let set_mode = |mode: u32| {
+        fs::set_permissions(&sb.install, fs::Permissions::from_mode(mode)).unwrap();
+    };
+    set_mode(0o555);
+    let out = sb.run(&["new", "race", "--name=One", "--yes", "--no-preview"]);
+    // Restore before any assertion, so a failure still leaves a removable tempdir.
+    set_mode(0o755);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "the project must still be created: {out:?}"
+    );
+    assert!(
+        stderr.contains("could not record the ID counter"),
+        "a dropped counter write must be reported: {stderr}"
+    );
+    assert_eq!(ids_in(&sb.base), ["R0001".to_string()]);
+}

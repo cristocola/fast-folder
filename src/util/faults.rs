@@ -116,6 +116,7 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "move:before-source-cleanup",
     "move:source-cleanup",
     "move:after-source-cleanup",
+    "template:mid-save",
 ];
 
 #[cfg(all(test, debug_assertions))]

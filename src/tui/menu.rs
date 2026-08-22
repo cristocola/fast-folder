@@ -966,23 +966,39 @@ fn prompt_template_slug(prompt: &str) -> Result<String> {
 mod tests {
     use super::is_fatal;
 
+    /// `is_fatal` reads the process-global interrupt flag, and
+    /// `util::interrupt`'s own tests raise it. Without taking the lock that
+    /// lives beside that state, a test here can be running while the flag is up
+    /// and every "recoverable" assertion flips. Pre-existing race, made visible
+    /// by adding lib tests elsewhere; the rule is in `tests/CLAUDE.md`.
+    fn no_interrupt<R>(body: impl FnOnce() -> R) -> R {
+        let _guard = crate::util::interrupt::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        body()
+    }
+
     /// A mistyped path fails with `canonicalize`'s `NotFound` wrapped in
     /// context. This is THE case containment exists for, and the obvious
     /// "propagate anything with an io::Error in the chain" rule would have got
     /// it exactly backwards.
     #[test]
     fn a_wrapped_io_error_is_recoverable() {
-        let io = std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory");
-        let err = anyhow::Error::new(io).context("path does not exist or is not accessible");
-        assert!(!is_fatal(&err));
+        no_interrupt(|| {
+            let io = std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory");
+            let err = anyhow::Error::new(io).context("path does not exist or is not accessible");
+            assert!(!is_fatal(&err));
+        });
     }
 
     /// A validation failure from `config::set` is likewise a correction to make,
     /// not a reason to end the session.
     #[test]
     fn a_plain_message_is_recoverable() {
-        let err = anyhow::anyhow!("recent_default_limit must be at least 1");
-        assert!(!is_fatal(&err));
+        no_interrupt(|| {
+            let err = anyhow::anyhow!("recent_default_limit must be at least 1");
+            assert!(!is_fatal(&err));
+        });
     }
 
     /// A prompt that cannot run must end the session: containing it would return

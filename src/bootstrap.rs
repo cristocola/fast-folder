@@ -119,8 +119,8 @@ pub fn ensure_bootstrapped() -> Result<()> {
         write_bundled_template("client-project", CLIENT_PROJECT_YAML)?;
         // Bundled file: client-project ships a brief that demonstrates
         // content interpolation out of the box.
-        fs::write(
-            paths::template_files_dir("client-project").join("BRIEF.md"),
+        crate::util::atomic::write(
+            &paths::template_files_dir("client-project").join("BRIEF.md"),
             CLIENT_PROJECT_BRIEF,
         )?;
         println!(
@@ -137,6 +137,9 @@ pub fn ensure_bootstrapped() -> Result<()> {
 /// plus an (initially empty) `files/` subtree for bundled assets.
 fn write_bundled_template(slug: &str, manifest: &str) -> Result<()> {
     fs::create_dir_all(paths::template_files_dir(slug))?;
-    fs::write(paths::template_manifest(slug), manifest)?;
+    // Atomic like every other template write: a first run interrupted partway
+    // would otherwise leave a manifest that no later create can load, and the
+    // "directory is empty" guard above means it is never rewritten.
+    crate::util::atomic::write(&paths::template_manifest(slug), manifest)?;
     Ok(())
 }

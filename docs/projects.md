@@ -34,7 +34,11 @@ variables:
 ## Notes
 ```
 
-The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming a folder never breaks tracking. After creation, fastf only touches the file through `fastf tag` and `fastf note`, both of which preserve the rest of the file byte for byte.
+The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming a folder never breaks tracking.
+
+After creation the file is yours. fastf rewrites the frontmatter when you tag, move, rename, or register a project, and every rewrite leaves the rest of the file byte for byte as it was. That includes **keys fastf does not recognise**: add `obsidian_folder:` or anything else your own tooling needs, and it stays where you put it, in the same position in the file. `fastf note` appends to the body and touches nothing else.
+
+This matters most when two machines share one library. A newer fastf can write a key an older one has never heard of, and the older one will not delete it.
 
 ## Discovery and bases
 

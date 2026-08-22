@@ -211,6 +211,13 @@ Track A of [`PLAN.md`](PLAN.md), one phase per session.
   warning, and an unknown flag is refused rather than ignored; prompt
   availability is probed on stderr, where prompts are drawn, and every prompt
   that cannot run says which flag replaces it.
+- [x] Phase 3: files fastf writes must stay readable — frontmatter and template
+  keys fastf does not recognise survive every mutation in place instead of being
+  deleted; a metadata file that cannot be serialized fails the create rather than
+  being written unreadable; template manifests are written atomically; a dropped
+  counter write and a rename that cannot be rolled back both say so; the
+  source-cleanup failpoint can fire again, and `reconcile_unlocked` admits it
+  does not hold the lock.
 
 ## Release and documentation gates
 

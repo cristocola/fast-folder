@@ -146,7 +146,7 @@ fn metadata_as_a_directory_is_not_fatal() {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name, "good");
         // reconcile walks the same folders and must also survive it.
-        let _ = provisioning::reconcile(&cfg);
+        let _ = provisioning::reconcile_unlocked(&cfg);
     });
 }
 
@@ -167,7 +167,7 @@ fn corrupt_markers_are_untouched_and_cannot_touch_data() {
         let create_before = fs::read(&create_marker).unwrap();
         let move_before = fs::read(&move_marker).unwrap();
         let cfg = config_for(base);
-        let report = provisioning::reconcile(&cfg);
+        let report = provisioning::reconcile_unlocked(&cfg);
 
         assert_eq!(
             fs::read_to_string(dir.join("payload.txt")).unwrap(),
@@ -203,7 +203,7 @@ fn move_marker_with_dangling_paths_is_reported_without_mutation() {
         .unwrap();
 
         let cfg = config_for(base);
-        let report = provisioning::reconcile(&cfg);
+        let report = provisioning::reconcile_unlocked(&cfg);
         assert_eq!(report.rolled_back, 0, "report: {report:?}");
         assert_eq!(report.obsolete.len(), 1, "report: {report:?}");
         assert!(
@@ -235,7 +235,7 @@ fn absent_base_is_treated_as_empty() {
         let found = library::discover(&cfg);
         assert_eq!(found.len(), 1);
         assert_eq!(library::max_id(&cfg), 1);
-        let _ = provisioning::reconcile(&cfg);
+        let _ = provisioning::reconcile_unlocked(&cfg);
     });
 }
 

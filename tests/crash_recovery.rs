@@ -194,7 +194,7 @@ fn successful_create_is_reported_clean_by_reconcile() {
         let plan = project::plan(&tmpl, &HashMap::new(), &cfg, &counters).unwrap();
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
-        let report = provisioning::reconcile(&cfg);
+        let report = provisioning::reconcile_unlocked(&cfg);
         assert!(
             report.is_empty(),
             "clean project reported as needing work: {report:?}"
@@ -230,7 +230,7 @@ fn create_v2_recovery_resumes_scoped_copies_and_is_idempotent() {
         )
         .unwrap();
 
-        let first = provisioning::reconcile(&cfg);
+        let first = provisioning::reconcile_unlocked(&cfg);
         assert_eq!(first.resumed, 1, "{first:?}");
         assert_eq!(fs::read(&destination).unwrap(), fs::read(&source).unwrap());
         assert!(!fastf::core::project_info::is_provisioning(&plan.root_path));
@@ -241,7 +241,7 @@ fn create_v2_recovery_resumes_scoped_copies_and_is_idempotent() {
                 .exists()
         );
 
-        let second = provisioning::reconcile(&cfg);
+        let second = provisioning::reconcile_unlocked(&cfg);
         assert!(second.is_empty(), "recovery must be idempotent: {second:?}");
     });
 }
@@ -343,11 +343,11 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
                 "[{point}] payload disappeared before reconcile"
             );
 
-            let first = provisioning::reconcile(&cfg);
+            let first = provisioning::reconcile_unlocked(&cfg);
             let source_after = source.exists();
             let final_after = final_path.exists();
             let state_after = (source_after, final_after, transaction_count(&target));
-            let second = provisioning::reconcile(&cfg);
+            let second = provisioning::reconcile_unlocked(&cfg);
             assert_eq!(
                 state_after,
                 (
@@ -463,7 +463,7 @@ fn hard_killed_create_is_visible_and_reported() {
         );
 
         // And reconcile says so, rather than claiming everything is fine.
-        let report = provisioning::reconcile(&cfg);
+        let report = provisioning::reconcile_unlocked(&cfg);
         assert!(
             !report.is_empty(),
             "reconcile must not report a clean library here"
@@ -516,4 +516,209 @@ fn hard_kill_before_metadata_does_not_produce_a_phantom_project() {
             "the counter must not have advanced"
         );
     });
+}
+
+/// A failpoint that cannot fire is a boundary nobody is testing.
+///
+/// `reconcile`'s source-cleanup boundary called `faults::check(...).ok()`, which
+/// throws the injected error away — so every other `check` in the file could be
+/// trusted and this one silently could not. The failure it models is real: the
+/// source is gone, the destination is published, and the transaction that records
+/// the remaining bookkeeping cannot be settled yet. Recovery must keep that
+/// transaction and report it, not declare the move complete.
+#[cfg(debug_assertions)]
+#[test]
+fn a_fault_after_source_cleanup_retains_the_transaction_for_the_next_pass() {
+    sandbox(|sb| {
+        write_template(&sb.install, "crash");
+        let target = sb.install.parent().unwrap().join("target");
+        fs::create_dir_all(&target).unwrap();
+        let mut cfg = config_for(&sb.base);
+        cfg.bases = vec![target.display().to_string()];
+        cfg.save().unwrap();
+
+        let tmpl = template::find_by_slug("crash").unwrap();
+        let mut counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &HashMap::new(), &cfg, &counters).unwrap();
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        fs::write(plan.root_path.join("payload.bin"), b"irreplaceable").unwrap();
+
+        // Abort just before source cleanup: published destination, source still
+        // present, transaction sitting in CleanupPending — the state reconcile's
+        // cleanup branch exists to finish.
+        let home = sb.install.parent().unwrap();
+        let killed = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "move_abort_child_driver", "--nocapture"])
+            .env("FASTF_INSTALL_DIR", &sb.install)
+            .env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }, home)
+            .env(MOVE_CHILD_ENV, "1")
+            .env(MOVE_TARGET_ENV, &target)
+            .env(FAULT_ENV, "move:before-source-cleanup:abort")
+            .output()
+            .expect("running move child");
+        assert!(!killed.status.success(), "child should abort: {killed:?}");
+
+        let source = plan.root_path.clone();
+        let final_path = target.join(&plan.folder_name);
+        assert!(
+            source.is_dir() && final_path.is_dir(),
+            "expected both halves"
+        );
+
+        arm("move:after-source-cleanup");
+        let interrupted = provisioning::reconcile_unlocked(&cfg);
+        disarm();
+
+        assert_eq!(
+            interrupted.completed, 0,
+            "an interrupted cleanup must not be reported as a completed move: {interrupted:?}"
+        );
+        assert!(
+            !interrupted.unrecoverable.is_empty(),
+            "the interruption must be reported: {interrupted:?}"
+        );
+        assert_eq!(
+            transaction_count(&target),
+            1,
+            "the transaction must be retained for the next pass"
+        );
+        assert!(
+            !source.exists(),
+            "source removal itself had already succeeded"
+        );
+
+        // The next pass finds the source gone and settles the bookkeeping.
+        let settled = provisioning::reconcile_unlocked(&cfg);
+        assert_eq!(settled.completed, 1, "{settled:?}");
+        assert_eq!(transaction_count(&target), 0, "transaction must clear");
+        assert_eq!(
+            fs::read(final_path.join("payload.bin")).unwrap(),
+            b"irreplaceable"
+        );
+        assert_eq!(library::discover(&cfg).len(), 1);
+    });
+}
+
+/// A template save killed outright must leave a manifest that still loads.
+///
+/// `template.yaml` is what every create reads, so a truncated one takes the
+/// template out of service entirely — the same class of damage the bare
+/// `fs::write` on `config.toml` and `counters.toml` caused before `util::atomic`
+/// existed. The manifest write now goes through the same atomic writer, and the
+/// scratch file it uses is a uniquely named sibling that no loader ever reads.
+///
+/// **Design guard, not a regression test** (see `tests/CLAUDE.md`): it passes
+/// against the pre-fix build too, because a failpoint can only be placed
+/// *around* `fs::write`, never inside the window where it had truncated the file
+/// and not yet written the bytes. What is genuinely pinned here is that a hard
+/// kill at this boundary leaves a loadable template and no scaffolding behind.
+#[cfg(debug_assertions)]
+#[test]
+fn a_hard_killed_template_save_leaves_a_loadable_manifest() {
+    sandbox(|sb| {
+        write_template(&sb.install, "crash");
+        let manifest = sb.install.join("templates/crash/template.yaml");
+        let before = fs::read_to_string(&manifest).unwrap();
+
+        let source = sb.install.parent().unwrap().join("source-tree");
+        fs::create_dir_all(source.join("docs")).unwrap();
+        fs::write(source.join("docs/readme.md"), "# regenerated\n").unwrap();
+
+        let home = sb.install.parent().unwrap();
+        let killed = run_fastf_aborting(
+            &sb.install,
+            home,
+            "template:mid-save",
+            &[
+                "template",
+                "from-folder",
+                &source.display().to_string(),
+                "crash",
+                "--force",
+                "--yes",
+            ],
+        );
+        assert!(!killed.status.success(), "child should abort: {killed:?}");
+        // Prove the boundary was actually reached: a save that never happened
+        // would pass every assertion below without testing anything.
+        assert!(
+            String::from_utf8_lossy(&killed.stderr).contains("template:mid-save"),
+            "the failpoint must have fired: {killed:?}"
+        );
+
+        // Either generation is acceptable; a manifest that no longer parses is not.
+        let after = fs::read_to_string(&manifest).expect("manifest must still exist");
+        assert!(
+            after == before || template::find_by_slug("crash").is_ok(),
+            "manifest is neither the old one nor a loadable new one:\n{after}"
+        );
+        template::find_by_slug("crash").expect("template must still load");
+
+        // No scratch siblings left where a future reader could trip over them.
+        let strays: Vec<String> = fs::read_dir(sb.install.join("templates/crash"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "temp scaffolding left behind: {strays:?}"
+        );
+    });
+}
+
+/// `ALL_FAULT_POINTS` must list exactly the names the source actually trips.
+///
+/// The list's own documentation says an invariant test iterates it and asserts
+/// agreement with the call sites; until now nothing referenced the list at all,
+/// so a boundary could gain a failpoint that no list, and therefore no reader,
+/// knew about — and a name could be deleted from the code while the list went on
+/// advertising it. Scanning the source is the only way to check this, since a
+/// failpoint's name is a string literal by design.
+#[test]
+fn every_failpoint_in_the_source_is_declared_and_vice_versa() {
+    fn collect(dir: &Path, found: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, found);
+                continue;
+            }
+            // The module's own unit tests name points to prove the matcher works;
+            // they are not boundaries in the code.
+            if path.extension().is_none_or(|e| e != "rs") || path.ends_with("util/faults.rs") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            for (_, rest) in text
+                .match_indices("faults::check(\"")
+                .map(|(i, m)| (i, &text[i + m.len()..]))
+            {
+                if let Some(name) = rest.split('"').next() {
+                    found.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    collect(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut found,
+    );
+    found.sort();
+    found.dedup();
+
+    let mut declared: Vec<String> = fastf::util::faults::ALL_FAULT_POINTS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    declared.sort();
+    declared.dedup();
+
+    assert_eq!(
+        found, declared,
+        "ALL_FAULT_POINTS and the `faults::check` call sites have drifted apart"
+    );
 }

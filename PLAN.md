@@ -145,14 +145,80 @@ not know) and is labelled a design guard, per `tests/CLAUDE.md`.
 - `provisioning::reconcile` becomes `pub(crate)` (or `#[doc(hidden)]` with an `_unlocked` suffix if a test needs it; prefer switching the test to `reconcile_locked`).
 
 **Steps.**
-- [ ] `tests/integration.rs` first: write a `PROJECT_INFO.md` with an extra top-level key and a nested extra map; run `tag add`, `rename`, and `move` through `core::operations`; the keys survive byte-for-byte in value and order. Confirm the existing no-op round-trip test is unchanged.
-- [ ] Add `extra` to `Metadata` (and `Template` if green).
-- [ ] `render -> Result`; a unit test feeding a value serde_yaml cannot emit (if one exists; otherwise a test that the error type propagates from `write`).
-- [ ] Atomic template writes; a `crash_recovery.rs` failpoint around `save_to_file` (new fault point `template:mid-save`) proving a kill leaves either the old or the new manifest, never a truncated one.
-- [ ] Counter save warning, rollback error, failpoint fix, `reconcile` visibility.
-- [ ] Docs: `docs/projects.md` states that unknown frontmatter keys are preserved across fastf mutations. `CLAUDE.md` "PROJECT_INFO.md" section gets one line on `extra`.
+- [x] `tests/integration.rs` first: write a `PROJECT_INFO.md` with an extra top-level key and a nested extra map; run `tag add`, `rename`, and `move` through `core::operations`; the keys survive byte-for-byte in value and order. Confirm the existing no-op round-trip test is unchanged.
+- [x] Add `extra` to `Metadata` (and `Template` if green). *(Done differently — see Notes. Both files preserve unknown keys; neither type gained a field.)*
+- [x] `render -> Result`; a unit test feeding a value serde_yaml cannot emit (if one exists; otherwise a test that the error type propagates from `write`).
+- [x] Atomic template writes; a `crash_recovery.rs` failpoint around `save_to_file` (new fault point `template:mid-save`) proving a kill leaves either the old or the new manifest, never a truncated one.
+- [x] Counter save warning, rollback error, failpoint fix, `reconcile` visibility.
+- [x] Docs: `docs/projects.md` states that unknown frontmatter keys are preserved across fastf mutations. `CLAUDE.md` "PROJECT_INFO.md" section gets one line on `extra`.
 
 **Acceptance.** Unknown frontmatter keys survive every mutation. A serialize error fails the create. A killed template save never leaves a truncated manifest. No `pub` function under `core/` mutates shared state without `DataLock` unless its name says so.
+
+**Notes.** The one design decision came out differently, and two tests are
+labelled design guards rather than regressions.
+
+(1) **`#[serde(flatten)]` was rejected after reading the vendored sources.**
+`flatten` routes every field through serde's `Content` buffer
+(`serde-1.0.229/src/private/de.rs:1255`), and serde_yaml resolves a plain
+unquoted scalar to a typed value (`serde_yaml-0.9.34/src/de.rs:1472`), so
+`year: 2026` in a hand-edited file would arrive as an integer and be rejected by
+the `String` field it belongs to. `library::read_project_meta` drops that error,
+so the project would vanish from discovery — this phase would have traded one
+invisible-project bug for another. It also sorts unknown keys to the end of the
+file, which step 1 explicitly forbids. Instead `util::yaml::to_string_preserving_unknown`
+merges the fresh struct onto the parsed `serde_yaml::Mapping` (an `IndexMap`, so
+positions hold), driven by an `OWNED_KEYS` const per type with an exhaustiveness
+test. Parsing is untouched, so there is no new failure class, and neither
+`Metadata` nor `Template` gained a field — no struct literals changed and no
+HTTP JSON shape moved. `Template::OWNED_KEYS` must keep listing `files` and
+`dir`: without them a pre-v0.8 flat `files:` block would start being *preserved*
+instead of dropped.
+
+(2) **`render`'s `Result` has no reachable serialize failure**, since every
+`Metadata` field is a `String`/`Vec`/`BTreeMap`/`bool` that serde_yaml can always
+emit. What the phase actually needed proving was the consequence the old
+fallback had, so it got a proptest instead: arbitrary hostile variable values
+render to frontmatter that reads back to the same values
+(`rendered_metadata_always_reads_back`).
+
+(3) **`template:mid-save` is a design guard, not a regression test.** A failpoint
+can only be placed around `fs::write`, never inside the window where it has
+truncated the file and not yet written the bytes, so the case cannot be made to
+fail against the pre-fix build. It pins what is checkable: a hard `abort` at that
+boundary leaves a loadable manifest and no `.tmp` scaffolding, and the child's
+stderr is asserted so the test cannot pass vacuously. Same for
+`a_case_only_rename_that_cannot_commit_restores_the_project` — a real occupied
+target reaches the rollback deterministically, but making the *rollback itself*
+fail needs both renames to fail at once, so the stranded-folder message is pinned
+by a unit test on `stranded_rename_message` instead.
+
+(4) **`reconcile` became `#[doc(hidden)] pub fn reconcile_unlocked` rather than
+switching the tests to `reconcile_locked`**, which this phase preferred:
+`reconcile_locked` reloads `Config` from disk, and the twelve test call sites
+build their config in memory and never save it, so they would have reconciled the
+wrong base. The rename satisfies the acceptance verbatim and matches the rule
+Phase 5 states.
+
+(5) Two items grew slightly. `ALL_FAULT_POINTS`'s doc comment claimed an
+invariant test iterated it and asserted agreement with the call sites; nothing
+referenced the list at all, so the source-scan test now exists
+(`every_failpoint_in_the_source_is_declared_and_vice_versa`). And
+`bootstrap.rs`'s two bundled-template `fs::write`s went atomic alongside
+`template.rs`'s, since an interrupted first run leaving an unloadable bundled
+template is the same defect.
+
+(6) **One pre-existing flake was fixed rather than parked**, because a gate that
+fails one run in twelve is not green. `tui::menu`'s two "recoverable" unit tests
+read the process-global interrupt flag through `is_fatal`, which
+`util::interrupt`'s own tests raise, and they did not take `interrupt::TEST_LOCK`
+— the rule `tests/CLAUDE.md` states for exactly this. Measured at 1/12 failures
+on the unmodified build and 0/15 after; the new lib tests in this phase only
+changed the scheduling that exposed it.
+
+(7) The counter-warning case is `#[cfg(unix)]`: a read-only data directory is
+what makes only the *write* fail, and planting a directory in place of
+`counters.toml` (the cross-platform trick) breaks the read first, which already
+propagates correctly.
 
 ## Phase 4: Browser-server hardening, CI gates that match the docs, and the release procedure in git
 
@@ -530,6 +596,12 @@ Browser UI (Track E, not selected):
 - XSS safety is 125 manual `esc()` calls with no lint; a tagged-template `html` helper and a source-scan test would make it mechanical. Job polling is triplicated (`app.js:2255`, `:2824`, `:2879`). Every mutation reloads `/api/state` (full discovery) and re-renders the page (43-key global `state`, 71 `innerHTML` writes). a11y: no focus trap in modals (`app.js:3405`), five `outline: none` with no `:focus-visible`, two `aria-label`s in the file, no `prefers-reduced-motion`. No frontend tests beyond `node --check`; `node --test` over the ~12 pure helpers would be cheap. Keep-alive and chunked bodies are unsupported (documented, fine for loopback). `open_path`'s `cmd /c start` quoting on Windows mirrors `reveal_folder`; both should pass the path through `explorer`-safe quoting if a case ever appears.
 
 Other:
+- `Counters::load().unwrap_or_default()` (`core/counter.rs:127`, inside
+  `propagate`) swallows a parse or I/O error the same way `Config::load` did
+  before Phase 1. Less damaging — `Counters::floor` also reads every base and
+  `library::max_id`, so the number self-heals — but it silently drops the
+  "unplugged base cannot restart numbering" protection, which is the one thing
+  that file exists for.
 - `query::resolve_field` clones per field access and `Predicate::Free` lowercases per comparison; fine at current scale.
 - `size_scan::request` has an O(n²) `contains` over the queue; bounded by page size.
 - `docs/` annotate features as "v1.5.0" but no such tag exists (tags go v1.4.0 → v1.5.1).
@@ -548,4 +620,5 @@ Other:
 |---|---|---|---|
 | 0 | 2026-08-21 | #6 (`7bccde5`) | CLAUDE.md trim and tests/CLAUDE.md landed; Phase 17 can assume both. |
 | 1 | 2026-08-21 | [#7](https://github.com/cristocola/fast-folder/pull/7) | `Config::load()` propagates everywhere; `PreviewKind` on both printers; `cli::config::normalize_base_entry` is the shared base validator; `util::interrupt::restore_terminal` is the one cursor restore; `operations::reconcile` and `run_paged_browser`'s loader now return `Result`. |
+| 3 | 2026-08-22 | PR pending | Branched on Phase 2 (#7 and #8 both still open) — retarget to `main` after they merge. `util::yaml::to_string_preserving_unknown` + `Metadata::OWNED_KEYS`/`Template::OWNED_KEYS` is how any file fastf does not fully own gets rewritten; `project_info::render` returns `Result`; `provisioning::reconcile` is now `reconcile_unlocked` (Phase 5's `_unlocked` rule starts here); new fault point `template:mid-save`, and `ALL_FAULT_POINTS` is now enforced against the call sites, so Phase 5 must update the list when it deletes code. |
 | 2 | 2026-08-22 | [#8](https://github.com/cristocola/fast-folder/pull/8) | Branched on Phase 1 (#7 still open) — retarget to `main` after it merges. `cli::extra::classify_extra(extra, &clap::Command)` + per-command `apply_extra`; `RegisterFlags::validate` owns register's constraints; `util::tty::{prompt_available, require_tty}` is the one prompt probe (stderr) and Phase 6/7 should route new prompts through it; `RecursiveArgs` gained `vars`; `template from-folder` gained `--yes`/`--dry-run` and `FromFolderArgs`; `Sandbox::run_headless` and `pty::run_stdout_to` are new harness helpers. |

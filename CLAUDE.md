@@ -286,7 +286,11 @@ form's base `<select>` (feeds the existing `PlanRequest.base_dir`). CLI stays
 
 `read_metadata(path)` slices out the frontmatter via `split_frontmatter_body()`, feeds it to `serde_yaml::from_str::<Metadata>`. Returns `Ok(None)` when no frontmatter block is present (older / hand-edited files). `read(path)` returns raw markdown for fallback display. **v0.9:** the filename is fixed (`RESERVED_FILENAME`); `write`/`read`/`read_metadata`/`read_journal_entries` no longer take a `cfg` (use `pinfo_path(dir)`); metadata is mandatory (no "disabled" toggle).
 
-**Atomic mutation** (v0.4): `write_frontmatter(path, |meta| { ... })` reads → splits → parses → applies the closure → re-serializes via `serde_yaml::to_string` → writes via `.tmp` + rename. Body bytes are byte-identical after a no-op mutation — the dedicated integration test asserts this. `append_journal_entry(path, msg)` does the same atomic dance for the body. Both require frontmatter to exist; otherwise return a structured error naming the path.
+**Atomic mutation** (v0.4): `write_frontmatter(path, |meta| { ... })` reads → splits → parses → applies the closure → re-serializes → writes via `.tmp` + rename. Body **and frontmatter** bytes are byte-identical after a no-op mutation — one integration test each.
+
+**Unknown keys survive every mutation** (v1.6.1). The re-serialize step is `util::yaml::to_string_preserving_unknown(&meta, frontmatter, Metadata::OWNED_KEYS)`, not `serde_yaml::to_string`. It merges the fresh struct onto the parsed `serde_yaml::Mapping`, which is an `IndexMap`, so a key fastf has no field for keeps its **position**, not just its value. `OWNED_KEYS` is what distinguishes "ours and no longer emitted, so remove it" (`provisioning` once a create finishes) from "not ours, leave it"; `owned_keys_covers_every_serialized_field` fails if a field is added without updating the list.
+
+**Do not replace this with `#[serde(flatten)]`.** It was the obvious design and it is wrong: `flatten` routes every field through serde's `Content` buffer, so a plain unquoted scalar in a hand-edited file (`year: 2026`) arrives as an integer and the `String` field rejects it — and `library::read_project_meta` drops that error, so the project disappears from discovery. Preserving unknown keys must not cost a new way to lose a project. Verified in `serde-1.0.229/src/private/de.rs:1255` and `serde_yaml-0.9.34/src/de.rs:1472`. `append_journal_entry(path, msg)` does the same atomic dance for the body. Both require frontmatter to exist; otherwise return a structured error naming the path.
 
 The bundled templates (since 2026-07-16: `general` — `{date}_{name}_{id}`, one `00_Inbox` folder — and `client-project` — client/project/tier vars + a BRIEF.md that demonstrates content interpolation. Deliberately universal; the domain-specific `music-video`/`photography`/`video-production` moved to `examples/templates/` alongside the dev/finance/research gallery) no longer declare a `PROJECT_INFO.md` content file — auto-gen owns that file. **As of v0.5, `PROJECT_INFO.md` at the project root is a reserved filename**: `Template::load_from_file` and `save_to_file` silently strip any `files[].path == "PROJECT_INFO.md"` entry (case-insensitive on the leaf, root-only — `docs/PROJECT_INFO.md` is allowed). Older user-built templates that declared their own `PROJECT_INFO.md` keep loading; the entry is just ignored. The TUI template builder rejects the name inline. If you want a custom notes file, use a different name (e.g. `NOTES.md`).
 
@@ -682,6 +686,40 @@ and draws from the main one, feeding `interrupt::is_set()` into the cancel flag
 so Ctrl-C aborts before the source is touched. Totals stay zero until the staged
 path scans the tree and never fill in for a same-fs rename — so "nothing to draw"
 is the normal case, not a bug.
+
+### v1.6.1 gotchas
+
+**`util::yaml::to_string_preserving_unknown` is how fastf rewrites a file it
+does not fully own** — `PROJECT_INFO.md` frontmatter and `template.yaml`. Both
+have an `OWNED_KEYS` const with an exhaustiveness test. `Template::OWNED_KEYS`
+also lists `files` and `dir`, which are `#[serde(skip)]` and therefore never
+serialized: without them a pre-v0.8 flat `files:` block would stop being dropped
+on save and start being *preserved*, which is the opposite of what v0.8 decided.
+The reasoning against `#[serde(flatten)]` is under "PROJECT_INFO.md" above; do
+not revisit it without re-reading serde's `ContentDeserializer`.
+
+**`render` returns `Result` because the fallback it replaced wrote an invisible
+project.** `serde_yaml::to_string(&meta).unwrap_or_else(|e| format!("#
+yaml-serialize-error: {e}"))` put a comment between valid `---` delimiters. That
+parses as an empty document, so `read_project_meta` failed, so the folder was not
+a project — from the moment it was created, with a success message on screen.
+Never substitute a placeholder for content that defines a file's identity.
+
+**A `.ok()` on `faults::check` disarms the failpoint.** `provisioning.rs`'s
+source-cleanup boundary had one, so the single point where the source is already
+gone and the bookkeeping is not yet done could not be tested at all. Every
+`check` either propagates with `?` or is handled with `if let Err`;
+`every_failpoint_in_the_source_is_declared_and_vice_versa` keeps
+`ALL_FAULT_POINTS` matching the call sites, which its own doc comment had
+claimed for two releases while nothing referenced the list.
+
+**A `pub fn` under `core/` that mutates without `DataLock` says `_unlocked`.**
+`provisioning::reconcile` did not, and reconcile resumes copies and removes
+sources. It is now `#[doc(hidden)] pub fn reconcile_unlocked`, with
+`reconcile_locked` as the only application entry point. The twelve test call
+sites build their `Config` in memory and never save it, so switching them to
+`reconcile_locked` would have reconciled the wrong base — the rename is what
+makes the signature honest without changing what the tests exercise.
 
 ## Browser UI (`fastf ui`)
 

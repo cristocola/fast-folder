@@ -27,9 +27,9 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Release: **v1.6.0 — the guided browser stops waiting**
-- Status: **v1.6.0 released; GitHub and AUR publication verified; manual network-share smoke pending**
-- Last reviewed: **2026-08-18**
+- Release: **v1.6.1 — correctness and hygiene**
+- Status: **Track A complete and merged (Phases 1-5); all gates green on `main`; tagging v1.6.1**
+- Last reviewed: **2026-08-23**
 
 ## Release train
 
@@ -39,6 +39,7 @@ responsibility of the filesystem and backups.
 | v1.5.0 | Delivered in v1.5.1; CI and Linux smoke passed | scoped v2 move/create journals recover idempotently after process crashes |
 | v1.5.1 | Released; CI, assets, and AUR packages verified | every mutation shares validation, locking, authoritative reload, and cache refresh behavior |
 | v1.6.0 | Released; CI, assets, and AUR packages verified | the guided project browser never waits on a folder size |
+| v1.6.1 | Track A merged; CI green on `main` | what fastf says happened is what happened, and every file it rewrites stays readable |
 
 ### v1.4.1 — containment and path safety
 
@@ -196,29 +197,32 @@ Regression coverage:
   bounded teardown with work outstanding.
 - [x] Viewport math for a list taller than the terminal.
 
-### v1.6.1 — correctness and hygiene (in progress)
+### v1.6.1 — correctness and hygiene
 
-Track A of [`PLAN.md`](PLAN.md), one phase per session.
+Track A of [`PLAN.md`](PLAN.md), one phase per session. No new features: five
+sessions of making the output honest, the input forgiving, the files fastf
+rewrites readable, the server boundary explicit, and the source free of code
+nothing calls.
 
-- [x] Phase 1: honest output and honest errors — a `config.toml` that does not
+- [x] Phase 1 ([#7](https://github.com/cristocola/fast-folder/pull/7)): honest output and honest errors — a `config.toml` that does not
   parse stops every command instead of being replaced by defaults that resolve a
   different library; real creates and applies no longer print the dry-run
   header; the Library bases menu commits against configuration reloaded under
   the lock; the second Ctrl-C restores the cursor.
-- [x] Phase 2: flags anywhere on the line, and prompts that know when there is
+- [x] Phase 2 ([#8](https://github.com/cristocola/fast-folder/pull/8)): flags anywhere on the line, and prompts that know when there is
   no terminal — the trailing-argument classifier reads each subcommand's flag
   list from clap, so `register --rename` after the path renames instead of
   warning, and an unknown flag is refused rather than ignored; prompt
   availability is probed on stderr, where prompts are drawn, and every prompt
   that cannot run says which flag replaces it.
-- [x] Phase 3: files fastf writes must stay readable — frontmatter and template
+- [x] Phase 3 ([#9](https://github.com/cristocola/fast-folder/pull/9)): files fastf writes must stay readable — frontmatter and template
   keys fastf does not recognise survive every mutation in place instead of being
   deleted; a metadata file that cannot be serialized fails the create rather than
   being written unreadable; template manifests are written atomically; a dropped
   counter write and a rename that cannot be rolled back both say so; the
   source-cleanup failpoint can fire again, and `reconcile_unlocked` admits it
   does not hold the lock.
-- [x] Phase 4: browser-server hardening, CI gates that match the docs, and the
+- [x] Phase 4 ([#10](https://github.com/cristocola/fast-folder/pull/10)): browser-server hardening, CI gates that match the docs, and the
   release procedure in git — an absurd `Content-Length` is refused instead of
   panicking the connection thread outside `catch_unwind`, and a malformed
   request is answered rather than dropped; `/api/open` and `/api/project` resolve
@@ -226,7 +230,7 @@ Track A of [`PLAN.md`](PLAN.md), one phase per session.
   every response carries a content security policy; CI runs `node --check` and
   lints Windows code, and the Release workflow refuses a tag that does not match
   `Cargo.toml`; the release routine is tracked in the repository.
-- [x] Phase 5: dead code out, stale gotchas corrected — the superseded move
+- [x] Phase 5 ([#11](https://github.com/cristocola/fast-folder/pull/11)): dead code out, stale gotchas corrected — the superseded move
   engine in `assets` and four uncalled move wrappers are deleted, the pre-v2
   marker writers are gone (the tests that need those bytes plant them), the
   duplicated path checks are one pair in `util::paths`, and every mutating

@@ -40,7 +40,7 @@ pub struct SearchArgs {
 }
 
 pub fn run(args: SearchArgs) -> Result<()> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
 
     if args.terms.is_empty() {
         anyhow::bail!(

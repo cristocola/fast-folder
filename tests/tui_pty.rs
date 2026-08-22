@@ -343,3 +343,199 @@ fn projects_browser_fills_in_sizes_without_any_input() {
     );
     assert!(out.contains("Goodbye."));
 }
+
+/// A `config.toml` that exists but does not parse changes which directory is
+/// the library, so the menu that used to open on the home directory — with the
+/// real projects nowhere in sight — has to refuse instead.
+#[test]
+fn a_corrupt_config_stops_the_menu() {
+    let sb = Sandbox::new();
+    let config_path = sb.install.join("config.toml");
+    let mut raw = fs::read_to_string(&config_path).unwrap();
+    raw.push_str("\nthis is = not [valid toml\n");
+    fs::write(&config_path, raw).unwrap();
+
+    let (out, code) = launch(&sb, pty::Script::new().pause(600).build());
+
+    assert_eq!(code, 1, "an unreadable config must stop the menu:\n{out}");
+    assert!(
+        out.contains("config.toml") && out.contains("hint:"),
+        "the failure must name the file and say how to recover:\n{out}"
+    );
+    assert!(
+        !out.contains("What would you like to do?"),
+        "no menu may open over a library fastf could not resolve:\n{out}"
+    );
+}
+
+/// Run the menu on its own thread, so the test can drive a second fastf process
+/// while one of its prompts is open.
+fn launch_detached(
+    sb: &Sandbox,
+    script: Vec<pty::Keystroke>,
+) -> std::thread::JoinHandle<(String, i32)> {
+    let install = sb.install.clone();
+    let home = sb.tmp.path().to_path_buf();
+    std::thread::spawn(move || {
+        pty::run(
+            common::FASTF,
+            &[],
+            &[("FASTF_INSTALL_DIR", install.as_path()), ("HOME", &home)],
+            &script,
+            DEADLINE,
+        )
+    })
+}
+
+/// Settings held a loaded `Config` across the prompt and then wrote the whole
+/// `bases` list back from that stale copy, silently reverting anything the
+/// browser UI or another `fastf config set` had written meanwhile. The rule is
+/// the one `edit_postcreate_commands` already follows: prompt first, then lock,
+/// then reload.
+///
+/// The pty runs on its own thread so the test can write the config from a
+/// second process while the "Base directory to add" prompt is open.
+#[test]
+fn adding_a_base_does_not_revert_a_concurrent_edit() {
+    let sb = Sandbox::new();
+    let typed = sb.tmp.path().join("typed_base");
+    let concurrent = sb.tmp.path().join("concurrent_base");
+    fs::create_dir_all(&typed).unwrap();
+    fs::create_dir_all(&concurrent).unwrap();
+
+    let script = pty::Script::new()
+        .down(MENU_SETTINGS)
+        .enter()
+        .down(2) // Settings → Library bases
+        .enter()
+        .enter() // → Add a base directory
+        // The prompt is open from here. Everything the menu writes after this
+        // point must be computed from a config reloaded under the lock.
+        .pause(2500)
+        .line(&typed.display().to_string())
+        .pause(1200)
+        .ctrl_c()
+        .build();
+    let driver = launch_detached(&sb, script);
+
+    // Well inside the window: the menu snapshots its config on entering the
+    // submenu (~3.4s) and writes after the answer (~6.5s).
+    std::thread::sleep(Duration::from_millis(5000));
+    let out = sb.run(&["config", "set", "bases", &concurrent.display().to_string()]);
+    assert!(
+        out.status.success(),
+        "concurrent config set failed: {out:?}"
+    );
+
+    let (transcript, _code) = driver.join().expect("pty thread");
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    assert!(
+        config.contains(&typed.display().to_string()),
+        "the base typed into the menu is missing:\n{config}\n--- transcript ---\n{transcript}"
+    );
+    assert!(
+        config.contains(&concurrent.display().to_string()),
+        "the concurrently added base was reverted:\n{config}\n--- transcript ---\n{transcript}"
+    );
+}
+
+/// The second Ctrl-C exits straight from the signal handler, bypassing `main`'s
+/// error path — so the shell got its terminal back with the cursor still
+/// hidden. The template's post-create command ignores SIGINT (and `SIG_IGN` is
+/// inherited across exec), which keeps fastf blocked long enough for the second
+/// interrupt to land on the path under test.
+#[test]
+fn a_second_ctrl_c_restores_the_cursor() {
+    let sb = Sandbox::new();
+    let dir = sb.install.join("templates").join("slow");
+    fs::create_dir_all(dir.join("files")).unwrap();
+    fs::write(
+        dir.join("template.yaml"),
+        "name: Slow\nslug: slow\nnaming_pattern: \"{id}_{name}\"\n\
+         id:\n  prefix: S\n  digits: 4\n\
+         variables:\n  - slug: name\n    label: Name\n    type: text\n\
+         \x20   required: true\n    transform: none\n\
+         post_create:\n  commands:\n    - \"trap '' INT; sleep 5\"\n",
+    )
+    .unwrap();
+
+    let script = pty::Script::new()
+        .pause(700) // the project is created; the command is now sleeping
+        .ctrl_c() // first: cooperative, sets the flag
+        .ctrl_c() // second: stop being polite and exit
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &["new", "slow", "--name=Slow", "--yes"],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+
+    assert_eq!(code, 130, "the second interrupt should exit 130:\n{out}");
+    assert!(
+        out.contains("\x1b[?25h"),
+        "the cursor must be shown again, or the user's shell is left blind:\n{out}"
+    );
+}
+
+/// The other half of the same rule: the item says "Remove <base>", so that base
+/// is what gets removed. Removing by the position it held in the list the user
+/// saw would, once anything else had edited the list, both delete the wrong
+/// entry and write the rest of the stale snapshot back over it.
+#[test]
+fn removing_a_base_leaves_the_rest_of_a_concurrent_edit_alone() {
+    let sb = Sandbox::new();
+    let (gone, kept, added) = (
+        sb.tmp.path().join("base_a"),
+        sb.tmp.path().join("base_b"),
+        sb.tmp.path().join("base_c"),
+    );
+    for dir in [&gone, &kept, &added] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let list = |dirs: [&PathBuf; 2]| {
+        dirs.iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    sb.ok(&["config", "set", "bases", &list([&gone, &kept])]);
+
+    let script = pty::Script::new()
+        .down(MENU_SETTINGS)
+        .enter()
+        .down(2) // Settings → Library bases
+        .enter() // the list the user sees is snapshotted here
+        .down(1) // → Remove <base_a>
+        .pause(2500)
+        .enter()
+        .pause(1200)
+        .ctrl_c()
+        .build();
+    let driver = launch_detached(&sb, script);
+
+    // Meanwhile, elsewhere: base_a goes away and base_c arrives, so every
+    // position in the menu's snapshot now means something different.
+    std::thread::sleep(Duration::from_millis(5000));
+    let out = sb.run(&["config", "set", "bases", &list([&kept, &added])]);
+    assert!(
+        out.status.success(),
+        "concurrent config set failed: {out:?}"
+    );
+
+    let (transcript, _code) = driver.join().expect("pty thread");
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    let shows = |dir: &PathBuf| config.contains(&dir.display().to_string());
+    assert!(
+        !shows(&gone),
+        "the base the user pointed at is still there:\n{config}\n--- transcript ---\n{transcript}"
+    );
+    assert!(
+        shows(&kept) && shows(&added),
+        "removing one base rewrote the list from the stale snapshot:\n{config}\n--- transcript ---\n{transcript}"
+    );
+}

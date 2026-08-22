@@ -338,3 +338,143 @@ fn from_folder_force_replaces_the_bundled_files() {
         "--force must replace the template, not merge into it"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Honest errors, honest previews
+// ---------------------------------------------------------------------------
+
+/// Break `config.toml` so every command has to decide what a config it cannot
+/// read means.
+fn corrupt_the_config(sb: &Sandbox) -> std::path::PathBuf {
+    let path = sb.install.join("config.toml");
+    let mut raw = fs::read_to_string(&path).expect("config.toml written by Sandbox::new");
+    raw.push_str("\nthis is = not [valid toml\n");
+    fs::write(&path, raw).unwrap();
+    path
+}
+
+/// A `config.toml` that exists but does not parse used to be swallowed by
+/// twenty `Config::load().unwrap_or_default()` calls, which silently changed
+/// which directory is the library: `recent --plain` printed "No projects yet"
+/// and exited 0 while the real projects sat in the configured base.
+///
+/// Falling back to defaults is not resilience when the fallback answers a
+/// different question. Every command stops, names the file, and says how to
+/// get out of it.
+#[test]
+fn a_corrupt_config_stops_every_command() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "proj", "ID0001");
+    let config_path = corrupt_the_config(&sb);
+    let shown = config_path.display().to_string();
+
+    for args in [
+        vec!["recent", "--plain"],
+        vec!["search", "proj", "--plain"],
+        vec!["tag", "list", "ID0001"],
+        vec!["notes", "ID0001"],
+        vec!["reconcile"],
+    ] {
+        let out = sb.run(&args);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let cmd = args.join(" ");
+        assert!(
+            !out.status.success(),
+            "`fastf {cmd}` must fail on an unreadable config, got {out:?}"
+        );
+        assert!(
+            stderr.contains(&shown) && stderr.contains("parsing"),
+            "`fastf {cmd}` must name the file it could not parse:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("hint:") && stderr.contains("delete it"),
+            "`fastf {cmd}` must say how to recover:\n{stderr}"
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "`fastf {cmd}` must not report anything about a library it could not read:\n{stdout}"
+        );
+    }
+}
+
+/// The cursor restore is guarded by `is_terminal` on each stream, because
+/// `Term::show_cursor` emits its escape whatever it is writing to — an
+/// unguarded call put a literal `\x1b[?25h` into the output a script reads.
+/// Moving the restore into the interrupt path must not lose that guard.
+#[test]
+fn a_piped_failure_leaks_no_terminal_escapes() {
+    let sb = Sandbox::new();
+    corrupt_the_config(&sb);
+
+    let out = sb.run(&["recent", "--plain"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        !stdout.contains("\x1b[?25h") && !stderr.contains("\x1b[?25h"),
+        "a piped failure must not emit terminal escapes:\nstdout: {stdout:?}\nstderr: {stderr:?}"
+    );
+}
+
+/// `fastf new` printed the same header for a preview and for the real thing:
+/// "Preview · dry run — nothing will be created", immediately followed by the
+/// project it had just created. A header that contradicts the command is worse
+/// than no header.
+#[test]
+fn a_real_create_is_not_labelled_a_dry_run() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let committed = sb.ok(&["new", "race", "--name=Committed", "--yes"]);
+    assert!(
+        !committed.contains("nothing will be created"),
+        "a create that creates must not claim otherwise:\n{committed}"
+    );
+    assert!(
+        committed.contains("Preview"),
+        "the plan is still shown before the commit:\n{committed}"
+    );
+    assert!(
+        sb.base.join("R0001_Committed").is_dir(),
+        "the project should exist: {:?}",
+        ids_in(&sb.base)
+    );
+
+    let previewed = sb.ok(&["new", "race", "--name=Previewed", "--dry-run"]);
+    assert!(
+        previewed.contains("nothing will be created"),
+        "a dry run must say so:\n{previewed}"
+    );
+    assert!(
+        !sb.base.join("R0002_Previewed").exists(),
+        "a dry run must write nothing"
+    );
+}
+
+/// Same defect on the other printer: `apply` announced a dry run and then
+/// applied the template.
+#[test]
+fn a_real_apply_is_not_labelled_a_dry_run() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let target = sb.tmp.path().join("existing");
+    fs::create_dir_all(&target).unwrap();
+    let target = target.display().to_string();
+
+    let previewed = sb.ok(&["apply", "race", &target, "--name=X", "--dry-run"]);
+    assert!(
+        previewed.contains("nothing will be created"),
+        "a dry run must say so:\n{previewed}"
+    );
+
+    let committed = sb.ok(&["apply", "race", &target, "--name=X", "--yes"]);
+    assert!(
+        !committed.contains("nothing will be created"),
+        "an apply that applies must not claim otherwise:\n{committed}"
+    );
+    assert!(
+        committed.contains("Preview") && committed.contains("Template applied"),
+        "the plan is still shown before the commit:\n{committed}"
+    );
+}

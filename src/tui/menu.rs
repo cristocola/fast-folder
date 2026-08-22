@@ -50,7 +50,7 @@ fn contain(result: Result<()>) -> Result<()> {
 
 pub fn run() -> Result<()> {
     // Banner is shown once based on the first config load. Honors show_banner.
-    let initial = Config::load().unwrap_or_default();
+    let initial = Config::load()?;
     if initial.show_banner {
         println!();
         println!("{}", BANNER.cyan().bold());
@@ -63,7 +63,7 @@ pub fn run() -> Result<()> {
 
     loop {
         // Reload config each iteration so changes in settings are reflected immediately
-        let cfg = Config::load().unwrap_or_default();
+        let cfg = Config::load()?;
         let base = cfg.resolve_base_dir();
 
         let parent = base
@@ -198,7 +198,7 @@ fn menu_create() -> Result<()> {
 /// be created in. Returns `None` (= config default) when there's only one base
 /// or the first (default) entry is chosen.
 fn pick_base_interactively() -> Result<Option<String>> {
-    let cfg = Config::load().unwrap_or_default();
+    let cfg = Config::load()?;
     let bases: Vec<std::path::PathBuf> = cfg
         .effective_bases()
         .into_iter()
@@ -233,16 +233,13 @@ fn pick_base_interactively() -> Result<Option<String>> {
 }
 
 fn menu_projects() -> Result<()> {
-    let page_size = Config::load()
-        .unwrap_or_default()
-        .recent_default_limit
-        .max(1);
+    let page_size = Config::load()?.recent_default_limit.max(1);
     recent::run_paged_browser(
         page_size,
         "No projects yet — create one with `fastf new`.",
         || {
-            let cfg = Config::load().unwrap_or_default();
-            library::discover(&cfg)
+            let cfg = Config::load()?;
+            Ok(library::discover(&cfg))
         },
     )?;
     println!();
@@ -260,13 +257,10 @@ fn menu_search() -> Result<()> {
     }
     let terms: Vec<String> = query.split_whitespace().map(|s| s.to_string()).collect();
     let predicates = query::parse(&terms);
-    let page_size = Config::load()
-        .unwrap_or_default()
-        .recent_default_limit
-        .max(1);
+    let page_size = Config::load()?.recent_default_limit.max(1);
     recent::run_paged_browser(page_size, "No projects match that query.", || {
-        let cfg = Config::load().unwrap_or_default();
-        crate::cli::search::matching_projects(&cfg, &predicates)
+        let cfg = Config::load()?;
+        Ok(crate::cli::search::matching_projects(&cfg, &predicates))
     })?;
     println!();
     Ok(())
@@ -578,7 +572,7 @@ fn menu_settings_basics() -> Result<()> {
 
 fn menu_settings_workflow() -> Result<()> {
     loop {
-        let cfg = Config::load().unwrap_or_default();
+        let cfg = Config::load()?;
         let items = [
             label_toggle(
                 "\"Open project folder?\" prompt after create",
@@ -634,9 +628,16 @@ fn menu_settings_workflow() -> Result<()> {
 
 /// Edit the list of extra base directories the project library indexes (beyond
 /// `base_dir`). An absent/unmounted base is simply skipped at scan time.
+///
+/// **Prompt first, then lock, then reload** — the same rule
+/// [`edit_postcreate_commands`] follows. This used to rebuild the whole `bases`
+/// list from the copy loaded before the prompt, so a base added by the browser
+/// UI or another `fastf config set` while the prompt sat open was silently
+/// reverted. Removal matches on the base's text rather than the position it had
+/// in the list the user saw, for the same reason.
 fn menu_settings_bases() -> Result<()> {
     loop {
-        let cfg = Config::load().unwrap_or_default();
+        let cfg = Config::load()?;
         println!();
         if cfg.bases.is_empty() {
             println!(
@@ -663,33 +664,22 @@ fn menu_settings_bases() -> Result<()> {
             .default(0)
             .interact()?;
 
+        if choice == items.len() - 1 {
+            break;
+        }
+
+        // What the user asked for, decided entirely outside the lock.
         let outcome = if choice == 0 {
             let val: String = Input::new()
                 .with_prompt("Base directory to add (absolute path)")
                 .allow_empty(true)
                 .interact_text()?;
-            let val = val.trim();
-            if val.is_empty() {
-                Ok(())
-            } else {
-                let mut bases = cfg.bases.clone();
-                if !bases.iter().any(|b| b == val) {
-                    bases.push(val.to_string());
-                }
-                // `config::set` validates each entry (absolute, `~` expanded)
-                // and only warns about one that is merely absent — an unmounted
-                // drive is a legitimate base.
-                config::set("bases", &bases.join(","))
-            }
-        } else if choice == items.len() - 1 {
-            break;
+            add_base(val.trim())
         } else {
-            let mut bases = cfg.bases.clone();
-            let idx = choice - 1;
-            if idx < bases.len() {
-                bases.remove(idx);
-            }
-            config::set("bases", &bases.join(","))
+            // The label carries the text, never the index: the list may have
+            // changed while the menu was open, and removing by position would
+            // then delete a base the user never pointed at.
+            remove_base(&cfg.bases[choice - 1])
         };
         contain(outcome)?;
         println!();
@@ -697,9 +687,57 @@ fn menu_settings_bases() -> Result<()> {
     Ok(())
 }
 
+/// Append one extra base, validated at the prompt and committed against the
+/// configuration as it is under the lock.
+fn add_base(raw: &str) -> Result<()> {
+    if raw.is_empty() {
+        return Ok(());
+    }
+    let entry = config::normalize_base_entry(raw)?;
+    let mut already = false;
+    crate::core::operations::update_config(|fresh| {
+        if fresh.bases.iter().any(|b| b == &entry) {
+            already = true;
+        } else {
+            fresh.bases.push(entry.clone());
+        }
+        Ok(())
+    })?;
+    if already {
+        println!("  {} {} is already indexed.", "·".dimmed(), entry);
+    } else {
+        println!("  {} added {}", "✓".green(), entry);
+    }
+    Ok(())
+}
+
+/// Drop one extra base by text, reporting rather than guessing when it has
+/// already gone elsewhere.
+fn remove_base(entry: &str) -> Result<()> {
+    let target = entry.to_string();
+    let mut removed = false;
+    crate::core::operations::update_config(|fresh| {
+        if let Some(position) = fresh.bases.iter().position(|b| b == &target) {
+            fresh.bases.remove(position);
+            removed = true;
+        }
+        Ok(())
+    })?;
+    if removed {
+        println!("  {} removed {}", "✓".green(), entry);
+    } else {
+        println!(
+            "  {} {} had already been removed elsewhere — left alone.",
+            "note:".yellow(),
+            entry
+        );
+    }
+    Ok(())
+}
+
 fn menu_settings_recent() -> Result<()> {
     loop {
-        let cfg = Config::load().unwrap_or_default();
+        let cfg = Config::load()?;
         let items = [
             format!("Projects page size  [{}]", cfg.recent_default_limit),
             "Back".to_string(),
@@ -729,7 +767,7 @@ fn menu_settings_recent() -> Result<()> {
 
 fn menu_settings_postcreate() -> Result<()> {
     loop {
-        let cfg = Config::load().unwrap_or_default();
+        let cfg = Config::load()?;
         let pc = &cfg.post_create;
         let items = [
             label_toggle("Run `git init`", pc.git_init),

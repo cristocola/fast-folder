@@ -14,7 +14,7 @@ use anyhow::Result;
 use colored::Colorize;
 
 pub fn run() -> Result<()> {
-    let report = crate::core::operations::reconcile();
+    let report = crate::core::operations::reconcile()?;
 
     if report.is_empty() {
         println!(

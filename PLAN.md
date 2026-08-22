@@ -65,15 +65,17 @@ cargo check --all-targets --target x86_64-pc-windows-gnu   # if the target is in
 **Out of scope.** Non-TTY prompt guards (Phase 2), anything in `core/project.rs` beyond the header parameter (Phase 12 moves rendering out of core).
 
 **Steps.**
-- [ ] Add `tests/cli_surface.rs` cases first: with a corrupt `config.toml`, `recent --plain`, `search x --plain`, `tag list <id>`, `notes <id>`, and `reconcile` exit 1 with the config path on stderr and nothing on stdout. Add a `tests/tui_pty.rs` case: the TUI prints the parse error and exits 1 instead of showing a menu.
-- [ ] Replace every `Config::load().unwrap_or_default()` (and any `.ok()`/`.unwrap_or(...)` on `Config::load`) with `?`, including inside the browser loader closures in `menu.rs` and `recent.rs`. Audit `src/ui/mod.rs` for the same pattern and make it a 500 with the message, not defaults.
-- [ ] Add the one-line hint in `main.rs`'s error printer.
-- [ ] `tests/cli_surface.rs`: `new general --name=x --yes` output does not contain "nothing will be created"; `new ... --dry-run` does; same pair for `apply`. Then add `PreviewKind` to both printers and fix the callers (`cli/new.rs`, `cli/apply.rs`, `tui/menu.rs`).
-- [ ] Rewrite `menu_settings_bases` as prompt, then `operations::update_config`, with text-based removal. Add a pty test: add a base, and concurrently (between prompt and Enter) `fastf config set bases ...` from a second process; both entries survive.
-- [ ] Cursor restore on the second Ctrl-C path; keep the `is_terminal` guard (verify with `cat -v` of a piped failure that no `\x1b[?25h` leaks).
-- [ ] Docs: `docs/cli.md` gains one sentence under config: a config that fails to parse stops every command until fixed. `CLAUDE.md`: replace the "Prompt first, then lock, then reload" example list with both functions.
+- [x] Add `tests/cli_surface.rs` cases first: with a corrupt `config.toml`, `recent --plain`, `search x --plain`, `tag list <id>`, `notes <id>`, and `reconcile` exit 1 with the config path on stderr and nothing on stdout. Add a `tests/tui_pty.rs` case: the TUI prints the parse error and exits 1 instead of showing a menu.
+- [x] Replace every `Config::load().unwrap_or_default()` (and any `.ok()`/`.unwrap_or(...)` on `Config::load`) with `?`, including inside the browser loader closures in `menu.rs` and `recent.rs`. Audit `src/ui/mod.rs` for the same pattern and make it a 500 with the message, not defaults.
+- [x] Add the one-line hint in `main.rs`'s error printer.
+- [x] `tests/cli_surface.rs`: `new general --name=x --yes` output does not contain "nothing will be created"; `new ... --dry-run` does; same pair for `apply`. Then add `PreviewKind` to both printers and fix the callers (`cli/new.rs`, `cli/apply.rs`, `tui/menu.rs`).
+- [x] Rewrite `menu_settings_bases` as prompt, then `operations::update_config`, with text-based removal. Add a pty test: add a base, and concurrently (between prompt and Enter) `fastf config set bases ...` from a second process; both entries survive.
+- [x] Cursor restore on the second Ctrl-C path; keep the `is_terminal` guard (verify with `cat -v` of a piped failure that no `\x1b[?25h` leaks).
+- [x] Docs: `docs/cli.md` gains one sentence under config: a config that fails to parse stops every command until fixed. `CLAUDE.md`: replace the "Prompt first, then lock, then reload" example list with both functions.
 
 **Acceptance.** All gates green. The five corrupt-config cases fail loudly. No real create or apply prints "dry run". A concurrent config write during the bases prompt is not reverted.
+
+**Notes.** The `src/ui` audit found no `unwrap_or_default` at all — all twelve loads were already `?`. What was wrong there was the status: a config parse failure was reported as 400. `ui::load_config` now tags it with a new `SERVER_ERROR_PREFIX` so `status_for` answers 500, asserted the way the suite already asserts a status (on the message prefix). The second-Ctrl-C path is driven by a template whose post-create command ignores SIGINT, which keeps fastf blocked long enough for the second signal to land there. Removal by text got its own pty case as well (`removing_a_base_leaves_the_rest_of_a_concurrent_edit_alone`), since "the item carries the text, not an index" is only observable once something else has edited the list; both concurrency cases were watched failing against the old code. `tui/menu.rs` needed no `PreviewKind` change: its two-pass apply calls `apply::run` with `dry_run` true and then false, so it already gets the dry-run header on pass one and the plain one on pass two — both are the paths `a_real_apply_is_not_labelled_a_dry_run` covers.
 
 ## Phase 2: Flags anywhere on the line, and prompts that know when there is no terminal
 
@@ -513,9 +515,11 @@ Other:
 - `size_scan::request` has an O(n²) `contains` over the queue; bounded by page size.
 - `docs/` annotate features as "v1.5.0" but no such tag exists (tags go v1.4.0 → v1.5.1).
 - The action menu offers "Move" only when another base is mounted; after Phase 9 an `Unresponsive` base could offer a "retry probe" item.
+- Phase 12's guard ("only `live_select.rs` names `dialoguer` under `src/util`") must also allow `src/util/interrupt.rs:restore_terminal`, whose non-unix branch uses `dialoguer::console::Term` for the console cursor API (the unix branch is raw `isatty`/`write` because it runs in a signal handler). Converting the Windows branch to `GetConsoleCursorInfo`/`SetConsoleCursorInfo` FFI would remove the exception; it was not worth an untestable Windows change in Phase 1.
 
 ## Phase log
 
 | Phase | Date | PR | Notes for later phases |
 |---|---|---|---|
 | 0 | 2026-08-21 | #6 (`7bccde5`) | CLAUDE.md trim and tests/CLAUDE.md landed; Phase 17 can assume both. |
+| 1 | 2026-08-21 | [#7](https://github.com/cristocola/fast-folder/pull/7) | `Config::load()` propagates everywhere; `PreviewKind` on both printers; `cli::config::normalize_base_entry` is the shared base validator; `util::interrupt::restore_terminal` is the one cursor restore; `operations::reconcile` and `run_paged_browser`'s loader now return `Result`. |

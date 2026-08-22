@@ -62,12 +62,61 @@ pub fn reset() {
     INTERRUPTED.store(false, Ordering::Relaxed);
 }
 
-/// Record the interrupt. Async-signal-safe: a single relaxed atomic store and
-/// nothing else — no allocation, no locks, no I/O.
+/// Show the terminal cursor again, on whichever standard stream is a terminal.
+///
+/// Every `dialoguer` prompt hides the cursor and shows it again on the way out
+/// — but not when it returns an error, and not when a menu unwinds past it.
+/// Left alone, leaving fastf that way hands the shell back an invisible cursor
+/// until the user thinks to run `tput cnorm`.
+///
+/// Guarded per stream: prompts draw on stderr, output lands on stdout, and
+/// either can be the terminal. Without the guard the escape lands in whatever
+/// a script is reading, which is a worse bug than the one being fixed.
+///
+/// On unix this is reached from inside the SIGINT handler, so it is written to
+/// be async-signal-safe: `isatty` and `write` are, while `Term::show_cursor`
+/// takes std's stream lock and can panic re-entering a `RefCell` the
+/// interrupted thread already holds. The bytes are exactly what `console`
+/// writes on unix, so no output changes. Elsewhere the handler runs on its own
+/// thread — Windows spawns one for a console control event — so the ordinary
+/// path is safe there, and the console API is what a legacy conhost needs.
+pub fn restore_terminal() {
+    #[cfg(unix)]
+    {
+        const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
+        for fd in [libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+            // SAFETY: both calls are async-signal-safe and touch only a
+            // descriptor the process already owns.
+            unsafe {
+                if libc::isatty(fd) == 1 {
+                    // Nothing to do about a failed write on the way out.
+                    let _ = libc::write(fd, SHOW_CURSOR.as_ptr().cast(), SHOW_CURSOR.len());
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        use dialoguer::console::Term;
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            let _ = Term::stdout().show_cursor();
+        }
+        if std::io::stderr().is_terminal() {
+            let _ = Term::stderr().show_cursor();
+        }
+    }
+}
+
+/// Record the interrupt. Async-signal-safe: a single relaxed atomic store, and
+/// on the second signal the cursor restore, which is written for this context.
 fn flag() {
     // On the second interrupt, stop being polite. If the first one did not get
     // us out promptly the user should not have to reach for Task Manager.
     if INTERRUPTED.swap(true, Ordering::Relaxed) {
+        // `main`'s error path never runs from here, so the cursor has to be
+        // restored before leaving or the shell is left blind.
+        restore_terminal();
         std::process::exit(130); // 128 + SIGINT, the conventional shell code
     }
 }

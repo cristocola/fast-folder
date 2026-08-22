@@ -120,14 +120,33 @@ pub fn plan(
     })
 }
 
-/// Print a dry-run preview tree without creating anything.
-pub fn print_dry_run(plan: &ProjectPlan, template: &Template, config: &Config) {
-    println!(
-        "\n{}",
-        "Preview  ·  dry run — nothing will be created"
-            .yellow()
-            .bold()
-    );
+/// Which side of the commit a preview is being printed on.
+///
+/// Both printers are called twice: once for `--dry-run`, which writes nothing,
+/// and once immediately before the real thing. They used to print the same
+/// header either way, so every real create and apply announced that nothing
+/// would be created and then created it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewKind {
+    /// `--dry-run`: this is the whole command, and nothing is written.
+    DryRun,
+    /// The plan about to be committed (the confirmation, if any, comes next).
+    BeforeCommit,
+}
+
+impl PreviewKind {
+    fn header(self) -> &'static str {
+        match self {
+            PreviewKind::DryRun => "Preview  ·  dry run — nothing will be created",
+            PreviewKind::BeforeCommit => "Preview",
+        }
+    }
+}
+
+/// Print the planned project tree. Creates nothing either way — see
+/// [`PreviewKind`] for what the header promises.
+pub fn print_dry_run(plan: &ProjectPlan, template: &Template, config: &Config, kind: PreviewKind) {
+    println!("\n{}", kind.header().yellow().bold());
     println!();
 
     // Tree with a 2-space indent for visual breathing room
@@ -771,14 +790,9 @@ pub fn apply(
     Ok(())
 }
 
-/// Render an `apply` plan as a human-readable dry-run report.
-pub fn print_apply_plan(actions: &[ApplyAction]) {
-    println!(
-        "\n{}",
-        "Preview  ·  dry run — nothing will be created"
-            .yellow()
-            .bold()
-    );
+/// Render an `apply` plan as a human-readable report. See [`PreviewKind`].
+pub fn print_apply_plan(actions: &[ApplyAction], kind: PreviewKind) {
+    println!("\n{}", kind.header().yellow().bold());
     println!();
     let mut creates = 0usize;
     let mut skips = 0usize;

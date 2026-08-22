@@ -264,6 +264,12 @@ fastf config set post_create.print_path true
 
 Run `fastf config set --help` for the complete key list with descriptions.
 
+A `config.toml` that exists but cannot be parsed stops every command, including
+the interactive menu, and names the file. fastf will not fall back to defaults
+there: the config decides which folders are your library, so a default would
+answer questions about a different one. Fix the file, or delete it to start over
+with defaults.
+
 ## ID counter
 
 ```bash

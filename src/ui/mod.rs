@@ -382,6 +382,22 @@ fn handle_connection_with(mut stream: TcpStream, timeout: Duration) -> Result<()
 /// [`handle_connection`] can answer 500 rather than 400.
 const PANIC_ERROR_PREFIX: &str = "internal error:";
 
+/// Prefix marking a failure of this machine's own state rather than of the
+/// request — an unreadable `config.toml` is not something the browser asked for
+/// wrongly, and reporting it as a bad request sends the reader looking in the
+/// wrong place.
+const SERVER_ERROR_PREFIX: &str = "server error:";
+
+/// The one way the request layer reads configuration.
+///
+/// Never falls back to defaults. A config that exists but does not parse
+/// resolves a different library than the user's, so answering from defaults
+/// would describe someone else's projects with a 200.
+fn load_config() -> Result<Config> {
+    Config::load()
+        .with_context(|| format!("{SERVER_ERROR_PREFIX} configuration could not be loaded"))
+}
+
 /// Run [`route_request`], turning a panic into a clean 500 instead of letting
 /// the connection thread unwind.
 ///
@@ -410,7 +426,7 @@ fn status_for(message: &str) -> u16 {
         404
     } else if message.starts_with("forbidden:") {
         403
-    } else if message.starts_with(PANIC_ERROR_PREFIX) {
+    } else if message.starts_with(PANIC_ERROR_PREFIX) || message.starts_with(SERVER_ERROR_PREFIX) {
         500
     } else {
         400
@@ -450,7 +466,7 @@ pub fn route_request(method: &str, route: &str, body: &[u8]) -> Result<Response>
             let _guard = lock_writes()?;
             save_settings(value)?;
             Ok(Response::Json(
-                json!({"ok": true, "config": Config::load()?}),
+                json!({"ok": true, "config": load_config()?}),
             ))
         }
         ("POST", "/api/base/init") => {
@@ -634,7 +650,7 @@ fn lock_writes() -> Result<std::sync::MutexGuard<'static, ()>> {
 }
 
 fn load_state() -> Result<Value> {
-    let config = Config::load()?;
+    let config = load_config()?;
     let mut templates = template::load_all()?;
     templates.sort_by(|a, b| {
         let a_default = a.slug == "gen";
@@ -698,7 +714,7 @@ fn load_state() -> Result<Value> {
 /// `POST /api/reconcile` — recover scoped v2 operations and report pre-v2
 /// markers without parsing them or mutating any related path.
 fn reconcile_provisioning() -> Result<Value> {
-    let report = crate::core::operations::reconcile();
+    let report = crate::core::operations::reconcile()?;
     Ok(json!({ "ok": true, "report": report }))
 }
 
@@ -707,7 +723,7 @@ fn configured_plan(
 ) -> Result<(Template, Config, Counters, project::ProjectPlan)> {
     let template = template::find_by_slug(&request.template)?;
     validate_variables(&template, &request.variables)?;
-    let mut config = Config::load()?;
+    let mut config = load_config()?;
     if let Some(base_dir) = request
         .base_dir
         .as_ref()
@@ -1339,7 +1355,7 @@ fn project_json(project: &Project, metadata: &Option<Metadata>) -> Value {
 /// `POST /api/search` — run the same query language as `fastf search`.
 /// Empty terms returns every project (newest first), matching the plain list.
 fn search_projects(request: SearchRequest) -> Result<Value> {
-    let config = Config::load()?;
+    let config = load_config()?;
     let predicates = query::parse(&request.terms);
 
     let mut projects = Vec::new();
@@ -1361,7 +1377,7 @@ fn search_projects(request: SearchRequest) -> Result<Value> {
 
 /// `GET /api/project?path=<abs>` — full metadata + journal for one project.
 fn project_detail(path: &str) -> Result<Value> {
-    let config = Config::load()?;
+    let config = load_config()?;
     let root = Path::new(path);
     let metadata = project_info::read_metadata(root).ok().flatten();
     let journal = project_info::read_journal_entries(root)
@@ -1399,7 +1415,7 @@ fn project_detail(path: &str) -> Result<Value> {
 /// project disappears after discovery, `size_bytes` is null (`unavailable` to
 /// the frontend) rather than a misleading partial sum.
 fn project_size(path: &str) -> Result<Value> {
-    let config = Config::load()?;
+    let config = load_config()?;
     let project = find_project(&config, path)?;
     let size_bytes = crate::util::tree_size::directory_size(&project.path);
     Ok(json!({
@@ -1426,7 +1442,7 @@ fn find_project(config: &Config, path: &str) -> Result<library::Project> {
 /// `POST /api/project/unregister` — remove the project's PROJECT_INFO.md so it
 /// stops being a project; the folder and its files are untouched.
 fn project_unregister(request: UnregisterRequest) -> Result<Value> {
-    let config = Config::load()?;
+    let config = load_config()?;
     let project = find_project(&config, &request.path)?;
     crate::core::operations::unregister(&project)?;
     Ok(json!({"ok": true}))
@@ -1436,7 +1452,7 @@ fn project_unregister(request: UnregisterRequest) -> Result<Value> {
 /// typed confirmation is re-checked server-side (`confirm_name` must equal the
 /// folder name) and, like move, the operation is restricted to configured bases.
 fn project_delete(request: DeleteProjectRequest) -> Result<Value> {
-    let config = Config::load()?;
+    let config = load_config()?;
     let project = find_project(&config, &request.path)?;
     if request.confirm_name.trim() != project.name {
         bail!(
@@ -1457,14 +1473,14 @@ fn project_delete(request: DeleteProjectRequest) -> Result<Value> {
 
 /// `POST /api/project/rename` — rename the project folder in place.
 fn project_rename(request: RenameRequest) -> Result<Value> {
-    let config = Config::load()?;
+    let config = load_config()?;
     let project = find_project(&config, &request.path)?;
     let renamed = crate::core::operations::rename(&project, &request.folder)?;
     Ok(json!({"ok": true, "path": renamed.path, "name": renamed.name}))
 }
 
 fn project_move(request: MoveRequest) -> Result<Value> {
-    let config = Config::load()?;
+    let config = load_config()?;
     let project = find_project(&config, &request.path)?;
 
     let wanted = PathBuf::from(request.base.trim());
@@ -1502,7 +1518,7 @@ fn project_tag(request: TagRequest) -> Result<Value> {
     if tag.is_empty() {
         bail!("Tag cannot be empty");
     }
-    let config = Config::load()?;
+    let config = load_config()?;
     let candidate = find_project(&config, &request.path)?;
     let tags = match request.action.as_str() {
         "add" => crate::core::operations::add_tags(&candidate, &[tag])?,
@@ -1518,7 +1534,7 @@ fn project_note(request: NoteRequest) -> Result<Value> {
     if message.is_empty() {
         bail!("Note cannot be empty");
     }
-    let config = Config::load()?;
+    let config = load_config()?;
     let candidate = find_project(&config, &request.path)?;
     let journal = crate::core::operations::append_note(&candidate, message)?
         .iter()

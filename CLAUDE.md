@@ -356,6 +356,8 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 
 `print_resolved_values()` + `print_file_previews()` — the rich dry-run additions. Show variable values, transforms applied, ID/counter delta, all built-in date tokens, and the first `config.preview_lines` (default 8) of every templated file.
 
+`print_dry_run` and `print_apply_plan` take a `PreviewKind`: `DryRun` for `--dry-run` ("nothing will be created"), `BeforeCommit` for the plan printed immediately before the real create/apply ("Preview"). Both are called on both paths — a new caller has to say which side of the commit it is on, because printing the dry-run header over a real create is the defect this replaced.
+
 ## Gotchas
 
 - `dialoguer::Input::interact_text()` takes ownership of `self`. Never reuse an `Input` struct across iterations — recreate it each time.
@@ -442,6 +444,23 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 - v1.0.2: **conhost ghosting fix** — `cli::recent::clamp_label(label, columns)` truncates picker labels to terminal width (`dialoguer::console::truncate_str`, unicode-width-aware, "…" tail; budget = columns − 3 for the "> " prefix + last-column margin; columns == 0 → passthrough). Applied in `run_picker` and the move-base picker. Wrapped Select lines are what ghosted on the legacy Windows console, so **picker labels must stay single-line, ANSI-free, and clamped** — don't add colored strings to Select items, and use `dialoguer::console` (don't add `console` as a direct dep). Unit tests in `recent.rs`.
 - v1.0.2: **unconfigured `base_dir` falls back to the HOME directory, not the cwd** (`Config::resolve_base_dir` → `paths::home_dir()`, new pub helper: `%USERPROFILE%`/`$HOME`; cwd only if home is unset). The cwd fallback scattered projects and `.fastf-index.json` caches into whatever directory a command ran from. **Both test harnesses (`with_fresh_install` in integration.rs AND ui_server.rs) now redirect HOME/USERPROFILE into the sandbox** — without that, tests with a default config would scan the developer's real home and self-heal the counter from their real projects (5 register tests broke exactly that way). Any new test harness must do the same.
 - v1.0.2: **onboarding is universal** — the shared core is `config::init_base_dir(raw)` (trim → `~` expansion → absolute-only → `create_dir_all` → canonicalize → persist `base_dir`) + `config::suggested_base_dir()` (`<home>/Projects`). The web UI's `/api/base/init` and the TUI's `onboard_first_run` (menu.rs, runs before the main loop when `base_dir` AND `bases` are both empty; empty answer skips, reappears next launch) are thin shells over it. Don't duplicate the expansion/validation anywhere else — call the core fn.
+
+- v1.6.1: **`Config::load()` is never `unwrap_or_default()`ed.** It already
+  returns `Ok(default)` when the file is *absent*, so a fallback can only mask a
+  parse or I/O error — and the config decides which directories are the library,
+  so defaulting answers a different question with a success. Every surface
+  propagates it: the CLI exits 1 (`main.rs` adds a `hint:` line when the chain
+  names `parsing` + `config.toml`), the TUI refuses to open a menu,
+  `run_paged_browser`'s loader closure returns `Result`, and `src/ui` loads
+  through `ui::load_config`, whose `SERVER_ERROR_PREFIX` makes `status_for`
+  answer 500 rather than blaming the request.
+- v1.6.1: **`util::interrupt::restore_terminal` is the one cursor restore**,
+  called from `main`'s error path and from the signal handler before the second
+  Ctrl-C exits 130. The unix branch is raw `isatty` + `write` because a signal
+  handler may not take std's stream lock; the non-unix branch keeps `Term`
+  (Windows runs console control handlers on their own thread). Keep the
+  per-stream terminal guard: an unguarded restore puts `\x1b[?25h` into piped
+  output.
 
 ### v1.1 hardening gotchas
 
@@ -633,12 +652,15 @@ not reentrant and `config::set` already holds it.
 CLI `new --base-dir`, UI preview/create overrides, and UI Settings use the same
 functions; do not assign those request strings directly to `Config.base_dir`.
 
-**Prompt first, then lock, then reload.** `edit_postcreate_commands` collects the
-answer, *then* takes `DataLock` and re-reads config. Holding a loaded `Config`
-across a human prompt and saving it afterwards reverted whatever the browser UI
-or another `config set` had written meanwhile. Its remove path also matches
-commands by text rather than by the index the user saw, since the list may have
-changed while the prompt was open.
+**Prompt first, then lock, then reload.** `edit_postcreate_commands` and
+`menu_settings_bases` collect the answer, *then* call
+`operations::update_config`, which takes `DataLock` and re-reads config. Holding
+a loaded `Config` across a human prompt and saving it afterwards reverted
+whatever the browser UI or another `config set` had written meanwhile. Both
+remove paths match by text rather than by the index the user saw, since the list
+may have changed while the prompt was open. `cli::config::normalize_base_entry`
+is the one validator for an extra base, shared by `config set bases` and the
+menu.
 
 **`fastf move` polls, it does not block.** `library::move_project_with` already
 took a `&Mutex<Progress>` and `&AtomicBool`; the CLI runs it on a scoped thread

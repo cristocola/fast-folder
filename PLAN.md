@@ -300,6 +300,20 @@ x86_64-pc-windows-{gnu,msvc} -- -D warnings`), so the job is a guard against
 regression rather than a repair. `lint` became a two-OS matrix; `cargo fmt` and
 `node --check` run on the Linux leg only.
 
+(7) **Tracking `.claude/skills/release/SKILL.md` published one machine's
+internals**, which is what the step asked for without anyone noticing what the
+file said: absolute paths to a personal drive, a named home directory, and
+third-person prose about the maintainer, in a public repository. The file is now
+written for a stranger, and the same sweep went through the rest of the repo —
+the tool's help text, `docs/`, the web UI placeholder, and
+`packaging/aur/update.sh`, which hard-coded a project folder that exists on one
+machine and now reads `FASTF_AUR_DIR`. `tests/repo_hygiene.rs` is the
+enforcement, because a written rule would not have caught this one; it skips
+when there is no git checkout, since the AUR source package runs the suite in a
+makepkg sandbox. Two test fixtures that used the maintainer's name were
+renamed, and `free_does_not_match_path` had to have its search term renamed with
+its fixture or it would have passed vacuously.
+
 (6) **`docs/UI.md:249` already claimed** that "oversized or malformed requests
 get a clean JSON 400, never a crashed connection thread". That was false on both
 counts: the oversized case panicked, and *any* malformed request was dropped
@@ -679,5 +693,5 @@ Other:
 | 1 | 2026-08-21 | [#7](https://github.com/cristocola/fast-folder/pull/7) | `Config::load()` propagates everywhere; `PreviewKind` on both printers; `cli::config::normalize_base_entry` is the shared base validator; `util::interrupt::restore_terminal` is the one cursor restore; `operations::reconcile` and `run_paged_browser`'s loader now return `Result`. |
 | 1-3 merged | 2026-08-22 | — | Phases 1-3 merged into `main` as merge commits, oldest first, and their branches deleted. `main` is green on all seven gates. Phase 4 starts from a clean `main` with nothing open. |
 | 3 | 2026-08-22 | [#9](https://github.com/cristocola/fast-folder/pull/9) | Branched on Phase 2 (#7 and #8 both still open) — retarget to `main` after they merge. `util::yaml::to_string_preserving_unknown` + `Metadata::OWNED_KEYS`/`Template::OWNED_KEYS` is how any file fastf does not fully own gets rewritten; `project_info::render` returns `Result`; `provisioning::reconcile` is now `reconcile_unlocked` (Phase 5's `_unlocked` rule starts here); new fault point `template:mid-save`, and `ALL_FAULT_POINTS` is now enforced against the call sites, so Phase 5 must update the list when it deletes code. |
-| 4 | 2026-08-22 | [#10](https://github.com/cristocola/fast-folder/pull/10) | `find_project` is the authorization boundary for every path-addressed UI route and its error is `forbidden:`-prefixed (403); `authorize_local_path`/`allowed_local_path`/`local_path_candidates` are the wider set for `/api/open`; every response carries `CONTENT_SECURITY_POLICY`, which assumes the frontend keeps no inline script; `socket_exchange` is the new socket test helper; CI's `lint` is a two-OS matrix and `release.yml` has a `verify-version` job every later release depends on; `.claude/skills/` is tracked, so the `release` skill is in the repo. |
+| 4 | 2026-08-22 | [#10](https://github.com/cristocola/fast-folder/pull/10) | **`tests/repo_hygiene.rs` scans `git ls-files`: no tracked file may name a real home directory, a personal mount point, a local project-folder path, or the maintainer outside the attribution files. Phase 17 rewrites `CLAUDE.md` and must not reintroduce any of them.** `find_project` is the authorization boundary for every path-addressed UI route and its error is `forbidden:`-prefixed (403); `authorize_local_path`/`allowed_local_path`/`local_path_candidates` are the wider set for `/api/open`; every response carries `CONTENT_SECURITY_POLICY`, which assumes the frontend keeps no inline script; `socket_exchange` is the new socket test helper; CI's `lint` is a two-OS matrix and `release.yml` has a `verify-version` job every later release depends on; `.claude/skills/` is tracked, so the `release` skill is in the repo. |
 | 2 | 2026-08-22 | [#8](https://github.com/cristocola/fast-folder/pull/8) | Branched on Phase 1 (#7 still open) — retarget to `main` after it merges. `cli::extra::classify_extra(extra, &clap::Command)` + per-command `apply_extra`; `RegisterFlags::validate` owns register's constraints; `util::tty::{prompt_available, require_tty}` is the one prompt probe (stderr) and Phase 6/7 should route new prompts through it; `RecursiveArgs` gained `vars`; `template from-folder` gained `--yes`/`--dry-run` and `FromFolderArgs`; `Sandbox::run_headless` and `pty::run_stdout_to` are new harness helpers. |

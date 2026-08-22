@@ -29,8 +29,12 @@ v1.6.1 `repo_hygiene.rs`. What each guards — the intent, not the case list:
   creatable (verified by creating it).
 - `repo_hygiene.rs` — the repository is published, so no tracked file may name a
   real home directory, a personal mount point, a local project-folder path, or
-  the maintainer outside an attribution file. Scans `git ls-files`; skips when
-  there is no checkout (the AUR source package runs the suite in a sandbox).
+  the maintainer outside an attribution file. Scans `git ls-files`; skips unless
+  the crate directory is itself the root of the checkout. That is stricter than
+  "is there a checkout": the AUR source package unpacks the release tarball into
+  an ignored directory *inside* a real clone, where `git ls-files` succeeds and
+  returns nothing — which the first version read as an empty repository and
+  failed on, breaking `check()` for everyone building the package.
 
 `tests/common/mod.rs` is the shared process-driving harness (v1.2.1): a `Sandbox`
 that owns its `FASTF_INSTALL_DIR`, redirects `HOME` into itself, and runs the

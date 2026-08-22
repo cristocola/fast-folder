@@ -28,7 +28,7 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v1.6.1 — correctness and hygiene**
-- Status: **Track A complete and merged (Phases 1-5); all gates green on `main`; tagging v1.6.1**
+- Status: **v1.6.1 released; CI, assets, and AUR packages verified; the Windows manual smoke (same-drive rename, cross-drive move via the MSI) is the one open item**
 - Last reviewed: **2026-08-23**
 
 ## Release train
@@ -39,7 +39,7 @@ responsibility of the filesystem and backups.
 | v1.5.0 | Delivered in v1.5.1; CI and Linux smoke passed | scoped v2 move/create journals recover idempotently after process crashes |
 | v1.5.1 | Released; CI, assets, and AUR packages verified | every mutation shares validation, locking, authoritative reload, and cache refresh behavior |
 | v1.6.0 | Released; CI, assets, and AUR packages verified | the guided project browser never waits on a folder size |
-| v1.6.1 | Track A merged; CI green on `main` | what fastf says happened is what happened, and every file it rewrites stays readable |
+| v1.6.1 | Released; CI, assets, and AUR packages verified | what fastf says happened is what happened, and every file it rewrites stays readable |
 
 ### v1.4.1 — containment and path safety
 

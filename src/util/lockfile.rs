@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Filename of the data-directory lock.
-pub const LOCK_FILENAME: &str = ".fastf.lock";
+pub(crate) const LOCK_FILENAME: &str = ".fastf.lock";
 
 /// How long to wait for another process before giving up. Generous enough to
 /// cover a slow create on a network base, short enough that a genuinely stuck
@@ -92,7 +92,7 @@ impl DataLock {
 }
 
 /// The data-directory lock path.
-pub fn lock_path() -> PathBuf {
+pub(crate) fn lock_path() -> PathBuf {
     crate::util::paths::install_dir().join(LOCK_FILENAME)
 }
 

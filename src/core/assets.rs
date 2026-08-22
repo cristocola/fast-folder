@@ -122,7 +122,7 @@ fn now_millis() -> u64 {
 
 /// A copy that stopped because its cancel flag was set. Callers distinguish this
 /// from a genuine failure by checking the flag after `copy_job` returns `Err`.
-pub const CANCELLED_MSG: &str = "copy cancelled";
+pub(crate) const CANCELLED_MSG: &str = "copy cancelled";
 
 /// Copy one deferred (large, verbatim) file into place with chunked progress.
 /// Atomic via an operation-owned unique sibling + rename;
@@ -130,7 +130,7 @@ pub const CANCELLED_MSG: &str = "copy cancelled";
 /// during a multi-minute copy.
 ///
 /// `cancel` is polled between chunks: when set, the exact partial sibling is
-/// removed and the copy returns a [`CANCELLED_MSG`] error so no half-written
+/// removed and the copy returns a `CANCELLED_MSG` error so no half-written
 /// file is ever left in place.
 pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) -> Result<()> {
     if entry_exists(&job.dest)? {
@@ -312,149 +312,6 @@ fn walk_inner(root: &Path, current: &Path, out: &mut Vec<AssetEntry>) -> Result<
             });
         }
     }
-    Ok(())
-}
-
-/// Relative paths of every link (symlink or Windows junction) inside a tree.
-///
-/// Used as a move pre-flight: fastf refuses to move a project containing links
-/// rather than dropping them. Recreating one faithfully needs elevation or
-/// Developer Mode on Windows, and following it would silently restructure the
-/// project and could duplicate a large shared asset library — so refusing is the
-/// only option that can neither lose nor corrupt data.
-pub fn find_links(root: &Path) -> Result<Vec<String>> {
-    Ok(walk(root)?
-        .into_iter()
-        .filter(AssetEntry::is_symlink)
-        .map(|e| e.rel)
-        .collect())
-}
-
-/// Recursively copy a directory tree, byte-for-byte — **no interpolation**
-/// (used by `library::move_project`'s cross-device fallback, where the copy
-/// must preserve every file exactly, including literal `{braces}`). Fails if
-/// `dst` already exists so a half-typed target never gets merged into.
-pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
-    require_real_directory(src, "copy source")?;
-    if entry_exists(dst)? {
-        anyhow::bail!("copy target already exists: {}", dst.display());
-    }
-    fs::create_dir_all(dst).with_context(|| format!("creating {}", dst.display()))?;
-    // `walk` sorts parents before children, so plain create_dir + copy works.
-    for entry in walk(src)? {
-        let rel = entry.rel.replace('/', std::path::MAIN_SEPARATOR_STR);
-        let target = dst.join(&rel);
-        match entry.kind {
-            EntryKind::Dir => {
-                fs::create_dir_all(&target)
-                    .with_context(|| format!("creating {}", target.display()))?;
-            }
-            EntryKind::File => {
-                let source = src.join(&rel);
-                fs::copy(&source, &target).with_context(|| {
-                    format!("copying {} → {}", source.display(), target.display())
-                })?;
-            }
-            // Refuse rather than drop: a caller that removes the source after a
-            // "successful" copy would destroy whatever this pointed at.
-            EntryKind::Symlink | EntryKind::Other => anyhow::bail!(
-                "cannot copy '{}': it is a link or special file. \
-                 Copying it faithfully is not supported, and skipping it would silently lose data.",
-                entry.rel
-            ),
-        }
-    }
-    Ok(())
-}
-
-/// Enumerate a source tree into the directory creates + per-file [`CopyJob`]s
-/// needed to reproduce it verbatim under `dst`. Directories (including empty
-/// ones) come first so a plain create-then-copy is ordering-safe. Every regular
-/// source file is payload, including names ending in `.tmp` or `.part`. Used by
-/// the staged move so the copy can report live progress and honor cancellation.
-///
-/// Errors on a link or special file. Callers pre-flight with [`find_links`] and
-/// refuse the move up front, so this is the backstop that guarantees no caller
-/// can ever reach the "copied, verified, now delete the source" step while
-/// having silently skipped something.
-pub fn jobs_for_tree(src: &Path, dst: &Path) -> Result<(Vec<PathBuf>, Vec<CopyJob>)> {
-    require_real_directory(src, "move source")?;
-    let mut dirs = Vec::new();
-    let mut files = Vec::new();
-    for entry in walk(src)? {
-        let rel = entry.rel.replace('/', std::path::MAIN_SEPARATOR_STR);
-        let target = dst.join(&rel);
-        match entry.kind {
-            EntryKind::Dir => dirs.push(target),
-            EntryKind::File => files.push(CopyJob {
-                src: src.join(&rel),
-                dest: target,
-                bytes: entry.size,
-            }),
-            EntryKind::Symlink | EntryKind::Other => anyhow::bail!(
-                "cannot copy '{}': it is a link or special file. \
-                 Copying it faithfully is not supported, and skipping it would silently lose data.",
-                entry.rel
-            ),
-        }
-    }
-    Ok((dirs, files))
-}
-
-/// Verify that `dst` faithfully reproduces `src`: every file in `src` exists
-/// under `dst` with an identical byte size, and the file counts
-/// match (no source file dropped). This is the guarantee that must hold **before**
-/// a move removes its source — it catches the real network-share failure mode
-/// (a truncated or dropped-connection copy) without the cost of re-hashing every
-/// byte. Returns a descriptive error on the first discrepancy.
-///
-/// **Deny by default.** Anything the walk cannot classify as a plain file or a
-/// directory fails verification instead of being skipped. The previous version
-/// skipped links on *both* sides, so their sizes agreed trivially and a copy that
-/// had dropped them verified clean — which is precisely how a move could delete a
-/// source whose junctions never reached the destination. Verification must never
-/// be narrower than the copy it is checking.
-pub fn verify_tree(src: &Path, dst: &Path) -> Result<()> {
-    require_real_directory(src, "verification source")?;
-    require_real_directory(dst, "verification destination")?;
-    let sizes = |root: &Path, side: &str| -> Result<HashMap<String, u64>> {
-        let mut map = HashMap::new();
-        for entry in walk(root)? {
-            match entry.kind {
-                EntryKind::Dir => {}
-                EntryKind::File => {
-                    map.insert(entry.rel, entry.size);
-                }
-                EntryKind::Symlink | EntryKind::Other => anyhow::bail!(
-                    "verification failed: {side} contains '{}', a link or special file \
-                     that cannot be verified",
-                    entry.rel
-                ),
-            }
-        }
-        Ok(map)
-    };
-    let src_files = sizes(src, "source")?;
-    let dst_files = sizes(dst, "destination")?;
-
-    for (rel, src_size) in &src_files {
-        match dst_files.get(rel) {
-            None => anyhow::bail!("verification failed: missing at destination: {rel}"),
-            Some(dst_size) if dst_size != src_size => anyhow::bail!(
-                "verification failed: size mismatch for {rel} (src {src_size} B, dst {dst_size} B)"
-            ),
-            Some(_) => {}
-        }
-    }
-    // There used to be a `dst_files.len() < src_files.len()` check here. It was
-    // unreachable: the loop above requires every source file to be present at
-    // the destination, so by this point `dst >= src` always holds. Mutation
-    // testing surfaced it — no test could distinguish flipping the comparison,
-    // because the branch could never be taken either way.
-    //
-    // Extra files at the destination are deliberately *not* an error. The
-    // property that has to hold before a source is deleted is "everything made
-    // it across", and a surplus does not threaten that.
     Ok(())
 }
 
@@ -681,74 +538,6 @@ mod tests {
         assert!(!PathBuf::from(part).exists(), "no .part left behind");
     }
 
-    #[test]
-    fn verify_tree_detects_short_and_missing_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let src = tmp.path().join("src");
-        let dst = tmp.path().join("dst");
-        fs::create_dir_all(src.join("sub")).unwrap();
-        fs::write(src.join("a.txt"), "hello").unwrap();
-        fs::write(src.join("sub/b.bin"), vec![0u8; 2048]).unwrap();
-
-        // Faithful copy verifies.
-        copy_tree(&src, &dst).unwrap();
-        verify_tree(&src, &dst).unwrap();
-
-        // A truncated destination file fails verification.
-        fs::write(dst.join("sub/b.bin"), vec![0u8; 1024]).unwrap();
-        assert!(
-            verify_tree(&src, &dst)
-                .unwrap_err()
-                .to_string()
-                .contains("size mismatch")
-        );
-        // Restore it so the next case isolates the missing-file failure.
-        fs::write(dst.join("sub/b.bin"), vec![0u8; 2048]).unwrap();
-        verify_tree(&src, &dst).unwrap();
-
-        // A missing destination file fails verification.
-        fs::remove_file(dst.join("a.txt")).unwrap();
-        let err = verify_tree(&src, &dst).unwrap_err().to_string();
-        assert!(
-            err.contains("missing") || err.contains("files"),
-            "err: {err}"
-        );
-    }
-
-    #[test]
-    fn copy_tree_reproduces_nested_files_and_empty_dirs() {
-        let tmp = tempfile::tempdir().unwrap();
-        let src = tmp.path().join("src");
-        fs::create_dir_all(src.join("docs/deep")).unwrap();
-        fs::create_dir_all(src.join("empty_dir")).unwrap();
-        // Literal braces must survive — a move never interpolates.
-        fs::write(src.join("notes_{client}.md"), "hello {name}").unwrap();
-        let binary: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
-        fs::write(src.join("docs/deep/blob.bin"), &binary).unwrap();
-
-        let dst = tmp.path().join("dst");
-        copy_tree(&src, &dst).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(dst.join("notes_{client}.md")).unwrap(),
-            "hello {name}"
-        );
-        assert_eq!(fs::read(dst.join("docs/deep/blob.bin")).unwrap(), binary);
-        assert!(dst.join("empty_dir").is_dir());
-        // Refuses to merge into an existing target.
-        assert!(copy_tree(&src, &dst).is_err());
-    }
-
-    #[test]
-    fn missing_tree_is_an_error_not_an_empty_manifest() {
-        let tmp = tempfile::tempdir().unwrap();
-        let missing = tmp.path().join("missing");
-        let destination = tmp.path().join("destination");
-        assert!(jobs_for_tree(&missing, &destination).is_err());
-        fs::create_dir(&destination).unwrap();
-        assert!(verify_tree(&missing, &destination).is_err());
-    }
-
     #[cfg(unix)]
     #[test]
     fn broken_symlink_occupies_a_destination_path() {
@@ -781,11 +570,12 @@ mod tests {
         }
     }
 
-    /// The data-loss regression. A junction inside a project used to be invisible
-    /// to `walk`, so a staged move copied around it and `verify_tree` — walking
-    /// the same blind way — reported success. The source was then deleted.
+    /// Links must be *reported* by the walk, not dropped. Template copying
+    /// decides what to do about one by asking `is_file()`, so a link
+    /// misclassified as a file would be copied by following it, and a link
+    /// missing from the walk would vanish from a new project with no warning.
     #[test]
-    fn links_are_reported_not_silently_skipped() {
+    fn walk_reports_links_instead_of_skipping_them() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("real_asset_library");
         fs::create_dir_all(&target).unwrap();
@@ -799,60 +589,13 @@ mod tests {
             return;
         }
 
-        // walk sees it, and classifies it as a link rather than dropping it.
         let entries = walk(&src).unwrap();
         let link = entries
             .iter()
             .find(|e| e.rel == "linked")
             .expect("the link must appear in the walk");
         assert!(link.is_symlink(), "kind was {:?}", link.kind);
-
-        assert_eq!(find_links(&src).unwrap(), vec!["linked".to_string()]);
-
-        // Every copy path refuses rather than silently dropping it.
-        let dst = tmp.path().join("dst");
-        assert!(
-            copy_tree(&src, &dst)
-                .unwrap_err()
-                .to_string()
-                .contains("link"),
-            "copy_tree must refuse a link"
-        );
-        assert!(
-            jobs_for_tree(&src, &dst)
-                .unwrap_err()
-                .to_string()
-                .contains("link"),
-            "jobs_for_tree must refuse a link"
-        );
-    }
-
-    /// Verification must be deny-by-default: a link it cannot check is an error,
-    /// never a skip. Skipping on both sides is what made the sizes agree and let
-    /// a lossy copy "verify".
-    #[test]
-    fn verify_tree_refuses_trees_containing_links() {
-        let tmp = tempfile::tempdir().unwrap();
-        let target = tmp.path().join("target");
-        fs::create_dir_all(&target).unwrap();
-
-        let src = tmp.path().join("src");
-        let dst = tmp.path().join("dst");
-        fs::create_dir_all(&src).unwrap();
-        fs::create_dir_all(&dst).unwrap();
-        fs::write(src.join("a.txt"), "x").unwrap();
-        fs::write(dst.join("a.txt"), "x").unwrap();
-        // Identical but for a link the destination never received.
-        if !make_dir_link(&src.join("linked"), &target) {
-            eprintln!("skipping: OS refused to create a directory link");
-            return;
-        }
-
-        let err = verify_tree(&src, &dst).unwrap_err().to_string();
-        assert!(
-            err.contains("verification failed") && err.contains("linked"),
-            "expected a verification failure naming the link, got: {err}"
-        );
+        assert!(!link.is_file() && !link.is_dir());
     }
 
     /// A file at exactly the interpolation cap is still interpolated; one past it
@@ -931,50 +674,6 @@ mod tests {
                 .map(|e| e.size),
             Some(10)
         );
-    }
-
-    /// Verification asks one question: did everything make it across? A surplus
-    /// at the destination does not threaten that, so it is tolerated — only
-    /// missing or short files block a move from removing its source.
-    #[test]
-    fn verify_tree_requires_everything_arrived_but_tolerates_extras() {
-        let tmp = tempfile::tempdir().unwrap();
-        let src = tmp.path().join("src");
-        let dst = tmp.path().join("dst");
-        fs::create_dir_all(&src).unwrap();
-        fs::create_dir_all(&dst).unwrap();
-        fs::write(src.join("a.txt"), "same").unwrap();
-        fs::write(dst.join("a.txt"), "same").unwrap();
-        verify_tree(&src, &dst).unwrap();
-
-        // An unrelated extra file at the destination is not a failure.
-        fs::write(dst.join("stranger.txt"), "unexpected").unwrap();
-        verify_tree(&src, &dst)
-            .expect("extra files at the destination must not block verification");
-
-        // But anything missing from the destination does block it — this is the
-        // guarantee that stands between a move and deleting a good source.
-        fs::write(src.join("b.txt"), "must arrive").unwrap();
-        let err = verify_tree(&src, &dst).unwrap_err().to_string();
-        assert!(err.contains("missing at destination"), "got: {err}");
-    }
-
-    #[test]
-    fn move_jobs_treat_tmp_and_part_names_as_payload() {
-        let tmp = tempfile::tempdir().unwrap();
-        let src = tmp.path().join("src");
-        let dst = tmp.path().join("dst");
-        fs::create_dir_all(src.join("nested")).unwrap();
-        fs::write(src.join("notes.tmp"), "temporary by name, real by contract").unwrap();
-        fs::write(src.join("nested/render.part"), [0_u8, 1, 2, 255]).unwrap();
-
-        let (_, jobs) = jobs_for_tree(&src, &dst).unwrap();
-        let names: Vec<_> = jobs
-            .iter()
-            .map(|job| job.src.strip_prefix(&src).unwrap().to_path_buf())
-            .collect();
-        assert!(names.contains(&PathBuf::from("notes.tmp")));
-        assert!(names.contains(&PathBuf::from("nested/render.part")));
     }
 
     /// The glob matcher backtracks; the wildcard bookkeeping is easy to get

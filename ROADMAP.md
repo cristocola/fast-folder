@@ -226,6 +226,12 @@ Track A of [`PLAN.md`](PLAN.md), one phase per session.
   every response carries a content security policy; CI runs `node --check` and
   lints Windows code, and the Release workflow refuses a tag that does not match
   `Cargo.toml`; the release routine is tracked in the repository.
+- [x] Phase 5: dead code out, stale gotchas corrected — the superseded move
+  engine in `assets` and four uncalled move wrappers are deleted, the pre-v2
+  marker writers are gone (the tests that need those bytes plant them), the
+  duplicated path checks are one pair in `util::paths`, and every mutating
+  library entry point that does not hold the lock says `_unlocked` in its name;
+  `CLAUDE.md` now describes the code that exists.
 
 ## Release and documentation gates
 

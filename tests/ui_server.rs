@@ -1011,12 +1011,19 @@ fn reconcile_route_reports_pre_v2_copy_without_following_it() {
         let data = vec![3u8; 6000];
         fs::write(&src, &data).unwrap();
         let dest = root.join("asset.bin");
-        let job = fastf::core::assets::CopyJob {
-            src,
-            dest: dest.clone(),
-            bytes: data.len() as u64,
-        };
-        fastf::core::provisioning::write_create_marker(&root, std::slice::from_ref(&job)).unwrap();
+        // Planted as bytes: fastf no longer writes this format, and the point of
+        // the test is that reconcile reports it without reading the absolute
+        // paths inside it.
+        fs::write(
+            root.join(".fastf-provisioning.json"),
+            format!(
+                r#"{{"version":1,"started_at":"2026-01-01T00:00:00Z","jobs":[{{"src":{src},"dest":{dest},"bytes":{bytes},"done":false}}]}}"#,
+                src = serde_json::to_string(&src.display().to_string()).unwrap(),
+                dest = serde_json::to_string(&dest.display().to_string()).unwrap(),
+                bytes = data.len(),
+            ),
+        )
+        .unwrap();
 
         // /api/state surfaces the incomplete provisioning for the banner.
         let state = json("GET", "/api/state", serde_json::Value::Null);

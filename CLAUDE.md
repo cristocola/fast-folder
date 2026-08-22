@@ -51,13 +51,15 @@ Gotchas sections below for the parts that bite.
   `operations.rs` (shared mutation boundary), `project.rs` (plan/create/apply),
   `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus
   report-only pre-v2 discovery), `template_import.rs` (from-folder engine),
-  `assets.rs` (template-file copy engine), `validated.rs` (typed slugs/relative
+  `assets.rs` (the template-file copy engine: walk, classify, interpolate or
+  byte-copy — moves live in `transactions.rs`), `validated.rs` (typed slugs/relative
   paths), `project_info.rs`
   (`PROJECT_INFO.md` read/write/mutate).
 - `src/util/` — all v1.1 hardening primitives: `lockfile` (cross-process `DataLock`),
   `atomic` (THE atomic write), `fs_retry` (Windows sharing violations), `interrupt`
   (Ctrl-C rollback), `faults` (failpoints, compiled out of release), `paths`
-  (`install_dir` resolution + `display_path`), `tree_size` (all-or-nothing,
+  (`install_dir` resolution, `display_path`, and the shared `require_real_file` /
+  `require_native_relative` boundary checks), `tree_size` (all-or-nothing,
   non-following logical-byte snapshots), plus the two live-size pieces:
   `size_scan` (background sizing workers) and `live_select` (the only picker in
   the codebase that is not `dialoguer::Select`).
@@ -119,7 +121,7 @@ It moved out of the data directory because of where it must be *readable* from. 
 2. this machine's data-dir `counters.toml` — spans **every base it has written to**, which is what stops an unplugged drive restarting numbering. Dropping this was a real regression: work in an archive base to ID0005, unplug it, create elsewhere → ID0001, and reconnecting gives two projects the same ID. Guarded by `unplugging_a_base_does_not_restart_numbering`;
 3. `library::max_id(cfg)`, the highest ID actually in project metadata — which is why losing a counter file is untidy rather than harmful.
 
-**The number only ever goes up, and every base converges on it.** `Counters::record` writes the target base and then `propagate`s to every other mounted base plus the data dir; `Counters::converge(cfg)` recomputes the full floor and pushes it out (`fastf id sync`, and `fastf id show`, which repairs as it displays). Three bases holding ID0004 / ID0082 / ID0017 all come out at 82. A base's file wins when it is *higher* than that base's own projects — which is what carries the number to a machine that cannot see the other drives; when the projects are higher, the file is raised and pushed out.
+**The number only ever goes up, and every base converges on it.** `Counters::record` writes the target base and then `propagate`s to every other mounted base plus the data dir; `Counters::converge(cfg)` recomputes the full floor and pushes it out (`fastf id sync`, and `fastf id show`, which repairs as it displays). Three bases holding ID0004 / ID0082 / ID0017 all come out at 82. The comparison is global, never per base: `floor` takes the single highest value across all three inputs and `propagate` raises every base to it, which is what carries the number to a machine that cannot see the other drives. A counter file that is higher than the projects around it is therefore never overwritten downward — nothing anywhere is.
 
 Propagating on **every create** is load-bearing, not tidiness: if Linux mints ID0101 in a base Windows cannot see, the base Windows *can* see has to learn about it now — there is no later.
 
@@ -432,17 +434,19 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 - v1.4.1: `move_project` falls back to copy **only** for Unix `EXDEV` or
   Windows `ERROR_NOT_SAME_DEVICE` (17). Permission, sharing, missing-path, and
   every other rename error returns unchanged. Never broaden that match.
-- v1.4.1: application callers use the `*_configured*_outcome` move entry points,
-  which acquire `DataLock`, reload config, and revalidate source identity/direct
-  child plus target membership under the lock. The legacy `Result<Project>`
-  wrapper remains for library compatibility.
+- v1.4.1/v1.6.1: application callers use `move_project_configured_with_outcome`
+  (through `operations::move_project`), which acquires `DataLock`, reloads
+  config, and revalidates source identity/direct child plus target membership
+  under the lock. `library::move_project` remains as the one compatibility
+  shape: it takes the lock and revalidates the recorded project, but validates
+  no configured base. The other three wrappers had no callers and are gone.
 - v0.10: in `project_action_menu` the Move/Back/Quit indices are dynamic (Move appears only when another mounted base exists) — they're handled by `if choice == move_idx/back_idx/quit_idx` guards ABOVE the numeric `match`. Adding a new fixed action means renumbering only the 0..=5 arms; the tail stays index-independent.
 - v0.10: the UI create form's `#base-dir` is now a `<select>` — it fires `change`, not `input` (the preview listener was updated accordingly). The frontend `effectiveBases()`/`baseLabel()` helpers mirror `Config::effective_bases()`/`library::base_label` with trailing-slash-insensitive dedup; the server re-validates and canonicalizes on every move anyway.
-- v1.5.0: `move_project_with` is the progress/cancel compatibility engine and
-  `staged_copy_verify_commit` uses `core::transactions`; debug-only forced-staged
-  tests reach it on one filesystem. Moves are verbatim. Every walked source name
-  is payload, including `.tmp`, `.part`, `.fastf-index.json`, and marker-looking
-  names; there is no suffix-based transient filter.
+- v1.5.0: `staged_copy_verify_commit` is the staged move body and it runs on
+  `core::transactions`; debug-only forced-staged tests reach it on one
+  filesystem. Moves are verbatim. Every walked source name is payload, including
+  `.tmp`, `.part`, `.fastf-index.json`, and marker-looking names; there is no
+  suffix-based transient filter.
 - v1.5.0: move manifests compare native relative path, entry type, and byte
   length, then rescan source path/type/size/mtime before publication. They do not
   hash or promise advanced filesystem metadata. Transaction staging is written
@@ -519,19 +523,25 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
   reported because inline interpolation cannot be reconstructed. A deferred v2
   journal stores already-realized relative copies and can safely resume those
   verbatim files after validation.
-- v1.1: `assets::AssetEntry` carries an `EntryKind` enum, not an `is_dir` bool.
-  This is deliberate — a new variant makes the compiler point at every consumer
-  that must decide. `walk` reports links instead of skipping them, and
-  `verify_tree` is **deny-by-default**: anything it cannot classify is an error.
-  Verification must never be narrower than the copy it checks, which is how a
-  move used to delete a source whose junctions never reached the destination.
-- v1.1: links are refused only on the **staged** move path
-  (`refuse_if_contains_links`, called after `fs::rename` fails). The
-  same-filesystem rename copies nothing and preserves links perfectly, so
-  refusing there would block the common case for no benefit.
+- v1.1/v1.6.1: `assets::AssetEntry` carries an `EntryKind` enum, not an `is_dir`
+  bool. This is deliberate — a new variant makes the compiler point at every
+  consumer that must decide, and `walk` reports links instead of skipping them
+  (template copying decides what to do about one by asking `is_file()`).
+  The move-side invariant now lives in `core::transactions`:
+  `MoveManifest::scan` is **deny-by-default** — a link or special entry fails
+  the whole move rather than being omitted — and `verify_destination` compares
+  the exact path/type/size manifest the scan produced. Verification must never
+  be narrower than the copy it checks, which is how a move used to delete a
+  source whose junctions never reached the destination. (v1.1's `assets`
+  `copy_tree`/`jobs_for_tree`/`verify_tree`/`find_links` were the previous
+  engine; Phase 5 deleted them once nothing called them.)
+- v1.1: links are refused only on the **staged** move path (`MoveManifest::scan`,
+  reached after `fs::rename` fails with `EXDEV`). The same-filesystem rename
+  copies nothing and preserves links perfectly, so refusing there would block
+  the common case for no benefit.
 - v1.1: `util::fs_retry` wraps the destructive fs calls (Windows sharing
   violations from Defender/indexer, plus read-only attribute clearing). The
-  same-fs `fs::rename` probe in `move_project_with` is deliberately NOT wrapped:
+  same-fs `fs::rename` probe in `move_project_unlocked` is deliberately NOT wrapped:
   its failure is the signal to take the staged path, so retrying would add the
   full backoff to every cross-drive move.
 - v1.1: `paths::display_path` strips `\\?\` for **display and metadata only**.
@@ -695,8 +705,9 @@ may have changed while the prompt was open. `cli::config::normalize_base_entry`
 is the one validator for an extra base, shared by `config set bases` and the
 menu.
 
-**`fastf move` polls, it does not block.** `library::move_project_with` already
-took a `&Mutex<Progress>` and `&AtomicBool`; the CLI runs it on a scoped thread
+**`fastf move` polls, it does not block.**
+`operations::move_project` already took a `&Mutex<Progress>` and `&AtomicBool`;
+the CLI runs it on a scoped thread
 and draws from the main one, feeding `interrupt::is_set()` into the cancel flag
 so Ctrl-C aborts before the source is touched. Totals stay zero until the staged
 path scans the tree and never fill in for a same-fs rename — so "nothing to draw"
@@ -731,10 +742,30 @@ claimed for two releases while nothing referenced the list.
 **A `pub fn` under `core/` that mutates without `DataLock` says `_unlocked`.**
 `provisioning::reconcile` did not, and reconcile resumes copies and removes
 sources. It is now `#[doc(hidden)] pub fn reconcile_unlocked`, with
-`reconcile_locked` as the only application entry point. The twelve test call
-sites build their `Config` in memory and never save it, so switching them to
-`reconcile_locked` would have reconciled the wrong base — the rename is what
-makes the signature honest without changing what the tests exercise.
+`reconcile_locked` as the only application entry point (it takes no `Config`:
+it loads one beneath the lock, and the argument it used to accept was ignored).
+The twelve test call sites build their `Config` in memory and never save it, so
+switching them to `reconcile_locked` would have reconciled the wrong base — the
+rename is what makes the signature honest without changing what the tests
+exercise. The rule now holds across `library` too:
+`unregister_project_unlocked`, `delete_project_unlocked`, and
+`rename_project_unlocked` are the renamed compatibility shapes (they revalidate
+the recorded project but take no lock), each `#[doc(hidden)]` with
+`*_configured` as the application entry point and a private `*_inner` body
+shared by both. `library::move_project` keeps its name because it does acquire
+the lock.
+
+**Deleting dead code is a phase, not a side effect (Phase 5).** What it left
+behind, so nobody re-derives it: the pre-v2 marker *writers* are gone, and the
+four tests that need those bytes plant the JSON literally — fastf having no
+writer for a format it must never resurrect is the point, so do not add one
+back for test convenience. `util::paths::require_real_file` and
+`require_native_relative` are the shared boundary checks (they were duplicated
+byte-for-byte in `transactions` and `provisioning`); `assets::require_real_directory`
+is their directory sibling. `ReconcileReport.swept` stays in the JSON because
+`docs/UI.md` promises the field, but nothing writes it and `is_empty` no longer
+consults it. `copy_template_files` lost its `verbose` flag — both call sites
+passed `false`, so the per-file printing had been unreachable since v0.8.
 
 ## Browser UI (`fastf ui`)
 

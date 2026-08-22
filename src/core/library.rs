@@ -391,7 +391,7 @@ pub fn refresh_cache(project_dir: &Path) {
 
 /// Remove the entry for base-relative `dir` from `base`'s cache. No-op when the
 /// cache is missing (the entry is already absent, definitionally).
-pub fn cache_remove(base: &Path, dir: &str) {
+pub(crate) fn cache_remove(base: &Path, dir: &str) {
     let Some(cache) = load_cache(base) else {
         return;
     };
@@ -512,31 +512,12 @@ pub struct MoveOutcome {
 }
 
 /// Move a project folder into another base directory, keeping its folder name.
-/// Synchronous convenience wrapper over [`move_project_with`] with throwaway
-/// progress/cancel handles — used by `fastf move` (CLI).
-pub fn move_project(project: &Project, new_base: &Path) -> Result<Project> {
-    let outcome = move_project_outcome(project, new_base)?;
-    report_cleanup_pending(&outcome, &project.path);
-    Ok(outcome.project)
-}
-
-/// Compatibility-level move outcome. Application interfaces should use
-/// [`move_project_configured_with_outcome`] so configured-base validation is
-/// reloaded under the mutation lock.
-pub fn move_project_outcome(project: &Project, new_base: &Path) -> Result<MoveOutcome> {
-    let progress = Mutex::new(Progress::new(&[]));
-    let cancel = AtomicBool::new(false);
-    move_project_with_outcome(project, new_base, &progress, &cancel)
-}
-
-/// Synchronous configured application wrapper with throwaway progress handles.
-pub fn move_project_configured_outcome(project: &Project, new_base: &Path) -> Result<MoveOutcome> {
-    let progress = Mutex::new(Progress::new(&[]));
-    let cancel = AtomicBool::new(false);
-    move_project_configured_with_outcome(project, new_base, &progress, &cancel)
-}
-
-/// Move a project folder into another base directory, keeping its folder name.
+///
+/// The historical compatibility shape, kept for library callers: it holds the
+/// coarse data lock, revalidates the recorded source base and identity beneath
+/// it, and runs with throwaway progress/cancel handles. Applications use
+/// [`move_project_configured_with_outcome`], which also revalidates the target
+/// against freshly loaded configuration.
 ///
 /// **Safety invariant: the source is never removed until the destination is
 /// fully copied AND verified.** Same-filesystem moves take an instant, atomic
@@ -544,34 +525,16 @@ pub fn move_project_configured_outcome(project: &Project, new_base: &Path) -> Re
 /// below the target base, verify exact path/type/size topology plus a second
 /// source metadata scan, atomically publish the staging directory, and only
 /// then remove the source.
-///
-/// `progress` drives the UI bar (phase + per-file counts); `cancel` aborts a
-/// staged copy cooperatively, cleaning up the staging folder and marker and
-/// leaving the source untouched. Returns the relocated [`Project`]. The caller
-/// is responsible for ensuring `new_base` is a configured base so the project
-/// stays discoverable.
-pub fn move_project_with(
-    project: &Project,
-    new_base: &Path,
-    progress: &Mutex<Progress>,
-    cancel: &AtomicBool,
-) -> Result<Project> {
-    let outcome = move_project_with_outcome(project, new_base, progress, cancel)?;
+pub fn move_project(project: &Project, new_base: &Path) -> Result<Project> {
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+    let outcome = {
+        let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+        let revalidated = revalidate_recorded_project(project)?;
+        move_project_unlocked(&revalidated, new_base, &progress, &cancel)?
+    };
     report_cleanup_pending(&outcome, &project.path);
     Ok(outcome.project)
-}
-
-/// Move through the compatibility library API while holding the coarse data
-/// lock and revalidating the recorded source base/identity.
-pub fn move_project_with_outcome(
-    project: &Project,
-    new_base: &Path,
-    progress: &Mutex<Progress>,
-    cancel: &AtomicBool,
-) -> Result<MoveOutcome> {
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    let project = revalidate_recorded_project(project)?;
-    move_project_unlocked(&project, new_base, progress, cancel)
 }
 
 /// Application move entry point. It reloads configuration under the coarse
@@ -639,14 +602,7 @@ pub fn move_project_staged_for_test(project: &Project, new_base: &Path) -> Resul
     }
     let progress = Mutex::new(Progress::new(&[]));
     let cancel = AtomicBool::new(false);
-    staged_copy_verify_commit(
-        &project,
-        &target,
-        &new_path,
-        &folder.to_string_lossy(),
-        &progress,
-        &cancel,
-    )
+    staged_copy_verify_commit(&project, &target, &new_path, &progress, &cancel)
 }
 
 fn move_project_unlocked(
@@ -686,13 +642,11 @@ fn move_project_unlocked(
     // Fast path: same-filesystem rename is atomic and instant — no staging,
     // no verification needed (there is no window in which data is half-there).
     // It also preserves links perfectly, because nothing is copied, so the link
-    // check below deliberately applies only to the staged fallback.
+    // refusal in the transaction scanner deliberately applies only to the
+    // staged fallback.
     // Deliberately NOT `fs_retry::rename`: this call is *expected* to fail on a
     // cross-device move, and that failure is the signal to take the staged path.
     // Retrying would add the full backoff to every cross-drive move for nothing.
-    if assets::entry_exists(&new_path)? {
-        anyhow::bail!("move target already exists: {}", new_path.display());
-    }
     let outcome = match fs::rename(&project.path, &new_path) {
         Ok(()) => {
             let moved = finish_move_bookkeeping(project, &old_base, &new_base, &new_path);
@@ -702,14 +656,7 @@ fn move_project_unlocked(
             }
         }
         Err(error) if is_cross_device_error(&error) => {
-            return staged_copy_verify_commit(
-                project,
-                &new_base,
-                &new_path,
-                &folder.to_string_lossy(),
-                progress,
-                cancel,
-            );
+            return staged_copy_verify_commit(project, &new_base, &new_path, progress, cancel);
         }
         Err(error) => {
             return Err(error).with_context(|| {
@@ -721,8 +668,6 @@ fn move_project_unlocked(
             });
         }
     };
-    set_phase(progress, "finalizing");
-    set_phase(progress, "done");
     Ok(outcome)
 }
 
@@ -762,7 +707,6 @@ fn staged_copy_verify_commit(
     project: &Project,
     new_base: &Path,
     new_path: &Path,
-    _folder_label: &str,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<MoveOutcome> {
@@ -980,9 +924,15 @@ fn set_phase(progress: &Mutex<Progress>, phase: &str) {
 
 /// Unregister a project: remove its `PROJECT_INFO.md` so it stops being a
 /// project. The folder and everything else inside it are untouched.
-pub fn unregister_project(project: &Project) -> Result<()> {
+///
+/// **Mutates without holding [`crate::util::lockfile::DataLock`]**, which the
+/// name is there to admit. Applications call
+/// [`unregister_project_configured`]; this shape exists for library callers and
+/// tests that supply their own tree.
+#[doc(hidden)]
+pub fn unregister_project_unlocked(project: &Project) -> Result<()> {
     let project = revalidate_recorded_project(project)?;
-    unregister_project_unlocked(&project)
+    unregister_project_inner(&project)
 }
 
 /// Application entry point for unregistering. Configuration and project
@@ -992,10 +942,10 @@ pub fn unregister_project_configured(project: &Project) -> Result<()> {
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let config = Config::load()?;
     let project = revalidate_project(&config, project)?;
-    unregister_project_unlocked(&project)
+    unregister_project_inner(&project)
 }
 
-fn unregister_project_unlocked(project: &Project) -> Result<()> {
+fn unregister_project_inner(project: &Project) -> Result<()> {
     let pinfo = project_info::pinfo_path(&project.path);
     if !pinfo.is_file() {
         anyhow::bail!(
@@ -1014,9 +964,14 @@ fn unregister_project_unlocked(project: &Project) -> Result<()> {
 /// `PROJECT_INFO.md` (never `remove_dir_all` an arbitrary path) and must be a
 /// direct child of its base. Callers additionally restrict operations to
 /// configured bases and confirm with the user — same convention as move.
-pub fn delete_project(project: &Project) -> Result<()> {
+///
+/// **Mutates without holding [`crate::util::lockfile::DataLock`]**, which the
+/// name is there to admit — and this one removes a tree. Applications call
+/// [`delete_project_configured`].
+#[doc(hidden)]
+pub fn delete_project_unlocked(project: &Project) -> Result<()> {
     let project = revalidate_recorded_project(project)?;
-    delete_project_unlocked(&project)
+    delete_project_inner(&project)
 }
 
 /// Application entry point for deletion with configured-base and identity
@@ -1025,10 +980,10 @@ pub fn delete_project_configured(project: &Project) -> Result<()> {
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let config = Config::load()?;
     let project = revalidate_project(&config, project)?;
-    delete_project_unlocked(&project)
+    delete_project_inner(&project)
 }
 
-fn delete_project_unlocked(project: &Project) -> Result<()> {
+fn delete_project_inner(project: &Project) -> Result<()> {
     let path = project
         .path
         .canonicalize()
@@ -1059,9 +1014,13 @@ fn delete_project_unlocked(project: &Project) -> Result<()> {
 /// is atomic; the metadata `folder`/`path` are patched best-effort (display
 /// truth only, like move) and the base cache is updated. Returns the renamed
 /// [`Project`].
-pub fn rename_project(project: &Project, new_folder: &str) -> Result<Project> {
+///
+/// **Mutates without holding [`crate::util::lockfile::DataLock`]**, which the
+/// name is there to admit. Applications call [`rename_project_configured`].
+#[doc(hidden)]
+pub fn rename_project_unlocked(project: &Project, new_folder: &str) -> Result<Project> {
     let project = revalidate_recorded_project(project)?;
-    rename_project_unlocked(&project, new_folder)
+    rename_project_inner(&project, new_folder)
 }
 
 /// Application entry point for rename with configured-base and identity
@@ -1070,7 +1029,7 @@ pub fn rename_project_configured(project: &Project, new_folder: &str) -> Result<
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let config = Config::load()?;
     let project = revalidate_project(&config, project)?;
-    rename_project_unlocked(&project, new_folder)
+    rename_project_inner(&project, new_folder)
 }
 
 /// What to say when a case-only rename could neither commit nor be undone.
@@ -1087,7 +1046,7 @@ fn stranded_rename_message(context: &str, staging: &Path, rollback: &str) -> Str
     )
 }
 
-fn rename_project_unlocked(project: &Project, new_folder: &str) -> Result<Project> {
+fn rename_project_inner(project: &Project, new_folder: &str) -> Result<Project> {
     let sanitized = naming::sanitize_name(new_folder.trim());
     if sanitized.is_empty() {
         anyhow::bail!("new folder name is empty");
@@ -1165,7 +1124,7 @@ fn rename_project_unlocked(project: &Project, new_folder: &str) -> Result<Projec
 }
 
 /// Drop a project's entry from its base cache, best-effort (mirrors the
-/// old-side bookkeeping of `move_project_with`).
+/// old-side bookkeeping of a completed move).
 fn remove_from_base_cache(project: &Project) {
     let base = project
         .base
@@ -1245,7 +1204,7 @@ pub fn max_id(cfg: &Config) -> u64 {
 /// The highest ID held by the projects in **one** base. Read-only, same as
 /// [`max_id`]. Separate because a base's own projects are what decide whether
 /// its `.fastf-counter.toml` is authoritative or needs raising.
-pub fn max_id_in_base(base: &Path) -> u64 {
+pub(crate) fn max_id_in_base(base: &Path) -> u64 {
     read_base_readonly(base)
         .iter()
         .filter_map(|project| naming::id_value(&project.id))
@@ -1552,7 +1511,7 @@ mod tests {
         fs::write(dir.join("keep.txt"), "content").unwrap();
 
         let project = scan_base(base).into_iter().next().unwrap();
-        let renamed = rename_project(&project, "MyProject").unwrap();
+        let renamed = rename_project_unlocked(&project, "MyProject").unwrap();
 
         assert_eq!(renamed.name, "MyProject");
         assert!(renamed.path.join("keep.txt").is_file(), "content survived");
@@ -1644,8 +1603,7 @@ mod tests {
         let progress = Mutex::new(Progress::new(&[]));
         let cancel = AtomicBool::new(false);
 
-        staged_copy_verify_commit(&project, new_base, &new_path, "proj_a", &progress, &cancel)
-            .unwrap();
+        staged_copy_verify_commit(&project, new_base, &new_path, &progress, &cancel).unwrap();
 
         // Progress must actually advance. The phase and the per-file counter are
         // the only feedback during a multi-minute network copy, so a counter
@@ -1701,10 +1659,9 @@ mod tests {
         // Pre-cancelled → copy aborts on the first chunk.
         let cancel = AtomicBool::new(true);
 
-        let err =
-            staged_copy_verify_commit(&project, new_base, &new_path, "proj_a", &progress, &cancel)
-                .unwrap_err()
-                .to_string();
+        let err = staged_copy_verify_commit(&project, new_base, &new_path, &progress, &cancel)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("cancelled"), "err: {err}");
         assert!(
             old_base.join("proj_a").is_dir(),
@@ -1727,14 +1684,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
 
         let outcome = crate::util::faults::with_thread_fault("move:source-cleanup", || {
-            staged_copy_verify_commit(
-                &project,
-                new.path(),
-                &final_path,
-                "proj",
-                &progress,
-                &cancel,
-            )
+            staged_copy_verify_commit(&project, new.path(), &final_path, &progress, &cancel)
         })
         .expect("publication remains a successful move");
 
@@ -1761,20 +1711,17 @@ mod tests {
         let progress = Mutex::new(Progress::new(&[]));
         let cancel = AtomicBool::new(false);
 
-        let staging = provisioning::staging_path(new.path(), "proj");
+        // The v1 staging and marker names, written literally: fastf has no
+        // writer for either format any more, and a v2 move must treat both as
+        // ordinary payload it never reads, follows, or removes.
+        let staging = new.path().join(".proj.fastf-part");
         fs::create_dir(&staging).unwrap();
         fs::write(staging.join("sentinel"), b"owned by someone else").unwrap();
-        let marker = provisioning::move_marker_path(new.path(), "proj");
+        let marker = new.path().join(".fastf-move-proj.json");
         fs::write(&marker, b"foreign marker bytes").unwrap();
-        let outcome = staged_copy_verify_commit(
-            &project,
-            new.path(),
-            &final_path,
-            "proj",
-            &progress,
-            &cancel,
-        )
-        .unwrap();
+        let outcome =
+            staged_copy_verify_commit(&project, new.path(), &final_path, &progress, &cancel)
+                .unwrap();
         assert!(!outcome.cleanup_pending);
         assert_eq!(
             fs::read(staging.join("sentinel")).unwrap(),
@@ -1813,7 +1760,7 @@ mod tests {
             metadata.id = "ID9999".to_string();
         })
         .unwrap();
-        let error = delete_project(&stale).unwrap_err();
+        let error = delete_project_unlocked(&stale).unwrap_err();
         assert!(error.to_string().contains("identity changed"));
         assert_eq!(fs::read(base.join("proj/sentinel")).unwrap(), b"keep");
     }
@@ -1870,7 +1817,7 @@ mod tests {
             .into_iter()
             .find(|p| p.name == "gone")
             .unwrap();
-        delete_project(&doomed).unwrap();
+        delete_project_unlocked(&doomed).unwrap();
         let dirs = cached_dirs(base);
         assert!(!dirs.contains(&"gone".to_string()), "stale entry: {dirs:?}");
         assert!(dirs.contains(&"stays".to_string()), "collateral: {dirs:?}");
@@ -1881,7 +1828,7 @@ mod tests {
         write_project(base, "dropme", "ID0001", "gen", "2026-01-01T00:00:00Z");
         write_cache(base, &scan_base(base)).unwrap();
         let p = scan_base(base).into_iter().next().unwrap();
-        unregister_project(&p).unwrap();
+        unregister_project_unlocked(&p).unwrap();
         assert!(
             !cached_dirs(base).contains(&"dropme".to_string()),
             "unregister must drop the cache entry"
@@ -1894,7 +1841,7 @@ mod tests {
         write_project(base, "before", "ID0001", "gen", "2026-01-01T00:00:00Z");
         write_cache(base, &scan_base(base)).unwrap();
         let p = scan_base(base).into_iter().next().unwrap();
-        rename_project(&p, "after").unwrap();
+        rename_project_unlocked(&p, "after").unwrap();
         let dirs = cached_dirs(base);
         assert!(!dirs.contains(&"before".to_string()), "old entry: {dirs:?}");
         assert!(dirs.contains(&"after".to_string()), "new entry: {dirs:?}");
@@ -2126,7 +2073,8 @@ mod tests {
 
         // A silent skip here would be worse than no test: it reports "ok" while
         // asserting nothing, which is exactly how the mutation run found that
-        // `refuse_if_contains_links` could be replaced with `Ok(())` and stay
+        // the transaction scanner's link refusal could be replaced with
+        // `Ok(())` and stay
         // green. Junctions need no elevation on Windows and symlinks work
         // normally on Unix, so failing to create one is a real problem — say so
         // loudly rather than passing.
@@ -2231,9 +2179,7 @@ mod tests {
             // Armed per-thread, so a move test running in parallel cannot see
             // this fault — an env var would fire inside every one of them.
             let result = crate::util::faults::with_thread_fault(point, || {
-                staged_copy_verify_commit(
-                    &project, new_base, &new_path, "proj_a", &progress, &cancel,
-                )
+                staged_copy_verify_commit(&project, new_base, &new_path, &progress, &cancel)
             });
 
             if *point == "move:after-commit-before-source-removal" {
@@ -2333,16 +2279,18 @@ mod tests {
         let project = discover(&cfg).remove(0);
 
         // Illegal filesystem chars are sanitized, not fatal.
-        let renamed = rename_project(&project, "New: Name?").unwrap();
+        let renamed = rename_project_unlocked(&project, "New: Name?").unwrap();
         assert_eq!(renamed.name, "New_ Name_");
         assert!(renamed.path.is_dir());
         assert!(!project.path.exists());
 
         // Dot-prefixed names would be invisible to discovery → rejected.
-        let err = rename_project(&renamed, ".hidden").unwrap_err().to_string();
+        let err = rename_project_unlocked(&renamed, ".hidden")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("may not start with '.'"), "err: {err}");
         // Same-name rename is a no-op error, not a silent success.
-        let err = rename_project(&renamed, "New_ Name_")
+        let err = rename_project_unlocked(&renamed, "New_ Name_")
             .unwrap_err()
             .to_string();
         assert!(err.contains("already the folder's name"), "err: {err}");
@@ -2359,20 +2307,20 @@ mod tests {
         let project = discover(&cfg).remove(0);
 
         // Unregister removes only the metadata file.
-        unregister_project(&project).unwrap();
+        unregister_project_unlocked(&project).unwrap();
         assert!(project.path.join("keep.txt").is_file());
         assert!(!project_info::pinfo_path(&project.path).exists());
         // Double-unregister is a clean error.
-        assert!(unregister_project(&project).is_err());
+        assert!(unregister_project_unlocked(&project).is_err());
 
         // Delete refuses a folder without PROJECT_INFO.md (the guard rail).
-        let err = delete_project(&project).unwrap_err().to_string();
+        let err = delete_project_unlocked(&project).unwrap_err().to_string();
         assert!(err.contains("no PROJECT_INFO.md"), "err: {err}");
         assert!(project.path.is_dir());
 
         // Re-register (rewrite metadata) → delete removes the whole folder.
         write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
-        delete_project(&project).unwrap();
+        delete_project_unlocked(&project).unwrap();
         assert!(!project.path.exists());
     }
 }

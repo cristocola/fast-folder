@@ -98,7 +98,7 @@ fn case_only_rename_round_trips() {
     fs::write(base.join("myproject/keep.txt"), "content").unwrap();
 
     let project = library::scan_base(base).remove(0);
-    let renamed = library::rename_project(&project, "MyProject").unwrap();
+    let renamed = library::rename_project_unlocked(&project, "MyProject").unwrap();
 
     assert_eq!(renamed.name, "MyProject");
     assert_eq!(
@@ -137,7 +137,7 @@ fn a_case_only_rename_that_cannot_commit_restores_the_project() {
     fs::write(base.join("MyProject/squatter.txt"), "not ours").unwrap();
 
     let project = library::scan_base(base).remove(0);
-    let err = library::rename_project(&project, "MyProject")
+    let err = library::rename_project_unlocked(&project, "MyProject")
         .expect_err("renaming onto an occupied target must fail");
     let message = format!("{err:#}");
     assert!(
@@ -185,7 +185,7 @@ fn non_ascii_names_round_trip_through_discovery() {
         .iter()
         .find(|p| p.name.contains("Ünïcödé"))
         .expect("unicode project found");
-    let renamed = library::rename_project(target, "Ünïcödé_renamed").unwrap();
+    let renamed = library::rename_project_unlocked(target, "Ünïcödé_renamed").unwrap();
     assert_eq!(renamed.name, "Ünïcödé_renamed");
     assert!(renamed.path.is_dir());
 }
@@ -212,7 +212,7 @@ fn delete_succeeds_despite_read_only_files() {
     fs::set_permissions(&locked, perms).unwrap();
 
     let project = library::scan_base(base).remove(0);
-    library::delete_project(&project).expect("read-only file must not block deletion");
+    library::delete_project_unlocked(&project).expect("read-only file must not block deletion");
     assert!(!dir.exists());
 }
 
@@ -287,10 +287,12 @@ fn same_filesystem_move_preserves_a_junction() {
     }
 
     let project = library::scan_base(&base).remove(0);
-    assert_eq!(
-        fastf::core::assets::find_links(&project.path).unwrap(),
-        vec!["linked".to_string()],
-        "the junction must be visible to the pre-flight check"
+    assert!(
+        fs::symlink_metadata(dir.join("linked"))
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the fixture must really hold a junction"
     );
 
     // Same filesystem → atomic rename, nothing copied, so the junction rides

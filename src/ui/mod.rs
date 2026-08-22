@@ -828,7 +828,7 @@ fn create_project(request: CreateRequest) -> Result<Value> {
 /// attaches a fresh window to a dead server, which is a UI that is frozen from
 /// the moment it opens.
 ///
-/// Generous on purpose: `verify_tree` walks both trees without reporting
+/// Generous on purpose: move verification rescans both trees without reporting
 /// progress, and on a slow network or cloud destination that can legitimately
 /// run for minutes. The bounded drain loop in `cli::ui::run` is the real
 /// backstop; this is the cheap first line.
@@ -1572,7 +1572,7 @@ fn project_move(request: MoveRequest) -> Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("'{}' is not a configured base", request.base.trim()))?;
 
     // Pre-flight the cheap guards so obvious errors surface synchronously rather
-    // than only via job polling (mirrors move_project_with's own checks).
+    // than only via job polling (mirrors the library move's own checks).
     if !target.is_dir() {
         bail!("target base does not exist: {}", target.display());
     }

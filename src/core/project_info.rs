@@ -337,7 +337,7 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
 
     let new_content = format!("---\n{}---\n{}", new_yaml, body);
 
-    atomic_write(path, new_content.as_bytes())
+    crate::util::atomic::write(path, new_content.as_bytes())
 }
 
 /// Append a timestamped journal entry to `## Journal` in the file.
@@ -376,7 +376,7 @@ pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
         }
     };
 
-    atomic_write(path, new_content.as_bytes())
+    crate::util::atomic::write(path, new_content.as_bytes())
 }
 
 /// Read back only the journal lines from the metadata file.
@@ -469,11 +469,6 @@ pub fn split_frontmatter_body(content: &str) -> Option<(&str, &str)> {
     let body = &rest[close_pos + close_len..];
 
     Some((frontmatter_yaml, body))
-}
-
-/// Write `bytes` through the shared unique atomic writer.
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    crate::util::atomic::write(path, bytes)
 }
 
 #[cfg(test)]

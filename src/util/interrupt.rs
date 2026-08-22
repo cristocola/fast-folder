@@ -25,7 +25,7 @@ pub fn is_set() -> bool {
 }
 
 /// Error returned by long-running work that noticed the interrupt.
-pub fn interrupted_error() -> anyhow::Error {
+pub(crate) fn interrupted_error() -> anyhow::Error {
     anyhow::anyhow!("interrupted")
 }
 

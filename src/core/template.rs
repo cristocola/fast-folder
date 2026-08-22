@@ -285,7 +285,7 @@ impl Template {
         // rather than `self.dir`, which may be unset on an in-memory template.
         let files_dir = dir.join("files");
         for f in &snapshot.files {
-            crate::core::naming::ensure_relative_safe_path(&f.path)?;
+            crate::core::validated::SafeRelativePath::parse(&f.path)?;
             let dest = files_dir.join(&f.path);
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)
@@ -306,7 +306,7 @@ impl Template {
     /// metadata filename (PROJECT_INFO.md at the project root, case-insensitive).
     /// Called from `load_from_file` and `save_to_file` — fastf always owns that
     /// file, so a template-defined version would just get overwritten.
-    pub fn strip_reserved_files(&mut self) {
+    pub(crate) fn strip_reserved_files(&mut self) {
         self.files
             .retain(|f| !crate::core::project_info::path_is_reserved(&f.path));
     }

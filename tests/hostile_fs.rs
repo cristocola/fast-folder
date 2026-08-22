@@ -191,14 +191,17 @@ fn move_marker_with_dangling_paths_is_reported_without_mutation() {
         let missing_src = base.join("vanished_source");
         let missing_temp = base.join(".vanished.fastf-part");
         let missing_final = base.join("never_committed");
-        provisioning::write_move_marker(
-            base,
-            "vanished",
-            &missing_src,
-            &missing_temp,
-            &missing_final,
-            "copying",
-            "ID9999",
+        // Planted as bytes on purpose: fastf has no writer for this format any
+        // more, and reconcile must report it without parsing a single path.
+        fs::write(
+            base.join(".fastf-move-vanished.json"),
+            format!(
+                r#"{{"version":1,"started_at":"2026-01-01T00:00:00Z","src":{src},"temp":{temp},"final_path":{final_path},"phase":"copying","id":"ID9999"}}"#,
+                src = serde_json::to_string(&missing_src.display().to_string()).unwrap(),
+                temp = serde_json::to_string(&missing_temp.display().to_string()).unwrap(),
+                final_path =
+                    serde_json::to_string(&missing_final.display().to_string()).unwrap(),
+            ),
         )
         .unwrap();
 

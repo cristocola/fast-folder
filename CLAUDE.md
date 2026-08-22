@@ -89,10 +89,11 @@ the exception and belongs in `LICENSE`, `Cargo.toml`, `README.md`, the
 PKGBUILDs, and the installer, where it is expected.
 
 `tests/repo_hygiene.rs` enforces this over `git ls-files`, so the rule fails the
-build rather than relying on anyone remembering it. It skips when there is no
-git checkout, because the AUR source package runs the suite inside a makepkg
-sandbox. Before tracking a file that was written as a private note, read it as a
-stranger would.
+build rather than relying on anyone remembering it. It runs only when the crate
+directory is the root of the checkout, because the AUR source package builds an
+unpacked tarball inside an ignored directory of a real clone, where `git` answers
+about the wrong tree. Before tracking a file that was written as a private note,
+read it as a stranger would.
 
 ## Key design decisions
 

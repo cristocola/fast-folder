@@ -41,9 +41,32 @@ const PLACEHOLDER_USERS: &[&str] = &[
 
 fn tracked_text_files() -> Option<Vec<PathBuf>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    // `git ls-files` is the exact question: what does a clone receive? When
-    // there is no checkout at all — the AUR source package runs this suite
-    // inside a makepkg sandbox — there is nothing published to check.
+    // The crate being tested must be the root of the checkout, or this is not
+    // the published tree. Asking `git` from inside a directory is not enough:
+    // the AUR source package unpacks the release tarball into
+    // `packaging/aur/fast-folder/src/`, which sits *inside* a real checkout and
+    // is ignored by it, so `git ls-files` there succeeds and returns nothing.
+    // That looked like "a checkout with no files" and tripped the vacuous-pass
+    // assertion, which is a failing `check()` for everyone building the AUR
+    // package. Comparing the top level answers the question that was meant:
+    // are these bytes the ones a clone receives?
+    let top_level = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !top_level.status.success() {
+        return None;
+    }
+    let top_level = PathBuf::from(
+        String::from_utf8_lossy(&top_level.stdout)
+            .trim()
+            .to_string(),
+    );
+    if top_level.canonicalize().ok()? != root.canonicalize().ok()? {
+        return None;
+    }
+    // `git ls-files` is then the exact question: what does a clone receive?
     let output = Command::new("git")
         .args(["ls-files", "-z"])
         .current_dir(root)
@@ -116,7 +139,10 @@ fn mentions_exact_path(line: &str, needle: &str) -> bool {
 #[test]
 fn no_tracked_file_describes_the_maintainers_machine() {
     let Some(files) = tracked_text_files() else {
-        eprintln!("skipping: not a git checkout, so nothing is published from here");
+        eprintln!(
+            "skipping: this tree is not the root of a git checkout, \
+             so nothing is published from here"
+        );
         return;
     };
     assert!(

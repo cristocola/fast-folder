@@ -49,6 +49,12 @@ fn contain(result: Result<()>) -> Result<()> {
 }
 
 pub fn run() -> Result<()> {
+    // Checked before the banner: a menu that cannot be driven should not put
+    // decoration on stdout for a session that never happens.
+    crate::util::tty::require_tty(
+        "show the menu",
+        "run a subcommand instead — see `fastf --help`",
+    )?;
     // Banner is shown once based on the first config load. Honors show_banner.
     let initial = Config::load()?;
     if initial.show_banner {
@@ -428,7 +434,14 @@ fn template_from_folder_flow() -> Result<()> {
         .with_prompt("Overwrite if a template with this slug exists?")
         .default(false)
         .interact()?;
-    template::run_from_folder(&path, &slug, force, false)
+    template::run_from_folder(template::FromFolderArgs {
+        path,
+        slug,
+        force,
+        bundle_assets: false,
+        yes: false,
+        dry_run: false,
+    })
 }
 
 // ---------------------------------------------------------------------------

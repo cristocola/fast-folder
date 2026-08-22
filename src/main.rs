@@ -2,7 +2,6 @@ use fastf::{bootstrap, cli, tui, ui};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use colored::Colorize;
 
 // ---------------------------------------------------------------------------
 // CLI definition
@@ -44,9 +43,9 @@ enum Commands {
             fastf new music-video --artist=\"Ariana Grande\" --title=Lullaby\n  \
             fastf new music-video --base-dir=/mnt/proj/01_PROJECTS   # create in another base\n  \
             fastf new music-video --yes --artist=\"Bad Bunny\"   # flags + vars in any order\n\n\
-            Variable flags must use = syntax: --artist=\"Bad Bunny\" not --artist \"Bad Bunny\".\n\
-            Flags (--yes, --dry-run, --no-preview, --no-post, --base-dir=...) may appear\n\
-            before OR after the template slug — fastf lifts them out automatically.")]
+            Variables must use = syntax: --artist=\"Bad Bunny\", not --artist \"Bad Bunny\".\n\
+            Every flag above works before OR after the template slug, and a --word that is\n\
+            neither a declared flag nor a --key=value pair is refused, not ignored.")]
     New {
         /// Template slug to use. Run 'fastf template list' to see available templates.
         /// Prompts interactively if omitted and no default-template is configured.
@@ -386,10 +385,10 @@ enum Commands {
 
     /// Print a shell completion script to stdout
     #[command(
-        after_help = "Pipe the output into your shell's completion directory.\n\n\
+        after_help = "Write the output into your shell's completion directory.\n\n\
         Examples:\n  \
-            fastf completions bash > /etc/bash_completion.d/fastf\n  \
-            fastf completions zsh > ~/.zfunc/_fastf\n  \
+            fastf completions bash > ~/.local/share/bash-completion/completions/fastf\n  \
+            fastf completions zsh > ~/.zfunc/_fastf          # ~/.zfunc must be on $fpath\n  \
             fastf completions fish > ~/.config/fish/completions/fastf.fish"
     )]
     Completions {
@@ -474,6 +473,7 @@ enum TemplateAction {
             Examples:\n  \
                 fastf template from-folder ./my-crate rust-project\n  \
                 fastf template from-folder ./delivery-kit client-kit --bundle-assets\n  \
+                fastf template from-folder ./delivery-kit client-kit --dry-run\n  \
                 fastf template from-folder ./existing-video video-project --force"
     )]
     FromFolder {
@@ -487,6 +487,12 @@ enum TemplateAction {
         /// Bundle binary/large files byte-for-byte (default: text files only)
         #[arg(long)]
         bundle_assets: bool,
+        /// Accept the bundle-size confirmation without asking (for scripts)
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Print what would be generated and write nothing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -688,17 +694,18 @@ fn run() -> Result<()> {
             yes,
             extra,
         }) => {
-            let classified = cli::new::classify_extra(extra);
-            warn_unknown(&classified.unknown);
-            cli::new::run(cli::new::NewArgs {
+            let classified = classify_for("new", extra)?;
+            let mut args = cli::new::NewArgs {
                 template_slug: template,
                 vars: classified.vars,
-                dry_run: dry_run || classified.flags.dry_run,
-                base_dir_override: base_dir.or(classified.flags.base_dir),
-                no_preview: no_preview || classified.flags.no_preview,
-                no_post: no_post || classified.flags.no_post,
-                yes: yes || classified.flags.yes,
-            })
+                dry_run,
+                base_dir_override: base_dir,
+                no_preview,
+                no_post,
+                yes,
+            };
+            cli::new::apply_extra(&mut args, classified.recognized)?;
+            cli::new::run(args)
         }
 
         Some(Commands::Template { action }) => match action {
@@ -712,7 +719,16 @@ fn run() -> Result<()> {
                 slug,
                 force,
                 bundle_assets,
-            } => cli::template::run_from_folder(&path, &slug, force, bundle_assets),
+                yes,
+                dry_run,
+            } => cli::template::run_from_folder(cli::template::FromFolderArgs {
+                path,
+                slug,
+                force,
+                bundle_assets,
+                yes,
+                dry_run,
+            }),
         },
 
         Some(Commands::Config { action }) => match action {
@@ -761,43 +777,42 @@ fn run() -> Result<()> {
             yes,
             extra,
         }) => {
-            let classified = cli::new::classify_extra(extra);
-            warn_unknown(&classified.unknown);
+            let classified = classify_for("register", extra)?;
             // clap's `requires`/`conflicts_with` only see flags written *before*
-            // the path; `trailing_var_arg` swallows anything after it into
-            // `extra`. Re-check here so `fastf register X --dry-run` is refused
-            // wherever the flag was typed — it used to be dropped silently and
+            // the path; `trailing_var_arg` swallows anything after it. So the
+            // flags are merged first and the constraints checked on the merged
+            // set — `fastf register X --dry-run` used to be dropped silently and
             // the folder written for real.
-            let dry_run = dry_run || classified.flags.dry_run;
-            if dry_run && !recursive {
-                anyhow::bail!(
-                    "--dry-run only applies to --recursive (a single folder has nothing to preview).\n  \
-                     Registering one folder writes its PROJECT_INFO.md and nothing else."
-                );
-            }
-            let yes = yes || classified.flags.yes;
-            if yes && recursive {
-                anyhow::bail!(
-                    "--yes cannot be used with --recursive: bulk registration never prompts"
-                );
-            }
-            if recursive {
+            let mut flags = cli::register::RegisterFlags {
+                recursive,
+                dry_run,
+                template,
+                apply,
+                rename,
+                use_today,
+                created,
+                yes,
+            };
+            flags.apply_extra(classified.recognized)?;
+            flags.validate()?;
+            if flags.recursive {
                 cli::register::run_recursive(cli::register::RecursiveArgs {
                     base: std::path::PathBuf::from(path),
-                    template_slug: template,
-                    use_today,
-                    dry_run,
+                    template_slug: flags.template,
+                    vars: classified.vars,
+                    use_today: flags.use_today,
+                    dry_run: flags.dry_run,
                 })
             } else {
                 cli::register::run(cli::register::RegisterArgs {
                     path: std::path::PathBuf::from(path),
-                    template_slug: template,
+                    template_slug: flags.template,
                     vars: classified.vars,
-                    apply_structure: apply,
-                    rename,
-                    use_today,
-                    created_override: created,
-                    yes,
+                    apply_structure: flags.apply,
+                    rename: flags.rename,
+                    use_today: flags.use_today,
+                    created_override: flags.created,
+                    yes: flags.yes,
                 })
             }
         }
@@ -809,15 +824,16 @@ fn run() -> Result<()> {
             yes,
             extra,
         }) => {
-            let classified = cli::new::classify_extra(extra);
-            warn_unknown(&classified.unknown);
-            cli::apply::run(cli::apply::ApplyArgs {
+            let classified = classify_for("apply", extra)?;
+            let mut args = cli::apply::ApplyArgs {
                 template_slug: template,
                 target,
-                dry_run: dry_run || classified.flags.dry_run,
-                yes: yes || classified.flags.yes,
+                dry_run,
+                yes,
                 vars: classified.vars,
-            })
+            };
+            cli::apply::apply_extra(&mut args, classified.recognized)?;
+            cli::apply::run(args)
         }
 
         Some(Commands::Tag { action }) => match action {
@@ -857,16 +873,19 @@ fn run() -> Result<()> {
     }
 }
 
-/// Emit a `warning:` line for every token that came out of `classify_extra`'s
-/// unknown bucket. Used by the New / Apply / Register arms.
-fn warn_unknown(unknown: &[String]) {
-    for u in unknown {
-        eprintln!(
-            "{} unrecognized flag '{}' — ignored",
-            "warning:".yellow().bold(),
-            u
-        );
-    }
+/// Sort one subcommand's trailing bucket, using **that subcommand's own clap
+/// declarations** as the list of flags to recognize.
+///
+/// Reading the list from clap is the point: the hand-written recognizer knew
+/// five flags, `register` declares none of them, and every register flag typed
+/// after the path was reported "unrecognized" and dropped.
+fn classify_for(subcommand: &str, extra: Vec<String>) -> Result<cli::extra::ClassifiedExtra> {
+    use clap::CommandFactory;
+    let command = Cli::command();
+    let sub = command
+        .find_subcommand(subcommand)
+        .expect("subcommand is declared on Cli");
+    cli::extra::classify_extra(extra, sub)
 }
 
 /// Generate the full man-page set (fastf.1 + one page per subcommand) into
@@ -910,7 +929,57 @@ fn generate_completions(shell: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_config_parse_failure;
+    use super::{Cli, is_config_parse_failure};
+    use clap::CommandFactory;
+    use fastf::cli::extra::Recognized;
+
+    /// Every flag a subcommand declares, as `classify_extra` would report it.
+    fn every_declared_flag(subcommand: &str) -> Vec<Recognized> {
+        let command = Cli::command();
+        let sub = command.find_subcommand(subcommand).expect("declared");
+        sub.get_arguments()
+            .filter(|arg| arg.get_long().is_some())
+            .filter(|arg| !matches!(arg.get_id().as_str(), "help" | "version"))
+            .map(|arg| Recognized {
+                name: arg.get_long().unwrap().to_string(),
+                value: arg.get_action().takes_values().then(|| "x".to_string()),
+            })
+            .collect()
+    }
+
+    /// The guard that replaces the old "three coordinated edits" rule: declare a
+    /// flag in clap, handle it in that command's `apply_extra`, and this test
+    /// catches the case you forget. Before it, a flag added to clap kept working
+    /// before the positional and silently did nothing after it.
+    #[test]
+    fn every_declared_flag_is_handled_after_the_positional() {
+        let mut new_args = fastf::cli::new::NewArgs {
+            template_slug: None,
+            vars: Default::default(),
+            dry_run: false,
+            base_dir_override: None,
+            no_preview: false,
+            no_post: false,
+            yes: false,
+        };
+        fastf::cli::new::apply_extra(&mut new_args, every_declared_flag("new"))
+            .expect("every `new` flag must be handled after the slug");
+
+        let mut apply_args = fastf::cli::apply::ApplyArgs {
+            template_slug: String::new(),
+            target: String::new(),
+            dry_run: false,
+            vars: Default::default(),
+            yes: false,
+        };
+        fastf::cli::apply::apply_extra(&mut apply_args, every_declared_flag("apply"))
+            .expect("every `apply` flag must be handled after the target");
+
+        let mut register_flags = fastf::cli::register::RegisterFlags::default();
+        register_flags
+            .apply_extra(every_declared_flag("register"))
+            .expect("every `register` flag must be handled after the path");
+    }
 
     /// The whole point of the hint: a config that exists but does not parse
     /// stops every command, and no command can repair it.

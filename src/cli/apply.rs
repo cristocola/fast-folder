@@ -4,11 +4,13 @@ use dialoguer::Confirm;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::cli::extra::Recognized;
 use crate::core::config::Config;
 use crate::core::project;
 use crate::core::template;
 use crate::core::template::FolderNode;
 use crate::core::vars::collect_vars;
+use crate::util::tty;
 
 /// Returns true if any folder name in the structure contains a `{token}` placeholder.
 /// Used to decide whether to prompt for variables during `fastf apply`.
@@ -44,6 +46,19 @@ pub struct ApplyArgs {
     pub dry_run: bool,
     pub vars: HashMap<String, String>,
     pub yes: bool,
+}
+
+/// Apply the flags recovered from clap's trailing bucket. See
+/// [`crate::cli::new::apply_extra`] for why the fallback arm exists.
+pub fn apply_extra(args: &mut ApplyArgs, recognized: Vec<Recognized>) -> Result<()> {
+    for flag in recognized {
+        match flag.name.as_str() {
+            "yes" => args.yes = true,
+            "dry-run" => args.dry_run = true,
+            other => bail!("flag `--{other}` is declared but not handled after the target"),
+        }
+    }
+    Ok(())
 }
 
 pub fn run(args: ApplyArgs) -> Result<()> {
@@ -99,6 +114,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     }
 
     if !args.yes {
+        tty::require_tty("confirm", "pass --yes to apply without confirming")?;
         println!();
         let ok = Confirm::new()
             .with_prompt(format!(

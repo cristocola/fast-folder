@@ -76,7 +76,12 @@ pub fn run(args: SearchArgs) -> Result<()> {
         return Ok(());
     }
 
-    let interactive = !args.plain && std::io::stdout().is_terminal();
+    // Two questions, both of which must say yes: stdout decides the *format*
+    // (a pipe gets the plain list), and stderr decides whether the picker can
+    // be drawn and answered at all. Without the second, `2>/dev/null` launched
+    // a picker nobody could see and waited for a key.
+    let interactive =
+        !args.plain && std::io::stdout().is_terminal() && crate::util::tty::prompt_available();
 
     if interactive {
         crate::cli::recent::run_picker(&matches)

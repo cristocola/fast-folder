@@ -1,7 +1,6 @@
 use anyhow::{Result, bail};
 use dialoguer::{Input, Select};
 use std::collections::HashMap;
-use std::io::IsTerminal;
 
 use crate::core::template::{Template, VarType};
 
@@ -84,7 +83,7 @@ pub fn collect_vars(
         // what to do. Name the variable that is missing and the flag that
         // supplies it. (Optional variables need `--slug=` too — the prompt runs
         // for them as well.)
-        if !std::io::stdout().is_terminal() {
+        if !crate::util::tty::prompt_available() {
             anyhow::bail!(
                 "no terminal to prompt on, and '{}' was not supplied.\n  \
                  Pass it as a flag: --{}=<value>   (use --{}= for an empty value)\n  \

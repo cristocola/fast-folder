@@ -1986,6 +1986,7 @@ fn register_recursive_onboards_children_and_previews() {
         run_recursive(RecursiveArgs {
             base: base.clone(),
             template_slug: None,
+            vars: Default::default(),
             use_today: false,
             dry_run: true,
         })
@@ -1997,6 +1998,7 @@ fn register_recursive_onboards_children_and_previews() {
         run_recursive(RecursiveArgs {
             base: base.clone(),
             template_slug: None,
+            vars: Default::default(),
             use_today: false,
             dry_run: false,
         })

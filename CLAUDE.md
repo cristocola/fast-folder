@@ -40,7 +40,8 @@ Gotchas sections below for the parts that bite.
 
 - `src/lib.rs` exposes `core/ cli/ tui/ ui/ util/ bootstrap/` so integration tests
   can `use fastf::…`. `src/main.rs` is the clap binary; its New / Apply / Register
-  arms run their trailing `extra` Vec through `cli::new::classify_extra`.
+  arms run their trailing `extra` Vec through `cli::extra::classify_extra` and then
+  each command's own `apply_extra`.
 - `src/bin/fastf-ui.rs` — second `[[bin]]`, a windowless Windows launcher shim over
   `cli::ui::run(app: true)`. **Not a second server**; the server lives only in `src/ui/`.
 - `src/bootstrap.rs` — first-run setup. Ships two deliberately universal templates
@@ -380,7 +381,7 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 - v0.4: `Predicate::Free` is the parser fallthrough, so any non-empty term that isn't `tag:`, `key=…`, `key>…`, `key<…` becomes a free-text predicate. Don't add another fallthrough below it (would be unreachable). Free terms search **case-insensitive substring** (not prefix) — keep it that way for grep-like UX.
 - v0.4: `path` is intentionally NOT searched by `Predicate::Free`. There's a regression test (`free_does_not_match_path`) that asserts this; if you ever extend the field set, don't break that guarantee silently — home-dir leakage is a privacy footgun.
 - v0.4: `cli::recent::run_picker` is `pub` because `cli::search` reuses it; `project_action_menu` stays private. If TUI/search both need a new picker action, add it inside `recent.rs`.
-- v0.5: Bool flags after the slug used to silently drop. Fixed by `cli::new::classify_extra` — main.rs's New / Apply / Register arms all run their trailing `extra` Vec through it, then OR-combine the recognized flags into the relevant Args struct. Adding a new bool flag to `New`/`Apply`/`Register` requires updating `ExtraFlags`, the recognizer match in `classify_extra`, AND the OR-combine in each match arm — three coordinated edits. Forget the third and the flag works before the slug but mysteriously breaks after it.
+- v1.6.1: **`cli::extra::classify_extra` reads the flag list from clap, not from a hand-written match.** `trailing_var_arg` means every token after the first one clap cannot parse lands in `extra`; the classifier sorts that bucket using `cmd.get_arguments()` for *that* subcommand (long, short, `get_action().takes_values()`). So the rule for adding a flag is two steps, not three: declare it in clap, handle it in that command's `apply_extra` (`cli::new`, `cli::apply`, `RegisterFlags`). The `_ =>` arm of each `apply_extra` bails by name, and `main.rs`'s `every_declared_flag_is_handled_after_the_positional` calls it with every declared long, so forgetting the second step fails the suite instead of making the flag work before the positional and silently do nothing after it. An undeclared `--key=value` is a template variable; anything else is an error (`warn_unknown` is gone — an ignored request is not an outcome).
 - register writes PROJECT_INFO.md in two steps: `project_info::write(&plan, &tmpl, &tags)` (which uses `library::now_iso8601` inside `Metadata::from_plan`), then `project_info::write_frontmatter` to patch `created` to the resolved timestamp. Don't try to plumb the timestamp through `from_plan` — it'd break the byte-identity guarantee on the round-trip test and pollute the signature for a register-only concern.
 - v0.5: `register` builds its `ProjectPlan` directly (pub struct fields) instead of calling `project::plan()` because plan always sets `root_path = cfg.base_dir.join(folder_name)`. Register's `root_path` is the canonical path of the existing folder. Don't refactor plan to take a path override — keep the two flows separate.
 - v0.5: Without `--template`, register uses a `registered_stub_template()` (slug `"(registered)"`, `IdConfig::default()`). Recent and search will show these mixed with template-created projects. `project_info::render`'s "no variables" branch handles empty `tmpl.variables` correctly — don't add a special-case writer.
@@ -454,6 +455,18 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
   `run_paged_browser`'s loader closure returns `Result`, and `src/ui` loads
   through `ui::load_config`, whose `SERVER_ERROR_PREFIX` makes `status_for`
   answer 500 rather than blaming the request.
+- v1.6.1: **`util::tty::prompt_available` probes *stderr*, because that is where a
+  prompt is drawn.** `dialoguer` writes to stderr and reads stdin (falling back to
+  `/dev/tty`), so the old `stdout().is_terminal()` guards answered a different
+  question: `fastf new t > out.txt` refused although a terminal was right there,
+  and `2>/dev/null` sailed past the guard into dialoguer's bare "IO error: not a
+  terminal". Every prompt in `src/cli/` goes through `tty::require_tty(what, how)`,
+  whose message must name the flag that gets the same result without asking.
+  **Stdout still decides output *format*** (`recent`/`search` plain list, the move
+  progress line) — a genuinely different question; those three probes stay. A
+  prompt whose absence changes what happens on disk (`fastf move`'s confirm)
+  refuses rather than proceeding unconfirmed. The TUI is guarded once, at
+  `tui::menu::run`, before the banner.
 - v1.6.1: **`util::interrupt::restore_terminal` is the one cursor restore**,
   called from `main`'s error path and from the signal handler before the second
   Ctrl-C exits 130. The unix branch is raw `isatty` + `write` because a signal
@@ -573,10 +586,11 @@ set` / `id reset` / `POST /api/counter` refuse rather than pretend.
 
 **`trailing_var_arg` means clap's `requires`/`conflicts_with` only see flags typed
 *before* the positional.** `register --dry-run` after the path lands in `extra`,
-where `classify_extra` picks it up and the arm decides. So a flag constraint that
-matters has to be enforced **twice**: in the clap attribute *and* in the match arm
-in `main.rs`. Enforcing it only in the attribute is what let `--dry-run` write the
-folder for real when typed after the path.
+so the attribute never fires — which is how `--dry-run` came to write the folder
+for real. Since v1.6.1 the constraint lives in exactly one place that sees the
+whole line: `RegisterFlags::validate`, run on the merged set (clap's fields plus
+what `apply_extra` lifted out of `extra`). Keep the clap attributes for the help
+text and the early error; put the enforcement in `validate`.
 
 **Don't read a `Config` field raw when a `resolve_*` exists.** `cli::note` passed
 `&cfg.editor` where everything else calls `cfg.resolve_editor()`, so the

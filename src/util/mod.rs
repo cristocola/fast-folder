@@ -7,3 +7,4 @@ pub mod lockfile;
 pub mod paths;
 pub(crate) mod size_scan;
 pub(crate) mod tree_size;
+pub mod tty;

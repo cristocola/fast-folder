@@ -534,7 +534,12 @@ fn register_recursive_dry_run_after_the_path_previews_the_children() {
     fs::create_dir_all(base.join("one")).unwrap();
     fs::create_dir_all(base.join("two")).unwrap();
 
-    let out = sb.run(&["register", &base.display().to_string(), "--recursive", "--dry-run"]);
+    let out = sb.run(&[
+        "register",
+        &base.display().to_string(),
+        "--recursive",
+        "--dry-run",
+    ]);
     assert!(out.status.success(), "dry run failed: {out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -646,7 +651,8 @@ fn apply_refuses_a_flag_it_does_not_declare() {
 fn recursive_register_passes_its_variables_to_every_child() {
     let sb = Sandbox::new();
     sb.write_template("race");
-    let base = sb.tmp.path().join("legacy-base");
+    // A configured base: registration refuses a folder that is not in one.
+    let base = sb.with_bases(&["legacy-base"]).remove(0);
     fs::create_dir_all(base.join("one")).unwrap();
     fs::create_dir_all(base.join("two")).unwrap();
 
@@ -775,7 +781,11 @@ fn from_folder_can_be_driven_without_a_terminal() {
     fs::write(src.join("blob.bin"), vec![0u8; 128 * 1024]).unwrap();
     let src = src.display().to_string();
 
-    refuses_without_a_terminal(&sb, &["template", "from-folder", &src, "t1", "--bundle-assets"], "--yes");
+    refuses_without_a_terminal(
+        &sb,
+        &["template", "from-folder", &src, "t1", "--bundle-assets"],
+        "--yes",
+    );
 
     let out = sb.run_headless(&["template", "from-folder", &src, "t2", "--dry-run"]);
     assert!(out.status.success(), "dry run failed: {out:?}");

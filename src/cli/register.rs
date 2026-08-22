@@ -27,6 +27,7 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+use crate::cli::extra::Recognized;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::library::Project;
@@ -51,6 +52,79 @@ pub enum PinfoConflict {
     /// Refuse to register at all — bail *before* any write so the caller can
     /// confirm and retry cleanly. Used by the browser UI.
     Abort,
+}
+
+/// Every flag `fastf register` declares, merged from clap's own parse and from
+/// the trailing bucket, so a flag means the same thing wherever it was typed.
+///
+/// The constraints live here rather than only in clap's attributes because
+/// `trailing_var_arg` hides everything after the path from clap: `requires` and
+/// `conflicts_with` simply do not see those tokens. That is how
+/// `register <path> --dry-run` came to write the folder for real.
+#[derive(Default, Debug)]
+pub struct RegisterFlags {
+    pub recursive: bool,
+    pub dry_run: bool,
+    pub template: Option<String>,
+    pub apply: bool,
+    pub rename: bool,
+    pub use_today: bool,
+    pub created: Option<String>,
+    pub yes: bool,
+}
+
+impl RegisterFlags {
+    /// Apply the flags recovered from clap's trailing bucket. See
+    /// [`crate::cli::new::apply_extra`] for why the fallback arm exists.
+    pub fn apply_extra(&mut self, recognized: Vec<Recognized>) -> Result<()> {
+        for flag in recognized {
+            match flag.name.as_str() {
+                "recursive" => self.recursive = true,
+                "dry-run" => self.dry_run = true,
+                "template" => self.template = flag.value,
+                "apply" => self.apply = true,
+                "rename" => self.rename = true,
+                "use-today" => self.use_today = true,
+                "created" => self.created = flag.value,
+                "yes" => self.yes = true,
+                other => bail!("flag `--{other}` is declared but not handled after the path"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuse a combination that cannot be honoured, naming what it would have
+    /// meant. A flag that cannot be obeyed is an error, never a silent drop.
+    pub fn validate(&self) -> Result<()> {
+        if self.dry_run && !self.recursive {
+            bail!(
+                "--dry-run only applies to --recursive (a single folder has nothing to preview).\n  \
+                 Registering one folder writes its PROJECT_INFO.md and nothing else."
+            );
+        }
+        if self.apply && self.template.is_none() {
+            bail!("--apply requires --template");
+        }
+        if self.use_today && self.created.is_some() {
+            bail!("--use-today and --created are mutually exclusive");
+        }
+        if self.recursive {
+            for (set, flag) in [
+                (self.yes, "--yes"),
+                (self.rename, "--rename"),
+                (self.apply, "--apply"),
+                (self.created.is_some(), "--created"),
+            ] {
+                if set {
+                    bail!(
+                        "{flag} cannot be used with --recursive: bulk registration never prompts, \
+                         never renames, and takes each folder's own date"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Interactive args from the CLI / TUI (`fastf register`).
@@ -294,6 +368,10 @@ pub fn run(args: RegisterArgs) -> Result<()> {
 pub struct RecursiveArgs {
     pub base: PathBuf,
     pub template_slug: Option<String>,
+    /// Raw variable values applied to every child. Empty is the ordinary case;
+    /// they were dropped entirely before, so a template with required variables
+    /// could not be used for bulk onboarding at all.
+    pub vars: HashMap<String, String>,
     pub use_today: bool,
     pub dry_run: bool,
 }
@@ -301,8 +379,9 @@ pub struct RecursiveArgs {
 /// Write a `PROJECT_INFO.md` into every direct child of `base` that lacks one,
 /// making them all discoverable. `--dry-run` previews without writing.
 ///
-/// Bulk onboarding uses empty variables + the given template (or the registered
-/// stub), so a template with required variables isn't appropriate here.
+/// Every child gets the same template (or the registered stub) and the same
+/// variable values, so a template with required variables needs them passed as
+/// `--slug=value` on the command line.
 pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
     let base = args.base.canonicalize().with_context(|| {
         format!(
@@ -371,7 +450,7 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
         match register_core(RegisterOptions {
             path: path.clone(),
             template_slug: args.template_slug.clone(),
-            vars: HashMap::new(),
+            vars: args.vars.clone(),
             apply_structure: false,
             rename: false,
             use_today: args.use_today,

@@ -4,6 +4,7 @@ use dialoguer::Confirm;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::cli::extra::Recognized;
 use crate::core::config::Config;
 use crate::core::project;
 use crate::core::template;
@@ -44,6 +45,19 @@ pub struct ApplyArgs {
     pub dry_run: bool,
     pub vars: HashMap<String, String>,
     pub yes: bool,
+}
+
+/// Apply the flags recovered from clap's trailing bucket. See
+/// [`crate::cli::new::apply_extra`] for why the fallback arm exists.
+pub fn apply_extra(args: &mut ApplyArgs, recognized: Vec<Recognized>) -> Result<()> {
+    for flag in recognized {
+        match flag.name.as_str() {
+            "yes" => args.yes = true,
+            "dry-run" => args.dry_run = true,
+            other => bail!("flag `--{other}` is declared but not handled after the target"),
+        }
+    }
+    Ok(())
 }
 
 pub fn run(args: ApplyArgs) -> Result<()> {

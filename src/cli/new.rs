@@ -4,6 +4,7 @@ use dialoguer::{Confirm, Select};
 use std::collections::HashMap;
 use std::io::IsTerminal;
 
+use crate::cli::extra::Recognized;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::project;
@@ -189,161 +190,25 @@ pub fn pick_template_interactively() -> Result<Template> {
 }
 
 // ---------------------------------------------------------------------------
-// `extra` classifier — shared by main.rs's New / Apply / Register arms.
-//
-// clap's `trailing_var_arg = true` captures every token after the positional
-// slug into a `Vec<String>`. Without further parsing, bare flags like `--yes`
-// placed after the slug get silently dropped. This helper lifts recognized
-// fastf flags out into `ExtraFlags`, splits `--key=value` pairs into the
-// `vars` map (with hyphens normalised to underscores), and surfaces unknown
-// `--foo` tokens so the caller can warn.
+// Flags lifted out of clap's trailing bucket
 // ---------------------------------------------------------------------------
 
-/// fastf-level flags that may appear inside clap's `trailing_var_arg` bucket.
-/// Each `Commands` arm picks the fields it cares about — Apply/Register
-/// ignore the ones that don't apply to them (no breaking change vs. the
-/// pre-fix silent drop).
-#[derive(Default, Debug, PartialEq)]
-pub struct ExtraFlags {
-    pub yes: bool,
-    pub dry_run: bool,
-    pub no_preview: bool,
-    pub no_post: bool,
-    pub base_dir: Option<String>,
-}
-
-/// Result of lifting recognized flags out of clap's `extra` bucket.
-#[derive(Default, Debug)]
-pub struct ClassifiedExtra {
-    pub flags: ExtraFlags,
-    /// `--key=value` pairs that did not match any recognized flag — these
-    /// flow into the template variable map. Keys have hyphens normalised
-    /// to underscores to match the on-disk template slug shape.
-    pub vars: HashMap<String, String>,
-    /// `--something` tokens without `=` that aren't a recognized fastf flag.
-    /// Callers should warn (they used to be silently dropped).
-    pub unknown: Vec<String>,
-}
-
-/// Walk clap's trailing `extra` once and classify each token.
+/// Apply the flags [`crate::cli::extra::classify_extra`] recovered for `new`.
 ///
-/// Recognized boolean flags: `--yes` / `-y`, `--dry-run`, `--no-preview`,
-/// `--no-post`. Recognized value flag (must use `=` form): `--base-dir=PATH`.
-/// Everything else shaped like `--key=value` becomes a variable; everything
-/// else shaped like `--foo` lands in `unknown`.
-pub fn classify_extra(extra: Vec<String>) -> ClassifiedExtra {
-    let mut out = ClassifiedExtra::default();
-    for arg in extra {
-        // Recognized boolean flags (exact match).
-        match arg.as_str() {
-            "--yes" | "-y" => {
-                out.flags.yes = true;
-                continue;
-            }
-            "--dry-run" => {
-                out.flags.dry_run = true;
-                continue;
-            }
-            "--no-preview" => {
-                out.flags.no_preview = true;
-                continue;
-            }
-            "--no-post" => {
-                out.flags.no_post = true;
-                continue;
-            }
-            _ => {}
+/// The `_ =>` arm is the guard: a flag declared in clap but not handled here is
+/// a build-time-visible bug rather than a flag that silently stops working when
+/// typed after the slug. `main.rs`'s exhaustiveness test calls this with every
+/// long `new` declares.
+pub fn apply_extra(args: &mut NewArgs, recognized: Vec<Recognized>) -> Result<()> {
+    for flag in recognized {
+        match flag.name.as_str() {
+            "yes" => args.yes = true,
+            "dry-run" => args.dry_run = true,
+            "no-preview" => args.no_preview = true,
+            "no-post" => args.no_post = true,
+            "base-dir" => args.base_dir_override = flag.value,
+            other => bail!("flag `--{other}` is declared but not handled after the slug"),
         }
-
-        // --key=value forms.
-        if let Some(stripped) = arg.strip_prefix("--") {
-            if let Some((key, val)) = stripped.split_once('=') {
-                if key == "base-dir" {
-                    out.flags.base_dir = Some(val.to_string());
-                } else {
-                    let key = key.replace('-', "_");
-                    out.vars.insert(key, val.to_string());
-                }
-                continue;
-            }
-            // Bare `--foo` we don't recognize — surface it.
-            out.unknown.push(arg);
-            continue;
-        }
-
-        // Anything else (positional residue, single-dash unrecognized) —
-        // also unknown.  Keeps the user from wondering where it went.
-        out.unknown.push(arg);
     }
-    out
-}
-
-#[cfg(test)]
-mod extra_tests {
-    use super::*;
-
-    #[test]
-    fn classify_extra_recognizes_yes_after_slug() {
-        let c = classify_extra(vec!["--yes".to_string()]);
-        assert!(c.flags.yes);
-        assert!(c.vars.is_empty());
-        assert!(c.unknown.is_empty());
-    }
-
-    #[test]
-    fn classify_extra_dash_y_short() {
-        let c = classify_extra(vec!["-y".to_string()]);
-        assert!(c.flags.yes);
-    }
-
-    #[test]
-    fn classify_extra_keeps_vars() {
-        let c = classify_extra(vec![
-            "--artist=Bad Bunny".to_string(),
-            "--title=Lullaby".to_string(),
-        ]);
-        assert_eq!(c.vars.get("artist"), Some(&"Bad Bunny".to_string()));
-        assert_eq!(c.vars.get("title"), Some(&"Lullaby".to_string()));
-        assert_eq!(c.flags, ExtraFlags::default());
-    }
-
-    #[test]
-    fn classify_extra_mixed() {
-        let c = classify_extra(vec![
-            "--yes".to_string(),
-            "--artist=foo".to_string(),
-            "--no-preview".to_string(),
-        ]);
-        assert!(c.flags.yes);
-        assert!(c.flags.no_preview);
-        assert!(!c.flags.dry_run);
-        assert_eq!(c.vars.get("artist"), Some(&"foo".to_string()));
-    }
-
-    #[test]
-    fn classify_extra_base_dir_with_equals() {
-        let c = classify_extra(vec!["--base-dir=/tmp/x".to_string()]);
-        assert_eq!(c.flags.base_dir.as_deref(), Some("/tmp/x"));
-        assert!(c.vars.is_empty());
-    }
-
-    #[test]
-    fn classify_extra_unknown_flag_isolated() {
-        let c = classify_extra(vec!["--bogus".to_string()]);
-        assert_eq!(c.unknown, vec!["--bogus".to_string()]);
-        assert!(c.vars.is_empty());
-        assert_eq!(c.flags, ExtraFlags::default());
-    }
-
-    #[test]
-    fn classify_extra_hyphen_in_var_key_normalised() {
-        let c = classify_extra(vec!["--client-name=Acme".to_string()]);
-        assert_eq!(c.vars.get("client_name"), Some(&"Acme".to_string()));
-    }
-
-    #[test]
-    fn classify_extra_dry_run_after_slug() {
-        let c = classify_extra(vec!["--dry-run".to_string()]);
-        assert!(c.flags.dry_run);
-    }
+    Ok(())
 }

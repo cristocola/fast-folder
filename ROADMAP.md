@@ -205,6 +205,12 @@ Track A of [`PLAN.md`](PLAN.md), one phase per session.
   different library; real creates and applies no longer print the dry-run
   header; the Library bases menu commits against configuration reloaded under
   the lock; the second Ctrl-C restores the cursor.
+- [x] Phase 2: flags anywhere on the line, and prompts that know when there is
+  no terminal — the trailing-argument classifier reads each subcommand's flag
+  list from clap, so `register --rename` after the path renames instead of
+  warning, and an unknown flag is refused rather than ignored; prompt
+  availability is probed on stderr, where prompts are drawn, and every prompt
+  that cannot run says which flag replaces it.
 
 ## Release and documentation gates
 

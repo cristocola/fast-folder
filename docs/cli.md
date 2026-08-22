@@ -9,7 +9,7 @@ On the very first launch (TUI or browser UI) fastf asks where your projects shou
 | Command | Description |
 |---|---|
 | `fastf` | Launch the interactive TUI menu |
-| `fastf ui` | Launch the local browser UI (`--app` for a dedicated window, `--no-open` for server only) |
+| `fastf ui` | Launch the local browser UI (`--app` for a dedicated window, `--no-open` for server only, `--address` to bind another loopback port) |
 | `fastf new [slug]` | Create a project from a template |
 | `fastf recent` | Interactive project picker with inline tags |
 | `fastf open <query>` | Reveal a project folder by ID or name |
@@ -46,9 +46,22 @@ relative path is rejected. Unsafe template slugs and relative paths (including
 paths that become unsafe only after token interpolation) are rejected before a
 project folder is claimed.
 
-Variables are passed as `--slug=value` flags. Flags work before or after the template slug. For fully non-interactive use, pass every variable explicitly (use `--slug=` for an empty optional value) together with `--yes`.
+Variables are passed as `--slug=value` flags, after the slug. Every flag the command itself declares works in any position and in either form — `--yes`, `--base-dir=/path`, `--base-dir /path` — because fastf sorts the tokens clap could not parse against that command's own flag list.
+
+A `--word` that is neither a declared flag nor a `--key=value` pair is an error, not a variable and not a warning: `fastf new t --name x` stops and shows you `--name=x`. For fully non-interactive use, pass every variable explicitly (use `--slug=` for an empty optional value) together with `--yes`.
 
 After a successful create, fastf asks `Open project folder? [Y/n]` and opens the new folder in your file manager on Yes. Disable this with `fastf config set prompt-open-after-create false`.
+
+### Prompts and terminals
+
+A prompt is drawn on stderr and read from your keyboard, so redirecting output does not take it away: `fastf new rust-project > plan.txt` still asks before it creates. When there is no terminal at all — a script, a CI job, `2>/dev/null` — fastf refuses instead of failing on a half-drawn prompt, and names the flag that gets the same result without asking:
+
+```
+$ fastf apply rust-project ./crate --name=x < /dev/null 2>&1
+error: no terminal to confirm on — pass --yes to apply without confirming
+```
+
+That includes `fastf move`: without a terminal and without `--yes` it refuses rather than moving the folder on the strength of a confirmation nobody saw. `fastf recent` and `fastf search` fall back to their plain list instead.
 
 ## Browsing projects
 
@@ -178,7 +191,7 @@ fastf move my-crate /mnt/proj/01_PROJECTS
 fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 ```
 
-Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move stages every ordinary file—including legitimate `.tmp` and `.part` names—checks relative paths and byte lengths, commits atomically, and only then removes the source. Keep the project untouched while that copy is running.
+Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move stages every ordinary file—including legitimate `.tmp` and `.part` names—checks relative paths and byte lengths, commits atomically, and only then removes the source. Keep the project untouched while that copy is running.
 
 A cross-filesystem move reports its progress as it goes — the phase (copying,
 verifying, finalizing), how many files are done, and how much has been copied.
@@ -228,9 +241,14 @@ fastf template show <slug>
 fastf template new                              # interactive builder
 fastf template edit <slug>
 fastf template delete <slug>                    # removes the whole templates/<slug>/ folder
+fastf template delete <slug> --yes              # no confirmation (for scripts)
 fastf template from-folder ./my-project my-template
 fastf template from-folder ./delivery-kit client-kit --bundle-assets
+fastf template from-folder ./delivery-kit client-kit --dry-run   # show the scan, write nothing
+fastf template from-folder ./delivery-kit client-kit --force     # replace an existing template
 ```
+
+`from-folder` reproduces every text file up to 64 KB and skips binary and larger files unless `--bundle-assets` is given, which confirms the total size first — pass `--yes` to accept it without asking. `--dry-run` prints the same scan (folders, files, assets with sizes) and writes nothing. `--force` replaces an existing template's whole `files/` tree rather than merging into it.
 
 A template is a folder. Share one by copying its folder, and use a gallery example by copying `examples/templates/<slug>/` into your templates directory. See [templates.md](templates.md) for the full authoring guide.
 
@@ -295,9 +313,9 @@ Because of that, the counter **cannot be lowered**, and there is no `fastf id re
 ## Shell completions
 
 ```bash
-fastf completions bash >> ~/.bashrc
-fastf completions zsh  >> ~/.zshrc
-fastf completions fish >> ~/.config/fish/completions/fastf.fish
+fastf completions bash > ~/.local/share/bash-completion/completions/fastf
+fastf completions zsh  > ~/.zfunc/_fastf          # ~/.zfunc must be on $fpath
+fastf completions fish > ~/.config/fish/completions/fastf.fish
 ```
 
 Package installs (AUR) ship completions and man pages already wired up.

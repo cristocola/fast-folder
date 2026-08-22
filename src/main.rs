@@ -43,9 +43,9 @@ enum Commands {
             fastf new music-video --artist=\"Ariana Grande\" --title=Lullaby\n  \
             fastf new music-video --base-dir=/mnt/proj/01_PROJECTS   # create in another base\n  \
             fastf new music-video --yes --artist=\"Bad Bunny\"   # flags + vars in any order\n\n\
-            Variable flags must use = syntax: --artist=\"Bad Bunny\" not --artist \"Bad Bunny\".\n\
-            Flags (--yes, --dry-run, --no-preview, --no-post, --base-dir=...) may appear\n\
-            before OR after the template slug — fastf lifts them out automatically.")]
+            Variables must use = syntax: --artist=\"Bad Bunny\", not --artist \"Bad Bunny\".\n\
+            Every flag above works before OR after the template slug, and a --word that is\n\
+            neither a declared flag nor a --key=value pair is refused, not ignored.")]
     New {
         /// Template slug to use. Run 'fastf template list' to see available templates.
         /// Prompts interactively if omitted and no default-template is configured.
@@ -385,10 +385,10 @@ enum Commands {
 
     /// Print a shell completion script to stdout
     #[command(
-        after_help = "Pipe the output into your shell's completion directory.\n\n\
+        after_help = "Write the output into your shell's completion directory.\n\n\
         Examples:\n  \
-            fastf completions bash > /etc/bash_completion.d/fastf\n  \
-            fastf completions zsh > ~/.zfunc/_fastf\n  \
+            fastf completions bash > ~/.local/share/bash-completion/completions/fastf\n  \
+            fastf completions zsh > ~/.zfunc/_fastf          # ~/.zfunc must be on $fpath\n  \
             fastf completions fish > ~/.config/fish/completions/fastf.fish"
     )]
     Completions {
@@ -473,6 +473,7 @@ enum TemplateAction {
             Examples:\n  \
                 fastf template from-folder ./my-crate rust-project\n  \
                 fastf template from-folder ./delivery-kit client-kit --bundle-assets\n  \
+                fastf template from-folder ./delivery-kit client-kit --dry-run\n  \
                 fastf template from-folder ./existing-video video-project --force"
     )]
     FromFolder {

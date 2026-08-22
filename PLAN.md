@@ -96,12 +96,31 @@ cargo check --all-targets --target x86_64-pc-windows-gnu   # if the target is in
 **Out of scope.** A new `--var k=v` syntax (breaking), JSON output, completions.
 
 **Steps.**
-- [ ] `tests/cli_surface.rs` first: `register <path> --template=general --name=X --rename --yes` renames; `register <path> --name=X --recursive --dry-run` previews (with a base path); `apply <t> <dir> --name=x --no-post --yes` runs no post-create (use a `commands` entry that writes a sentinel file); `new general --base-dir <dir> --name=x --yes` (space form) lands in `<dir>`; `new general --nope --yes` exits 1 naming the flag; `new general --name x --yes` exits 1 suggesting `--name=x`.
-- [ ] Rewrite `classify_extra` as designed; delete `ExtraFlags`; add `apply_extra` per command with the exhaustiveness test.
-- [ ] `tests/cli_surface.rs`: with stdin and stderr redirected away from a TTY, `apply`, `register --rename`, `template from-folder --bundle-assets`, and `new` (no slug, no default template) exit 1 with the "no terminal" message and the flag that avoids the prompt. With a pty on stderr but stdout redirected, `new <slug> --name=x` prompts and completes.
-- [ ] Add `require_tty` and route every `src/cli/` prompt through it; switch prompt-availability probes to stderr.
-- [ ] `template from-folder --yes` and `--dry-run`; thread `yes` into `run_from_folder`.
-- [ ] Docs: fix `docs/cli.md:49` (variables go after the slug; declared flags work in any position); document `template delete --yes`, `from-folder --force/--yes/--dry-run`, `ui --address`; reconcile the two completion recipes (`docs/cli.md:292` vs `main.rs:389`) into one. `CLAUDE.md`: replace the "three coordinated edits" gotcha with the new rule (declare in clap, handle in `apply_extra`, the test catches the rest).
+- [x] `tests/cli_surface.rs` first: `register <path> --template=general --name=X --rename --yes` renames; `register <path> --name=X --recursive --dry-run` previews (with a base path); `apply <t> <dir> --name=x --no-post --yes` runs no post-create (use a `commands` entry that writes a sentinel file); `new general --base-dir <dir> --name=x --yes` (space form) lands in `<dir>`; `new general --nope --yes` exits 1 naming the flag; `new general --name x --yes` exits 1 suggesting `--name=x`.
+- [x] Rewrite `classify_extra` as designed; delete `ExtraFlags`; add `apply_extra` per command with the exhaustiveness test.
+- [x] `tests/cli_surface.rs`: with stdin and stderr redirected away from a TTY, `apply`, `register --rename`, `template from-folder --bundle-assets`, and `new` (no slug, no default template) exit 1 with the "no terminal" message and the flag that avoids the prompt. With a pty on stderr but stdout redirected, `new <slug> --name=x` prompts and completes.
+- [x] Add `require_tty` and route every `src/cli/` prompt through it; switch prompt-availability probes to stderr.
+- [x] `template from-folder --yes` and `--dry-run`; thread `yes` into `run_from_folder`.
+- [x] Docs: fix `docs/cli.md:49` (variables go after the slug; declared flags work in any position); document `template delete --yes`, `from-folder --force/--yes/--dry-run`, `ui --address`; reconcile the two completion recipes (`docs/cli.md:292` vs `main.rs:389`) into one. `CLAUDE.md`: replace the "three coordinated edits" gotcha with the new rule (declare in clap, handle in `apply_extra`, the test catches the rest).
+
+**Notes.** Two design decisions came out differently and one item grew. (1) The
+apply case in step 1 was written as "`apply <t> <dir> --name=x --no-post --yes`
+runs no post-create": `apply` never ran post-create actions and does not declare
+`--no-post`, so that case could not fail against the old build. It became
+`apply_refuses_a_flag_it_does_not_declare` (the same defect from the other side:
+a flag that does nothing is not silently accepted) plus a `-y`-after-the-target
+design guard. (2) `register --recursive` dropped the variables typed on the line,
+so a template with required variables could not be used for bulk onboarding at
+all; `RecursiveArgs` gained `vars`. (3) `require_tty` lives in `util::tty`, not
+`cli::prompting`, because `core::vars::collect_vars` needs it and core cannot
+import cli (Phase 6 moves `collect_vars` into `tui/`; the helper does not move
+with it). (4) One prompt was not on the list and mattered most: `fastf move`
+skipped its confirmation when stdout was not a terminal and moved the folder — it
+now refuses without `--yes`. (5) `recent`/`search` keep their stdout format probe
+but also fall back to the plain list when the picker could not be drawn, instead
+of waiting for a key on an invisible list. `register_recursive_dry_run_after_the_path_previews_the_children`
+passes pre-fix (clap parses declared flags normally until the first token it does
+not know) and is labelled a design guard, per `tests/CLAUDE.md`.
 
 **Acceptance.** Every declared flag works in any position for the three commands, proven by the exhaustiveness test plus the process cases. No `src/cli/` prompt can produce a raw `IO error: not a terminal`.
 
@@ -515,6 +534,12 @@ Other:
 - `size_scan::request` has an O(n²) `contains` over the queue; bounded by page size.
 - `docs/` annotate features as "v1.5.0" but no such tag exists (tags go v1.4.0 → v1.5.1).
 - The action menu offers "Move" only when another base is mounted; after Phase 9 an `Unresponsive` base could offer a "retry probe" item.
+- `tests/tui_pty.rs:300` (`projects_browser_fills_in_sizes_without_any_input`) is
+  timing-sensitive: it asserts a background size snapshot reaches the list within
+  a repaint tick, and failed once under the CPU load of a full `cargo test
+  --all-targets` while passing every run on its own (Phase 2, 2026-08-22). The
+  guarantee is right; the deadline is what is thin. Give it a longer window, or
+  anchor it on the scanner rather than the clock.
 - Phase 12's guard ("only `live_select.rs` names `dialoguer` under `src/util`") must also allow `src/util/interrupt.rs:restore_terminal`, whose non-unix branch uses `dialoguer::console::Term` for the console cursor API (the unix branch is raw `isatty`/`write` because it runs in a signal handler). Converting the Windows branch to `GetConsoleCursorInfo`/`SetConsoleCursorInfo` FFI would remove the exception; it was not worth an untestable Windows change in Phase 1.
 
 ## Phase log
@@ -523,3 +548,4 @@ Other:
 |---|---|---|---|
 | 0 | 2026-08-21 | #6 (`7bccde5`) | CLAUDE.md trim and tests/CLAUDE.md landed; Phase 17 can assume both. |
 | 1 | 2026-08-21 | [#7](https://github.com/cristocola/fast-folder/pull/7) | `Config::load()` propagates everywhere; `PreviewKind` on both printers; `cli::config::normalize_base_entry` is the shared base validator; `util::interrupt::restore_terminal` is the one cursor restore; `operations::reconcile` and `run_paged_browser`'s loader now return `Result`. |
+| 2 | 2026-08-22 | PR pending | Branched on Phase 1 (#7 still open) — retarget to `main` after it merges. `cli::extra::classify_extra(extra, &clap::Command)` + per-command `apply_extra`; `RegisterFlags::validate` owns register's constraints; `util::tty::{prompt_available, require_tty}` is the one prompt probe (stderr) and Phase 6/7 should route new prompts through it; `RecursiveArgs` gained `vars`; `template from-folder` gained `--yes`/`--dry-run` and `FromFolderArgs`; `Sandbox::run_headless` and `pty::run_stdout_to` are new harness helpers. |

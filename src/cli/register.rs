@@ -24,7 +24,6 @@ use colored::Colorize;
 use dialoguer::Confirm;
 use std::collections::HashMap;
 use std::fs;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::cli::extra::Recognized;
@@ -35,6 +34,7 @@ use crate::core::naming::{interpolate_name, parse_id_token, sanitize_name};
 use crate::core::project_info;
 use crate::core::template::{self, IdConfig, Template};
 use crate::core::vars::collect_vars;
+use crate::util::tty;
 
 /// Slug stored in PROJECT_INFO.md frontmatter when a folder is registered
 /// without a template. Surfaces clearly in `recent` listings so the user can
@@ -257,6 +257,10 @@ pub fn run(args: RegisterArgs) -> Result<()> {
     // Decide whether to actually rename: preview the target and confirm.
     let mut rename = args.rename;
     if rename && !args.yes {
+        tty::require_tty(
+            "confirm the rename",
+            "pass --yes to rename without confirming",
+        )?;
         let current_name = canonical
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -296,7 +300,7 @@ pub fn run(args: RegisterArgs) -> Result<()> {
     let on_pinfo_conflict = if pinfo_path.exists() {
         if args.yes {
             PinfoConflict::Overwrite
-        } else if std::io::stdout().is_terminal() {
+        } else if tty::prompt_available() {
             println!();
             let overwrite = Confirm::new()
                 .with_prompt(format!(

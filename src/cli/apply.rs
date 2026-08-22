@@ -10,6 +10,7 @@ use crate::core::project;
 use crate::core::template;
 use crate::core::template::FolderNode;
 use crate::core::vars::collect_vars;
+use crate::util::tty;
 
 /// Returns true if any folder name in the structure contains a `{token}` placeholder.
 /// Used to decide whether to prompt for variables during `fastf apply`.
@@ -113,6 +114,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     }
 
     if !args.yes {
+        tty::require_tty("confirm", "pass --yes to apply without confirming")?;
         println!();
         let ok = Confirm::new()
             .with_prompt(format!(

@@ -486,6 +486,12 @@ enum TemplateAction {
         /// Bundle binary/large files byte-for-byte (default: text files only)
         #[arg(long)]
         bundle_assets: bool,
+        /// Accept the bundle-size confirmation without asking (for scripts)
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Print what would be generated and write nothing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -712,7 +718,16 @@ fn run() -> Result<()> {
                 slug,
                 force,
                 bundle_assets,
-            } => cli::template::run_from_folder(&path, &slug, force, bundle_assets),
+                yes,
+                dry_run,
+            } => cli::template::run_from_folder(cli::template::FromFolderArgs {
+                path,
+                slug,
+                force,
+                bundle_assets,
+                yes,
+                dry_run,
+            }),
         },
 
         Some(Commands::Config { action }) => match action {

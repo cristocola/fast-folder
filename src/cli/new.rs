@@ -2,7 +2,6 @@ use anyhow::{Result, bail};
 use colored::Colorize;
 use dialoguer::{Confirm, Select};
 use std::collections::HashMap;
-use std::io::IsTerminal;
 
 use crate::cli::extra::Recognized;
 use crate::core::config::Config;
@@ -10,6 +9,7 @@ use crate::core::counter::Counters;
 use crate::core::project;
 use crate::core::template::{self, Template};
 use crate::core::vars::collect_vars;
+use crate::util::tty;
 
 /// Arguments passed to `fastf new`.
 pub struct NewArgs {
@@ -66,13 +66,12 @@ pub fn run(args: NewArgs) -> Result<()> {
 
     // Show preview and confirm (unless --yes or confirm_create disabled globally)
     project::print_dry_run(&plan, &tmpl, &config, project::PreviewKind::BeforeCommit);
-    if !args.yes && config.confirm_create && !std::io::stdout().is_terminal() {
-        bail!(
-            "no terminal to confirm on — pass --yes to create without confirming\n  \
-             (or set `fastf config set confirm-create false` to stop asking)"
-        );
-    }
     if !args.yes && config.confirm_create {
+        tty::require_tty(
+            "confirm",
+            "pass --yes to create without confirming\n  \
+             (or set `fastf config set confirm-create false` to stop asking)",
+        )?;
         println!();
         let ok = Confirm::new()
             .with_prompt("Create this project?")
@@ -137,7 +136,7 @@ fn should_prompt_open(args: &NewArgs, tmpl: &Template, config: &Config) -> bool 
     if !config.prompt_open_after_create {
         return false;
     }
-    if !std::io::stdout().is_terminal() {
+    if !tty::prompt_available() {
         return false;
     }
     // If reveal will already run as a post-create action, don't double-open.
@@ -168,6 +167,11 @@ pub fn pick_template_interactively() -> Result<Template> {
     if templates.is_empty() {
         bail!("no templates found — run `fastf template new` to create one");
     }
+    tty::require_tty(
+        "pick a template",
+        "name it instead: `fastf new <slug>`\n  \
+         (or set one with `fastf config set default-template <slug>`)",
+    )?;
 
     let labels: Vec<String> = templates
         .iter()

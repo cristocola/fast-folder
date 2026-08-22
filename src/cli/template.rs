@@ -2,12 +2,12 @@ use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::Confirm;
 use std::fs;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::core::project;
 use crate::core::template::{self, FileEntry, FolderNode, Template};
 use crate::util::paths;
+use crate::util::tty;
 
 /// Files larger than this are skipped when generating a template from a folder —
 /// bundling big binaries into a YAML template is almost never what you want.
@@ -167,11 +167,19 @@ fn collect_relative(root: &Path, dir: &Path, out: &mut Vec<String>) {
 
 /// Create a new template using the interactive builder.
 pub fn new_interactive() -> Result<()> {
+    tty::require_tty(
+        "build a template",
+        "generate one instead: `fastf template from-folder <dir> <slug>`",
+    )?;
     crate::tui::template_builder::build_template(None)
 }
 
 /// Edit an existing template using the interactive builder.
 pub fn edit(slug: &str) -> Result<()> {
+    tty::require_tty(
+        "edit a template",
+        "edit templates/<slug>/template.yaml directly, or use the browser UI",
+    )?;
     validate_slug(slug)?;
     let path = paths::template_manifest(slug);
     if !path.exists() {
@@ -190,12 +198,10 @@ pub fn delete(slug: &str, yes: bool) -> Result<()> {
     if !yes {
         // Without this the command is simply unusable from a script: it dies on
         // dialoguer's bare "IO error: not a terminal" with no way forward.
-        if !std::io::stdout().is_terminal() {
-            bail!(
-                "no terminal to confirm on — pass --yes to delete template '{}' without confirming",
-                slug
-            );
-        }
+        tty::require_tty(
+            "confirm",
+            &format!("pass --yes to delete template '{slug}' without confirming"),
+        )?;
         let ok = Confirm::new()
             .with_prompt(format!("Delete template '{}' and its bundled files?", slug))
             .default(false)
@@ -214,6 +220,8 @@ pub type FromFolderReport = crate::core::template_import::FromFolderReport;
 
 /// One binary/large file queued for byte-for-byte bundling into `files/`.
 struct AssetPlan {
+    /// Path relative to the scanned root, for the dry-run listing.
+    rel: String,
     size: u64,
 }
 
@@ -247,35 +255,132 @@ pub fn from_folder(
     crate::core::operations::template_from_folder(Path::new(source), slug, force, bundle_assets)
 }
 
+/// What `fastf template from-folder` was asked to do.
+pub struct FromFolderArgs {
+    pub path: String,
+    pub slug: String,
+    pub force: bool,
+    pub bundle_assets: bool,
+    /// Accept the bundle-size confirmation without asking.
+    pub yes: bool,
+    /// Print what would be generated and write nothing.
+    pub dry_run: bool,
+}
+
 /// Interactive CLI wrapper: confirms the total size before bundling assets, then
 /// prints a summary. The actual mutation is performed by the shared operation.
-pub fn run_from_folder(source: &str, slug: &str, force: bool, bundle_assets: bool) -> Result<()> {
-    let root = validate_source(source)?;
-    validate_slug(slug)?;
-    ensure_slug_available(slug, force)?;
+pub fn run_from_folder(args: FromFolderArgs) -> Result<()> {
+    let FromFolderArgs {
+        path,
+        slug,
+        force,
+        bundle_assets,
+        yes,
+        dry_run,
+    } = args;
+    let root = validate_source(&path)?;
+    validate_slug(&slug)?;
+    // A dry run reports the same refusal the real run would: a preview that
+    // stays silent about the `--force` it needs is not a preview of anything.
+    ensure_slug_available(&slug, force)?;
     let scan = scan_source(&root, bundle_assets)?;
+
+    if dry_run {
+        print_from_folder_preview(&slug, &scan, bundle_assets);
+        return Ok(());
+    }
 
     if bundle_assets && !scan.assets.is_empty() {
         let total = scan.bundle_bytes();
-        let ok = Confirm::new()
-            .with_prompt(format!(
-                "Bundle {} asset{} ({}) into template '{}'?",
-                scan.assets.len(),
-                if scan.assets.len() == 1 { "" } else { "s" },
-                human_size(total),
-                slug
-            ))
-            .default(true)
-            .interact()?;
-        if !ok {
-            println!("Aborted.");
-            return Ok(());
+        if !yes {
+            tty::require_tty(
+                "confirm the bundle size",
+                "pass --yes to bundle without confirming (or --dry-run to see the scan)",
+            )?;
+            let ok = Confirm::new()
+                .with_prompt(format!(
+                    "Bundle {} asset{} ({}) into template '{}'?",
+                    scan.assets.len(),
+                    if scan.assets.len() == 1 { "" } else { "s" },
+                    human_size(total),
+                    slug
+                ))
+                .default(true)
+                .interact()?;
+            if !ok {
+                println!("Aborted.");
+                return Ok(());
+            }
         }
     }
 
-    let report = crate::core::operations::template_from_folder(&root, slug, force, bundle_assets)?;
-    print_from_folder_summary(slug, &report);
+    let report = crate::core::operations::template_from_folder(&root, &slug, force, bundle_assets)?;
+    print_from_folder_summary(&slug, &report);
     Ok(())
+}
+
+/// Render the scan without writing anything. Same numbers the real run reports,
+/// plus the names, since the point of a preview is to see what was picked up.
+fn print_from_folder_preview(slug: &str, scan: &ScanResult, bundle_assets: bool) {
+    println!(
+        "\n{}",
+        "Preview  ·  dry run — nothing will be written"
+            .yellow()
+            .bold()
+    );
+    println!("  {} {}", "Template:".dimmed(), slug.cyan().bold());
+
+    if !scan.structure.is_empty() {
+        println!("\n{}", "Folder structure:".bold());
+        project::print_tree(&scan.structure, "  ", None);
+    }
+    if !scan.text_files.is_empty() {
+        println!("\n{}", "Files:".bold());
+        for f in &scan.text_files {
+            println!("  {} {}", "•".cyan(), f.path.green());
+        }
+    }
+    if !scan.assets.is_empty() {
+        println!("\n{}", "Bundled assets (copied byte-for-byte):".bold());
+        for a in &scan.assets {
+            println!(
+                "  {} {}  {}",
+                "•".cyan(),
+                a.rel.dimmed(),
+                human_size(a.size).dimmed()
+            );
+        }
+    }
+
+    println!();
+    let mut summary = format!(
+        "  {} {} folder{}, {} text file{}",
+        "Summary:".bold(),
+        scan.folders,
+        if scan.folders == 1 { "" } else { "s" },
+        scan.text_files.len(),
+        if scan.text_files.len() == 1 { "" } else { "s" },
+    );
+    if bundle_assets {
+        summary.push_str(&format!(
+            ", {} asset{} ({})",
+            scan.assets.len(),
+            if scan.assets.len() == 1 { "" } else { "s" },
+            human_size(scan.bundle_bytes())
+        ));
+    }
+    println!("{summary}");
+    if scan.skipped > 0 {
+        println!(
+            "   {}",
+            format!(
+                "{} binary/large file{} would be skipped — add --bundle-assets to include them.",
+                scan.skipped,
+                if scan.skipped == 1 { "" } else { "s" }
+            )
+            .dimmed()
+        );
+    }
 }
 
 fn validate_source(source: &str) -> Result<PathBuf> {
@@ -438,7 +543,7 @@ fn classify_file(root: &Path, path: &Path, size: u64, bundle_assets: bool, out: 
     }
 
     if bundle_assets {
-        out.assets.push(AssetPlan { size });
+        out.assets.push(AssetPlan { rel, size });
     } else {
         out.skipped += 1;
     }

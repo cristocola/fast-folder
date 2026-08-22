@@ -83,9 +83,10 @@ pub fn run(args: MoveArgs) -> Result<()> {
                 })?
         }
         None => {
-            if !std::io::stdout().is_terminal() {
-                anyhow::bail!("no target base given — usage: fastf move <query> <base>");
-            }
+            crate::util::tty::require_tty(
+                "pick a base",
+                "name the target instead: `fastf move <query> <base>`",
+            )?;
             let labels: Vec<String> = candidates
                 .iter()
                 .map(|b| format!("{}  ({})", library::base_label(b), b.display()))
@@ -103,7 +104,10 @@ pub fn run(args: MoveArgs) -> Result<()> {
     // means walking the whole tree, which is wasted on the same-filesystem
     // rename that handles most moves, and slow over NTFS. The progress line
     // below reports real numbers once there is actually something to copy.
-    if !args.yes && std::io::stdout().is_terminal() {
+    if !args.yes {
+        // A confirmation that cannot be shown is not a confirmation. Skipping it
+        // here moved the folder on the strength of a question nobody was asked.
+        crate::util::tty::require_tty("confirm", "pass --yes to move without confirming")?;
         println!(
             "  {} {}  {} {}",
             "move".dimmed(),

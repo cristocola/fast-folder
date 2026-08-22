@@ -217,7 +217,7 @@ pub fn sanitize_name(s: &str) -> String {
 
     // Doing the trim here keeps the recorded name and the name on disk
     // identical. It also reduces ".." to the empty string, which callers such as
-    // `rename_project` already reject.
+    // `rename_project_inner` already reject.
     let trimmed = replaced.trim_end_matches([' ', '.']);
 
     let stem = trimmed.split('.').next().unwrap_or(trimmed);
@@ -226,14 +226,6 @@ pub fn sanitize_name(s: &str) -> String {
         return format!("{}_{}", stem, &trimmed[stem.len()..]);
     }
     trimmed.to_string()
-}
-
-/// Reject file paths that would escape the project root.
-/// Refuses absolute paths, paths containing `..`, Windows drive letters, and
-/// leading path separators. Callers see the error at template load time (via
-/// `Template::validate`) and again defensively at create time.
-pub fn ensure_relative_safe_path(raw: &str) -> anyhow::Result<()> {
-    crate::core::validated::SafeRelativePath::parse(raw).map(|_| ())
 }
 
 #[cfg(test)]
@@ -427,27 +419,5 @@ mod tests {
             let once = sanitize_name(input);
             assert_eq!(sanitize_name(&once), once, "not idempotent for {input:?}");
         }
-    }
-
-    #[test]
-    fn rejects_parent_escape() {
-        assert!(ensure_relative_safe_path("../evil.txt").is_err());
-        assert!(ensure_relative_safe_path("a/../b.txt").is_err());
-        assert!(ensure_relative_safe_path("a/b/../../c.txt").is_err());
-    }
-
-    #[test]
-    fn rejects_absolute_path() {
-        assert!(ensure_relative_safe_path("/etc/passwd").is_err());
-        assert!(ensure_relative_safe_path("\\windows\\evil").is_err());
-        assert!(ensure_relative_safe_path("C:/evil").is_err());
-        assert!(ensure_relative_safe_path("D:\\evil").is_err());
-    }
-
-    #[test]
-    fn accepts_normal_paths() {
-        assert!(ensure_relative_safe_path("README.md").is_ok());
-        assert!(ensure_relative_safe_path("src/lib.rs").is_ok());
-        assert!(ensure_relative_safe_path("deeply/nested/file.txt").is_ok());
     }
 }

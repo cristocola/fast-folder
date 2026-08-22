@@ -119,6 +119,8 @@ mod tests {
 
     #[test]
     fn safe_relative_path_preserves_nested_paths() {
+        assert!(SafeRelativePath::parse("README.md").is_ok());
+        assert!(SafeRelativePath::parse("deeply/nested/file.txt").is_ok());
         let path = SafeRelativePath::parse("src/components/button.rs").unwrap();
         assert_eq!(path.as_str(), "src/components/button.rs");
         assert_eq!(
@@ -135,6 +137,7 @@ mod tests {
             "..",
             "../outside",
             "inside/../../outside",
+            "a/b/../../c.txt",
             "/etc/passwd",
             "\\server\\share",
             "C:/Windows",

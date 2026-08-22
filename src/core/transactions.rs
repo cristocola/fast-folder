@@ -20,7 +20,7 @@ use crate::core::assets::{self, Progress};
 
 pub const TRANSACTIONS_DIR: &str = ".fastf-transactions";
 pub const JOURNAL_FILE: &str = "move.json";
-pub const MANIFEST_FILE: &str = "manifest.json";
+pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 pub const STAGING_DIR: &str = "staging";
 
 const MOVE_VERSION: u32 = 2;
@@ -129,7 +129,7 @@ impl MoveManifest {
         }
         let mut seen = HashSet::new();
         for entry in &self.entries {
-            validate_native_relative(&entry.path)?;
+            crate::util::paths::require_native_relative(&entry.path, "move manifest path")?;
             if !seen.insert(entry.path.clone()) {
                 bail!(
                     "move manifest contains duplicate path {}",
@@ -212,7 +212,7 @@ fn scan_inner(root: &Path, current: &Path, entries: &mut Vec<ManifestEntry>) -> 
             .strip_prefix(root)
             .with_context(|| format!("deriving relative path for {}", path.display()))?
             .to_path_buf();
-        validate_native_relative(&relative)?;
+        crate::util::paths::require_native_relative(&relative, "move manifest path")?;
 
         if file_type.is_symlink() {
             bail!(
@@ -246,22 +246,6 @@ fn scan_inner(root: &Path, current: &Path, entries: &mut Vec<ManifestEntry>) -> 
                 relative.display()
             );
         }
-    }
-    Ok(())
-}
-
-fn validate_native_relative(path: &Path) -> Result<()> {
-    if path.as_os_str().is_empty() || path.is_absolute() {
-        bail!("move manifest path must be a non-empty relative path");
-    }
-    if !path
-        .components()
-        .all(|component| matches!(component, Component::Normal(_)))
-    {
-        bail!(
-            "move manifest contains an unsafe relative path: {}",
-            path.display()
-        );
     }
     Ok(())
 }
@@ -304,8 +288,11 @@ impl MoveTransaction {
                             target_folder: target_folder.to_path_buf(),
                             phase: MovePhase::Copying,
                         };
-                        write_json(&operation_dir.join(JOURNAL_FILE), &journal)
-                            .context("writing Copying move journal")?;
+                        crate::util::atomic::write_json(
+                            &operation_dir.join(JOURNAL_FILE),
+                            &journal,
+                        )
+                        .context("writing Copying move journal")?;
                         Ok(Self {
                             target_base: target_base.to_path_buf(),
                             operation_dir: operation_dir.clone(),
@@ -345,7 +332,7 @@ impl MoveTransaction {
 
     pub fn write_manifest(&self, manifest: &MoveManifest) -> Result<()> {
         manifest.validate()?;
-        write_json(&self.operation_dir.join(MANIFEST_FILE), manifest)
+        crate::util::atomic::write_json(&self.operation_dir.join(MANIFEST_FILE), manifest)
             .context("writing move manifest")
     }
 
@@ -356,7 +343,7 @@ impl MoveTransaction {
     pub fn set_phase(&mut self, phase: MovePhase) -> Result<()> {
         let mut next = self.journal.clone();
         next.phase = phase;
-        write_json(&self.operation_dir.join(JOURNAL_FILE), &next)
+        crate::util::atomic::write_json(&self.operation_dir.join(JOURNAL_FILE), &next)
             .with_context(|| format!("writing {:?} move phase", phase))?;
         self.journal = next;
         Ok(())
@@ -411,7 +398,7 @@ pub fn transaction_root(target_base: &Path) -> PathBuf {
 
 pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
     let path = operation_dir.join(JOURNAL_FILE);
-    require_real_file(&path, "move journal")?;
+    crate::util::paths::require_real_file(&path, "move journal")?;
     let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let journal: MoveJournal =
         serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
@@ -444,7 +431,7 @@ pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
 
 pub fn read_manifest(operation_dir: &Path) -> Result<MoveManifest> {
     let path = operation_dir.join(MANIFEST_FILE);
-    require_real_file(&path, "move manifest")?;
+    crate::util::paths::require_real_file(&path, "move manifest")?;
     let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let manifest: MoveManifest =
         serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
@@ -604,19 +591,6 @@ fn next_operation_id() -> String {
     format!("{timestamp:x}-{:x}-{counter:x}", std::process::id())
 }
 
-fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    crate::util::atomic::write_json(path, value)
-}
-
-fn require_real_file(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("{label} is missing: {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        bail!("{label} is not a real file: {}", path.display());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,6 +604,8 @@ mod tests {
         fs::create_dir_all(source.join("nested")).unwrap();
         fs::write(source.join("zero.tmp"), []).unwrap();
         fs::write(source.join("nested/data.part"), [0_u8, 255, 7]).unwrap();
+        // A move never interpolates: literal braces survive in names and bytes.
+        fs::write(source.join("notes_{client}.md"), "hello {name}").unwrap();
         fs::create_dir(&staging).unwrap();
 
         let manifest = MoveManifest::scan(&source).unwrap();
@@ -650,6 +626,103 @@ mod tests {
             fs::read(staging.join("nested/data.part")).unwrap(),
             [0_u8, 255, 7]
         );
+        assert_eq!(
+            fs::read_to_string(staging.join("notes_{client}.md")).unwrap(),
+            "hello {name}"
+        );
+    }
+
+    /// Create a directory link inside a test tree, cross-platform. Windows
+    /// junctions need no elevation (unlike symlinks, which want Developer
+    /// Mode), so `mklink /J` is the portable-enough choice there. Returns
+    /// `false` when the OS refused, so a test can skip rather than fail on a
+    /// machine with restrictive policy.
+    fn make_dir_link(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
+    /// The data-loss regression, now guarded where the invariant lives. A
+    /// junction inside a project was once invisible to the walk, so a staged
+    /// move copied around it, verification walked the same blind way and
+    /// reported success, and the source was deleted. The scan refuses the whole
+    /// move instead: a link is neither followed nor silently omitted.
+    #[test]
+    fn scan_refuses_a_link_rather_than_skipping_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("real_asset_library");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("payload.txt"), "irreplaceable").unwrap();
+
+        let source = temp.path().join("project");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("normal.txt"), "ordinary").unwrap();
+        if !make_dir_link(&source.join("linked"), &target) {
+            eprintln!("skipping: OS refused to create a directory link");
+            return;
+        }
+
+        let error = MoveManifest::scan(&source).unwrap_err().to_string();
+        assert!(
+            error.contains("links are not supported") && error.contains("linked"),
+            "the scan must name the link it refuses, got: {error}"
+        );
+    }
+
+    /// A missing source is an error, never an empty manifest that would verify
+    /// against an empty destination.
+    #[test]
+    fn scan_of_a_missing_tree_is_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(MoveManifest::scan(&temp.path().join("missing")).is_err());
+    }
+
+    /// Verification is what stands between a move and deleting a good source,
+    /// so it has to catch the real network-share failure modes: a truncated
+    /// file and a dropped one.
+    #[test]
+    fn verify_destination_detects_short_and_missing_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(source.join("sub")).unwrap();
+        fs::write(source.join("a.txt"), "hello").unwrap();
+        fs::write(source.join("sub/b.bin"), vec![0_u8; 2048]).unwrap();
+        fs::create_dir(&staging).unwrap();
+
+        let manifest = MoveManifest::scan(&source).unwrap();
+        let progress = Mutex::new(Progress::new(&[]));
+        copy_to_staging(
+            &manifest,
+            &source,
+            &staging,
+            &progress,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        manifest.verify_destination(&staging).unwrap();
+
+        // Truncated at the destination.
+        fs::write(staging.join("sub/b.bin"), vec![0_u8; 1024]).unwrap();
+        assert!(manifest.verify_destination(&staging).is_err());
+        fs::write(staging.join("sub/b.bin"), vec![0_u8; 2048]).unwrap();
+        manifest.verify_destination(&staging).unwrap();
+
+        // Dropped at the destination.
+        fs::remove_file(staging.join("a.txt")).unwrap();
+        assert!(manifest.verify_destination(&staging).is_err());
     }
 
     #[test]

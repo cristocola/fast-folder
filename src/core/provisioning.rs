@@ -9,7 +9,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
@@ -21,13 +21,12 @@ use crate::core::transactions::{self, MoveJournal, MoveManifest, MovePhase, Move
 use crate::core::validated::TemplateSlug;
 
 /// Filename of an obsolete pre-v2 per-project create marker.
-pub const MARKER_CREATE: &str = ".fastf-provisioning.json";
+pub(crate) const MARKER_CREATE: &str = ".fastf-provisioning.json";
 /// Prefix of obsolete pre-v2 move markers at a base root.
-pub const MARKER_MOVE_PREFIX: &str = ".fastf-move-";
+pub(crate) const MARKER_MOVE_PREFIX: &str = ".fastf-move-";
 /// Filename of the scoped create journal introduced in v2.
 pub const CREATE_JOURNAL_V2: &str = ".fastf-create-v2.json";
 
-const LEGACY_MARKER_VERSION: u32 = 1;
 const CREATE_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
@@ -84,8 +83,8 @@ pub fn write_create_journal(
                 root.display()
             )
         })?;
-        validate_native_relative(source)?;
-        validate_native_relative(destination)?;
+        crate::util::paths::require_native_relative(source, "create journal path")?;
+        crate::util::paths::require_native_relative(destination, "create journal path")?;
         relative_jobs.push(CreateCopy {
             source: source.to_path_buf(),
             destination: destination.to_path_buf(),
@@ -114,7 +113,7 @@ pub fn path_is_reserved(path: &str) -> bool {
 
 fn read_create_journal(root: &Path) -> Result<CreateJournal> {
     let path = create_journal_path(root);
-    require_real_file(&path, "create journal")?;
+    crate::util::paths::require_real_file(&path, "create journal")?;
     let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let journal: CreateJournal =
         serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
@@ -127,93 +126,10 @@ fn read_create_journal(root: &Path) -> Result<CreateJournal> {
     }
     TemplateSlug::parse(&journal.template_slug)?;
     for job in &journal.jobs {
-        validate_native_relative(&job.source)?;
-        validate_native_relative(&job.destination)?;
+        crate::util::paths::require_native_relative(&job.source, "create journal path")?;
+        crate::util::paths::require_native_relative(&job.destination, "create journal path")?;
     }
     Ok(journal)
-}
-
-// ---------------------------------------------------------------------------
-// Obsolete v1 writers retained only for compatibility/testing
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-struct LegacyDeferredCopy {
-    src: String,
-    dest: String,
-    bytes: u64,
-    done: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct LegacyCreateMarker {
-    version: u32,
-    started_at: String,
-    jobs: Vec<LegacyDeferredCopy>,
-}
-
-/// Compatibility helper for constructing an obsolete marker. Active creates
-/// use [`write_create_journal`]; reconcile never reads this marker's bytes.
-#[doc(hidden)]
-pub fn write_create_marker(root: &Path, jobs: &[CopyJob]) -> Result<()> {
-    let marker = LegacyCreateMarker {
-        version: LEGACY_MARKER_VERSION,
-        started_at: library::now_iso8601(),
-        jobs: jobs
-            .iter()
-            .map(|job| LegacyDeferredCopy {
-                src: job.src.display().to_string(),
-                dest: job.dest.display().to_string(),
-                bytes: job.bytes,
-                done: false,
-            })
-            .collect(),
-    };
-    crate::util::atomic::write_json(&legacy_create_marker_path(root), &marker)
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct LegacyMoveMarker {
-    version: u32,
-    started_at: String,
-    src: String,
-    temp: String,
-    final_path: String,
-    phase: String,
-    id: String,
-}
-
-/// Conventional v1 staging name, exposed only so diagnostics/tests can identify
-/// old artifacts. V2 never creates or removes it.
-pub fn staging_path(target_base: &Path, folder: &str) -> PathBuf {
-    target_base.join(format!(".{folder}.fastf-part"))
-}
-
-pub(crate) fn move_marker_path(target_base: &Path, folder: &str) -> PathBuf {
-    target_base.join(format!("{MARKER_MOVE_PREFIX}{folder}.json"))
-}
-
-#[allow(clippy::too_many_arguments)]
-#[doc(hidden)]
-pub fn write_move_marker(
-    target_base: &Path,
-    folder: &str,
-    src: &Path,
-    temp: &Path,
-    final_path: &Path,
-    phase: &str,
-    id: &str,
-) -> Result<()> {
-    let marker = LegacyMoveMarker {
-        version: LEGACY_MARKER_VERSION,
-        started_at: library::now_iso8601(),
-        src: src.display().to_string(),
-        temp: temp.display().to_string(),
-        final_path: final_path.display().to_string(),
-        phase: phase.to_string(),
-        id: id.to_string(),
-    };
-    crate::util::atomic::write_json(&move_marker_path(target_base, folder), &marker)
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +262,9 @@ pub struct ReconcileReport {
     pub resumed: usize,
     pub completed: usize,
     pub rolled_back: usize,
-    /// Retained for backward-compatible JSON; suffix sweeping no longer exists.
+    /// Always zero. Retained because `/api/reconcile` promises the field;
+    /// suffix sweeping no longer exists, so nothing writes it and `is_empty`
+    /// does not consult it.
     pub swept: usize,
     pub incomplete: Vec<String>,
     pub unrecoverable: Vec<String>,
@@ -358,7 +276,6 @@ impl ReconcileReport {
         self.resumed == 0
             && self.completed == 0
             && self.rolled_back == 0
-            && self.swept == 0
             && self.incomplete.is_empty()
             && self.unrecoverable.is_empty()
             && self.obsolete.is_empty()
@@ -394,10 +311,10 @@ pub fn reconcile_unlocked(cfg: &Config) -> ReconcileReport {
     report
 }
 
-/// Hold the coarse cross-process mutation lock for the whole pass and reload
-/// configuration beneath it. The argument is retained for source compatibility
-/// but is never authoritative.
-pub fn reconcile_locked(_cfg: &Config) -> ReconcileReport {
+/// Hold the coarse cross-process mutation lock for the whole pass and load the
+/// configuration beneath it: which bases get walked is the whole question, and
+/// a snapshot taken before the lock could already be stale.
+pub fn reconcile_locked() -> ReconcileReport {
     let mut report = ReconcileReport::default();
     let _data_lock = match crate::util::lockfile::DataLock::acquire() {
         Ok(lock) => lock,
@@ -485,12 +402,11 @@ fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
             return;
         }
     };
-    let metadata = match crate::core::project_info::read_metadata(root) {
+    // Identity gate only: the journal may not resume a folder whose metadata
+    // says it belongs to a different template or is no longer provisioning.
+    match crate::core::project_info::read_metadata(root) {
         Ok(Some(metadata))
-            if metadata.provisioning && metadata.template == journal.template_slug =>
-        {
-            metadata
-        }
+            if metadata.provisioning && metadata.template == journal.template_slug => {}
         Ok(Some(metadata)) => {
             report.unrecoverable.push(format!(
                 "{}: create journal identity mismatch (metadata template '{}', journal '{}')",
@@ -515,7 +431,6 @@ fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
             return;
         }
     };
-    let _ = metadata;
     let template = match template::find_by_slug(&journal.template_slug) {
         Ok(template) => template,
         Err(error) => {
@@ -929,7 +844,7 @@ fn configured_real_base(cfg: &Config, wanted: &Path) -> Result<PathBuf> {
 fn confirm_project_identity(path: &Path, expected: &str, label: &str) -> Result<()> {
     assets::require_real_directory(path, label)?;
     let pinfo = crate::core::project_info::pinfo_path(path);
-    require_real_file(&pinfo, "PROJECT_INFO.md")?;
+    crate::util::paths::require_real_file(&pinfo, "PROJECT_INFO.md")?;
     let metadata = crate::core::project_info::read_metadata(path)?
         .ok_or_else(|| anyhow::anyhow!("{label} project has no readable identity"))?;
     if metadata.id != expected {
@@ -937,27 +852,6 @@ fn confirm_project_identity(path: &Path, expected: &str, label: &str) -> Result<
             "{label} project identity mismatch (expected {expected}, found {})",
             metadata.id
         );
-    }
-    Ok(())
-}
-
-fn validate_native_relative(path: &Path) -> Result<()> {
-    if path.as_os_str().is_empty()
-        || path.is_absolute()
-        || !path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
-    {
-        bail!("unsafe relative path in create journal: {}", path.display());
-    }
-    Ok(())
-}
-
-fn require_real_file(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("{label} is missing: {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        bail!("{label} is not a real file: {}", path.display());
     }
     Ok(())
 }
@@ -1063,7 +957,7 @@ mod tests {
             outside.display()
         );
         let create = legacy_create_marker_path(&project);
-        let moved = move_marker_path(&base, "project");
+        let moved = base.join(format!("{MARKER_MOVE_PREFIX}project.json"));
         fs::write(&create, hostile.as_bytes()).unwrap();
         fs::write(&moved, hostile.as_bytes()).unwrap();
         let before_create = fs::read(&create).unwrap();

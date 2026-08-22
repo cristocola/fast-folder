@@ -684,8 +684,8 @@ fn sanitize_and_safe_path_units_exposed_via_lib() {
     // Smoke-test that the lib re-exports the naming helpers as expected —
     // protects against someone pruning the module accidentally.
     assert_eq!(naming::sanitize_name("a/b"), "a_b");
-    assert!(naming::ensure_relative_safe_path("foo/bar.txt").is_ok());
-    assert!(naming::ensure_relative_safe_path("../bad").is_err());
+    assert!(fastf::core::validated::SafeRelativePath::parse("foo/bar.txt").is_ok());
+    assert!(fastf::core::validated::SafeRelativePath::parse("../bad").is_err());
 }
 
 #[test]

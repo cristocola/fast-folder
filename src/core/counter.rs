@@ -28,7 +28,7 @@ use crate::util::paths;
 /// which is why `fastf id set` refuses a value below the floor instead of
 /// pretending to accept one — before this rule it wrote a single file that
 /// [`Counters::floor`] then ignored, and reported success for a no-op.
-pub const BASE_COUNTER_FILE: &str = ".fastf-counter.toml";
+pub(crate) const BASE_COUNTER_FILE: &str = ".fastf-counter.toml";
 
 /// Single global counter shared across all templates.
 /// The file contains one line: `global = 47`
@@ -191,7 +191,7 @@ impl Counters {
     /// Monotonic on purpose: two machines writing the same base must not be able
     /// to walk the number backwards, and a base that has seen higher IDs than
     /// this create knows about keeps its mark.
-    pub fn save_base(base: &Path, value: u64) -> Result<bool> {
+    pub(crate) fn save_base(base: &Path, value: u64) -> Result<bool> {
         if Self::load_base(base) >= value {
             return Ok(false);
         }
@@ -204,7 +204,7 @@ impl Counters {
     }
 
     /// The highest value recorded by any configured base.
-    pub fn base_floor(cfg: &Config) -> u64 {
+    pub(crate) fn base_floor(cfg: &Config) -> u64 {
         cfg.effective_bases()
             .iter()
             .filter(|base| base.is_dir())

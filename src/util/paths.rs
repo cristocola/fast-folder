@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 /// How the data directory (config, templates, counters) was resolved.
@@ -191,6 +191,41 @@ fn strip_verbatim(raw: &str) -> String {
     } else {
         raw.to_string()
     }
+}
+
+/// Require an existing, non-symlink regular file.
+///
+/// The counterpart to [`crate::core::assets::require_real_directory`], and the
+/// same reasoning: `Path::is_file()` follows links and reads a missing path as
+/// `false`, neither of which is strong enough at a boundary where a journal, a
+/// manifest, or a project's metadata is about to be trusted.
+pub(crate) fn require_real_file(path: &Path, label: &str) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("{label} is missing: {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        bail!("{label} is not a real file: {}", path.display());
+    }
+    Ok(())
+}
+
+/// Require a native relative path with only ordinary components: non-empty,
+/// not absolute, no `.`, `..`, or root/prefix component. Journals and manifests
+/// store paths that later get joined onto a base, so this is what stands
+/// between a recovered record and a write outside the tree it describes.
+pub(crate) fn require_native_relative(path: &Path, label: &str) -> Result<()> {
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        bail!("{label} must be a non-empty relative path");
+    }
+    if !path
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!(
+            "{label} contains an unsafe relative path: {}",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 pub fn config_path() -> PathBuf {

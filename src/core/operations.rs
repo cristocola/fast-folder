@@ -547,8 +547,11 @@ pub fn move_project(
 /// bases get walked is the whole question, and answering it with defaults would
 /// report a clean library because it looked in the wrong place.
 pub fn reconcile() -> Result<crate::core::provisioning::ReconcileReport> {
-    let config = Config::load()?;
-    Ok(crate::core::provisioning::reconcile_locked(&config))
+    // Loaded here only to fail loudly on an unreadable config: reporting a
+    // clean library because the pass looked in the wrong place would be worse
+    // than an error. The pass itself reloads it beneath the lock.
+    Config::load()?;
+    Ok(crate::core::provisioning::reconcile_locked())
 }
 
 // ---------------------------------------------------------------------------

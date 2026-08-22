@@ -46,13 +46,6 @@ pub fn run() -> Result<()> {
             report.rolled_back
         );
     }
-    if report.swept > 0 {
-        println!(
-            "   {} {} abandoned temporary file(s) removed",
-            "swept".dimmed(),
-            report.swept
-        );
-    }
     if !report.incomplete.is_empty() {
         println!(
             "   {} {} project(s) were never finished being created:",

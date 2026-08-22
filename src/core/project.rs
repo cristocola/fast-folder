@@ -15,14 +15,14 @@ use crate::core::validated::SafeRelativePath;
 ///
 /// Fifty is far past any believable accident; hitting it means something is
 /// generating names in a loop, and failing is better than continuing.
-pub const MAX_NAME_ATTEMPTS: u32 = 50;
+pub(crate) const MAX_NAME_ATTEMPTS: u32 = 50;
 
 /// The candidate folder name for attempt `n`: the bare name first, then
 /// `name_2`, `name_3`, …
 ///
 /// Shared by the preview in [`plan`] and the atomic claim in `create_inner`, so
 /// the name a user is shown is the name the claim tries first.
-pub fn suffixed_name(name: &str, attempt: u32) -> String {
+pub(crate) fn suffixed_name(name: &str, attempt: u32) -> String {
     if attempt <= 1 {
         name.to_string()
     } else {
@@ -572,7 +572,6 @@ fn provision_project(
         &plan.vars,
         &config.date_format,
         false,
-        false,
         defer_over,
     )?;
 
@@ -764,7 +763,7 @@ pub fn apply(
     assets::require_real_directory(target, "apply target")?;
     let vars = crate::core::vars::rendered_values(template, vars)?;
 
-    // Empty dirs declared in `structure:` first (create-or-skip, printed).
+    // Empty dirs declared in `structure:` first (create-or-skip).
     for action in apply_plan_resolved(template, target, &vars, &config.date_format)? {
         match action {
             ApplyAction::CreateFolder(p) => {
@@ -776,16 +775,8 @@ pub fn apply(
         }
     }
 
-    // Files from the files/ subtree — never overwrite, print each item.
-    copy_template_files(
-        template,
-        target,
-        &vars,
-        &config.date_format,
-        true,
-        false,
-        None,
-    )?;
+    // Files from the files/ subtree — never overwrite.
+    copy_template_files(template, target, &vars, &config.date_format, true, None)?;
 
     Ok(())
 }
@@ -891,7 +882,7 @@ fn validate_rendered_template_paths(
 /// Names and UTF-8 text (≤ [`assets::TEXT_MAX_BYTES`]) are interpolated;
 /// binaries / `verbatim` globs are copied byte-for-byte; `exclude` globs are
 /// skipped. When `skip_existing` is set (apply semantics) existing files are
-/// left untouched; `verbose` prints a per-item line (used by `fastf apply`).
+/// left untouched.
 ///
 /// When `defer_over` is `Some(limit)`, files larger than `limit` are **not**
 /// copied here — they're returned as [`assets::CopyJob`]s for a background
@@ -902,7 +893,6 @@ fn copy_template_files(
     vars: &HashMap<String, String>,
     date_format: &str,
     skip_existing: bool,
-    verbose: bool,
     defer_over: Option<u64>,
 ) -> Result<Vec<assets::CopyJob>> {
     let mut deferred = Vec::new();
@@ -948,13 +938,6 @@ fn copy_template_files(
         }
 
         if skip_existing && dest.exists() {
-            if verbose {
-                println!(
-                    "  {} {}",
-                    "  file  ".dimmed(),
-                    format!("{} (exists)", dest.display()).dimmed()
-                );
-            }
             continue;
         }
 
@@ -980,9 +963,6 @@ fn copy_template_files(
             vars,
             date_format,
         )?;
-        if verbose {
-            println!("  {} {}", "+ file  ".green(), dest.display());
-        }
     }
     Ok(deferred)
 }

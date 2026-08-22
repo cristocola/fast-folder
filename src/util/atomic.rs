@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Suffix used in our unique scratch names. This is diagnostic only: payload
 /// walkers and recovery never infer ownership from a filename suffix.
-pub const TMP_SUFFIX: &str = ".tmp";
+pub(crate) const TMP_SUFFIX: &str = ".tmp";
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -153,12 +153,6 @@ pub fn copy(src: &Path, path: &Path) -> Result<()> {
         })
 }
 
-/// True for the scratch naming scheme this module creates. This is diagnostic
-/// only: cleanup and tree walking never infer ownership from a suffix.
-pub fn is_temp_file(name: &str) -> bool {
-    name.ends_with(TMP_SUFFIX)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,7 +178,9 @@ mod tests {
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| is_temp_file(n))
+            // Cleanup never infers ownership from a suffix; the test may,
+            // because it knows exactly what this module writes.
+            .filter(|n| n.ends_with(TMP_SUFFIX))
             .collect();
         assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
     }
@@ -203,7 +199,7 @@ mod tests {
         let a = temp_path_for(target);
         let b = temp_path_for(target);
         assert_ne!(a, b, "concurrent writers must not share a temp path");
-        assert!(is_temp_file(&a.to_string_lossy()));
+        assert!(a.to_string_lossy().ends_with(TMP_SUFFIX));
     }
 
     #[test]

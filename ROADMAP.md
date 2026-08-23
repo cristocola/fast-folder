@@ -27,8 +27,8 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Release: **v1.6.1 — correctness and hygiene**
-- Status: **v1.6.1 released; CI, assets, and AUR packages verified; the Windows manual smoke (same-drive rename, cross-drive move via the MSI) is the one open item**
+- Release: **v1.7.0 — the guided TUI, and the structure under it**
+- Status: **tagging; Tracks B and C of [`PLAN.md`](PLAN.md) are complete (Phases 6-17), all gates green**
 - Last reviewed: **2026-08-23**
 
 ## Release train
@@ -40,7 +40,7 @@ responsibility of the filesystem and backups.
 | v1.5.1 | Released; CI, assets, and AUR packages verified | every mutation shares validation, locking, authoritative reload, and cache refresh behavior |
 | v1.6.0 | Released; CI, assets, and AUR packages verified | the guided project browser never waits on a folder size |
 | v1.6.1 | Released; CI, assets, and AUR packages verified | what fastf says happened is what happened, and every file it rewrites stays readable |
-| v1.7.0 | In progress | the guided menu can always be backed out of, never loses what you typed, and reaches everything the command line can |
+| v1.7.0 | Tagging | the guided menu can always be backed out of, never loses what you typed, and reaches everything the command line can |
 
 ### v1.4.1 — containment and path safety
 
@@ -286,10 +286,14 @@ what the command line can already do.
   pickers, three base pickers and two byte formatters became one each, and
   `tests/layering.rs` fails the build if `core` or `util` reaches for a prompt.
 
-### v1.7.1 — core structure
+### v1.7.1 — core structure (delivered inside v1.7.0)
 
 Track C of [`PLAN.md`](PLAN.md). No behaviour change: the proof is the unchanged
-test suite plus the guard each phase adds.
+test suite plus the guard each phase adds. It ships **inside v1.7.0** rather than
+as a separate tag — a patch release that changes nothing a user can see is not
+worth a version of its own when it lands at the same moment, and skipping a
+number would be worse than absorbing one. Its checked items remain here as
+history.
 
 - [x] Phase 17: `CLAUDE.md` as a working document, dependencies refreshed — the
   development notes are organised by topic and split by directory (root 308

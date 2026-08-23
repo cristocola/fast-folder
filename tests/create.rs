@@ -1013,3 +1013,81 @@ fn a_template_whose_pattern_starts_with_a_dot_cannot_be_saved() {
         assert!(manifest.exists());
     });
 }
+
+// ---------------------------------------------------------------------------
+// Post-create: the project path is data, never source
+// ---------------------------------------------------------------------------
+
+/// A post-create command used to be `raw.replace("{path}", &path)` and then
+/// `sh -c`. `sanitize_name` leaves `;`, `&`, `$`, `(`, `)`, backtick and `^`
+/// alone — they are all legal in a folder name — so a project called
+/// `Live; touch pwned` split the command in two, and the second half ran.
+///
+/// After the rewrite the shell sees `"$FASTF_PROJECT_PATH"`: one argument, no
+/// re-parsing, whatever the folder is called.
+#[cfg(unix)]
+#[test]
+fn a_project_name_full_of_shell_syntax_cannot_split_a_post_create_command() {
+    sandboxed(|install| {
+        write_template(install, "hostile", &name_only_template_yaml("hostile"));
+
+        let mut cfg = Config::default();
+        let base = install.join("projects");
+        fs::create_dir_all(&base).unwrap();
+        cfg.base_dir = base.display().to_string();
+        // `test -d` proves the token resolves to the real folder; the `touch`
+        // proves the command ran as one command with the right argument.
+        cfg.post_create.commands = vec![
+            "test -d {path} && touch \"$FASTF_PROJECT_PATH/ok\"".to_string(),
+            "pwd > cwd.txt".to_string(),
+        ];
+
+        let tmpl = template::find_by_slug("hostile").unwrap();
+        let mut vars = HashMap::new();
+        // Every metacharacter `sanitize_name` passes through. `/`, `\`, `:` and
+        // friends are mapped to `_`, so this is what a hostile name can be.
+        vars.insert(
+            "name".to_string(),
+            "Live; touch pwned && $(touch subbed) `touch ticked`".to_string(),
+        );
+
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        let plan = project::create(&plan, &tmpl, &mut counters, &cfg, true).unwrap();
+
+        // The command ran, once, against the right folder.
+        assert!(
+            plan.root_path.join("ok").exists(),
+            "the command did not run against the project: {:?}",
+            fs::read_dir(&plan.root_path)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>()
+        );
+
+        // `current_dir` is the project, so a relative redirect lands inside it.
+        let cwd = fs::read_to_string(plan.root_path.join("cwd.txt")).unwrap();
+        assert_eq!(
+            fs::canonicalize(cwd.trim()).unwrap(),
+            fs::canonicalize(&plan.root_path).unwrap()
+        );
+
+        // And nothing the folder name asked for happened, anywhere.
+        for stray in ["pwned", "subbed", "ticked"] {
+            assert!(
+                !plan.root_path.join(stray).exists(),
+                "'{stray}' was created inside the project — the name was executed"
+            );
+            assert!(
+                !base.join(stray).exists(),
+                "'{stray}' was created in the base — the name was executed"
+            );
+            assert!(
+                !install.join(stray).exists(),
+                "'{stray}' was created in the install dir — the name was executed"
+            );
+        }
+    });
+}

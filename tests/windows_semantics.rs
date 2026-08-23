@@ -354,3 +354,56 @@ fn long_paths_work_and_display_cleanly() {
     );
     assert!(Path::new(&shown).is_absolute());
 }
+
+// ---------------------------------------------------------------------------
+// Post-create on cmd.exe
+// ---------------------------------------------------------------------------
+
+/// `cmd.exe` expands `%VAR%` inside the command line it reconstructs, *after*
+/// std has quoted the arguments. A project folder called `%USERPROFILE%` is a
+/// legal folder name, and `cmd /c start "" <path>` opened the user's home
+/// directory instead of it.
+///
+/// The rewrite means the path never appears in a command line at all: the shell
+/// gets `"%FASTF_PROJECT_PATH%"`, which expands to the variable fastf set, not
+/// to anything in the folder's own name. `&` is the other half of the same
+/// problem — it is `cmd`'s command separator and is legal in a folder name.
+#[cfg(windows)]
+#[test]
+fn a_windows_project_name_with_percent_and_ampersand_cannot_reach_cmd() {
+    use fastf::core::post_create::{PROJECT_PATH_VAR, rewrite_path_token};
+
+    let rewritten = rewrite_path_token("if exist {path} echo yes");
+    assert!(
+        !rewritten.contains("{path}"),
+        "the token must not survive: {rewritten}"
+    );
+    assert_eq!(
+        rewritten,
+        format!("if exist \"%{PROJECT_PATH_VAR}%\" echo yes"),
+        "the Windows expansion must be the quoted variable"
+    );
+
+    // A quoted token is replaced as a unit rather than double-quoted, which on
+    // cmd would make the argument an empty string followed by a bare path.
+    assert_eq!(
+        rewrite_path_token("code \"{path}\""),
+        format!("code \"%{PROJECT_PATH_VAR}%\"")
+    );
+}
+
+/// The names themselves are creatable and survive discovery — otherwise the
+/// case above would be theoretical.
+#[cfg(windows)]
+#[test]
+fn folder_names_that_are_cmd_syntax_round_trip_through_discovery() {
+    let tmp = tempfile::tempdir().unwrap();
+    for folder in ["%USERPROFILE%", "Q1 & Q2", "100%25"] {
+        let sanitized = naming::sanitize_name(folder);
+        assert_eq!(sanitized, folder, "these are all legal folder names");
+        write_project(tmp.path(), folder, "ID0001");
+    }
+
+    let found = library::scan_base(tmp.path());
+    assert_eq!(found.len(), 3, "all three must be discoverable");
+}

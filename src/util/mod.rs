@@ -8,6 +8,8 @@ pub mod interrupt;
 pub(crate) mod live_select;
 pub mod lockfile;
 pub mod paths;
+#[cfg(windows)]
+pub(crate) mod shell_open;
 pub(crate) mod size_scan;
 pub mod time;
 pub mod trace;

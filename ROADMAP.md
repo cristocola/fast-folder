@@ -30,7 +30,14 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v2.0.0 in progress — two surfaces, one engine, nothing trusted by accident** (`PLAN.md` drives it, one phase per PR)
-- Status: **Phase 2 landed: names and numbers.** One validator
+- Status: **Phase 3 landed: shelling out.** A project path never appears inside
+  shell source. Every child fastf spawns for a project gets the project as its
+  working directory and as `FASTF_PROJECT_PATH`; `{path}` in a post-create
+  command expands to a quoted reference to that variable rather than to the path
+  itself, so a folder named `Live; rm -rf ~` is one argument and not two
+  commands. Reveal on Windows is `ShellExecuteW`, not `cmd /c start`, which
+  expanded `%VAR%` out of the folder's own name.
+- Previously: **Phase 2 landed: names and numbers.** One validator
   (`validated::ProjectFolderName`) decides what a project folder may be called,
   and create, rename and register all use it — a name that would be invisible
   (`.hidden`) or empty (`..`) is refused before any directory is made. The ID
@@ -96,13 +103,18 @@ Regression coverage grows with the relevant release:
 - [x] Names that sanitize away or start with `.` are refused before any folder is
   created; the counter's maximum is enforced at `id set` and at create; an
   unreadable template manifest is never overwritten (v2.0.0).
+- [x] A folder name full of shell metacharacters runs no command of its own and
+  the post-create shell's cwd is the project (v2.0.0, unix); the Windows
+  expansion is the quoted variable (v2.0.0, windows).
 
 Manual move smoke and follow-up:
 
 - [x] Linux same-filesystem direct rename and genuine cross-filesystem staged
   move (`/tmp` to `/dev/shm`) using the release binary.
 - [ ] Windows same-drive rename and ordinary move to another mounted drive/share
-  using the published MSI or ZIP. This remains the sole post-release validation
+  using the published MSI or ZIP; plus, new in v2.0.0, "Reveal" from the TUI
+  action menu and `fastf open` (the `ShellExecuteW` path — CI compiles and lints
+  it, but only a real desktop session opens a window). This remains the sole post-release validation
   item, still outstanding across every release since v1.5.1.
 
 Behavior changes and user documentation land together. CLI flags and the

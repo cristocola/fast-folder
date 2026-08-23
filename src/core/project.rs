@@ -551,12 +551,10 @@ pub fn run_post_create(
     if actions.is_empty() {
         return Vec::new();
     }
-    match crate::core::post_create::run(&actions, root, config) {
-        Ok(notes) => notes,
-        Err(e) => vec![crate::core::post_create::Note::Warning(format!(
-            "post-create step failed: {e}"
-        ))],
-    }
+    // No `Result` to unwrap: every individual failure is already a
+    // `Note::Warning`, because the project on disk is finished and correct
+    // whatever the editor did. The `Err` arm this used to carry was dead code.
+    crate::core::post_create::run(&actions, root, config)
 }
 
 pub fn resolve_post_create(

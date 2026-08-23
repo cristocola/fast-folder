@@ -178,7 +178,31 @@ git_init = true
 reveal = false
 open_in_editor = false   # opens config.editor (or $EDITOR) with the project folder
 print_path = false       # prints the absolute path, useful for pipelines: $(fastf new ...)
-commands = []            # shell commands; {path} is replaced with the project's absolute path
+commands = []            # shell commands, run inside the project folder
 ```
 
 A template-level `post_create:` replaces the global block entirely. Commands run synchronously through the system shell, so only use templates you trust.
+
+### How a command finds the project
+
+Every program fastf starts for a project — `git init`, your editor, and each of
+these commands — runs with the project folder as its **working directory** and
+with `FASTF_PROJECT_PATH` set to the project's absolute path. So in a new
+command, write `.` or `"$FASTF_PROJECT_PATH"` (`"%FASTF_PROJECT_PATH%"` on
+Windows):
+
+```toml
+commands = [
+  "npm install",                          # . is already the project
+  "tar czf ../backup.tgz .",
+  "echo \"$FASTF_PROJECT_PATH\" | xclip",
+]
+```
+
+`{path}` still works and needs no migration. It is **not** replaced with the
+path: it expands to a quoted reference to that same variable, so the folder's
+name never becomes part of the command's source text. That matters because a
+folder name can legally contain `;`, `&`, `$`, `(`, `)` and a backtick, and a
+project called `Live; rm -rf ~` would otherwise be two commands rather than one
+argument. A `{path}` you have already quoted yourself (`code "{path}"`) is
+replaced as a unit, so it does not end up double-quoted.

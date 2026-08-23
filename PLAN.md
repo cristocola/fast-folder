@@ -346,13 +346,18 @@ practice.
 5. `src/core/CLAUDE.md` "Post-create actions" rewritten to the new contract.
 
 **Acceptance.**
-- [ ] All gates pass, including Windows clippy on CI (the `extern "system"` block is
-      `cfg(windows)` and must be linted there).
-- [ ] `grep -rn 'Command::new("cmd")' src/` shows only the editor shim and test
-      helpers; no `start` anywhere.
-- [ ] The injection test was observed failing on the pre-change build.
+- [x] All gates pass. The `extern "system"` block is linted by local
+      `--target x86_64-pc-windows-gnu` clippy and by CI's Windows runner.
+- [x] `grep -rn 'Command::new("cmd")' src/` finds only three test helpers
+      (`transactions.rs`, `assets.rs`, `library/tests.rs`, all inside
+      `mod tests`). No `start` outside the editor shim — which the Decisions
+      above deliberately keep on `cmd /c` for `.cmd` shim resolution, with the
+      path passed as the quoted variable.
+- [x] The injection test was observed failing on the pre-change build: with the
+      old `raw.replace("{path}", …)` restored it reported `'pwned' was created
+      inside the project — the name was executed`.
 - [ ] **Needs the maintainer:** a Windows smoke of "Reveal" from the TUI action
-      menu and of `fastf open` (the outstanding manual item in `ROADMAP.md`).
+      menu and of `fastf open` (recorded in `ROADMAP.md`).
 
 ---
 
@@ -753,3 +758,11 @@ fastf refuses to write through links; cache entries outside a base are ignored.
   - `Template::validate`'s digit ceiling is `template::MAX_ID_DIGITS` (12,
     matching `Counters::MAX_VALUE`'s width), which *widens* the TUI builder's
     previous 1..=9. The builder now shares the constant instead of its own bound.
+- **Phase 3 — 2026-08-23, `phase-03-shelling-out`.** As planned. Two notes:
+  `post_create::project_command(program, project_path)` is the single funnel the
+  plan implied but did not name — it sets `current_dir` and `FASTF_PROJECT_PATH`
+  together, so a future child cannot get one without the other. And the "no
+  `start` anywhere" acceptance line contradicts the phase's own decision to keep
+  the editor on `cmd /c start` for `.cmd` shims; read as "no `start` in
+  `reveal_folder`", which holds. The Windows reveal smoke stays open for the
+  maintainer — CI compiles and lints `ShellExecuteW` but cannot open a window.

@@ -354,15 +354,37 @@ rescan; `note` does not, because the cache stores no journal.
 
 `PostCreate` on both `Config` and `Template`; a template-level block overrides the
 global one entirely. All fields default to off: `git_init`, `reveal`,
-`open_in_editor`, `print_path` (for `$(fastf new ...)` pipelines), and
-`commands`, whose `{path}` token is substituted before execution.
+`open_in_editor`, `print_path` (for `$(fastf new ...)` pipelines), and `commands`.
+
+**A project path never appears inside shell source.** Every child fastf spawns
+for a project goes through `post_create::project_command`, which sets the project
+as `current_dir` **and** as `PROJECT_PATH_VAR` (`FASTF_PROJECT_PATH`).
+`rewrite_path_token` then turns a `{path}` in a command into `"$FASTF_PROJECT_PATH"`
+(`"%FASTF_PROJECT_PATH%"` on Windows) rather than into the path — a folder name
+may legally contain `;`, `&`, `$`, `(`, `)` and a backtick, and `sanitize_name`
+leaves every one of them alone, so substituting the path split the command in
+two. `{path}` is **not** deprecated: after the rewrite there is nothing to
+migrate. A token already wrapped in a matching pair of quotes is replaced as a
+unit so `code "{path}"` does not come out double-quoted; Windows paths cannot
+contain `"`, so the quoted expansion is safe for every legal path.
 
 Commands run synchronously through the user's shell (`cmd /c` on Windows, `sh -c`
 elsewhere). **There is no sandbox** — template authors control this.
 
-`core::post_create::run` returns `Vec<Note>` and does **not** print: `core` may
-not write to a stdout the caller may be piping. `Note::Path` is separate from `Note::Done` because
-`print_path`'s line is the run's *output*, so it goes to stdout alone and last.
+**Reveal on Windows is `util::shell_open` (`ShellExecuteW`), not `cmd /c start`.**
+std quotes `start`'s argument correctly, but `cmd.exe` expands `%VAR%` inside the
+command line it reconstructs afterwards, so a folder named `%USERPROFILE%` opened
+the home directory. `ShellExecuteW` takes the path as an argument, with no
+command line to expand. The editor **does** stay on `cmd /c start` on Windows —
+`code` is a `.cmd` shim only cmd can resolve — but its path argument is the
+quoted variable, so the folder's own name never reaches the parser.
+
+`core::post_create::run` returns `Vec<Note>` — no `Result`, because every
+individual failure is already a `Note::Warning`: the project on disk is finished
+and correct whatever the editor did. It does **not** print: `core` may not write
+to a stdout the caller may be piping. `Note::Path` is separate from `Note::Done`
+because `print_path`'s line is the run's *output*, so it goes to stdout alone and
+last.
 
 `resolve_post_create()` is `pub` so `cli::new`'s open-prompt can avoid
 double-opening when `reveal: true` is already set.

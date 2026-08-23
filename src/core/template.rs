@@ -225,13 +225,13 @@ impl Template {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("reading template {}", path.display()))?;
         // Strip a UTF-8 BOM. Notepad, PowerShell's `Out-File -Encoding utf8`,
-        // and plenty of other Windows editors add one by default, and serde_yaml
+        // and plenty of other Windows editors add one by default, and the parser
         // then fails with a thoroughly misleading `missing field \`slug\``
         // pointing at line 1 column 2 — while `slug` is sitting right there.
         // `project_info::split_frontmatter_body` has stripped it for years; the
         // template loader simply never got the same treatment.
         let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
-        let mut t: Self = serde_yaml::from_str(raw).with_context(|| {
+        let mut t: Self = crate::util::yaml::from_str(raw).with_context(|| {
             format!(
                 "parsing template {}\n  (if you edited this file on Windows, \
                  check it is saved as UTF-8 without a BOM)",
@@ -302,7 +302,7 @@ impl Template {
             .context("serializing template")?,
             // No readable manifest yet: this is a new template, or the old file
             // is unreadable and there is nothing to preserve from it.
-            Err(_) => serde_yaml::to_string(&snapshot).context("serializing template")?,
+            Err(_) => crate::util::yaml::to_string(&snapshot).context("serializing template")?,
         };
         // Atomic: a manifest truncated by a crash is a template that no longer
         // loads, and `load_all` is what every create reads.

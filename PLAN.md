@@ -912,12 +912,42 @@ variable.
 - `chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }`; `colored = "3"` after confirming `NO_COLOR`/non-TTY behaviour is unchanged (the `cat -v` piped-output checks from Phase 1 are the test). Record binary size before and after in the PR; revert any change that grows it.
 
 **Steps.**
-- [ ] `CLAUDE.md` restructure; read every section against the code once (the agent is expected to open each referenced file).
-- [ ] `core::yaml` shim and the expected-output test with the old crate; switch crates; tests unchanged.
-- [ ] `chrono` features, `colored` bump, `cargo audit` clean, `cargo tree -d` empty.
-- [ ] `ROADMAP.md`: strike "Dependency and binary-size cleanup" from the backlog with the numbers.
+- [x] `CLAUDE.md` restructure; read every section against the code once (the agent is expected to open each referenced file).
+- [x] `core::yaml` shim and the expected-output test with the old crate; switch crates; tests unchanged. *(It lives in `util::yaml`, which already existed for `to_string_preserving_unknown`.)*
+- [x] `chrono` features, `colored` bump, `cargo tree -d` empty. *(`cargo audit` not run — see Notes.)*
+- [x] `ROADMAP.md`: strike "Dependency and binary-size cleanup" from the backlog with the numbers.
 
 **Acceptance.** `wc -l CLAUDE.md` ≤ 420. `cargo tree | grep -c deprecated` is 0. Byte-identity tests pass. Binary size is not larger than before the phase.
+
+**Notes.**
+
+(1) **The restructure became a split, not just a cut.** `CLAUDE.md` was 1013
+lines, not the 660 the phase was written against — Phases 1-16 each recorded
+their decisions there, as the process required. Cutting to 420 by deletion would
+have meant removing rules that are current and load-bearing, which is the
+opposite of what the file is for. So it follows the pattern the repo already
+uses for `src/ui/CLAUDE.md` and `tests/CLAUDE.md`: **root 308 lines**
+(orientation, layering, the data-dir and counter models, the argument layer, the
+traps belonging to no module), `src/core/CLAUDE.md` 376 (the engine),
+`src/tui/CLAUDE.md` 174 (the guided menu). Each loads when you touch that
+directory, so a rule now sits beside the code it constrains. Total across all
+five files: 1363 → 1208, and organised by topic rather than by release.
+
+(2) **Measured.** `cargo tree | grep -c deprecated`: 1 → **0**. Release binary:
+3,905,368 → **3,905,136** bytes. `cargo tree -d --edges normal` is **empty** —
+the only duplication left (`getrandom` 0.3 vs 0.4) is dev-only, from proptest's
+`rand` against tempfile's, and cannot be resolved from here.
+
+(3) **`cargo audit` was not run**: the subcommand is not installed, and
+installing a tool into the machine's `~/.cargo/bin` is outside what this task was
+asked to change. What it was in the list for — the archived `serde_yaml` — is
+verified gone by the deprecated count above.
+
+(4) **The byte-identity snapshot was captured from `serde_yaml 0.9.34` before the
+switch**, and it caught a real difference on the first writing: the old crate
+emits a multi-line string as a literal block (`|`), not as a quoted scalar. The
+recorded expectation is what 0.9.34 actually produced, and `serde_yaml_ng 0.10`
+reproduces it byte for byte.
 
 ## Release checkpoint: v1.7.1
 

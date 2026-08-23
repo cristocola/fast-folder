@@ -291,6 +291,14 @@ what the command line can already do.
 Track C of [`PLAN.md`](PLAN.md). No behaviour change: the proof is the unchanged
 test suite plus the guard each phase adds.
 
+- [x] Phase 17: `CLAUDE.md` as a working document, dependencies refreshed — the
+  development notes are organised by topic and split by directory (root 308
+  lines, plus `src/core/`, `src/tui/`, `src/ui/` and `tests/`), so a rule sits
+  beside the code it constrains. The archived `serde_yaml` is replaced by the
+  maintained fork behind `util::yaml`, with a byte-identity snapshot captured
+  from the old crate; `chrono` drops the default features nothing calls and
+  `colored` is current. Deprecated dependencies 1 → 0; release binary
+  3,905,368 → 3,905,136 bytes.
 - [x] Phase 16: one test harness, faster suites, the coverage gaps — the sandbox
   and its `HOME` redirect are defined once in `tests/common/env`, the two
   2700-line and 1300-line suites are split by subject, and the modules that had
@@ -391,7 +399,6 @@ than as separate published tags. Their checked items remain above as history.
 
 - One library snapshot for UI state. (Lazy template loading landed in v1.7.1:
   `load_all` no longer reads template file contents.)
-- Dependency and binary-size cleanup based on measurements.
 - Portable project packages.
 - Template upgrades.
 - Template diagnostics and language-server support.

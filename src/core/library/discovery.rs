@@ -152,7 +152,7 @@ pub(crate) fn read_project_meta(dir: &Path) -> Option<Metadata> {
     let path = dir.join(project_info::RESERVED_FILENAME);
     let body = fs::read_to_string(&path).ok()?;
     let (frontmatter, _) = project_info::split_frontmatter_body(&body)?;
-    serde_yaml::from_str::<Metadata>(frontmatter).ok()
+    crate::util::yaml::from_str::<Metadata>(frontmatter).ok()
 }
 
 pub(crate) fn project_from_meta(meta: Metadata, base: &Path, dir: &Path) -> Project {

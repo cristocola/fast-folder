@@ -186,10 +186,10 @@ pub fn render_at(
 ) -> Result<String> {
     let meta = Metadata::from_plan_at(plan, tmpl, tags.to_vec(), created);
 
-    // Serialize frontmatter via serde_yaml so colons, quotes, multibyte values,
-    // etc. all escape correctly. serde_yaml's output already ends with `\n`
+    // Serialize frontmatter through `util::yaml` so colons, quotes, multibyte
+    // values, etc. all escape correctly. The output already ends with `\n`
     // and starts with no leading separator, so we wrap it in `---` lines.
-    let yaml = serde_yaml::to_string(&meta).context("serializing project metadata")?;
+    let yaml = crate::util::yaml::to_string(&meta).context("serializing project metadata")?;
 
     let mut out = String::new();
     out.push_str("---\n");
@@ -327,7 +327,7 @@ pub fn read_metadata(project_root: &Path) -> Result<Option<Metadata>> {
     let Some((frontmatter, _)) = split_frontmatter_body(&body) else {
         return Ok(None);
     };
-    let meta: Metadata = serde_yaml::from_str(frontmatter)
+    let meta: Metadata = crate::util::yaml::from_str(frontmatter)
         .with_context(|| format!("parsing YAML frontmatter in {}", RESERVED_FILENAME))?;
     Ok(Some(meta))
 }
@@ -357,7 +357,7 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
         )
     })?;
 
-    let mut meta: Metadata = serde_yaml::from_str(frontmatter_yaml)
+    let mut meta: Metadata = crate::util::yaml::from_str(frontmatter_yaml)
         .with_context(|| format!("parsing YAML frontmatter in {}", path.display()))?;
 
     mutator(&mut meta);

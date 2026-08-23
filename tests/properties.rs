@@ -181,7 +181,7 @@ proptest! {
         let rendered = project_info::render(&plan, &tmpl, &[]).expect("render must not fail");
         let (frontmatter, _) = project_info::split_frontmatter_body(&rendered)
             .ok_or_else(|| TestCaseError::fail("rendered file has no frontmatter"))?;
-        let meta: project_info::Metadata = serde_yaml::from_str(frontmatter)
+        let meta: project_info::Metadata = serde_yaml_ng::from_str(frontmatter)
             .map_err(|e| TestCaseError::fail(format!("frontmatter unreadable: {e}\n{frontmatter}")))?;
 
         prop_assert_eq!(&meta.id, "ID0001");

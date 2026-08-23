@@ -29,11 +29,16 @@ clap_complete = "4"
 clap_mangen = "0.2"
 dialoguer = "0.11"
 serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+# `serde_yaml 0.9` is archived upstream. `serde_yaml_ng` is the maintained
+# drop-in fork; `util::yaml` is the only module that names either of them, and
+# `the_emitted_bytes_are_the_ones_we_have_always_emitted` pins the output.
+serde_yaml_ng = "0.10"
 toml = "0.8"
-chrono = "0.4"
+# Only the local/UTC clock and formatting are used. The default features also
+# pull `oldtime`, `wasmbind` and `unstable-locales`, none of which fastf calls.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 anyhow = "1"
-colored = "2"
+colored = "3"
 serde_json = "1"
 
 [target.'cfg(unix)'.dependencies]

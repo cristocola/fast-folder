@@ -16,13 +16,37 @@
 //!
 //! So the merge happens one level down, on the parsed document rather than on
 //! the type. Deserialization is left exactly as it was, and the surviving keys
-//! keep their original positions because [`serde_yaml::Mapping`] is insertion
+//! keep their original positions because [`serde_yaml_ng::Mapping`] is insertion
 //! ordered.
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use serde_yaml::Value;
+use serde_yaml_ng::Value;
 
+// ---------------------------------------------------------------------------
+// The YAML crate, named once
+// ---------------------------------------------------------------------------
+
+/// Serialize a value to a YAML document.
+///
+/// Every YAML call in fastf goes through this module, so the crate underneath is
+/// named in one file. That matters because `serde_yaml 0.9` is archived
+/// upstream: replacing it is a change here rather than at nine call sites across
+/// `template`, `project_info` and `library`, every one of which sits under a
+/// byte-identity test.
+pub fn to_string<T: Serialize>(value: &T) -> Result<String, serde_yaml_ng::Error> {
+    serde_yaml_ng::to_string(value)
+}
+
+/// Parse a YAML document.
+pub fn from_str<'a, T: serde::Deserialize<'a>>(text: &'a str) -> Result<T, serde_yaml_ng::Error> {
+    serde_yaml_ng::from_str(text)
+}
+
+/// Convert a value into the crate's dynamic `Value`.
+pub fn to_value<T: Serialize>(value: T) -> Result<Value, serde_yaml_ng::Error> {
+    serde_yaml_ng::to_value(value)
+}
 /// Serialize `value`, keeping every top-level key `original` had that `value`'s
 /// type does not own — each in its original position.
 ///
@@ -41,16 +65,16 @@ pub fn to_string_preserving_unknown<T: Serialize>(
     original: &str,
     owned: &[&str],
 ) -> Result<String> {
-    let fresh = serde_yaml::to_value(value).context("serializing")?;
+    let fresh = serde_yaml_ng::to_value(value).context("serializing")?;
     let Value::Mapping(fresh) = fresh else {
-        return serde_yaml::to_string(value).context("serializing");
+        return serde_yaml_ng::to_string(value).context("serializing");
     };
 
     // A BOM here is routine: Notepad and PowerShell's `Out-File -Encoding utf8`
     // both add one, and `Template::load_from_file` has stripped it for years.
     let original = original.strip_prefix('\u{feff}').unwrap_or(original);
-    let Ok(Value::Mapping(mut merged)) = serde_yaml::from_str::<Value>(original) else {
-        return serde_yaml::to_string(&Value::Mapping(fresh)).context("serializing");
+    let Ok(Value::Mapping(mut merged)) = serde_yaml_ng::from_str::<Value>(original) else {
+        return serde_yaml_ng::to_string(&Value::Mapping(fresh)).context("serializing");
     };
 
     for key in owned {
@@ -67,7 +91,7 @@ pub fn to_string_preserving_unknown<T: Serialize>(
         merged.insert(key, value);
     }
 
-    serde_yaml::to_string(&Value::Mapping(merged)).context("serializing")
+    serde_yaml_ng::to_string(&Value::Mapping(merged)).context("serializing")
 }
 
 /// The top-level keys of a value's own serialization, for the tests that keep an
@@ -76,7 +100,7 @@ pub fn to_string_preserving_unknown<T: Serialize>(
 /// updated — the mutation would appear to do nothing.
 #[cfg(test)]
 pub fn serialized_keys<T: Serialize>(value: &T) -> Vec<String> {
-    let Ok(Value::Mapping(map)) = serde_yaml::to_value(value) else {
+    let Ok(Value::Mapping(map)) = serde_yaml_ng::to_value(value) else {
         return Vec::new();
     };
     map.keys()
@@ -146,7 +170,7 @@ mod tests {
     #[test]
     fn output_matches_a_plain_serialization_when_there_is_nothing_extra() {
         let value = doc("a", "b", None);
-        let plain = serde_yaml::to_string(&value).unwrap();
+        let plain = serde_yaml_ng::to_string(&value).unwrap();
         let out = to_string_preserving_unknown(&value, &plain, OWNED).unwrap();
         assert_eq!(out, plain, "a document with no extras must not be reshaped");
     }
@@ -156,7 +180,11 @@ mod tests {
         let value = doc("a", "b", None);
         for original in ["", "just a scalar", "- a\n- list\n", "{{{ not yaml"] {
             let out = to_string_preserving_unknown(&value, original, OWNED).unwrap();
-            assert_eq!(out, serde_yaml::to_string(&value).unwrap(), "{original:?}");
+            assert_eq!(
+                out,
+                serde_yaml_ng::to_string(&value).unwrap(),
+                "{original:?}"
+            );
         }
     }
 
@@ -174,5 +202,73 @@ mod tests {
             serialized_keys(&doc("a", "b", Some("x"))),
             ["first", "second", "optional"]
         );
+    }
+
+    /// The exact bytes the YAML crate emits, for a value that exercises
+    /// everything a `PROJECT_INFO.md` can hold: a colon, a quote, a `#`, a
+    /// multi-line value, unicode, an empty string, and a nested map.
+    ///
+    /// Captured from `serde_yaml 0.9.34` before the crate was replaced. This is
+    /// what makes the swap checkable: every existing round-trip test proves
+    /// fastf can read what it wrote, and only this one proves the bytes did not
+    /// move — which they must not, because these files are diffed, committed and
+    /// hand-edited by users.
+    #[test]
+    fn the_emitted_bytes_are_the_ones_we_have_always_emitted() {
+        use serde::Serialize;
+        use std::collections::BTreeMap;
+
+        #[derive(Serialize)]
+        struct Sample {
+            id: String,
+            title: String,
+            quoted: String,
+            hashed: String,
+            multiline: String,
+            unicode: String,
+            empty: String,
+            flag: bool,
+            count: u32,
+            list: Vec<String>,
+            nested: BTreeMap<String, String>,
+        }
+
+        let sample = Sample {
+            id: "ID0048".to_string(),
+            title: "Aria: a study".to_string(),
+            quoted: "she said \"hello\"".to_string(),
+            hashed: "#1 pick".to_string(),
+            multiline: "first\nsecond\n".to_string(),
+            unicode: "日本語 · émigré".to_string(),
+            empty: String::new(),
+            flag: true,
+            count: 7,
+            list: vec!["one".to_string(), "two: three".to_string()],
+            nested: BTreeMap::from([
+                ("a".to_string(), "1".to_string()),
+                ("b".to_string(), String::new()),
+            ]),
+        };
+
+        let expected = "\
+id: ID0048
+title: 'Aria: a study'
+quoted: she said \"hello\"
+hashed: '#1 pick'
+multiline: |
+  first
+  second
+unicode: 日本語 · émigré
+empty: ''
+flag: true
+count: 7
+list:
+- one
+- 'two: three'
+nested:
+  a: '1'
+  b: ''
+";
+        assert_eq!(to_string(&sample).unwrap(), expected);
     }
 }

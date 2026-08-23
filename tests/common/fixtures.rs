@@ -29,7 +29,7 @@ pub fn write_template(install: &Path, slug: &str, yaml: &str) {
     let dir = install.join("templates").join(slug);
     fs::create_dir_all(dir.join("files")).unwrap();
     fs::write(dir.join("template.yaml"), yaml).unwrap();
-    if let Ok(inline) = serde_yaml::from_str::<InlineFiles>(yaml) {
+    if let Ok(inline) = serde_yaml_ng::from_str::<InlineFiles>(yaml) {
         for file in inline.files {
             let body = if !file.template.is_empty() {
                 file.template

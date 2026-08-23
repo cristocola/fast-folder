@@ -201,10 +201,9 @@ Regression coverage:
 
 ### v1.6.1 — correctness and hygiene
 
-Track A of [`PLAN.md`](PLAN.md), one phase per session. No new features: five
-sessions of making the output honest, the input forgiving, the files fastf
-rewrites readable, the server boundary explicit, and the source free of code
-nothing calls.
+Five phases, one per session, no new features: making the output honest, the
+input forgiving, the files fastf rewrites readable, the server boundary
+explicit, and the source free of code nothing calls.
 
 - [x] Phase 1 ([#7](https://github.com/cristocola/fast-folder/pull/7)): honest output and honest errors — a `config.toml` that does not
   parse stops every command instead of being replaced by defaults that resolve a
@@ -241,10 +240,10 @@ nothing calls.
 
 ### v1.7.0 — the guided TUI
 
-Track B of [`PLAN.md`](PLAN.md). The guided menu is the daily surface, so this
-release is about it: one way out of every prompt, typed input that survives a
-validation failure, a browser that stops rescanning the library, and parity with
-what the command line can already do.
+The guided menu is the daily surface, so this release is about it: one way out
+of every prompt, typed input that survives a validation failure, a browser that
+stops rescanning the library, and parity with what the command line can already
+do.
 
 - [x] Phase 11: parity with the command line, and a builder that lets you change
   your mind — the menu can bulk-register a base after showing the same preview
@@ -289,9 +288,9 @@ what the command line can already do.
 
 ### v1.7.1 — core structure, and two Windows-only defects
 
-Track C of [`PLAN.md`](PLAN.md) is behaviour-neutral and shipped alongside Track
-B. The tag exists because **v1.7.0's Windows CI leg failed**, on two defects that
-no Linux run could show:
+This structural track is behaviour-neutral and shipped alongside the guided-TUI
+work above. The tag exists because **v1.7.0's Windows CI leg failed**, on two
+defects that no Linux run could show:
 
 - `paths::MAX_WALK_DEPTH` was 256, chosen against a Linux main thread's 8 MiB
   stack. A Windows *thread* gets 1 MiB, and the browser's size scan runs on
@@ -417,3 +416,36 @@ than as separate published tags. Their checked items remain above as history.
 - Template diagnostics and language-server support.
 - Project lifecycle states.
 - Declarative post-create workflows.
+- Scriptability: `--json`/`--format` output, `search --limit/--template/--since/--tag`,
+  a `fastf path <query>` command, `print_path` as a `new` flag rather than only a
+  config toggle, `--color=auto|always|never` (`colored` currently gates on stdout
+  only, so stderr gets ANSI when redirected), documented exit codes, and
+  `completions <shell>` as a typed `clap_complete::Shell` rather than a bare
+  `String`.
+- Browser UI: a tagged-template `html` helper (plus a source-scan test) in place
+  of 125 manual `esc()` calls; the triplicated job-polling logic in `app.js`; a
+  full `/api/state` reload on every mutation instead of a targeted patch; a modal
+  focus trap and `:focus-visible` styling; `node --test` coverage for the pure
+  frontend helpers.
+
+Smaller findings from the v1.7.1 audit, not worth a phase on their own:
+
+- `Counters::load().unwrap_or_default()` inside `propagate`
+  (`src/core/counter.rs:126`) swallows a parse/IO error the way `Config::load`
+  did before v1.6.1's Phase 1 — less damaging (the floor still self-heals from
+  every base and `library::max_id`), but it silently drops the "an unplugged
+  base can't restart numbering" protection that file exists for.
+- `query::resolve_field` clones per field access and `Predicate::Free`
+  lowercases per comparison (`src/core/query.rs`) — fine at current scale, would
+  matter at a much larger library.
+- `size_scan::request`'s queue dedup is an O(n²) `contains` scan
+  (`src/util/size_scan.rs`) — bounded by page size today.
+- The action menu only offers "Move to another base" when one is already
+  mounted; an `Unresponsive` base (Phase 9's probe) could offer a "retry probe"
+  item instead of just being left out.
+- `tests/tui_pty/browser.rs:214`
+  (`projects_browser_fills_in_sizes_without_any_input`) is timing-sensitive: it
+  asserts a background size snapshot reaches the list within one repaint tick,
+  and failed once under the CPU load of a full `cargo test --all-targets` while
+  passing every standalone run. The guarantee is right; the deadline is thin —
+  give it a longer window or anchor it on the scanner instead of the clock.

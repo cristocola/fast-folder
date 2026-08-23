@@ -1,11 +1,17 @@
 # PLAN.md — v2.0.0: two surfaces, one engine, nothing trusted by accident
 
-How to use this file: one phase per session. Start with "read PLAN.md, do phase N,
-verify, tick the boxes". Tick a box only when the named verification ran. Every
-phase ends in its own PR (`phase-NN-<slug>`), with `ROADMAP.md` updated in the same
-commit. Findings outside the phase go to the Parking lot, never fixed in passing.
-Publication (version bump, tag, GitHub Release, AUR) happens only on an explicit
-"release" — see the final section.
+> **Done. v2.0.0 was published 2026-08-23.** This file is kept as the
+> phase-by-phase record of that release, which `ROADMAP.md` points at rather
+> than duplicating. Nothing here is outstanding except the one unticked box in
+> Phase 3, which needs a Windows desktop and is also tracked in `ROADMAP.md`.
+> The **Phase log** at the bottom is the useful part: one entry per phase saying
+> what differed from the plan and why.
+>
+> It was written to be worked one phase per session: "read PLAN.md, do phase N,
+> verify, tick the boxes", a box ticked only when its named verification
+> actually ran, each phase in its own PR with `ROADMAP.md` updated in the same
+> commit, and findings outside the phase sent to the Parking lot rather than
+> fixed in passing. That shape held for all nine, and it is worth reusing.
 
 ## Why this plan exists
 

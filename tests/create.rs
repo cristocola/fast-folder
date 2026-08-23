@@ -461,11 +461,7 @@ fn template_slug_and_structure_paths_are_contained() {
             ..template::Template::default()
         };
         let escaped_dir = install.join("escaped");
-        let derived_path = install
-            .join("templates")
-            .join(&invalid_slug.slug)
-            .join("template.yaml");
-        assert!(invalid_slug.save_to_file(&derived_path).is_err());
+        assert!(fastf::core::operations::save_template(&invalid_slug, None).is_err());
         assert!(
             !escaped_dir.exists(),
             "slug rejection must happen before creating a derived directory"
@@ -997,8 +993,7 @@ fn a_template_whose_pattern_starts_with_a_dot_cannot_be_saved() {
         };
 
         let manifest = dir.join("template.yaml");
-        let error = tmpl
-            .save_to_file(&manifest)
+        let error = fastf::core::operations::save_template(&tmpl, None)
             .expect_err("a dot-prefixed pattern must be refused")
             .to_string();
         assert!(error.contains("may not start with '.'"), "{error}");
@@ -1009,7 +1004,10 @@ fn a_template_whose_pattern_starts_with_a_dot_cannot_be_saved() {
 
         // The same template with a visible pattern saves fine.
         tmpl.naming_pattern = "{id}".to_string();
-        tmpl.save_to_file(&manifest).unwrap();
+        assert_eq!(
+            fastf::core::operations::save_template(&tmpl, None).unwrap(),
+            manifest
+        );
         assert!(manifest.exists());
     });
 }

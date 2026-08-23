@@ -94,8 +94,8 @@ fn template_save_strips_reserved_project_info_entry() {
         ];
 
         let dir = install.join("templates").join("x");
-        let path = dir.join("template.yaml");
-        t.save_to_file(&path).unwrap();
+        let path = fastf::core::operations::save_template(&t, None).unwrap();
+        assert_eq!(path, dir.join("template.yaml"));
 
         // Files live on disk now: the reserved root entry must not be flushed,
         // while KEEP.md is written into files/.
@@ -245,5 +245,140 @@ files:
         let t = template::find_by_slug("subdoc").unwrap();
         assert_eq!(t.files.len(), 1);
         assert_eq!(t.files[0].path, "docs/PROJECT_INFO.md");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Template writes go through core::operations, under the data lock
+// ---------------------------------------------------------------------------
+
+fn in_memory(slug: &str) -> template::Template {
+    template::Template {
+        name: "Fixture".to_string(),
+        slug: slug.to_string(),
+        naming_pattern: "{id}".to_string(),
+        ..Default::default()
+    }
+}
+
+/// The builder's edit mode can change a slug. It used to write the new manifest
+/// into a fresh directory and leave the old one behind — a second template with
+/// the same contents under the old name. `original_slug` renames instead.
+#[test]
+fn renaming_a_templates_slug_moves_its_directory_rather_than_duplicating_it() {
+    sandboxed(|install| {
+        use fastf::core::operations;
+
+        let mut tmpl = in_memory("before");
+        operations::save_template(&tmpl, None).unwrap();
+        // A bundled file, so the rename has to carry the whole directory.
+        let files = install.join("templates").join("before").join("files");
+        fs::create_dir_all(&files).unwrap();
+        fs::write(files.join("NOTES.md"), b"kept").unwrap();
+
+        tmpl.slug = "after".to_string();
+        let manifest = operations::save_template(&tmpl, Some("before")).unwrap();
+
+        assert_eq!(manifest, install.join("templates/after/template.yaml"));
+        assert!(
+            !install.join("templates/before").exists(),
+            "the old directory must be gone"
+        );
+        assert_eq!(
+            fs::read_to_string(install.join("templates/after/files/NOTES.md")).unwrap(),
+            "kept",
+            "bundled files travel with the rename"
+        );
+        assert_eq!(
+            template::load_all().unwrap().len(),
+            1,
+            "exactly one template"
+        );
+    });
+}
+
+/// Renaming onto a slug that already exists would silently merge two templates.
+#[test]
+fn renaming_a_template_onto_an_existing_slug_is_refused() {
+    sandboxed(|install| {
+        use fastf::core::operations;
+
+        operations::save_template(&in_memory("keep"), None).unwrap();
+        let mut moving = in_memory("moving");
+        operations::save_template(&moving, None).unwrap();
+        fs::write(install.join("templates/keep/sentinel"), b"untouched").unwrap();
+
+        moving.slug = "keep".to_string();
+        let error = operations::save_template(&moving, Some("moving"))
+            .expect_err("the collision must be refused")
+            .to_string();
+        assert!(
+            error.contains("already exists"),
+            "unexpected error: {error}"
+        );
+
+        assert!(
+            install.join("templates/moving").is_dir(),
+            "the source stays put"
+        );
+        assert_eq!(
+            fs::read_to_string(install.join("templates/keep/sentinel")).unwrap(),
+            "untouched"
+        );
+    });
+}
+
+#[test]
+fn deleting_a_template_removes_its_directory_and_nothing_else() {
+    sandboxed(|install| {
+        use fastf::core::operations;
+
+        operations::save_template(&in_memory("doomed"), None).unwrap();
+        operations::save_template(&in_memory("spared"), None).unwrap();
+
+        operations::delete_template("doomed").unwrap();
+        assert!(!install.join("templates/doomed").exists());
+        assert!(install.join("templates/spared").is_dir());
+
+        // A slug that is not a template is refused, not silently ignored.
+        assert!(operations::delete_template("doomed").is_err());
+        // And a slug that is not a slug never becomes a path at all.
+        assert!(operations::delete_template("../../etc").is_err());
+    });
+}
+
+/// `remove_dir_all` follows what it is pointed at. A template directory that is
+/// really a link to somewhere else must be refused, not walked into.
+#[cfg(unix)]
+#[test]
+fn a_template_directory_that_is_a_link_is_never_deleted_through() {
+    sandboxed(|install| {
+        use fastf::core::operations;
+        use std::os::unix::fs::symlink;
+
+        let outside = install.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("precious.txt"), b"do not delete").unwrap();
+
+        let linked = install.join("templates").join("linked");
+        fs::create_dir_all(install.join("templates")).unwrap();
+        symlink(&outside, &linked).unwrap();
+
+        let error = operations::delete_template("linked")
+            .expect_err("a linked template directory must be refused")
+            .to_string();
+        assert!(
+            error.contains("not a real directory"),
+            "unexpected error: {error}"
+        );
+
+        assert!(
+            outside.join("precious.txt").exists(),
+            "the link target must be untouched"
+        );
+        assert!(
+            linked.exists(),
+            "the link itself is left for its owner to remove"
+        );
     });
 }

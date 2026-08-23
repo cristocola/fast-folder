@@ -23,6 +23,12 @@ Everything under `files/` is copied into each new project:
 
 There is no per-file configuration. The directory is the spec, which also makes sharing trivial: a template is a folder, so copy the folder. Version it in git, send it to a teammate, or drop a gallery example from [`examples/templates/`](../examples/templates/) into your own templates directory.
 
+Saving or deleting a template through fastf waits for any fastf operation
+already running — including one in another terminal — so a template cannot be
+edited or removed out from under a `fastf new` that is halfway through copying
+it. Editing `template.yaml` in your own editor is outside that, as it should be:
+the directory is yours.
+
 ## template.yaml
 
 The manifest holds metadata only. The file spec lives in `files/`.

@@ -405,10 +405,13 @@ guarded by "templates dir is empty". `src/core/CLAUDE.md` "Locking and mutation"
    and deletes wait for any running fastf operation.
 
 **Acceptance.**
-- [ ] All gates pass.
-- [ ] `grep -rn 'save_to_file\|remove_dir_all' src/cli src/tui` is empty.
-- [ ] The concurrency test passes and was observed interleaving on the old build.
-- [ ] `src/core/CLAUDE.md` lists the new operations and the bootstrap exception.
+- [x] All gates pass.
+- [x] `grep -rn 'save_to_file\|remove_dir_all' src/cli src/tui` is empty, and
+      `tests/layering.rs` now fails the build if either reappears.
+- [x] The concurrency test passes and was observed interleaving on the old
+      build: with the direct `remove_dir_all` restored it reported "the delete
+      ran to completion while the data lock was held".
+- [x] `src/core/CLAUDE.md` lists the new operations and the bootstrap exception.
 
 ---
 
@@ -766,3 +769,17 @@ fastf refuses to write through links; cache entries outside a base are ignored.
   the editor on `cmd /c start` for `.cmd` shims; read as "no `start` in
   `reveal_folder`", which holds. The Windows reveal smoke stays open for the
   maintainer — CI compiles and lints `ShellExecuteW` but cannot open a window.
+- **Phase 4 — 2026-08-23, `phase-04-template-writes-locked`.** Two deviations.
+  The operations' tests are **integration** tests in `tests/template_engine.rs`
+  rather than unit tests in `operations.rs`: both take `DataLock`, whose path is
+  `install_dir().join(".fastf.lock")`, so a unit test would lock the developer's
+  real data directory — the very defect Phase 7 exists to fix. And the
+  concurrency test's lock holder is **the test process itself**
+  (`DataLock::acquire_at` on the sandbox's lock file) rather than a second
+  spawned fastf: a race between two children is a race, and would pass or fail
+  on scheduling. Holding the real lock makes the question exact.
+
+  Found while wiring it: the builder's edit mode could already change a slug, and
+  `save_to_file(&tmpl.file_path())` wrote the new manifest into a fresh directory
+  and left the old one behind as a second template with the same contents.
+  `save_template`'s `original_slug` fixes that; it is why the parameter exists.

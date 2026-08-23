@@ -313,6 +313,22 @@ in its name (`reconcile_unlocked`, `unregister_project_unlocked`,
 `delete_project_unlocked`, `rename_project_unlocked`), each `#[doc(hidden)]` with
 a `*_configured` application entry point.
 
+**Every write to the templates directory goes through `operations` too.**
+`save_template(&template, original_slug)` and `delete_template(slug)` are the
+only ways in; `Template::save_to_file` is `pub(crate)` so that stays true, and
+`tests/layering.rs` refuses `save_to_file(` or `remove_dir_all(` anywhere under
+`src/cli` or `src/tui`. `save_template`'s `original_slug` is the slug the
+template was *loaded* under: when it differs, the directory is renamed before
+the manifest is written, because the builder's edit mode can change a slug and
+without the rename the old directory stayed behind as a stale duplicate.
+`delete_template` refuses a template directory that is not a real directory
+directly under the templates directory — `remove_dir_all` follows a link, and
+the link's target is somewhere it has no business removing.
+
+**Bootstrap is the one exception.** `bootstrap.rs` writes the two bundled
+templates on first run without the lock: it runs before the data directory has a
+lock file to take, and only into a templates directory it has just found empty.
+
 `util::fs_retry` wraps the destructive filesystem calls (Windows sharing
 violations from Defender or the indexer, plus read-only attribute clearing).
 

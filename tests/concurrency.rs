@@ -245,3 +245,62 @@ fn concurrent_tag_and_note_updates_do_not_lose_metadata() {
         );
     }
 }
+
+/// Deleting a template must wait for whatever fastf operation is in flight.
+///
+/// `fastf template delete` used to call `fs::remove_dir_all` directly, with no
+/// lock at all: it could remove a template's `files/` out from under a
+/// `fastf new` that was halfway through copying them, in another terminal.
+///
+/// The holder here is **this test process**, not a second fastf. That is
+/// deliberate: a race between two spawned children is a race, and would pass or
+/// fail on scheduling. Holding the real `DataLock` on the sandbox's own lock
+/// file makes the question exact — while it is held, the delete must make no
+/// progress at all, and the template must still be on disk.
+#[test]
+fn deleting_a_template_waits_for_the_data_lock() {
+    use fastf::util::lockfile::DataLock;
+    use std::time::{Duration, Instant};
+
+    let sb = racing_sandbox();
+    let template_dir = sb.install.join("templates").join("race");
+    assert!(template_dir.is_dir(), "fixture template should exist");
+
+    let held = DataLock::acquire_at(&sb.install.join(".fastf.lock"), Duration::from_secs(5))
+        .expect("the sandbox lock should be free");
+
+    let mut child = sb.spawn(&["template", "delete", "race", "--yes"]);
+
+    // Give it far longer than it needs to start up, reach the lock, and (on an
+    // unlocked build) finish the whole delete.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut exited = None;
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().expect("polling the child") {
+            exited = Some(status);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    assert!(
+        exited.is_none(),
+        "the delete ran to completion while the data lock was held: {exited:?}"
+    );
+    assert!(
+        template_dir.is_dir(),
+        "the template was removed while another operation held the lock"
+    );
+
+    // Released — and only now may it proceed.
+    drop(held);
+    let status = child.wait().expect("waiting for the delete");
+    assert!(
+        status.success(),
+        "the delete should succeed once the lock is free"
+    );
+    assert!(
+        !template_dir.exists(),
+        "the delete should have removed the template after acquiring the lock"
+    );
+}

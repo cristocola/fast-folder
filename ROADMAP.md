@@ -30,7 +30,14 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v2.0.0 in progress — two surfaces, one engine, nothing trusted by accident** (`PLAN.md` drives it, one phase per PR)
-- Status: **Phase 3 landed: shelling out.** A project path never appears inside
+- Status: **Phase 4 landed: template writes behind the lock.**
+  `operations::save_template` and `operations::delete_template` are the only
+  ways to write the templates directory, both under `DataLock`;
+  `Template::save_to_file` is `pub(crate)` and `tests/layering.rs` refuses the
+  call anywhere under `src/cli` or `src/tui`. Renaming a template's slug now
+  moves its directory instead of leaving the old one behind as a duplicate, and
+  a template directory that is really a link is never deleted through.
+- Previously: **Phase 3 landed: shelling out.** A project path never appears inside
   shell source. Every child fastf spawns for a project gets the project as its
   working directory and as `FASTF_PROJECT_PATH`; `{path}` in a post-create
   command expands to a quoted reference to that variable rather than to the path
@@ -106,6 +113,9 @@ Regression coverage grows with the relevant release:
 - [x] A folder name full of shell metacharacters runs no command of its own and
   the post-create shell's cwd is the project (v2.0.0, unix); the Windows
   expansion is the quoted variable (v2.0.0, windows).
+- [x] `template delete` waits for a held `DataLock` and leaves the template on
+  disk until it gets it; a slug rename moves the directory; a linked template
+  directory is refused (v2.0.0).
 
 Manual move smoke and follow-up:
 

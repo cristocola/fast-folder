@@ -285,7 +285,7 @@ impl Template {
     /// Persist a template in folder form: write `template.yaml` (metadata only)
     /// at `path` and flush the in-memory text `files` buffer into the sibling
     /// `files/` directory. Binaries already on disk are untouched.
-    pub fn save_to_file(&self, path: &Path) -> Result<()> {
+    pub(crate) fn save_to_file(&self, path: &Path) -> Result<()> {
         // Defense in depth: never persist a reserved-name file entry.
         let mut snapshot = self.clone();
         snapshot.strip_reserved_files();

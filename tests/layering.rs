@@ -58,14 +58,13 @@ fn core_does_not_prompt() {
     );
 }
 
-/// `core` and `util` produce data; `cli`, `tui` and `ui` render it.
+/// `core` and `util` produce data; `cli` and `tui` render it.
 ///
-/// Two surfaces render the same operations (a terminal and an HTTP server) and
-/// a third will, so a `println!` inside `core` is output one of them cannot
-/// suppress, redirect, or translate — and `colored` inside `core` is ANSI in a
-/// JSON response. The exceptions are named here rather than left to judgement:
-/// `util::diag` is the one warning sink, and `util::live_select` draws a picker
-/// by design.
+/// Both surfaces render the same operations, so a `println!` inside `core` is
+/// output neither can suppress, redirect or translate — and `colored` inside
+/// `core` is ANSI in a stdout a script is piping. The exceptions are named here
+/// rather than left to judgement: `util::diag` is the one warning sink, and
+/// `util::live_select` draws a picker by design.
 #[test]
 fn core_and_util_do_not_render() {
     const RENDERING: [&str; 5] = ["use colored", "println!", "eprintln!", "print!", "eprint!"];
@@ -211,6 +210,46 @@ fn util_does_not_prompt() {
     assert!(
         offenders.is_empty(),
         "util must not run a dialoguer prompt:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// Every mutation of the templates directory goes through `core::operations`,
+/// which holds `DataLock`.
+///
+/// Eight of nine template writers used to bypass the lock. A manifest written
+/// with no lock held can be read half-finished by a `fastf new` in another
+/// terminal — `load_all` is what every create reads — and a `remove_dir_all`
+/// racing a create removes files out from under it.
+///
+/// A source scan is the only check that holds: the rule is about which function
+/// is called, and a runtime test would only catch the race it happened to
+/// schedule.
+#[test]
+fn the_surfaces_do_not_write_templates_themselves() {
+    const FORBIDDEN: [&str; 2] = ["save_to_file(", "remove_dir_all("];
+
+    let mut offenders = Vec::new();
+    for layer in ["cli", "tui"] {
+        for path in sources(layer) {
+            let text = fs::read_to_string(&path).unwrap();
+            for (number, line) in text.lines().enumerate() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                for call in FORBIDDEN {
+                    if trimmed.contains(call) {
+                        offenders.push(format!("{}:{}: {}", path.display(), number + 1, trimmed));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a surface must call core::operations::{{save_template, delete_template}}, \
+         which take the data lock:\n  {}",
         offenders.join("\n  ")
     );
 }

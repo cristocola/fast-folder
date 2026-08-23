@@ -30,6 +30,10 @@ macro_rules! answered {
 
 pub fn build_template(existing: Option<Template>) -> Result<()> {
     let is_edit = existing.is_some();
+    // The slug this template was loaded under. Edit mode can change the slug,
+    // and the save has to rename the directory rather than leaving the old one
+    // behind as a stale duplicate.
+    let original_slug = existing.as_ref().map(|t| t.slug.clone());
     let mut tmpl = existing.unwrap_or_default();
     if tmpl.version.is_empty() {
         tmpl.version = "1".to_string();
@@ -95,12 +99,14 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
         }
     }
 
-    tmpl.save_to_file(&dest)?;
+    // Every answer is in before the lock is taken — a prompt under `DataLock`
+    // would stall every other fastf for as long as the terminal sits unattended.
+    let manifest = crate::core::operations::save_template(&tmpl, original_slug.as_deref())?;
     println!(
         "\n{} template '{}' saved to {}",
         "✓".green().bold(),
         tmpl.slug.green(),
-        dest.display()
+        manifest.display()
     );
 
     Ok(())

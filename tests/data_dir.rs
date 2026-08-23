@@ -331,7 +331,7 @@ fn unknown_template_keys_survive_a_save_but_legacy_files_do_not() {
         .unwrap();
 
         let tmpl = template::find_by_slug("test").unwrap();
-        tmpl.save_to_file(&manifest).unwrap();
+        fastf::core::operations::save_template(&tmpl, None).unwrap();
 
         let saved = fs::read_to_string(&manifest).unwrap();
         assert!(

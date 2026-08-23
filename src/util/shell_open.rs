@@ -90,10 +90,10 @@ mod tests {
 
     #[test]
     fn a_wide_string_is_nul_terminated_and_round_trips() {
-        let units = wide(OsStr::new(r"C:\Users\x\Projects\Ünïcødé")).unwrap();
+        let units = wide(OsStr::new(r"D:\Projects\Ünïcødé")).unwrap();
         assert_eq!(units.last(), Some(&0));
         let back = std::ffi::OsString::from_wide(&units[..units.len() - 1]);
-        assert_eq!(back, OsStr::new(r"C:\Users\x\Projects\Ünïcødé"));
+        assert_eq!(back, OsStr::new(r"D:\Projects\Ünïcødé"));
     }
 
     #[test]

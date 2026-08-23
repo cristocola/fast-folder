@@ -136,12 +136,34 @@ fn read_create_journal(root: &Path) -> Result<CreateJournal> {
 // Discovery and recovery
 // ---------------------------------------------------------------------------
 
+/// What kind of unfinished work a marker or journal represents.
+///
+/// Was six magic strings written by literal at eleven sites. The serialized
+/// names are unchanged: `docs/UI.md` documents them and the frontend renders
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IncompleteKind {
+    /// A v2 create journal that can be resumed or reported.
+    Create,
+    /// A v2 move transaction.
+    Move,
+    /// A pre-v2 create marker. Reported, never parsed — see the module docs.
+    #[serde(rename = "obsolete-create-v1")]
+    ObsoleteCreateV1,
+    /// A pre-v2 move marker.
+    #[serde(rename = "obsolete-move-v1")]
+    ObsoleteMoveV1,
+    #[serde(rename = "create-v2-invalid")]
+    CreateV2Invalid,
+    #[serde(rename = "move-v2-invalid")]
+    MoveV2Invalid,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Incomplete {
     pub path: String,
-    /// `create`, `move`, `obsolete-create-v1`, `obsolete-move-v1`, or an
-    /// explicitly invalid v2 kind.
-    pub kind: String,
+    pub kind: IncompleteKind,
     pub pending: usize,
 }
 
@@ -171,7 +193,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                 } else {
                     out.push(Incomplete {
                         path: path.display().to_string(),
-                        kind: "move-v2-invalid".to_string(),
+                        kind: IncompleteKind::MoveV2Invalid,
                         pending: 0,
                     });
                 }
@@ -181,7 +203,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                 if entry_exists_quiet(&legacy_create_marker_path(&path)) {
                     out.push(Incomplete {
                         path: legacy_create_marker_path(&path).display().to_string(),
-                        kind: "obsolete-create-v1".to_string(),
+                        kind: IncompleteKind::ObsoleteCreateV1,
                         pending: 0,
                     });
                 }
@@ -189,26 +211,26 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                     match read_create_journal(&path) {
                         Ok(journal) => out.push(Incomplete {
                             path: path.display().to_string(),
-                            kind: "create".to_string(),
+                            kind: IncompleteKind::Create,
                             pending: journal.jobs.len(),
                         }),
                         Err(_) => out.push(Incomplete {
                             path: create_journal_path(&path).display().to_string(),
-                            kind: "create-v2-invalid".to_string(),
+                            kind: IncompleteKind::CreateV2Invalid,
                             pending: 0,
                         }),
                     }
                 } else if crate::core::project_info::is_provisioning(&path) {
                     out.push(Incomplete {
                         path: path.display().to_string(),
-                        kind: "create".to_string(),
+                        kind: IncompleteKind::Create,
                         pending: 0,
                     });
                 }
             } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
                 out.push(Incomplete {
                     path: path.display().to_string(),
-                    kind: "obsolete-move-v1".to_string(),
+                    kind: IncompleteKind::ObsoleteMoveV1,
                     pending: 0,
                 });
             }
@@ -221,7 +243,7 @@ fn list_move_transactions(base: &Path, root: &Path, out: &mut Vec<Incomplete>) {
     if assets::require_real_directory(root, "transaction root").is_err() {
         out.push(Incomplete {
             path: root.display().to_string(),
-            kind: "move-v2-invalid".to_string(),
+            kind: IncompleteKind::MoveV2Invalid,
             pending: 0,
         });
         return;
@@ -238,19 +260,19 @@ fn list_move_transactions(base: &Path, root: &Path, out: &mut Vec<Incomplete>) {
             match transactions::read_journal(&operation_dir) {
                 Ok(journal) => out.push(Incomplete {
                     path: base.join(journal.target_folder).display().to_string(),
-                    kind: "move".to_string(),
+                    kind: IncompleteKind::Move,
                     pending: 0,
                 }),
                 Err(_) => out.push(Incomplete {
                     path: operation_dir.display().to_string(),
-                    kind: "move-v2-invalid".to_string(),
+                    kind: IncompleteKind::MoveV2Invalid,
                     pending: 0,
                 }),
             }
         } else {
             out.push(Incomplete {
                 path: operation_dir.display().to_string(),
-                kind: "move-v2-invalid".to_string(),
+                kind: IncompleteKind::MoveV2Invalid,
                 pending: 0,
             });
         }
@@ -1130,5 +1152,26 @@ mod tests {
         assert!(!report.unrecoverable.is_empty());
         assert_eq!(fs::read(&journal).unwrap(), before);
         assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
+    }
+
+    /// `docs/UI.md` documents these names and the frontend renders them, so the
+    /// enum must serialize to exactly the strings the eleven literals produced.
+    #[test]
+    fn incomplete_kinds_serialize_to_their_documented_names() {
+        use super::IncompleteKind;
+
+        for (value, name) in [
+            (IncompleteKind::Create, "create"),
+            (IncompleteKind::Move, "move"),
+            (IncompleteKind::ObsoleteCreateV1, "obsolete-create-v1"),
+            (IncompleteKind::ObsoleteMoveV1, "obsolete-move-v1"),
+            (IncompleteKind::CreateV2Invalid, "create-v2-invalid"),
+            (IncompleteKind::MoveV2Invalid, "move-v2-invalid"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&value).unwrap(),
+                format!("\"{name}\"")
+            );
+        }
     }
 }

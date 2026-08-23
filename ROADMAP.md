@@ -291,6 +291,13 @@ what the command line can already do.
 Track C of [`PLAN.md`](PLAN.md). No behaviour change: the proof is the unchanged
 test suite plus the guard each phase adds.
 
+- [x] Phase 15: types over strings, path fidelity, bounded recursion — job
+  status and phase, the recovery kinds and the name-collision policy are enums
+  whose serialized names are unchanged and asserted; a template file whose name
+  is not valid UTF-8 reaches the new project spelled exactly as it was, instead
+  of aborting the create at a path nobody wrote; a path that will be stored is
+  refused rather than mangled; and every recursive walk stops at a depth limit
+  and says where.
 - [x] Phase 14: one clock, one load, lazy templates — every interpolation in an
   operation renders against one `RenderContext` built when the plan was, so a
   create spanning midnight cannot date the folder differently from the files in

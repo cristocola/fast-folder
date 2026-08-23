@@ -819,12 +819,39 @@ in a release build there is nothing to count. That is the guarantee, not a gap.
 - Recursion: a `MAX_DEPTH` (for example 256) in each walker returning an error naming the path at the limit; `tree_size` returns `None` at the limit (consistent with "any read failure is `None`"). `hostile_fs.rs` gets a deep-tree case (build 300 nested dirs) for `tree_size` and `assets::walk`.
 
 **Steps.**
-- [ ] Serialization tests first; enums; call sites.
-- [ ] `PathBuf` entries and the non-UTF-8 test; config path conversions.
-- [ ] Depth limits and the `hostile_fs.rs` cases.
-- [ ] `CLAUDE.md`: the `Progress` gotcha (v0.11) updated to the enum; a line in "Path-escape safety" on native-path fidelity for the create engine.
+- [x] Serialization tests first; enums; call sites.
+- [x] `PathBuf` entries and the non-UTF-8 test; config path conversions.
+- [x] Depth limits and the `hostile_fs.rs` cases.
+- [x] `CLAUDE.md`: the `Progress` gotcha (v0.11) updated to the enum; a line in "Path-escape safety" on native-path fidelity for the create engine.
 
 **Acceptance.** No `String` field in `src/` models a closed set that the code matches on by literal. The non-UTF-8 template file test passes on Linux. A 300-deep tree yields an error or `None`, never an abort.
+
+**Notes.**
+
+(1) **`AssetEntry` gained `os_rel` rather than `rel` becoming a `PathBuf`.**
+Everything downstream of the walk reasons about names as *text* — glob matching
+for `verbatim`/`exclude`, `SafeRelativePath`'s `..`/drive-letter checks, the
+browser's JSON — so converting the field would have moved the
+`to_string_lossy()` to five other places rather than removing it. The split is
+honest about which form is which: `rel` is the textual, possibly-lossy name, and
+`os_rel` is what the filesystem actually spells. Validation stays textual,
+because every dangerous component is ASCII, and the destination is built from
+`os_rel` through `interp_rel_os` and then `require_native_relative`.
+
+(2) **The non-UTF-8 case was watched failing**, and the failure was worse than
+"a mangled name": the create aborted and rolled back with
+`opening …/note?.txt: No such file or directory` — a path the user never wrote.
+
+(3) **The deep-tree case is a design guard.** 300 stack frames does not overflow;
+making it fail against the old build would have meant a tree deep enough to crash
+the test runner. It pins that the limit exists and names where it stopped.
+
+(4) **`NameCollision` keeps `#[serde(other)]` on `Suffix` on purpose.** The old
+`String` compared case-insensitively against `"error"` and treated everything
+else as "suffix", so a config holding `sufix` kept working; a strict enum would
+refuse to parse it, and since Phase 1 an unparseable config stops every command.
+The `config set` path stays strict — a typo typed at the command line is a
+mistake worth reporting.
 
 ## Phase 16: One test harness, parallel suites, the coverage gaps
 

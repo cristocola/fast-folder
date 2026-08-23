@@ -26,6 +26,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::bootstrap;
+use crate::core::assets::{JobPhase, JobStatus};
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::library::{self, Project};
@@ -850,7 +851,7 @@ pub fn jobs_active() -> bool {
             h.progress
                 .lock()
                 .map(|p| {
-                    p.status == "running"
+                    p.status == JobStatus::Running
                         && Duration::from_millis(p.idle_millis()) < JOB_STALE_AFTER
                 })
                 .unwrap_or(false)
@@ -869,7 +870,7 @@ fn register_job(
     map.retain(|_, h| {
         h.progress
             .lock()
-            .map(|p| p.status == "running")
+            .map(|p| p.status == JobStatus::Running)
             .unwrap_or(false)
     });
     map.insert(
@@ -914,7 +915,11 @@ fn spawn_copy_job(
                 if let Err(e) = crate::core::assets::copy_job(job, &progress, &cancel) {
                     let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
                     if let Ok(mut p) = progress.lock() {
-                        p.status = if cancelled { "cancelled" } else { "failed" }.to_string();
+                        p.status = if cancelled {
+                            JobStatus::Cancelled
+                        } else {
+                            JobStatus::Failed
+                        };
                         p.error = Some(format!("{e:#}"));
                         p.touch();
                     }
@@ -928,7 +933,7 @@ fn spawn_copy_job(
             // The last deferred file has landed, so the project is finally complete.
             if let Err(error) = crate::core::project_info::clear_provisioning(&root) {
                 if let Ok(mut p) = progress.lock() {
-                    p.status = "failed".to_string();
+                    p.status = JobStatus::Failed;
                     p.error = Some(format!("could not clear provisioning state: {error:#}"));
                     p.touch();
                 }
@@ -936,7 +941,7 @@ fn spawn_copy_job(
             }
             if let Err(error) = provisioning::clear_create(&root) {
                 if let Ok(mut p) = progress.lock() {
-                    p.status = "failed".to_string();
+                    p.status = JobStatus::Failed;
                     p.error = Some(format!("could not clear create journal: {error:#}"));
                     p.touch();
                 }
@@ -953,8 +958,8 @@ fn spawn_copy_job(
                 p.touch();
             }
             if let Ok(mut p) = progress.lock() {
-                p.status = "done".to_string();
-                p.phase = "done".to_string();
+                p.status = JobStatus::Done;
+                p.phase = JobPhase::Done;
                 p.current_file.clear();
                 p.touch();
             }
@@ -980,7 +985,7 @@ where
         let detail = panic_detail(payload.as_ref());
         eprintln!("{label} worker panicked: {detail}");
         let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-        p.status = "failed".to_string();
+        p.status = JobStatus::Failed;
         p.error = Some(format!("{PANIC_ERROR_PREFIX} {detail}"));
         p.touch();
     }
@@ -1009,8 +1014,8 @@ fn spawn_move_job(project: Project, target: PathBuf) -> String {
             ) {
                 Ok(outcome) => {
                     if let Ok(mut p) = progress_thread.lock() {
-                        p.status = "done".to_string();
-                        p.phase = "done".to_string();
+                        p.status = JobStatus::Done;
+                        p.phase = JobPhase::Done;
                         p.current_file.clear();
                         p.cleanup_pending = outcome.cleanup_pending;
                         if outcome.cleanup_pending {
@@ -1025,7 +1030,11 @@ fn spawn_move_job(project: Project, target: PathBuf) -> String {
                 Err(e) => {
                     let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed);
                     if let Ok(mut p) = progress_thread.lock() {
-                        p.status = if cancelled { "cancelled" } else { "failed" }.to_string();
+                        p.status = if cancelled {
+                            JobStatus::Cancelled
+                        } else {
+                            JobStatus::Failed
+                        };
                         p.error = Some(format!("{e:#}"));
                         p.touch();
                     }
@@ -1728,7 +1737,7 @@ fn list_template_files(slug: &str) -> Result<Value> {
         .filter(|entry| entry.is_file())
         .map(|entry| {
             let content = if entry.size <= crate::core::assets::TEXT_MAX_BYTES {
-                fs::read_to_string(dir.join(&entry.rel)).ok()
+                fs::read_to_string(dir.join(&entry.os_rel)).ok()
             } else {
                 None
             };

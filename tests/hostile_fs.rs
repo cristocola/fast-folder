@@ -331,3 +331,40 @@ fn destroyed_counter_self_heals_from_the_projects_on_disk() {
         }
     });
 }
+
+// ---------------------------------------------------------------------------
+// Path fidelity and bounded recursion (v1.7.1)
+// ---------------------------------------------------------------------------
+
+/// A pathologically deep tree degrades instead of blowing the stack.
+///
+/// A design guard, not a regression: 300 frames does not overflow a thread
+/// stack, so this could not be made to fail against the old build without
+/// building a tree deep enough to crash the test runner. What it pins is that
+/// the limit exists and reports where it stopped — every walk in the tool is
+/// plain recursion, and two of them (`tree_size`, and the browser's size scan)
+/// run over whatever folder a user points at.
+#[test]
+fn a_very_deep_tree_is_refused_rather_than_overflowing_the_stack() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let deep = tmp.path().join("Deep");
+    let mut path = deep.clone();
+    for level in 0..300 {
+        path = path.join(format!("l{level}"));
+    }
+    fs::create_dir_all(&path).unwrap();
+    fs::write(path.join("leaf.txt"), b"x").unwrap();
+
+    // The walk reports a failure; it does not abort, and it does not return a
+    // number that is missing most of the tree.
+    let walked = fastf::core::assets::walk(&deep);
+    assert!(
+        walked.is_err(),
+        "a tree past the depth limit should be refused"
+    );
+    let message = format!("{:#}", walked.unwrap_err());
+    assert!(
+        message.contains("too deep") || message.contains("depth"),
+        "the error should say what happened: {message}"
+    );
+}

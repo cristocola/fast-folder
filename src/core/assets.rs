@@ -11,7 +11,7 @@
 //! and `fastf apply` (CLI and UI share it).
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -55,11 +55,9 @@ pub struct Progress {
     pub total_files: usize,
     pub done_files: usize,
     pub current_file: String,
-    /// `"running"`, `"done"`, `"failed"`, or `"cancelled"`.
-    pub status: String,
-    /// Coarse stage for the UI, shared by create + move jobs:
-    /// `"copying" | "verifying" | "finalizing" | "done"`.
-    pub phase: String,
+    pub status: JobStatus,
+    /// Coarse stage for the UI, shared by create + move jobs.
+    pub phase: JobPhase,
     pub error: Option<String>,
     /// A move reached its verified destination but could not remove its source.
     /// Existing clients may ignore this additive field safely.
@@ -78,6 +76,48 @@ pub struct Progress {
     pub last_progress_at: u64,
 }
 
+/// Where a background job has got to.
+///
+/// Was a `String` set by literal at fifteen call sites, which is exactly as many
+/// chances to write `"canceled"`. The serialized names are unchanged, so the
+/// JSON the browser reads is byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobStatus {
+    Running,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+/// The coarse stage a job reports, shared by create and move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobPhase {
+    Copying,
+    Verifying,
+    Finalizing,
+    Done,
+}
+
+impl JobPhase {
+    /// The wire and display name — the same string the JSON carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JobPhase::Copying => "copying",
+            JobPhase::Verifying => "verifying",
+            JobPhase::Finalizing => "finalizing",
+            JobPhase::Done => "done",
+        }
+    }
+}
+
+impl std::fmt::Display for JobPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(self.as_str())
+    }
+}
+
 impl Progress {
     pub fn new(jobs: &[CopyJob]) -> Self {
         Self {
@@ -86,8 +126,8 @@ impl Progress {
             total_files: jobs.len(),
             done_files: 0,
             current_file: String::new(),
-            status: "running".to_string(),
-            phase: "copying".to_string(),
+            status: JobStatus::Running,
+            phase: JobPhase::Copying,
             error: None,
             cleanup_pending: false,
             warning: None,
@@ -229,9 +269,21 @@ pub enum EntryKind {
 }
 
 /// One physical entry discovered under a directory tree.
+#[derive(Debug, Clone)]
 pub struct AssetEntry {
-    /// Path relative to the walk root, forward-slash separated, **uninterpolated**.
+    /// Path relative to the walk root, forward-slash separated,
+    /// **uninterpolated**, and **lossy** for a name that is not valid UTF-8.
+    ///
+    /// This is the *textual* form: globs, `SafeRelativePath` and the browser's
+    /// JSON all reason about names as text and always have. Never join it to
+    /// open or create a file — use [`Self::os_rel`], which is exact.
     pub rel: String,
+    /// The same path as the filesystem actually spells it.
+    ///
+    /// `rel` was the only form, so a template file whose name is not valid
+    /// UTF-8 was opened at a `?`-substituted path that does not exist — the copy
+    /// failed with "file not found" naming a path the user never wrote.
+    pub os_rel: PathBuf,
     pub kind: EntryKind,
     pub size: u64,
 }
@@ -262,13 +314,16 @@ pub fn walk(files_dir: &Path) -> Result<Vec<AssetEntry>> {
     if !files_dir.exists() {
         return Ok(out);
     }
-    walk_inner(files_dir, files_dir, &mut out)?;
+    walk_inner(files_dir, files_dir, 0, &mut out)?;
     // Lexicographic sort puts a parent ("a") before its children ("a/b").
     out.sort_by(|x, y| x.rel.cmp(&y.rel));
     Ok(out)
 }
 
-fn walk_inner(root: &Path, current: &Path, out: &mut Vec<AssetEntry>) -> Result<()> {
+fn walk_inner(root: &Path, current: &Path, depth: usize, out: &mut Vec<AssetEntry>) -> Result<()> {
+    if depth >= crate::util::paths::MAX_WALK_DEPTH {
+        return Err(crate::util::paths::too_deep(current));
+    }
     for entry in fs::read_dir(current).with_context(|| format!("reading {}", current.display()))? {
         let entry = entry?;
         let path = entry.path();
@@ -276,35 +331,36 @@ fn walk_inner(root: &Path, current: &Path, out: &mut Vec<AssetEntry>) -> Result<
         // directory reports as a symlink rather than a dir — the link itself is
         // the thing being described, which is what the caller needs to know.
         let ft = entry.file_type()?;
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let os_rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+        let rel = os_rel.to_string_lossy().replace('\\', "/");
 
         if ft.is_symlink() {
             out.push(AssetEntry {
                 rel,
+                os_rel,
                 kind: EntryKind::Symlink,
                 size: 0,
             });
         } else if ft.is_dir() {
             out.push(AssetEntry {
                 rel,
+                os_rel,
                 kind: EntryKind::Dir,
                 size: 0,
             });
-            walk_inner(root, &path, out)?;
+            walk_inner(root, &path, depth + 1, out)?;
         } else if ft.is_file() {
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             out.push(AssetEntry {
                 rel,
+                os_rel,
                 kind: EntryKind::File,
                 size,
             });
         } else {
             out.push(AssetEntry {
                 rel,
+                os_rel,
                 kind: EntryKind::Other,
                 size: 0,
             });
@@ -344,6 +400,32 @@ pub fn interp_rel(rel: &str, vars: &HashMap<String, String>, date_format: &str) 
         vars,
         &crate::core::naming::RenderContext::now(date_format),
     )
+}
+
+/// Interpolate a native relative path, component by component, without ever
+/// converting a component that has no token in it.
+///
+/// A component containing `{` is interpolated as text (it must be, to be
+/// interpolated at all); anything else is pushed through as the `OsStr` it
+/// already is. So a template file whose name is not valid UTF-8 and contains no
+/// token reaches the new project spelled exactly as it was, instead of being
+/// mangled by a lossy conversion on the way.
+pub fn interp_rel_os(
+    rel: &Path,
+    vars: &HashMap<String, String>,
+    ctx: &crate::core::naming::RenderContext,
+) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in rel.components() {
+        let raw = component.as_os_str();
+        match raw.to_str() {
+            Some(text) if text.contains('{') => {
+                out.push(crate::core::naming::interpolate_name_with(text, vars, ctx));
+            }
+            _ => out.push(raw),
+        }
+    }
+    out
 }
 
 /// [`interp_rel`] against a prepared context — see [`crate::core::naming::RenderContext`].
@@ -743,5 +825,42 @@ mod tests {
         // Empty segment variable collapses within the segment, slash preserved.
         let out = interp_rel("05_Delivery/Note_{name}.md", &vars, "%Y-%m-%d");
         assert_eq!(out, "05_Delivery/Note_Aurora.md");
+    }
+
+    /// The enums replaced `String` fields the browser reads by name. If these
+    /// change, `/api/job/<id>` starts answering in a vocabulary the frontend
+    /// does not know, and there is nothing in the JSON to say so.
+    #[test]
+    fn job_status_and_phase_serialize_to_the_names_the_browser_reads() {
+        use super::{JobPhase, JobStatus};
+
+        for (value, name) in [
+            (JobStatus::Running, "running"),
+            (JobStatus::Done, "done"),
+            (JobStatus::Failed, "failed"),
+            (JobStatus::Cancelled, "cancelled"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&value).unwrap(),
+                format!("\"{name}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<JobStatus>(&format!("\"{name}\"")).unwrap(),
+                value
+            );
+        }
+
+        for (value, name) in [
+            (JobPhase::Copying, "copying"),
+            (JobPhase::Verifying, "verifying"),
+            (JobPhase::Finalizing, "finalizing"),
+            (JobPhase::Done, "done"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&value).unwrap(),
+                format!("\"{name}\"")
+            );
+            assert_eq!(value.as_str(), name);
+        }
     }
 }

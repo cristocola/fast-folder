@@ -94,6 +94,18 @@ fn clear_readonly(path: &Path) {
 /// Recursively clear read-only attributes across a tree before removing it.
 #[cfg(windows)]
 fn clear_readonly_tree(path: &Path) {
+    clear_readonly_tree_at(path, 0);
+}
+
+/// Best-effort, so the depth limit simply stops descending rather than
+/// reporting: the caller is about to try a delete either way, and an
+/// unreachable read-only attribute past 256 levels is not the reason it will
+/// fail.
+#[cfg(windows)]
+fn clear_readonly_tree_at(path: &Path, depth: usize) {
+    if depth >= crate::util::paths::MAX_WALK_DEPTH {
+        return;
+    }
     clear_readonly(path);
     let Ok(entries) = std::fs::read_dir(path) else {
         return;
@@ -103,7 +115,7 @@ fn clear_readonly_tree(path: &Path) {
         // Never follow links: clearing attributes through a link would touch
         // data outside the tree being removed.
         match entry.file_type() {
-            Ok(ft) if ft.is_dir() => clear_readonly_tree(&child),
+            Ok(ft) if ft.is_dir() => clear_readonly_tree_at(&child, depth + 1),
             _ => clear_readonly(&child),
         }
     }

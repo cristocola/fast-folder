@@ -98,8 +98,8 @@ pub struct Config {
     /// created the same day from the same answers collide for real. Appending a
     /// suffix is what every file manager does. `"error"` restores the old
     /// refuse-a-duplicate behaviour for anyone who would rather be stopped.
-    #[serde(default = "default_on_name_collision")]
-    pub on_name_collision: String,
+    #[serde(default)]
+    pub on_name_collision: NameCollision,
 }
 
 fn default_date_format() -> String {
@@ -126,8 +126,38 @@ fn default_recent_limit() -> usize {
 fn default_register_naming_pattern() -> String {
     "{date}_{name}_{id}".to_string()
 }
-fn default_on_name_collision() -> String {
-    "suffix".to_string()
+/// What a create does when the folder name it computed already exists.
+///
+/// `#[serde(other)]` on the default keeps the historical contract exactly: the
+/// old code compared case-insensitively against `"error"` and treated *anything
+/// else* — including a typo — as "add a suffix". A stricter enum would turn
+/// somebody's `on_name_collision = "sufix"` into a config that no longer parses,
+/// which is a worse answer than the one they meant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NameCollision {
+    /// Refuse the create.
+    Error,
+    /// Try `name_2`, `name_3`, … Each is a single atomic claim. Also what any
+    /// unrecognized value means, which is what it meant before.
+    #[default]
+    #[serde(other)]
+    Suffix,
+}
+
+impl NameCollision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NameCollision::Error => "error",
+            NameCollision::Suffix => "suffix",
+        }
+    }
+}
+
+impl std::fmt::Display for NameCollision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(self.as_str())
+    }
 }
 
 impl Default for Config {
@@ -147,7 +177,7 @@ impl Default for Config {
             show_frame: true,
             bases_cache: std::sync::OnceLock::new(),
             register_naming_pattern: default_register_naming_pattern(),
-            on_name_collision: default_on_name_collision(),
+            on_name_collision: NameCollision::default(),
         }
     }
 }
@@ -178,7 +208,7 @@ impl Config {
     /// Anything other than an explicit `"error"` means suffix, so a typo in the
     /// config leaves creates working instead of blocking them.
     pub fn suffix_on_name_collision(&self) -> bool {
-        !self.on_name_collision.trim().eq_ignore_ascii_case("error")
+        self.on_name_collision == NameCollision::Suffix
     }
 
     /// Resolve base directory: configured path, or the user's home directory.
@@ -329,7 +359,52 @@ pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
     // TUI's onboarding runs before anything else.
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let mut config = Config::load()?;
-    config.base_dir = resolved.display().to_string();
+    config.base_dir = paths::storable(&resolved, "the base directory")?;
     config.save()?;
     Ok(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, NameCollision};
+
+    /// `on_name_collision` became an enum, and its TOML must be byte-identical.
+    ///
+    /// The `#[serde(other)]` case is the load-bearing one: the old code compared
+    /// case-insensitively against `"error"` and treated everything else as
+    /// "suffix", so a config file holding a typo kept working. A stricter enum
+    /// would refuse to parse it, and a config that will not parse is how every
+    /// command stops (Phase 1).
+    #[test]
+    fn name_collision_round_trips_and_tolerates_a_typo() {
+        // Serialized as part of a whole config: TOML has no representation for
+        // a bare value at the root.
+        let mut config = Config::default();
+        assert!(
+            toml::to_string(&config)
+                .unwrap()
+                .contains("on_name_collision = \"suffix\""),
+            "the default must still write the byte the old String wrote"
+        );
+        config.on_name_collision = NameCollision::Error;
+        assert!(
+            toml::to_string(&config)
+                .unwrap()
+                .contains("on_name_collision = \"error\"")
+        );
+
+        let parsed: Config = toml::from_str("on_name_collision = \"error\"").unwrap();
+        assert_eq!(parsed.on_name_collision, NameCollision::Error);
+        assert!(!parsed.suffix_on_name_collision());
+
+        let typo: Config = toml::from_str("on_name_collision = \"sufix\"").unwrap();
+        assert_eq!(typo.on_name_collision, NameCollision::Suffix);
+        assert!(
+            typo.suffix_on_name_collision(),
+            "an unrecognized value must keep meaning what it meant"
+        );
+
+        let absent: Config = toml::from_str("").unwrap();
+        assert_eq!(absent.on_name_collision, NameCollision::Suffix);
+    }
 }

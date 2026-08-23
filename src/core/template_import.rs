@@ -81,6 +81,19 @@ fn scan_dir(
     bundle_assets: bool,
     plan: &mut ImportPlan,
 ) -> Result<Vec<FolderNode>> {
+    scan_dir_at(root, current, 0, bundle_assets, plan)
+}
+
+fn scan_dir_at(
+    root: &Path,
+    current: &Path,
+    depth: usize,
+    bundle_assets: bool,
+    plan: &mut ImportPlan,
+) -> Result<Vec<FolderNode>> {
+    if depth >= crate::util::paths::MAX_WALK_DEPTH {
+        return Err(crate::util::paths::too_deep(current));
+    }
     let mut folders = Vec::new();
     for entry in fs::read_dir(current).with_context(|| format!("reading {}", current.display()))? {
         let entry = entry?;

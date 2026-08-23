@@ -965,3 +965,45 @@ fn listing_templates_reads_no_template_file_contents() {
         trace.summary()
     );
 }
+
+/// A template file whose name is not valid UTF-8 reaches the new project spelled
+/// exactly as it was.
+///
+/// Unix only: a Windows filename is UTF-16 and cannot hold these bytes. The walk
+/// used to describe every entry with `to_string_lossy`, so this file was opened
+/// at a `?`-substituted path that does not exist — the copy failed naming a path
+/// the user never wrote.
+#[cfg(unix)]
+#[test]
+fn a_template_file_with_a_non_utf8_name_is_reproduced_byte_for_byte() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let files = sb.install.join("templates/race/files");
+    // 0xFF is not valid UTF-8 in any position.
+    let hostile = OsStr::from_bytes(b"note\xff.txt");
+    fs::write(files.join(hostile), b"payload").unwrap();
+
+    sb.ok(&["new", "race", "--name=Solo", "--yes"]);
+
+    let project = common::project_dirs(&sb.base)
+        .into_iter()
+        .next()
+        .expect("a project was created");
+    let landed = fs::read_dir(&project)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect::<Vec<_>>();
+    assert!(
+        landed.iter().any(|name| name.as_bytes() == b"note\xff.txt"),
+        "the file should keep its exact bytes, got {landed:?}"
+    );
+    assert_eq!(
+        fs::read(project.join(hostile)).unwrap(),
+        b"payload",
+        "and its contents"
+    );
+}

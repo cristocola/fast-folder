@@ -265,7 +265,7 @@ impl Template {
             if !entry.is_file() || entry.size > crate::core::assets::TEXT_MAX_BYTES {
                 continue;
             }
-            if let Ok(text) = fs::read_to_string(files_dir.join(&entry.rel)) {
+            if let Ok(text) = fs::read_to_string(files_dir.join(&entry.os_rel)) {
                 self.files.push(FileEntry {
                     path: entry.rel,
                     template: text,

@@ -195,7 +195,7 @@ pub fn normalize_base_entry(raw: &str) -> Result<String> {
             crate::util::paths::display_path(&expanded)
         );
     }
-    Ok(expanded.display().to_string())
+    crate::util::paths::storable(&expanded, "the base directory")
 }
 
 pub fn set(key: &str, value: &str) -> Result<()> {
@@ -213,7 +213,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                 // quoted `~/Projects` become a literal directory named `~`, and a
                 // relative path scatter projects wherever the command ran.
                 let resolved = crate::core::config::resolve_base_dir_input(value)?;
-                config.base_dir = resolved.display().to_string();
+                config.base_dir = crate::util::paths::storable(&resolved, "the base directory")?;
                 println!(
                     "Set base_dir = {}",
                     crate::util::paths::display_path(&resolved)
@@ -303,11 +303,14 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                 );
             }
             "on_name_collision" => {
-                let v = value.trim().to_lowercase();
-                if v != "suffix" && v != "error" {
-                    bail!("expected 'suffix' or 'error'; got '{}'", value.trim());
-                }
-                config.on_name_collision = v;
+                config.on_name_collision = match value.trim().to_lowercase().as_str() {
+                    "suffix" => crate::core::config::NameCollision::Suffix,
+                    "error" => crate::core::config::NameCollision::Error,
+                    // The *setter* is still strict: a typo typed at the command
+                    // line is a mistake to report, where a typo already sitting
+                    // in a config file must not stop every command.
+                    other => bail!("expected 'suffix' or 'error'; got '{other}'"),
+                };
                 println!(
                     "Set on_name_collision = {}  ({})",
                     config.on_name_collision,

@@ -181,7 +181,7 @@ fn existing_project_fails_cleanly() {
         // The default is now to append `_2`, since a naming pattern need not
         // contain `{id}`. `error` restores the old refuse-a-duplicate guard,
         // which is what this test is about.
-        cfg.on_name_collision = "error".to_string();
+        cfg.on_name_collision = fastf::core::config::NameCollision::Error;
         fs::create_dir_all(&cfg.base_dir).unwrap();
 
         let tmpl = template::find_by_slug("test").unwrap();

@@ -371,7 +371,11 @@ fn staged_move_copies_verifies_commits_and_removes_source() {
     // that silently stops updating looks exactly like a hung move.
     {
         let p = progress.lock().unwrap();
-        assert_eq!(p.phase, "done", "the phase should have advanced");
+        assert_eq!(
+            p.phase,
+            crate::core::assets::JobPhase::Done,
+            "the phase should have advanced"
+        );
         assert!(p.total_files >= 3, "files counted: {}", p.total_files);
         assert_eq!(
             p.done_files, p.total_files,

@@ -34,6 +34,20 @@ pub(crate) fn directory_size_until(root: &Path, cancel: &AtomicBool) -> Option<u
 }
 
 fn directory_size_inner(root: &Path, cancel: &AtomicBool) -> io::Result<u64> {
+    directory_size_at(root, cancel, 0)
+}
+
+/// The body, carrying the depth. Past the limit the whole snapshot fails, which
+/// the caller renders as `unavailable` — consistent with every other read
+/// failure here, and the only honest answer when part of the tree was not
+/// counted.
+fn directory_size_at(root: &Path, cancel: &AtomicBool, depth: usize) -> io::Result<u64> {
+    if depth >= crate::util::paths::MAX_WALK_DEPTH {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "directory tree is too deep to measure",
+        ));
+    }
     // `symlink_metadata` is load-bearing: `metadata` would follow a root link.
     let root_metadata = fs::symlink_metadata(root)?;
     if is_link_like(&root_metadata) || !root_metadata.file_type().is_dir() {

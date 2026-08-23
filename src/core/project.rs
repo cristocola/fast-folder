@@ -794,6 +794,8 @@ fn copy_template_files(
         if assets::is_excluded(&entry.rel, &template.exclude) {
             continue;
         }
+        // Validated as text — that is where `..`, drive letters and reserved
+        // names live, and all of them are ASCII.
         let raw = SafeRelativePath::parse(&entry.rel)?;
         let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
         let rel = SafeRelativePath::parse(&rendered)?;
@@ -803,7 +805,15 @@ fn copy_template_files(
         {
             continue;
         }
-        let dest = rel.join_to(dest_root);
+        // Built from the *native* path, so a name that is not valid UTF-8 lands
+        // spelled exactly as it was rather than with `?` where its bytes were.
+        // `require_native_relative` is what keeps this inside `dest_root`.
+        // Built from the *native* path, so a name that is not valid UTF-8 lands
+        // spelled exactly as it was rather than with `?` where its bytes were.
+        // `require_native_relative` is what keeps this inside `dest_root`.
+        let native = assets::interp_rel_os(&entry.os_rel, vars, ctx);
+        crate::util::paths::require_native_relative(&native, "template file")?;
+        let dest = dest_root.join(&native);
 
         if entry.is_dir() {
             fs::create_dir_all(&dest)
@@ -833,7 +843,7 @@ fn copy_template_files(
             && entry.size > limit
         {
             deferred.push(assets::CopyJob {
-                src: files_dir.join(&entry.rel),
+                src: files_dir.join(&entry.os_rel),
                 dest,
                 bytes: entry.size,
             });
@@ -843,7 +853,7 @@ fn copy_template_files(
         let force_verbatim = assets::is_verbatim(&entry.rel, &template.verbatim)
             || entry.size > assets::TEXT_MAX_BYTES;
         assets::copy_file(
-            &files_dir.join(&entry.rel),
+            &files_dir.join(&entry.os_rel),
             &dest,
             force_verbatim,
             vars,

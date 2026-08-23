@@ -25,9 +25,10 @@ pub struct NewArgs {
 pub fn run(args: NewArgs) -> Result<()> {
     let mut config = Config::load()?;
     if let Some(ref dir) = args.base_dir_override {
-        config.base_dir = crate::core::config::resolve_base_dir_input(dir)?
-            .display()
-            .to_string();
+        config.base_dir = crate::util::paths::storable(
+            &crate::core::config::resolve_base_dir_input(dir)?,
+            "the base directory",
+        )?;
     }
     if args.no_preview {
         config.preview_lines = 0;

@@ -61,9 +61,10 @@ pub fn create(options: CreateOptions) -> Result<CreateOutcome> {
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        config.base_dir = crate::core::config::resolve_base_dir_input(raw)?
-            .display()
-            .to_string();
+        config.base_dir = crate::util::paths::storable(
+            &crate::core::config::resolve_base_dir_input(raw)?,
+            "the base directory",
+        )?;
     }
     let template = template::find_by_slug(&options.template_slug)?;
     crate::core::vars::validated_raw_values(&template, &options.variables)?;

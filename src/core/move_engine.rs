@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use crate::core::assets::{self, Progress};
+use crate::core::assets::{self, JobPhase, Progress};
 use crate::core::config::Config;
 use crate::core::library::{
     Project, cache_remove, cache_upsert, project_from_meta, revalidate_project,
@@ -247,7 +247,7 @@ pub(crate) fn staged_copy_verify_commit(
         transaction.write_manifest(&manifest)?;
         {
             let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
-            state.phase = "copying".to_string();
+            state.phase = crate::core::assets::JobPhase::Copying;
             state.total_bytes = manifest.total_bytes();
             state.total_files = manifest.total_files();
             state.done_files = 0;
@@ -265,7 +265,7 @@ pub(crate) fn staged_copy_verify_commit(
                 .with_context(|| format!("copying '{}' into private staging", project.name));
         }
         crate::util::faults::check("move:after-staging")?;
-        set_phase(progress, "verifying");
+        set_phase(progress, JobPhase::Verifying);
         manifest.verify_destination(&staging)?;
         manifest.verify_source_unchanged(&project.path)?;
         crate::util::faults::check("move:after-verify")?;
@@ -274,7 +274,7 @@ pub(crate) fn staged_copy_verify_commit(
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("move of '{}' cancelled", project.name);
         }
-        set_phase(progress, "finalizing");
+        set_phase(progress, JobPhase::Finalizing);
         transaction.set_phase(MovePhase::ReadyToCommit)?;
         crate::util::faults::check("move:before-commit-rename")?;
         if cancel.load(Ordering::Relaxed) {
@@ -371,7 +371,7 @@ pub(crate) fn staged_copy_verify_commit(
             "could not clear completed move transaction: {error:#}"
         ));
     }
-    set_phase(progress, "done");
+    set_phase(progress, JobPhase::Done);
     Ok(MoveOutcome {
         project: moved,
         cleanup_pending,
@@ -429,9 +429,9 @@ pub(crate) fn finish_recovered_move(
     Ok(())
 }
 
-fn set_phase(progress: &Mutex<Progress>, phase: &str) {
+fn set_phase(progress: &Mutex<Progress>, phase: JobPhase) {
     if let Ok(mut p) = progress.lock() {
-        p.phase = phase.to_string();
+        p.phase = phase;
         // A phase change is real movement: without it, verifying a large tree
         // looks identical to a dead worker to both `jobs_active` and the
         // frontend's stall notice.

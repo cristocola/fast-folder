@@ -200,6 +200,18 @@ impl MoveManifest {
 }
 
 fn scan_inner(root: &Path, current: &Path, entries: &mut Vec<ManifestEntry>) -> Result<()> {
+    scan_at(root, current, 0, entries)
+}
+
+fn scan_at(
+    root: &Path,
+    current: &Path,
+    depth: usize,
+    entries: &mut Vec<ManifestEntry>,
+) -> Result<()> {
+    if depth >= crate::util::paths::MAX_WALK_DEPTH {
+        return Err(crate::util::paths::too_deep(current));
+    }
     let children = fs::read_dir(current)
         .with_context(|| format!("reading move source {}", current.display()))?;
     for child in children {

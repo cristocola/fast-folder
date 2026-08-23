@@ -212,6 +212,24 @@ pub(crate) fn require_real_file(path: &Path, label: &str) -> Result<()> {
 /// not absolute, no `.`, `..`, or root/prefix component. Journals and manifests
 /// store paths that later get joined onto a base, so this is what stands
 /// between a recovered record and a write outside the tree it describes.
+/// How deep any of fastf's walkers will descend before refusing.
+///
+/// Every recursive walk in the tool is plain recursion on the call stack, and
+/// two of them (`tree_size`, and the browser's own size scan) run over whatever
+/// folder a user points at. 256 is far past any real project layout and far
+/// short of what overflows a thread stack, so the limit is only ever met by a
+/// pathological or looping tree — which is exactly the case that must degrade
+/// rather than abort the process.
+pub const MAX_WALK_DEPTH: usize = 256;
+
+/// The error every walker reports at [`MAX_WALK_DEPTH`], naming where it stopped.
+pub fn too_deep(path: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "directory tree is too deep (more than {MAX_WALK_DEPTH} levels) at {}",
+        display_path(path)
+    )
+}
+
 pub(crate) fn require_native_relative(path: &Path, label: &str) -> Result<()> {
     if path.as_os_str().is_empty() || path.is_absolute() {
         bail!("{label} must be a non-empty relative path");
@@ -226,6 +244,22 @@ pub(crate) fn require_native_relative(path: &Path, label: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// A path as a `String` fit to be *stored*, refusing rather than mangling.
+///
+/// `display().to_string()` is lossy: a path with non-UTF-8 bytes comes back
+/// with `?` where they were, and writing that into `config.toml` records a
+/// directory that does not exist. TOML cannot hold the bytes either way, so the
+/// only honest answers are "store it" and "say why not" — and saying why not at
+/// the moment the value is set beats discovering it on the next scan.
+pub fn storable(path: &Path, label: &str) -> Result<String> {
+    path.to_str().map(str::to_string).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{label} is not valid UTF-8 and cannot be stored in config: {}",
+            path.display()
+        )
+    })
 }
 
 pub fn config_path() -> PathBuf {

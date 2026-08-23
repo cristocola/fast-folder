@@ -7,6 +7,8 @@ Windows 10 and 11 are fully supported. Every release ships two Windows artifacts
 | `fastf-vX.Y.Z-x86_64.msi` | Installer with a setup wizard. Installs `fastf.exe`, adds it to your PATH, and creates a Start Menu entry. |
 | `fastf-vX.Y.Z-x86_64-pc-windows-msvc.zip` | Portable archive with `fastf.exe`, PowerShell completions, and the docs. |
 
+Both are self-contained. `fastf.exe` is a single file that uses nothing beyond Windows itself. There is no Visual C++ Redistributable, .NET runtime, or other prerequisite to install first, on a fresh machine or a clean VM.
+
 ## Option 1: MSI installer (recommended)
 
 1. Download the `.msi` from the releases page and run it. A standard setup wizard walks you through the license and the install folder.
@@ -86,6 +88,12 @@ These rules run on every platform, not just Windows, so a project created on Lin
 
 Save `template.yaml` as **UTF-8**. Notepad and `Out-File -Encoding utf8` in Windows PowerShell 5.1 add a byte-order mark; fastf skips it, so either encoding loads. If a template fails to parse, the error names the file and reminds you to check the encoding.
 
+## "VCRUNTIME140.dll was not found"
+
+Releases up to and including v2.0.0 linked the Microsoft C runtime dynamically, so `fastf.exe` needed the Visual C++ Redistributable. Most developer machines already have it and most clean installs do not, and where it was missing Windows refused to start the program and named that DLL.
+
+Download a newer release. Nothing needs uninstalling first: the MSI upgrades in place, and for the portable zip, replacing `fastf.exe` is the whole update. Installing the redistributable also works, but is no longer necessary.
+
 ## Building from source on Windows
 
 Install Rust via [rustup](https://rustup.rs) (MSVC toolchain), then:
@@ -96,3 +104,5 @@ cd fast-folder
 cargo build --release
 # Output: target\release\fastf.exe
 ```
+
+The repository's `.cargo/config.toml` links the C runtime statically for the MSVC target, so a binary you build yourself is as self-contained as a released one. A `RUSTFLAGS` environment variable set in your shell replaces that config rather than adding to it, so unset it if your own build starts asking for the redistributable.

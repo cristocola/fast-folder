@@ -213,6 +213,10 @@ jobs:
     needs: build
     runs-on: windows-latest
     steps:
+      # Before the download: `actions/checkout` clears the workspace, which
+      # would take the artifacts with it. Only wanted for
+      # `packaging/windows/assert-standalone.ps1`.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: pkg-x86_64-pc-windows-msvc
@@ -256,6 +260,18 @@ jobs:
               exit 1
             }
           }
+
+      # These runners have the Visual C++ Redistributable installed, so a
+      # binary that needs it starts here and fails on a user's clean install.
+      # Reading the import table is what distinguishes the two. Both shipped
+      # copies are checked: the ZIP and the MSI are separate artifacts, and an
+      # installer built from a stale exe would otherwise pass on the ZIP alone.
+      - name: Neither artifact depends on a redistributable CRT
+        shell: pwsh
+        run: |
+          $zipExe = (Get-ChildItem -Recurse unpacked -Filter fastf.exe)[0].FullName
+          $msiExe = (Get-ChildItem -Recurse msi-extract -Filter fastf.exe)[0].FullName
+          ./packaging/windows/assert-standalone.ps1 $zipExe $msiExe
 
   release:
     name: publish release

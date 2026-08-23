@@ -1,0 +1,31 @@
+# Cargo configuration for this checkout.
+#
+# Everything here is scoped to a target triple on purpose. Unlike a
+# `rust-toolchain.toml` (deliberately absent — see CLAUDE.md), a target-scoped
+# section follows the AUR source package and every contributor's checkout
+# around without changing what they build: a Linux or musl build never reads
+# these sections at all.
+
+# Link the MSVC C runtime statically, so the shipped `fastf.exe` is standalone.
+#
+# The default MSVC target dynamically links the runtime, which makes the binary
+# import VCRUNTIME140.dll — a file that ships with the *Visual C++
+# Redistributable*, not with Windows. On a clean install or a fresh VM the
+# redist is not there, and the program dies before `main` with a system error
+# box naming that DLL. That is a broken first-run for exactly the users least
+# equipped to diagnose it, and it applies to the MSI just the same: the
+# installer places the same exe.
+#
+# `+crt-static` pulls the runtime into the binary instead (a few hundred KB),
+# leaving only DLLs that are part of Windows itself. Nothing here links C code,
+# so there is no second CRT to conflict with.
+#
+# This applies to native `cargo build` on Windows as well as to CI's
+# `--target x86_64-pc-windows-msvc`. Proc macros keep working either way: the
+# Windows targets set `crt_static_allows_dylibs`, unlike static musl.
+#
+# `.github/workflows/ci.yml` and `release.yml` both assert the built exe imports
+# no CRT DLL, so deleting this section fails the build rather than shipping a
+# binary that only runs on developer machines.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

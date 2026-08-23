@@ -96,6 +96,16 @@ targeting fastf.exe.
   patch version is missing on NuGet, fall back to 5.0.1/5.0.0. WiX v6+ demands a
   paid OSMF EULA in CI — stay pinned.
 - The Windows zip ships `docs/` alongside the binary.
+- **The exe must need no Visual C++ Redistributable.** `.cargo/config.toml` sets
+  `target-feature=+crt-static` for `x86_64-pc-windows-msvc`; without it the
+  binary imports VCRUNTIME140.dll and dies before `main` on a clean install or
+  a fresh VM — the MSI included, since it carries the same exe.
+  `packaging/windows/assert-standalone.ps1` reads the PE import table and fails
+  the build if that regresses: ci.yml's `test-release` checks the built exe,
+  release.yml's `smoke-windows` checks both the zip's copy and the MSI payload
+  (that job checks out the repo *before* downloading artifacts, since checkout
+  clears the workspace). Never solve a redist complaint by adding a merge
+  module or a bootstrapper to the MSI — fix the link.
 
 ## Packaging-sensitive code
 

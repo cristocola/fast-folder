@@ -762,12 +762,45 @@ discovery.
 - Proof: Phase 9's `util::trace` counters. Add a `tests/cli_surface.rs` case that runs `new` with `FASTF_TRACE_FILE` and asserts `template_load` ≤ 2, `discover`/`scan_base` ≤ 2, `read_metadata` bounded by project count, and a `template list` case asserting zero file-content reads (add a `template_file_read` trace point in `scan_files`).
 
 **Steps.**
-- [ ] Trace-count tests first (they fail with today's counts; record today's numbers in the PR).
-- [ ] `RenderContext` and single-pass interpolation; property tests in `tests/properties.rs`.
-- [ ] Load-once threading; memoized bases; single apply plan; lazy file buffer; `cache_upsert`.
-- [ ] `CLAUDE.md`: rewrite the "Interpolation" section for the context; add "one load per operation" to the `DataLock` gotcha; the lazy-buffer rule next to the v0.8 `files/` gotcha. `ROADMAP.md`: strike "Lazy template loading" and "Deterministic one-pass interpolation" from the backlog.
+- [x] Trace-count tests first (they fail with today's counts; record today's numbers in the PR).
+- [x] `RenderContext` and single-pass interpolation; property tests in `tests/properties.rs`.
+- [x] Load-once threading; memoized bases; single apply plan; lazy file buffer; `cache_upsert`.
+- [x] `CLAUDE.md`: rewrite the "Interpolation" section for the context; add "one load per operation" to the `DataLock` gotcha; the lazy-buffer rule next to the v0.8 `files/` gotcha. `ROADMAP.md`: strike "Lazy template loading" and "Deterministic one-pass interpolation" from the backlog.
 
 **Acceptance.** Trace-count tests pass. Every existing naming, interpolation, and preview test passes unchanged. `fastf template list` reads no template file contents.
+
+**Notes.**
+
+(1) **Measured, on a two-template sandbox.** `fastf template list`:
+`template_file_scan` 4 → **0** (the manifests are still parsed; their contents
+are not read). `fastf new`: `template_load` 2, `scan_base` 3, unchanged — and
+deliberately so, which is why that case is labelled a design guard rather than a
+regression test. Both numbers are structural: the two template parses are the
+preview outside the data lock and the authority inside it (the thing that stops
+two racing creates minting one ID), and the three base scans are `max_id` staying
+read-only, so it never leaves a cache behind for the next call. The test pins
+that neither grows.
+
+(2) **`operations::create` was not given the caller's loaded objects.** It
+already loads config, counters and template exactly once each, and the plan's own
+ground rule keeps the double `plan()`. Threading them in would have moved the
+loads, not removed any.
+
+(3) **The bases memo is keyed on its inputs, not a bare `OnceLock`.**
+`OnceLock<T: Clone>` clones its *value*, and `cli::new` mutates `config.base_dir`
+after loading, so an unkeyed memo could have answered with the pre-override
+bases. Checking `(base_dir, bases)` on every read makes a stale memo a miss
+rather than a wrong answer. The field is `pub` + `#[doc(hidden)]` only because
+integration tests build `Config { .., ..Default::default() }` and functional
+record update cannot see a private field across a crate boundary.
+
+(4) **`id show`'s trace case was dropped as vacuous** — it reads no template file
+contents either way in a fresh sandbox, so it could never have failed. Two cases
+carry the phase: the create budget and `template list`.
+
+(5) **The trace-based cases are `#[cfg(debug_assertions)]`**, like the failpoint
+suites and for the same reason: `util::trace` compiles to nothing in release, so
+in a release build there is nothing to count. That is the guarantee, not a gap.
 
 ## Phase 15: Types over strings, path fidelity, bounded recursion
 

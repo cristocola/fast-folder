@@ -898,3 +898,70 @@ fn a_failed_counter_write_warns_instead_of_going_quiet() {
     );
     assert_eq!(ids_in(&sb.base), ["R0001".to_string()]);
 }
+
+// ---------------------------------------------------------------------------
+// One clock, one load (v1.7.1)
+//
+// Debug-only, like the failpoint suites: `util::trace` compiles to nothing in
+// release, so in a release build there is nothing to count. That is the
+// guarantee, not a gap.
+//
+// These are budgets, not exact counts: the point is that a create does not read
+// the same file five times, and that listing templates does not read their
+// contents at all. `util::trace` is what makes any of it observable — the output
+// is identical either way, and the cost is invisible on a local SSD and seconds
+// on a network share.
+// ---------------------------------------------------------------------------
+
+/// Creating one project loads each thing a small, bounded number of times.
+///
+/// A design guard rather than a regression test: the two template parses are
+/// deliberate (the preview outside the data lock, then the authority inside it,
+/// which is what stops two racing creates minting the same ID), and so are the
+/// base scans — `library::max_id` must stay read-only, so it never leaves a
+/// cache behind for the next call. What this pins is that none of those numbers
+/// grows: a third parse or a fourth scan means something started reloading.
+#[cfg(debug_assertions)]
+#[test]
+fn a_create_does_not_reload_the_same_things_over_and_over() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let trace = sb.traced(&["new", "race", "--name=Solo", "--yes"]);
+
+    assert!(
+        trace.count("template_load") <= 2,
+        "the template should be parsed at most twice (preview, then under the \
+         lock), traced {}",
+        trace.summary()
+    );
+    assert!(
+        trace.count("scan_base") <= 3,
+        "a create should not rescan every base repeatedly, traced {}",
+        trace.summary()
+    );
+}
+
+/// `template list` prints names and descriptions. It has no reason to read a
+/// single template file, and it used to read all of them.
+#[cfg(debug_assertions)]
+#[test]
+fn listing_templates_reads_no_template_file_contents() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.write_template("other");
+
+    let trace = sb.traced(&["template", "list"]);
+
+    assert!(
+        trace.count("template_load") >= 2,
+        "the manifests must still be parsed, traced {}",
+        trace.summary()
+    );
+    assert_eq!(
+        trace.count("template_file_scan"),
+        0,
+        "listing must not read template file contents, traced {}",
+        trace.summary()
+    );
+}

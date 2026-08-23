@@ -146,6 +146,18 @@ pub struct FolderNode {
     pub children: Vec<FolderNode>,
 }
 
+/// Whether loading a template should read the text under `files/` into memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileBuffer {
+    /// Read every UTF-8 file up to `TEXT_MAX_BYTES` into `Template::files`.
+    /// Needed by the editors, the previews and `apply`'s variable detection.
+    Load,
+    /// Leave `Template::files` empty. `files/` on disk is the create spec, and
+    /// the copy engine always walks the real directory, so a skipped buffer
+    /// changes nothing about what a create produces.
+    Skip,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileEntry {
     pub path: String,
@@ -198,6 +210,17 @@ impl Template {
     /// UTF-8 text files under `files/` are scanned into the in-memory `files`
     /// buffer (for editors/previews); binaries stay on disk only.
     pub fn load_from_file(path: &Path) -> Result<Self> {
+        Self::load_with(path, FileBuffer::Load)
+    }
+
+    /// [`load_from_file`](Self::load_from_file), choosing whether to read the
+    /// text files under `files/` into the in-memory buffer.
+    ///
+    /// Listing templates does not need their contents, and reading every UTF-8
+    /// file of every template to print a name and a description is work nobody
+    /// asked for — `fastf template list`, `fastf id show`, the template picker
+    /// and `/api/state` all did it.
+    pub fn load_with(path: &Path, buffer: FileBuffer) -> Result<Self> {
         crate::util::trace::hit("template_load");
         let raw = fs::read_to_string(path)
             .with_context(|| format!("reading template {}", path.display()))?;
@@ -216,7 +239,9 @@ impl Template {
             )
         })?;
         t.dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        t.scan_files();
+        if buffer == FileBuffer::Load {
+            t.scan_files();
+        }
         // Silently strip file entries colliding with the reserved auto-gen
         // filename. fastf always owns PROJECT_INFO.md.
         t.strip_reserved_files();
@@ -227,6 +252,7 @@ impl Template {
     /// Read the UTF-8 text files under `files/` into the `files` buffer. Binary
     /// or oversize files are left on disk only (the copy engine handles them).
     fn scan_files(&mut self) {
+        crate::util::trace::hit("template_file_scan");
         self.files.clear();
         let files_dir = self.files_dir();
         let entries = match crate::core::assets::walk(&files_dir) {
@@ -384,7 +410,9 @@ pub fn load_all() -> Result<Vec<Template>> {
         if !manifest.exists() {
             continue;
         }
-        match Template::load_from_file(&manifest) {
+        // Names and descriptions only: `load_all`'s callers list, pick and
+        // count templates. Anything that edits or previews one loads it again.
+        match Template::load_with(&manifest, FileBuffer::Skip) {
             Ok(t) => templates.push(t),
             Err(e) => crate::util::diag::warn(format!("skipping {}: {}", manifest.display(), e)),
         }

@@ -19,8 +19,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::core::naming::interpolate_name;
-
 /// Text files at or below this size are candidates for `{token}` interpolation.
 /// Anything larger is copied verbatim — interpolating a 200 MB file makes no
 /// sense and would blow up memory.
@@ -341,8 +339,21 @@ pub fn entry_exists(path: &Path) -> Result<bool> {
 /// Interpolate a relative path segment-by-segment, so empty variables collapse
 /// underscores *within* each name component without touching the `/` separators.
 pub fn interp_rel(rel: &str, vars: &HashMap<String, String>, date_format: &str) -> String {
+    interp_rel_with(
+        rel,
+        vars,
+        &crate::core::naming::RenderContext::now(date_format),
+    )
+}
+
+/// [`interp_rel`] against a prepared context — see [`crate::core::naming::RenderContext`].
+pub fn interp_rel_with(
+    rel: &str,
+    vars: &HashMap<String, String>,
+    ctx: &crate::core::naming::RenderContext,
+) -> String {
     rel.split('/')
-        .map(|segment| interpolate_name(segment, vars, date_format))
+        .map(|segment| crate::core::naming::interpolate_name_with(segment, vars, ctx))
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -411,7 +422,7 @@ pub fn copy_file(
     dest: &Path,
     force_verbatim: bool,
     vars: &HashMap<String, String>,
-    date_format: &str,
+    ctx: &crate::core::naming::RenderContext,
 ) -> Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
@@ -427,7 +438,7 @@ pub fn copy_file(
 
     match interpolated {
         Some(text) => {
-            let rendered = crate::core::naming::interpolate(&text, vars, date_format);
+            let rendered = crate::core::naming::interpolate_with(&text, vars, ctx);
             crate::util::atomic::write(dest, rendered)?;
         }
         None => {
@@ -611,12 +622,26 @@ mod tests {
         let small = tmp.path().join("small.txt");
         fs::write(&small, "hello {name}").unwrap();
         let dest = tmp.path().join("out_small.txt");
-        copy_file(&small, &dest, false, &vars, "%Y-%m-%d").unwrap();
+        copy_file(
+            &small,
+            &dest,
+            false,
+            &vars,
+            &crate::core::naming::RenderContext::now("%Y-%m-%d"),
+        )
+        .unwrap();
         assert_eq!(fs::read_to_string(&dest).unwrap(), "hello Aurora");
 
         // Same file, forced verbatim → braces survive untouched.
         let dest = tmp.path().join("out_verbatim.txt");
-        copy_file(&small, &dest, true, &vars, "%Y-%m-%d").unwrap();
+        copy_file(
+            &small,
+            &dest,
+            true,
+            &vars,
+            &crate::core::naming::RenderContext::now("%Y-%m-%d"),
+        )
+        .unwrap();
         assert_eq!(fs::read_to_string(&dest).unwrap(), "hello {name}");
 
         // A comfortably large — but still under the cap — text file must also be
@@ -631,7 +656,14 @@ mod tests {
             body.len()
         );
         let dest = tmp.path().join("out_big.md");
-        copy_file(&big, &dest, false, &vars, "%Y-%m-%d").unwrap();
+        copy_file(
+            &big,
+            &dest,
+            false,
+            &vars,
+            &crate::core::naming::RenderContext::now("%Y-%m-%d"),
+        )
+        .unwrap();
         let out = fs::read_to_string(&dest).unwrap();
         assert!(out.ends_with("# Aurora\n"), "large text must interpolate");
         assert!(!out.contains("{name}"));

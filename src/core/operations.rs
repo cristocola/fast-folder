@@ -276,6 +276,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             vars: plan_vars,
             id_str: id.clone(),
             counter_value: id_value,
+            ctx: crate::core::naming::RenderContext::now(&config.date_format),
         };
         let created = resolve_created(
             &canonical,

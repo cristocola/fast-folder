@@ -43,7 +43,9 @@ pub fn pick_template(prompt: &str, how: &str) -> Result<Option<Template>> {
         return Ok(None);
     };
 
-    Ok(Some(templates[idx].clone()))
+    // Re-loaded rather than returned from the list: `load_all` skips the text
+    // buffer, and the caller goes on to preview the template's files with it.
+    Ok(Some(template::find_by_slug(&templates[idx].slug)?))
 }
 
 /// Ask which base to use.

@@ -175,6 +175,7 @@ proptest! {
             vars: vars.clone(),
             id_str: "ID0001".to_string(),
             counter_value: 1,
+            ctx: fastf::core::naming::RenderContext::now("%Y-%m-%d"),
         };
 
         let rendered = project_info::render(&plan, &tmpl, &[]).expect("render must not fail");
@@ -206,5 +207,82 @@ proptest! {
         };
         prop_assert_eq!(split_body, body.as_str(), "body must survive the split verbatim");
         prop_assert!(frontmatter.contains(&id));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Interpolation is deterministic (v1.7.1)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    /// The rendered result does not depend on `HashMap` iteration order.
+    ///
+    /// The old implementation ran `String::replace` once per variable, in
+    /// whatever order the map iterated, so a value that happened to contain
+    /// `{another_token}` expanded or did not depending on hashing — two runs of
+    /// the same create could produce different names.
+    #[test]
+    fn interpolation_does_not_depend_on_map_order(
+        values in prop::collection::vec("[a-zA-Z0-9{}_-]{0,12}", 1..6)
+    ) {
+        use std::collections::HashMap;
+
+        let slugs: Vec<String> = (0..values.len()).map(|n| format!("v{n}")).collect();
+        let pattern: String = slugs
+            .iter()
+            .map(|slug| format!("{{{slug}}}"))
+            .collect::<Vec<_>>()
+            .join("_");
+
+        // The same pairs, inserted in two different orders. A `HashMap` does not
+        // preserve insertion order, but with a value that itself contains a
+        // token the old code's result depended on which one it replaced first.
+        let mut forward: HashMap<String, String> = HashMap::new();
+        for (slug, value) in slugs.iter().zip(values.iter()) {
+            forward.insert(slug.clone(), value.clone());
+        }
+        let mut backward: HashMap<String, String> = HashMap::new();
+        for (slug, value) in slugs.iter().zip(values.iter()).rev() {
+            backward.insert(slug.clone(), value.clone());
+        }
+
+        let ctx = fastf::core::naming::RenderContext::now("%Y-%m-%d");
+        prop_assert_eq!(
+            fastf::core::naming::interpolate_with(&pattern, &forward, &ctx),
+            fastf::core::naming::interpolate_with(&pattern, &backward, &ctx),
+        );
+    }
+
+    /// A substituted value is never re-scanned, so a variable holding `{v0}`
+    /// comes out as the literal text `{v0}`.
+    #[test]
+    fn a_substituted_value_is_never_rescanned(inner in "[a-z]{1,6}") {
+        use std::collections::HashMap;
+
+        let vars: HashMap<String, String> = [
+            ("v0".to_string(), inner.clone()),
+            ("v1".to_string(), "{v0}".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let ctx = fastf::core::naming::RenderContext::now("%Y-%m-%d");
+        prop_assert_eq!(
+            fastf::core::naming::interpolate_with("{v1}", &vars, &ctx),
+            "{v0}".to_string(),
+        );
+    }
+
+    /// An unknown token passes through exactly as written, whatever is around it.
+    #[test]
+    fn an_unknown_token_is_left_alone(head in "[a-z ]{0,8}", tail in "[a-z ]{0,8}") {
+        use std::collections::HashMap;
+
+        let pattern = format!("{head}{{no_such_variable}}{tail}");
+        let ctx = fastf::core::naming::RenderContext::now("%Y-%m-%d");
+        prop_assert_eq!(
+            fastf::core::naming::interpolate_with(&pattern, &HashMap::new(), &ctx),
+            pattern.clone(),
+        );
     }
 }

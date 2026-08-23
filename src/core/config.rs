@@ -67,6 +67,20 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub show_frame: bool,
 
+    /// Memoized `effective_bases()`, with the inputs it was computed from.
+    ///
+    /// The key is checked on every read, so a `Config` whose `base_dir` was
+    /// mutated after the first call (which `fastf new --base-dir` does) simply
+    /// misses and recomputes — the memo can save work but cannot answer the
+    /// wrong question. Never serialized.
+    ///
+    /// `pub` only because integration tests build `Config { .., ..Default::default() }`
+    /// and functional record update cannot see a private field from another
+    /// crate. Nothing outside this module should touch it.
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub bases_cache: std::sync::OnceLock<BasesMemo>,
+
     /// Pattern used by `fastf register --rename` when no `--template` is set.
     /// Tokens: `{date}` (uses `date_format`), `{YYYY}`, `{MM}`, `{DD}`, `{id}`,
     /// and `{name}` — the sanitized basename of the existing folder.
@@ -90,6 +104,14 @@ pub struct Config {
 
 fn default_date_format() -> String {
     "%Y-%m-%d".to_string()
+}
+
+/// One memoized `effective_bases()` answer and the configuration it came from.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct BasesMemo {
+    key: (String, Vec<String>),
+    value: Vec<std::path::PathBuf>,
 }
 
 fn default_preview_lines() -> usize {
@@ -123,6 +145,7 @@ impl Default for Config {
             confirm_create: true,
             show_banner: true,
             show_frame: true,
+            bases_cache: std::sync::OnceLock::new(),
             register_naming_pattern: default_register_naming_pattern(),
             on_name_collision: default_on_name_collision(),
         }
@@ -179,6 +202,28 @@ impl Config {
     /// Non-existent paths are kept (not canonicalizable) so callers can decide
     /// to skip them — discovery does, treating an absent base as honestly empty.
     pub fn effective_bases(&self) -> Vec<std::path::PathBuf> {
+        // Memoized per `Config` instance. One create used to call this six to
+        // eight times, and each call `canonicalize`s every base — which on a
+        // network share is a round trip, not an arithmetic operation. The cell
+        // lives and dies with the loaded config, so a `config set` elsewhere is
+        // picked up by the next load exactly as before.
+        let key = (self.base_dir.clone(), self.bases.clone());
+        if let Some(memo) = self.bases_cache.get()
+            && memo.key == key
+        {
+            return memo.value.clone();
+        }
+        let resolved = self.resolve_effective_bases();
+        // A racing `set` would store the same answer, so ignoring the loser is
+        // correct rather than merely tolerable.
+        let _ = self.bases_cache.set(BasesMemo {
+            key,
+            value: resolved.clone(),
+        });
+        resolved
+    }
+
+    fn resolve_effective_bases(&self) -> Vec<std::path::PathBuf> {
         let mut candidates = vec![self.resolve_base_dir()];
         for b in &self.bases {
             if !b.trim().is_empty() {

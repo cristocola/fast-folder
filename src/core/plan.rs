@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::core::naming::RenderContext;
+
 #[derive(Clone, Debug)]
 pub struct ProjectPlan {
     /// The resolved root folder name (after pattern interpolation).
@@ -20,4 +22,12 @@ pub struct ProjectPlan {
     pub id_str: String,
     /// Counter value used.
     pub counter_value: u64,
+    /// The date tokens this create resolves to, sampled once when the plan was
+    /// built.
+    ///
+    /// Carried on the plan rather than re-read per file so a create that spans
+    /// midnight cannot name the folder with one date and the files inside it
+    /// with another, and so the plan a user approves is the plan that is
+    /// committed.
+    pub ctx: RenderContext,
 }

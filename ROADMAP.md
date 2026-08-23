@@ -291,6 +291,13 @@ what the command line can already do.
 Track C of [`PLAN.md`](PLAN.md). No behaviour change: the proof is the unchanged
 test suite plus the guard each phase adds.
 
+- [x] Phase 14: one clock, one load, lazy templates — every interpolation in an
+  operation renders against one `RenderContext` built when the plan was, so a
+  create spanning midnight cannot date the folder differently from the files in
+  it, and substitution is one left-to-right pass whose result no longer depends
+  on `HashMap` order. Listing templates no longer reads their file contents
+  (4 scans to 0 on a two-template library), and `effective_bases()` memoizes
+  against the configuration it was computed from.
 - [x] Phase 13: split `library.rs` — 1268 production lines with nine
   responsibilities became a facade over `model` / `discovery` / `cache` /
   `guard` / `lifecycle` / `resolve`, with the staged move engine moved out to
@@ -369,9 +376,8 @@ than as separate published tags. Their checked items remain above as history.
 
 ## Unscheduled backlog
 
-- Lazy template loading and one library snapshot for UI state.
-- Deterministic one-pass interpolation with a frozen render context.
-- Further terminal-rendering extraction from core.
+- One library snapshot for UI state. (Lazy template loading landed in v1.7.1:
+  `load_all` no longer reads template file contents.)
 - Dependency and binary-size cleanup based on measurements.
 - Portable project packages.
 - Template upgrades.

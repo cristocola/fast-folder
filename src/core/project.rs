@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::core::assets;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::naming::{interpolate_name, sanitize_name};
+use crate::core::naming::{RenderContext, interpolate_name, sanitize_name};
 pub use crate::core::plan::ProjectPlan;
 use crate::core::template::{FolderNode, Template};
 use crate::core::validated::SafeRelativePath;
@@ -206,6 +206,8 @@ pub fn plan(
     counters: &Counters,
 ) -> Result<ProjectPlan> {
     template.validate()?;
+    // The clock, sampled once for the whole create.
+    let ctx = crate::core::naming::RenderContext::now(&config.date_format);
     let mut vars = crate::core::vars::rendered_values(template, raw_vars)?;
 
     // Resolve ID — one global counter across all templates, whose high-water
@@ -228,7 +230,7 @@ pub fn plan(
     // Validate again after interpolation. Raw template paths can be safe while
     // a rendered date format or value turns a component into `..` or an
     // absolute path; reject the plan before even claiming a project folder.
-    validate_rendered_template_paths(template, &vars, &config.date_format)?;
+    validate_rendered_template_paths(template, &vars, &ctx)?;
 
     // Interpolate folder name. Use `interpolate_name` so empty variables don't
     // leave `__` gaps or leading/trailing underscores in the folder name.
@@ -236,10 +238,10 @@ pub fn plan(
     // pattern itself can contribute a trailing dot or a literal reserved device
     // name that no single variable is responsible for. `sanitize_name` is
     // idempotent, so the double pass is free.
-    let base_name = sanitize_name(&interpolate_name(
+    let base_name = sanitize_name(&crate::core::naming::interpolate_name_with(
         &template.naming_pattern,
         &vars,
-        &config.date_format,
+        &ctx,
     ));
 
     let base = config.resolve_base_dir();
@@ -270,6 +272,7 @@ pub fn plan(
         vars,
         id_str,
         counter_value,
+        ctx,
     })
 }
 
@@ -483,12 +486,7 @@ fn provision_project(
     .context("writing create journal")?;
 
     // Create subfolder structure
-    create_structure(
-        &template.structure,
-        &plan.root_path,
-        &plan.vars,
-        &config.date_format,
-    )?;
+    create_structure(&template.structure, &plan.root_path, &plan.vars, &plan.ctx)?;
 
     // Reproduce the template's files/ subtree into the new project. Large files
     // may be deferred (returned as jobs) when a threshold is given.
@@ -496,7 +494,7 @@ fn provision_project(
         template,
         &plan.root_path,
         &plan.vars,
-        &config.date_format,
+        &plan.ctx,
         false,
         defer_over,
     )?;
@@ -617,23 +615,24 @@ pub fn apply_plan(
 ) -> Result<Vec<ApplyAction>> {
     template.validate()?;
     let vars = crate::core::vars::rendered_values(template, vars)?;
-    apply_plan_resolved(template, target, &vars, date_format)
+    // One clock for the whole apply, the same way a create takes one.
+    apply_plan_resolved(template, target, &vars, &RenderContext::now(date_format))
 }
 
 fn apply_plan_resolved(
     template: &Template,
     target: &Path,
     vars: &HashMap<String, String>,
-    date_format: &str,
+    ctx: &RenderContext,
 ) -> Result<Vec<ApplyAction>> {
     let mut out = Vec::new();
-    walk_structure(&template.structure, target, vars, date_format, &mut out)?;
+    walk_structure(&template.structure, target, vars, ctx, &mut out)?;
     for entry in assets::walk(&template.files_dir())? {
         if assets::is_excluded(&entry.rel, &template.exclude) {
             continue;
         }
         let raw = SafeRelativePath::parse(&entry.rel)?;
-        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
         let rel = SafeRelativePath::parse(&rendered)?;
         if crate::core::project_info::path_is_reserved(rel.as_str())
             || crate::core::provisioning::path_is_reserved(rel.as_str())
@@ -662,12 +661,12 @@ fn walk_structure(
     nodes: &[FolderNode],
     parent: &Path,
     vars: &HashMap<String, String>,
-    date_format: &str,
+    ctx: &RenderContext,
     out: &mut Vec<ApplyAction>,
 ) -> Result<()> {
     for node in nodes {
         let raw = SafeRelativePath::parse(&node.name)?;
-        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
         let actual_path = SafeRelativePath::parse(&rendered)?;
         let path = actual_path.join_to(parent);
         if assets::entry_exists(&path)? {
@@ -676,7 +675,7 @@ fn walk_structure(
             out.push(ApplyAction::CreateFolder(path.clone()));
         }
         if !node.children.is_empty() {
-            walk_structure(&node.children, &path, vars, date_format, out)?;
+            walk_structure(&node.children, &path, vars, ctx, out)?;
         }
     }
     Ok(())
@@ -693,9 +692,10 @@ pub fn apply(
 ) -> Result<()> {
     assets::require_real_directory(target, "apply target")?;
     let vars = crate::core::vars::rendered_values(template, vars)?;
+    let ctx = RenderContext::now(&config.date_format);
 
     // Empty dirs declared in `structure:` first (create-or-skip).
-    for action in apply_plan_resolved(template, target, &vars, &config.date_format)? {
+    for action in apply_plan_resolved(template, target, &vars, &ctx)? {
         match action {
             ApplyAction::CreateFolder(p) => {
                 fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
@@ -707,7 +707,7 @@ pub fn apply(
     }
 
     // Files from the files/ subtree — never overwrite.
-    copy_template_files(template, target, &vars, &config.date_format, true, None)?;
+    copy_template_files(template, target, &vars, &ctx, true, None)?;
 
     Ok(())
 }
@@ -716,17 +716,17 @@ fn create_structure(
     nodes: &[FolderNode],
     parent: &Path,
     vars: &HashMap<String, String>,
-    date_format: &str,
+    ctx: &RenderContext,
 ) -> Result<()> {
     for node in nodes {
         let raw = SafeRelativePath::parse(&node.name)?;
-        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
         let actual_path = SafeRelativePath::parse(&rendered)?;
         let path = actual_path.join_to(parent);
         fs::create_dir_all(&path)
             .with_context(|| format!("creating directory {}", path.display()))?;
         if !node.children.is_empty() {
-            create_structure(&node.children, &path, vars, date_format)?;
+            create_structure(&node.children, &path, vars, ctx)?;
         }
     }
     Ok(())
@@ -735,29 +735,29 @@ fn create_structure(
 fn validate_rendered_template_paths(
     template: &Template,
     vars: &HashMap<String, String>,
-    date_format: &str,
+    ctx: &RenderContext,
 ) -> Result<()> {
     fn validate_nodes(
         nodes: &[FolderNode],
         vars: &HashMap<String, String>,
-        date_format: &str,
+        ctx: &RenderContext,
     ) -> Result<()> {
         for node in nodes {
             let raw = SafeRelativePath::parse(&node.name)?;
-            let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+            let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
             let rendered = SafeRelativePath::parse(&rendered)?;
             if crate::core::provisioning::path_is_reserved(rendered.as_str()) {
                 anyhow::bail!("'{}' is reserved for fastf create recovery", rendered);
             }
-            validate_nodes(&node.children, vars, date_format)?;
+            validate_nodes(&node.children, vars, ctx)?;
         }
         Ok(())
     }
 
-    validate_nodes(&template.structure, vars, date_format)?;
+    validate_nodes(&template.structure, vars, ctx)?;
     for entry in assets::walk(&template.files_dir())? {
         let raw = SafeRelativePath::parse(&entry.rel)?;
-        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
         let rendered = SafeRelativePath::parse(&rendered)?;
         if crate::core::provisioning::path_is_reserved(rendered.as_str()) {
             anyhow::bail!("'{}' is reserved for fastf create recovery", rendered);
@@ -779,7 +779,7 @@ fn copy_template_files(
     template: &Template,
     dest_root: &Path,
     vars: &HashMap<String, String>,
-    date_format: &str,
+    ctx: &RenderContext,
     skip_existing: bool,
     defer_over: Option<u64>,
 ) -> Result<Vec<assets::CopyJob>> {
@@ -795,7 +795,7 @@ fn copy_template_files(
             continue;
         }
         let raw = SafeRelativePath::parse(&entry.rel)?;
-        let rendered = assets::interp_rel(raw.as_str(), vars, date_format);
+        let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
         let rel = SafeRelativePath::parse(&rendered)?;
         // fastf owns PROJECT_INFO.md — never let a bundled file clobber it.
         if crate::core::project_info::path_is_reserved(rel.as_str())
@@ -847,7 +847,7 @@ fn copy_template_files(
             &dest,
             force_verbatim,
             vars,
-            date_format,
+            ctx,
         )?;
     }
     Ok(deferred)
@@ -1038,6 +1038,7 @@ mod tests {
                 .collect(),
             id_str: "ID0048".to_string(),
             counter_value: 48,
+            ctx: RenderContext::now("%Y-%m-%d"),
         }
     }
 

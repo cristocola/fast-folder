@@ -46,13 +46,8 @@ impl CacheEntry {
     pub(crate) fn from_project(project: &Project, base: &Path) -> Self {
         // `dir` is base-relative; fall back to the basename if strip fails
         // (shouldn't happen — projects are always built as `base.join(...)`).
-        let dir = project
-            .path
-            .strip_prefix(base)
-            .map(to_forward_slashes)
-            .unwrap_or_else(|_| project.name.clone());
         Self {
-            dir,
+            dir: entry_dir(project, base),
             id: project.id.clone(),
             template: project.template.clone(),
             template_name: project.template_name.clone(),
@@ -167,6 +162,15 @@ pub(crate) fn write_cache(base: &Path, projects: &[Project]) -> Result<()> {
 // full rescan). All best-effort — a cache error never fails the command.
 // ---------------------------------------------------------------------------
 
+/// A project's base-relative directory, the way a cache entry records it.
+fn entry_dir(project: &Project, base: &Path) -> String {
+    project
+        .path
+        .strip_prefix(base)
+        .map(to_forward_slashes)
+        .unwrap_or_else(|_| project.name.clone())
+}
+
 /// Insert or update `project` in `base`'s cache (matched by base-relative dir).
 /// If the cache is missing/unreadable, seed it from a full scan first so the new
 /// entry lands in a complete cache.
@@ -179,8 +183,11 @@ pub fn cache_upsert(base: &Path, project: &Project) {
             .collect(),
         None => scan_base(base),
     };
-    let new_dir = CacheEntry::from_project(project, base).dir;
-    projects.retain(|p| CacheEntry::from_project(p, base).dir != new_dir);
+    // The base-relative directory is the identity. Computing it directly beats
+    // building a throwaway `CacheEntry` — with every other field cloned — once
+    // per project already in the cache, just to read one string off it.
+    let new_dir = entry_dir(project, base);
+    projects.retain(|p| entry_dir(p, base) != new_dir);
     projects.push(project.clone());
     let _ = write_cache(base, &projects);
 }

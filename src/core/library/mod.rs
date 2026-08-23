@@ -39,8 +39,11 @@ pub use model::*;
 pub use resolve::*;
 
 pub(crate) use crate::core::move_engine::finish_recovered_move;
+/// Debug builds only, like the failpoints it exists beside.
+#[cfg(debug_assertions)]
+pub use crate::core::move_engine::move_project_staged_for_test;
 pub use crate::core::move_engine::{
-    MoveOutcome, move_project, move_project_configured_with_outcome, move_project_staged_for_test,
+    MoveOutcome, move_project, move_project_configured_with_outcome,
 };
 
 /// Compatibility re-export: the clock moved to [`crate::util::time`], which is

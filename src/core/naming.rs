@@ -1,36 +1,111 @@
+use std::collections::HashMap;
+
 use chrono::Local;
 
+/// The values every `{token}` in one operation resolves to.
+///
+/// Built **once per operation** and threaded through every interpolation it
+/// does. Two reasons, and the first is correctness rather than speed: the clock
+/// used to be sampled inside `interpolate`, which runs per path segment and per
+/// file, so a create that spanned midnight could name the folder with one date
+/// and the files inside it with another, and the plan a user approved could
+/// differ from the plan that was committed.
+///
+/// The second is that formatting four date strings per file, on a template with
+/// a hundred of them, is a hundred times more work than the answer needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderContext {
+    /// `{date}`, as `config.date_format` renders it.
+    pub date: String,
+    pub yyyy: String,
+    pub mm: String,
+    pub dd: String,
+}
+
+impl RenderContext {
+    /// Sample the clock once.
+    pub fn now(date_format: &str) -> Self {
+        let now = Local::now();
+        Self {
+            date: now.format(date_format).to_string(),
+            yyyy: now.format("%Y").to_string(),
+            mm: now.format("%m").to_string(),
+            dd: now.format("%d").to_string(),
+        }
+    }
+
+    /// The built-in token `name` resolves to, if it is one.
+    fn builtin(&self, name: &str) -> Option<&str> {
+        match name {
+            "date" => Some(&self.date),
+            "YYYY" => Some(&self.yyyy),
+            "MM" => Some(&self.mm),
+            "DD" => Some(&self.dd),
+            _ => None,
+        }
+    }
+}
+
 /// Substitute `{token}` placeholders in `pattern`. Built-in tokens
-/// (`{date}`, `{YYYY}`, `{MM}`, `{DD}`) resolve automatically; everything else
+/// (`{date}`, `{YYYY}`, `{MM}`, `{DD}`) resolve from `ctx`; everything else
 /// comes from `vars`. Unrecognized tokens are left literal.
 ///
 /// This is the raw form, used for file contents where `__` sequences (e.g.
 /// Python's `__init__`, `__version__`) must be preserved exactly.
-pub fn interpolate(
+///
+/// **One left-to-right pass, and a substituted value is never re-scanned.** The
+/// old implementation ran `String::replace` once per variable, in `HashMap`
+/// order, so a value that happened to contain `{another_token}` expanded or did
+/// not depending on which order the map iterated in — different runs of the same
+/// create could produce different names.
+pub fn interpolate_with(
     pattern: &str,
-    vars: &std::collections::HashMap<String, String>,
-    date_format: &str,
+    vars: &HashMap<String, String>,
+    ctx: &RenderContext,
 ) -> String {
-    let now = Local::now();
-    let date_str = now.format(date_format).to_string();
-    let yyyy = now.format("%Y").to_string();
-    let mm = now.format("%m").to_string();
-    let dd = now.format("%d").to_string();
+    let mut out = String::with_capacity(pattern.len());
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
 
-    let mut result = pattern.to_string();
-
-    // Built-in tokens
-    result = result.replace("{date}", &date_str);
-    result = result.replace("{YYYY}", &yyyy);
-    result = result.replace("{MM}", &mm);
-    result = result.replace("{DD}", &dd);
-
-    // Variable tokens
-    for (key, value) in vars {
-        result = result.replace(&format!("{{{}}}", key), value);
+    while i < pattern.len() {
+        if bytes[i] != b'{' {
+            // Copy through to the next `{`, or to the end.
+            let next = pattern[i..]
+                .find('{')
+                .map(|at| i + at)
+                .unwrap_or(pattern.len());
+            out.push_str(&pattern[i..next]);
+            i = next;
+            continue;
+        }
+        // `{` with no `}` after it is literal text, not an unterminated token.
+        let Some(close) = pattern[i..].find('}').map(|at| i + at) else {
+            out.push_str(&pattern[i..]);
+            break;
+        };
+        let name = &pattern[i + 1..close];
+        match ctx
+            .builtin(name)
+            .or_else(|| vars.get(name).map(String::as_str))
+        {
+            Some(value) => out.push_str(value),
+            // An unrecognized token is left exactly as written.
+            None => out.push_str(&pattern[i..=close]),
+        }
+        i = close + 1;
     }
 
-    result
+    out
+}
+
+/// [`interpolate_with`], sampling the clock itself.
+///
+/// For the callers that render one string and have no operation to hang a
+/// context on. Anything that renders more than one string should build a
+/// [`RenderContext`] and use `interpolate_with`, or its outputs can disagree
+/// about what day it is.
+pub fn interpolate(pattern: &str, vars: &HashMap<String, String>, date_format: &str) -> String {
+    interpolate_with(pattern, vars, &RenderContext::now(date_format))
 }
 
 /// Characters that act as separators in a name.
@@ -61,10 +136,19 @@ fn is_name_separator(c: char) -> bool {
 /// through unchanged.
 pub fn interpolate_name(
     pattern: &str,
-    vars: &std::collections::HashMap<String, String>,
+    vars: &HashMap<String, String>,
     date_format: &str,
 ) -> String {
-    let raw = interpolate(pattern, vars, date_format);
+    interpolate_name_with(pattern, vars, &RenderContext::now(date_format))
+}
+
+/// [`interpolate_name`] against a prepared context.
+pub fn interpolate_name_with(
+    pattern: &str,
+    vars: &HashMap<String, String>,
+    ctx: &RenderContext,
+) -> String {
+    let raw = interpolate_with(pattern, vars, ctx);
 
     let mut out = String::with_capacity(raw.len());
     let mut pending: Option<char> = None;

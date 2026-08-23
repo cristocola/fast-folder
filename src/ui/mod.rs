@@ -1769,7 +1769,14 @@ fn add_template_file(request: TemplateFileAddRequest) -> Result<Value> {
     let dest = paths::template_files_dir(&request.slug).join(&rel);
     // A template asset is copied byte-for-byte here; `{token}` interpolation
     // happens later, at project-create time, not at ingestion.
-    crate::core::assets::copy_file(&src, &dest, true, &HashMap::new(), "")?;
+    // Verbatim: no variables and no tokens, so the context is never consulted.
+    crate::core::assets::copy_file(
+        &src,
+        &dest,
+        true,
+        &HashMap::new(),
+        &crate::core::naming::RenderContext::now(""),
+    )?;
     let size = fs::metadata(&dest).map(|meta| meta.len()).unwrap_or(0);
     let is_text = size <= crate::core::assets::TEXT_MAX_BYTES && fs::read_to_string(&dest).is_ok();
     Ok(json!({"ok": true, "path": rel, "size": size, "is_text": is_text}))

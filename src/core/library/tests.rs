@@ -6,6 +6,7 @@ use crate::core::assets::Progress;
 use crate::core::config::Config;
 use crate::core::move_engine::{is_cross_device_error, staged_copy_verify_commit};
 use crate::core::project_info;
+#[cfg(debug_assertions)]
 use crate::core::provisioning;
 use crate::core::transactions::{self, MoveManifest};
 use std::fs;

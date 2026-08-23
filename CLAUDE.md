@@ -159,12 +159,31 @@ sibling `files/` directory (see below). Keys:
 
 `files/` subtree: every file/dir is reproduced into new projects. Names + UTF-8 text (≤ `TEXT_MAX_BYTES`) are interpolated; `verbatim`/oversize/non-UTF-8 files are byte-copied; `exclude` globs skipped; root `PROJECT_INFO.md` is reserved and skipped.
 
-### Interpolation: `interpolate` vs `interpolate_name` (important)
-Two separate functions in `core/naming.rs`:
-- **`interpolate()`** — raw substitution only. Used for **file content** (templated files). Preserves `__` sequences so Python's `__version__`, `__init__`, etc. survive intact.
-- **`interpolate_name()`** — calls `interpolate`, then collapses consecutive `__` → `_` and trims leading/trailing `_`. Used for **folder and file names** so empty optional variables don't leave dangling underscore gaps.
+### Interpolation: one context, one pass (v1.7.1)
+`naming::RenderContext { date, yyyy, mm, dd }` is **built once per operation**
+and threaded through everything it renders. `project::plan` builds one and
+stores it on `ProjectPlan`; apply builds one at entry. The clock used to be
+sampled *inside* `interpolate`, which runs per path segment and per file, so a
+create spanning midnight could name the folder with one date and the files
+inside it with another, and the plan a user approved could differ from the plan
+that was committed.
 
-When adding new code: if you're building a *path component name*, call `interpolate_name`. If you're building *file contents*, call `interpolate`. Do not mix them.
+Substitution is **one left-to-right pass, and a substituted value is never
+re-scanned**. It used to be a `String::replace` per variable in `HashMap` order,
+so a value containing `{another_token}` expanded or did not depending on
+hashing. Guarded by proptests in `tests/properties.rs`.
+
+Two shapes, and mixing them is the classic mistake:
+- **`interpolate_with(pattern, vars, ctx)`** — raw substitution. Used for **file
+  content**. Preserves `__` sequences so Python's `__version__` survives intact.
+- **`interpolate_name_with(pattern, vars, ctx)`** — then collapses runs of
+  `_`/`-` and trims the ends, so an empty optional variable does not leave a
+  dangling separator. Used for **folder and file names**.
+
+If you're building a *path component name*, call `interpolate_name_with`. If
+you're building *file contents*, call `interpolate_with`. The `_with`-less
+variants sample the clock themselves and exist for the one-string callers that
+have no operation to hang a context on.
 
 ### Path-escape safety
 `validated::TemplateSlug` accepts one ASCII alphanumeric/`-`/`_` component.
@@ -869,6 +888,24 @@ imported `naming` for interpolation). `Metadata::from_plan_at` / `write_at` /
 `render_at` take the timestamp, so register writes its `PROJECT_INFO.md` **once**
 instead of writing it with `now` and rewriting the frontmatter to patch
 `created`.
+
+**A `Template` loaded for a list has no file buffer.** `Template::load_with(path,
+FileBuffer::Skip | Load)`; `load_all` uses `Skip`, because listing, picking and
+counting templates never needs their contents — `template list`, `id show`, the
+picker and `/api/state` all read every UTF-8 file of every template to print a
+name. Anything that edits, previews, or detects apply's variables loads with
+`Load`, which is why `tui::pickers::pick_template` re-loads the template it
+picked instead of returning the one from the list. `files/` on disk is still the
+create spec, and the copy engine always walks the real directory, so a skipped
+buffer changes nothing about what a create produces.
+
+**`Config::effective_bases()` memoizes, keyed on its inputs.** Each call
+`canonicalize`s every base — a round trip on a share, not an arithmetic
+operation — and one create made six to eight of them. The memo stores
+`(base_dir, bases)` alongside the answer and checks it on every read, so a
+`Config` whose `base_dir` was mutated afterwards (which `fastf new --base-dir`
+does) simply misses and recomputes. It can save work; it cannot answer the wrong
+question.
 
 **The guided menu reaches the whole tool, and it does so by calling the CLI's
 own functions.** Maintenance runs `cli::reindex::run`, `cli::reconcile::run` and

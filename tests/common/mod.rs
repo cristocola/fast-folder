@@ -102,6 +102,28 @@ impl Sandbox {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
+    /// `run`, with `util::trace` writing to a file, returning what it counted.
+    ///
+    /// Debug builds only — the tracer is compiled out of release, like the
+    /// failpoints. The command must succeed.
+    pub fn traced(&self, args: &[&str]) -> Trace {
+        let path = self.tmp.path().join(format!("trace-{}", args.join("-")));
+        let out = self
+            .command()
+            .args(args)
+            .env("FASTF_TRACE_FILE", &path)
+            .output()
+            .expect("running fastf");
+        assert!(
+            out.status.success(),
+            "expected `fastf {}` to succeed, got {out:?}",
+            args.join(" ")
+        );
+        Trace {
+            lines: fs::read_to_string(&path).unwrap_or_default(),
+        }
+    }
+
     /// `run`, asserting failure and returning stderr — for the refusals.
     pub fn fails(&self, args: &[&str]) -> String {
         let out = self.run(args);
@@ -194,6 +216,30 @@ impl Sandbox {
         )
         .unwrap();
         dir
+    }
+}
+
+/// What one traced command did, by operation name.
+pub struct Trace {
+    lines: String,
+}
+
+impl Trace {
+    pub fn count(&self, name: &str) -> usize {
+        self.lines.lines().filter(|line| *line == name).count()
+    }
+
+    /// Every name that appeared, with its count — for a failure message that
+    /// says what actually happened rather than only what did not.
+    pub fn summary(&self) -> String {
+        let mut names: Vec<&str> = self.lines.lines().collect();
+        names.sort();
+        names.dedup();
+        names
+            .iter()
+            .map(|name| format!("{name}={}", self.count(name)))
+            .collect::<Vec<_>>()
+            .join("  ")
     }
 }
 

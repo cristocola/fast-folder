@@ -22,7 +22,9 @@ mod common;
 
 use common::{Sandbox, pty};
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(debug_assertions)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 const DEADLINE: Duration = Duration::from_secs(25);
@@ -49,7 +51,9 @@ fn launch(sb: &Sandbox, script: Vec<pty::Keystroke>) -> (String, i32) {
 }
 
 /// `launch`, with `util::trace` writing to `trace`. Debug builds only — the
-/// tracer is compiled out of release, like the failpoints.
+/// tracer is compiled out of release, like the failpoints, and so are its
+/// callers.
+#[cfg(debug_assertions)]
 fn launch_traced(sb: &Sandbox, script: Vec<pty::Keystroke>, trace: &Path) -> (String, i32) {
     pty::run(
         common::FASTF,
@@ -284,6 +288,9 @@ fn projects_browser_is_newest_first_sized_and_paged() {
 /// library to put one word into one cell. The trace file is how that is
 /// observable at all: the rendered list looks the same either way, and the cost
 /// is seconds on a network share and nothing on a local disk.
+// Debug-only, like the failpoint suites: `util::trace` compiles to nothing in
+// release, so there would be no counts to compare.
+#[cfg(debug_assertions)]
 #[test]
 fn a_tag_patches_its_row_without_rescanning_the_library() {
     let sb = Sandbox::new();
@@ -343,6 +350,7 @@ fn a_tag_patches_its_row_without_rescanning_the_library() {
 }
 
 /// Deleting a project takes its row out of the list, also without a rescan.
+#[cfg(debug_assertions)]
 #[test]
 fn a_delete_drops_its_row_without_rescanning_the_library() {
     let sb = Sandbox::new();
@@ -972,6 +980,7 @@ fn a_search_that_matches_nothing_keeps_the_query() {
 /// The counts come from each base's own `.fastf-index.json` and are labelled as
 /// such, so opening the menu does not get slower the more it has to say. A base
 /// that is configured but not mounted is named rather than silently dropped.
+#[cfg(debug_assertions)]
 #[test]
 fn the_frame_reports_the_library_from_the_index_without_scanning() {
     let sb = Sandbox::new();

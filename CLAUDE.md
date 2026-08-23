@@ -14,7 +14,10 @@ and the command line (`fastf new`, …). `core` and `util` know about neither.
 
 Standard cargo throughout. Clippy must be clean with `--all-targets -- -D
 warnings`, **on Windows targets too** — the lint thresholds differ, and
-`large_enum_variant` has fired there and nowhere else. The non-obvious parts:
+`large_enum_variant` has fired there and nowhere else — and **in release too**:
+`#[cfg(debug_assertions)]` code does not exist there, so an item used only from
+a failpoint or tracer test is dead in release and live in debug. The non-obvious
+parts:
 
 ```bash
 # Cross-compile for Windows (from Linux). A local convenience; CI builds on a

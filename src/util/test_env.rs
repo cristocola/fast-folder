@@ -18,6 +18,12 @@
 //! takes it afterwards, never the other way round. The same note is on that
 //! lock.
 
+// Which methods are live depends on the profile: `trace`'s tests are
+// `#[cfg(debug_assertions)]` (the tracer is compiled out of release), so
+// `also_remove` has no caller in a release test build. That is the guarantee,
+// not a gap — same reasoning as `tests/common/mod.rs`.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;

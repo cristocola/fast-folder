@@ -49,6 +49,13 @@ jobs:
       - run: cargo fmt --all -- --check
         if: runner.os == 'Linux'
       - run: cargo clippy --all-targets -- -D warnings
+      # Release too, on one platform. `#[cfg(debug_assertions)]` code — the
+      # failpoints and the tracer — does not exist in a release build, so an
+      # item used *only* from it becomes dead there and nowhere else. A
+      # debug-only lint cannot see that, and the AUR source package's `check()`
+      # is a release test build, so its users saw warnings CI called clean.
+      - run: cargo clippy --all-targets --release -- -D warnings
+        if: runner.os == 'Linux'
 
   test:
     name: test (${{ matrix.os }})

@@ -26,6 +26,11 @@ use std::process::Command;
 use std::sync::Mutex;
 
 use fastf::core::{config::Config, counter::Counters, library, project, provisioning, template};
+// Every use of this is inside `#[cfg(debug_assertions)]` — failpoints are
+// compiled out of release builds, so in a release test build the import itself
+// is dead. The AUR source package's `check()` is a release test build, which is
+// where the warning showed up.
+#[cfg(debug_assertions)]
 use fastf::util::faults::FAULT_ENV;
 
 mod common;

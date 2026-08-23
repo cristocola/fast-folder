@@ -107,6 +107,9 @@ checklist to work through by hand.
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
+- [x] `cargo clippy --all-targets --release -- -D warnings` (debug-only code is
+  absent from a release build, so an item used only from it is dead there and
+  nowhere else)
 - [x] `cargo test --all-targets`
 - [x] `cargo test --release`
 - [x] Windows cfg compile: `cargo check --all-targets --target

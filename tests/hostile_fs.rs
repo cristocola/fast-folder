@@ -320,18 +320,19 @@ fn destroyed_counter_self_heals_from_the_projects_on_disk() {
 
 /// A pathologically deep tree degrades instead of blowing the stack.
 ///
-/// A design guard, not a regression: 300 frames does not overflow a thread
-/// stack, so this could not be made to fail against the old build without
-/// building a tree deep enough to crash the test runner. What it pins is that
-/// the limit exists and reports where it stopped — every walk in the tool is
-/// plain recursion, and two of them (`tree_size`, and the browser's size scan)
-/// run over whatever folder a user points at.
+/// Unix only, and for two separate reasons that both belong to the setup rather
+/// than to fastf. Building a 100-level tree needs a path past Windows'
+/// MAX_PATH, which `create_dir_all` refuses without long-path support; and a
+/// Windows test thread's 1 MiB stack is what proved the *old* 256-level limit
+/// was too generous in the first place. The limit itself is cross-platform and
+/// is what this pins: the walk stops and says where.
+#[cfg(unix)]
 #[test]
 fn a_very_deep_tree_is_refused_rather_than_overflowing_the_stack() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let deep = tmp.path().join("Deep");
     let mut path = deep.clone();
-    for level in 0..300 {
+    for level in 0..100 {
         path = path.join(format!("l{level}"));
     }
     fs::create_dir_all(&path).unwrap();

@@ -69,13 +69,21 @@ fn core_does_not_prompt() {
 #[test]
 fn core_and_util_do_not_render() {
     const RENDERING: [&str; 5] = ["use colored", "println!", "eprintln!", "print!", "eprint!"];
-    const ALLOWED: [&str; 3] = ["util/diag.rs", "util/live_select.rs", "util/trace.rs"];
+    // Matched on the file name, not a `"util/diag.rs"` suffix: `Path::display`
+    // uses the platform separator, so a `/` suffix never matches on Windows —
+    // and the first version of this list flagged `util::diag` itself there, on
+    // the one platform nobody ran it on locally.
+    const ALLOWED: [&str; 3] = ["diag.rs", "live_select.rs", "trace.rs"];
 
     let mut offenders = Vec::new();
     for layer in ["core", "util"] {
         for path in sources(layer) {
             let shown = path.display().to_string();
-            if ALLOWED.iter().any(|allowed| shown.ends_with(allowed)) {
+            let file_name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if ALLOWED.contains(&file_name.as_str()) {
                 continue;
             }
             let text = fs::read_to_string(&path).unwrap();

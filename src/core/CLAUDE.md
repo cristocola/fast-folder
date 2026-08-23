@@ -103,8 +103,11 @@ Validation stays textual because every dangerous component is ASCII.
 verbatim form is what makes paths past MAX_PATH work. Strip at display, never at
 storage.
 
-Every recursive walk stops at `paths::MAX_WALK_DEPTH` (256) and reports through
-`paths::too_deep`; `tree_size` turns it into `None` like any other read failure.
+Every recursive walk stops at `paths::MAX_WALK_DEPTH` (**64**) and reports
+through `paths::too_deep`; `tree_size` turns it into `None` like any other read
+failure. 64 rather than 256 because a Windows *thread* gets a 1 MiB stack and the
+browser's size scan runs on worker threads — 256 frames of `read_dir` iterator
+overflowed one, which is the exact failure the limit exists to prevent.
 
 ## `PROJECT_INFO.md`
 

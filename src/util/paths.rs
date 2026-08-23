@@ -216,11 +216,16 @@ pub(crate) fn require_real_file(path: &Path, label: &str) -> Result<()> {
 ///
 /// Every recursive walk in the tool is plain recursion on the call stack, and
 /// two of them (`tree_size`, and the browser's own size scan) run over whatever
-/// folder a user points at. 256 is far past any real project layout and far
-/// short of what overflows a thread stack, so the limit is only ever met by a
-/// pathological or looping tree — which is exactly the case that must degrade
-/// rather than abort the process.
-pub const MAX_WALK_DEPTH: usize = 256;
+/// folder a user points at.
+///
+/// **64, not 256.** The first value was chosen against a Linux main thread's
+/// 8 MiB stack; a Windows *thread* gets 1 MiB by default, and the browser's
+/// size scan runs on worker threads. 256 frames of `read_dir` iterator plus
+/// locals overflowed one — which is the exact failure the limit exists to
+/// prevent, so a limit that only holds on the roomiest stack is not a limit.
+/// 64 is still far past any real project layout: discovery itself is depth-1,
+/// and a template's `files/` tree is a handful of levels.
+pub const MAX_WALK_DEPTH: usize = 64;
 
 /// The error every walker reports at [`MAX_WALK_DEPTH`], naming where it stopped.
 pub fn too_deep(path: &Path) -> anyhow::Error {

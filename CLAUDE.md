@@ -296,6 +296,13 @@ documented `$EDITOR` fallback never ran.
   module looks right and silently races.
 - Concurrency tests must spawn **processes**, not threads: a thread test passes
   against an in-process `Mutex` while production stays broken.
+- **A Windows thread's stack is 1 MiB, not the main thread's 8.** The browser's
+  size scan runs on worker threads, so any recursion bound must hold there —
+  `paths::MAX_WALK_DEPTH` is 64 for that reason, not 256.
+- **Never match a source path with a `/` suffix.** `Path::display()` uses the
+  platform separator, so `shown.ends_with("util/diag.rs")` silently matches
+  nothing on Windows. Compare `file_name()`, or use `Path::ends_with`, which is
+  component-wise.
 - Do not bulk-edit source with PowerShell `Get-Content -Raw` + `Set-Content`. 5.1
   reads as the ANSI codepage and writes UTF-8, double-encoding every non-ASCII
   character; this repo is full of `—`, `→`, `…`, `✓`. It silently corrupted nine

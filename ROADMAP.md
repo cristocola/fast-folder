@@ -55,9 +55,10 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Release: **v2.0.0, ready to publish** — two surfaces, one engine, nothing
+- Release: **v2.0.0, published 2026-08-23** — two surfaces, one engine, nothing
   trusted by accident. `PLAN.md` drove it, one phase per PR; that file is the
-  phase-by-phase record and this is the summary.
+  phase-by-phase record and this is the summary. Both AUR packages are at
+  2.0.0-1.
 - Status: **all nine phases landed.** What changed, as guarantees rather than
   phases:
   - The browser UI is gone, and with it fastf's only network surface. v1.7.1
@@ -90,7 +91,7 @@ responsibility of the filesystem and backups.
 | v1.6.1 | what fastf says happened is what happened, and every file it rewrites stays readable | [release](https://github.com/cristocola/fast-folder/releases/tag/v1.6.1) |
 | v1.7.0 | the guided menu: one way out, nothing lost, nothing rescanned (superseded — Windows CI failed) | [release](https://github.com/cristocola/fast-folder/releases/tag/v1.7.0) |
 | v1.7.1 | the same, with the recursion bound safe for a Windows thread stack | [release](https://github.com/cristocola/fast-folder/releases/tag/v1.7.1) |
-| v2.0.0 | two surfaces, one engine, nothing trusted by accident: the browser UI removed, and every boundary that took a path on trust made to check it | (pending) |
+| v2.0.0 | two surfaces, one engine, nothing trusted by accident: the browser UI removed, and every boundary that took a path on trust made to check it | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.0.0) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find

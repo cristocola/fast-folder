@@ -939,8 +939,11 @@ fn a_name_that_would_be_invisible_or_empty_is_refused_before_anything_is_written
 
         for (raw, expected) in [
             (".hidden", "may not start with '.'"),
-            ("..", "leaves no usable folder name"),
-            (".", "leaves no usable folder name"),
+            // `interpolate_name` sanitizes each variable *before* assembling
+            // the pattern, so `..` reaches `ProjectFolderName` already reduced
+            // to "" — the empty case, not the trimmed-away one.
+            ("..", "cannot be empty"),
+            (".", "cannot be empty"),
             // `"   "` is not here: the required-variable check refuses an
             // all-whitespace answer one layer earlier, which is the better
             // error. What matters is that nothing gets through, not which

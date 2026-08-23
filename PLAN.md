@@ -492,11 +492,29 @@ arms removed from `prompt.rs`.
 - Template builder: slug and name validated at the prompt; `edit_id` reports "expected a number between 1 and 9" and keeps the old value only when the user cancels.
 
 **Steps.**
-- [ ] `tests/tui_pty.rs` first: register with a bad path, see the inline error and the bad text still in the field, fix it, complete; the earlier answers are used (assert on the written `PROJECT_INFO.md`). Same shape for from-folder (bad slug), apply (bad target after variables), settings base dir, ID counter, and search (retry with the query prefilled).
-- [ ] Implement per flow; keep the prompts' wording stable where tests anchor on it.
-- [ ] Docs: `docs/cli.md` interactive section, one paragraph.
+- [x] `tests/tui_pty.rs` first: register with a bad path, see the inline error and the bad text still in the field, fix it, complete; the earlier answers are used (assert on the written `PROJECT_INFO.md`). Same shape for from-folder (bad slug), apply (bad target after variables), settings base dir, ID counter, and search (retry with the query prefilled).
+- [x] Implement per flow; keep the prompts' wording stable where tests anchor on it.
+- [x] Docs: `docs/cli.md` interactive section, one paragraph.
 
 **Acceptance.** All new pty cases pass; no existing case regresses; no flow in `src/tui/` asks a dependent question before validating what it depends on.
+
+**Notes.** Two of the existing pty cases had to be rewritten rather than kept,
+because they asserted the *old* consolation prize. `a_bad_register_path_returns_to_the_menu`
+and `an_invalid_setting_returns_to_the_menu` proved that a rejected value did not
+end the session; the guarantee they now carry is stronger and includes the old
+one — the value is refused where it was typed and corrected in place
+(`a_bad_register_path_is_corrected_in_place`, `an_invalid_setting_is_corrected_in_place`).
+
+The ID-counter case was already covered by Phase 7's validator on that field, so
+it did not get a second pty case of its own.
+
+Two of the four new cases passed against the unmodified build on the first
+writing, for different reasons, and both were tightened until they failed: the
+base-directory case because the *message* appeared either way (it now proves the
+text survived, by pressing Home and prefixing the path), and the search case
+because "Alpha" is a substring of the "Alphaa" that was typed, so the assertion
+matched the echo of the failed query rather than any result (it now anchors on
+the browser's own `Projects — Page 1/1`).
 
 ## Phase 9: The browser stops rescanning
 

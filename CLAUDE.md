@@ -824,6 +824,14 @@ as), `default_value` keeps `dialoguer::Input::default`'s `prompt [default]:`
 contract where an empty answer means the default. Converting a `default` site to
 an `initial` one changes what typing `0` into a field showing `20` produces.
 
+**A value with a local validity rule is checked at the prompt that collected
+it** (`TextOpts::validate`), and dependent questions come after the value they
+depend on. Register asked path, template, rename and apply and then had
+`register::run` reject the path; `menu_apply` asked template, target, dry-run
+and every variable before `apply` rejected the target. What survives at the core
+boundary is the *non-local* class — a race, a permission — which `contain`
+reports and which costs nothing already typed.
+
 **Menus match on labels, not indices.** Every submenu used to `match` a raw
 index with a trailing `unreachable!()`, so inserting a row silently reassigned
 the ones below it — the action menu's `move_idx` was a hard-coded `6` that only

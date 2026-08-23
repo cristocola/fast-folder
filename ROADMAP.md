@@ -245,6 +245,12 @@ release is about it: one way out of every prompt, typed input that survives a
 validation failure, a browser that stops rescanning the library, and parity with
 what the command line can already do.
 
+- [x] Phase 8: keep what you typed — a value with a local validity rule is
+  checked at the prompt that asked for it and stays on the line to be corrected,
+  and dependent questions come after the value they depend on. Register checks
+  the path before the three questions that follow it, apply checks the target
+  before the dry-run question and every variable, and a search that matches
+  nothing comes back with the query still in the field.
 - [x] Phase 7: one cancel contract — Esc (and `q` on a list) backs out of every
   menu, list, confirmation and text field, one level per press, and a cancelled
   create leaves no folder and consumes no ID. Every prompt goes through

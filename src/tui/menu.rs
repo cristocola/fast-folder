@@ -37,6 +37,26 @@ fn is_fatal(err: &anyhow::Error) -> bool {
     crate::util::interrupt::is_set() || err.downcast_ref::<dialoguer::Error>().is_some()
 }
 
+/// A folder that must already exist, checked at the prompt that asks for it.
+///
+/// The whole point of Phase 8: a path typed wrong used to be rejected by the
+/// core operation *after* three more questions had been answered, and all four
+/// answers went with it. Rejecting it here keeps the text on the line to be
+/// corrected.
+fn existing_directory(raw: &str) -> std::result::Result<(), String> {
+    let path = std::path::Path::new(raw.trim());
+    if raw.trim().is_empty() {
+        return Err("enter a folder path".to_string());
+    }
+    if !path.exists() {
+        return Err(format!("no such folder: {}", path.display()));
+    }
+    if !path.is_dir() {
+        return Err(format!("not a folder: {}", path.display()));
+    }
+    Ok(())
+}
+
 /// Draw one menu and return the **label** that was chosen.
 ///
 /// `Ok(None)` is Esc, and every menu treats that as its own Back item — the
@@ -271,35 +291,62 @@ fn menu_projects() -> Result<()> {
     Ok(())
 }
 
+/// Search, with the query kept across a miss.
+///
+/// A query that matched nothing used to drop straight back to the main menu,
+/// so the only way to fix a typo in `tag:draft` was to type the whole thing
+/// again. It now comes back in the field, editable.
 fn menu_search() -> Result<()> {
-    let Some(query) = prompt::text(
-        "Search query (e.g. tag:draft  template=music-video  artist=Aria*)",
-        TextOpts::new().allow_empty(),
-    )?
-    else {
-        return Ok(());
-    };
-    let query = query.trim().to_string();
-    if query.is_empty() {
-        println!("{}", "  (cancelled)".dimmed());
+    let mut previous = String::new();
+    loop {
+        let mut opts = TextOpts::new().allow_empty();
+        if !previous.is_empty() {
+            opts = opts.initial(previous.clone());
+        }
+        let Some(query) = prompt::text(
+            "Search query (e.g. tag:draft  template=music-video  artist=Aria*)",
+            opts,
+        )?
+        else {
+            return Ok(());
+        };
+        let query = query.trim().to_string();
+        if query.is_empty() {
+            println!("{}", "  (cancelled)".dimmed());
+            return Ok(());
+        }
+
+        let terms: Vec<String> = query.split_whitespace().map(|s| s.to_string()).collect();
+        let predicates = query::parse(&terms);
+        let cfg = Config::load()?;
+        let matches = crate::cli::search::matching_projects(&cfg, &predicates);
+        if matches.is_empty() {
+            println!("{}", "No projects match that query.".dimmed());
+            previous = query;
+            continue;
+        }
+
+        let page_size = cfg.recent_default_limit.max(1);
+        browser::run_paged_browser(page_size, "No projects match that query.", || {
+            let cfg = Config::load()?;
+            Ok(crate::cli::search::matching_projects(&cfg, &predicates))
+        })?;
+        println!();
         return Ok(());
     }
-    let terms: Vec<String> = query.split_whitespace().map(|s| s.to_string()).collect();
-    let predicates = query::parse(&terms);
-    let page_size = Config::load()?.recent_default_limit.max(1);
-    browser::run_paged_browser(page_size, "No projects match that query.", || {
-        let cfg = Config::load()?;
-        Ok(crate::cli::search::matching_projects(&cfg, &predicates))
-    })?;
-    println!();
-    Ok(())
 }
 
 fn menu_apply() -> Result<()> {
     let Some(slug) = prompt_template_slug("Template to apply")? else {
         return Ok(());
     };
-    let Some(target) = prompt::text("Target folder", TextOpts::new())? else {
+    // Before the dry-run question and before every variable: `apply` used to
+    // reject the target only after all of them had been answered.
+    let Some(target) = prompt::text(
+        "Target folder",
+        TextOpts::new().validate(existing_directory),
+    )?
+    else {
         return Ok(());
     };
     let Some(dry_run) = prompt::confirm("Dry run first (preview only)?", true)? else {
@@ -342,15 +389,15 @@ fn menu_apply() -> Result<()> {
 
 fn menu_register() -> Result<()> {
     // 1. Folder path.
-    let Some(path) = prompt::text("Existing folder to register", TextOpts::new().allow_empty())?
+    // Validated here, before the three questions that follow it.
+    let Some(path) = prompt::text(
+        "Existing folder to register",
+        TextOpts::new().validate(existing_directory),
+    )?
     else {
         return Ok(());
     };
     let path = path.trim();
-    if path.is_empty() {
-        println!("{}", "  (cancelled)".dimmed());
-        return Ok(());
-    }
 
     // 2. Optional template — first ask, then pick if Yes. Skipping is fully
     //    supported: register writes a minimal record with template "(registered)".
@@ -469,10 +516,22 @@ fn on_template(prompt: &str, action: impl FnOnce(&str) -> Result<()>) -> Result<
 }
 
 fn template_from_folder_flow() -> Result<()> {
-    let Some(path) = prompt::text("Source folder to scan", TextOpts::new())? else {
+    let Some(path) = prompt::text(
+        "Source folder to scan",
+        TextOpts::new().validate(existing_directory),
+    )?
+    else {
         return Ok(());
     };
-    let Some(slug) = prompt::text("Slug for the new template", TextOpts::new())? else {
+    let Some(slug) = prompt::text(
+        "Slug for the new template",
+        TextOpts::new().validate(|raw| {
+            crate::core::validated::TemplateSlug::parse(raw.trim())
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"))
+        }),
+    )?
+    else {
         return Ok(());
     };
     let Some(force) = prompt::confirm("Overwrite if a template with this slug exists?", false)?
@@ -624,7 +683,14 @@ fn menu_settings_basics() -> Result<()> {
                 set_from_prompt(
                     "base-dir",
                     "Base directory (empty = your home directory)",
-                    TextOpts::new().allow_empty(),
+                    TextOpts::new().allow_empty().validate(|raw| {
+                        if raw.trim().is_empty() {
+                            return Ok(());
+                        }
+                        crate::core::config::expand_base_path(raw)
+                            .map(|_| ())
+                            .map_err(|e| format!("{e:#}"))
+                    }),
                 )
             }
             "Set default template" => set_from_prompt(
@@ -685,7 +751,14 @@ fn menu_settings_workflow() -> Result<()> {
             3 => set_from_prompt(
                 "preview-lines",
                 "Lines per file in dry-run (0 = none)",
-                TextOpts::new().default_value(cfg.preview_lines.to_string()),
+                TextOpts::new()
+                    .default_value(cfg.preview_lines.to_string())
+                    .validate(|raw| {
+                        raw.trim()
+                            .parse::<usize>()
+                            .map(|_| ())
+                            .map_err(|_| format!("expected a number, got '{}'", raw.trim()))
+                    }),
             ),
             // Not a bool on disk — it stores "suffix" or "error".
             4 => config::set(
@@ -748,7 +821,14 @@ fn menu_settings_bases() -> Result<()> {
         let outcome = if choice == 0 {
             match prompt::text(
                 "Base directory to add (absolute path)",
-                TextOpts::new().allow_empty(),
+                TextOpts::new().allow_empty().validate(|raw| {
+                    if raw.trim().is_empty() {
+                        return Ok(());
+                    }
+                    config::normalize_base_entry(raw)
+                        .map(|_| ())
+                        .map_err(|e| format!("{e:#}"))
+                }),
             )? {
                 Some(val) => add_base(val.trim()),
                 None => Ok(()),
@@ -828,7 +908,13 @@ fn menu_settings_recent() -> Result<()> {
             0 => set_from_prompt(
                 "recent-default-limit",
                 "TUI page size and default --limit for `fastf recent`",
-                TextOpts::new().default_value(cfg.recent_default_limit.to_string()),
+                TextOpts::new()
+                    .default_value(cfg.recent_default_limit.to_string())
+                    .validate(|raw| match raw.trim().parse::<usize>() {
+                        Ok(n) if n >= 1 => Ok(()),
+                        Ok(_) => Err("must be at least 1".to_string()),
+                        Err(_) => Err(format!("expected a number, got '{}'", raw.trim())),
+                    }),
             ),
             _ => break,
         };

@@ -274,6 +274,20 @@ pub mod pty {
             self.push(text.as_bytes(), 600)
         }
 
+        /// Backspace, `n` times. For correcting text a validator has just
+        /// rejected — which is the whole point of leaving it on the line.
+        pub fn backspace(mut self, n: usize) -> Self {
+            for _ in 0..n {
+                self = self.push(b"\x7f", 200);
+            }
+            self
+        }
+
+        /// Home, for editing the front of a line a validator refused.
+        pub fn home(self) -> Self {
+            self.push(b"\x1b[H", 300)
+        }
+
         /// Esc — the one cancel key.
         ///
         /// Sent alone, with a full gap after it: a lone `\x1b` immediately

@@ -91,6 +91,17 @@ Text fields are editable, not just typeable: Left/Right, Home/End, Backspace and
 Delete all work, and a value a prompt rejects stays on the line to be corrected
 rather than being cleared for you to type again.
 
+### Nothing you answered is lost
+
+A value is checked at the prompt that asked for it, and questions are asked in
+dependency order. Registering a folder checks the path before it asks about
+templates or renaming; applying a template checks the target folder before the
+dry-run question and before a single variable; generating a template from a
+folder checks the source and the slug as each is typed. A search that matches
+nothing comes back with your query still in the field, one keystroke from being
+fixed. Settings fields, the ID counter and the template builder all behave the
+same way: the reason appears under the line, the text stays on it.
+
 ## Browsing projects
 
 From the guided `fastf` menu, choose **Projects** to browse the complete library

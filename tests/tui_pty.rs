@@ -29,7 +29,9 @@ const DEADLINE: Duration = Duration::from_secs(25);
 
 /// Main-menu indices: Create, Projects, Search, Register, Templates, Settings, Quit.
 const MENU_PROJECTS: usize = 1;
+const MENU_SEARCH: usize = 2;
 const MENU_REGISTER: usize = 3;
+const MENU_TEMPLATES: usize = 4;
 const MENU_SETTINGS: usize = 5;
 const MENU_QUIT: usize = 6;
 
@@ -57,68 +59,85 @@ fn the_menu_opens_and_quits_cleanly() {
     assert!(out.contains("Goodbye."), "expected a clean exit:\n{out}");
 }
 
-/// The headline regression. Register asks for a path *last*, so a typo used to
-/// cost three answered prompts and the whole session.
+/// The headline regression, now closed from the other side. Register used to ask
+/// for the path *first* and reject it *last*, so a typo cost three more answered
+/// prompts and the whole session. The path is now checked at the prompt that
+/// collected it, and the text it rejected stays on the line to be corrected.
 #[test]
-fn a_bad_register_path_returns_to_the_menu() {
+fn a_bad_register_path_is_corrected_in_place() {
     let sb = Sandbox::new();
+    let good = sb.base.join("Legacy");
+    fs::create_dir_all(&good).unwrap();
+    // Two characters longer than a real folder, so Backspace fixes it.
+    let typo = format!("{}XX", good.display());
+
     let script = pty::Script::new()
         .down(MENU_REGISTER)
         .enter()
-        .line("/nope/does/not/exist") // folder to register (Input → Enter)
-        .key("n") // attach a template?      (Confirm → keypress only)
-        .key("n") // standardize the name?   (Confirm → keypress only)
-        .pause(900)
-        // Back at the main menu — prove it by quitting from there.
-        .down(MENU_QUIT)
+        .key(&typo) // typed, not submitted
+        .enter() // refused inline
+        .pause(500)
+        .backspace(2) // correct it without retyping the path
         .enter()
+        .pause(500)
+        .key("n") // attach a template?    (Confirm → keypress only)
+        .key("n") // standardize the name? (Confirm → keypress only)
+        .pause(900)
+        .esc() // back at the main menu → quit
         .build();
     let (out, code) = launch(&sb, script);
 
-    assert!(
-        out.contains("does not exist or is not accessible"),
-        "the failure should be reported:\n{out}"
-    );
     assert_eq!(
         code, 0,
         "a mistyped path must not end the session (it exited {code}):\n{out}"
     );
     assert!(
-        out.contains("Goodbye."),
-        "expected to reach the menu and quit from it:\n{out}"
+        out.contains("no such folder"),
+        "the path should be refused where it was typed:\n{out}"
+    );
+    assert!(
+        good.join("PROJECT_INFO.md").exists(),
+        "the corrected path should have been registered:\n{out}"
     );
 }
 
-/// Same shape, three submenus deep: an out-of-range setting is a correction to
-/// make, not a reason to close the tool.
+/// Same shape, three submenus deep: an out-of-range setting is refused at the
+/// field, the value stays there, and the correction is two keys rather than a
+/// retype.
 #[test]
-fn an_invalid_setting_returns_to_the_menu() {
+fn an_invalid_setting_is_corrected_in_place() {
     let sb = Sandbox::new();
     let script = pty::Script::new()
         .down(MENU_SETTINGS)
         .enter()
-        .down(3) // Settings → Recent projects
+        .down(3) // Settings → Project list (page size)
         .enter()
-        .enter() // → Default list limit
-        .line("0") // refused: must be at least 1
+        .enter() // → the page-size field
+        .key("0") // refused: must be at least 1
+        .enter()
+        .pause(500)
+        .backspace(1)
+        .key("5")
+        .enter()
         .pause(700)
-        .down(1) // Recent projects → Back
-        .enter()
-        .down(6) // Settings → Back
-        .enter()
-        .pause(400)
-        .down(MENU_QUIT)
-        .enter()
+        .esc() // → Settings
+        .esc() // → main menu
+        .esc() // quit
         .build();
     let (out, code) = launch(&sb, script);
 
     assert!(
         out.contains("must be at least 1"),
-        "the validation failure should be reported:\n{out}"
+        "the validation failure should be reported at the prompt:\n{out}"
     );
     assert_eq!(
         code, 0,
         "an invalid setting must not end the session (it exited {code}):\n{out}"
+    );
+    let shown = sb.ok(&["config", "show"]);
+    assert!(
+        shown.contains('5'),
+        "the corrected value should have been saved:\n{shown}"
     );
 }
 
@@ -706,5 +725,161 @@ fn esc_walks_back_out_of_the_project_browser() {
     assert!(
         out.contains("Goodbye."),
         "two presses should reach the main menu:\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Keep what you typed (v1.7.0)
+//
+// Every one of these flows used to ask its dependent questions first and reject
+// the value they depended on afterwards, so a single typo cost every answer
+// given since. The rule now: a value with a local validity rule is checked at
+// the prompt that collected it.
+// ---------------------------------------------------------------------------
+
+/// `template from-folder` asked path, slug and force, then rejected the slug.
+#[test]
+fn a_bad_template_slug_is_refused_at_its_own_prompt() {
+    let sb = Sandbox::new();
+    let source = sb.base.join("Source");
+    fs::create_dir_all(source.join("01_Assets")).unwrap();
+
+    let script = pty::Script::new()
+        .down(MENU_TEMPLATES)
+        .enter()
+        .down(1) // → Generate template from existing folder
+        .enter()
+        .line(&source.display().to_string())
+        .pause(400)
+        .key("not a slug") // spaces are not allowed in a slug
+        .enter()
+        .pause(500)
+        // Correct it in place: drop " a slug", leaving "not".
+        .backspace(7)
+        .key("-a-slug")
+        .enter()
+        .pause(500)
+        .key("n") // overwrite if it exists?
+        .pause(900)
+        .esc() // Templates → main menu
+        .esc()
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "a bad slug must not end the session:\n{out}");
+    assert!(
+        sb.install
+            .join("templates/not-a-slug/template.yaml")
+            .exists(),
+        "the corrected slug should have produced the template:\n{out}"
+    );
+}
+
+/// Apply asked template, target, dry-run and every variable, then rejected the
+/// target. The target now comes second, and is checked there.
+#[test]
+fn apply_refuses_a_missing_target_before_asking_anything_else() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let script = pty::Script::new()
+        .down(MENU_TEMPLATES)
+        .enter()
+        .down(3) // → Apply template to existing folder
+        .enter()
+        .enter() // pick the only template
+        .pause(400)
+        .line("/nope/does/not/exist")
+        .pause(600)
+        .esc() // give up on the target
+        .pause(400)
+        .esc() // Templates → main menu
+        .esc()
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "a missing target must not end the session:\n{out}");
+    assert!(
+        out.contains("no such folder"),
+        "the target should be refused at its own prompt:\n{out}"
+    );
+    assert!(
+        !out.contains("Dry run first"),
+        "nothing that depends on the target may be asked before it is valid:\n{out}"
+    );
+}
+
+/// A base directory that is not absolute is refused where it is typed, and the
+/// text stays there — so making it absolute is a Home and a prefix, not a
+/// retype. Pre-Phase-8 the message appeared too, but only after the field had
+/// closed and thrown the value away.
+#[test]
+fn a_relative_base_directory_is_corrected_in_place() {
+    let sb = Sandbox::new();
+    let prefix = sb.tmp.path().display().to_string();
+
+    let script = pty::Script::new()
+        .down(MENU_SETTINGS)
+        .enter()
+        .enter() // Project basics
+        .enter() // → Set base directory
+        .key("relative/path")
+        .enter() // refused inline
+        .pause(600)
+        .home()
+        .key(&format!("{prefix}/"))
+        .enter()
+        .pause(800)
+        .esc() // → Settings
+        .esc() // → main menu
+        .esc()
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "a rejected value must not end the session:\n{out}");
+    assert!(
+        out.contains("absolute path"),
+        "the reason should appear at the prompt:\n{out}"
+    );
+    let shown = sb.ok(&["config", "show"]);
+    assert!(
+        shown.contains(&format!("{prefix}/relative/path")),
+        "the text the prompt rejected should still have been there to fix:\n{shown}"
+    );
+}
+
+/// A search that matches nothing comes back with the query still in the field.
+#[test]
+fn a_search_that_matches_nothing_keeps_the_query() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+
+    let script = pty::Script::new()
+        .down(MENU_SEARCH)
+        .enter()
+        .key("Alphaa") // one letter too many
+        .enter()
+        .pause(700)
+        // The query is back in the field: one Backspace makes it match.
+        .backspace(1)
+        .enter()
+        .pause(900)
+        .esc() // leave the browser
+        .pause(400)
+        .esc() // quit
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "a search miss must not end the session:\n{out}");
+    assert!(
+        out.contains("No projects match that query."),
+        "the miss should be reported:\n{out}"
+    );
+    // Anchored on the browser's own prompt, not on the project name: "Alpha" is
+    // a substring of the "Alphaa" that was typed, so matching it would pass
+    // against a build that never re-ran the search at all.
+    assert!(
+        out.contains("Projects — Page 1/1"),
+        "the corrected query should have opened the browser:\n{out}"
     );
 }

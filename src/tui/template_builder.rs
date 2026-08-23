@@ -216,12 +216,13 @@ fn edit_metadata(tmpl: &mut Template) -> Result<bool> {
         "Slug (used as filename and CLI argument)",
         TextOpts::new()
             .default_value(suggested_slug)
+            // The same rule `fastf template <slug>` enforces, checked here
+            // rather than by a `bail!` that discarded the whole in-progress
+            // template.
             .validate(|value| {
-                if value.trim().is_empty() {
-                    Err("slug cannot be empty".to_string())
-                } else {
-                    Ok(())
-                }
+                crate::core::validated::TemplateSlug::parse(value.trim())
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:#}"))
             })
     ));
 
@@ -266,11 +267,13 @@ fn edit_id(tmpl: &mut Template) -> Result<bool> {
         "ID digits (zero-padded width)",
         TextOpts::new()
             .default_value(tmpl.id.digits.to_string())
-            .validate(|value| value
-                .trim()
-                .parse::<usize>()
-                .map(|_| ())
-                .map_err(|_| format!("expected a number, got '{}'", value.trim())))
+            // An ID wider than nine digits is not a padding choice, it is a
+            // typo; the old `unwrap_or` swallowed both silently.
+            .validate(|value| match value.trim().parse::<usize>() {
+                Ok(n) if (1..=9).contains(&n) => Ok(()),
+                Ok(_) => Err("expected a number between 1 and 9".to_string()),
+                Err(_) => Err(format!("expected a number, got '{}'", value.trim())),
+            })
     ));
 
     tmpl.id.prefix = prefix;

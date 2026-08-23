@@ -232,8 +232,10 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "registered".to_string());
-        let id_value = parse_id_token(&folder_name, &template.id.prefix)
-            .unwrap_or_else(|| Counters::next_value(&config, &counters));
+        let id_value = match parse_id_token(&folder_name, &template.id.prefix) {
+            Some(recovered) => recovered,
+            None => Counters::next_value(&config, &counters)?,
+        };
         let id = Counters::format_id(&template.id.prefix, template.id.digits, id_value);
 
         for configured in config.effective_bases() {
@@ -374,10 +376,10 @@ fn desired_registration_name(
             "register_naming_pattern",
         )
     };
-    let desired = sanitize_name(&interpolate_name(pattern, variables, &config.date_format));
-    if desired.is_empty() {
-        bail!("{source} resolved to an empty name — cannot rename");
-    }
+    let rendered = interpolate_name(pattern, variables, &config.date_format);
+    let desired = crate::core::validated::ProjectFolderName::parse(&rendered)
+        .with_context(|| format!("{source} resolved to '{rendered}'"))?
+        .into_string();
     Ok(Some(desired))
 }
 
@@ -575,6 +577,12 @@ pub fn set_counter(value: u64) -> Result<CounterOutcome> {
     let floor = Counters::floor(&config);
     if value <= floor {
         bail!("the counter cannot go below {floor}; pass a value above {floor} to raise it");
+    }
+    if value > Counters::MAX_VALUE {
+        bail!(
+            "the counter cannot go above {}; the next create would have no ID to mint",
+            Counters::MAX_VALUE
+        );
     }
     Counters::record(&config, &config.resolve_base_dir(), value);
     Ok(CounterOutcome {

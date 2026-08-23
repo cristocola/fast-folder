@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use crate::core::assets;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::naming::{RenderContext, interpolate_name, sanitize_name};
+use crate::core::naming::{RenderContext, interpolate_name};
 pub use crate::core::plan::ProjectPlan;
 use crate::core::template::{FolderNode, Template};
-use crate::core::validated::SafeRelativePath;
+use crate::core::validated::{ProjectFolderName, SafeRelativePath};
 
 /// How many `_2`, `_3`… variants to try before giving up on a colliding name.
 ///
@@ -223,7 +223,7 @@ pub fn plan(
     // Read-only by contract: `next_value` consults `library::max_id`, which
     // never writes, so previewing a plan still touches no disk. Convergence
     // (which does write) happens on the create path — see `Counters::record`.
-    let counter_value = Counters::next_value(config, counters);
+    let counter_value = Counters::next_value(config, counters)?;
     let id_str = Counters::format_id(&template.id.prefix, template.id.digits, counter_value);
     vars.insert("id".to_string(), id_str.clone());
 
@@ -234,15 +234,22 @@ pub fn plan(
 
     // Interpolate folder name. Use `interpolate_name` so empty variables don't
     // leave `__` gaps or leading/trailing underscores in the folder name.
-    // Sanitize the assembled result as well as the individual variables: the
-    // pattern itself can contribute a trailing dot or a literal reserved device
-    // name that no single variable is responsible for. `sanitize_name` is
-    // idempotent, so the double pass is free.
-    let base_name = sanitize_name(&crate::core::naming::interpolate_name_with(
-        &template.naming_pattern,
-        &vars,
-        &ctx,
-    ));
+    // `ProjectFolderName` sanitizes the assembled result as well as the
+    // individual variables — the pattern itself can contribute a trailing dot or
+    // a literal reserved device name that no single variable is responsible for
+    // — and then refuses what sanitizing alone would let through. The error
+    // names both the rendered value and the pattern that produced it, because
+    // the user typed a variable, not a folder name.
+    let rendered_name =
+        crate::core::naming::interpolate_name_with(&template.naming_pattern, &vars, &ctx);
+    let base_name = ProjectFolderName::parse(&rendered_name)
+        .with_context(|| {
+            format!(
+                "template '{}' rendered its naming pattern '{}' as '{rendered_name}'",
+                template.slug, template.naming_pattern
+            )
+        })?
+        .into_string();
 
     let base = config.resolve_base_dir();
 
@@ -302,22 +309,27 @@ fn create_inner(
     config: &Config,
     run_post: bool,
 ) -> Result<ProjectPlan> {
+    // Defense in depth, before a single directory is created: the folder must
+    // land directly in the base the plan was made against.
     //
-    // This used to be `exists()` followed by `create_dir_all()`. Because
-    // `create_dir_all` succeeds on a directory that is already there, two
-    // concurrent creates could both pass the check and then both write into the
-    // same folder — the second silently overwriting the first's files and
-    // PROJECT_INFO.md. `create_dir` fails with `AlreadyExists` instead, so the
-    // filesystem itself arbitrates and exactly one caller can ever win.
-    let parent = plan
-        .root_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    if !parent.as_os_str().is_empty() {
-        fs::create_dir_all(&parent).with_context(|| format!("creating {}", parent.display()))?;
+    // `plan` builds `root_path` as `base.join(folder_name)`, so this holds by
+    // construction — until `folder_name` is something `join` treats specially.
+    // `base.join("")` is `base` itself, and its parent is the base's *parent*:
+    // that is how `--name=..` came to create a folder called `_2` one level
+    // above the library. `ProjectFolderName` now refuses those names at the
+    // plan, and this refuses a plan that carries one anyway.
+    let base = config.resolve_base_dir();
+    let parent = plan.root_path.parent().unwrap_or(Path::new(""));
+    if parent != base.as_path() {
+        anyhow::bail!(
+            "refusing to create '{}': it would land in {} rather than in the base {}",
+            plan.folder_name,
+            crate::util::paths::display_path(parent),
+            crate::util::paths::display_path(&base)
+        );
     }
+    let parent = parent.to_path_buf();
+    fs::create_dir_all(&parent).with_context(|| format!("creating {}", parent.display()))?;
 
     // Claim the project folder with a single atomic operation.
     //

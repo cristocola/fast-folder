@@ -162,12 +162,33 @@ necessarily own; `register` explicitly claims one.
 ## Create, apply, register
 
 `project::plan()` resolves variables, mints the ID (`counter_value =
-next_value(...)`, so preview and commit agree), interpolates the folder name with
-`interpolate_name_with`, and validates every rendered path. It writes nothing.
+next_value(...)?`, so preview and commit agree), interpolates the folder name
+with `interpolate_name_with`, and validates every rendered path. It writes
+nothing.
+
+**`validated::ProjectFolderName` is the one validator for what a project folder
+may be called.** `plan`, `library::rename_project_inner` and `operations`'
+register-rename all go through it, so a name refused in one is refused in all
+three — the rule used to live only in the rename path. `naming::sanitize_name`
+still does the character work underneath it and still *refuses nothing*: it maps
+illegal characters and trims what Windows would trim, and returns `""` for `".."`
+and leaves a leading `.` alone. `ProjectFolderName` supplies the opinion —
+non-empty, not dot-prefixed (discovery skips those), one path component — and its
+error names the rendered value and the pattern that produced it, because the user
+typed a variable, not a folder name.
+
+`Template::validate` refuses a `naming_pattern` starting with `.` at save time,
+so the invisible-project case is caught before any project exists. It also
+requires a non-empty `id.prefix` (register's `parse_id_token` would otherwise
+match any trailing digits — `Album_2024` becomes ID 2024) and `1 <= id.digits <=
+MAX_ID_DIGITS`.
 
 `create_inner` claims the folder with `fs::create_dir` — **not**
 `create_dir_all`, which succeeds on an existing directory and let two racers
-merge into one folder. Everything after the claim lives in `provision_project` so
+merge into one folder. Before that it re-checks that `root_path.parent()` **is**
+the configured base: defense in depth, because `base.join("")` is `base` itself
+and its parent is one level up, which is how an empty rendered name once planted
+a folder beside the library instead of inside it. Everything after the claim lives in `provision_project` so
 a failure rolls the folder back; **nothing may sit between the claim and that
 call**, or an early return skips the rollback and leaks the folder. A failpoint
 placed one line too early found exactly that.

@@ -232,8 +232,20 @@ without that re-stamp, every create would invalidate every other base's cache.
 **`Counters::next_value(cfg, counters)` is the one expression for "which ID comes
 next."** Three callers drifted before, and the preview confirmed `ID0001` while
 the commit wrote `ID0011`. There is no way to lower it: `id set` refuses anything
-at or below the floor and names what holds it, `id reset` is gone, and
-`POST /api/counter` applies the same rule.
+at or below the floor and names what holds it, and `id reset` is gone.
+
+**The counter is bounded at both ends.** `Counters::MAX_VALUE` is
+`999_999_999_999` — twelve digits, so every reachable value renders inside the
+widest `id.digits` a template may declare, and below 2^53 so a JSON consumer
+reads it exactly. `next_value` returns `Result<u64>` and `checked_add`s against
+it; `operations::set_counter` refuses anything above it. Without the ceiling,
+`id set` accepted `u64::MAX` (above the floor was the only rule) and the next
+create's `+ 1` overflowed: a panic in debug, a wrap to zero in release.
+
+`Counters::propagate` **must not** `unwrap_or_default()` the data-dir counter.
+A read error reads as zero, zero is below everything, so the write proceeds and
+overwrites what could not be read — the exact file whose job is to stop an
+unplugged base from restarting numbering. It warns and skips instead.
 
 `naming::id_value` rejects any id containing a hyphen. An interim build wrote
 UUIDs, and reading the trailing digits of one would put the floor at 20044.

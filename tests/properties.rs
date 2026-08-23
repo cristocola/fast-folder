@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use fastf::core::validated::ProjectFolderName;
 use fastf::core::{naming, project_info, query};
 use proptest::prelude::*;
 
@@ -59,9 +60,9 @@ fn hostile_text() -> impl Strategy<Value = String> {
 
 proptest! {
     /// The core guarantee: whatever goes in, what comes out can be created as a
-    /// directory on this operating system — or is empty, which callers reject
-    /// explicitly. Before the Windows hardening this failed for `CON`, for
-    /// trailing dots, and for control characters.
+    /// directory on this operating system — or is empty, which
+    /// `ProjectFolderName` refuses. Before the Windows hardening this failed for
+    /// `CON`, for trailing dots, and for control characters.
     #[test]
     fn sanitize_name_always_yields_a_creatable_directory(raw in hostile_text()) {
         let safe = naming::sanitize_name(&raw);
@@ -88,6 +89,40 @@ proptest! {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .next();
         prop_assert_eq!(listed.as_deref(), Some(safe.as_str()));
+    }
+
+    /// `ProjectFolderName` accepts **exactly** the `sanitize_name` outputs that
+    /// are non-empty and not dot-prefixed, and its accepted value is that output
+    /// unchanged.
+    ///
+    /// This is the property the suite used to skip. `prop_assume!(!safe
+    /// .is_empty())` came with the comment "callers reject that explicitly",
+    /// which was true of `rename_project_inner` and false of `plan` — so the
+    /// generated empty names, the ones that mattered, were the ones never
+    /// tested.
+    #[test]
+    fn a_project_folder_name_is_exactly_a_visible_sanitized_name(raw in hostile_text()) {
+        let safe = naming::sanitize_name(raw.trim());
+        let parsed = ProjectFolderName::parse(&raw);
+
+        let acceptable = !safe.is_empty() && !safe.starts_with('.');
+        prop_assert_eq!(
+            parsed.is_ok(),
+            acceptable,
+            "{:?} sanitizes to {:?}; parse said {:?}",
+            raw,
+            safe,
+            parsed.as_ref().map(|name| name.as_str().to_string())
+        );
+
+        if let Ok(name) = parsed {
+            prop_assert_eq!(name.as_str(), safe.as_str());
+            // The accepted value is always creatable, which is what the
+            // property above proves for the sanitizer alone.
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir(tmp.path().join(name.as_str()))
+                .map_err(|e| TestCaseError::fail(format!("{safe:?} not creatable: {e}")))?;
+        }
     }
 
     /// Applying it twice must equal applying it once: `plan()` sanitizes each

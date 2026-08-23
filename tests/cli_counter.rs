@@ -214,3 +214,42 @@ fn listing_templates_reads_no_template_file_contents() {
         trace.summary()
     );
 }
+
+/// `fastf id set` accepted any value above the floor, `u64::MAX` included — and
+/// then the next create computed `value + 1` and overflowed: a panic in a debug
+/// build, a silent wrap to zero in a release one. Both ends are now bounded.
+#[test]
+fn the_counter_has_a_maximum_and_stops_cleanly_at_it() {
+    const MAX: u64 = 999_999_999_999;
+
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let err = sb.fails(&["id", "set", &(MAX + 1).to_string()]);
+    assert!(
+        err.contains(&MAX.to_string()),
+        "the refusal must name the maximum: {err}"
+    );
+    let err = sb.fails(&["id", "set", &u64::MAX.to_string()]);
+    assert!(
+        err.contains(&MAX.to_string()),
+        "the refusal must name the maximum: {err}"
+    );
+
+    // The maximum itself is a legal setting.
+    sb.ok(&["id", "set", &MAX.to_string()]);
+
+    // And the create that would have to mint MAX + 1 fails, saying so, without
+    // leaving a folder behind.
+    let before = fs::read_dir(&sb.base).unwrap().count();
+    let err = sb.fails(&["new", "race", "--name=Overflow", "--yes", "--no-preview"]);
+    assert!(
+        err.contains("maximum") && err.contains(&MAX.to_string()),
+        "the create must name the maximum it hit: {err}"
+    );
+    assert_eq!(
+        fs::read_dir(&sb.base).unwrap().count(),
+        before,
+        "no folder may be created once the counter is exhausted"
+    );
+}

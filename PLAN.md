@@ -272,13 +272,14 @@ could not be read.
    maximum fails with the maximum named and no folder created.
 
 **Acceptance.**
-- [ ] All gates pass.
-- [ ] `grep -rn '+ 1' src/core/counter.rs` shows no counter arithmetic outside
-      `next_value`; `grep -rn "delete the lock" src/` is empty.
-- [ ] The three name tests, the `.{id}` test, the counter-maximum tests and the
-      unreadable-manifest test were written against the current build first and
-      observed failing (note which ones in the Phase log).
-- [ ] `docs/templates.md`, `docs/cli.md`, `ROADMAP.md` updated; `src/core/CLAUDE.md`
+- [x] All gates pass (Windows clippy included; the cross-*link* still cannot run
+      here — see Phase 1).
+- [x] `grep -rn '+ 1' src/core/counter.rs` matches only the comment explaining
+      the overflow it replaced; `grep -rn "delete the lock" src/` matches only
+      the test that asserts the message no longer says it.
+- [x] Every new test was run against the pre-change build and observed failing —
+      see the Phase log for what each one did there.
+- [x] `docs/templates.md`, `docs/cli.md`, `ROADMAP.md` updated; `src/core/CLAUDE.md`
       "Create, apply, register" names `ProjectFolderName` as the one validator.
 
 ---
@@ -729,3 +730,26 @@ fastf refuses to write through links; cache entries outside a base are ignored.
   the WiX `UiLauncher` component belonged to no `ComponentGroup`, so removing it
   needed no other edit. The Windows cross-*link* could not run here (no
   `mingw-w64-gcc`); Windows clippy did.
+- **Phase 2 — 2026-08-23, `phase-02-names-and-numbers`.** Observed failing on the
+  pre-change build: the `.hidden`/`..` create test (planned `.hidden` and got a
+  `ProjectPlan`), the `.{id}` template test (`save_to_file` returned `Ok`),
+  `fastf id set 1000000000000` (succeeded, printing "counter raised to
+  1000000000000"), and both manifest tests — the undecodable one is the
+  important one, because `save_to_file` returned `Ok` there and the file was
+  gone. The `ProjectFolderName` property could not compile, the type not
+  existing yet.
+
+  Four deviations from the plan, all narrowing:
+  - `--name=` "of only illegal characters" is **not** refused and should not be:
+    `?*|` sanitizes to `___`, a real visible folder. Only names that sanitize
+    away to *nothing* are refused. The test cases are `..`, `.`, `...`.
+  - `--name="   "` is refused one layer earlier, by the required-variable check.
+    Noted in the test rather than asserted on `ProjectFolderName`.
+  - The unreadable-manifest fixture the plan named (a *directory* at the manifest
+    path) proves the message but not the defect: the old code's atomic rename
+    onto a non-empty directory failed anyway. A manifest containing invalid UTF-8
+    is the fixture where the old code returned `Ok` and destroyed the file. Both
+    cases are tested.
+  - `Template::validate`'s digit ceiling is `template::MAX_ID_DIGITS` (12,
+    matching `Counters::MAX_VALUE`'s width), which *widens* the TUI builder's
+    previous 1..=9. The builder now shares the constant instead of its own bound.

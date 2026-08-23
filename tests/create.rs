@@ -887,3 +887,129 @@ fn bundled_templates_do_not_emit_duplicate_project_info() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Names that must never reach the filesystem
+// ---------------------------------------------------------------------------
+
+/// A gallery-style template: the folder name is the user's answer, with no
+/// `{id}` to make it safe. Every domain template in `examples/templates/` is
+/// shaped this way, so what a `{name}` renders to *is* the folder name.
+fn name_only_template_yaml(slug: &str) -> String {
+    format!(
+        r#"name: Name Only
+slug: {slug}
+description: fixture
+naming_pattern: "{{name}}"
+id:
+  prefix: T
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+    transform: none
+"#
+    )
+}
+
+/// `--name=.hidden` used to create a project fastf could not see: discovery
+/// skips dot-prefixed directories, so the folder showed up once from the
+/// write-through cache and then vanished at the next rescan.
+///
+/// `--name=..` was worse. It sanitizes to `""`, `base.join("")` is the base,
+/// which `exists()` answers yes to, so the collision loop moved on to `_2` — and
+/// `create_inner` resolved that against the base's *parent*, planting `_2`
+/// one level above the library.
+///
+/// Both must fail in `plan`, before a single directory is created.
+#[test]
+fn a_name_that_would_be_invisible_or_empty_is_refused_before_anything_is_written() {
+    sandboxed(|install| {
+        write_template(install, "named", &name_only_template_yaml("named"));
+
+        let mut cfg = Config::default();
+        let base = install.join("projects");
+        fs::create_dir_all(&base).unwrap();
+        cfg.base_dir = base.display().to_string();
+
+        let tmpl = template::find_by_slug("named").unwrap();
+        let counters = Counters::load().unwrap();
+
+        for (raw, expected) in [
+            (".hidden", "may not start with '.'"),
+            ("..", "leaves no usable folder name"),
+            (".", "leaves no usable folder name"),
+            // `"   "` is not here: the required-variable check refuses an
+            // all-whitespace answer one layer earlier, which is the better
+            // error. What matters is that nothing gets through, not which
+            // gate stops it.
+        ] {
+            let mut vars = HashMap::new();
+            vars.insert("name".to_string(), raw.to_string());
+            let error = project::plan(&tmpl, &vars, &cfg, &counters)
+                .expect_err("the plan must be refused")
+                .chain()
+                .map(|cause| cause.to_string())
+                .collect::<Vec<_>>()
+                .join(": ");
+
+            assert!(error.contains(expected), "--name={raw:?} gave: {error}");
+            // The error names the pattern too — the user typed a variable, not
+            // a folder name, and needs to see how it became one.
+            assert!(error.contains("{name}"), "--name={raw:?} gave: {error}");
+        }
+
+        // Nothing was created: not in the base, not beside it.
+        assert_eq!(
+            fs::read_dir(&base).unwrap().count(),
+            0,
+            "the base must still be empty"
+        );
+        let stray: Vec<String> = fs::read_dir(install)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with('_'))
+            .collect();
+        assert!(stray.is_empty(), "planted beside the base: {stray:?}");
+
+        // And no ID was burned.
+        assert_eq!(Counters::load_base(&base), 0);
+    });
+}
+
+/// The same rule, one layer earlier: a template whose pattern *starts* with `.`
+/// renders a dot-prefixed name for every project it ever makes, so it is refused
+/// when the template is saved rather than once per create.
+#[test]
+fn a_template_whose_pattern_starts_with_a_dot_cannot_be_saved() {
+    sandboxed(|install| {
+        let dir = install.join("templates").join("hidden");
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut tmpl = template::Template {
+            name: "Hidden".to_string(),
+            slug: "hidden".to_string(),
+            naming_pattern: ".{id}".to_string(),
+            ..Default::default()
+        };
+
+        let manifest = dir.join("template.yaml");
+        let error = tmpl
+            .save_to_file(&manifest)
+            .expect_err("a dot-prefixed pattern must be refused")
+            .to_string();
+        assert!(error.contains("may not start with '.'"), "{error}");
+        assert!(
+            !manifest.exists(),
+            "validation must precede the write, not follow it"
+        );
+
+        // The same template with a visible pattern saves fine.
+        tmpl.naming_pattern = "{id}".to_string();
+        tmpl.save_to_file(&manifest).unwrap();
+        assert!(manifest.exists());
+    });
+}

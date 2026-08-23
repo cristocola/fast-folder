@@ -84,6 +84,13 @@ pub struct IdConfig {
     pub digits: usize,
 }
 
+/// The widest zero-padding an `id.digits` may ask for.
+///
+/// Twelve, because that is the number of digits in `Counters::MAX_VALUE`: every
+/// value the counter can reach renders inside its own template's width, so a
+/// project's ID never grows a column late in the library's life.
+pub const MAX_ID_DIGITS: usize = 12;
+
 fn default_id_prefix() -> String {
     "ID".to_string()
 }
@@ -300,9 +307,23 @@ impl Template {
                 Template::OWNED_KEYS,
             )
             .context("serializing template")?,
-            // No readable manifest yet: this is a new template, or the old file
-            // is unreadable and there is nothing to preserve from it.
-            Err(_) => crate::util::yaml::to_string(&snapshot).context("serializing template")?,
+            // No manifest yet: a new template, with nothing to preserve.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                crate::util::yaml::to_string(&snapshot).context("serializing template")?
+            }
+            // Anything else — EACCES, EIO, a directory where the manifest
+            // should be, invalid UTF-8 — is a manifest that exists and could
+            // not be read. Treating that as "new template" wrote a fresh file
+            // over it, discarding every unknown key the user owns. Refuse
+            // instead: the failure is recoverable, the overwrite is not.
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "refusing to replace an unreadable manifest at {}",
+                        path.display()
+                    )
+                });
+            }
         };
         // Atomic: a manifest truncated by a crash is a template that no longer
         // loads, and `load_all` is what every create reads.
@@ -347,6 +368,33 @@ impl Template {
         }
         if self.naming_pattern.is_empty() {
             bail!("template 'naming_pattern' is required");
+        }
+        // A pattern beginning with '.' renders a dot-prefixed folder name, and
+        // discovery skips those. `ProjectFolderName` catches it at create time
+        // too, but catching it here means the template is refused when it is
+        // saved — before any project has been built from it.
+        if self.naming_pattern.starts_with('.') {
+            bail!(
+                "template 'naming_pattern' may not start with '.' (got '{}'): \
+                 fastf would not see the projects it names",
+                self.naming_pattern
+            );
+        }
+        // Register recovers a project's ID from a folder name by looking for
+        // `<prefix><digits>` (`naming::parse_id_token`). With an empty prefix
+        // that match degenerates to "any trailing digits", so `Album_2024` would
+        // register as ID 2024.
+        if self.id.prefix.is_empty() {
+            bail!("template 'id.prefix' is required — it is what makes an ID token recognizable");
+        }
+        // Upper bound is `Counters::MAX_VALUE`'s width: past it a rendered ID is
+        // wider than its own template says, and the zero-padding stops meaning
+        // anything.
+        if self.id.digits < 1 || self.id.digits > MAX_ID_DIGITS {
+            bail!(
+                "template 'id.digits' must be between 1 and {MAX_ID_DIGITS} (got {})",
+                self.id.digits
+            );
         }
         // Check for duplicate variable slugs
         let mut seen = std::collections::HashSet::new();
@@ -491,9 +539,108 @@ mod tests {
 
     use super::*;
 
+    fn minimal(slug: &str) -> Template {
+        Template {
+            name: "Minimal".to_string(),
+            slug: slug.to_string(),
+            naming_pattern: "{id}".to_string(),
+            ..Template::default()
+        }
+    }
+
+    /// A manifest that exists but cannot be **decoded** is the case where the
+    /// old `Err(_)` arm actually destroyed data: `read_to_string` fails with
+    /// `InvalidData`, the arm called it a new template, and the atomic write
+    /// went straight through — taking every unknown key the user owns with it.
+    ///
+    /// Invalid UTF-8 is the honest fixture for that. No permissions to arrange,
+    /// no root-runner exemption, and the file is genuinely replaceable, so the
+    /// test can only pass because the code refuses.
+    #[test]
+    fn a_manifest_that_cannot_be_decoded_is_never_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = tmp.path().join("template.yaml");
+        // Valid YAML shape, one invalid UTF-8 byte inside it.
+        let original = b"name: Mine\nslug: mine\nnaming_pattern: \"{id}\"\nmy_own_key: \xff\n";
+        std::fs::write(&manifest, original).unwrap();
+
+        let error = minimal("mine")
+            .save_to_file(&manifest)
+            .expect_err("an undecodable manifest must not be overwritten")
+            .to_string();
+        assert!(
+            error.contains("refusing to replace an unreadable manifest"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            std::fs::read(&manifest).unwrap(),
+            original,
+            "the manifest must be byte-identical after a refused save"
+        );
+    }
+
+    /// The other shape of unreadable: something that is not a file at all.
+    #[test]
+    fn a_manifest_path_that_is_a_directory_is_never_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = tmp.path().join("template.yaml");
+        std::fs::create_dir_all(&manifest).unwrap();
+        std::fs::write(manifest.join("sentinel"), b"still here").unwrap();
+
+        let error = minimal("blocked")
+            .save_to_file(&manifest)
+            .expect_err("an unreadable manifest must not be overwritten")
+            .to_string();
+        assert!(
+            error.contains("refusing to replace an unreadable manifest"),
+            "unexpected error: {error}"
+        );
+        assert!(manifest.is_dir(), "the existing entry must be left alone");
+        assert!(manifest.join("sentinel").exists());
+    }
+
+    /// A pattern beginning with `.` renders an invisible folder. Refusing it at
+    /// save time means no project is ever built from it.
+    #[test]
+    fn a_dot_prefixed_naming_pattern_is_refused() {
+        let mut template = minimal("hidden");
+        template.naming_pattern = ".{id}".to_string();
+        let error = template.validate().unwrap_err().to_string();
+        assert!(error.contains("may not start with '.'"), "{error}");
+    }
+
+    #[test]
+    fn an_id_block_must_be_recognizable_and_renderable() {
+        let mut template = minimal("ids");
+        template.id.prefix = String::new();
+        assert!(
+            template
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("id.prefix"),
+            "an empty prefix makes any trailing digits look like an ID token"
+        );
+
+        for digits in [0, MAX_ID_DIGITS + 1] {
+            let mut template = minimal("ids");
+            template.id.digits = digits;
+            let error = template.validate().unwrap_err().to_string();
+            assert!(error.contains("id.digits"), "digits {digits} gave: {error}");
+        }
+
+        for digits in [1, 4, MAX_ID_DIGITS] {
+            let mut template = minimal("ids");
+            template.id.digits = digits;
+            template
+                .validate()
+                .unwrap_or_else(|error| panic!("digits {digits} should be accepted, got: {error}"));
+        }
+    }
+
     /// A field added to `Template` without being added to `OWNED_KEYS` would be
     /// preserved from the old manifest instead of updated, so an edit made in the
-    /// TUI builder or the browser editor would appear to save and change nothing.
+    /// TUI builder would appear to save and change nothing.
     #[test]
     fn owned_keys_covers_every_serialized_field() {
         // Populated so nothing is skipped: `verbatim` and `exclude` are omitted

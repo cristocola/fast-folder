@@ -30,7 +30,14 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v2.0.0 in progress — two surfaces, one engine, nothing trusted by accident** (`PLAN.md` drives it, one phase per PR)
-- Status: **Phase 1 landed: the browser UI is removed.** `fastf ui`, `fastf-ui.exe`, `src/ui/`, the four `ui_*` suites and `docs/UI.md` are gone, and with them fastf's only network surface. v1.7.1 stays available as the last release that has it. v2.0.0 is a hardening release: the backlog below waits.
+- Status: **Phase 2 landed: names and numbers.** One validator
+  (`validated::ProjectFolderName`) decides what a project folder may be called,
+  and create, rename and register all use it — a name that would be invisible
+  (`.hidden`) or empty (`..`) is refused before any directory is made. The ID
+  counter has a maximum (999999999999) and cannot overflow. The lock timeout no
+  longer tells users to delete the lock file, which would break it. A template
+  manifest is never replaced because it could not be read.
+- Previously: **Phase 1 landed: the browser UI is removed.** `fastf ui`, `fastf-ui.exe`, `src/ui/`, the four `ui_*` suites and `docs/UI.md` are gone, and with them fastf's only network surface. v1.7.1 stays available as the last release that has it. v2.0.0 is a hardening release: the backlog below waits.
 - Last reviewed: **2026-08-23**
 
 ## Release train
@@ -86,6 +93,9 @@ Regression coverage grows with the relevant release:
   (v1.5.1).
 - [x] Guided browser draws before measuring, fills in without input, and never
   reflows a row as a size lands (v1.6.0).
+- [x] Names that sanitize away or start with `.` are refused before any folder is
+  created; the counter's maximum is enforced at `id set` and at create; an
+  unreadable template manifest is never overwritten (v2.0.0).
 
 Manual move smoke and follow-up:
 
@@ -118,11 +128,6 @@ This work does not use GitHub issues, a separate ADR system, or a changelog.
 
 Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 
-- `Counters::load().unwrap_or_default()` inside `propagate`
-  (`src/core/counter.rs:126`) swallows a parse/IO error the way `Config::load`
-  did before v1.6.1's Phase 1 — less damaging (the floor still self-heals from
-  every base and `library::max_id`), but it silently drops the "an unplugged
-  base can't restart numbering" protection that file exists for.
 - `query::resolve_field` clones per field access and `Predicate::Free`
   lowercases per comparison (`src/core/query.rs`) — fine at current scale, would
   matter at a much larger library.

@@ -73,9 +73,18 @@ impl DataLock {
                 }
             }
             if Instant::now() >= deadline {
+                // Never suggest deleting the file. On Unix the lock is `flock`
+                // on the *inode*: unlinking the path does not release it, and
+                // the next process creates a new inode and locks that instead —
+                // so both processes then hold "the" lock, which is exactly the
+                // duplicate-ID race this module exists to prevent. There is no
+                // stale lock to clear either way; the OS drops it when the
+                // holder dies.
                 anyhow::bail!(
-                    "another fastf process is busy (waited {}s for {}).\n\
-                     If no other fastf is running, delete the lock file and retry.",
+                    "another fastf process is busy (waited {}s for {}). \
+                     It still holds the data lock — close it or wait, then retry. \
+                     Deleting the lock file does not help: the lock belongs to \
+                     the process, not the file.",
                     timeout.as_secs(),
                     path.display()
                 );
@@ -194,5 +203,29 @@ mod tests {
         drop(held);
         DataLock::acquire_at(&path, Duration::from_millis(500))
             .expect("lock must be available once released");
+    }
+
+    /// The timeout message used to end "delete the lock file and retry", which
+    /// is advice that breaks the lock: `flock` is held on the inode, so the
+    /// deleter and the next process end up locking two different files and both
+    /// believing they hold it.
+    #[test]
+    fn the_timeout_message_never_suggests_deleting_the_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(LOCK_FILENAME);
+
+        let _held = DataLock::acquire_at(&path, Duration::from_secs(1)).unwrap();
+        let message = DataLock::acquire_at(&path, Duration::from_millis(50))
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            !message.contains("delete the lock file and retry"),
+            "the message still tells the user to delete the lock: {message}"
+        );
+        assert!(
+            message.contains("holds the data lock"),
+            "the message should say who holds it: {message}"
+        );
     }
 }

@@ -39,6 +39,20 @@ pub struct Counters {
 }
 
 impl Counters {
+    /// The highest project ID fastf will ever mint.
+    ///
+    /// Twelve nines. Two reasons for that number rather than `u64::MAX`:
+    ///
+    /// - It is the widest `id.digits` a template may declare
+    ///   ([`crate::core::template::MAX_ID_DIGITS`]), so every ID the counter can
+    ///   reach still renders inside the width its own template asked for.
+    /// - It is below 2^53, so any JSON consumer reads it back exactly.
+    ///
+    /// Without a ceiling, `fastf id set 18446744073709551615` was accepted (it
+    /// is above the floor, which was the only rule) and the very next create
+    /// overflowed the `+ 1`: a panic in debug, a wrap to zero in release.
+    pub const MAX_VALUE: u64 = 999_999_999_999;
+
     /// Read this machine's counter from the data directory.
     ///
     /// Still written, and still needed, even though the base file is the shared
@@ -123,7 +137,22 @@ impl Counters {
                 )),
             }
         }
-        let mut local = Self::load().unwrap_or_default();
+        // Not `unwrap_or_default()`: a parse or IO error here would read as
+        // zero, and zero is below every value, so the write would go ahead and
+        // overwrite whatever could not be read. This is the counter that spans
+        // every base this machine has written to — the one that stops an
+        // unplugged drive from restarting numbering — so a failure to read it is
+        // reported and the write skipped, leaving the file for its owner to fix.
+        let mut local = match Self::load() {
+            Ok(local) => local,
+            Err(err) => {
+                crate::util::diag::warn(format!(
+                    "could not read the ID counter in {} ({err}) — leaving it alone",
+                    paths::counters_path().display()
+                ));
+                return;
+            }
+        };
         if value > local.get() {
             local.set_value(value);
             // Warn like the per-base writes above. This is the counter that spans
@@ -162,8 +191,19 @@ impl Counters {
     /// needs the next ID — `project::plan`, `operations::register`, and the
     /// register rename preview — must go through here: when preview used its own
     /// formula it confirmed one folder name and committed a different one.
-    pub fn next_value(cfg: &Config, counters: &Counters) -> u64 {
-        counters.get().max(Self::floor(cfg)) + 1
+    pub fn next_value(cfg: &Config, counters: &Counters) -> Result<u64> {
+        let current = counters.get().max(Self::floor(cfg));
+        let next = current
+            .checked_add(1)
+            .filter(|value| *value <= Self::MAX_VALUE)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "the project ID counter has reached its maximum ({}); \
+                     no further IDs can be minted",
+                    Self::MAX_VALUE
+                )
+            })?;
+        Ok(next)
     }
 
     /// Where a base keeps its counter.

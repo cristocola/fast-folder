@@ -87,6 +87,26 @@ The template `slug` is one directory component and may contain only ASCII
 letters, digits, `-`, and `_`. A `structure` name may use safe nested syntax
 such as `src/components`; it is not limited to one component.
 
+### What `naming_pattern` and `id:` may be
+
+- `naming_pattern` is required and **may not start with `.`**. fastf finds
+  projects by scanning for folders that hold a `PROJECT_INFO.md`, and it skips
+  dot-prefixed folders (those are its own staging), so a pattern like `.{id}`
+  would name projects fastf could never see again. The template is refused when
+  you save it, not once per project.
+- `id.prefix` is required. `fastf register` recovers a project's ID by finding
+  `<prefix><digits>` in an existing folder name, and with no prefix that match
+  is "any trailing digits" — `Album_2024` would register as ID 2024.
+- `id.digits` must be between **1 and 12**. Twelve is the width of the highest
+  ID the counter can reach, so every ID a template can produce fits the padding
+  it asked for.
+
+Whatever the pattern renders to also has to be a folder name fastf can find
+again: not empty, not starting with `.`, and a single path component. A project
+whose answers render to nothing (`--name=..`) is refused before any folder is
+created, and the error names both the rendered value and the pattern that
+produced it.
+
 ## Variables and transforms
 
 Two variable types exist: `text` (free input) and `select` (pick from a list, with an optional default). Each variable can declare a transform applied to the value before it lands in names:

@@ -102,11 +102,18 @@ pub(crate) fn matching_projects(cfg: &Config, predicates: &[query::Predicate]) -
 fn matching_projects_from(projects: Vec<Project>, predicates: &[query::Predicate]) -> Vec<Project> {
     projects
         .into_iter()
-        .filter(|project| {
-            project_info::read_metadata(&project.path)
-                .ok()
-                .flatten()
-                .is_some_and(|meta| query::evaluate(predicates, &meta))
-        })
+        .filter(|project| still_matches(project, predicates))
         .collect()
+}
+
+/// Does one project still satisfy the query?
+///
+/// Read fresh from disk, because the guided browser asks this about a row it has
+/// just patched in memory: a tag added there may have taken the project out of
+/// its own search results, and the row has to go with it.
+pub(crate) fn still_matches(project: &Project, predicates: &[query::Predicate]) -> bool {
+    project_info::read_metadata(&project.path)
+        .ok()
+        .flatten()
+        .is_some_and(|meta| query::evaluate(predicates, &meta))
 }

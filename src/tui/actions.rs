@@ -14,11 +14,30 @@ use crate::tui::prompt::{self, TextOpts};
 use crate::tui::rows::{PENDING_LABEL, size_label};
 use crate::util::size_scan::SizeCell;
 
-/// What a project action asks its list to do next. `Changed` carries every path
-/// whose contents moved, so the caller can drop stale size snapshots.
+/// What a project action asks its list to do next.
+///
+/// The distinction that matters is `Patched` versus `Reload`. Every mutation
+/// used to be reported as one boolean, and the guided browser answered it by
+/// re-running `library::discover` across every base — so adding a tag to one
+/// project re-read every `PROJECT_INFO.md` in the library, and in a search
+/// browser it re-evaluated the query against all of them too. A content
+/// mutation changes one row, and the list already holds that row.
+///
+/// `stale` names the paths whose size snapshot must be dropped: the new location
+/// always, and the old one as well when the folder moved or was renamed.
 pub enum ActionLoop {
     BackToList,
-    Changed(Vec<PathBuf>),
+    /// One row's content changed; the library's shape did not.
+    Patched {
+        project: Project,
+        stale: Vec<PathBuf>,
+    },
+    /// The row is gone from the library.
+    Removed {
+        path: PathBuf,
+    },
+    /// Something the list cannot reason about. Re-run the loader.
+    Reload,
     Quit,
 }
 
@@ -69,10 +88,11 @@ pub(crate) fn project_action_menu(
             .unwrap_or_else(|_| project.base.clone());
         let all = cfg.effective_bases();
         let default_base = all.first().cloned();
+        // Probed once when the action menu opens, not `is_dir`-ed per base every
+        // time a list is built.
+        let (mounted, _unusable) = crate::util::paths::mounted_bases(&all);
         (
-            all.into_iter()
-                .filter(|b| b.is_dir() && *b != current)
-                .collect(),
+            mounted.into_iter().filter(|b| *b != current).collect(),
             default_base,
         )
     };
@@ -147,14 +167,14 @@ pub(crate) fn project_action_menu(
                     continue;
                 }
                 match crate::core::operations::add_tags(project, &[tag]) {
-                    Ok(_) => {
+                    Ok(tags) => {
                         println!(
                             "{}  Added 1 tag to {}",
                             "✓".green().bold(),
                             project.id.green().bold()
                         );
                         if reload_after_change {
-                            return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                            return Ok(retagged(project, tags));
                         }
                     }
                     Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
@@ -171,14 +191,14 @@ pub(crate) fn project_action_menu(
                     continue;
                 }
                 match crate::core::operations::remove_tags(project, &[tag]) {
-                    Ok(_) => {
+                    Ok(tags) => {
                         println!(
                             "{}  Removed 1 tag from {}",
                             "✓".green().bold(),
                             project.id.green().bold()
                         );
                         if reload_after_change {
-                            return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                            return Ok(retagged(project, tags));
                         }
                     }
                     Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
@@ -199,7 +219,12 @@ pub(crate) fn project_action_menu(
                 } else {
                     println!("{}  Journal entry added.", "✓".green().bold());
                     if reload_after_change {
-                        return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                        // The journal is not shown in a row, but the row's size
+                        // is now wrong, so the snapshot has to go.
+                        return Ok(ActionLoop::Patched {
+                            project: project.clone(),
+                            stale: vec![project.path.clone()],
+                        });
                     }
                 }
             }
@@ -232,7 +257,11 @@ pub(crate) fn project_action_menu(
                                 crate::util::paths::display_path(&project.path)
                             );
                         }
-                        return Ok(ActionLoop::Changed(vec![project.path.clone(), moved.path]));
+                        let stale = vec![project.path.clone(), moved.path.clone()];
+                        return Ok(ActionLoop::Patched {
+                            project: moved,
+                            stale,
+                        });
                     }
                     Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
                 }
@@ -248,10 +277,11 @@ pub(crate) fn project_action_menu(
                 match crate::core::operations::rename(project, &new_name) {
                     Ok(renamed) => {
                         println!("{}  Renamed to {}", "✓".green().bold(), renamed.name.bold());
-                        return Ok(ActionLoop::Changed(vec![
-                            project.path.clone(),
-                            renamed.path,
-                        ]));
+                        let stale = vec![project.path.clone(), renamed.path.clone()];
+                        return Ok(ActionLoop::Patched {
+                            project: renamed,
+                            stale,
+                        });
                     }
                     Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
                 }
@@ -275,7 +305,9 @@ pub(crate) fn project_action_menu(
                             "✓".green().bold(),
                             project.name.bold()
                         );
-                        return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                        return Ok(ActionLoop::Removed {
+                            path: project.path.clone(),
+                        });
                     }
                     Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
                 }
@@ -303,7 +335,9 @@ pub(crate) fn project_action_menu(
                 match crate::core::operations::delete(project) {
                     Ok(()) => {
                         println!("{}  Deleted {}", "✓".green().bold(), path_str.bold());
-                        return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                        return Ok(ActionLoop::Removed {
+                            path: project.path.clone(),
+                        });
                     }
                     Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
                 }
@@ -312,6 +346,22 @@ pub(crate) fn project_action_menu(
             "Back to main menu" => return Ok(ActionLoop::Quit),
             other => anyhow::bail!("unhandled action '{other}'"),
         }
+    }
+}
+
+/// The same row with its tag list replaced.
+///
+/// The tags are the only field a tag mutation can change, and `mutate_tags`
+/// already returns the new list, so the row is patched from what the operation
+/// reported rather than by reading the file back.
+fn retagged(project: &Project, tags: Vec<String>) -> ActionLoop {
+    let mut patched = project.clone();
+    patched.tags = tags;
+    ActionLoop::Patched {
+        // The tag was written into `PROJECT_INFO.md`, so the folder is a few
+        // bytes bigger than the snapshot says. Measure it again.
+        stale: vec![project.path.clone()],
+        project: patched,
     }
 }
 

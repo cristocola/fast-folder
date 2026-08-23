@@ -22,7 +22,7 @@ mod common;
 
 use common::{Sandbox, pty};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DEADLINE: Duration = Duration::from_secs(25);
@@ -42,6 +42,22 @@ fn launch(sb: &Sandbox, script: Vec<pty::Keystroke>) -> (String, i32) {
         &[
             ("FASTF_INSTALL_DIR", sb.install.as_path()),
             ("HOME", sb.tmp.path()),
+        ],
+        &script,
+        DEADLINE,
+    )
+}
+
+/// `launch`, with `util::trace` writing to `trace`. Debug builds only — the
+/// tracer is compiled out of release, like the failpoints.
+fn launch_traced(sb: &Sandbox, script: Vec<pty::Keystroke>, trace: &Path) -> (String, i32) {
+    pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_TRACE_FILE", trace),
         ],
         &script,
         DEADLINE,
@@ -258,17 +274,21 @@ fn projects_browser_is_newest_first_sized_and_paged() {
     assert!(out.contains("Goodbye."));
 }
 
+/// A tag changes one row, and only that row.
+///
+/// The browser used to answer every mutation by re-running `library::discover`
+/// across every configured base, re-reading every `PROJECT_INFO.md` in the
+/// library to put one word into one cell. The trace file is how that is
+/// observable at all: the rendered list looks the same either way, and the cost
+/// is seconds on a network share and nothing on a local disk.
 #[test]
-fn projects_browser_reloads_after_a_project_mutation() {
+fn a_tag_patches_its_row_without_rescanning_the_library() {
     let sb = Sandbox::new();
     sb.ok(&["config", "set", "recent-default-limit", "1"]);
-    let root = plant_dated_project(
-        &sb,
-        "Mutable_Project",
-        "ID0001",
-        "2026-01-01T00:00:00Z",
-        256,
-    );
+    // Short name on purpose: the row is clamped to the terminal width, and the
+    // tag cell is the last thing on it.
+    let root = plant_dated_project(&sb, "Mut", "ID0001", "2026-01-01T00:00:00Z", 256);
+    let trace = sb.tmp.path().join("trace");
 
     let script = pty::Script::new()
         .down(MENU_PROJECTS)
@@ -277,14 +297,14 @@ fn projects_browser_reloads_after_a_project_mutation() {
         .down(2) // Add tag
         .enter()
         .line("draft")
-        .pause(500)
-        // Reloaded one-project page: project, Back.
+        .pause(700)
+        // Still a one-project page: project, Back.
         .down(1)
         .enter()
         .down(MENU_QUIT)
         .enter()
         .build();
-    let (out, code) = launch(&sb, script);
+    let (out, code) = launch_traced(&sb, script, &trace);
 
     assert_eq!(
         code, 0,
@@ -295,6 +315,10 @@ fn projects_browser_reloads_after_a_project_mutation() {
         "tag action did not complete:\n{out}"
     );
     assert!(
+        out.contains("[draft]"),
+        "the patched row should show the new tag:\n{out}"
+    );
+    assert!(
         out.matches("scanning…").count() >= 2,
         "the changed project size should be invalidated and rescanned:\n{out}"
     );
@@ -303,7 +327,57 @@ fn projects_browser_reloads_after_a_project_mutation() {
             .unwrap()
             .contains("draft")
     );
+
+    let counts = fs::read_to_string(&trace).unwrap_or_default();
+    let discoveries = counts.lines().filter(|line| *line == "discover").count();
+    assert_eq!(
+        discoveries, 1,
+        "the browser opened once and must not have rescanned the library \
+         to add a tag (traced {discoveries} discoveries):\n{counts}"
+    );
     assert!(out.contains("Goodbye."));
+}
+
+/// Deleting a project takes its row out of the list, also without a rescan.
+#[test]
+fn a_delete_drops_its_row_without_rescanning_the_library() {
+    let sb = Sandbox::new();
+    sb.ok(&["config", "set", "recent-default-limit", "9"]);
+    plant_dated_project(&sb, "Doomed_Project", "ID0002", "2026-02-02T00:00:00Z", 128);
+    plant_dated_project(&sb, "Kept_Project", "ID0001", "2026-01-01T00:00:00Z", 128);
+    let trace = sb.tmp.path().join("trace");
+
+    let script = pty::Script::new()
+        .down(MENU_PROJECTS)
+        .enter()
+        .enter() // the newest row: Doomed_Project
+        .down(8) // → Delete folder permanently
+        .enter()
+        .line("Doomed_Project") // typed confirmation
+        .pause(800)
+        .esc() // leave the browser
+        .pause(400)
+        .esc() // quit
+        .build();
+    let (out, code) = launch_traced(&sb, script, &trace);
+
+    assert_eq!(code, 0, "a delete should return to the browser:\n{out}");
+    assert!(out.contains("Deleted"), "the delete did not run:\n{out}");
+    assert!(
+        !sb.base.join("Doomed_Project").exists(),
+        "the folder should be gone:\n{out}"
+    );
+    assert!(
+        out.contains("Page 1/1"),
+        "the list should have shrunk to a single page:\n{out}"
+    );
+
+    let counts = fs::read_to_string(&trace).unwrap_or_default();
+    let discoveries = counts.lines().filter(|line| *line == "discover").count();
+    assert_eq!(
+        discoveries, 1,
+        "dropping a row must not rescan the library (traced {discoveries}):\n{counts}"
+    );
 }
 
 /// The headline behaviour: the list is drawn before a single folder has been

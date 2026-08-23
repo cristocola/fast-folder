@@ -245,6 +245,13 @@ release is about it: one way out of every prompt, typed input that survives a
 validation failure, a browser that stops rescanning the library, and parity with
 what the command line can already do.
 
+- [x] Phase 9: the browser stops rescanning — a tag, a note, a rename or a move
+  patches the one row it changed instead of re-running discovery across every
+  base, and a delete drops the row; a search browser re-evaluates its query
+  against the patched project so a row that stopped matching leaves. Base lists
+  are probed with a timeout, so an unresponsive network mount is named rather
+  than hanging the menu. `util::trace` (debug-only, `FASTF_TRACE_FILE`) is what
+  makes the claim testable.
 - [x] Phase 8: keep what you typed — a value with a local validity rule is
   checked at the prompt that asked for it and stays on the line to be corrected,
   and dependent questions come after the value they depend on. Register checks

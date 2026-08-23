@@ -192,6 +192,10 @@ Two things worth knowing before you change the copy or move paths:
   failpoints. Trip one with `FASTF_FAULT=move:before-commit-rename` (returns an
   error there) or `FASTF_FAULT=create:mid-copy:abort` (kills the process there).
   See `util::faults::ALL_FAULT_POINTS`. Compiled out of release builds.
+- **Work counting.** Operations that cost real I/O name themselves, so a claim
+  like "the browser no longer rescans the library" can be asserted rather than
+  believed. `FASTF_TRACE_FILE=/tmp/counts fastf` appends one line per traced
+  operation. Also compiled out of release builds.
 - **Lint the other platform too.** `#[cfg(unix)]` code does not compile on a
   Windows machine and `#[cfg(windows)]` code does not compile on a Linux one, so
   `cargo clippy --all-targets --target x86_64-pc-windows-gnu` (or

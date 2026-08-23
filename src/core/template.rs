@@ -196,6 +196,7 @@ impl Template {
     /// UTF-8 text files under `files/` are scanned into the in-memory `files`
     /// buffer (for editors/previews); binaries stay on disk only.
     pub fn load_from_file(path: &Path) -> Result<Self> {
+        crate::util::trace::hit("template_load");
         let raw = fs::read_to_string(path)
             .with_context(|| format!("reading template {}", path.display()))?;
         // Strip a UTF-8 BOM. Notepad, PowerShell's `Out-File -Encoding utf8`,

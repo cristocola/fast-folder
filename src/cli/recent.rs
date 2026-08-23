@@ -159,12 +159,12 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
         }
 
         match project_action_menu(filtered[idx], None, false)? {
-            ActionLoop::BackToList => continue,
             // Preserve the command picker's existing behaviour: it returns to
-            // its current list after a mutation. The guided browser passes
-            // `reload_after_change = true` and refreshes its owned rows.
-            ActionLoop::Changed(_) => continue,
+            // its current list after a mutation, showing the rows it started
+            // with. Only the guided browser passes `reload_after_change = true`
+            // and owns rows it can patch.
             ActionLoop::Quit => return Ok(()),
+            _ => continue,
         }
     }
 }

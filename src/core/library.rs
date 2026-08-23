@@ -143,6 +143,7 @@ fn to_forward_slashes(p: &Path) -> String {
 /// Per base: cache-first with a staleness gate (see module docs). Absent /
 /// unmounted bases are skipped honestly rather than surfacing stale entries.
 pub fn discover(cfg: &Config) -> Vec<Project> {
+    crate::util::trace::hit("discover");
     let mut all = Vec::new();
     for base in cfg.effective_bases() {
         if !base.is_dir() {
@@ -233,6 +234,7 @@ pub fn touch_cache(base: &Path) {
 /// Subdirectories without one are skipped — sitting in a base is necessary but
 /// not sufficient to be a project.
 pub fn scan_base(base: &Path) -> Vec<Project> {
+    crate::util::trace::hit("scan_base");
     debug_assert_eq!(SCAN_DEPTH, 1, "only depth-1 scanning is implemented");
     let mut out = Vec::new();
     let Ok(read_dir) = fs::read_dir(base) else {

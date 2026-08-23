@@ -37,6 +37,22 @@ fn is_fatal(err: &anyhow::Error) -> bool {
     crate::util::interrupt::is_set() || err.downcast_ref::<dialoguer::Error>().is_some()
 }
 
+/// Say which configured bases are not available, and why, once per list.
+///
+/// A base that is not mounted is ordinary — an external drive that is not
+/// plugged in. One that does not answer is worth naming, because the alternative
+/// is a menu that appears to hang.
+fn report_unusable_bases(unusable: &[(std::path::PathBuf, crate::util::paths::Probe)]) {
+    for (path, probe) in unusable {
+        println!(
+            "  {} {}{}",
+            "·".dimmed(),
+            crate::util::paths::display_path(path).dimmed(),
+            probe.note().dimmed()
+        );
+    }
+}
+
 /// A folder that must already exist, checked at the prompt that asks for it.
 ///
 /// The whole point of Phase 8: a path typed wrong used to be rejected by the
@@ -254,11 +270,8 @@ fn menu_create() -> Result<()> {
 /// and lets `config.base_dir` resolution do its thing.
 fn pick_base_interactively() -> Result<Option<Option<String>>> {
     let cfg = Config::load()?;
-    let bases: Vec<std::path::PathBuf> = cfg
-        .effective_bases()
-        .into_iter()
-        .filter(|b| b.is_dir())
-        .collect();
+    let (bases, unusable) = crate::util::paths::mounted_bases(&cfg.effective_bases());
+    report_unusable_bases(&unusable);
     if bases.len() <= 1 {
         return Ok(Some(None));
     }
@@ -286,6 +299,8 @@ fn menu_projects() -> Result<()> {
             let cfg = Config::load()?;
             Ok(library::discover(&cfg))
         },
+        // Every project belongs in the full library.
+        |_| true,
     )?;
     println!();
     Ok(())
@@ -327,10 +342,15 @@ fn menu_search() -> Result<()> {
         }
 
         let page_size = cfg.recent_default_limit.max(1);
-        browser::run_paged_browser(page_size, "No projects match that query.", || {
-            let cfg = Config::load()?;
-            Ok(crate::cli::search::matching_projects(&cfg, &predicates))
-        })?;
+        browser::run_paged_browser(
+            page_size,
+            "No projects match that query.",
+            || {
+                let cfg = Config::load()?;
+                Ok(crate::cli::search::matching_projects(&cfg, &predicates))
+            },
+            |project| crate::cli::search::still_matches(project, &predicates),
+        )?;
         println!();
         return Ok(());
     }
@@ -797,8 +817,19 @@ fn menu_settings_bases() -> Result<()> {
             );
         } else {
             println!("  {}", "Extra indexed bases (besides base_dir):".bold());
-            for b in &cfg.bases {
-                println!("    {} {}", "•".cyan(), b);
+            // Probed, so a base that is configured but unplugged or hanging says
+            // so here rather than looking identical to a working one.
+            let entries: Vec<std::path::PathBuf> =
+                cfg.bases.iter().map(std::path::PathBuf::from).collect();
+            for (path, probe) in
+                crate::util::paths::probe_dirs(&entries, crate::util::paths::PROBE_TIMEOUT)
+            {
+                println!(
+                    "    {} {}{}",
+                    "•".cyan(),
+                    path.display(),
+                    probe.note().dimmed()
+                );
             }
         }
         println!();

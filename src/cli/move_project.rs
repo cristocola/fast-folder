@@ -39,12 +39,19 @@ pub fn run(args: MoveArgs) -> Result<()> {
         .base
         .canonicalize()
         .unwrap_or_else(|_| project.base.clone());
-    // Mounted configured bases the project could move to.
-    let candidates: Vec<PathBuf> = cfg
-        .effective_bases()
-        .into_iter()
-        .filter(|b| b.is_dir() && *b != current)
-        .collect();
+    // Mounted configured bases the project could move to. Probed rather than
+    // `is_dir`-ed: a dead network mount answers `is_dir()` only after the
+    // operating system's own timeout, and nothing on screen says why.
+    let (mounted, unusable) = crate::util::paths::mounted_bases(&cfg.effective_bases());
+    for (path, probe) in &unusable {
+        eprintln!(
+            "{} skipping base {}{}",
+            "note:".yellow(),
+            crate::util::paths::display_path(path),
+            probe.note()
+        );
+    }
+    let candidates: Vec<PathBuf> = mounted.into_iter().filter(|b| *b != current).collect();
 
     if candidates.is_empty() {
         anyhow::bail!(

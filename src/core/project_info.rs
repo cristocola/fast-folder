@@ -286,6 +286,7 @@ pub fn read(project_root: &Path) -> Result<String> {
 ///   verbatim.
 /// - `Err(_)` — file missing, IO error, or malformed YAML.
 pub fn read_metadata(project_root: &Path) -> Result<Option<Metadata>> {
+    crate::util::trace::hit("read_metadata");
     let body = read(project_root)?;
     let Some((frontmatter, _)) = split_frontmatter_body(&body) else {
         return Ok(None);

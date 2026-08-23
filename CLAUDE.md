@@ -824,6 +824,34 @@ as), `default_value` keeps `dialoguer::Input::default`'s `prompt [default]:`
 contract where an empty answer means the default. Converting a `default` site to
 an `initial` one changes what typing `0` into a field showing `20` produces.
 
+**A content mutation patches the row; only a structural change reloads.**
+`tui::actions::ActionLoop` is `Patched { project, stale }` / `Removed { path }` /
+`Reload` / `BackToList` / `Quit`, not a boolean. The browser answered every
+mutation by re-running `library::discover` across every configured base, so
+adding one tag re-read every `PROJECT_INFO.md` in the library — and in a search
+browser re-evaluated the query against all of them. `stale` is what
+`size_scan::forget` is called with (the new location always, the old one too
+when the folder moved), and it is not empty for a tag: the tag was written into
+`PROJECT_INFO.md`, so the folder is bigger than the snapshot says.
+`run_paged_browser` takes a `keeps` predicate for the one thing a patch cannot
+decide locally — a search browser must drop a row whose new metadata stopped
+matching the query.
+
+**`util::trace` is how a claim about work done becomes testable.** Debug-only
+and env-gated by `FASTF_TRACE_FILE`, exactly like `util::faults`: `hit("discover")`
+appends a line, and a pty test counts them. "The browser no longer rescans" is
+invisible in the rendered output and worth seconds on a share, so it needs a
+counter rather than an assertion about text. Every write failure is dropped — a
+trace that cannot be written must not change what the program does.
+
+**Base lists are probed, never `is_dir`-ed.** `paths::probe_dirs` /
+`paths::mounted_bases` run the `metadata` call on a helper thread and
+`recv_timeout` it (the `live_select` shape), returning
+`Probe::{Mounted, Absent, Unresponsive}`. `is_dir()` on a dead SMB mount blocks
+for the operating system's timeout with nothing on screen. The abandoned thread
+is deliberate: it is blocked in the kernel and cannot be cancelled, and one
+parked thread is cheaper than the user's session.
+
 **A value with a local validity rule is checked at the prompt that collected
 it** (`TextOpts::validate`), and dependent questions come after the value they
 depend on. Register asked path, template, rename and apply and then had

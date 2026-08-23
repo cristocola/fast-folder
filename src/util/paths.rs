@@ -257,6 +257,98 @@ pub fn template_files_dir(slug: &str) -> PathBuf {
     template_dir(slug).join("files")
 }
 
+// ---------------------------------------------------------------------------
+// Probing configured bases
+// ---------------------------------------------------------------------------
+
+/// What one configured base turned out to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probe {
+    /// A directory, right now.
+    Mounted,
+    /// Not there, or not a directory. Ordinary: a drive that is not plugged in.
+    Absent,
+    /// Did not answer within the timeout. A dead SMB or NFS mount looks exactly
+    /// like this, and `is_dir()` on one blocks for the operating system's own
+    /// timeout — tens of seconds — with nothing on screen to say why.
+    Unresponsive,
+}
+
+impl Probe {
+    /// Can this base be listed, written to, or moved into?
+    pub fn usable(self) -> bool {
+        matches!(self, Probe::Mounted)
+    }
+
+    /// Suffix for a list that shows every configured base, mounted or not.
+    pub fn note(self) -> &'static str {
+        match self {
+            Probe::Mounted => "",
+            Probe::Absent => "  (not mounted)",
+            Probe::Unresponsive => "  (unresponsive)",
+        }
+    }
+}
+
+/// How long a base gets to answer before it is called unresponsive.
+pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Classify each path, in order, without letting one dead mount stop the rest.
+///
+/// The `metadata` call runs on a helper thread and is collected with a timeout —
+/// the same shape as `util::live_select`'s key read, and for the same reason: the
+/// *wait* has to be interruptible even though the *call* is not. The thread is
+/// left behind when it times out, which is deliberate. It is blocked in the
+/// kernel and cannot be cancelled; abandoning it costs one parked thread, while
+/// waiting for it costs the user their session.
+pub fn probe_dirs(paths: &[PathBuf], timeout: std::time::Duration) -> Vec<(PathBuf, Probe)> {
+    paths
+        .iter()
+        .map(|path| (path.clone(), probe_with(path, timeout, |p| p.is_dir())))
+        .collect()
+}
+
+/// The subset of `paths` that answered and is a directory, reporting the rest.
+///
+/// Every surface that lists bases goes through this rather than `is_dir()`, so
+/// one dead mount costs `PROBE_TIMEOUT` once instead of blocking the menu for
+/// the operating system's own timeout every time a base list is built.
+pub fn mounted_bases(paths: &[PathBuf]) -> (Vec<PathBuf>, Vec<(PathBuf, Probe)>) {
+    let probed = probe_dirs(paths, PROBE_TIMEOUT);
+    let mounted = probed
+        .iter()
+        .filter(|(_, probe)| probe.usable())
+        .map(|(path, _)| path.clone())
+        .collect();
+    let unusable = probed
+        .into_iter()
+        .filter(|(_, probe)| !probe.usable())
+        .collect();
+    (mounted, unusable)
+}
+
+/// The body of `probe_dirs` for one path, with the blocking call injected.
+///
+/// A real unresponsive mount cannot be created portably in a test, so the test
+/// supplies a prober that sleeps instead.
+pub(crate) fn probe_with<F>(path: &Path, timeout: std::time::Duration, is_dir: F) -> Probe
+where
+    F: FnOnce(&Path) -> bool + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    let owned = path.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(is_dir(&owned));
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(true) => Probe::Mounted,
+        Ok(false) => Probe::Absent,
+        // Disconnected means the prober panicked; a base fastf cannot ask about
+        // is one it must not claim is there.
+        Err(_) => Probe::Unresponsive,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,5 +415,39 @@ mod tests {
         // Nothing set → error, not a panic.
         assert!(user_config_dir_from(None, None).is_err());
         assert!(user_config_dir_from(None, Some("")).is_err());
+    }
+
+    #[test]
+    fn a_probe_that_answers_is_mounted_or_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let there = dir.path().to_path_buf();
+        let missing = dir.path().join("nope");
+
+        let probed = probe_dirs(&[there.clone(), missing.clone()], PROBE_TIMEOUT);
+        assert_eq!(probed[0], (there, Probe::Mounted));
+        assert_eq!(probed[1], (missing, Probe::Absent));
+    }
+
+    /// A dead network mount cannot be created portably, so the blocking call is
+    /// injected. What is under test is the timeout, not the filesystem.
+    #[test]
+    fn a_probe_that_never_answers_is_unresponsive_within_the_timeout() {
+        let started = std::time::Instant::now();
+        let probe = probe_with(
+            Path::new("/mnt/dead-share"),
+            std::time::Duration::from_millis(120),
+            |_| {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                true
+            },
+        );
+
+        assert_eq!(probe, Probe::Unresponsive);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the probe must give up on its own, not wait for the mount"
+        );
+        assert!(!probe.usable(), "an unresponsive base is not a target");
+        assert_eq!(probe.note(), "  (unresponsive)");
     }
 }

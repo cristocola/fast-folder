@@ -100,10 +100,7 @@ pub fn reset() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn mounted_bases(cfg: &Config) -> Vec<std::path::PathBuf> {
-    cfg.effective_bases()
-        .into_iter()
-        .filter(|base| base.is_dir())
-        .collect()
+    crate::util::paths::mounted_bases(&cfg.effective_bases()).0
 }
 
 fn print_counter(cfg: &Config, val: u64) {

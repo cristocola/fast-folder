@@ -530,13 +530,30 @@ the browser's own `Projects — Page 1/1`).
 - Add `util::trace` (debug builds only, env-gated by `FASTF_TRACE_FILE`): `trace::hit("discover")`, `trace::hit("template_load")`, `trace::hit("read_metadata")` append one line each. Tests count lines. Release builds compile it to nothing, like `util::faults`.
 
 **Steps.**
-- [ ] `util::trace` with a unit test; instrument `library::discover`, `library::scan_base`, `Template::load_from_file`, `project_info::read_metadata`.
-- [ ] `tests/tui_pty.rs` first: open the browser with `FASTF_TRACE_FILE` set, tag a project, assert the row shows the tag and the `discover` count did not increase; delete a project, assert the row is gone and the list did not scan more than once.
-- [ ] Outcome enum, in-memory patching, search re-evaluation.
-- [ ] `probe_dirs`; use it in the browser, `pick_base`, `fastf move`, `id show`. Unit test with a directory that a helper thread holds open is not possible cross-platform; test the timeout path with a closure-injected prober.
-- [ ] Docs: `docs/projects.md` gets a sentence on unresponsive bases. `CLAUDE.md`: the outcome enum rule ("a content mutation patches the row; only structural changes reload") and `util::trace`.
+- [x] `util::trace` with a unit test; instrument `library::discover`, `library::scan_base`, `Template::load_from_file`, `project_info::read_metadata`.
+- [x] `tests/tui_pty.rs` first: open the browser with `FASTF_TRACE_FILE` set, tag a project, assert the row shows the tag and the `discover` count did not increase; delete a project, assert the row is gone and the list did not scan more than once.
+- [x] Outcome enum, in-memory patching, search re-evaluation.
+- [x] `probe_dirs`; use it in the browser, `pick_base`, `fastf move`, `id show`. Unit test with a directory that a helper thread holds open is not possible cross-platform; test the timeout path with a closure-injected prober.
+- [x] Docs: `docs/projects.md` gets a sentence on unresponsive bases. `CLAUDE.md`: the outcome enum rule ("a content mutation patches the row; only structural changes reload") and `util::trace`.
 
 **Acceptance.** The trace-based pty tests pass. A deliberately unreachable base path (for example a non-existent host under `/run/user/.../gvfs` or a `probe_dirs` injected timeout) shows "unresponsive" within the timeout instead of hanging the menu.
+
+**Notes.** Three details worth recording.
+
+(1) **A tag's `stale` list is not empty.** The design reads as though a tag
+changes no bytes on disk, but it rewrites `PROJECT_INFO.md`, so the row's size
+snapshot is wrong and has to be dropped. `projects_browser_reloads_after_a_project_mutation`
+already asserted a rescan of that one folder, and it was right to.
+
+(2) **The row is patched by index, not by search.** The browser knows which row
+it opened (`start + choice`), so there is nothing to look up — which also means
+a patch cannot accidentally rewrite a different project that happens to share a
+path prefix.
+
+(3) **`probe_dirs` abandons a thread that times out**, and that is the design,
+not an oversight: the thread is blocked in the kernel on a dead mount and cannot
+be cancelled. One parked thread per unresponsive base per probe is cheaper than
+the alternative, which is the menu waiting for the operating system.
 
 ## Phase 10: The main-menu frame, a better action menu, more keys, one browser
 

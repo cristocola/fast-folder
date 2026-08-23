@@ -33,9 +33,19 @@ const SIZE_TICK: Duration = Duration::from_millis(200);
 /// While the list is up, `util::live_select` owns the terminal, so
 /// nothing in here may print — which is why the scan has no progress output of
 /// its own, and why the scanner threads are silent by construction.
-pub fn run_paged_browser<F>(page_size: usize, empty_message: &str, mut load: F) -> Result<()>
+/// `keeps` decides whether a row that has just been patched still belongs in
+/// this list. The projects browser passes something that always says yes; the
+/// search browser re-evaluates its query against the project's fresh metadata,
+/// because adding a tag can take a project out of its own results.
+pub fn run_paged_browser<F, K>(
+    page_size: usize,
+    empty_message: &str,
+    mut load: F,
+    keeps: K,
+) -> Result<()>
 where
     F: FnMut() -> Result<Vec<Project>>,
+    K: Fn(&Project) -> bool,
 {
     let page_size = page_size.max(1);
     let mut projects = load()?;
@@ -97,22 +107,39 @@ where
         };
 
         if choice < current.len() {
-            // Own the selected snapshot so a successful action can reload the
+            // Own the selected snapshot so a successful action can patch the
             // backing Vec without keeping a borrow into it.
-            let project = current[choice].clone();
+            let row = start + choice;
+            let project = projects[row].clone();
             let cell = scanner.cells_for(std::slice::from_ref(&project.path))[0];
             match project_action_menu(&project, Some(cell), true)? {
                 ActionLoop::BackToList => {}
-                ActionLoop::Changed(paths) => {
-                    for path in paths {
-                        scanner.forget(&path);
+                ActionLoop::Patched { project, stale } => {
+                    for path in &stale {
+                        scanner.forget(path);
                     }
+                    // One row changed, so one row is rewritten. Re-running the
+                    // loader here is what made a tag cost a full rescan of every
+                    // base. A search browser still gets the last word: a project
+                    // whose new metadata no longer satisfies the query leaves the
+                    // list.
+                    if keeps(&project) {
+                        projects[row] = project;
+                    } else {
+                        projects.remove(row);
+                    }
+                }
+                ActionLoop::Removed { path } => {
+                    scanner.forget(&path);
+                    projects.remove(row);
+                }
+                ActionLoop::Reload => {
                     projects = load()?;
-                    // `page` is clamped at the top of the loop if the final row
-                    // on the last page was removed or stopped matching search.
                 }
                 ActionLoop::Quit => return Ok(()),
             }
+            // `page` is clamped at the top of the loop if the final row on the
+            // last page was removed or stopped matching.
             continue;
         }
         if previous_idx == Some(choice) {

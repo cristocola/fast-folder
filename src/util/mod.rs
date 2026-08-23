@@ -7,6 +7,7 @@ pub(crate) mod live_select;
 pub mod lockfile;
 pub mod paths;
 pub(crate) mod size_scan;
+pub mod trace;
 pub(crate) mod tree_size;
 pub mod tty;
 pub mod yaml;

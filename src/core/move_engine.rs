@@ -128,7 +128,7 @@ fn move_project_unlocked(
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<MoveOutcome> {
-    assets::require_real_directory(new_base, "target base")?;
+    crate::util::paths::require_real_directory(new_base, "target base")?;
     let new_base = new_base
         .canonicalize()
         .with_context(|| format!("resolving target base {}", new_base.display()))?;

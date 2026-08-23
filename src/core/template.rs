@@ -334,9 +334,16 @@ impl Template {
         // Flush text files into files/. Uses `path`'s parent (authoritative)
         // rather than `self.dir`, which may be unset on an in-memory template.
         let files_dir = dir.join("files");
+        if !snapshot.files.is_empty() {
+            fs::create_dir_all(&files_dir)
+                .with_context(|| format!("creating {}", files_dir.display()))?;
+        }
         for f in &snapshot.files {
-            crate::core::validated::SafeRelativePath::parse(&f.path)?;
-            let dest = files_dir.join(&f.path);
+            let rel = crate::core::validated::SafeRelativePath::parse(&f.path)?;
+            // Lexically safe above; physically checked here, right before the
+            // write, so an existing `files/docs -> /outside` is refused rather
+            // than written through.
+            let dest = crate::util::paths::contained_destination(&files_dir, &rel.to_path_buf())?;
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)
                     .with_context(|| format!("creating {}", parent.display()))?;

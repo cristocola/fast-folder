@@ -351,3 +351,91 @@ fn a_very_deep_tree_is_refused_rather_than_overflowing_the_stack() {
         "the error should say what happened: {message}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Writes never follow a link out of the tree they are meant to fill
+// ---------------------------------------------------------------------------
+
+/// `SafeRelativePath` proves the *text* of `docs/new.md` cannot escape the apply
+/// target. Nothing proved the same about the filesystem, and `create_dir_all`
+/// walks straight through an existing `docs -> outside`: the file landed outside
+/// the folder while every lexical check passed.
+#[cfg(unix)]
+#[test]
+fn apply_refuses_to_write_through_a_link_in_the_target() {
+    use std::os::unix::fs::symlink;
+
+    sandbox(|install, base| {
+        let dir = install.join("templates").join("linky");
+        fs::create_dir_all(dir.join("files/docs")).unwrap();
+        fs::write(
+            dir.join("template.yaml"),
+            "name: T\nslug: linky\nnaming_pattern: \"{id}\"\nid:\n  prefix: L\n  digits: 3\n",
+        )
+        .unwrap();
+        fs::write(dir.join("files/docs/new.md"), "template body\n").unwrap();
+
+        let target = base.join("target");
+        let outside = base.join("outside");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, target.join("docs")).unwrap();
+
+        let tmpl = template::find_by_slug("linky").unwrap();
+        let error = project::apply(&tmpl, &target, &HashMap::new(), &Config::default())
+            .expect_err("apply must refuse to write through the link")
+            .to_string();
+
+        assert!(
+            error.contains("refusing to write through a link"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("docs"),
+            "the error must name the link: {error}"
+        );
+        assert!(
+            !outside.join("new.md").exists(),
+            "the file was written outside the apply target"
+        );
+        assert_eq!(
+            fs::read_dir(&outside).unwrap().count(),
+            0,
+            "nothing may be created beyond the link"
+        );
+    });
+}
+
+/// The same rule on the way in. `template from-folder --force` reuses an
+/// existing template directory, so a `files/sub -> outside` planted there would
+/// send the bundle out of the templates directory.
+#[cfg(unix)]
+#[test]
+fn template_ingestion_refuses_a_pre_planted_link_before_writing_a_byte() {
+    use std::os::unix::fs::symlink;
+
+    sandbox(|install, base| {
+        // A source project with a nested binary worth bundling.
+        let source = base.join("source");
+        fs::create_dir_all(source.join("sub")).unwrap();
+        fs::write(source.join("sub/asset.bin"), [0u8, 159, 146, 150]).unwrap();
+
+        // A template directory that already exists, with a hostile link inside.
+        let outside = install.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let files = install.join("templates").join("ingest").join("files");
+        fs::create_dir_all(&files).unwrap();
+        symlink(&outside, files.join("sub")).unwrap();
+
+        let result = fastf::core::operations::template_from_folder(&source, "ingest", true, true);
+
+        // Either the pre-existing directory is cleared first (in which case the
+        // link is gone and the bundle is contained), or the write is refused.
+        // What must never happen is a byte landing beyond the link.
+        assert_eq!(
+            fs::read_dir(&outside).unwrap().count(),
+            0,
+            "the bundle was written through the link: {result:?}"
+        );
+    });
+}

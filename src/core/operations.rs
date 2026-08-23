@@ -93,7 +93,7 @@ pub fn preview_apply(
 ) -> Result<ApplyOutcome> {
     let config = Config::load()?;
     let template = template::find_by_slug(template_slug)?;
-    assets::require_real_directory(target, "apply target")?;
+    crate::util::paths::require_real_directory(target, "apply target")?;
     let actions = project::apply_plan(&template, target, variables, &config.date_format)?;
     Ok(ApplyOutcome { actions })
 }
@@ -106,7 +106,7 @@ pub fn apply(
     let _mutation_lock = DataLock::acquire()?;
     let config = Config::load()?;
     let template = template::find_by_slug(template_slug)?;
-    assets::require_real_directory(target, "apply target")?;
+    crate::util::paths::require_real_directory(target, "apply target")?;
     // The authoritative occupancy plan is computed only after the lock is held.
     let actions = project::apply_plan(&template, target, variables, &config.date_format)?;
     project::apply(&template, target, variables, &config)?;
@@ -341,7 +341,7 @@ fn configured_parent(config: &Config, canonical: &Path) -> Result<PathBuf> {
             continue;
         };
         if configured == parent {
-            assets::require_real_directory(&configured, "configured base")?;
+            crate::util::paths::require_real_directory(&configured, "configured base")?;
             return Ok(configured);
         }
     }
@@ -658,7 +658,7 @@ pub fn delete_template(slug: &str) -> Result<()> {
     // A recursive delete follows what it is pointed at. The template directory
     // must be a real directory sitting directly under the templates directory —
     // never a link, whose target is somewhere this has no business removing.
-    assets::require_real_directory(&dir, "template directory")?;
+    crate::util::paths::require_real_directory(&dir, "template directory")?;
     if dir.parent() != Some(crate::util::paths::templates_dir().as_path()) {
         bail!(
             "refusing to delete {}: it is not directly inside the templates directory",

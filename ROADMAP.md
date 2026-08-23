@@ -20,6 +20,13 @@ file paths and byte lengths, publishes the complete staging directory, and only
 then attempts to remove the source. The project must remain untouched by other
 programs while it is moving.
 
+A write fastf performs beneath a root it controls — a new project, an apply
+target, a template's `files/` — never follows a link, junction or reparse point
+that is already there. Both layers are enforced: the path text cannot escape its
+root, and the filesystem beneath it is checked component by component
+immediately before each write. This is not a defence against another process
+rewriting the tree concurrently; it is one user's own filesystem.
+
 The contract deliberately does not include hashes, ACLs, extended attributes,
 sparse-file layout, hard-link relationships, symlink/junction reproduction, or
 storage-level durability. Links and special entries are rejected when copying
@@ -30,7 +37,12 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v2.0.0 in progress — two surfaces, one engine, nothing trusted by accident** (`PLAN.md` drives it, one phase per PR)
-- Status: **Phase 4 landed: template writes behind the lock.**
+- Status: **Phase 5 landed: destination containment.** No write fastf performs
+  beneath a root it controls follows an existing link, junction or reparse
+  point. `paths::contained_destination` checks every component immediately
+  before the write, and `paths::is_link_like` is the single, widest definition
+  of "link" in the crate.
+- Previously: **Phase 4 landed: template writes behind the lock.**
   `operations::save_template` and `operations::delete_template` are the only
   ways to write the templates directory, both under `DataLock`;
   `Template::save_to_file` is `pub(crate)` and `tests/layering.rs` refuses the
@@ -116,6 +128,9 @@ Regression coverage grows with the relevant release:
 - [x] `template delete` waits for a held `DataLock` and leaves the template on
   disk until it gets it; a slug rename moves the directory; a linked template
   directory is refused (v2.0.0).
+- [x] Apply through a link in the target is refused and the outside directory
+  stays empty (v2.0.0, unix symlink + windows junction); template ingestion
+  refuses a pre-planted link before writing a byte.
 
 Manual move smoke and follow-up:
 

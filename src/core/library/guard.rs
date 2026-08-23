@@ -9,7 +9,6 @@ use crate::core::project_info;
 
 use super::discovery::*;
 use super::model::*;
-use crate::core::assets;
 use std::fs;
 
 /// Re-resolve a cached/discovered project against the configured filesystem
@@ -49,8 +48,8 @@ pub(crate) fn revalidate_recorded_project(candidate: &Project) -> Result<Project
 }
 
 pub(crate) fn revalidate_project_in_base(candidate: &Project, base: &Path) -> Result<Project> {
-    assets::require_real_directory(base, "project base")?;
-    assets::require_real_directory(&candidate.path, "project source")?;
+    crate::util::paths::require_real_directory(base, "project base")?;
+    crate::util::paths::require_real_directory(&candidate.path, "project source")?;
     let path = candidate
         .path
         .canonicalize()

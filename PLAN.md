@@ -467,11 +467,16 @@ deny-by-default link detection this phase needs on Windows
    `src/core/CLAUDE.md` "Path safety" describes lexical + physical as two layers.
 
 **Acceptance.**
-- [ ] All gates pass, Windows CI included (junction test).
-- [ ] The apply-through-link test was observed writing into `outside/` on the old
-      build.
-- [ ] `grep -rn 'create_dir_all' src/core/assets.rs src/core/project.rs` shows each
-      call preceded by `contained_destination`.
+- [x] All gates pass; the junction test is `cfg(windows)` and lints clean under
+      the `x86_64-pc-windows-gnu` target. CI's Windows runner runs it.
+- [x] The apply-through-link test was observed failing on the pre-change build
+      (`apply must refuse to write through the link: ()` — it returned `Ok`).
+- [x] `grep -rn 'create_dir_all' src/core/assets.rs src/core/project.rs`: every
+      production call is preceded by `contained_destination`, except two that are
+      correct as they are — `create_inner`'s base creation (the base itself, just
+      checked to be the configured one; a base that is a link to a mounted drive
+      is legitimate) and `copy_job`'s parent (its caller derives the destination
+      through the helper, noted in its doc comment).
 
 ---
 
@@ -783,3 +788,13 @@ fastf refuses to write through links; cache entries outside a base are ignored.
   `save_to_file(&tmpl.file_path())` wrote the new manifest into a fresh directory
   and left the old one behind as a second template with the same contents.
   `save_template`'s `original_slug` fixes that; it is why the parameter exists.
+- **Phase 5 — 2026-08-23, `phase-05-destination-containment`.** As planned, plus
+  three things the plan did not name. `assets::copy_file` now takes
+  `(dest_root, rel)` instead of a joined `dest`, because a caller that joins
+  first has already skipped the check. `paths::is_link_like` is a new single
+  definition of "link" — the reparse-point attribute, not just
+  `FileType::is_symlink()` — and `tree_size`'s private copy is gone, so a walker
+  cannot end up with a weaker rule than a writer. And `require_real_directory`
+  moved to `paths` as the plan said, which upgrades **every** existing caller
+  (transactions, provisioning, move_engine, guard, and Phase 4's
+  `delete_template`) from the symlink-only test to the reparse-point one.

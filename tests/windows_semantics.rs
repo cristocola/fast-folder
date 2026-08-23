@@ -407,3 +407,45 @@ fn folder_names_that_are_cmd_syntax_round_trip_through_discovery() {
     let found = library::scan_base(tmp.path());
     assert_eq!(found.len(), 3, "all three must be discoverable");
 }
+
+/// A junction is a link. `contained_destination` must refuse to write through
+/// one exactly as it refuses a symlink on unix, or the containment guarantee
+/// holds on one platform and not the other.
+///
+/// This is the reason `paths::is_link_like` tests the reparse-point attribute
+/// rather than only `FileType::is_symlink()`: there is one definition of "link"
+/// in the crate, and it is the widest one.
+#[cfg(windows)]
+#[test]
+fn apply_refuses_to_write_through_a_junction_in_the_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = tmp.path().join("outside");
+    let target = tmp.path().join("target");
+    fs::create_dir_all(&outside).unwrap();
+    fs::create_dir_all(&target).unwrap();
+
+    let made = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(target.join("docs"))
+        .arg(&outside)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !made {
+        eprintln!("skipping: the OS refused to create a junction");
+        return;
+    }
+
+    let error = fastf::util::paths::contained_destination(&target, Path::new("docs/new.md"))
+        .expect_err("a junction mid-path must be refused")
+        .to_string();
+    assert!(
+        error.contains("refusing to write through a link"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        fs::read_dir(&outside).unwrap().count(),
+        0,
+        "nothing may be created beyond the junction"
+    );
+}

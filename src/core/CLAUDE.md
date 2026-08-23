@@ -99,6 +99,35 @@ template file whose name is not valid UTF-8 was opened at a `?`-substituted path
 that does not exist, so the create aborted naming a path the user never wrote.
 Validation stays textual because every dangerous component is ASCII.
 
+**Path safety is two layers, and lexical is only the first.**
+`SafeRelativePath` and `paths::require_native_relative` prove the *text* of a
+path cannot escape its root. They say nothing about the filesystem, and
+`create_dir_all` walks straight through an existing `docs -> /outside` — so a
+template file at `docs/new.md` applied to a folder with such a link landed
+outside the folder while every lexical check passed.
+
+`paths::contained_destination(root, rel)` is the physical layer: `root` must be a
+real directory, every existing component of `root/rel` must be a real directory
+(the last may be an ordinary file), and none may be a link. A component that does
+not exist yet is fine — nothing can be reached through a path that is not there.
+**Call it immediately before the write**, which is where every caller does:
+`assets::copy_file` takes `(dest_root, rel)` rather than a joined path for
+exactly that reason, and `create_structure`, `apply`'s structure loop,
+`copy_template_files`, `Template::save_to_file`'s file flush,
+`template_import`'s asset bundling and `provisioning`'s create-journal resume all
+go through it. `copy_job` is the one that takes a joined path, because a
+`CopyJob` is a pair of absolute paths by the time it exists — its caller derives
+the destination through the helper first.
+
+This closes the gap where a link is already sitting in the tree. It is not a
+race-free `openat2` fortress and does not claim to be; the threat model is one
+user's own filesystem, stated in `ROADMAP.md`.
+
+`paths::is_link_like` is the **one** definition of "link" in the crate, and it is
+the widest one: any Windows reparse point, not only what `FileType::is_symlink()`
+reports. Junctions are the case that matters, and `tree_size` shares it so a
+second walker cannot end up with a weaker rule.
+
 `paths::display_path` strips `\\?\` **for display and metadata only**. The
 verbatim form is what makes paths past MAX_PATH work. Strip at display, never at
 storage.

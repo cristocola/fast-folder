@@ -660,7 +660,7 @@ pub fn apply(
     vars: &HashMap<String, String>,
     config: &Config,
 ) -> Result<()> {
-    assets::require_real_directory(target, "apply target")?;
+    crate::util::paths::require_real_directory(target, "apply target")?;
     let vars = crate::core::vars::rendered_values(template, vars)?;
     let ctx = RenderContext::now(&config.date_format);
 
@@ -668,6 +668,13 @@ pub fn apply(
     for action in apply_plan_resolved(template, target, &vars, &ctx)? {
         match action {
             ApplyAction::CreateFolder(p) => {
+                // The plan joined this onto `target` lexically. Re-derive the
+                // relative part and re-check it physically, here, right before
+                // the write.
+                let rel = p
+                    .strip_prefix(target)
+                    .with_context(|| format!("{} is not inside the apply target", p.display()))?;
+                let p = crate::util::paths::contained_destination(target, rel)?;
                 fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
             }
             ApplyAction::SkipFolder(_) => {}
@@ -682,6 +689,9 @@ pub fn apply(
     Ok(())
 }
 
+/// `parent` is checked as a real directory by `contained_destination` on the
+/// way in at every level, so a link planted mid-tree stops the recursion rather
+/// than redirecting it.
 fn create_structure(
     nodes: &[FolderNode],
     parent: &Path,
@@ -692,7 +702,7 @@ fn create_structure(
         let raw = SafeRelativePath::parse(&node.name)?;
         let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
         let actual_path = SafeRelativePath::parse(&rendered)?;
-        let path = actual_path.join_to(parent);
+        let path = crate::util::paths::contained_destination(parent, &actual_path.to_path_buf())?;
         fs::create_dir_all(&path)
             .with_context(|| format!("creating directory {}", path.display()))?;
         if !node.children.is_empty() {
@@ -772,15 +782,14 @@ fn copy_template_files(
         }
         // Built from the *native* path, so a name that is not valid UTF-8 lands
         // spelled exactly as it was rather than with `?` where its bytes were.
-        // `require_native_relative` is what keeps this inside `dest_root`.
-        // Built from the *native* path, so a name that is not valid UTF-8 lands
-        // spelled exactly as it was rather than with `?` where its bytes were.
-        // `require_native_relative` is what keeps this inside `dest_root`.
+        // `require_native_relative` proves the *text* cannot escape `dest_root`;
+        // `contained_destination` proves the filesystem beneath it does not
+        // either, and is re-run per entry immediately before each write.
         let native = assets::interp_rel_os(&entry.os_rel, vars, ctx);
         crate::util::paths::require_native_relative(&native, "template file")?;
-        let dest = dest_root.join(&native);
 
         if entry.is_dir() {
+            let dest = crate::util::paths::contained_destination(dest_root, &native)?;
             fs::create_dir_all(&dest)
                 .with_context(|| format!("creating directory {}", dest.display()))?;
             continue;
@@ -798,7 +807,7 @@ fn copy_template_files(
             continue;
         }
 
-        if skip_existing && dest.exists() {
+        if skip_existing && dest_root.join(&native).exists() {
             continue;
         }
 
@@ -806,7 +815,8 @@ fn copy_template_files(
             || entry.size > assets::TEXT_MAX_BYTES;
         assets::copy_file(
             &files_dir.join(&entry.os_rel),
-            &dest,
+            dest_root,
+            &native,
             force_verbatim,
             vars,
             ctx,

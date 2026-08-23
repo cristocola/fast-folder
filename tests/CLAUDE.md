@@ -1,10 +1,10 @@
 # CLAUDE.md — fastf test suites
 
-There are **ten** integration binaries — `integration.rs` (core flows),
+There are **eleven** integration binaries — `integration.rs` (core flows),
 `ui_server.rs` (browser-UI request layer), the five v1.1 suites
 `crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`, `hostile_fs.rs`,
-`properties.rs`, the v1.2.1 `cli_surface.rs`, the v1.3 `tui_pty.rs`, and the
-v1.6.1 `repo_hygiene.rs`. What each guards — the intent, not the case list:
+`properties.rs`, the v1.2.1 `cli_surface.rs`, the v1.3 `tui_pty.rs`, the
+v1.6.1 `repo_hygiene.rs`, and the v1.7.0 `layering.rs`. What each guards — the intent, not the case list:
 - `crash_recovery.rs` — every create failpoint asserted against the same invariants,
   plus real subprocesses killed with abort. Debug-only (failpoints are compiled out
   of release).
@@ -21,6 +21,10 @@ v1.6.1 `repo_hygiene.rs`. What each guards — the intent, not the case list:
   session. Keystrokes must be **spaced**, not burst (`pty::Script` handles the
   cadence), and `Confirm` takes a bare `y`/`n` with no Enter — a trailing `\r`
   survives into the next prompt and silently accepts its default.
+- `layering.rs` — reads the source rather than running it: `core` and `util` may
+  not reach for a `dialoguer` prompt, because the same functions serve `fastf ui`,
+  where there is no terminal to answer one. An import is not something a runtime
+  test can see.
 - `windows_semantics.rs` — reserved names, trailing dots, control chars, unicode,
   >MAX_PATH, case-only rename, read-only files, a real sharing violation, junctions.
 - `hostile_fs.rs` — corrupt caches/markers/metadata, absent bases, vanishing paths:

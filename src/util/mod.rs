@@ -1,6 +1,7 @@
 pub mod atomic;
 pub mod faults;
 pub mod fs_retry;
+pub mod human_bytes;
 pub mod interrupt;
 pub(crate) mod live_select;
 pub mod lockfile;

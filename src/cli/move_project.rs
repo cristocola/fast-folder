@@ -83,20 +83,21 @@ pub fn run(args: MoveArgs) -> Result<()> {
                 })?
         }
         None => {
-            crate::util::tty::require_tty(
-                "pick a base",
+            let default_base = Config::load()?.effective_bases().first().cloned();
+            let picked = crate::tui::pickers::pick_base(
+                &format!("Move '{}' to which base?", project.name),
+                &candidates,
+                default_base.as_deref(),
                 "name the target instead: `fastf move <query> <base>`",
+                true,
             )?;
-            let labels: Vec<String> = candidates
-                .iter()
-                .map(|b| format!("{}  ({})", library::base_label(b), b.display()))
-                .collect();
-            let idx = dialoguer::Select::new()
-                .with_prompt(format!("Move '{}' to which base?", project.name))
-                .items(&labels)
-                .default(0)
-                .interact()?;
-            candidates[idx].clone()
+            match picked {
+                Some(base) => base,
+                None => {
+                    println!("{}", "Cancelled — nothing moved.".dimmed());
+                    return Ok(());
+                }
+            }
         }
     };
 

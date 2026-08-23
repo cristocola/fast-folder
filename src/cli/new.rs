@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use colored::Colorize;
-use dialoguer::{Confirm, Select};
+use dialoguer::Confirm;
 use std::collections::HashMap;
 
 use crate::cli::extra::Recognized;
@@ -8,7 +8,7 @@ use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::project;
 use crate::core::template::{self, Template};
-use crate::core::vars::collect_vars;
+use crate::tui::vars::collect_vars;
 use crate::util::tty;
 
 /// Arguments passed to `fastf new`.
@@ -117,7 +117,7 @@ pub fn run(args: NewArgs) -> Result<()> {
             .canonicalize()
             .unwrap_or_else(|_| plan.root_path.clone());
         println!();
-        if let Err(e) = crate::core::post_create::prompt_and_reveal(&abs_path) {
+        if let Err(e) = prompt_and_reveal(&abs_path) {
             eprintln!(
                 "{} could not open folder: {}",
                 "warning:".yellow().bold(),
@@ -163,34 +163,15 @@ fn resolve_template(slug: Option<&str>, config: &Config) -> Result<Template> {
 }
 
 pub fn pick_template_interactively() -> Result<Template> {
-    let templates = template::load_all()?;
-    if templates.is_empty() {
-        bail!("no templates found — run `fastf template new` to create one");
-    }
-    tty::require_tty(
-        "pick a template",
+    let picked = crate::tui::pickers::pick_template(
+        "Select template",
         "name it instead: `fastf new <slug>`\n  \
          (or set one with `fastf config set default-template <slug>`)",
     )?;
-
-    let labels: Vec<String> = templates
-        .iter()
-        .map(|t| {
-            if t.description.is_empty() {
-                t.name.clone()
-            } else {
-                format!("{} — {}", t.name, t.description)
-            }
-        })
-        .collect();
-
-    let idx = Select::new()
-        .with_prompt("Select template")
-        .items(&labels)
-        .default(0)
-        .interact()?;
-
-    Ok(templates[idx].clone())
+    match picked {
+        Some(tmpl) => Ok(tmpl),
+        None => bail!("no template chosen"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +194,25 @@ pub fn apply_extra(args: &mut NewArgs, recognized: Vec<Recognized>) -> Result<()
             "base-dir" => args.base_dir_override = flag.value,
             other => bail!("flag `--{other}` is declared but not handled after the slug"),
         }
+    }
+    Ok(())
+}
+
+/// Ask "Open project folder? [Y/n]" and reveal on Yes.
+///
+/// The caller has already filtered out the cases where the prompt should not
+/// fire (`--yes`, `--no-post`, `prompt_open_after_create=false`, a resolved
+/// `post_create` that already reveals, no terminal). This owns the prompt and
+/// the reveal call, and it lives here rather than in `core::post_create`
+/// because `core` may not prompt: the same module runs for `fastf ui`, where
+/// there is nobody at a terminal to answer.
+fn prompt_and_reveal(path: &std::path::Path) -> Result<()> {
+    let open = Confirm::new()
+        .with_prompt("Open project folder?")
+        .default(true)
+        .interact()?;
+    if open {
+        crate::core::post_create::reveal_folder(path)?;
     }
     Ok(())
 }

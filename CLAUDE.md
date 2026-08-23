@@ -67,7 +67,15 @@ Gotchas sections below for the parts that bite.
   because `move` is a keyword. CLI modules gather prompts and render outcomes;
   noninteractive register/from-folder behavior lives under `core/` so UI code
   never depends on a CLI implementation.
-- `src/tui/` — `menu.rs` carries the interactive menu and the grouped Settings submenus.
+- `src/tui/` — every interactive terminal surface. `menu.rs` carries the guided
+  menu and the grouped Settings submenus; `browser.rs` the paged project browser;
+  `actions.rs` the project action menu and the metadata/journal views;
+  `rows.rs` the one project-row builder (widths, Size cell, `clamp_label`,
+  `ProjectRowTheme`); `pickers.rs` the one template picker and the one base
+  picker; `vars.rs` the interactive half of variable collection;
+  `template_builder.rs` the template builder. **`core` and `util` import nothing
+  from `cli`/`tui`/`ui`** — `tests/layering.rs` is the enforcement. New shared
+  interactive code goes here, not in `cli/`.
 - `src/ui/` — browser UI. Has its own CLAUDE.md.
 - `docs/` — the user-facing reference.
   **When features change, update the matching `docs/` file, not the README.**
@@ -327,7 +335,7 @@ After `print_success()` in `cli/new.rs`, call `post_create::prompt_and_reveal(pa
 Calls the existing platform-correct `reveal_folder()` on Yes.
 
 ### Interactive `fastf recent`
-`cli/recent.rs` decides interactive vs plain by `!args.plain && std::io::stdout().is_terminal()`. In interactive mode: `dialoguer::Select` picker over the filtered `library::Project`s + a `[Quit]` sentinel at the end. Selecting a project enters `project_action_menu()` which loops until Back/Quit. **v0.9:** `--prune` is gone (the cache self-heals); the picker sources from `library::discover` and reads tags straight off `project.tags`.
+`cli/recent.rs` decides interactive vs plain by `!args.plain && std::io::stdout().is_terminal()`. In interactive mode: `dialoguer::Select` picker over the filtered `library::Project`s + a `[Quit]` sentinel at the end. Selecting a project enters `tui::actions::project_action_menu()` which loops until Back/Quit. **v0.9:** `--prune` is gone (the cache self-heals); the picker sources from `library::discover` and reads tags straight off `project.tags`.
 
 The metadata display (`show_metadata`) tries `read_metadata` first; on success it calls `print_structured_metadata` which computes max-key-width and emits aligned `key  value` pairs with a `variables:` sub-block. Dim `(empty)` for empty values. Falls back to raw markdown on `Ok(None)`. Yellow warning on missing file.
 
@@ -402,7 +410,7 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 - v0.4: `project_info::split_frontmatter_body()` is `pub` (not `pub(crate)`) so integration tests can assert byte-identity round-trips. The internal `extract_frontmatter` helper from v0.3 was folded into it — there's now one splitter.
 - v0.4: `Predicate::Free` is the parser fallthrough, so any non-empty term that isn't `tag:`, `key=…`, `key>…`, `key<…` becomes a free-text predicate. Don't add another fallthrough below it (would be unreachable). Free terms search **case-insensitive substring** (not prefix) — keep it that way for grep-like UX.
 - v0.4: `path` is intentionally NOT searched by `Predicate::Free`. There's a regression test (`free_does_not_match_path`) that asserts this; if you ever extend the field set, don't break that guarantee silently — home-dir leakage is a privacy footgun.
-- v0.4: `cli::recent::run_picker` is `pub` because `cli::search` reuses it; `project_action_menu` stays private. If TUI/search both need a new picker action, add it inside `recent.rs`.
+- v0.4/v1.7.0: `cli::recent::run_picker` is `pub` because `cli::search` reuses it. The action menu it opens is `tui::actions::project_action_menu`, shared with the guided browser — a new picker action goes there, not in `cli/recent.rs`, which is now just `fastf recent`/`fastf open` (args, filter, plain list, picker loop).
 - v1.6.1: **`cli::extra::classify_extra` reads the flag list from clap, not from a hand-written match.** `trailing_var_arg` means every token after the first one clap cannot parse lands in `extra`; the classifier sorts that bucket using `cmd.get_arguments()` for *that* subcommand (long, short, `get_action().takes_values()`). So the rule for adding a flag is two steps, not three: declare it in clap, handle it in that command's `apply_extra` (`cli::new`, `cli::apply`, `RegisterFlags`). The `_ =>` arm of each `apply_extra` bails by name, and `main.rs`'s `every_declared_flag_is_handled_after_the_positional` calls it with every declared long, so forgetting the second step fails the suite instead of making the flag work before the positional and silently do nothing after it. An undeclared `--key=value` is a template variable; anything else is an error (`warn_unknown` is gone — an ignored request is not an outcome).
 - register writes PROJECT_INFO.md in two steps: `project_info::write(&plan, &tmpl, &tags)` (which uses `library::now_iso8601` inside `Metadata::from_plan`), then `project_info::write_frontmatter` to patch `created` to the resolved timestamp. Don't try to plumb the timestamp through `from_plan` — it'd break the byte-identity guarantee on the round-trip test and pollute the signature for a register-only concern.
 - v0.5: `register` builds its `ProjectPlan` directly (pub struct fields) instead of calling `project::plan()` because plan always sets `root_path = cfg.base_dir.join(folder_name)`. Register's `root_path` is the canonical path of the existing folder. Don't refactor plan to take a path override — keep the two flows separate.
@@ -441,7 +449,7 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
   under the lock. `library::move_project` remains as the one compatibility
   shape: it takes the lock and revalidates the recorded project, but validates
   no configured base. The other three wrappers had no callers and are gone.
-- v0.10: in `project_action_menu` the Move/Back/Quit indices are dynamic (Move appears only when another mounted base exists) — they're handled by `if choice == move_idx/back_idx/quit_idx` guards ABOVE the numeric `match`. Adding a new fixed action means renumbering only the 0..=5 arms; the tail stays index-independent.
+- v0.10: in `tui::actions::project_action_menu` the Move/Back/Quit indices are dynamic (Move appears only when another mounted base exists) — they're handled by `if choice == move_idx/back_idx/quit_idx` guards ABOVE the numeric `match`. Adding a new fixed action means renumbering only the 0..=5 arms; the tail stays index-independent.
 - v0.10: the UI create form's `#base-dir` is now a `<select>` — it fires `change`, not `input` (the preview listener was updated accordingly). The frontend `effectiveBases()`/`baseLabel()` helpers mirror `Config::effective_bases()`/`library::base_label` with trailing-slash-insensitive dedup; the server re-validates and canonicalizes on every move anyway.
 - v1.5.0: `staged_copy_verify_commit` is the staged move body and it runs on
   `core::transactions`; debug-only forced-staged tests reach it on one
@@ -466,7 +474,7 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 
 - v1.0: `paths::install_dir()` must stay infallible-looking but non-panicking. Never re-add `.expect` there; never memoize the resolution (tests swap `FASTF_INSTALL_DIR` within one process). Portable detection keys on `config.toml`/`templates/` NEXT TO THE EXE — a bare binary copied without them lands in the user config dir by design (first-run banner names the mode).
 - v1.0.2: **`fastf-ui` launcher bin** (`src/bin/fastf-ui.rs`, second `[[bin]]`) — `#![cfg_attr(windows, windows_subsystem = "windows")]` shim that runs try_install_dir → ensure_bootstrapped → `cli::ui::run(app: true)` so the Start Menu shortcut opens the web UI with no console. NOT a second server (the server still lives only in `src/ui/`). Errors surface via a raw `MessageBoxW` extern (user32, edition-2024 `unsafe extern` — no new dependency); std discards println! when no console is attached. Built on all platforms; only Windows artifacts ship it (MSI + zip; the Linux tar copies just `fastf`).
-- v1.0.2: **conhost ghosting fix** — `cli::recent::clamp_label(label, columns)` truncates picker labels to terminal width (`dialoguer::console::truncate_str`, unicode-width-aware, "…" tail; budget = columns − 3 for the "> " prefix + last-column margin; columns == 0 → passthrough). Applied in `run_picker` and the move-base picker. Wrapped Select lines are what ghosted on the legacy Windows console, so **picker labels must stay single-line, ANSI-free, and clamped** — don't add colored strings to Select items, and use `dialoguer::console` (don't add `console` as a direct dep). Unit tests in `recent.rs`.
+- v1.0.2: **conhost ghosting fix** — `tui::rows::clamp_label(label, columns)` truncates picker labels to terminal width (`dialoguer::console::truncate_str`, unicode-width-aware, "…" tail; budget = columns − 3 for the "> " prefix + last-column margin; columns == 0 → passthrough). Applied by `tui::rows::project_row`'s callers and by both pickers in `tui::pickers`. Wrapped Select lines are what ghosted on the legacy Windows console, so **picker labels must stay single-line, ANSI-free, and clamped** — don't add colored strings to Select items, and use `dialoguer::console` (don't add `console` as a direct dep). Unit tests in `tui/rows.rs`.
 - v1.0.2: **unconfigured `base_dir` falls back to the HOME directory, not the cwd** (`Config::resolve_base_dir` → `paths::home_dir()`, new pub helper: `%USERPROFILE%`/`$HOME`; cwd only if home is unset). The cwd fallback scattered projects and `.fastf-index.json` caches into whatever directory a command ran from. **Both test harnesses (`with_fresh_install` in integration.rs AND ui_server.rs) now redirect HOME/USERPROFILE into the sandbox** — without that, tests with a default config would scan the developer's real home and self-heal the counter from their real projects (5 register tests broke exactly that way). Any new test harness must do the same.
 - v1.0.2: **onboarding is universal** — the shared core is `config::init_base_dir(raw)` (trim → `~` expansion → absolute-only → `create_dir_all` → canonicalize → persist `base_dir`) + `config::suggested_base_dir()` (`<home>/Projects`). The web UI's `/api/base/init` and the TUI's `onboard_first_run` (menu.rs, runs before the main loop when `base_dir` AND `bases` are both empty; empty answer skips, reappears next launch) are thin shells over it. Don't duplicate the expansion/validation anywhere else — call the core fn.
 
@@ -767,6 +775,33 @@ is their directory sibling. `ReconcileReport.swept` stays in the JSON because
 `docs/UI.md` promises the field, but nothing writes it and `is_empty` no longer
 consults it. `copy_template_files` lost its `verbose` flag — both call sites
 passed `false`, so the per-file printing had been unreachable since v0.8.
+
+### v1.7.0 gotchas
+
+**Every interactive terminal surface lives under `src/tui/`.** `cli/recent.rs`
+had become the shared picker library — the guided menu imported seven `cli::*`
+modules, so the TUI was a client of the CLI layer. The browser, the action menu,
+the row builder, the two pickers and interactive variable collection are now
+`tui::{browser, actions, rows, pickers, vars}`; `cli/recent.rs` is `fastf recent`
+and `fastf open` again. `cli` may call `tui` helpers; the reverse of the layering
+rule is what `tests/layering.rs` enforces: **`core` and `util` never import
+`dialoguer`'s prompts.** That is why `post_create::prompt_and_reveal` moved into
+`cli::new` — `core::post_create` also runs for `fastf ui`, where nobody is at a
+terminal to answer a `Confirm`.
+
+**There is one template picker, one base picker and one byte formatter.** They
+were two, three and two, and the copies had drifted: only one base picker clamped
+its labels, only one marked the default, and the two byte formatters switched
+unit on opposite sides of the boundary. `tui::pickers::pick_base` takes the
+default base explicitly (the first `effective_bases()` entry) rather than
+assuming index 0, because `fastf move`'s candidate list excludes the project's
+current base and can therefore start anywhere. Both pickers return
+`Result<Option<_>>`: `None` is a cancelled pick, never an error.
+
+**Row widths are measured from the projects, never from the sizes**
+(`tui::rows::RowWidths`). A label may only ever change inside its own Size cell,
+or the table reflows under the reader as background snapshots land — the property
+`a_landing_size_does_not_reflow_the_row` pins it.
 
 ## Browser UI (`fastf ui`)
 

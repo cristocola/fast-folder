@@ -9,7 +9,7 @@ use crate::core::config::Config;
 use crate::core::project;
 use crate::core::template;
 use crate::core::template::FolderNode;
-use crate::core::vars::collect_vars;
+use crate::tui::vars::collect_vars;
 use crate::util::tty;
 
 /// Returns true if any folder name in the structure contains a `{token}` placeholder.

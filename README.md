@@ -184,6 +184,7 @@ Tests are hermetic: they redirect all state through `FASTF_INSTALL_DIR` (and `HO
 | [`cli_surface.rs`](tests/cli_surface.rs) | what `fastf <args>` actually does to disk, as a process |
 | [`tui_pty.rs`](tests/tui_pty.rs) | the interactive menu through a real terminal (unix) |
 | [`repo_hygiene.rs`](tests/repo_hygiene.rs) | no tracked file describes the machine it was written on |
+| [`layering.rs`](tests/layering.rs) | `core` and `util` never reach for a terminal prompt |
 
 Two things worth knowing before you change the copy or move paths:
 

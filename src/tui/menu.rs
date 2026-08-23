@@ -5,10 +5,12 @@ use std::collections::HashMap;
 
 use crate::cli::new::{self, NewArgs};
 use crate::cli::register::{self, RegisterArgs};
-use crate::cli::{apply, config, id, recent, template};
+use crate::cli::{apply, config, id, template};
 use crate::core::config::Config;
 use crate::core::template as core_template;
 use crate::core::{library, query};
+use crate::tui::browser;
+use crate::tui::pickers::{pick_base, pick_template};
 
 const BANNER: &str = r#"  ___        _      ___    _    _
  | __|_ _ __| |_   | __|__| |__| |___ _ _
@@ -202,7 +204,7 @@ fn menu_create() -> Result<()> {
 
 /// When more than one base is configured, ask which one the new project should
 /// be created in. Returns `None` (= config default) when there's only one base
-/// or the first (default) entry is chosen.
+/// or the default entry is chosen.
 fn pick_base_interactively() -> Result<Option<String>> {
     let cfg = Config::load()?;
     let bases: Vec<std::path::PathBuf> = cfg
@@ -213,34 +215,25 @@ fn pick_base_interactively() -> Result<Option<String>> {
     if bases.len() <= 1 {
         return Ok(None);
     }
-    let labels: Vec<String> = bases
-        .iter()
-        .enumerate()
-        .map(|(i, b)| {
-            let default = if i == 0 { "  (default)" } else { "" };
-            format!(
-                "{}  ({}){}",
-                crate::core::library::base_label(b),
-                b.display(),
-                default
-            )
-        })
-        .collect();
-    let idx = Select::new()
-        .with_prompt("Create the project in which base?")
-        .items(&labels)
-        .default(0)
-        .interact()?;
-    if idx == 0 {
+    let default_base = bases.first().cloned();
+    let picked = pick_base(
+        "Create the project in which base?",
+        &bases,
+        default_base.as_deref(),
+        "name it instead: `fastf new <slug> --base-dir=<path>`",
+        false,
+    )?;
+    match picked {
         // The default base — let config.base_dir resolution do its thing.
-        return Ok(None);
+        Some(base) if Some(&base) == default_base.as_ref() => Ok(None),
+        Some(base) => Ok(Some(base.display().to_string())),
+        None => Ok(None),
     }
-    Ok(Some(bases[idx].display().to_string()))
 }
 
 fn menu_projects() -> Result<()> {
     let page_size = Config::load()?.recent_default_limit.max(1);
-    recent::run_paged_browser(
+    browser::run_paged_browser(
         page_size,
         "No projects yet — create one with `fastf new`.",
         || {
@@ -264,7 +257,7 @@ fn menu_search() -> Result<()> {
     let terms: Vec<String> = query.split_whitespace().map(|s| s.to_string()).collect();
     let predicates = query::parse(&terms);
     let page_size = Config::load()?.recent_default_limit.max(1);
-    recent::run_paged_browser(page_size, "No projects match that query.", || {
+    browser::run_paged_browser(page_size, "No projects match that query.", || {
         let cfg = Config::load()?;
         Ok(crate::cli::search::matching_projects(&cfg, &predicates))
     })?;
@@ -944,22 +937,16 @@ fn toggle_setting(key: &str, current: bool) -> Result<()> {
     Ok(())
 }
 
+/// The guided menu addresses templates by slug; the picker itself is shared with
+/// `fastf new`.
 fn prompt_template_slug(prompt: &str) -> Result<String> {
-    use crate::core::template;
-    let templates = template::load_all()?;
-    if templates.is_empty() {
-        anyhow::bail!("no templates found");
+    match pick_template(
+        prompt,
+        "run the command directly: `fastf template show <slug>`",
+    )? {
+        Some(tmpl) => Ok(tmpl.slug),
+        None => anyhow::bail!("no template chosen"),
     }
-    let labels: Vec<String> = templates
-        .iter()
-        .map(|t| format!("{} ({})", t.name, t.slug))
-        .collect();
-    let idx = Select::new()
-        .with_prompt(prompt)
-        .items(&labels)
-        .default(0)
-        .interact()?;
-    Ok(templates[idx].slug.clone())
 }
 
 #[cfg(test)]

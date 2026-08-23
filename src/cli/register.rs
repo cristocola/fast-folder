@@ -33,7 +33,7 @@ use crate::core::library::Project;
 use crate::core::naming::{interpolate_name, parse_id_token, sanitize_name};
 use crate::core::project_info;
 use crate::core::template::{self, IdConfig, Template};
-use crate::core::vars::collect_vars;
+use crate::tui::vars::collect_vars;
 use crate::util::tty;
 
 /// Slug stored in PROJECT_INFO.md frontmatter when a folder is registered

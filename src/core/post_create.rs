@@ -143,23 +143,6 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result
     Ok(())
 }
 
-/// Ask the user "Open project folder? [Y/n]" and reveal on Yes.
-///
-/// Caller is expected to have already filtered out cases where the prompt
-/// shouldn't fire (`--yes`, `--no-post`, `prompt_open_after_create=false`,
-/// reveal already in resolved post_create, non-TTY stdout). This helper
-/// just owns the prompt + reveal call.
-pub fn prompt_and_reveal(path: &Path) -> Result<()> {
-    let open = dialoguer::Confirm::new()
-        .with_prompt("Open project folder?")
-        .default(true)
-        .interact()?;
-    if open {
-        reveal_folder(path)?;
-    }
-    Ok(())
-}
-
 #[cfg(windows)]
 pub fn reveal_folder(path: &Path) -> Result<()> {
     // `start` is a cmd.exe builtin, not an executable.

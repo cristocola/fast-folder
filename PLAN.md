@@ -384,12 +384,33 @@ The maintainer's verdict on PR #3: Esc-to-back and the main-menu frame were righ
 - Pure move: behaviour, strings, and test expectations stay identical, except the byte formatter unification may change template-size rounding in `template show` (acceptable; update its test if one exists).
 
 **Steps.**
-- [ ] Move the code; update imports; keep unit tests next to the code they test.
-- [ ] Replace the two template pickers, three base pickers, and two byte formatters with the single versions. `fastf move`'s picker and the create-time base picker must both clamp and both mark the default.
-- [ ] Add a unit test that `core/` has no `dialoguer` import (a source scan over `src/core/*.rs`; Phase 12 extends it to `colored` and `println!`).
-- [ ] `CLAUDE.md`: update "Project layout" and the gotchas that name `cli::recent::run_picker`, `recent.rs` as the place for picker actions, and `collect_vars`' location. `tests/CLAUDE.md` unchanged unless a test moved.
+- [x] Move the code; update imports; keep unit tests next to the code they test.
+- [x] Replace the two template pickers, three base pickers, and two byte formatters with the single versions. `fastf move`'s picker and the create-time base picker must both clamp and both mark the default.
+- [x] Add a unit test that `core/` has no `dialoguer` import (a source scan over `src/core/*.rs`; Phase 12 extends it to `colored` and `println!`). *(It became `tests/layering.rs` — see Notes.)*
+- [x] `CLAUDE.md`: update "Project layout" and the gotchas that name `cli::recent::run_picker`, `recent.rs` as the place for picker actions, and `collect_vars`' location. `tests/CLAUDE.md` unchanged unless a test moved.
 
 **Acceptance.** All gates green with the same test outcomes. `grep -rn "use dialoguer" src/core` is empty. `wc -l src/cli/recent.rs` is under 250.
+
+**Notes.** Three things came out slightly differently.
+
+(1) **The layering check is `tests/layering.rs`, not a unit test.** A unit test
+inside `core` would have to read `core`'s own sources while being one of them,
+and the rule is about a whole layer, not a module. The suite also carries the
+`util` half (no `.interact()` there either): `util::live_select` and
+`tui::rows` legitimately use `dialoguer`'s console primitives to measure widths
+and draw themes, so the test asks about prompting, not about the crate.
+
+(2) **`core::post_create::prompt_and_reveal` had to move as well**, into
+`cli::new`, its only caller. It was the last `dialoguer` call under `core/`, and
+it is exactly the thing the rule exists for: `core::post_create` also runs for
+`fastf ui`, where a `Confirm` has nobody to answer it.
+
+(3) **`pick_base` takes the default base explicitly** rather than marking index
+0. `fastf move`'s candidate list excludes the project's current base, so its
+first entry is not the default one, and marking it would have been a lie. It also
+gained an `offer_cancel` flag: only the action menu's move picker had a
+`[Cancel]` row, and adding one everywhere would have been a behaviour change in a
+phase that is a pure move — Phase 7 is where cancel becomes universal.
 
 ## Phase 7: One way out: a single cancel contract for every prompt
 

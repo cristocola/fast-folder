@@ -40,6 +40,7 @@ responsibility of the filesystem and backups.
 | v1.5.1 | Released; CI, assets, and AUR packages verified | every mutation shares validation, locking, authoritative reload, and cache refresh behavior |
 | v1.6.0 | Released; CI, assets, and AUR packages verified | the guided project browser never waits on a folder size |
 | v1.6.1 | Released; CI, assets, and AUR packages verified | what fastf says happened is what happened, and every file it rewrites stays readable |
+| v1.7.0 | In progress | the guided menu can always be backed out of, never loses what you typed, and reaches everything the command line can |
 
 ### v1.4.1 — containment and path safety
 
@@ -236,6 +237,20 @@ nothing calls.
   duplicated path checks are one pair in `util::paths`, and every mutating
   library entry point that does not hold the lock says `_unlocked` in its name;
   `CLAUDE.md` now describes the code that exists.
+
+### v1.7.0 — the guided TUI
+
+Track B of [`PLAN.md`](PLAN.md). The guided menu is the daily surface, so this
+release is about it: one way out of every prompt, typed input that survives a
+validation failure, a browser that stops rescanning the library, and parity with
+what the command line can already do.
+
+- [x] Phase 6: relocate the terminal picker library — every interactive terminal
+  surface moved under `src/tui/` (`browser`, `actions`, `rows`, `pickers`,
+  `vars`), so the guided menu is no longer a client of the CLI layer;
+  `cli/recent.rs` is `fastf recent` and `fastf open` again. Two template
+  pickers, three base pickers and two byte formatters became one each, and
+  `tests/layering.rs` fails the build if `core` or `util` reaches for a prompt.
 
 ## Release and documentation gates
 

@@ -302,7 +302,7 @@ pub fn run_from_folder(args: FromFolderArgs) -> Result<()> {
                     "Bundle {} asset{} ({}) into template '{}'?",
                     scan.assets.len(),
                     if scan.assets.len() == 1 { "" } else { "s" },
-                    human_size(total),
+                    crate::util::human_bytes::human_bytes(total),
                     slug
                 ))
                 .default(true)
@@ -347,7 +347,7 @@ fn print_from_folder_preview(slug: &str, scan: &ScanResult, bundle_assets: bool)
                 "  {} {}  {}",
                 "•".cyan(),
                 a.rel.dimmed(),
-                human_size(a.size).dimmed()
+                crate::util::human_bytes::human_bytes(a.size).dimmed()
             );
         }
     }
@@ -366,7 +366,7 @@ fn print_from_folder_preview(slug: &str, scan: &ScanResult, bundle_assets: bool)
             ", {} asset{} ({})",
             scan.assets.len(),
             if scan.assets.len() == 1 { "" } else { "s" },
-            human_size(scan.bundle_bytes())
+            crate::util::human_bytes::human_bytes(scan.bundle_bytes())
         ));
     }
     println!("{summary}");
@@ -417,7 +417,7 @@ fn print_from_folder_summary(slug: &str, report: &FromFolderReport) {
             ", {} bundled asset{} ({})",
             report.bundled,
             if report.bundled == 1 { "" } else { "s" },
-            human_size(report.bundled_bytes)
+            crate::util::human_bytes::human_bytes(report.bundled_bytes)
         ));
     }
     println!(
@@ -449,22 +449,6 @@ fn print_from_folder_summary(slug: &str, report: &FromFolderReport) {
 }
 
 /// Human-readable byte size (KB/MB/GB) for confirmations and summaries.
-fn human_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    let b = bytes as f64;
-    if b >= GB {
-        format!("{:.1} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.1} MB", b / MB)
-    } else if b >= KB {
-        format!("{:.1} KB", b / KB)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 fn validate_slug(slug: &str) -> Result<()> {
     crate::core::validated::TemplateSlug::parse(slug).map(|_| ())
 }

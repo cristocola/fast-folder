@@ -652,9 +652,15 @@ push to a branch to exercise `ci.yml` via PR; inspect that `gates` ran and the s
 steps printed the version.
 
 **Acceptance.**
-- [ ] PR CI green; the dry-run release shows `gates → build → (release skipped)`.
-- [ ] `grep -n 'uses:' .github/workflows/*.yml` shows only SHA pins.
-- [ ] `ROADMAP.md` gates and `PUBLISHING.md` updated.
+- [x] The dry-run release
+      ([run 32645482828](https://github.com/cristocola/fast-folder/actions/runs/32645482828))
+      is green end to end: `gates` (all eight CI jobs) → `build` (three targets)
+      → `smoke` (three jobs) → `publish release: skipped`. Both Windows smoke
+      steps printed `fastf 2.0.0` — the ZIP's exe and the MSI payload's.
+- [x] `grep -n 'uses:' .github/workflows/*.yml` shows only SHA pins. The one
+      exception is `uses: ./.github/workflows/ci.yml`, the repository's own
+      reusable workflow, which is a path and not a pinnable ref.
+- [x] `ROADMAP.md` gates and `PUBLISHING.md` updated, plus the `release` skill.
 
 ---
 
@@ -711,6 +717,11 @@ release table.
 ---
 
 ## Release — v2.0.0
+
+**All nine phases are complete.** `Cargo.toml` is at `2.0.0` so the built binary
+reports the release it is; **no tag has been pushed and no release cut** —
+publication is the maintainer's explicit call, and `release.yml` refuses a tag
+that does not match this number anyway.
 
 Only on an explicit "release" from the maintainer; follow the `release` skill.
 Release notes must say: the browser UI (`fastf ui`, `fastf-ui.exe`, the
@@ -848,3 +859,16 @@ fastf refuses to write through links; cache entries outside a base are ignored.
   once `\\?\` and 8.3 short names are involved. Fixed on the Phase 6 branch and
   merged up the stack, which is the gate doing exactly its job on its first
   run.
+
+  The gate earned itself twice more after that. A second dry run failed on
+  Windows because Phase 3's `folder_names_that_are_cmd_syntax_round_trip_through_discovery`
+  hand-wrote `folder: %USERPROFILE%` unquoted, and a plain YAML scalar may not
+  begin with `%` — the directive indicator. The product was never wrong
+  (`project_info::write` goes through `util::yaml` and emits
+  `folder: '%USERPROFILE%'`; verified against the release binary), but the
+  fixture was, and the test is no longer `cfg(windows)`: `%` and `&` are legal
+  folder names everywhere, so gating it to Windows meant it could only fail on
+  CI. And smoke-testing the release binary by hand turned up a message that read
+  "'' leaves no usable folder name: every character in it is one a folder name
+  may not contain" for `--name=..` — nonsense about a string with no characters,
+  now two distinct messages.

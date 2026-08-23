@@ -55,10 +55,10 @@ fn report_unusable_bases(unusable: &[(std::path::PathBuf, crate::util::paths::Pr
 
 /// A folder that must already exist, checked at the prompt that asks for it.
 ///
-/// The whole point of Phase 8: a path typed wrong used to be rejected by the
-/// core operation *after* three more questions had been answered, and all four
-/// answers went with it. Rejecting it here keeps the text on the line to be
-/// corrected.
+/// **Validate at the prompt, not at the operation.** A path typed wrong used to
+/// be rejected by the core operation *after* three more questions had been
+/// answered, and all four answers went with it. Rejecting it here keeps the
+/// text on the line to be corrected.
 fn existing_directory(raw: &str) -> std::result::Result<(), String> {
     let path = std::path::Path::new(raw.trim());
     if raw.trim().is_empty() {
@@ -838,7 +838,7 @@ fn menu_settings_basics() -> Result<()> {
                     "Hint:".yellow()
                 );
                 // Empty falls back to the HOME directory, not the cwd — that
-                // changed in v1.0.2 and this hint kept saying otherwise.
+                // the home directory, and this hint used to say otherwise.
                 set_from_prompt(
                     "base-dir",
                     "Base directory (empty = your home directory)",

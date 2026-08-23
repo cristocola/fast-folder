@@ -132,13 +132,13 @@ page, selected row first, so turning the page reprioritizes at once instead of
 finishing work nobody is looking at. Snapshots live for one browser session and
 die with it; a mutation calls `forget`.
 
-`util::tree_size::directory_size` is the one shared walker: it sums regular-file
-logical lengths recursively, never follows links, ignores special nodes, uses
-checked addition, and returns `None` on **any** read failure rather than a partial
-number. `directory_size_until` adds a cancel token checked once per entry, so
-teardown is bounded on a share — and **a cancelled walk also returns `None`**, so
-a caller that cancels must discard the result rather than record it as
-`unavailable`. Sizes never enter `Project`, the cache or metadata.
+`util::tree_size::directory_size_until` is the one shared walker: it sums
+regular-file logical lengths recursively, never follows links (`paths::is_link_like`,
+so junctions count as links too), ignores special nodes, uses checked addition,
+and returns `None` on **any** read failure rather than a partial number. Its
+cancel token is checked once per entry, so teardown is bounded on a share — and
+**a cancelled walk also returns `None`**, so a caller that cancels must discard
+the result rather than record it as `unavailable`. Sizes never enter `Project`, the cache or metadata.
 
 **Base lists are probed, never `is_dir`-ed.** `paths::probe_dirs` /
 `mounted_bases` run the `metadata` call on a helper thread and `recv_timeout` it,

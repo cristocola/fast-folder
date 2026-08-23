@@ -316,7 +316,7 @@ fn destroyed_counter_self_heals_from_the_projects_on_disk() {
 }
 
 // ---------------------------------------------------------------------------
-// Path fidelity and bounded recursion (v1.7.1)
+// Path fidelity and bounded recursion
 // ---------------------------------------------------------------------------
 
 /// A pathologically deep tree degrades instead of blowing the stack.

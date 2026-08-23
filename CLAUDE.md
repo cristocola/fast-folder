@@ -55,14 +55,17 @@ tell you.
   `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus
   report-only pre-v2 discovery), `template_import.rs` (the from-folder engine),
   `assets.rs` (the template-file copy engine: walk, classify, interpolate or
-  byte-copy), `validated.rs` (typed slugs and relative paths), `project_info.rs`.
+  byte-copy), `validated.rs` (typed slugs, relative paths and project folder
+  names), `project_info.rs`.
 - `src/util/` — `lockfile` (cross-process `DataLock`), `atomic` (THE atomic
   write), `fs_retry` (Windows sharing violations), `interrupt` (Ctrl-C
   rollback), `faults` (failpoints), `trace` (work counting), `diag` (the one
   warning sink), `yaml` (the one place the YAML crate is named), `time` (one
   clock), `paths` (data-dir resolution, `display_path`, the shared boundary
-  checks, base probing), `tree_size`, `size_scan`, `live_select`,
-  `human_bytes`, `clipboard`, `tty`.
+  checks including `contained_destination` and `is_link_like`, base probing),
+  `shell_open` (Windows `ShellExecuteW`), `test_env` (the one env-mutation guard,
+  test-only), `tree_size`, `size_scan`, `live_select`, `human_bytes`,
+  `clipboard`, `tty`.
 - `src/cli/` — one module per subcommand, plus `render.rs`, the only module that
   prints a plan, a create or an apply. `move_project.rs` is named that way
   because `move` is a keyword.
@@ -304,13 +307,16 @@ documented `$EDITOR` fallback never ran.
 
 - `dialoguer::Input::interact_text()` takes ownership of `self`. Never reuse an
   `Input` across iterations — recreate it each time.
-- Rust 2024 makes `std::env::set_var`/`remove_var` unsafe. In tests they are
-  wrapped in `unsafe { }` with the suite's `SERIAL` mutex held.
+- Rust 2024 makes `std::env::set_var`/`remove_var` unsafe, and `setenv` is not
+  thread-safe underneath. **One guard per binary**: `util::test_env` under
+  `src/`, `tests/common/env` under `tests/`, and `tests/layering.rs` fails the
+  build if either name appears anywhere else.
 - `clippy::field_reassign_with_default` is allowed at the test-file level;
   rewriting every `Config::default()` builder into struct-literal form is churn.
-- `FASTF_FAULT`, `FASTF_TRACE_FILE` and the interrupt flag are process-global, so
-  their test locks live beside the state they guard — a private mutex per test
-  module looks right and silently races.
+- The interrupt flag is process-global, so its test lock lives beside it
+  (`interrupt::TEST_LOCK`) — a private mutex per test module looks right and
+  silently races. Lock order is `test_env::ENV_LOCK` first, then that one.
+  `faults` needs no lock: its arming is thread-local.
 - Concurrency tests must spawn **processes**, not threads: a thread test passes
   against an in-process `Mutex` while production stays broken.
 - **A Windows thread's stack is 1 MiB, not the main thread's 8.** The TUI

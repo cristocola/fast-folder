@@ -1,7 +1,4 @@
 //! Moving projects between bases.
-//!
-//! Split out of the single 2700-line `integration.rs`, whose 67 tests all
-//! queued behind one mutex in one binary.
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -25,7 +22,7 @@ fn sandboxed<R>(body: impl FnOnce(&Path) -> R) -> R {
 }
 
 // ---------------------------------------------------------------------------
-// v0.10: move projects between bases
+// Moving projects between bases
 // ---------------------------------------------------------------------------
 
 #[test]

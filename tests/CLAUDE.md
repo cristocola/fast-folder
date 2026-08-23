@@ -1,14 +1,9 @@
 # CLAUDE.md — fastf test suites
 
-**Every in-process suite uses `common::env`.** `with_fresh_install(&SERIAL, …)`
+**Every in-process suite uses `common::env`**: `with_fresh_install(&SERIAL, …)`
 for one data directory, `with_sandbox(&SERIAL, …)` where a project base is
-needed too. `FASTF_INSTALL_DIR` and `HOME` are process-wide, so each binary
-keeps its **own** `static SERIAL` and every test in it goes through the helper —
-including the `HOME` redirect, which is not optional: an unconfigured `base_dir`
-falls back to the home directory, and a harness that skips it scans the
-developer's real one and self-heals the counter from their real projects. That
-rule used to be re-typed in four files, which is three chances to drop it.
-Fixtures live in `common::fixtures`.
+needed too. Fixtures live in `common::fixtures`. The rules those helpers exist
+to enforce are at the bottom of this file, stated once.
 
 **A file per subject, a binary per subject — except the pty suite.** `cargo test`
 runs test *binaries* sequentially, so splitting is free for fast suites and
@@ -19,26 +14,21 @@ overlapping. `tui_pty.rs` is therefore one binary with three modules under
 
 The suites, and what each guards — the intent, not the case list:
 - `create.rs`, `metadata.rs`, `search.rs`, `template_engine.rs`, `register.rs`,
-  `move.rs`, `data_dir.rs` — the core flows, split out of the 2700-line
-  `integration.rs` whose 67 tests all queued behind one mutex.
+  `move.rs`, `data_dir.rs` — the core flows, in process.
 - `cli_counter.rs`, `cli_flags.rs`, `cli_output.rs` — what `fastf <args>` does to
-  disk, split out of `cli_surface.rs`.
+  disk, driven as a **real process** because their defects lived between clap
+  and the core (flags dropped into `trailing_var_arg`, one caller computing an
+  ID differently from another, a config field read raw instead of resolved) and
+  only a process sees that.
 - `crash_recovery.rs` — every create failpoint asserted against the same invariants,
   plus real subprocesses killed with abort. Debug-only (failpoints are compiled out
   of release).
 - `concurrency.rs` — races real **processes**, not threads: a thread test passes
   against an in-process `Mutex` while production stays broken.
-- The `cli_*.rs` suites drive the **real binary**, because their defects lived
-  between clap and the core (flags dropped into `trailing_var_arg`, one caller
-  computing an ID differently from another, a config field read raw instead of
-  resolved) and only a process sees that. **Write the test against the broken
-  build first** — several have passed pre-fix and were relabelled as design
-  guards rather than left to look like regressions they aren't.
-- `tui_pty.rs` (v1.3, unix; modules `menu`, `browser`, `flows`) — the interactive menu through a real terminal, which
-  is the only place its worst defect was visible: any recoverable error ended the
-  session. Keystrokes must be **spaced**, not burst (`pty::Script` handles the
-  cadence), and `Confirm` takes a bare `y`/`n` with no Enter — a trailing `\r`
-  survives into the next prompt and silently accepts its default.
+- `tui_pty.rs` (unix; modules `menu`, `browser`, `flows`) — the interactive menu
+  through a real terminal, which is the only place its worst defect was visible:
+  any recoverable error ended the session. `tests/tui_pty/harness.rs` states the
+  rules that keep these from being flaky.
 - `layering.rs` — reads the source rather than running it: `core` and `util` may
   not reach for a `dialoguer` prompt, because the same functions serve scripted
   runs, where there is no terminal to answer one. An import is not something a runtime
@@ -58,15 +48,19 @@ The suites, and what each guards — the intent, not the case list:
   returns nothing — which the first version read as an empty repository and
   failed on, breaking `check()` for everyone building the package.
 
-`tests/common/mod.rs` is the shared process-driving harness (v1.2.1): a `Sandbox`
-that owns its `FASTF_INSTALL_DIR`, redirects `HOME` into itself, and runs the
-built binary (`run`/`ok`/`fails`/`spawn`), plus `with_bases` for multi-base
-fixtures and `plant_project` for "this base already holds ID0082". It also
-carries `pty::run` (unix, `libc::forkpty`) — `dialoguer` refuses to prompt
-without a TTY, so confirmations and pickers are invisible to a pipe-based test,
-which is exactly where the rename prompt spent v1.2.0 offering one folder name
+`tests/common/mod.rs` is the shared process-driving harness: a `Sandbox` that
+owns its `FASTF_INSTALL_DIR`, redirects `HOME` into itself, and runs the built
+binary (`run`/`ok`/`fails`/`spawn`), plus `with_bases` for multi-base fixtures
+and `plant_project` for "this base already holds ID0082". It also carries
+`pty::run` (unix, `libc::forkpty`) — `dialoguer` refuses to prompt without a
+TTY, so confirmations and pickers are invisible to a pipe-based test, which is
+exactly where the rename prompt once spent a release offering one folder name
 and committing another. `#![allow(dead_code)]` because each binary uses a
-different subset. `concurrency.rs` and `cli_surface.rs` both `mod common;`.
+different subset.
+
+**Write a test against the broken build first.** Several have passed pre-fix and
+were relabelled as design guards rather than left looking like regressions they
+are not — and several more caught a defect the fix was assumed to have covered.
 
 Shared harness rules — every new harness must follow all of them:
 - **`common::env` is the only module under `tests/` that may call `set_var` or

@@ -1,7 +1,4 @@
 //! Tags, `PROJECT_INFO.md` frontmatter, and the journal.
-//!
-//! Split out of the single 2700-line `integration.rs`, whose 67 tests all
-//! queued behind one mutex in one binary.
 
 #![allow(clippy::field_reassign_with_default)]
 

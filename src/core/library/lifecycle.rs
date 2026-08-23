@@ -12,7 +12,7 @@ use super::model::*;
 use crate::core::assets;
 
 // ---------------------------------------------------------------------------
-// Unregister / delete / rename (v1.0)
+// Unregister / delete / rename
 // ---------------------------------------------------------------------------
 
 /// Unregister a project: remove its `PROJECT_INFO.md` so it stops being a

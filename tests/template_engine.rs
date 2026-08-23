@@ -1,7 +1,4 @@
 //! The template engine: reserved names, the gallery, the `files/` subtree.
-//!
-//! Split out of the single 2700-line `integration.rs`, whose 67 tests all
-//! queued behind one mutex in one binary.
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -163,7 +160,7 @@ files:
 
 #[test]
 fn copy_engine_handles_binary_verbatim_and_globs() {
-    // v0.8 files/ subtree: interpolated text, byte-identical binaries, a
+    // The files/ subtree: interpolated text, byte-identical binaries, a
     // `verbatim` glob that preserves literal braces, and `exclude` globs.
     sandboxed(|install| {
         let yaml = r#"name: Assets

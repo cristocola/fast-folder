@@ -327,7 +327,7 @@ fn edit_structure(tmpl: &mut Template, is_edit_pass: bool) -> Result<bool> {
     );
 
     // Re-entry with folders already declared gets the same Add / Edit / Remove
-    // treatment variables have had since v1.0. It used to be all-or-nothing:
+    // treatment variables have. It used to be all-or-nothing:
     // "Replace folder structure?" meant retyping every path to fix one typo.
     if is_edit_pass && !tmpl.structure.is_empty() {
         return structure_submenu(tmpl);

@@ -5,6 +5,19 @@
 //! splitting the pty suite into three targets added nineteen seconds of wall
 //! time — their fixed keystroke schedules stopped overlapping. Modules keep the
 //! files navigable and the schedules interleaved.
+//!
+//! **The rules every suite in this binary follows**, stated once here rather
+//! than at the top of each of them:
+//!
+//! - They are driven through a real terminal because `dialoguer` refuses to
+//!   prompt without one, and the defects they cover were only ever visible from
+//!   a terminal. Unix only by construction.
+//! - Keystrokes are **spaced**, never burst — `dialoguer` redraws between them,
+//!   and a burst of six arrows loses most of them (`pty::Script` handles the
+//!   cadence).
+//! - Assertions match **stable text only**, never cursor-positioning escapes.
+//! - `Confirm` takes a bare `y`/`n` with no Enter: a trailing `\r` survives into
+//!   the next prompt and silently accepts its default.
 
 use crate::common::{self, Sandbox, pty};
 use std::fs;

@@ -1,13 +1,7 @@
 //! The menu itself: it opens, it contains errors, it can be left.
 //!
-//! Driven through a real terminal (`common::pty`), because `dialoguer` refuses
-//! to prompt without one and the defects these cover were only ever visible
-//! from a terminal. Unix only by construction.
-//!
-//! Two rules keep them from being flaky:
-//! - keystrokes are **spaced**, never burst — `dialoguer` redraws between them,
-//!   and a burst of six arrows loses most of them (`pty::Script` handles this);
-//! - assertions match **stable text only**, never cursor-positioning escapes.
+//! Driven through a real terminal — `harness.rs` states why, and the rules
+//! every suite in this binary follows.
 
 use super::common::{self, Sandbox, pty};
 use super::harness::*;

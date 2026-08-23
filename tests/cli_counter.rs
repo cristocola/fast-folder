@@ -1,10 +1,6 @@
 //! The command surface: The ID counter, and what a base carries about it.
 //!
-//! These drive the **real binary** rather than calling library functions,
-//! because the defects they cover lived in the plumbing between clap and the
-//! core — flags dropped into `trailing_var_arg`, one caller computing an ID
-//! differently from another, a config field read raw instead of resolved. Only
-//! a process sees that.
+//! Driven as a **real process** — see `common::mod`'s preamble for why.
 
 mod common;
 
@@ -51,7 +47,7 @@ fn id_reset_is_gone_and_says_why() {
     );
 }
 
-/// The headline of the v1.2 counter design: three bases holding different
+/// The headline of the counter design: three bases holding different
 /// highest IDs must all converge on the largest one.
 #[test]
 fn id_sync_propagates_the_highest_id_to_every_base() {
@@ -76,7 +72,7 @@ fn id_sync_propagates_the_highest_id_to_every_base() {
 /// A base whose counter file outranks its own projects is authoritative — that
 /// is what carries the number across a machine that cannot see the other bases.
 ///
-/// Not a v1.2.0 regression (the floor already consulted base counters); this
+/// Not a regression the floor could have caught (it already consulted base counters); this
 /// pins the rule down so a future simplification of `floor` cannot drop it.
 #[test]
 fn a_base_counter_above_its_projects_is_authoritative() {
@@ -98,7 +94,7 @@ fn a_base_counter_above_its_projects_is_authoritative() {
 /// Without re-stamping the cache, every create would force a full rescan of
 /// every base, defeating the cache entirely.
 ///
-/// Guards the cost of the new propagation rather than an old bug: v1.2.0 never
+/// Guards the cost of propagation rather than an old bug: propagation never
 /// wrote other bases at all, so it passed this vacuously.
 #[test]
 fn propagating_the_counter_does_not_invalidate_other_bases_caches() {

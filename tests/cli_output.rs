@@ -1,10 +1,6 @@
 //! The command surface: What a command says it did, and what it does without a terminal.
 //!
-//! These drive the **real binary** rather than calling library functions,
-//! because the defects they cover lived in the plumbing between clap and the
-//! core — flags dropped into `trailing_var_arg`, one caller computing an ID
-//! differently from another, a config field read raw instead of resolved. Only
-//! a process sees that.
+//! Driven as a **real process** — see `common::mod`'s preamble for why.
 
 mod common;
 
@@ -104,7 +100,7 @@ fn tag_reauto_on_a_registered_project_explains_itself() {
 
 /// `template from-folder --force` merged into the previous generation's
 /// `files/`, so a template regenerated from a different folder still carried
-/// the old files — and since v0.8 `files/` is what create copies, they landed
+/// the old files — and `files/` is what create copies, so they landed
 /// in every new project.
 #[test]
 fn from_folder_force_replaces_the_bundled_files() {
@@ -465,7 +461,7 @@ fn a_template_file_with_a_non_utf8_name_is_reproduced_byte_for_byte() {
 }
 
 // ---------------------------------------------------------------------------
-// The commands that had no process-level test at all (v1.7.1)
+// The commands that had no process-level test at all
 //
 // `paths`, `reindex`, `reconcile`, `tag` and `template` were exercised only
 // through the library functions underneath them. What a *command* prints and

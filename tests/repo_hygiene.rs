@@ -1,7 +1,7 @@
 //! The repository is published. Nothing in it may describe the machine it was
 //! written on.
 //!
-//! This exists because Phase 4 tracked `.claude/skills/release/SKILL.md` — a
+//! This exists because `.claude/skills/release/SKILL.md` was once tracked as a
 //! file that was correct, secret-free, and full of one developer's absolute
 //! paths ("the icon lives at `/mnt/proj/00_SYSTEM/...`", "the AUR clones are at
 //! `~/Projects/<dated-folder>/aur`"). Tracking a file in a public repository

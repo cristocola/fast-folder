@@ -55,49 +55,28 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Release: **v2.0.0 in progress — two surfaces, one engine, nothing trusted by accident** (`PLAN.md` drives it, one phase per PR)
-- Status: **Phase 8 landed: the release pipeline.** A tag cannot publish what CI
-  would reject: `release.yml` runs the whole of `ci.yml` as a gate, requires the
-  tag to be an ancestor of `main`, unpacks and runs every archive (and the MSI's
-  payload) before publishing, and attests provenance. Only the publishing job
-  has write access; every third-party action is pinned to a commit SHA, with
-  Dependabot opening the bumps.
-- Previously: **Phase 7 landed: test isolation.** One lock per binary guards
-  environment mutation — `util::test_env` under `src/`, `common::env` under
-  `tests/`, enforced by a source scan — and every guard restores what it changed
-  on unwind. No unit test can lock the developer's real data directory any more.
-- Previously: **Phase 6 landed: cache entries are hints.** A `.fastf-index.json`
-  entry can never name a path outside its base — a forged one is rejected, the
-  cache abandoned and the base rescanned — and `fastf open` and the TUI's Reveal
-  check the folder before spawning anything. The trust model fastf actually has
-  is written down in the product contract above.
-- Previously: **Phase 5 landed: destination containment.** No write fastf performs
-  beneath a root it controls follows an existing link, junction or reparse
-  point. `paths::contained_destination` checks every component immediately
-  before the write, and `paths::is_link_like` is the single, widest definition
-  of "link" in the crate.
-- Previously: **Phase 4 landed: template writes behind the lock.**
-  `operations::save_template` and `operations::delete_template` are the only
-  ways to write the templates directory, both under `DataLock`;
-  `Template::save_to_file` is `pub(crate)` and `tests/layering.rs` refuses the
-  call anywhere under `src/cli` or `src/tui`. Renaming a template's slug now
-  moves its directory instead of leaving the old one behind as a duplicate, and
-  a template directory that is really a link is never deleted through.
-- Previously: **Phase 3 landed: shelling out.** A project path never appears inside
-  shell source. Every child fastf spawns for a project gets the project as its
-  working directory and as `FASTF_PROJECT_PATH`; `{path}` in a post-create
-  command expands to a quoted reference to that variable rather than to the path
-  itself, so a folder named `Live; rm -rf ~` is one argument and not two
-  commands. Reveal on Windows is `ShellExecuteW`, not `cmd /c start`, which
-  expanded `%VAR%` out of the folder's own name.
-- Previously: **Phase 2 landed: names and numbers.** One validator
-  (`validated::ProjectFolderName`) decides what a project folder may be called,
-  and create, rename and register all use it — a name that would be invisible
-  (`.hidden`) or empty (`..`) is refused before any directory is made. The ID
-  counter has a maximum (999999999999) and cannot overflow. The lock timeout no
-  longer tells users to delete the lock file, which would break it. A template
-  manifest is never replaced because it could not be read.
-- Previously: **Phase 1 landed: the browser UI is removed.** `fastf ui`, `fastf-ui.exe`, `src/ui/`, the four `ui_*` suites and `docs/UI.md` are gone, and with them fastf's only network surface. v1.7.1 stays available as the last release that has it. v2.0.0 is a hardening release: the backlog below waits.
+- Release: **v2.0.0, ready to publish** — two surfaces, one engine, nothing
+  trusted by accident. `PLAN.md` drove it, one phase per PR; that file is the
+  phase-by-phase record and this is the summary.
+- Status: **all nine phases landed.** What changed, as guarantees rather than
+  phases:
+  - The browser UI is gone, and with it fastf's only network surface. v1.7.1
+    remains the last release that has `fastf ui`.
+  - One validator decides what a project folder may be called; a name that would
+    be invisible or empty is refused before any directory is made.
+  - The ID counter has a maximum and cannot overflow.
+  - A project path never reaches a shell as source text, and Windows "Reveal"
+    passes the path as data.
+  - Every template write goes through `core::operations` under `DataLock`.
+  - No write beneath a root fastf controls follows a link, junction or reparse
+    point.
+  - A cache entry can only ever point at a direct child of its own base, and
+    `open` checks a folder before spawning anything on it.
+  - One lock per test binary guards environment mutation, and no test can reach
+    the developer's real data directory.
+  - A tag cannot publish what CI would reject.
+- Outstanding, and needing the maintainer: a TUI screenshot or asciinema for the
+  README hero, and the Windows smokes listed under "Manual move smoke" below.
 - Last reviewed: **2026-08-23**
 
 ## Release train
@@ -111,6 +90,7 @@ responsibility of the filesystem and backups.
 | v1.6.1 | what fastf says happened is what happened, and every file it rewrites stays readable | [release](https://github.com/cristocola/fast-folder/releases/tag/v1.6.1) |
 | v1.7.0 | the guided menu: one way out, nothing lost, nothing rescanned (superseded — Windows CI failed) | [release](https://github.com/cristocola/fast-folder/releases/tag/v1.7.0) |
 | v1.7.1 | the same, with the recursion bound safe for a Windows thread stack | [release](https://github.com/cristocola/fast-folder/releases/tag/v1.7.1) |
+| v2.0.0 | two surfaces, one engine, nothing trusted by accident: the browser UI removed, and every boundary that took a path on trust made to check it | (pending) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find
@@ -211,10 +191,10 @@ Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 - `size_scan::request`'s queue dedup is an O(n²) `contains` scan
   (`src/util/size_scan.rs`) — bounded by page size today.
 - The action menu only offers "Move to another base" when one is already
-  mounted; an `Unresponsive` base (Phase 9's probe) could offer a "retry probe"
-  item instead of just being left out.
-- `tests/tui_pty/browser.rs:214`
-  (`projects_browser_fills_in_sizes_without_any_input`) is timing-sensitive: it
+  mounted; an `Unresponsive` base could offer a "retry probe" item instead of
+  just being left out.
+- `tui_pty`'s `projects_browser_fills_in_sizes_without_any_input` is
+  timing-sensitive: it
   asserts a background size snapshot reaches the list within one repaint tick,
   and failed once under the CPU load of a full `cargo test --all-targets` while
   passing every standalone run. The guarantee is right; the deadline is thin —

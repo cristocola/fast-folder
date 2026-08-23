@@ -2,9 +2,14 @@
 //!
 //! Shared by every suite that needs to exercise the command surface rather than
 //! the library: `concurrency.rs` (which races processes, because a thread test
-//! passes against an in-process `Mutex` while production stays broken) and
-//! `cli_surface.rs` (which asserts what commands actually do to disk, because
-//! the argument-and-prompt layer is where a green suite kept missing bugs).
+//! passes against an in-process `Mutex` while production stays broken) and the
+//! `cli_*` suites (which assert what commands actually do to disk, because the
+//! argument-and-prompt layer is where a green suite kept missing bugs).
+//!
+//! **Why a process and not a function call:** the defects these cover live in
+//! the plumbing between clap and the core — flags dropped into
+//! `trailing_var_arg`, one caller computing an ID differently from another, a
+//! config field read raw instead of resolved. Only a process sees that.
 //!
 //! Each sandbox owns its `FASTF_INSTALL_DIR` and redirects `HOME` into itself,
 //! so nothing here can reach the developer's real config, templates, counter, or
@@ -250,7 +255,7 @@ impl Trace {
 ///
 /// `dialoguer` refuses to prompt without a TTY, so every confirmation, picker
 /// and interactive preview is invisible to a pipe-based test — which is exactly
-/// where the rename prompt spent v1.2.0 offering one folder name and committing
+/// where the rename prompt once spent a release offering one folder name and committing
 /// another. A pty is the only way to see what the user sees.
 ///
 /// Unix only, which matches how it is used: the prompts themselves are

@@ -372,7 +372,7 @@ mod tests {
     /// case-insensitively against `"error"` and treated everything else as
     /// "suffix", so a config file holding a typo kept working. A stricter enum
     /// would refuse to parse it, and a config that will not parse is how every
-    /// command stops (Phase 1).
+    /// command stops.
     #[test]
     fn name_collision_round_trips_and_tolerates_a_typo() {
         // Serialized as part of a whole config: TOML has no representation for

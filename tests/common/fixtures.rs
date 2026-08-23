@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-/// Install a template in v0.8 folder form: `templates/<slug>/template.yaml`
+/// Install a template in folder form: `templates/<slug>/template.yaml`
 /// plus a `files/` subtree.
 ///
 /// For test convenience the fixture YAML may still carry an inline `files:`

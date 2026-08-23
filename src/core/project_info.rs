@@ -37,7 +37,7 @@ use crate::core::template::Template;
 
 /// Canonical filename for the per-project metadata file.
 ///
-/// As of v0.9 the filename is fixed (no config knob): this file IS the
+/// The filename is fixed — there is no config knob — because this file IS the
 /// project's identity in the filesystem-as-truth model, so it is mandatory and
 /// always named `PROJECT_INFO.md`. Reserved across the codebase — templates
 /// cannot declare a file entry with this name (case-insensitive), checked in
@@ -261,7 +261,7 @@ pub fn render_at(
     Ok(out)
 }
 
-/// Write `<root>/PROJECT_INFO.md`. Metadata is mandatory in v0.9 (the file is
+/// Write `<root>/PROJECT_INFO.md`. Metadata is mandatory (the file is
 /// the project's identity), so there is no "disabled" path.
 pub fn write(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<()> {
     write_at(plan, tmpl, tags, crate::util::time::now_iso8601())

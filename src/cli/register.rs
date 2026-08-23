@@ -171,7 +171,7 @@ pub struct RegisterOutcome {
 // ---------------------------------------------------------------------------
 
 /// Onboard an existing folder by writing a `PROJECT_INFO.md` into it — fully
-/// non-interactive. This is register's whole job in v0.9: the file makes the
+/// non-interactive. This is register's whole job: the file makes the
 /// folder discoverable (filesystem-as-truth); there is no separate index.
 ///
 /// The ID is **recovered from the folder name** (`ID####` token, any digit

@@ -1,7 +1,4 @@
 //! Data-dir resolution, bootstrap, and unknown-key preservation.
-//!
-//! Split out of the single 2700-line `integration.rs`, whose 67 tests all
-//! queued behind one mutex in one binary.
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -25,7 +22,7 @@ fn sandboxed<R>(body: impl FnOnce(&Path) -> R) -> R {
 }
 
 // ---------------------------------------------------------------------------
-// v1.0: data-dir resolution (portable mode + user config dir fallback)
+// Data-dir resolution: portable mode + user config dir fallback
 // ---------------------------------------------------------------------------
 
 /// Serialize + point the user-config-dir fallback at a tempdir, with
@@ -264,7 +261,7 @@ fn unknown_frontmatter_keys_survive_every_mutation() {
 
 /// A no-op frontmatter mutation must leave the frontmatter bytes untouched.
 ///
-/// The body has had this guarantee since v0.4; the frontmatter never did, which
+/// The body has always had this guarantee; the frontmatter did not, which
 /// is what let a rewrite quietly reorder or drop keys with nothing failing.
 #[test]
 fn write_frontmatter_bytes_preserved_on_no_op() {
@@ -301,7 +298,7 @@ fn write_frontmatter_bytes_preserved_on_no_op() {
 ///
 /// `template.yaml` is user-owned and rewritten wholesale by the TUI builder, the
 /// browser editor, and `template from-folder --force`. The `files:` half of this
-/// is the reason preservation cannot be blanket: since v0.8 the `files/`
+/// is the reason preservation cannot be blanket: the `files/`
 /// directory is the spec, and a flat `files:` block is a pre-v0.8 leftover that
 /// must keep being dropped rather than newly resurrected.
 #[test]

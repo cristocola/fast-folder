@@ -1,7 +1,4 @@
 //! Creating projects: plan, claim, provision, roll back.
-//!
-//! Split out of the single 2700-line `integration.rs`, whose 67 tests all
-//! queued behind one mutex in one binary.
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -811,7 +808,7 @@ structure:
 
 #[test]
 fn config_ignores_removed_project_info_keys() {
-    // v0.9 dropped the `project_info_*` / `pinfo_*` config knobs (metadata is now
+    // The `project_info_*` / `pinfo_*` config knobs are gone (metadata is now
     // mandatory and always named PROJECT_INFO.md). Old configs that still carry
     // those keys must keep parsing — serde ignores unknown fields — and the
     // surviving fields must load normally.

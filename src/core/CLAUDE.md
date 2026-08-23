@@ -163,8 +163,10 @@ and an exhaustiveness test fails if a field is added without updating the list.
 it is wrong: `flatten` routes every field through serde's `Content` buffer, so a
 plain unquoted scalar in a hand-edited file (`year: 2026`) arrives as an integer
 and the `String` field rejects it — and `read_project_meta` drops that error, so
-the project disappears from discovery. Verified in `serde-1.0.229/src/private/de.rs:1255`
-and the YAML crate's deserializer.
+the project disappears from discovery. Verified against serde's
+`private::de::ContentDeserializer` and the YAML crate's deserializer — the
+behaviour is `flatten`'s design, not a version's bug, so there is no release to
+wait for.
 
 `render` returns `Result` because the fallback it replaced wrote an *invisible
 project*: a `# yaml-serialize-error` comment between valid `---` delimiters

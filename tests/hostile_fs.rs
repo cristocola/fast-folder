@@ -20,11 +20,12 @@ use fastf::core::{
 
 mod common;
 
+/// This binary's lock over the process environment — see `common::env`.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 /// Fresh install dir + base, with HOME redirected — see `common::env`.
 fn sandbox<R>(body: impl FnOnce(&Path, &Path) -> R) -> R {
-    common::env::with_sandbox(&SERIAL, |sb| body(&sb.install, &sb.base))
+    common::env::with_sandbox(&SERIAL, |sb, _guard| body(&sb.install, &sb.base))
 }
 
 fn write_hostile_template(install: &Path, slug: &str) {

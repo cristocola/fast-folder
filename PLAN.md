@@ -595,11 +595,14 @@ env guard. No `--test-threads=1` anywhere (correct; keep it that way).
    --all-targets -q || break; done`) — the race was intermittent.
 
 **Acceptance.**
-- [ ] All gates pass; the ten-run loop is clean.
-- [ ] With a `fastf` TUI left open in another terminal, `cargo test` does not block
-      on it and leaves no `.fastf.lock` in the real data dir (check with `fastf
-      paths` + `ls -la`).
-- [ ] `grep -rn 'TEST_LOCK' src/` shows only `interrupt::TEST_LOCK`.
+- [x] All gates pass; the ten-run loop is clean (ten consecutive
+      `cargo test --all-targets -q`, no failures).
+- [x] `cargo test` leaves no `.fastf.lock` in the real data dir — deleted before
+      the loop, still absent after all ten runs. (The "TUI open in another
+      terminal" half is the same property observed from the other side; the
+      lock file is the check that does not need a human.)
+- [x] `grep -rn 'TEST_LOCK' src/` shows only `interrupt::TEST_LOCK` (its
+      definition, and the two modules that take it).
 
 ---
 
@@ -809,3 +812,18 @@ fastf refuses to write through links; cache entries outside a base are ignored.
   now abandons the cache and rescans, which is the honest response: a vanished
   folder is a transient row to drop, but an entry naming a path outside its base
   means the file is no longer fastf's own bookkeeping.
+- **Phase 7 — 2026-08-23, `phase-07-test-isolation`.** As planned, with three
+  notes. `common::env::EnvGuard` became **public and general**
+  (`apply`/`set`/`remove`) rather than private, because `data_dir.rs`'s
+  `with_user_dir_env` and `crash_recovery.rs`'s `arm`/`disarm` both had to go
+  through it — `with_sandbox` now hands the guard to its body for that reason.
+  The `tests/` half of the source scan therefore has real work to do, not just
+  the lib's.
+
+  Two mistakes worth recording because the phase is about exactly them.
+  `EnvGuard` guards do **not** nest: `ENV_LOCK` is a plain `Mutex` and taking it
+  twice on one thread deadlocks — the first version of the unwind test did, and
+  hung. And the first version of `a_panicking_test_body_still_restores_the_environment`
+  used a private `PANIC_SERIAL` instead of the binary's `SERIAL`, so it raced the
+  other tests in `data_dir.rs` and failed intermittently: a second mutex over the
+  same process-global, which is the defect this phase removes.

@@ -14,12 +14,10 @@ use fastf::core::{config::Config, counter::Counters, library, project, project_i
 
 mod common;
 
-use common::env::with_fresh_install;
+use common::env::{EnvGuard, with_fresh_install};
 use common::fixtures::{minimal_template_yaml, write_template};
 
-/// This binary's own lock. `FASTF_INSTALL_DIR` and `HOME` are process-wide, so
-/// every test in a binary shares one — and separate binaries are separate
-/// processes, which is what lets these suites run in parallel with each other.
+/// This binary's lock over the process environment — see `common::env`.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn sandboxed<R>(body: impl FnOnce(&Path) -> R) -> R {
@@ -35,33 +33,29 @@ fn sandboxed<R>(body: impl FnOnce(&Path) -> R) -> R {
 /// system path (e.g. /usr/bin via a package manager). The test binary lives in
 /// `target/debug/deps/` with no `config.toml`/`templates/` beside it, so
 /// portable mode cannot trigger and resolution must land in the user dir.
-fn with_user_dir_env<R>(body: impl FnOnce(&Path) -> R) -> R {
-    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+fn with_user_dir_env<R>(body: impl FnOnce(&Path, &mut EnvGuard<'_>) -> R) -> R {
     let tmp = tempfile::tempdir().expect("tempdir");
     #[cfg(not(windows))]
     let var = "XDG_CONFIG_HOME";
     #[cfg(windows)]
     let var = "APPDATA";
-    let saved = std::env::var(var).ok();
-    // Safe: SERIAL guarantees no other test thread races on these env vars.
-    unsafe {
-        std::env::remove_var("FASTF_INSTALL_DIR");
-        std::env::set_var(var, tmp.path());
-    }
-    let result = body(tmp.path());
-    unsafe {
-        match saved {
-            Some(v) => std::env::set_var(var, v),
-            None => std::env::remove_var(var),
-        }
-    }
-    drop(guard);
-    result
+
+    // Through the shared guard, so the restore happens on unwind and there is
+    // still exactly one lock over environment mutation in this binary.
+    let mut guard = EnvGuard::apply(
+        &SERIAL,
+        &[
+            ("FASTF_INSTALL_DIR", None),
+            (var, Some(tmp.path())),
+            (common::env::home_var(), Some(tmp.path())),
+        ],
+    );
+    body(tmp.path(), &mut guard)
 }
 
 #[test]
 fn data_dir_falls_back_to_user_config_dir() {
-    with_user_dir_env(|tmp| {
+    with_user_dir_env(|tmp, _guard| {
         let (dir, mode) = fastf::util::paths::try_install_dir().expect("must resolve");
         assert_eq!(dir, tmp.join("fastf"));
         assert_eq!(mode, fastf::util::paths::DirMode::UserDir);
@@ -70,23 +64,19 @@ fn data_dir_falls_back_to_user_config_dir() {
 
 #[test]
 fn env_override_beats_user_config_dir() {
-    with_user_dir_env(|_tmp| {
+    with_user_dir_env(|_tmp, guard| {
         let other = tempfile::tempdir().expect("tempdir");
-        unsafe {
-            std::env::set_var("FASTF_INSTALL_DIR", other.path());
-        }
+        guard.set("FASTF_INSTALL_DIR", other.path());
         let (dir, mode) = fastf::util::paths::try_install_dir().expect("must resolve");
         assert_eq!(dir, other.path());
         assert_eq!(mode, fastf::util::paths::DirMode::EnvOverride);
-        unsafe {
-            std::env::remove_var("FASTF_INSTALL_DIR");
-        }
+        guard.remove("FASTF_INSTALL_DIR");
     });
 }
 
 #[test]
 fn bootstrap_lands_in_user_dir_for_system_install() {
-    with_user_dir_env(|tmp| {
+    with_user_dir_env(|tmp, _guard| {
         fastf::bootstrap::ensure_bootstrapped().expect("bootstrap must succeed");
         let data = tmp.join("fastf");
         assert!(data.join("config.toml").is_file(), "config.toml written");
@@ -349,4 +339,49 @@ fn unknown_template_keys_survive_a_save_but_legacy_files_do_not() {
         // Still a valid template afterwards.
         template::find_by_slug("test").unwrap();
     });
+}
+
+/// The harness restores the environment on **unwind**, not merely on a clean
+/// return.
+///
+/// It used to restore with a line after `body()`, so a panicking test skipped
+/// it and the next test in the binary inherited a deleted tempdir as its `HOME`
+/// — and an unconfigured `base_dir` falls back to the home directory, so that
+/// next test scanned a directory that no longer existed. The failure landed on
+/// whichever test happened to run next, never on the one that caused it.
+#[test]
+fn a_panicking_test_body_still_restores_the_environment() {
+    // This binary's own `SERIAL`, not a private one. A second mutex over the
+    // same process-global variables is exactly the defect this phase removes:
+    // it looks like isolation and provides none.
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+
+    // Read under the lock: another test in this binary has its own sandbox
+    // installed while it runs, so an unguarded read sees whatever happens to be
+    // in flight. Every test restores what it found, so the value observed with
+    // the lock held is the stable one.
+    let before = {
+        let _guard = EnvGuard::apply(&SERIAL, &[]);
+        (
+            std::env::var_os(home_var),
+            std::env::var_os("FASTF_INSTALL_DIR"),
+        )
+    };
+
+    let panicked = std::panic::catch_unwind(|| {
+        with_fresh_install(&SERIAL, |_| panic!("the body of a test that fails"))
+    });
+    assert!(panicked.is_err(), "the fixture must actually panic");
+
+    let _guard = EnvGuard::apply(&SERIAL, &[]);
+    assert_eq!(
+        std::env::var_os(home_var),
+        before.0,
+        "HOME must be back to what it was"
+    );
+    assert_eq!(
+        std::env::var_os("FASTF_INSTALL_DIR"),
+        before.1,
+        "the sandbox data dir must not outlive the test that made it"
+    );
 }

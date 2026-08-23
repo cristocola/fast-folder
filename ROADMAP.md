@@ -56,7 +56,11 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v2.0.0 in progress — two surfaces, one engine, nothing trusted by accident** (`PLAN.md` drives it, one phase per PR)
-- Status: **Phase 6 landed: cache entries are hints.** A `.fastf-index.json`
+- Status: **Phase 7 landed: test isolation.** One lock per binary guards
+  environment mutation — `util::test_env` under `src/`, `common::env` under
+  `tests/`, enforced by a source scan — and every guard restores what it changed
+  on unwind. No unit test can lock the developer's real data directory any more.
+- Previously: **Phase 6 landed: cache entries are hints.** A `.fastf-index.json`
   entry can never name a path outside its base — a forged one is rejected, the
   cache abandoned and the base rescanned — and `fastf open` and the TUI's Reveal
   check the folder before spawning anything. The trust model fastf actually has

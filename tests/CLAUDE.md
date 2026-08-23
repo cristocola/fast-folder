@@ -69,13 +69,30 @@ and committing another. `#![allow(dead_code)]` because each binary uses a
 different subset. `concurrency.rs` and `cli_surface.rs` both `mod common;`.
 
 Shared harness rules — every new harness must follow all of them:
-- `FASTF_INSTALL_DIR` env var to redirect `paths::install_dir()` to a tempdir per test
-- `tempfile::TempDir` for hermetic sandboxes
-- **Redirect `HOME`/`USERPROFILE` into the sandbox too.** Since v1.0.2 an
-  unconfigured `base_dir` falls back to the home directory, so a harness that
-  skips this scans the developer's real home and self-heals the counter from
-  their real projects. Any new harness must do the same.
-- A `static SERIAL: Mutex<()>` to run tests serially within the test binary (Rust 2024 edition made `std::env::set_var` unsafe — the mutex justifies the `unsafe` block). Each test binary has its own `SERIAL`; that's fine because `FASTF_INSTALL_DIR` is per-process and `cargo test`'s binaries are separate processes.
-- Process-global state needs its lock beside it: `faults::TEST_LOCK` and
-  `interrupt::TEST_LOCK` exist because a private mutex per test module looks
-  right and silently races.
+- **`common::env` is the only module under `tests/` that may call `set_var` or
+  `remove_var`**, and `util::test_env` is the only one under `src/`.
+  `tests/layering.rs` reads the source and fails the build otherwise. `setenv`
+  is not thread-safe at the libc level, so a second helper behind a second mutex
+  looks like isolation and provides none — the lib genuinely had two, and they
+  raced each other and every `env::var` in the binary.
+- Go through `common::env::with_fresh_install` or `with_sandbox`. Both take the
+  binary's `SERIAL`, redirect `FASTF_INSTALL_DIR` and `HOME`/`USERPROFILE` into
+  a `TempDir`, clear `FASTF_FAULT`, and **restore all of it in `Drop`** — the
+  restore used to be a line after `body()`, so a panicking test skipped it and
+  the next test inherited a deleted tempdir as its `HOME`. `with_sandbox` hands
+  the guard to the body, which is how `crash_recovery` arms a failpoint.
+- Redirecting `HOME` is not optional: an unconfigured `base_dir` falls back to
+  the home directory, so a harness that skips it scans the developer's real home
+  and self-heals the counter from their real projects.
+- Each test binary keeps its **own** `static SERIAL`. Separate binaries are
+  separate processes, so one lock per binary is both necessary and sufficient.
+  There is no `--test-threads=1` anywhere; keep it that way.
+- A unit test under `src/` that reaches `DataLock` must take
+  `util::test_env::EnvGuard::sandbox()` first. The lock path is
+  `install_dir().join(".fastf.lock")`, so without it `cargo test` locks the
+  developer's real data directory — blocking any `fastf` they have open for the
+  full 30-second timeout, and leaving a lock file behind.
+- Lock order when a test needs both: `ENV_LOCK` first, then
+  `interrupt::TEST_LOCK` (the process-global interrupt flag, which lives beside
+  the state it guards because a private mutex per test module silently races).
+  `faults` needs no lock — its arming is thread-local.

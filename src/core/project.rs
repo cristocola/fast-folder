@@ -860,12 +860,10 @@ mod tests {
     /// `interrupt::check()` inside the copy loop — without the collateral.
     #[test]
     fn interrupted_create_rolls_back_and_leaves_no_partial_project() {
+        // `ENV_LOCK` first, then the interrupt flag's lock — the documented
+        // order, in both modules.
+        let (_env, tmp) = crate::util::test_env::EnvGuard::sandbox();
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        // SAFETY: the SERIAL lock keeps other tests in this binary off these vars.
-        unsafe {
-            std::env::set_var("FASTF_INSTALL_DIR", tmp.path());
-        }
 
         let template = template_on_disk(&tmp.path().join("tpl"), 3);
         let base = tmp.path().join("base");
@@ -893,22 +891,14 @@ mod tests {
             0,
             "a rolled-back create must not burn an ID"
         );
-
-        unsafe {
-            std::env::remove_var("FASTF_INSTALL_DIR");
-        }
     }
 
     /// The success path must end with no in-progress markings at all — otherwise
     /// every healthy project would look half-built to `reconcile`.
     #[test]
     fn successful_create_clears_provisioning_state() {
+        let (_env, tmp) = crate::util::test_env::EnvGuard::sandbox();
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        // SAFETY: as above.
-        unsafe {
-            std::env::set_var("FASTF_INSTALL_DIR", tmp.path());
-        }
         crate::util::interrupt::reset();
 
         let template = template_on_disk(&tmp.path().join("tpl"), 2);
@@ -942,10 +932,6 @@ mod tests {
             !pinfo.contains("provisioning"),
             "finished metadata must not carry the flag:\n{pinfo}"
         );
-
-        unsafe {
-            std::env::remove_var("FASTF_INSTALL_DIR");
-        }
     }
 
     // -----------------------------------------------------------------------

@@ -57,28 +57,21 @@ pub fn count_in(contents: &str, name: &str) -> usize {
 mod tests {
     #[cfg(debug_assertions)]
     use super::{count_in, hit};
-    use std::sync::Mutex;
-
-    /// `TRACE_ENV` is process-global, like every other environment variable a
-    /// test touches. See `tests/CLAUDE.md`: the lock lives beside the state it
-    /// guards, not in whichever module happens to need it.
-    #[allow(dead_code)]
-    pub static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Debug only: `hit` is compiled to nothing in release, so in a release test
     /// build there is nothing to count. That is the guarantee, not a gap.
     #[cfg(debug_assertions)]
     #[test]
     fn hits_are_appended_one_per_line_and_counted_by_name() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trace");
 
-        unsafe { std::env::set_var(super::TRACE_ENV, &path) };
+        let mut guard = crate::util::test_env::EnvGuard::set(&[]);
+        guard.also_set(super::TRACE_ENV, &path.display().to_string());
         hit("discover");
         hit("read_metadata");
         hit("discover");
-        unsafe { std::env::remove_var(super::TRACE_ENV) };
+        guard.also_remove(super::TRACE_ENV);
 
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(count_in(&text, "discover"), 2);
@@ -90,15 +83,15 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn tracing_is_off_unless_the_file_is_named() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe { std::env::remove_var(super::TRACE_ENV) };
+        let mut guard = crate::util::test_env::EnvGuard::set(&[]);
+        guard.also_remove(super::TRACE_ENV);
         hit("discover");
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trace");
-        unsafe { std::env::set_var(super::TRACE_ENV, "") };
+        guard.also_set(super::TRACE_ENV, "");
         hit("discover");
-        unsafe { std::env::remove_var(super::TRACE_ENV) };
+        guard.also_remove(super::TRACE_ENV);
         assert!(!path.exists());
     }
 }

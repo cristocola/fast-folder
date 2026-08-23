@@ -30,13 +30,18 @@ use fastf::util::faults::FAULT_ENV;
 
 mod common;
 
-/// `FASTF_INSTALL_DIR` and `FASTF_FAULT` are process-wide.
+/// This binary's lock over the process environment — see `common::env`.
 static SERIAL: Mutex<()> = Mutex::new(());
 
-use common::env::{Sandbox, with_sandbox};
+use common::env::{EnvGuard, Sandbox, with_sandbox};
 
 /// Fresh install dir + base, with HOME redirected — see `common::env`.
-fn sandbox<R>(body: impl FnOnce(&Sandbox) -> R) -> R {
+///
+/// The guard comes through so a test can arm a failpoint with it. `FASTF_FAULT`
+/// is process-wide like `FASTF_INSTALL_DIR`, and `common::env` is the one place
+/// under `tests/` allowed to mutate the environment (`tests/layering.rs`
+/// enforces that) — a second `set_var` behind a second lock is not isolation.
+fn sandbox<R>(body: impl FnOnce(&Sandbox, &mut EnvGuard<'_>) -> R) -> R {
     with_sandbox(&SERIAL, body)
 }
 
@@ -69,14 +74,13 @@ fn config_for(base: &Path) -> Config {
 }
 
 #[cfg(debug_assertions)]
-fn arm(point: &str) {
-    // SAFETY: the sandbox holds SERIAL for the duration of the test.
-    unsafe { std::env::set_var(FAULT_ENV, point) };
+fn arm(guard: &mut EnvGuard<'_>, point: &str) {
+    guard.set(FAULT_ENV, Path::new(point));
 }
 
 #[cfg(debug_assertions)]
-fn disarm() {
-    unsafe { std::env::remove_var(FAULT_ENV) };
+fn disarm(guard: &mut EnvGuard<'_>) {
+    guard.remove(FAULT_ENV);
 }
 
 /// Failpoints reachable from a plain `fastf new`.
@@ -111,16 +115,16 @@ const MOVE_TARGET_ENV: &str = "FASTF_MOVE_TARGET_BASE";
 #[test]
 fn interrupted_create_leaves_nothing_behind_at_every_failpoint() {
     for point in CREATE_POINTS {
-        sandbox(|sb| {
+        sandbox(|sb, guard| {
             write_crash_template(&sb.install, "crash");
             let cfg = config_for(&sb.base);
             let tmpl = template::find_by_slug("crash").unwrap();
             let mut counters = Counters::load().unwrap();
             let plan = project::plan(&tmpl, &HashMap::new(), &cfg, &counters).unwrap();
 
-            arm(point);
+            arm(guard, point);
             let result = project::create(&plan, &tmpl, &mut counters, &cfg, false);
-            disarm();
+            disarm(guard);
 
             assert!(result.is_err(), "[{point}] create should have failed");
             assert!(
@@ -153,7 +157,7 @@ fn interrupted_create_leaves_nothing_behind_at_every_failpoint() {
 /// project would look broken and the signal would be worthless.
 #[test]
 fn successful_create_is_reported_clean_by_reconcile() {
-    sandbox(|sb| {
+    sandbox(|sb, _guard| {
         write_crash_template(&sb.install, "crash");
         let cfg = config_for(&sb.base);
         let tmpl = template::find_by_slug("crash").unwrap();
@@ -173,7 +177,7 @@ fn successful_create_is_reported_clean_by_reconcile() {
 
 #[test]
 fn create_v2_recovery_resumes_scoped_copies_and_is_idempotent() {
-    sandbox(|sb| {
+    sandbox(|sb, _guard| {
         write_crash_template(&sb.install, "crash");
         let cfg = config_for(&sb.base);
         let tmpl = template::find_by_slug("crash").unwrap();
@@ -270,7 +274,7 @@ fn transaction_count(target: &Path) -> usize {
 #[test]
 fn hard_killed_staged_moves_reconcile_without_data_loss() {
     for point in MOVE_ABORT_POINTS {
-        sandbox(|sb| {
+        sandbox(|sb, _guard| {
             write_crash_template(&sb.install, "crash");
             let target = sb.install.parent().unwrap().join("target");
             fs::create_dir_all(&target).unwrap();
@@ -390,7 +394,7 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
 #[cfg(debug_assertions)]
 #[test]
 fn hard_killed_create_is_visible_and_reported() {
-    sandbox(|sb| {
+    sandbox(|sb, _guard| {
         write_crash_template(&sb.install, "crash");
         let home = sb.install.parent().unwrap();
 
@@ -452,7 +456,7 @@ fn hard_killed_create_is_visible_and_reported() {
 #[cfg(debug_assertions)]
 #[test]
 fn hard_kill_before_metadata_does_not_produce_a_phantom_project() {
-    sandbox(|sb| {
+    sandbox(|sb, _guard| {
         write_crash_template(&sb.install, "crash");
         let home = sb.install.parent().unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_fastf"))
@@ -496,7 +500,7 @@ fn hard_kill_before_metadata_does_not_produce_a_phantom_project() {
 #[cfg(debug_assertions)]
 #[test]
 fn a_fault_after_source_cleanup_retains_the_transaction_for_the_next_pass() {
-    sandbox(|sb| {
+    sandbox(|sb, guard| {
         write_crash_template(&sb.install, "crash");
         let target = sb.install.parent().unwrap().join("target");
         fs::create_dir_all(&target).unwrap();
@@ -532,9 +536,9 @@ fn a_fault_after_source_cleanup_retains_the_transaction_for_the_next_pass() {
             "expected both halves"
         );
 
-        arm("move:after-source-cleanup");
+        arm(guard, "move:after-source-cleanup");
         let interrupted = provisioning::reconcile_unlocked(&cfg);
-        disarm();
+        disarm(guard);
 
         assert_eq!(
             interrupted.completed, 0,
@@ -582,7 +586,7 @@ fn a_fault_after_source_cleanup_retains_the_transaction_for_the_next_pass() {
 #[cfg(debug_assertions)]
 #[test]
 fn a_hard_killed_template_save_leaves_a_loadable_manifest() {
-    sandbox(|sb| {
+    sandbox(|sb, _guard| {
         write_crash_template(&sb.install, "crash");
         let manifest = sb.install.join("templates/crash/template.yaml");
         let before = fs::read_to_string(&manifest).unwrap();

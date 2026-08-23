@@ -11,6 +11,8 @@ pub mod paths;
 #[cfg(windows)]
 pub(crate) mod shell_open;
 pub(crate) mod size_scan;
+#[cfg(test)]
+pub(crate) mod test_env;
 pub mod time;
 pub mod trace;
 pub(crate) mod tree_size;

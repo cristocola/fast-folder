@@ -253,3 +253,67 @@ fn the_surfaces_do_not_write_templates_themselves() {
         offenders.join("\n  ")
     );
 }
+
+/// **Environment mutation lives in exactly one place per binary.**
+///
+/// `setenv` is not thread-safe at the libc level, so two mutexes over the same
+/// process-global variables is one lock too many: they race each other and every
+/// `env::var` in the binary. The lib had two — `trace::tests::TEST_LOCK` for
+/// `FASTF_TRACE_FILE` and `interrupt::TEST_LOCK`, borrowed as `SERIAL` by
+/// `project`'s tests, for `FASTF_INSTALL_DIR`.
+///
+/// Under `src/`, the one place is `util::test_env`. Under `tests/`, it is
+/// `common::env`. A helper that reaches for `set_var` itself looks like
+/// isolation and provides none.
+#[test]
+fn environment_mutation_goes_through_one_guard_per_binary() {
+    fn offenders_in(root: &Path, allowed: &Path) -> Vec<String> {
+        let mut offenders = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                // Compared component-wise, never as a `/`-suffixed string:
+                // `Path::display` uses the platform separator, so a `"a/b.rs"`
+                // suffix silently matches nothing on Windows.
+                if path.ends_with(allowed) {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).unwrap();
+                for (number, line) in text.lines().enumerate() {
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with("//") {
+                        continue;
+                    }
+                    // Split so the scanner does not match its own needles.
+                    if trimmed.contains(concat!("set_", "var("))
+                        || trimmed.contains(concat!("remove_", "var("))
+                    {
+                        offenders.push(format!("{}:{}", path.display(), number + 1));
+                    }
+                }
+            }
+        }
+        offenders
+    }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut offenders = offenders_in(&root.join("src"), Path::new("util/test_env.rs"));
+    offenders.extend(offenders_in(
+        &root.join("tests"),
+        Path::new("common/env.rs"),
+    ));
+
+    assert!(
+        offenders.is_empty(),
+        "environment mutation belongs in util::test_env (src) or common::env (tests):\n  {}",
+        offenders.join("\n  ")
+    );
+}

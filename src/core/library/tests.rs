@@ -348,6 +348,11 @@ fn rename_allows_case_only_change() {
 
 #[test]
 fn move_project_round_trip() {
+    // `move_project` takes `DataLock`, whose path is
+    // `paths::install_dir().join(".fastf.lock")`. Without this the unit test
+    // locks the developer's real data directory — blocking any `fastf` they
+    // have open for the full 30-second timeout, and leaving a lock file behind.
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
     let tmp1 = tempfile::tempdir().unwrap();
     let tmp2 = tempfile::tempdir().unwrap();
     let (old_base, new_base) = (tmp1.path(), tmp2.path());
@@ -1047,6 +1052,7 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
 
 #[test]
 fn move_project_rejects_same_base_and_collision() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
     let tmp1 = tempfile::tempdir().unwrap();
     let tmp2 = tempfile::tempdir().unwrap();
     write_project(

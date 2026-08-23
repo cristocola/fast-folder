@@ -7,7 +7,6 @@
   Preprocessor variables, passed with -d on the command line:
     Version        numeric x.y.z (MSI requires numeric versions, no "v" prefix)
     BinPath        path to the built fastf.exe
-    UiBinPath      path to the built fastf-ui.exe (windowless UI launcher)
     LicensePath    path to the repo LICENSE file (installed as LICENSE.txt)
     LicenseRtfPath path to packaging/wix/LICENSE.rtf (wizard license page)
     IconPath       path to packaging/icons/fastf.ico
@@ -47,12 +46,6 @@
           <File Id="FastfExe" Source="$(var.BinPath)" Name="fastf.exe" KeyPath="yes" />
         </Component>
 
-        <!-- Windowless launcher the Start Menu shortcut targets: opens the
-             browser UI in an app window without flashing a console. -->
-        <Component Id="UiLauncher">
-          <File Id="FastfUiExe" Source="$(var.UiBinPath)" Name="fastf-ui.exe" KeyPath="yes" />
-        </Component>
-
         <Component Id="LicenseFile">
           <File Id="License" Source="$(var.LicensePath)" Name="LICENSE.txt" KeyPath="yes" />
         </Component>
@@ -83,8 +76,8 @@
     </StandardDirectory>
 
     <!-- Start Menu "Fast Folder" entry — the Windows counterpart of
-         packaging/fastf.desktop (the app-window mode of `fastf ui`,
-         via the windowless fastf-ui.exe launcher). Non-advertised so
+         packaging/fastf.desktop. It opens the guided TUI in a console
+         window. Non-advertised so
          launching never triggers an MSI repair. The HKCU RegistryValue as
          KeyPath is the official WiX pattern for a perMachine shortcut (a
          Shortcut cannot be a KeyPath); it trips ICE38/ICE43 only under
@@ -95,7 +88,7 @@
             Id="FastFolderShortcut"
             Name="Fast Folder"
             Description="Create and manage structured project folders from templates"
-            Target="[INSTALLFOLDER]fastf-ui.exe"
+            Target="[INSTALLFOLDER]fastf.exe"
             WorkingDirectory="INSTALLFOLDER"
             Icon="FastfIco" />
         <RegistryValue

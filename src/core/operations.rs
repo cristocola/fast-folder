@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use crate::core::assets::{self, CopyJob, Progress};
+use crate::core::assets::{self, Progress};
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::library::{self, MoveOutcome, Project};
@@ -33,17 +33,15 @@ pub struct CreateOptions {
     pub template_slug: String,
     pub variables: HashMap<String, String>,
     pub base_dir_override: Option<String>,
-    pub defer_over: Option<u64>,
 }
 
-/// A create result retains the mutation lock when deferred copies remain. The
-/// background worker takes ownership of it and releases it only after it has
-/// cleared the provisioning flag/journal (or reported failure/cancellation).
+/// A create result carries the mutation lock so the caller can drop it before
+/// running post-create actions, which spawn the user's editor and shell
+/// commands and must not hold the data lock while they run.
 pub struct CreateOutcome {
     pub template: Template,
     pub config: Config,
     pub plan: ProjectPlan,
-    pub deferred: Vec<CopyJob>,
     mutation_lock: Option<DataLock>,
 }
 
@@ -70,20 +68,11 @@ pub fn create(options: CreateOptions) -> Result<CreateOutcome> {
     crate::core::vars::validated_raw_values(&template, &options.variables)?;
     let mut counters = Counters::load()?;
     let planned = project::plan(&template, &options.variables, &config, &counters)?;
-    let (plan, deferred) = match options.defer_over {
-        Some(limit) => {
-            project::create_deferred(&planned, &template, &mut counters, &config, limit)?
-        }
-        None => (
-            project::create(&planned, &template, &mut counters, &config, false)?,
-            Vec::new(),
-        ),
-    };
+    let plan = project::create(&planned, &template, &mut counters, &config, false)?;
     Ok(CreateOutcome {
         template,
         config,
         plan,
-        deferred,
         mutation_lock: Some(mutation_lock),
     })
 }

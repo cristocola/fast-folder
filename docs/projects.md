@@ -66,11 +66,11 @@ fastf reindex
 
 ## Live folder sizes
 
-The guided TUI and browser UI show a current Size snapshot for each project they
-display. Neither waits for one: the guided TUI draws its list first and fills the
-column in from background workers (see "Browsing projects" in `cli.md`), and the
-browser UI requests sizes per row after the page has rendered. Size is the sum of the logical lengths of all regular files below the
-project folder, including hidden files and `PROJECT_INFO.md`. Empty directories
+The guided TUI shows a current Size snapshot for each project it displays, and
+never waits for one: it draws its list first and fills the column in from
+background workers (see "Browsing projects" in `cli.md`). Size is the sum of the
+logical lengths of all regular files below the project folder, including hidden
+files and `PROJECT_INFO.md`. Empty directories
 add zero bytes. Symlinks, Windows junctions, and other links are never followed;
 sockets, devices, and other special filesystem nodes are ignored.
 
@@ -80,11 +80,10 @@ total. Values describe file length, not allocated disk blocks, compression, or
 the size of anything reached through a link.
 
 Sizes are deliberately absent from `PROJECT_INFO.md`, the disposable
-`.fastf-index.json` cache, the in-memory `Project` model, and `/api/state`.
-Project contents can change outside fastf at any time, so a persisted value
-would immediately become stale. Re-enter the TUI Projects browser or use the
-browser UI's Refresh action to obtain a new snapshot. Acting on a project in the
-guided browser drops that project's snapshot. Tag it, rename it, or move it, and
+`.fastf-index.json` cache, and the in-memory `Project` model. Project contents
+can change outside fastf at any time, so a persisted value would immediately
+become stale. Re-enter the TUI Projects browser to obtain a new snapshot. Acting
+on a project in the guided browser drops that project's snapshot. Tag it, rename it, or move it, and
 the row is measured again when you return to the list.
 
 ## The ID counter self-heals
@@ -103,7 +102,7 @@ Because nothing ever lowers it, there is no `fastf id reset`, and `fastf id set`
 fastf move ID0047 archive
 ```
 
-Moves are also available from the `fastf recent` action menu and the browser UI (including multi-select bulk moves). The rules:
+Moves are also available from the `fastf recent` action menu. The rules:
 
 - Targets must be configured bases, so a moved project always stays discoverable.
 - On the same filesystem, a move is an instant atomic rename.
@@ -161,8 +160,7 @@ Create and move markers written before journal v2 are **obsolete and
 report-only**. They contain arbitrary absolute paths, so `reconcile` never
 parses or migrates them, follows their paths, or deletes anything they name. It
 lists each marker and leaves it plus all related paths untouched. Inspect both
-locations before manually removing any obsolete artifact. The browser UI shows
-the same v2 recovery and obsolete-marker report.
+locations before manually removing any obsolete artifact.
 
 ## Onboarding folders fastf did not create
 

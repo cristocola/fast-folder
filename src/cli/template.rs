@@ -177,7 +177,7 @@ pub fn new_interactive() -> Result<()> {
 pub fn edit(slug: &str) -> Result<()> {
     tty::require_tty(
         "edit a template",
-        "edit templates/<slug>/template.yaml directly, or use the browser UI",
+        "edit templates/<slug>/template.yaml directly",
     )?;
     validate_slug(slug)?;
     let path = paths::template_manifest(slug);
@@ -242,7 +242,7 @@ impl ScanResult {
 }
 
 /// Generate a template from an existing folder tree (non-interactive core used
-/// by the browser UI and tests). Text files are reproduced into `files/`;
+/// by tests). Text files are reproduced into `files/`;
 /// binary/large files are bundled byte-for-byte only when `bundle_assets` is set
 /// (otherwise they are skipped). The generated template can be edited like any
 /// other — via `fastf template edit <slug>`, the browser editor, or on disk.

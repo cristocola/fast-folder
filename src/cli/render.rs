@@ -1,10 +1,10 @@
 //! Everything fastf prints about a plan, a create, or an apply.
 //!
 //! This lived in `core::project`, which meant 255 lines of `colored` output sat
-//! under the layer `fastf ui` also calls: ANSI escapes on a path no HTTP
-//! response can use, and no way for a second surface to say the same thing
-//! differently. `core` produces the data now (`core::project::plan_report`,
-//! `apply_report`), and this is the one place that turns it into text.
+//! under a layer every surface calls — ANSI escapes with no way for a second
+//! surface to say the same thing differently. `core` produces the data now
+//! (`core::project::plan_report`, `apply_report`), and this is the one place
+//! that turns it into text.
 //!
 //! `tests/layering.rs` keeps it that way.
 

@@ -1,9 +1,9 @@
 //! The layering rule, enforced by reading the source.
 //!
-//! `core` and `util` are the parts of fastf that the CLI, the guided TUI and the
-//! browser server all sit on top of. A prompt inside one of them is a prompt no
-//! HTTP request can answer, which is how `core::vars::collect_vars` came to
-//! block the browser UI's variable collection until it was moved to `tui`.
+//! `core` and `util` are the parts of fastf that both surfaces — the CLI and the
+//! guided TUI — sit on top of. A prompt inside one of them is a prompt a
+//! non-interactive caller cannot answer, which is how `core::vars::collect_vars`
+//! came to block scripted variable collection until it was moved to `tui`.
 //!
 //! A source scan is the only check that holds here: an import is not something a
 //! runtime test can observe, and the rule has to fail the build the moment it is
@@ -40,8 +40,8 @@ fn sources(layer: &str) -> Vec<PathBuf> {
 }
 
 /// `dialoguer` is the terminal prompt library. Nothing under `core/` may reach
-/// for it: the same functions serve `fastf ui`, where there is no terminal to
-/// prompt on and no user watching one.
+/// for it: the same functions serve scripted, non-interactive runs, where there
+/// is no terminal to prompt on and no user watching one.
 #[test]
 fn core_does_not_prompt() {
     let mut offenders = Vec::new();
@@ -118,15 +118,15 @@ fn core_and_util_do_not_render() {
 /// The layers below never reach up into the ones above.
 #[test]
 fn core_and_util_do_not_import_the_surfaces() {
-    const UPWARD: [&str; 3] = ["crate::cli", "crate::tui", "crate::ui"];
+    const UPWARD: [&str; 2] = ["crate::cli", "crate::tui"];
 
     let mut offenders = Vec::new();
     for layer in ["core", "util"] {
         for path in sources(layer) {
             let text = fs::read_to_string(&path).unwrap();
             for (number, line) in text.lines().enumerate() {
-                // A doc link is not a dependency: `[crate::ui::jobs_active]` in
-                // a comment tells a reader where something is used, and removing
+                // A doc link is not a dependency: `[crate::tui::browser]` in a
+                // comment tells a reader where something is used, and removing
                 // it would make the documentation worse to satisfy a rule about
                 // code.
                 let trimmed = line.trim_start();

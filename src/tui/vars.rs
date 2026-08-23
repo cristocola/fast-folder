@@ -2,8 +2,8 @@
 //!
 //! It lived in `core::vars`, which meant `core` imported `dialoguer` and printed
 //! to the terminal. The noninteractive boundary (`core::vars::validated_raw_values`)
-//! stayed where it was: it is what create, apply, register, and the browser UI
-//! all validate against.
+//! stayed where it was: it is what create, apply and register all validate
+//! against.
 
 use anyhow::{Result, bail};
 use std::collections::HashMap;

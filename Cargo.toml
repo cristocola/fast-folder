@@ -3,7 +3,7 @@ name = "fastf"
 version = "1.7.1"
 edition = "2024"
 rust-version = "1.88"
-description = "Fast Folder Creator — template-driven project folder generator with TUI and browser UI"
+description = "Fast Folder Creator — template-driven project folder generator with a guided TUI and CLI"
 license = "MIT"
 repository = "https://github.com/cristocola/fast-folder"
 homepage = "https://github.com/cristocola/fast-folder"
@@ -15,13 +15,6 @@ categories = ["command-line-utilities", "filesystem"]
 [[bin]]
 name = "fastf"
 path = "src/main.rs"
-
-# Windowless launcher for the browser UI — what the Windows Start Menu
-# shortcut runs. Built everywhere (keeps clippy/tests uniform); only the
-# Windows artifacts ship it.
-[[bin]]
-name = "fastf-ui"
-path = "src/bin/fastf-ui.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -58,8 +51,8 @@ tempfile = "3"
 # output is always a creatable filename" property is the one that matters most.
 proptest = { version = "1", default-features = false, features = ["std"] }
 
-# Do not add `panic = "abort"`. The browser UI answers a panicking handler with a
-# 500 via `catch_unwind`, and aborting turns that into a killed process instead.
+# Do not add `panic = "abort"`. The TUI restores the terminal while unwinding;
+# aborting would leave it in raw mode with the cursor hidden.
 [profile.release]
 opt-level = 3
 lto = true

@@ -16,7 +16,6 @@
 
 pub mod env;
 pub mod fixtures;
-pub mod ui;
 
 use std::fs;
 use std::path::{Path, PathBuf};

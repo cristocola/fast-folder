@@ -149,13 +149,18 @@ UI), 51–52, 153, 158, 170, 205; `docs/cli.md:3,12`; `docs/templates.md:3`;
    must return only `ROADMAP.md`'s release table and this file.
 
 **Acceptance.**
-- [ ] All gates pass; `cargo test --all-targets` runs no `ui_*` binary.
-- [ ] `cargo build --release --target x86_64-pc-windows-gnu` produces exactly one exe.
-- [ ] The `git grep` in step 7 is clean.
-- [ ] `fastf --help` lists no `ui`; `fastf ui` is "unrecognized subcommand".
-- [ ] Manual: `fastf` opens the TUI, create / browse / move / template builder work as
-      before (nothing in the TUI depended on `src/ui`).
-- [ ] ROADMAP, README, docs, CLAUDE.md files updated in the same PR.
+- [x] All gates pass; `cargo test --all-targets` runs no `ui_*` binary.
+- [~] `cargo build --release --target x86_64-pc-windows-gnu` produces exactly one exe.
+      **Not run locally**: this machine has no `mingw-w64-gcc`, so the cross-link
+      fails in `getrandom`/`windows-sys` before reaching fastf. What did run:
+      `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings`
+      (clean) and `cargo metadata`, which reports exactly one `bin` target.
+      CI's Windows runner is the authority.
+- [x] The `git grep` in step 7 is clean.
+- [x] `fastf --help` lists no `ui`; `fastf ui` is "unrecognized subcommand".
+- [x] `tui_pty` (34 tests: menu, project browser, flows, template builder) passes
+      unchanged — nothing in the TUI depended on `src/ui`.
+- [x] ROADMAP, README, docs, CLAUDE.md files updated in the same PR.
 
 **Notes for the next phase.** After this phase the only in-process mutation lock is
 gone with `WRITE_LOCK`; the remaining concurrency is cross-process (`DataLock`) plus
@@ -715,3 +720,12 @@ fastf refuses to write through links; cache entries outside a base are ignored.
 ## Phase log
 
 (One line per finished phase: date, PR, what differed from the plan.)
+
+- **Phase 1 — 2026-08-23, `phase-01-remove-browser-ui`.** As planned. Three things
+  the plan did not name: `util::tree_size::directory_size` (the uncancelled walk)
+  had no caller left once the UI went, so it became a test helper and
+  `NEVER_CANCELLED` went with it; `assets::JOB_DEFER_BYTES` took its
+  `TEXT_MAX_BYTES` compile-time assert with it, since nothing defers any more; and
+  the WiX `UiLauncher` component belonged to no `ComponentGroup`, so removing it
+  needed no other edit. The Windows cross-*link* could not run here (no
+  `mingw-w64-gcc`); Windows clippy did.

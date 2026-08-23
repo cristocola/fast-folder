@@ -1,15 +1,14 @@
 # Command line reference
 
-Every interactive step in fastf has a scriptable equivalent. Use the TUI when exploring and flags when automating. This page covers the full command surface. For template authoring see [templates.md](templates.md), for the project model see [projects.md](projects.md), and for the browser UI see [UI.md](UI.md).
+Every interactive step in fastf has a scriptable equivalent. Use the TUI when exploring and flags when automating. This page covers the full command surface. For template authoring see [templates.md](templates.md) and for the project model see [projects.md](projects.md).
 
-On the very first launch (TUI or browser UI) fastf asks where your projects should live and suggests `~/Projects` (`C:\Users\<you>\Projects` on Windows). The folder is created for you, and you can add more bases later under Settings > Library bases. Until a base is set, an unconfigured fastf falls back to your home directory.
+On the very first launch fastf asks where your projects should live and suggests `~/Projects` (`C:\Users\<you>\Projects` on Windows). The folder is created for you, and you can add more bases later under Settings > Library bases. Until a base is set, an unconfigured fastf falls back to your home directory.
 
 ## Command overview
 
 | Command | Description |
 |---|---|
 | `fastf` | Launch the interactive TUI menu |
-| `fastf ui` | Launch the local browser UI (`--app` for a dedicated window, `--no-open` for server only, `--address` to bind another loopback port) |
 | `fastf new [slug]` | Create a project from a template |
 | `fastf recent` | Interactive project picker with inline tags |
 | `fastf open <query>` | Reveal a project folder by ID or name |
@@ -198,8 +197,8 @@ fastf recent | grep music-video
 ```
 
 The standalone `fastf recent` and `fastf search` commands retain their existing
-command-line output; live Size fields are exclusive to the guided TUI and
-browser UI, so scripts do not acquire a new column.
+command-line output; live Size fields are exclusive to the guided TUI, so
+scripts do not acquire a new column.
 
 Deleted a project folder manually? The next `fastf recent` simply won't list it. The per-base cache heals itself, so there is no prune command. If you moved folders or edited metadata outside fastf, run `fastf reindex`.
 

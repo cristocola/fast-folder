@@ -215,11 +215,10 @@ pub(crate) fn require_real_file(path: &Path, label: &str) -> Result<()> {
 /// How deep any of fastf's walkers will descend before refusing.
 ///
 /// Every recursive walk in the tool is plain recursion on the call stack, and
-/// two of them (`tree_size`, and the browser's own size scan) run over whatever
-/// folder a user points at.
+/// `tree_size` runs over whatever folder a user points at.
 ///
 /// **64, not 256.** The first value was chosen against a Linux main thread's
-/// 8 MiB stack; a Windows *thread* gets 1 MiB by default, and the browser's
+/// 8 MiB stack; a Windows *thread* gets 1 MiB by default, and the TUI browser's
 /// size scan runs on worker threads. 256 frames of `read_dir` iterator plus
 /// locals overflowed one — which is the exact failure the limit exists to
 /// prevent, so a limit that only holds on the roomiest stack is not a limit.

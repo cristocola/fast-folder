@@ -1,4 +1,4 @@
-use fastf::{bootstrap, cli, tui, ui};
+use fastf::{bootstrap, cli, tui};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -410,31 +410,6 @@ enum Commands {
     Mangen {
         /// Output directory for the generated .1 files
         dir: std::path::PathBuf,
-    },
-
-    /// Launch the local browser UI for Fast Folder
-    #[command(
-        after_help = "Starts a small local HTTP server and opens the Fast Folder\n\
-        UI in your browser. The UI shares the same templates, config, counter,\n\
-        and project index as the CLI. Stop it with Ctrl-C.\n\n\
-        Examples:\n  \
-            fastf ui                              # serve + open the default browser\n  \
-            fastf ui --app                        # open a dedicated app window (Chromium/Chrome)\n  \
-            fastf ui --no-open                    # serve only, don't open a browser\n  \
-            fastf ui --address 127.0.0.1:47840    # bind a different loopback port"
-    )]
-    Ui {
-        /// Address to bind. Keep it on loopback; the server has no authentication.
-        #[arg(long, default_value = ui::DEFAULT_ADDRESS)]
-        address: String,
-
-        /// Start the server but do not open a browser.
-        #[arg(long)]
-        no_open: bool,
-
-        /// Open in a dedicated app window (Chromium/Chrome) instead of the default browser.
-        #[arg(long)]
-        app: bool,
     },
 }
 
@@ -860,16 +835,6 @@ fn run() -> Result<()> {
         Some(Commands::Completions { shell }) => generate_completions(&shell),
         Some(Commands::Paths) => cli::paths_cmd::run(),
         Some(Commands::Mangen { dir }) => generate_man_pages(&dir),
-
-        Some(Commands::Ui {
-            address,
-            no_open,
-            app,
-        }) => cli::ui::run(cli::ui::UiArgs {
-            address,
-            no_open,
-            app,
-        }),
     }
 }
 

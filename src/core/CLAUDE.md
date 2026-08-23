@@ -6,7 +6,7 @@ the orientation, the layering rule and the data-dir and counter models; this fil
 is the part that bites when you edit these directories.
 
 **The layering rule applies here above all: `core` and `util` import nothing
-from `cli`, `tui` or `ui`, never prompt, and never print.** `tests/layering.rs`
+from `cli` or `tui`, never prompt, and never print.** `tests/layering.rs`
 enforces it; `util::diag` is the one sink for anything these layers have to say.
 
 ## Templates
@@ -90,10 +90,10 @@ components, absolute and drive paths, and `..`; `src/components` stays valid.
 Validation happens before path derivation at template lookup and save, and on raw
 `files` plus `structure` entries. `project::plan` then validates every physical
 and structure path **again after interpolation**, before claiming a folder; the
-create, apply and UI file routes repeat the typed boundary check.
+create and apply file walks repeat the typed boundary check.
 
 `assets::AssetEntry` carries **both** `rel: String` (textual, lossy — what globs,
-`SafeRelativePath` and the browser's JSON reason about) and `os_rel: PathBuf`
+`SafeRelativePath` reasons about) and `os_rel: PathBuf`
 (exact — what you join to open or create a file). **Never join `rel`.** A
 template file whose name is not valid UTF-8 was opened at a `?`-substituted path
 that does not exist, so the create aborted naming a path the user never wrote.
@@ -106,8 +106,8 @@ storage.
 Every recursive walk stops at `paths::MAX_WALK_DEPTH` (**64**) and reports
 through `paths::too_deep`; `tree_size` turns it into `None` like any other read
 failure. 64 rather than 256 because a Windows *thread* gets a 1 MiB stack and the
-browser's size scan runs on worker threads — 256 frames of `read_dir` iterator
-overflowed one, which is the exact failure the limit exists to prevent.
+TUI browser's size scan runs on worker threads — 256 frames of `read_dir`
+iterator overflowed one, which is the exact failure the limit exists to prevent.
 
 ## `PROJECT_INFO.md`
 
@@ -174,14 +174,10 @@ placed one line too early found exactly that.
 
 The `_2` collision suffix: `create_inner` walks `name`, `name_2`, `name_3`, each
 a single atomic `create_dir`, so racing processes land on different suffixes and
-can never merge. The loop wraps **only** the claim. `create`/`create_deferred`
-therefore return the plan **as realized** — callers must report from that, not
-from the plan they passed in. `config.on_name_collision = "error"` restores
+can never merge. The loop wraps **only** the claim. `create` therefore returns
+the plan **as realized** — callers must report from that, not from the plan they
+passed in. `config.on_name_collision = "error"` restores
 refuse-a-duplicate.
-
-`defer_over` in `copy_template_files` must stay ≥ `TEXT_MAX_BYTES` so every
-deferred file is verbatim (no interpolation off-thread). `create` passes `None`;
-only the UI's `create_deferred` defers.
 
 **Register** writes a `PROJECT_INFO.md` into a folder that lacks one. It builds
 its `ProjectPlan` directly rather than calling `plan()`, because `plan` always
@@ -251,10 +247,11 @@ published.
 
 **Create** writes `PROJECT_INFO.md` first with `provisioning: true`, clears the
 flag before removing the journal, and writes `.fastf-create-v2.json` on **every**
-path, CLI included — never regress to UI-only journaling. An empty initial
-journal cannot prove which inline interpolated files landed, so it is reported for
-inspection; a deferred journal can resume missing files after identity, type and
-length checks.
+path. An empty journal cannot prove which interpolated files landed, so it is
+reported for inspection. Creates no longer defer any copy, but the resume branch
+stays: a journal listing pending copies can still be on a shared drive, written
+by a v1.x binary on the other operating system, and it resumes those files after
+identity, type and length checks.
 
 **Reconcile** holds `DataLock` for the whole pass and is idempotent. `Copying`
 and an unpublished `ReadyToCommit` discard only the owned transaction; a
@@ -273,9 +270,9 @@ four tests that need those bytes plant them literally.
 
 `util::lockfile::DataLock` is the cross-process lock over the data dir
 (`.fastf.lock`). Any read-modify-write of `counters.toml` or `config.toml` must
-hold it — `ui::WRITE_LOCK` is an in-process `Mutex` and cannot see a CLI running
-alongside the browser. Windows uses `share_mode(0)`, Unix `flock`; both are
-released by the OS on process death, so there is no stale lock to recover.
+hold it — an in-process `Mutex` would not see a second fastf running in another
+terminal. Windows uses `share_mode(0)`, Unix `flock`; both are released by the OS
+on process death, so there is no stale lock to recover.
 
 **Never hold it across a prompt, an editor, a reveal or a post-create hook.**
 `cli::new` re-plans inside the lock and runs post-create outside it for exactly
@@ -284,8 +281,8 @@ that reason.
 **Prompt first, then lock, then reload.** `edit_postcreate_commands` and
 `menu_settings_bases` collect the answer, *then* call `operations::update_config`,
 which takes the lock and re-reads. Holding a loaded `Config` across a human prompt
-and saving it afterwards reverted whatever the browser or another `config set`
-had written meanwhile. Both remove by **text**, not by the index the user saw.
+and saving it afterwards reverted whatever another `config set` had written
+meanwhile. Both remove by **text**, not by the index the user saw.
 
 `core::operations` is the shared mutation entry point: it holds `DataLock`,
 reloads config and authoritative project identity beneath it, then refreshes the
@@ -294,10 +291,6 @@ itself.** A `pub fn` under `core/` that mutates without the lock says `_unlocked
 in its name (`reconcile_unlocked`, `unregister_project_unlocked`,
 `delete_project_unlocked`, `rename_project_unlocked`), each `#[doc(hidden)]` with
 a `*_configured` application entry point.
-
-Background create and move jobs run off the UI's `WRITE_LOCK` but retain the
-cross-process `DataLock` through completion; reads and cancellation stay
-available.
 
 `util::fs_retry` wraps the destructive filesystem calls (Windows sharing
 violations from Defender or the indexer, plus read-only attribute clearing).
@@ -346,9 +339,8 @@ global one entirely. All fields default to off: `git_init`, `reveal`,
 Commands run synchronously through the user's shell (`cmd /c` on Windows, `sh -c`
 elsewhere). **There is no sandbox** — template authors control this.
 
-`core::post_create::run` returns `Vec<Note>` and does **not** print: the same
-runner serves `fastf ui`, which cannot suppress an ANSI checkmark written to the
-process's stdout. `Note::Path` is separate from `Note::Done` because
+`core::post_create::run` returns `Vec<Note>` and does **not** print: `core` may
+not write to a stdout the caller may be piping. `Note::Path` is separate from `Note::Done` because
 `print_path`'s line is the run's *output*, so it goes to stdout alone and last.
 
 `resolve_post_create()` is `pub` so `cli::new`'s open-prompt can avoid

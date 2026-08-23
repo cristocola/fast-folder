@@ -4,29 +4,26 @@ Windows 10 and 11 are fully supported. Every release ships two Windows artifacts
 
 | Artifact | What it is |
 |---|---|
-| `fastf-vX.Y.Z-x86_64.msi` | Installer with a setup wizard. Installs the CLI, adds it to your PATH, and creates a Start Menu app for the browser UI. |
-| `fastf-vX.Y.Z-x86_64-pc-windows-msvc.zip` | Portable archive with `fastf.exe`, the `fastf-ui.exe` launcher, PowerShell completions, and the docs. |
+| `fastf-vX.Y.Z-x86_64.msi` | Installer with a setup wizard. Installs `fastf.exe`, adds it to your PATH, and creates a Start Menu entry. |
+| `fastf-vX.Y.Z-x86_64-pc-windows-msvc.zip` | Portable archive with `fastf.exe`, PowerShell completions, and the docs. |
 
 ## Option 1: MSI installer (recommended)
 
 1. Download the `.msi` from the releases page and run it. A standard setup wizard walks you through the license and the install folder.
-2. Launch **Fast Folder** from the Start Menu. It opens the browser UI in its own app window, with no console attached. Closing the window stops fastf. On the first launch it asks where your projects should live, suggesting `C:\Users\<you>\Projects`, and creates that folder for you (the terminal TUI asks the same on its first run).
+2. Launch **Fast Folder** from the Start Menu. It opens the guided menu in a console window. On the first launch it asks where your projects should live, suggesting `C:\Users\<you>\Projects`, and creates that folder for you.
 3. For the CLI, open a **new** terminal (PowerShell or cmd). PATH changes only apply to terminals started after the install. Verify:
 
 ```powershell
 fastf --version
 ```
 
-The installer places two programs under `Program Files\fastf` and adds that directory to the PATH:
-
-- `fastf.exe` is the CLI and TUI.
-- `fastf-ui.exe` is what the Start Menu shortcut runs. It is the same program in app-window mode, equivalent to `fastf ui --app`.
+The installer places `fastf.exe` — the CLI and the guided menu, one program — under `Program Files\fastf` and adds that directory to the PATH. The Start Menu shortcut runs it.
 
 Upgrading is just running a newer MSI. Uninstall from Windows Settings > Apps like any other program. Uninstalling removes the shortcut and the PATH entry.
 
 ## Option 2: portable zip
 
-1. Download and extract the `.zip`. Inside is a folder containing `fastf.exe` and `fastf-ui.exe`.
+1. Download and extract the `.zip`. Inside is a folder containing `fastf.exe`.
 2. Move the folder somewhere permanent, for example `C:\Tools\fastf`.
 3. Add that folder to your PATH. Two ways:
 
@@ -88,12 +85,6 @@ These rules run on every platform, not just Windows, so a project created on Lin
 ## Editing templates in Notepad
 
 Save `template.yaml` as **UTF-8**. Notepad and `Out-File -Encoding utf8` in Windows PowerShell 5.1 add a byte-order mark; fastf skips it, so either encoding loads. If a template fails to parse, the error names the file and reminds you to check the encoding.
-
-## Browser UI
-
-`fastf ui` works the same as on Linux. `fastf ui --app` opens a dedicated app window using Chrome if you have it, or Microsoft Edge otherwise. Edge ships with Windows, so the app window works on every stock machine. Closing the window stops the server. If neither browser can be found it falls back to a tab in your default browser.
-
-The Start Menu shortcut runs `fastf-ui.exe`, which is exactly this app mode without a console window.
 
 ## Building from source on Windows
 

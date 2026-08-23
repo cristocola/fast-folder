@@ -1,10 +1,9 @@
 //! Cross-process concurrency.
 //!
 //! These spawn **real processes**, not threads, and that is the whole point.
-//! The browser UI's `WRITE_LOCK` is an in-process `Mutex`: a thread-based test
-//! would have passed against it while production stayed broken, because the
-//! actual collision is a `fastf new` in a terminal racing the UI — the workflow
-//! the docs recommend. Ten concurrent creates reliably minted duplicate IDs.
+//! An in-process `Mutex` would pass a thread-based test while production stayed
+//! broken: the actual collision is one `fastf new` racing another in a second
+//! terminal. Ten concurrent creates reliably minted duplicate IDs.
 //!
 //! Each test drives the built binary with its own `FASTF_INSTALL_DIR`, so the
 //! only thing shared between the processes is the sandbox on disk — exactly the

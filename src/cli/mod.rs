@@ -14,4 +14,3 @@ pub mod render;
 pub mod search;
 pub mod tag;
 pub mod template;
-pub mod ui;

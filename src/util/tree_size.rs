@@ -10,25 +10,19 @@ use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A token that is never set, for callers with nothing to cancel.
-static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
-
-/// Sum the logical lengths of every regular file below `root`.
+/// Sum the logical lengths of every regular file below `root`, abandoning the
+/// walk once `cancel` is set.
 ///
 /// Hidden files and `PROJECT_INFO.md` are ordinary files and therefore count.
 /// Symlinks/junctions and special nodes are ignored. `None` means the root was
-/// not a directory, an entry could not be inspected, or the total overflowed.
-pub(crate) fn directory_size(root: &Path) -> Option<u64> {
-    directory_size_until(root, &NEVER_CANCELLED)
-}
-
-/// As [`directory_size`], but abandons the walk once `cancel` is set.
+/// not a directory, an entry could not be inspected, the total overflowed — or
+/// the walk was cancelled:
 ///
-/// A cancelled walk returns `None` — the same answer an unreadable tree gives,
-/// because the snapshot is all-or-nothing either way. A caller that cancels must
-/// therefore **discard** the result rather than record it: here `None` means "no
-/// answer", not "unavailable". Cancellation is checked once per directory entry,
-/// which is what bounds teardown when the tree lives on a slow network share.
+/// a cancelled walk gives the same answer an unreadable tree does, because the
+/// snapshot is all-or-nothing either way. A caller that cancels must therefore
+/// **discard** the result rather than record it: there `None` means "no answer",
+/// not "unavailable". Cancellation is checked once per directory entry, which is
+/// what bounds teardown when the tree lives on a slow network share.
 pub(crate) fn directory_size_until(root: &Path, cancel: &AtomicBool) -> Option<u64> {
     directory_size_inner(root, cancel).ok()
 }
@@ -117,9 +111,15 @@ fn is_link_like(metadata: &fs::Metadata) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{directory_size, directory_size_until};
+    use super::directory_size_until;
     use std::fs;
+    use std::path::Path;
     use std::sync::atomic::AtomicBool;
+
+    /// The uncancelled walk every case here but one wants.
+    fn directory_size(root: &Path) -> Option<u64> {
+        directory_size_until(root, &AtomicBool::new(false))
+    }
 
     #[test]
     fn counts_nested_hidden_and_metadata_files() {

@@ -8,9 +8,10 @@ before tagging the next one, and what is still open.
 ## Product contract
 
 fastf is a local, single-user project scaffolder for self-contained trees of
-ordinary directories and regular files. One person may use its CLI, TUI, and
-loopback browser UI; fastf commands may wait behind one coarse mutation lock.
-It does not coordinate simultaneous writers on multiple computers.
+ordinary directories and regular files. It has two surfaces, the CLI and the
+guided TUI, and **no network surface at all**; fastf commands may wait behind one
+coarse mutation lock. It does not coordinate simultaneous writers on multiple
+computers.
 
 A move first asks the operating system to rename the directory. Only a standard
 cross-device failure switches to fastf's internal Rust copy path. That path
@@ -28,8 +29,8 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Release: **v1.7.1 — the guided TUI, and the structure under it**
-- Status: **v1.7.1 released; it supersedes v1.7.0, whose Windows CI leg found two defects that only a 1 MiB thread stack and a backslash separator could show**
+- Release: **v2.0.0 in progress — two surfaces, one engine, nothing trusted by accident** (`PLAN.md` drives it, one phase per PR)
+- Status: **Phase 1 landed: the browser UI is removed.** `fastf ui`, `fastf-ui.exe`, `src/ui/`, the four `ui_*` suites and `docs/UI.md` are gone, and with them fastf's only network surface. v1.7.1 stays available as the last release that has it. v2.0.0 is a hardening release: the backlog below waits.
 - Last reviewed: **2026-08-23**
 
 ## Release train
@@ -57,7 +58,6 @@ Every release must pass:
 - [x] `cargo clippy --all-targets -- -D warnings`
 - [x] `cargo test --all-targets`
 - [x] `cargo test --release`
-- [x] `node --check src/ui/web/app.js`
 - [x] Windows cfg compile: `cargo check --all-targets --target
   x86_64-pc-windows-{gnu,msvc}`
 - [x] Windows clippy: `cargo clippy --all-targets -- -D warnings` on a Windows
@@ -82,8 +82,8 @@ Regression coverage grows with the relevant release:
   sentinels; reconciliation is idempotent.
 - [x] Hard-abort subprocess cases at transaction creation, mid-copy,
   post-verification, post-publication, and before/after source cleanup (v1.5.0).
-- [x] Cross-interface mutation-loss, registration partial-outcome, and browser
-  Host/Origin cases (v1.5.1).
+- [x] Cross-interface mutation-loss and registration partial-outcome cases
+  (v1.5.1).
 - [x] Guided browser draws before measuring, fills in without input, and never
   reflows a row as a size lands (v1.6.0).
 
@@ -92,19 +92,18 @@ Manual move smoke and follow-up:
 - [x] Linux same-filesystem direct rename and genuine cross-filesystem staged
   move (`/tmp` to `/dev/shm`) using the release binary.
 - [ ] Windows same-drive rename and ordinary move to another mounted drive/share
-  using the published v1.7.1 MSI or ZIP. This remains the sole post-release
-  validation item, still outstanding across every release since v1.5.1.
+  using the published MSI or ZIP. This remains the sole post-release validation
+  item, still outstanding across every release since v1.5.1.
 
-Behavior changes and user documentation land together. CLI flags, template and
-cache schemas, and existing HTTP response fields remain compatible; rejecting
-previously accepted unsafe input is intentional. Update this roadmap in every
+Behavior changes and user documentation land together. CLI flags and the
+template and cache schemas remain compatible within a major version; rejecting
+previously accepted unsafe input is intentional, and v2.0.0 is the major that
+removes `fastf ui`. Update this roadmap in every
 implementation PR/commit. Update `CLAUDE.md` only after a decision has landed.
 This work does not use GitHub issues, a separate ADR system, or a changelog.
 
 ## Unscheduled backlog
 
-- One library snapshot for UI state. (Lazy template loading landed in v1.7.1:
-  `load_all` no longer reads template file contents.)
 - Portable project packages.
 - Template upgrades.
 - Template diagnostics and language-server support.
@@ -116,11 +115,6 @@ This work does not use GitHub issues, a separate ADR system, or a changelog.
   only, so stderr gets ANSI when redirected), documented exit codes, and
   `completions <shell>` as a typed `clap_complete::Shell` rather than a bare
   `String`.
-- Browser UI: a tagged-template `html` helper (plus a source-scan test) in place
-  of 125 manual `esc()` calls; the triplicated job-polling logic in `app.js`; a
-  full `/api/state` reload on every mutation instead of a targeted patch; a modal
-  focus trap and `:focus-visible` styling; `node --test` coverage for the pure
-  frontend helpers.
 
 Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 

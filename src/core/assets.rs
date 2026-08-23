@@ -24,22 +24,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// sense and would blow up memory.
 pub const TEXT_MAX_BYTES: u64 = 1024 * 1024;
 
-/// Files larger than this are deferred to a background copy job in the UI so a
-/// slow cross-filesystem copy (for example btrfs to ntfs) never blocks the
-/// request. Must be ≥ [`TEXT_MAX_BYTES`] so every deferred file is verbatim
-/// (never needs interpolation) — the background copier does pure byte copies.
-pub const JOB_DEFER_BYTES: u64 = 4 * 1024 * 1024;
-
-// Enforced at compile time, not merely tested: the background copier has no
-// variables to interpolate with, so a file large enough to be deferred but small
-// enough to still be interpolated would be written out with its `{tokens}`
-// unsubstituted. Lowering `JOB_DEFER_BYTES` below `TEXT_MAX_BYTES` fails the
-// build rather than shipping that.
-const _: () = assert!(JOB_DEFER_BYTES >= TEXT_MAX_BYTES);
-
-/// A single deferred file copy (always a verbatim byte copy — see
-/// [`JOB_DEFER_BYTES`]). Produced by the eager create phase, run by a UI
-/// background thread with progress.
+/// A single deferred file copy (always a verbatim byte copy). Creates no longer
+/// defer anything, but [`crate::core::provisioning`] still reads create journals
+/// a pre-v2 binary may have left on a shared drive, and the staged move builds
+/// its own jobs.
 #[derive(Debug, Clone)]
 pub struct CopyJob {
     pub src: PathBuf,
@@ -47,7 +35,7 @@ pub struct CopyJob {
     pub bytes: u64,
 }
 
-/// Live progress of a background copy job. Serialized to the UI's `/api/job`.
+/// Live progress of a background copy job.
 #[derive(Debug, Clone, Serialize)]
 pub struct Progress {
     pub total_bytes: u64,
@@ -67,12 +55,9 @@ pub struct Progress {
     /// Unix-epoch milliseconds of the last observed movement (bytes copied, a
     /// file finished, or a phase change).
     ///
-    /// Two jobs depend on this. The UI tells "slow" from "stuck" with it —
-    /// a copy to a cloud-synced or network destination can legitimately sit for
-    /// minutes, so there is no wall-clock timeout, only an honest "no progress
-    /// for N minutes" note. And [`crate::ui::jobs_active`] uses it as a
-    /// staleness floor so a job whose worker thread died can never report
-    /// itself as running forever and hold the process open.
+    /// It tells "slow" from "stuck" — a copy to a cloud-synced or network
+    /// destination can legitimately sit for minutes, so there is no wall-clock
+    /// timeout, only an honest "no progress for N minutes" note.
     pub last_progress_at: u64,
 }
 

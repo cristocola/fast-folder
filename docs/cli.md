@@ -63,6 +63,34 @@ error: no terminal to confirm on — pass --yes to apply without confirming
 
 That includes `fastf move`: without a terminal and without `--yes` it refuses rather than moving the folder on the strength of a confirmation nobody saw. `fastf recent` and `fastf search` fall back to their plain list instead.
 
+### One way out: Esc
+
+**Esc backs out of anything.** Every menu, every list, every confirmation and
+every text field takes it, and `q` works wherever a list is on screen. You never
+have to reach for Ctrl-C to leave a prompt, and nothing you have already answered
+is thrown away by leaving one.
+
+Where each press lands:
+
+| Where you are | Esc |
+|---|---|
+| A submenu | its parent menu |
+| The main menu | quits, the same as the Quit item |
+| A confirmation | the action is not taken; back to the menu that offered it |
+| Anywhere in the create wizard | `Cancelled — nothing was created`; no folder, and the ID counter is untouched |
+| The project list | the main menu |
+| A project's action menu | back to the list, same row selected |
+| A settings field | back to the settings submenu, value unchanged |
+| The template builder, editing | its section menu, the section left as it was |
+| The template builder, creating | asks `Discard this template?` first |
+
+Back and Cancel rows stay on the menus that had them: Esc is the shortcut, the
+row is the discoverable path.
+
+Text fields are editable, not just typeable: Left/Right, Home/End, Backspace and
+Delete all work, and a value a prompt rejects stays on the line to be corrected
+rather than being cleared for you to type again.
+
 ## Browsing projects
 
 From the guided `fastf` menu, choose **Projects** to browse the complete library

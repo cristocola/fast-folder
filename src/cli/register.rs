@@ -21,7 +21,6 @@
 
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
-use dialoguer::Confirm;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -248,7 +247,10 @@ pub fn run(args: RegisterArgs) -> Result<()> {
                     );
                 }
             }
-            let v = collect_vars(&t, &args.vars)?;
+            let Some(v) = collect_vars(&t, &args.vars)? else {
+                crate::tui::prompt::report_cancelled("nothing was registered");
+                return Ok(());
+            };
             (t, v)
         }
         None => (registered_stub_template(), HashMap::new()),
@@ -288,10 +290,11 @@ pub fn run(args: RegisterArgs) -> Result<()> {
             && desired != current_name
         {
             println!();
-            rename = Confirm::new()
-                .with_prompt(format!("Rename '{current_name}' → '{desired}'?"))
-                .default(true)
-                .interact()?;
+            rename = crate::tui::prompt::confirm(
+                &format!("Rename '{current_name}' → '{desired}'?"),
+                true,
+            )?
+            .unwrap_or(false);
         }
     }
 
@@ -302,14 +305,13 @@ pub fn run(args: RegisterArgs) -> Result<()> {
             PinfoConflict::Overwrite
         } else if tty::prompt_available() {
             println!();
-            let overwrite = Confirm::new()
-                .with_prompt(format!(
-                    "{} already exists — overwrite?",
-                    pinfo_path.display()
-                ))
-                .default(false)
-                .interact()
-                .unwrap_or(false);
+            let overwrite = crate::tui::prompt::confirm(
+                &format!("{} already exists — overwrite?", pinfo_path.display()),
+                false,
+            )
+            .ok()
+            .flatten()
+            .unwrap_or(false);
             if overwrite {
                 PinfoConflict::Overwrite
             } else {

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::core::config::Config;
 use crate::core::library::{self, Project};
 use crate::tui::pickers::pick_base;
+use crate::tui::prompt::{self, TextOpts};
 use crate::tui::rows::{PENDING_LABEL, size_label};
 use crate::util::size_scan::SizeCell;
 
@@ -28,8 +29,6 @@ pub(crate) fn project_action_menu(
     size: Option<SizeCell>,
     reload_after_change: bool,
 ) -> Result<ActionLoop> {
-    use dialoguer::{Input, Select};
-
     let path = project.path.as_path();
     let path_str = crate::util::paths::display_path(path);
 
@@ -79,7 +78,10 @@ pub(crate) fn project_action_menu(
     };
 
     loop {
-        let mut items = vec![
+        // Labels, not indices. The move row appears only when there is somewhere
+        // to move to, so every index below it used to shift — `move_idx` was a
+        // hard-coded `6` that only happened to be right.
+        let mut items: Vec<&str> = vec![
             "Open project folder",
             "Show project metadata",
             "Add tag",
@@ -87,7 +89,6 @@ pub(crate) fn project_action_menu(
             "Add journal note",
             "Show journal",
         ];
-        // Only offer a move when there is somewhere to move to.
         if !other_bases.is_empty() {
             items.push("Move to another base");
         }
@@ -95,138 +96,16 @@ pub(crate) fn project_action_menu(
         items.push("Unregister (keep files)");
         items.push("Delete folder permanently");
         items.push("Back to list");
-        items.push("Quit");
-        let move_idx = if other_bases.is_empty() {
-            usize::MAX
-        } else {
-            6
-        };
-        let rename_idx = items.len() - 5;
-        let unregister_idx = items.len() - 4;
-        let delete_idx = items.len() - 3;
-        let back_idx = items.len() - 2;
-        let quit_idx = items.len() - 1;
+        items.push("Back to main menu");
 
-        let choice = Select::new()
-            .with_prompt("What would you like to do?")
-            .items(&items)
-            .default(0)
-            .interact()?;
-
-        if choice == move_idx {
-            let Some(target) = pick_base(
-                "Move to which base?",
-                &other_bases,
-                default_base.as_deref(),
-                "name the target instead: `fastf move <query> <base>`",
-                true,
-            )?
-            else {
-                continue;
-            };
-            let progress = std::sync::Mutex::new(crate::core::assets::Progress::new(&[]));
-            let cancel = std::sync::atomic::AtomicBool::new(false);
-            match crate::core::operations::move_project(project, &target, &progress, &cancel) {
-                Ok(outcome) => {
-                    let moved = outcome.project;
-                    println!(
-                        "{}  Moved to {}",
-                        "✓".green().bold(),
-                        crate::util::paths::display_path(&moved.path).bold()
-                    );
-                    if outcome.cleanup_pending {
-                        eprintln!(
-                            "{} destination is complete, but cleanup is pending at {}",
-                            "warning:".yellow().bold(),
-                            crate::util::paths::display_path(&project.path)
-                        );
-                    }
-                    return Ok(ActionLoop::Changed(vec![project.path.clone(), moved.path]));
-                }
-                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
-            }
-            continue;
-        }
-        if choice == rename_idx {
-            let new_name: String = Input::new()
-                .with_prompt("New folder name")
-                .with_initial_text(project.name.clone())
-                .interact_text()?;
-            match crate::core::operations::rename(project, &new_name) {
-                Ok(renamed) => {
-                    println!("{}  Renamed to {}", "✓".green().bold(), renamed.name.bold());
-                    return Ok(ActionLoop::Changed(vec![
-                        project.path.clone(),
-                        renamed.path,
-                    ]));
-                }
-                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
-            }
-            continue;
-        }
-        if choice == unregister_idx {
-            let confirmed = dialoguer::Confirm::new()
-                .with_prompt(format!(
-                    "Remove PROJECT_INFO.md from '{}'? The files stay on disk; fastf just forgets the project",
-                    project.name
-                ))
-                .default(false)
-                .interact()?;
-            if !confirmed {
-                continue;
-            }
-            match crate::core::operations::unregister(project) {
-                Ok(()) => {
-                    println!(
-                        "{}  Unregistered {}",
-                        "✓".green().bold(),
-                        project.name.bold()
-                    );
-                    return Ok(ActionLoop::Changed(vec![project.path.clone()]));
-                }
-                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
-            }
-            continue;
-        }
-        if choice == delete_idx {
-            println!(
-                "  {} this permanently deletes {} and everything inside it.",
-                "warning:".red().bold(),
-                path_str.bold()
-            );
-            let typed: String = Input::new()
-                .with_prompt(format!(
-                    "Type the folder name '{}' to confirm",
-                    project.name
-                ))
-                .allow_empty(true)
-                .interact_text()?;
-            if typed.trim() != project.name {
-                eprintln!(
-                    "{} name did not match — nothing deleted",
-                    "cancelled:".yellow()
-                );
-                continue;
-            }
-            match crate::core::operations::delete(project) {
-                Ok(()) => {
-                    println!("{}  Deleted {}", "✓".green().bold(), path_str.bold());
-                    return Ok(ActionLoop::Changed(vec![project.path.clone()]));
-                }
-                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
-            }
-            continue;
-        }
-        if choice == back_idx {
+        let labels: Vec<String> = items.iter().map(|item| (*item).to_string()).collect();
+        // Esc is "Back to list": the parent of this menu is the list it opened from.
+        let Some(choice) = prompt::select("What would you like to do?", &labels, 0)? else {
             return Ok(ActionLoop::BackToList);
-        }
-        if choice == quit_idx {
-            return Ok(ActionLoop::Quit);
-        }
+        };
 
-        match choice {
-            // Open folder
-            0 => {
+        match items[choice] {
+            "Open project folder" => {
                 if !path.exists() {
                     eprintln!(
                         "{} project folder no longer exists at {}",
@@ -243,8 +122,7 @@ pub(crate) fn project_action_menu(
                     );
                 }
             }
-            // Show metadata
-            1 => {
+            "Show project metadata" => {
                 if !path.exists() {
                     eprintln!(
                         "{} project folder no longer exists at {}",
@@ -255,75 +133,184 @@ pub(crate) fn project_action_menu(
                 }
                 show_metadata(path);
             }
-            // Add tag
-            2 => {
-                let input: String = Input::new()
-                    .with_prompt("Tag to add (e.g. draft  or  client/Acme)")
-                    .interact_text()?;
+            "Add tag" => {
+                let Some(input) = prompt::text(
+                    "Tag to add (e.g. draft  or  client/Acme)",
+                    TextOpts::new().allow_empty(),
+                )?
+                else {
+                    continue;
+                };
                 let tag = input.trim().to_string();
                 if tag.is_empty() {
                     println!("{}", "  (cancelled)".dimmed());
-                } else {
-                    match crate::core::operations::add_tags(project, &[tag]) {
-                        Ok(_) => {
-                            println!(
-                                "{}  Added 1 tag to {}",
-                                "✓".green().bold(),
-                                project.id.green().bold()
-                            );
-                            if reload_after_change {
-                                return Ok(ActionLoop::Changed(vec![project.path.clone()]));
-                            }
-                        }
-                        Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
-                    }
+                    continue;
                 }
-            }
-            // Remove tag
-            3 => {
-                let input: String = Input::new().with_prompt("Tag to remove").interact_text()?;
-                let tag = input.trim().to_string();
-                if tag.is_empty() {
-                    println!("{}", "  (cancelled)".dimmed());
-                } else {
-                    match crate::core::operations::remove_tags(project, &[tag]) {
-                        Ok(_) => {
-                            println!(
-                                "{}  Removed 1 tag from {}",
-                                "✓".green().bold(),
-                                project.id.green().bold()
-                            );
-                            if reload_after_change {
-                                return Ok(ActionLoop::Changed(vec![project.path.clone()]));
-                            }
-                        }
-                        Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
-                    }
-                }
-            }
-            // Add journal note
-            4 => {
-                let input: String = Input::new().with_prompt("Journal note").interact_text()?;
-                let msg = input.trim().to_string();
-                if msg.is_empty() {
-                    println!("{}", "  (cancelled)".dimmed());
-                } else {
-                    if let Err(e) = crate::core::operations::append_note(project, &msg) {
-                        eprintln!("{} {}", "error:".red().bold(), e);
-                    } else {
-                        println!("{}  Journal entry added.", "✓".green().bold());
+                match crate::core::operations::add_tags(project, &[tag]) {
+                    Ok(_) => {
+                        println!(
+                            "{}  Added 1 tag to {}",
+                            "✓".green().bold(),
+                            project.id.green().bold()
+                        );
                         if reload_after_change {
                             return Ok(ActionLoop::Changed(vec![project.path.clone()]));
                         }
                     }
+                    Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
                 }
             }
-            // Show journal
-            5 => {
-                show_journal(path);
+            "Remove tag" => {
+                let Some(input) = prompt::text("Tag to remove", TextOpts::new().allow_empty())?
+                else {
+                    continue;
+                };
+                let tag = input.trim().to_string();
+                if tag.is_empty() {
+                    println!("{}", "  (cancelled)".dimmed());
+                    continue;
+                }
+                match crate::core::operations::remove_tags(project, &[tag]) {
+                    Ok(_) => {
+                        println!(
+                            "{}  Removed 1 tag from {}",
+                            "✓".green().bold(),
+                            project.id.green().bold()
+                        );
+                        if reload_after_change {
+                            return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                        }
+                    }
+                    Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+                }
             }
-            // Move / Back / Quit are handled above the match (dynamic indices).
-            _ => unreachable!(),
+            "Add journal note" => {
+                let Some(input) = prompt::text("Journal note", TextOpts::new().allow_empty())?
+                else {
+                    continue;
+                };
+                let msg = input.trim().to_string();
+                if msg.is_empty() {
+                    println!("{}", "  (cancelled)".dimmed());
+                    continue;
+                }
+                if let Err(e) = crate::core::operations::append_note(project, &msg) {
+                    eprintln!("{} {}", "error:".red().bold(), e);
+                } else {
+                    println!("{}  Journal entry added.", "✓".green().bold());
+                    if reload_after_change {
+                        return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                    }
+                }
+            }
+            "Show journal" => show_journal(path),
+            "Move to another base" => {
+                let Some(target) = pick_base(
+                    "Move to which base?",
+                    &other_bases,
+                    default_base.as_deref(),
+                    "name the target instead: `fastf move <query> <base>`",
+                    true,
+                )?
+                else {
+                    continue;
+                };
+                let progress = std::sync::Mutex::new(crate::core::assets::Progress::new(&[]));
+                let cancel = std::sync::atomic::AtomicBool::new(false);
+                match crate::core::operations::move_project(project, &target, &progress, &cancel) {
+                    Ok(outcome) => {
+                        let moved = outcome.project;
+                        println!(
+                            "{}  Moved to {}",
+                            "✓".green().bold(),
+                            crate::util::paths::display_path(&moved.path).bold()
+                        );
+                        if outcome.cleanup_pending {
+                            eprintln!(
+                                "{} destination is complete, but cleanup is pending at {}",
+                                "warning:".yellow().bold(),
+                                crate::util::paths::display_path(&project.path)
+                            );
+                        }
+                        return Ok(ActionLoop::Changed(vec![project.path.clone(), moved.path]));
+                    }
+                    Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+                }
+            }
+            "Rename folder" => {
+                let Some(new_name) = prompt::text(
+                    "New folder name",
+                    TextOpts::new().initial(project.name.clone()),
+                )?
+                else {
+                    continue;
+                };
+                match crate::core::operations::rename(project, &new_name) {
+                    Ok(renamed) => {
+                        println!("{}  Renamed to {}", "✓".green().bold(), renamed.name.bold());
+                        return Ok(ActionLoop::Changed(vec![
+                            project.path.clone(),
+                            renamed.path,
+                        ]));
+                    }
+                    Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+                }
+            }
+            "Unregister (keep files)" => {
+                let confirmed = prompt::confirm(
+                    &format!(
+                        "Remove PROJECT_INFO.md from '{}'? The files stay on disk; fastf just forgets the project",
+                        project.name
+                    ),
+                    false,
+                )?
+                .unwrap_or(false);
+                if !confirmed {
+                    continue;
+                }
+                match crate::core::operations::unregister(project) {
+                    Ok(()) => {
+                        println!(
+                            "{}  Unregistered {}",
+                            "✓".green().bold(),
+                            project.name.bold()
+                        );
+                        return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                    }
+                    Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+                }
+            }
+            "Delete folder permanently" => {
+                println!(
+                    "  {} this permanently deletes {} and everything inside it.",
+                    "warning:".red().bold(),
+                    path_str.bold()
+                );
+                let Some(typed) = prompt::text(
+                    &format!("Type the folder name '{}' to confirm", project.name),
+                    TextOpts::new().allow_empty(),
+                )?
+                else {
+                    continue;
+                };
+                if typed.trim() != project.name {
+                    eprintln!(
+                        "{} name did not match — nothing deleted",
+                        "cancelled:".yellow()
+                    );
+                    continue;
+                }
+                match crate::core::operations::delete(project) {
+                    Ok(()) => {
+                        println!("{}  Deleted {}", "✓".green().bold(), path_str.bold());
+                        return Ok(ActionLoop::Changed(vec![project.path.clone()]));
+                    }
+                    Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+                }
+            }
+            "Back to list" => return Ok(ActionLoop::BackToList),
+            "Back to main menu" => return Ok(ActionLoop::Quit),
+            other => anyhow::bail!("unhandled action '{other}'"),
         }
     }
 }

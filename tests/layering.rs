@@ -58,6 +58,50 @@ fn core_does_not_prompt() {
     );
 }
 
+/// Exactly one module may name a `dialoguer` prompt type.
+///
+/// An earlier attempt at a cancel contract moved twenty-nine prompts to
+/// `interact_opt` by hand and missed several, so Esc backed out of some menus
+/// and was swallowed by others. Consistency is the whole feature, and it cannot
+/// be kept by remembering: every prompt goes through `tui::prompt`, and a new
+/// `Select::new()` anywhere else fails here.
+#[test]
+fn only_tui_prompt_prompts() {
+    const PROMPT_TYPES: [&str; 6] = [
+        "Select::",
+        "MultiSelect::",
+        "Confirm::",
+        "Input::",
+        "FuzzySelect::",
+        "Sort::",
+    ];
+
+    let mut offenders = Vec::new();
+    for layer in ["tui", "cli"] {
+        for path in sources(layer) {
+            if path.ends_with("tui/prompt.rs") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            for (number, line) in text.lines().enumerate() {
+                // `select_live` is fastf's own picker, and `dialoguer::console`
+                // is a terminal toolkit, not a prompt.
+                if line.contains("live_select") || line.contains("console::") {
+                    continue;
+                }
+                if PROMPT_TYPES.iter().any(|t| line.contains(t)) {
+                    offenders.push(format!("{}:{}", path.display(), number + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these prompt outside tui::prompt, so Esc will not cancel them:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// The same rule one layer down. `util` is under `core`.
 #[test]
 fn util_does_not_prompt() {

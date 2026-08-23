@@ -116,10 +116,7 @@ pub fn run(args: MoveArgs) -> Result<()> {
             "→".cyan(),
             crate::util::paths::display_path(&target)
         );
-        let ok = dialoguer::Confirm::new()
-            .with_prompt("Move this project?")
-            .default(true)
-            .interact()?;
+        let ok = crate::tui::prompt::confirm("Move this project?", true)?.unwrap_or(false);
         if !ok {
             println!("Aborted.");
             return Ok(());

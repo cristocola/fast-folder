@@ -539,3 +539,172 @@ fn removing_a_base_leaves_the_rest_of_a_concurrent_edit_alone() {
         "removing one base rewrote the list from the stale snapshot:\n{config}\n--- transcript ---\n{transcript}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The cancel contract (v1.7.0)
+//
+// One case per row of the semantics table in `docs/cli.md`. Before this, Esc
+// was ignored by every `dialoguer::Select` and swallowed outright by every
+// `Input`, so the only way out of a menu — or out of a required variable that
+// would not accept an empty answer — was Ctrl-C, which ends the session at
+// exit 130 and throws away everything already typed.
+// ---------------------------------------------------------------------------
+
+/// Esc at the top level is Quit: there is no parent to go back to.
+#[test]
+fn esc_at_the_main_menu_quits() {
+    let sb = Sandbox::new();
+    let (out, code) = launch(&sb, pty::Script::new().esc().build());
+
+    assert_eq!(code, 0, "Esc at the main menu should exit cleanly:\n{out}");
+    assert!(out.contains("Goodbye."), "expected a clean exit:\n{out}");
+}
+
+/// Esc in a submenu goes to its parent, one level per press. Three levels down,
+/// three presses reach the shell — and no press may skip a level.
+#[test]
+fn esc_backs_out_one_level_at_a_time() {
+    let sb = Sandbox::new();
+    let script = pty::Script::new()
+        .down(MENU_SETTINGS)
+        .enter() // Settings
+        .enter() // → Project basics
+        .esc() // → Settings
+        .esc() // → main menu
+        .esc() // → quit
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(
+        code, 0,
+        "Esc must not end the session with a failure:\n{out}"
+    );
+    assert!(
+        out.contains("Goodbye."),
+        "three levels, three presses, then the main menu's own exit:\n{out}"
+    );
+    // The parent reappeared. Anchored on rows that belong to exactly one of the
+    // two menus: "Set date format" is only in Project basics, "Library bases" is
+    // only in Settings, and the second must be drawn after the last of the first.
+    let last_child_row = out.rfind("Set date format").expect("the submenu was drawn");
+    assert!(
+        out[last_child_row..].contains("Library bases"),
+        "escaping the submenu should redraw its parent:\n{out}"
+    );
+}
+
+/// Esc anywhere in the create wizard cancels the whole create. Nothing on disk,
+/// and the ID counter is exactly where it was.
+#[test]
+fn esc_in_the_create_wizard_creates_nothing() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let before = sb.local_counter();
+
+    let script = pty::Script::new()
+        .enter() // Create new project → template picker
+        .esc() // cancel at the picker
+        .pause(500)
+        .esc() // main menu → quit
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "a cancelled create is not a failure:\n{out}");
+    assert!(
+        out.contains("Cancelled"),
+        "the cancel should say so, not fail silently:\n{out}"
+    );
+    assert!(
+        common::project_dirs(&sb.base).is_empty(),
+        "a cancelled create must leave no folder behind"
+    );
+    assert_eq!(
+        sb.local_counter(),
+        before,
+        "a cancelled create must not consume an ID"
+    );
+}
+
+/// The same, one prompt deeper: Esc at a required variable. This is the dead end
+/// the old build had no exit from at all — an empty answer re-prompted forever
+/// and Esc did nothing.
+#[test]
+fn esc_at_a_required_variable_creates_nothing() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let before = sb.local_counter();
+
+    let script = pty::Script::new()
+        .enter() // Create new project
+        .enter() // pick the only template
+        .pause(400)
+        .esc() // at the required "Name" variable
+        .pause(500)
+        .esc() // main menu → quit
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "a cancelled create is not a failure:\n{out}");
+    assert!(
+        common::project_dirs(&sb.base).is_empty(),
+        "a cancelled create must leave no folder behind:\n{out}"
+    );
+    assert_eq!(sb.local_counter(), before, "no ID may be consumed:\n{out}");
+}
+
+/// Esc in a settings field leaves the value alone and returns to the submenu.
+#[test]
+fn esc_in_a_settings_field_leaves_the_value_unchanged() {
+    let sb = Sandbox::new();
+    sb.ok(&["config", "set", "recent-default-limit", "7"]);
+
+    let script = pty::Script::new()
+        .down(MENU_SETTINGS)
+        .enter()
+        .down(3) // Settings → Project list (page size)
+        .enter()
+        .enter() // → the page-size field
+        .pause(400)
+        .esc() // abandon the edit
+        .pause(400)
+        .esc() // → Settings
+        .esc() // → main menu
+        .esc() // quit
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "Esc in a field is not a failure:\n{out}");
+    let shown = sb.ok(&["config", "show"]);
+    assert!(
+        shown.contains('7'),
+        "the setting must be untouched by a cancelled edit:\n{shown}"
+    );
+}
+
+/// Esc in the project list returns to the main menu; Esc in the action menu
+/// returns to the list it was opened from.
+#[test]
+fn esc_walks_back_out_of_the_project_browser() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+
+    let script = pty::Script::new()
+        .down(MENU_PROJECTS)
+        .enter() // the browser
+        .pause(600)
+        .enter() // open the row's action menu
+        .pause(600)
+        .esc() // → back to the list
+        .pause(600)
+        .esc() // → main menu
+        .pause(400)
+        .esc() // quit
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "Esc must not end the session:\n{out}");
+    assert!(
+        out.contains("Goodbye."),
+        "two presses should reach the main menu:\n{out}"
+    );
+}

@@ -274,6 +274,15 @@ pub mod pty {
             self.push(text.as_bytes(), 600)
         }
 
+        /// Esc — the one cancel key.
+        ///
+        /// Sent alone, with a full gap after it: a lone `\x1b` immediately
+        /// followed by `[` is an arrow-key sequence, so an Esc typed next to
+        /// another key is a different key.
+        pub fn esc(self) -> Self {
+            self.push(b"\x1b", 700)
+        }
+
         pub fn ctrl_c(self) -> Self {
             self.push(b"\x03", 400)
         }

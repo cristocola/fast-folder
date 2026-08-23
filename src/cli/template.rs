@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
-use dialoguer::Confirm;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -202,10 +201,11 @@ pub fn delete(slug: &str, yes: bool) -> Result<()> {
             "confirm",
             &format!("pass --yes to delete template '{slug}' without confirming"),
         )?;
-        let ok = Confirm::new()
-            .with_prompt(format!("Delete template '{}' and its bundled files?", slug))
-            .default(false)
-            .interact()?;
+        let ok = crate::tui::prompt::confirm(
+            &format!("Delete template '{}' and its bundled files?", slug),
+            false,
+        )?
+        .unwrap_or(false);
         if !ok {
             println!("Aborted.");
             return Ok(());
@@ -297,16 +297,17 @@ pub fn run_from_folder(args: FromFolderArgs) -> Result<()> {
                 "confirm the bundle size",
                 "pass --yes to bundle without confirming (or --dry-run to see the scan)",
             )?;
-            let ok = Confirm::new()
-                .with_prompt(format!(
+            let ok = crate::tui::prompt::confirm(
+                &format!(
                     "Bundle {} asset{} ({}) into template '{}'?",
                     scan.assets.len(),
                     if scan.assets.len() == 1 { "" } else { "s" },
                     crate::util::human_bytes::human_bytes(total),
                     slug
-                ))
-                .default(true)
-                .interact()?;
+                ),
+                true,
+            )?
+            .unwrap_or(false);
             if !ok {
                 println!("Aborted.");
                 return Ok(());

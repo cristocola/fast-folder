@@ -430,13 +430,49 @@ phase that is a pure move — Phase 7 is where cancel becomes universal.
 - Required variables: Esc cancels the whole create (the table above). An empty answer on a required variable re-prompts with the same text kept, as today, but the hint says "(Esc to cancel)".
 
 **Steps.**
-- [ ] Write `tui/prompt.rs` with unit tests for the line editor's pure parts (cursor moves, windowing math, validator retention) and the source-scan test (initially failing, listing every offending site).
-- [ ] `tests/tui_pty.rs` first, one case per row of the semantics table: drive into the level, press Esc, assert the parent prompt string reappears, and for the create wizard assert no folder was created and the counter file is unchanged. Anchor assertions on prompt strings, not on timing (`tests/CLAUDE.md`).
-- [ ] Migrate every prompt in `src/tui/` and `src/cli/` to `tui::prompt`; apply the vocabulary and label-based matching as you touch each menu; delete the per-site `is_terminal` checks that `prompt` now owns.
-- [ ] `live_select`: Esc returns `None`; `q` matches whatever dialoguer does for `interact_opt` in the vendored version (check `~/.cargo/registry`); keep the existing key set otherwise (Phase 10 adds more).
-- [ ] Docs: `docs/cli.md` interactive section gets the semantics table in prose. `CLAUDE.md` gets a gotcha: "every prompt goes through `tui::prompt`; the source-scan test is the enforcement; `None` is cancel, never an error".
+- [x] Write `tui/prompt.rs` with unit tests for the line editor's pure parts (cursor moves, windowing math, validator retention) and the source-scan test (initially failing, listing every offending site).
+- [x] `tests/tui_pty.rs` first, one case per row of the semantics table: drive into the level, press Esc, assert the parent prompt string reappears, and for the create wizard assert no folder was created and the counter file is unchanged. Anchor assertions on prompt strings, not on timing (`tests/CLAUDE.md`).
+- [x] Migrate every prompt in `src/tui/` and `src/cli/` to `tui::prompt`; apply the vocabulary and label-based matching as you touch each menu; delete the per-site `is_terminal` checks that `prompt` now owns. *(The per-site `require_tty` calls stayed — see Notes.)*
+- [x] `live_select`: Esc returns `None`; `q` matches whatever dialoguer does for `interact_opt` in the vendored version (check `~/.cargo/registry`); keep the existing key set otherwise (Phase 10 adds more).
+- [x] Docs: `docs/cli.md` interactive section gets the semantics table in prose. `CLAUDE.md` gets a gotcha: "every prompt goes through `tui::prompt`; the source-scan test is the enforcement; `None` is cancel, never an error".
 
 **Acceptance.** The source-scan test passes with `tui/prompt.rs` as the only match. Every pty case in the table passes. Ctrl-C is no longer the only way out of any flow. `cargo test --release` passes on Windows CI (the line editor is exercised by unit tests there even though pty tests are Unix-only).
+
+**Notes.** Four decisions came out differently from the plan.
+
+(1) **`select`, `multi_select` and `sort` kept `dialoguer`'s `interact_opt`;
+only `confirm` and `text` are hand-rolled.** The vendored 0.11.0 cancels a
+`Select` on `Key::Escape | Key::Char('q')` in one keystroke, which is exactly the
+contract wanted, and reusing it keeps the rendering the pty suite anchors on
+unchanged. `Confirm::interact_opt` does *not*: Esc there sets a pending `None`
+that still needs Enter, and switching to it would also have dropped `interact`'s
+bare-`y`/`n`-without-Enter behaviour, which `tests/CLAUDE.md` names as a rule the
+whole suite depends on. So `confirm` is a small key loop that keeps bare `y`/`n`
+*and* answers Esc in one press.
+
+(2) **`TextOpts` needed two starting-text modes, not one.** The plan specified
+`with_initial_text` semantics (editable, not a hint), but most converted sites
+were `dialoguer::Input::default` — `prompt [default]:` with an empty line, where
+typing replaces rather than appends. `an_invalid_setting_returns_to_the_menu`
+caught it immediately: typing `0` into a field prefilled with `20` produced
+`200`, not a refusal. `initial` and `default_value` are now both there, and they
+are different gestures.
+
+(3) **`require_tty` stayed at the call sites** that had it. `tui::prompt` owns a
+generic backstop, but the specific messages ("pass --yes to move without
+confirming") name the flag that answers the same question, and only the caller
+knows which flag that is. The per-site probes deleted were the *format* ones the
+plan did not mean.
+
+(4) **The template builder's sections return `Result<bool>`, not `Result<()>`.**
+A section that is escaped out of returns `Ok(false)` with the scratch `Template`
+untouched — `edit_metadata` collects all four answers before assigning any of
+them, so a cancel halfway leaves the previous values in place. Edit mode reads
+that as "back to the section menu"; new mode asks `Discard this template?` and
+repeats the step if the answer is no.
+
+All six new pty cases were watched failing first, against a build with the Esc
+arms removed from `prompt.rs`.
 
 ## Phase 8: Keep what you typed
 

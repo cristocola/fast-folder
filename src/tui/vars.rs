@@ -6,11 +6,11 @@
 //! all validate against.
 
 use anyhow::{Result, bail};
-use dialoguer::{Input, Select};
 use std::collections::HashMap;
 
 use crate::core::template::{Template, VarType};
 use crate::core::vars::validated_raw_values;
+use crate::tui::prompt::{self, TextOpts};
 
 /// Collect variable values for a template, preferring CLI-provided values
 /// and falling back to interactive prompts for anything missing.
@@ -18,7 +18,7 @@ use crate::core::vars::validated_raw_values;
 pub fn collect_vars(
     tmpl: &Template,
     cli_vars: &HashMap<String, String>,
-) -> Result<HashMap<String, String>> {
+) -> Result<Option<HashMap<String, String>>> {
     let mut result = HashMap::new();
 
     for var in &tmpl.variables {
@@ -46,26 +46,19 @@ pub fn collect_vars(
 
         let value = match var.var_type {
             VarType::Text => {
-                if var.required {
-                    loop {
-                        let mut input = Input::<String>::new().with_prompt(&var.label);
-                        if !var.default.is_empty() {
-                            input = input.default(var.default.clone());
-                        }
-                        let v: String = input.interact_text()?;
-                        if !v.is_empty() {
-                            break v;
-                        }
-                        eprintln!("  '{}' is required — please enter a value", var.label);
-                    }
-                } else {
-                    let mut input = Input::<String>::new()
-                        .with_prompt(&var.label)
-                        .allow_empty(true);
-                    if !var.default.is_empty() {
-                        input = input.default(var.default.clone());
-                    }
-                    input.interact_text()?
+                // The template's default keeps `dialoguer`'s `[default]`
+                // contract: shown in the prompt, taken by a bare Enter, replaced
+                // by whatever is typed instead.
+                let mut opts = TextOpts::new();
+                if !var.default.is_empty() {
+                    opts = opts.default_value(var.default.clone());
+                }
+                if !var.required {
+                    opts = opts.allow_empty();
+                }
+                match prompt::text(&var.label, opts)? {
+                    Some(value) => value,
+                    None => return Ok(None),
                 }
             }
             VarType::Select => {
@@ -80,17 +73,15 @@ pub fn collect_vars(
                     .iter()
                     .position(|o| o == &var.default)
                     .unwrap_or(0);
-                let idx = Select::new()
-                    .with_prompt(&var.label)
-                    .items(&var.options)
-                    .default(default_idx)
-                    .interact()?;
-                var.options[idx].clone()
+                match prompt::select(&var.label, &var.options, default_idx)? {
+                    Some(idx) => var.options[idx].clone(),
+                    None => return Ok(None),
+                }
             }
         };
 
         result.insert(var.slug.clone(), value);
     }
 
-    validated_raw_values(tmpl, &result)
+    validated_raw_values(tmpl, &result).map(Some)
 }

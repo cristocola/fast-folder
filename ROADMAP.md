@@ -245,6 +245,12 @@ release is about it: one way out of every prompt, typed input that survives a
 validation failure, a browser that stops rescanning the library, and parity with
 what the command line can already do.
 
+- [x] Phase 7: one cancel contract — Esc (and `q` on a list) backs out of every
+  menu, list, confirmation and text field, one level per press, and a cancelled
+  create leaves no folder and consumes no ID. Every prompt goes through
+  `tui::prompt`, which `tests/layering.rs` enforces; text prompts are a
+  hand-rolled line editor because `dialoguer::Input` has no Esc at all. Menus
+  match on labels rather than raw indices.
 - [x] Phase 6: relocate the terminal picker library — every interactive terminal
   surface moved under `src/tui/` (`browser`, `actions`, `rows`, `pickers`,
   `vars`), so the guided menu is no longer a client of the CLI layer;

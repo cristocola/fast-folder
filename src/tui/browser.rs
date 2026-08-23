@@ -81,7 +81,7 @@ where
             projects.len()
         );
 
-        let choice = crate::util::live_select::select_live(&prompt, 0, &theme, SIZE_TICK, |sel| {
+        let picked = crate::util::live_select::select_live(&prompt, 0, &theme, SIZE_TICK, |sel| {
             // Re-declare the whole visible page every frame, selected row first:
             // it is the one the user is about to open, and `request` replaces the
             // queue rather than extending it, so moving the selection or turning
@@ -91,6 +91,10 @@ where
             labels.extend(nav.iter().cloned());
             labels
         })?;
+        // Esc leaves the browser, the same as the Back row.
+        let Some(choice) = picked else {
+            return Ok(());
+        };
 
         if choice < current.len() {
             // Own the selected snapshot so a successful action can reload the

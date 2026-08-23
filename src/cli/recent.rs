@@ -133,8 +133,6 @@ pub fn print_plain(filtered: &[&Project]) {
 /// Displays the projects in a `dialoguer::Select` loop. Selecting a project
 /// enters `tui::actions::project_action_menu`.
 pub fn run_picker(filtered: &[&Project]) -> Result<()> {
-    use dialoguer::Select;
-
     let columns = terminal_columns();
     let theme = ProjectRowTheme::new(columns);
     let widths = RowWidths::measure(filtered.iter().copied());
@@ -147,11 +145,14 @@ pub fn run_picker(filtered: &[&Project]) -> Result<()> {
             .chain(std::iter::once("[Quit]".to_string()))
             .collect();
 
-        let idx = Select::with_theme(&theme)
-            .with_prompt(format!("Projects ({} shown) — pick one", filtered.len()))
-            .items(&labels)
-            .default(0)
-            .interact()?;
+        let picked = crate::tui::prompt::select_with_theme(
+            &format!("Projects ({} shown) — pick one", filtered.len()),
+            &labels,
+            0,
+            &theme,
+        )?;
+        // Esc leaves the list, the same as the [Quit] row.
+        let Some(idx) = picked else { return Ok(()) };
 
         if idx == filtered.len() {
             return Ok(());

@@ -5,7 +5,6 @@
 //! one marked the default. A picker is a picker: these are the two.
 
 use anyhow::{Result, bail};
-use dialoguer::Select;
 use std::path::{Path, PathBuf};
 
 use crate::core::template::{self, Template};
@@ -40,11 +39,9 @@ pub fn pick_template(prompt: &str, how: &str) -> Result<Option<Template>> {
         .map(|label| clamp_label(&label, columns))
         .collect();
 
-    let idx = Select::new()
-        .with_prompt(prompt)
-        .items(&labels)
-        .default(0)
-        .interact()?;
+    let Some(idx) = crate::tui::prompt::select(prompt, &labels, 0)? else {
+        return Ok(None);
+    };
 
     Ok(Some(templates[idx].clone()))
 }
@@ -79,11 +76,9 @@ pub fn pick_base(
         labels.push("[Cancel]".to_string());
     }
 
-    let idx = Select::new()
-        .with_prompt(prompt)
-        .items(&labels)
-        .default(0)
-        .interact()?;
+    let Some(idx) = crate::tui::prompt::select(prompt, &labels, 0)? else {
+        return Ok(None);
+    };
 
     if idx >= bases.len() {
         return Ok(None);

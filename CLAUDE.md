@@ -798,6 +798,39 @@ assuming index 0, because `fastf move`'s candidate list excludes the project's
 current base and can therefore start anywhere. Both pickers return
 `Result<Option<_>>`: `None` is a cancelled pick, never an error.
 
+**Every prompt goes through `tui::prompt`, and `tests/layering.rs` is the
+enforcement.** No other module under `src/tui` or `src/cli` may name
+`dialoguer::Select`, `MultiSelect`, `Confirm`, `Input`, `Sort`, or
+`FuzzySelect`. Consistency is the whole feature: an earlier attempt moved
+twenty-nine prompts to `interact_opt` by hand and missed several, so Esc backed
+out of some menus and was swallowed by others, which is worse than Esc never
+working at all. **`Ok(None)` is a cancelled prompt and is never an error**, so
+`tui::menu::is_fatal` keeps treating a *broken* prompt (no terminal, stdin at
+EOF) as fatal and a cancelled one as an ordinary answer.
+
+Two of the four are hand-rolled on `dialoguer::console::Term`, for reasons that
+are in the vendored source. `Confirm::interact_opt` makes Esc set a *pending*
+value that still needs Enter, and it drops `interact`'s contract that a bare
+`y`/`n` answers without one — which the pty suite depends on. `Input` has no
+`Key::Escape` arm at all, so a text prompt could not be cancelled through it;
+`tui::prompt`'s line editor keeps its cursor as a **char index**, never a byte
+offset, and windows a long line around the cursor instead of wrapping (a wrapped
+line is what ghosts on the legacy Windows console and what desynchronises
+`clear_last_lines`).
+
+`TextOpts` has both `initial` and `default_value`, and they are different
+gestures: `initial` is editable starting text (what a rejected value comes back
+as), `default_value` keeps `dialoguer::Input::default`'s `prompt [default]:`
+contract where an empty answer means the default. Converting a `default` site to
+an `initial` one changes what typing `0` into a field showing `20` produces.
+
+**Menus match on labels, not indices.** Every submenu used to `match` a raw
+index with a trailing `unreachable!()`, so inserting a row silently reassigned
+the ones below it — the action menu's `move_idx` was a hard-coded `6` that only
+happened to be right while the move row was last. `tui::menu::menu()` returns the
+chosen label. Vocabulary: **Back** to a parent menu, **Cancel** to abandon an
+action, **Quit** only at the main menu.
+
 **Row widths are measured from the projects, never from the sizes**
 (`tui::rows::RowWidths`). A label may only ever change inside its own Size cell,
 or the table reflows under the reader as background snapshots land — the property

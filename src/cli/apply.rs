@@ -1,6 +1,5 @@
 use anyhow::{Result, bail};
 use colored::Colorize;
-use dialoguer::Confirm;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -30,13 +29,13 @@ fn structure_has_tokens(nodes: &[FolderNode]) -> bool {
 pub fn collect_if_needed(
     tmpl: &crate::core::template::Template,
     provided: &HashMap<String, String>,
-) -> Result<HashMap<String, String>> {
+) -> Result<Option<HashMap<String, String>>> {
     let needs_vars =
         tmpl.files.iter().any(|f| !f.template.is_empty()) || structure_has_tokens(&tmpl.structure);
     if needs_vars {
         collect_vars(tmpl, provided)
     } else {
-        Ok(HashMap::new())
+        Ok(Some(HashMap::new()))
     }
 }
 
@@ -87,7 +86,10 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         }
     }
 
-    let raw_vars = collect_if_needed(&tmpl, &args.vars)?;
+    let Some(raw_vars) = collect_if_needed(&tmpl, &args.vars)? else {
+        crate::tui::prompt::report_cancelled("nothing was applied");
+        return Ok(());
+    };
 
     let actions = project::apply_plan(&tmpl, &target, &raw_vars, &config.date_format)?;
 
@@ -116,14 +118,11 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     if !args.yes {
         tty::require_tty("confirm", "pass --yes to apply without confirming")?;
         println!();
-        let ok = Confirm::new()
-            .with_prompt(format!(
-                "Apply template '{}' to {}?",
-                tmpl.slug,
-                target.display()
-            ))
-            .default(true)
-            .interact()?;
+        let ok = crate::tui::prompt::confirm(
+            &format!("Apply template '{}' to {}?", tmpl.slug, target.display()),
+            true,
+        )?
+        .unwrap_or(false);
         if !ok {
             println!("Aborted.");
             return Ok(());

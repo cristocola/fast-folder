@@ -18,7 +18,7 @@
 //! Three rules the caller must keep, all load-bearing:
 //! 1. **Items are single-line and ANSI-free.** A repaint takes its own block back
 //!    by line count (`clear_last_lines`), so one soft-wrapped row desynchronises
-//!    every later redraw — the same reason `cli::recent::clamp_label` exists.
+//!    every later redraw — the same reason `tui::rows::clamp_label` exists.
 //! 2. **Nothing else may write to the terminal while this runs.** On Windows
 //!    `move_cursor_up` derives its target from the *live* console cursor
 //!    position, so a stray `println!` from another thread corrupts the redraw.
@@ -41,13 +41,17 @@ use dialoguer::theme::Theme;
 /// `frame` receives the current selection index — the browser uses it to put the
 /// row the user is about to open at the front of its scan queue — and returns the
 /// full item list, navigation rows included.
+///
+/// `Ok(None)` is Esc or `q`, exactly the two keys `dialoguer`'s `interact_opt`
+/// quits on. Matching it key for key is the point: this picker is meant to be
+/// indistinguishable from the ones around it.
 pub(crate) fn select_live<F>(
     prompt: &str,
     default: usize,
     theme: &dyn Theme,
     tick: Duration,
     mut frame: F,
-) -> dialoguer::Result<usize>
+) -> dialoguer::Result<Option<usize>>
 where
     F: FnMut(usize) -> Vec<String>,
 {
@@ -91,7 +95,7 @@ struct Live<'a> {
 }
 
 impl Live<'_> {
-    fn run<F>(&mut self, tick: Duration, frame: &mut F) -> dialoguer::Result<usize>
+    fn run<F>(&mut self, tick: Duration, frame: &mut F) -> dialoguer::Result<Option<usize>>
     where
         F: FnMut(usize) -> Vec<String>,
     {
@@ -103,9 +107,9 @@ impl Live<'_> {
             match key {
                 Key::ArrowDown | Key::Tab | Key::Char('j') => self.step(1),
                 Key::ArrowUp | Key::BackTab | Key::Char('k') => self.step(-1),
-                Key::Enter | Key::Char(' ') => return Ok(self.sel),
-                // Everything else is ignored, exactly as `Select::interact` does
-                // — Esc and 'q' included, since only the `_opt` variants quit.
+                Key::Enter | Key::Char(' ') => return Ok(Some(self.sel)),
+                // The two keys `interact_opt` quits on, and no others.
+                Key::Escape | Key::Char('q') => return Ok(None),
                 _ => {}
             }
             let next = frame(self.sel);

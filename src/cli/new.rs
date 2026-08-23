@@ -1,6 +1,5 @@
 use anyhow::{Result, bail};
 use colored::Colorize;
-use dialoguer::Confirm;
 use std::collections::HashMap;
 
 use crate::cli::extra::Recognized;
@@ -50,8 +49,12 @@ pub fn run(args: NewArgs) -> Result<()> {
         }
     }
 
-    // Collect variable values (flags → interactive fallback)
-    let raw_vars = collect_vars(&tmpl, &args.vars)?;
+    // Collect variable values (flags → interactive fallback). Esc at any
+    // variable cancels the whole create: no folder, no ID.
+    let Some(raw_vars) = collect_vars(&tmpl, &args.vars)? else {
+        crate::tui::prompt::report_cancelled("nothing was created");
+        return Ok(());
+    };
 
     // Preview plan — read-only, so no lock is taken. The ID shown here is
     // advisory: the committed one is allocated under the lock below, and only
@@ -73,13 +76,12 @@ pub fn run(args: NewArgs) -> Result<()> {
              (or set `fastf config set confirm-create false` to stop asking)",
         )?;
         println!();
-        let ok = Confirm::new()
-            .with_prompt("Create this project?")
-            .default(true)
-            .interact()?;
+        // Esc is a No here: the question is whether to create, and cancelling
+        // it means not creating.
+        let ok = crate::tui::prompt::confirm("Create this project?", true)?.unwrap_or(false);
 
         if !ok {
-            println!("Aborted.");
+            crate::tui::prompt::report_cancelled("nothing was created");
             return Ok(());
         }
     }
@@ -207,10 +209,7 @@ pub fn apply_extra(args: &mut NewArgs, recognized: Vec<Recognized>) -> Result<()
 /// because `core` may not prompt: the same module runs for `fastf ui`, where
 /// there is nobody at a terminal to answer.
 fn prompt_and_reveal(path: &std::path::Path) -> Result<()> {
-    let open = Confirm::new()
-        .with_prompt("Open project folder?")
-        .default(true)
-        .interact()?;
+    let open = crate::tui::prompt::confirm("Open project folder?", true)?.unwrap_or(false);
     if open {
         crate::core::post_create::reveal_folder(path)?;
     }

@@ -573,14 +573,34 @@ the alternative, which is the menu waiting for the operating system.
 - Also: the Size cell appears in all three entry points now; `SIZE_CELL` stays fixed width.
 
 **Steps.**
-- [ ] `tests/tui_pty.rs` first: frame shows "from index" counts that match a planted cache and a base marked unmounted; `/` filter narrows to one row and Enter opens its action menu; PageDown moves the highlight by the viewport; `fastf recent` on a pty shows the Size column and the action menu; Copy path with no clipboard tool on PATH prints the path.
-- [ ] Frame, `show_frame` key (`config::set` accepts it, Settings shows it, `config show` lists it), session ring.
-- [ ] Action menu restructure using `tui::prompt` (`multi_select` for tags), Copy path, Re-derive.
-- [ ] `live_select` keys and filter; unit tests for viewport and filter math.
-- [ ] Retire `run_picker`; route `recent`/`search` through the browser.
-- [ ] Docs: `docs/cli.md` (keys table, Copy path, `show_frame`), `CLAUDE.md` (frame reads caches only; filter line is part of the block height).
+- [x] `tests/tui_pty.rs` first: frame shows "from index" counts that match a planted cache and a base marked unmounted; `/` filter narrows to one row and Enter opens its action menu; PageDown moves the highlight by the viewport; `fastf recent` on a pty shows the Size column and the action menu; Copy path with no clipboard tool on PATH prints the path.
+- [x] Frame, `show_frame` key (`config::set` accepts it, Settings shows it, `config show` lists it), session ring.
+- [x] Action menu restructure using `tui::prompt` (`multi_select` for tags), Copy path, Re-derive.
+- [x] `live_select` keys and filter; unit tests for viewport and filter math.
+- [x] Retire `run_picker`; route `recent`/`search` through the browser.
+- [x] Docs: `docs/cli.md` (keys table, Copy path, `show_frame`), `CLAUDE.md` (frame reads caches only; filter line is part of the block height).
 
 **Acceptance.** All pty cases pass. Opening the main menu performs zero directory scans (trace count for `scan_base` is 0 on a warm cache). `grep -rn run_picker src` is empty.
+
+**Notes.** Two of the new pty cases passed on the first writing for the wrong
+reason and were tightened until they could not.
+
+`page_keys_move_by_a_viewport` counted viewport hints, and a 40-row list on a
+24-row terminal draws one on every repaint — of which the size scanner alone
+produces many. It now parses the window's *start row* out of the hint and
+requires one greater than 1, which only a scroll produces.
+
+`the_browser_filter_narrows_to_one_row` sliced from the filter line to the last
+`What would you like to do?` in the stream. That is the **main menu's** prompt as
+well as the action menu's, so the slice ran past the end of the browser session
+and swept up the unfiltered list drawn after Esc. It now takes the first action
+menu after the filter.
+
+One thing the plan did not anticipate: `Re-derive from template` returns
+`Reload`, not `Patched`. It replaces only the tags whose prefix matches the
+template's `tag_from` slugs and leaves free-form tags alone, so the resulting tag
+list is not something the caller can reconstruct from what the operation
+returned.
 
 ## Phase 11: Parity with the CLI, and a template builder that lets you change your mind
 

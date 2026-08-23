@@ -33,6 +33,9 @@ const SIZE_TICK: Duration = Duration::from_millis(200);
 /// While the list is up, `util::live_select` owns the terminal, so
 /// nothing in here may print — which is why the scan has no progress output of
 /// its own, and why the scanner threads are silent by construction.
+/// `leave_label` is the last row: "Back to main menu" from the guided menu,
+/// "Quit" when `fastf recent` or `fastf search` opened this from a shell.
+///
 /// `keeps` decides whether a row that has just been patched still belongs in
 /// this list. The projects browser passes something that always says yes; the
 /// search browser re-evaluates its query against the project's fresh metadata,
@@ -40,6 +43,7 @@ const SIZE_TICK: Duration = Duration::from_millis(200);
 pub fn run_paged_browser<F, K>(
     page_size: usize,
     empty_message: &str,
+    leave_label: &str,
     mut load: F,
     keeps: K,
 ) -> Result<()>
@@ -58,6 +62,10 @@ where
             println!("{}", empty_message.dimmed());
             return Ok(());
         }
+
+        // Every tag the loaded projects carry, so "Add a tag" can offer them
+        // without a scan of its own.
+        let known_tags = known_tags(&projects);
 
         let page_count = projects.len().div_ceil(page_size);
         page = page.min(page_count - 1);
@@ -112,7 +120,7 @@ where
             let row = start + choice;
             let project = projects[row].clone();
             let cell = scanner.cells_for(std::slice::from_ref(&project.path))[0];
-            match project_action_menu(&project, Some(cell), true)? {
+            match project_action_menu(&project, Some(cell), true, &known_tags, leave_label)? {
                 ActionLoop::BackToList => {}
                 ActionLoop::Patched { project, stale } => {
                     for path in &stale {
@@ -185,4 +193,15 @@ fn paged_labels(projects: &[Project], sizes: &[SizeCell], columns: usize) -> Vec
             clamp_label(&project_row(project, &widths, Some(cell), false), columns)
         })
         .collect()
+}
+
+/// The distinct tags across a loaded list, sorted for a stable picker.
+fn known_tags(projects: &[Project]) -> Vec<String> {
+    let mut tags: Vec<String> = projects
+        .iter()
+        .flat_map(|project| project.tags.iter().cloned())
+        .collect();
+    tags.sort();
+    tags.dedup();
+    tags
 }

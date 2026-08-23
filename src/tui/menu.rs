@@ -121,30 +121,7 @@ pub fn run() -> Result<()> {
     loop {
         // Reload config each iteration so changes in settings are reflected immediately
         let cfg = Config::load()?;
-        let base = cfg.resolve_base_dir();
-
-        let parent = base
-            .parent()
-            .map(|p| {
-                format!(
-                    "{}{}",
-                    crate::util::paths::display_path(p),
-                    std::path::MAIN_SEPARATOR
-                )
-            })
-            .unwrap_or_default();
-        let name = base
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| crate::util::paths::display_path(&base));
-
-        println!(
-            "  {}  {}{}",
-            "project base  →".dimmed(),
-            parent.dimmed(),
-            name.cyan().bold()
-        );
-        println!();
+        crate::tui::frame::print(&cfg);
 
         let choice = menu(
             "What would you like to do?",
@@ -295,6 +272,7 @@ fn menu_projects() -> Result<()> {
     browser::run_paged_browser(
         page_size,
         "No projects yet — create one with `fastf new`.",
+        "Back to main menu",
         || {
             let cfg = Config::load()?;
             Ok(library::discover(&cfg))
@@ -345,6 +323,7 @@ fn menu_search() -> Result<()> {
         browser::run_paged_browser(
             page_size,
             "No projects match that query.",
+            "Back to main menu",
             || {
                 let cfg = Config::load()?;
                 Ok(crate::cli::search::matching_projects(&cfg, &predicates))
@@ -749,6 +728,7 @@ fn menu_settings_workflow() -> Result<()> {
             ),
             label_toggle("\"Create this project?\" confirmation", cfg.confirm_create),
             label_toggle("ASCII banner in main menu", cfg.show_banner),
+            label_toggle("Library summary in main menu", cfg.show_frame),
             format!("Dry-run preview lines  [{}]", cfg.preview_lines),
             format!(
                 "Duplicate folder name  [{}]",
@@ -768,7 +748,8 @@ fn menu_settings_workflow() -> Result<()> {
             0 => toggle_setting("prompt-open-after-create", cfg.prompt_open_after_create),
             1 => toggle_setting("confirm-create", cfg.confirm_create),
             2 => toggle_setting("show-banner", cfg.show_banner),
-            3 => set_from_prompt(
+            3 => toggle_setting("show-frame", cfg.show_frame),
+            4 => set_from_prompt(
                 "preview-lines",
                 "Lines per file in dry-run (0 = none)",
                 TextOpts::new()
@@ -781,7 +762,7 @@ fn menu_settings_workflow() -> Result<()> {
                     }),
             ),
             // Not a bool on disk — it stores "suffix" or "error".
-            4 => config::set(
+            5 => config::set(
                 "on-name-collision",
                 if cfg.suffix_on_name_collision() {
                     "error"

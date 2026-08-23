@@ -47,6 +47,8 @@ pub(crate) fn project_action_menu(
     project: &Project,
     size: Option<SizeCell>,
     reload_after_change: bool,
+    known_tags: &[String],
+    leave_label: &str,
 ) -> Result<ActionLoop> {
     let path = project.path.as_path();
     let path_str = crate::util::paths::display_path(path);
@@ -101,13 +103,16 @@ pub(crate) fn project_action_menu(
         // Labels, not indices. The move row appears only when there is somewhere
         // to move to, so every index below it used to shift — `move_idx` was a
         // hard-coded `6` that only happened to be right.
+        //
+        // Ordered most-used first, and the two typed-tag rows are now one Tags
+        // submenu: removing a tag by retyping it exactly was the worst gesture
+        // in the tool.
         let mut items: Vec<&str> = vec![
             "Open project folder",
+            "Copy path",
             "Show project metadata",
-            "Add tag",
-            "Remove tag",
-            "Add journal note",
-            "Show journal",
+            "Tags",
+            "Journal",
         ];
         if !other_bases.is_empty() {
             items.push("Move to another base");
@@ -116,13 +121,17 @@ pub(crate) fn project_action_menu(
         items.push("Unregister (keep files)");
         items.push("Delete folder permanently");
         items.push("Back to list");
-        items.push("Back to main menu");
+        items.push(leave_label);
 
         let labels: Vec<String> = items.iter().map(|item| (*item).to_string()).collect();
         // Esc is "Back to list": the parent of this menu is the list it opened from.
         let Some(choice) = prompt::select("What would you like to do?", &labels, 0)? else {
             return Ok(ActionLoop::BackToList);
         };
+
+        if items[choice] == leave_label {
+            return Ok(ActionLoop::Quit);
+        }
 
         match items[choice] {
             "Open project folder" => {
@@ -142,6 +151,7 @@ pub(crate) fn project_action_menu(
                     );
                 }
             }
+            "Copy path" => copy_path(&path_str),
             "Show project metadata" => {
                 if !path.exists() {
                     eprintln!(
@@ -153,82 +163,16 @@ pub(crate) fn project_action_menu(
                 }
                 show_metadata(path);
             }
-            "Add tag" => {
-                let Some(input) = prompt::text(
-                    "Tag to add (e.g. draft  or  client/Acme)",
-                    TextOpts::new().allow_empty(),
-                )?
-                else {
-                    continue;
-                };
-                let tag = input.trim().to_string();
-                if tag.is_empty() {
-                    println!("{}", "  (cancelled)".dimmed());
-                    continue;
-                }
-                match crate::core::operations::add_tags(project, &[tag]) {
-                    Ok(tags) => {
-                        println!(
-                            "{}  Added 1 tag to {}",
-                            "✓".green().bold(),
-                            project.id.green().bold()
-                        );
-                        if reload_after_change {
-                            return Ok(retagged(project, tags));
-                        }
-                    }
-                    Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+            "Tags" => {
+                if let Some(outcome) = tags_menu(project, known_tags, reload_after_change)? {
+                    return Ok(outcome);
                 }
             }
-            "Remove tag" => {
-                let Some(input) = prompt::text("Tag to remove", TextOpts::new().allow_empty())?
-                else {
-                    continue;
-                };
-                let tag = input.trim().to_string();
-                if tag.is_empty() {
-                    println!("{}", "  (cancelled)".dimmed());
-                    continue;
-                }
-                match crate::core::operations::remove_tags(project, &[tag]) {
-                    Ok(tags) => {
-                        println!(
-                            "{}  Removed 1 tag from {}",
-                            "✓".green().bold(),
-                            project.id.green().bold()
-                        );
-                        if reload_after_change {
-                            return Ok(retagged(project, tags));
-                        }
-                    }
-                    Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+            "Journal" => {
+                if let Some(outcome) = journal_menu(project, reload_after_change)? {
+                    return Ok(outcome);
                 }
             }
-            "Add journal note" => {
-                let Some(input) = prompt::text("Journal note", TextOpts::new().allow_empty())?
-                else {
-                    continue;
-                };
-                let msg = input.trim().to_string();
-                if msg.is_empty() {
-                    println!("{}", "  (cancelled)".dimmed());
-                    continue;
-                }
-                if let Err(e) = crate::core::operations::append_note(project, &msg) {
-                    eprintln!("{} {}", "error:".red().bold(), e);
-                } else {
-                    println!("{}  Journal entry added.", "✓".green().bold());
-                    if reload_after_change {
-                        // The journal is not shown in a row, but the row's size
-                        // is now wrong, so the snapshot has to go.
-                        return Ok(ActionLoop::Patched {
-                            project: project.clone(),
-                            stale: vec![project.path.clone()],
-                        });
-                    }
-                }
-            }
-            "Show journal" => show_journal(path),
             "Move to another base" => {
                 let Some(target) = pick_base(
                     "Move to which base?",
@@ -257,6 +201,11 @@ pub(crate) fn project_action_menu(
                                 crate::util::paths::display_path(&project.path)
                             );
                         }
+                        crate::tui::frame::record(format!(
+                            "moved {} → {}",
+                            moved.id,
+                            library::base_label(&moved.base)
+                        ));
                         let stale = vec![project.path.clone(), moved.path.clone()];
                         return Ok(ActionLoop::Patched {
                             project: moved,
@@ -277,6 +226,10 @@ pub(crate) fn project_action_menu(
                 match crate::core::operations::rename(project, &new_name) {
                     Ok(renamed) => {
                         println!("{}  Renamed to {}", "✓".green().bold(), renamed.name.bold());
+                        crate::tui::frame::record(format!(
+                            "renamed {} → {}",
+                            renamed.id, renamed.name
+                        ));
                         let stale = vec![project.path.clone(), renamed.path.clone()];
                         return Ok(ActionLoop::Patched {
                             project: renamed,
@@ -305,6 +258,7 @@ pub(crate) fn project_action_menu(
                             "✓".green().bold(),
                             project.name.bold()
                         );
+                        crate::tui::frame::record(format!("unregistered {}", project.id));
                         return Ok(ActionLoop::Removed {
                             path: project.path.clone(),
                         });
@@ -335,6 +289,7 @@ pub(crate) fn project_action_menu(
                 match crate::core::operations::delete(project) {
                     Ok(()) => {
                         println!("{}  Deleted {}", "✓".green().bold(), path_str.bold());
+                        crate::tui::frame::record(format!("deleted {}", project.id));
                         return Ok(ActionLoop::Removed {
                             path: project.path.clone(),
                         });
@@ -343,10 +298,212 @@ pub(crate) fn project_action_menu(
                 }
             }
             "Back to list" => return Ok(ActionLoop::BackToList),
-            "Back to main menu" => return Ok(ActionLoop::Quit),
             other => anyhow::bail!("unhandled action '{other}'"),
         }
     }
+}
+
+/// Put the project's path where another program can take it.
+///
+/// There is no portable clipboard, so "no clipboard tool here" is an ordinary
+/// answer: the path goes on its own line instead, which is what a terminal
+/// selection wants anyway. Either way the action says what it did — a Copy that
+/// silently did nothing is the worst possible version of this.
+fn copy_path(path_str: &str) {
+    match crate::util::clipboard::copy(path_str) {
+        Some(tool) => println!("{}  Copied with {}", "✓".green().bold(), tool.dimmed()),
+        None => {
+            println!(
+                "  {}",
+                "no clipboard tool found — here is the path:".dimmed()
+            );
+            println!("{path_str}");
+        }
+    }
+}
+
+/// Add, remove, or re-derive this project's tags.
+///
+/// `Ok(None)` means the caller's action menu continues; `Ok(Some(_))` is an
+/// outcome for the list.
+fn tags_menu(
+    project: &Project,
+    known_tags: &[String],
+    reload_after_change: bool,
+) -> Result<Option<ActionLoop>> {
+    let items = [
+        "Add a tag",
+        "Remove tags",
+        "Re-derive from template",
+        "Back",
+    ];
+    let labels: Vec<String> = items.iter().map(|item| (*item).to_string()).collect();
+    let Some(choice) = prompt::select("Tags", &labels, 0)? else {
+        return Ok(None);
+    };
+
+    match items[choice] {
+        "Add a tag" => {
+            let Some(tag) = pick_or_type_tag(project, known_tags)? else {
+                return Ok(None);
+            };
+            match crate::core::operations::add_tags(project, std::slice::from_ref(&tag)) {
+                Ok(tags) => {
+                    println!(
+                        "{}  Added 1 tag to {}",
+                        "✓".green().bold(),
+                        project.id.green().bold()
+                    );
+                    crate::tui::frame::record(format!("tagged {} {tag}", project.id));
+                    if reload_after_change {
+                        return Ok(Some(retagged(project, tags)));
+                    }
+                }
+                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+            }
+        }
+        "Remove tags" => {
+            if project.tags.is_empty() {
+                println!("  {}", "no tags to remove.".dimmed());
+                return Ok(None);
+            }
+            // Chosen from a list, not retyped. Removing a tag used to mean
+            // typing it back exactly, and a typo silently removed nothing.
+            let checked = vec![false; project.tags.len()];
+            let Some(picks) = prompt::multi_select(
+                "Tags to remove (Space to toggle, Enter to confirm)",
+                &project.tags,
+                &checked,
+            )?
+            else {
+                return Ok(None);
+            };
+            if picks.is_empty() {
+                println!("{}", "  (nothing selected)".dimmed());
+                return Ok(None);
+            }
+            let removing: Vec<String> = picks
+                .iter()
+                .filter_map(|index| project.tags.get(*index).cloned())
+                .collect();
+            let count = removing.len();
+            match crate::core::operations::remove_tags(project, &removing) {
+                Ok(tags) => {
+                    println!(
+                        "{}  Removed {count} tag{} from {}",
+                        "✓".green().bold(),
+                        if count == 1 { "" } else { "s" },
+                        project.id.green().bold()
+                    );
+                    if reload_after_change {
+                        return Ok(Some(retagged(project, tags)));
+                    }
+                }
+                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+            }
+        }
+        "Re-derive from template" => {
+            match crate::core::operations::replace_auto_tags(project) {
+                Ok(derived) => {
+                    println!(
+                        "{}  Re-derived {} auto-tag{} for {}",
+                        "✓".green().bold(),
+                        derived.len(),
+                        if derived.len() == 1 { "" } else { "s" },
+                        project.id.green().bold()
+                    );
+                    if reload_after_change {
+                        // The free-form tags survive; only the derived ones were
+                        // replaced, so the row has to be re-read rather than
+                        // patched from what was returned.
+                        return Ok(Some(ActionLoop::Reload));
+                    }
+                }
+                Err(e) => eprintln!("{} {}", "error:".red().bold(), e),
+            }
+        }
+        _ => {}
+    }
+    Ok(None)
+}
+
+/// Pick a tag the library already uses, or type a new one.
+///
+/// The known set comes from the projects the list already holds, so this costs
+/// no scan. Tags the project already carries are left out — adding one twice is
+/// a no-op that reads like a success.
+fn pick_or_type_tag(project: &Project, known_tags: &[String]) -> Result<Option<String>> {
+    const NEW: &str = "New tag…";
+
+    let available: Vec<String> = known_tags
+        .iter()
+        .filter(|tag| !project.tags.contains(tag))
+        .cloned()
+        .collect();
+
+    if !available.is_empty() {
+        let mut labels = available.clone();
+        labels.push(NEW.to_string());
+        let Some(choice) = prompt::select("Tag to add", &labels, 0)? else {
+            return Ok(None);
+        };
+        if labels[choice] != NEW {
+            return Ok(Some(labels[choice].clone()));
+        }
+    }
+
+    let Some(input) = prompt::text(
+        "Tag to add (e.g. draft  or  client/Acme)",
+        TextOpts::new().allow_empty(),
+    )?
+    else {
+        return Ok(None);
+    };
+    let tag = input.trim().to_string();
+    if tag.is_empty() {
+        println!("{}", "  (cancelled)".dimmed());
+        return Ok(None);
+    }
+    Ok(Some(tag))
+}
+
+/// Add a journal entry, or read the ones already there.
+fn journal_menu(project: &Project, reload_after_change: bool) -> Result<Option<ActionLoop>> {
+    let items = ["Add a note", "Show journal", "Back"];
+    let labels: Vec<String> = items.iter().map(|item| (*item).to_string()).collect();
+    let Some(choice) = prompt::select("Journal", &labels, 0)? else {
+        return Ok(None);
+    };
+
+    match items[choice] {
+        "Add a note" => {
+            let Some(input) = prompt::text("Journal note", TextOpts::new().allow_empty())? else {
+                return Ok(None);
+            };
+            let msg = input.trim().to_string();
+            if msg.is_empty() {
+                println!("{}", "  (cancelled)".dimmed());
+                return Ok(None);
+            }
+            if let Err(e) = crate::core::operations::append_note(project, &msg) {
+                eprintln!("{} {}", "error:".red().bold(), e);
+            } else {
+                println!("{}  Journal entry added.", "✓".green().bold());
+                crate::tui::frame::record(format!("noted {}", project.id));
+                if reload_after_change {
+                    // The journal is not shown in a row, but the row's size is
+                    // now wrong, so the snapshot has to go.
+                    return Ok(Some(ActionLoop::Patched {
+                        project: project.clone(),
+                        stale: vec![project.path.clone()],
+                    }));
+                }
+            }
+        }
+        "Show journal" => show_journal(&project.path),
+        _ => {}
+    }
+    Ok(None)
 }
 
 /// The same row with its tag list replaced.

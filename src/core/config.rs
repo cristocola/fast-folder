@@ -59,6 +59,14 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub show_banner: bool,
 
+    /// Show the library summary under the TUI main menu.
+    ///
+    /// Separate from `show_banner` on purpose: the banner is decoration and the
+    /// frame is information, so somebody who turns off the first usually still
+    /// wants the second.
+    #[serde(default = "default_true")]
+    pub show_frame: bool,
+
     /// Pattern used by `fastf register --rename` when no `--template` is set.
     /// Tokens: `{date}` (uses `date_format`), `{YYYY}`, `{MM}`, `{DD}`, `{id}`,
     /// and `{name}` — the sanitized basename of the existing folder.
@@ -114,6 +122,7 @@ impl Default for Config {
             recent_default_limit: default_recent_limit(),
             confirm_create: true,
             show_banner: true,
+            show_frame: true,
             register_naming_pattern: default_register_naming_pattern(),
             on_name_collision: default_on_name_collision(),
         }

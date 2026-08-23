@@ -245,6 +245,14 @@ release is about it: one way out of every prompt, typed input that survives a
 validation failure, a browser that stops rescanning the library, and parity with
 what the command line can already do.
 
+- [x] Phase 10: the main-menu frame, a better action menu, more keys, one
+  browser — the menu shows each base and whether it is there, indexed counts,
+  the highest ID and this session's last few actions, all from the caches and a
+  probe, scanning nothing (`show_frame`, on by default). Lists take PageUp /
+  PageDown, Home / End and `/` to filter. The action menu leads with Open and
+  Copy path, and folds tagging into a submenu where tags are ticked off a list
+  instead of retyped, plus Re-derive. `fastf recent` and `fastf search` open the
+  same browser as the menu; the second, size-less picker is gone.
 - [x] Phase 9: the browser stops rescanning — a tag, a note, a rename or a move
   patches the one row it changed instead of re-running discovery across every
   base, and a delete drops the row; a search browser re-evaluates its query

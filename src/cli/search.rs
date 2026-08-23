@@ -84,7 +84,7 @@ pub fn run(args: SearchArgs) -> Result<()> {
         !args.plain && std::io::stdout().is_terminal() && crate::util::tty::prompt_available();
 
     if interactive {
-        crate::cli::recent::run_picker(&matches)
+        crate::cli::recent::browse(owned_matches, "No projects match that query.")
     } else {
         // Shared with `fastf recent` — identical plain output (incl. base column).
         crate::cli::recent::print_plain(&matches);

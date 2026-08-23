@@ -4,10 +4,7 @@ use std::io::IsTerminal;
 
 use crate::core::config::Config;
 use crate::core::library::{self, Project};
-use crate::tui::actions::{ActionLoop, project_action_menu};
-use crate::tui::rows::{
-    ProjectRowTheme, RowWidths, clamp_label, date_cell, project_row, terminal_columns,
-};
+use crate::tui::rows::{RowWidths, date_cell};
 
 pub struct RecentArgs {
     /// None = use Config::recent_default_limit.
@@ -58,7 +55,10 @@ pub fn run(args: RecentArgs) -> Result<()> {
         !args.plain && std::io::stdout().is_terminal() && crate::util::tty::prompt_available();
 
     if interactive {
-        run_picker(&filtered)
+        browse(
+            filtered.into_iter().cloned().collect(),
+            "No projects to show.",
+        )
     } else {
         print_plain(&filtered);
         Ok(())
@@ -128,45 +128,25 @@ pub fn print_plain(filtered: &[&Project]) {
     }
 }
 
-/// Interactive picker shared by `fastf recent` and `fastf search`.
+/// Open the guided browser over an already-filtered list.
 ///
-/// Displays the projects in a `dialoguer::Select` loop. Selecting a project
-/// enters `tui::actions::project_action_menu`.
-pub fn run_picker(filtered: &[&Project]) -> Result<()> {
-    let columns = terminal_columns();
-    let theme = ProjectRowTheme::new(columns);
-    let widths = RowWidths::measure(filtered.iter().copied());
-
-    loop {
-        let labels: Vec<String> = filtered
-            .iter()
-            // Tags come straight from discovery (cache/scan) — no reload.
-            .map(|p| clamp_label(&project_row(p, &widths, None, true), columns))
-            .chain(std::iter::once("[Quit]".to_string()))
-            .collect();
-
-        let picked = crate::tui::prompt::select_with_theme(
-            &format!("Projects ({} shown) — pick one", filtered.len()),
-            &labels,
-            0,
-            &theme,
-        )?;
-        // Esc leaves the list, the same as the [Quit] row.
-        let Some(idx) = picked else { return Ok(()) };
-
-        if idx == filtered.len() {
-            return Ok(());
-        }
-
-        match project_action_menu(filtered[idx], None, false)? {
-            // Preserve the command picker's existing behaviour: it returns to
-            // its current list after a mutation, showing the rows it started
-            // with. Only the guided browser passes `reload_after_change = true`
-            // and owns rows it can patch.
-            ActionLoop::Quit => return Ok(()),
-            _ => continue,
-        }
-    }
+/// `fastf recent` and `fastf search` used to have a second, size-less picker of
+/// their own (`run_picker`), so the same library looked different depending on
+/// which door you came through and only one of the two showed folder sizes.
+/// There is one browser now; the shell entry points differ only in their last
+/// row, which says Quit rather than Back to main menu.
+pub fn browse(projects: Vec<Project>, empty_message: &str) -> Result<()> {
+    let page_size = Config::load()?.recent_default_limit.max(1);
+    // The list is already filtered and already read: the loader hands back the
+    // same rows rather than discovering again.
+    let mut initial = Some(projects);
+    crate::tui::browser::run_paged_browser(
+        page_size,
+        empty_message,
+        "Quit",
+        move || Ok(initial.take().unwrap_or_default()),
+        |_| true,
+    )
 }
 
 /// `fastf open <query>` — resolve a project and reveal it in the file manager.

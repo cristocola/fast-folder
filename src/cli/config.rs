@@ -88,6 +88,11 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
+        "show_frame:".green(),
+        bool_label(config.show_frame)
+    );
+    println!(
+        "  {:<26} {}",
         "recent_default_limit:".green(),
         config.recent_default_limit
     );
@@ -252,6 +257,10 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                 config.show_banner = parse_bool(value)?;
                 println!("Set show_banner = {}", config.show_banner);
             }
+            "show_frame" => {
+                config.show_frame = parse_bool(value)?;
+                println!("Set show_frame = {}", config.show_frame);
+            }
             "bases" => {
                 // Comma-separated list of extra base directories to index. Empty
                 // value clears the list.
@@ -333,7 +342,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
             }
             other => bail!(
                 "unknown config key '{}'. Valid keys: base-dir, bases, editor, default-template, date-format, \
-             preview-lines, prompt-open-after-create, confirm-create, show-banner, \
+             preview-lines, prompt-open-after-create, confirm-create, show-banner, show-frame, \
              recent-default-limit, register-naming-pattern, on-name-collision, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
                 other

@@ -336,6 +336,43 @@ fn load_cache(base: &Path) -> Option<Cache> {
     (cache.version == CACHE_VERSION).then_some(cache)
 }
 
+/// One base's own picture of itself, read from `.fastf-index.json` and nothing
+/// else — no staleness check, no directory scan, no metadata read.
+///
+/// This exists for the main-menu frame, which must cost nothing. A summary that
+/// scanned would make opening the menu slower the larger the library got, which
+/// is exactly backwards; a summary that is a few minutes out of date is fine as
+/// long as it says so, which is why every surface labels it "from index".
+#[derive(Debug, Clone)]
+pub struct IndexSummary {
+    pub projects: usize,
+    /// Highest ID in the cache, by numeric value.
+    pub max_id: Option<String>,
+    /// Newest project's id and folder name (the cache is not sorted, so this is
+    /// computed by `created`).
+    pub newest: Option<(String, String)>,
+}
+
+/// `None` when the base has no readable cache of a version this build knows.
+pub fn index_summary(base: &Path) -> Option<IndexSummary> {
+    let cache = load_cache(base)?;
+    let max_id = cache
+        .entries
+        .iter()
+        .max_by_key(|entry| naming::id_value(&entry.id))
+        .map(|entry| entry.id.clone());
+    let newest = cache
+        .entries
+        .iter()
+        .max_by(|a, b| a.created.cmp(&b.created))
+        .map(|entry| (entry.id.clone(), entry.name.clone()));
+    Some(IndexSummary {
+        projects: cache.entries.len(),
+        max_id,
+        newest,
+    })
+}
+
 /// Write the cache for `base` atomically. Best-effort: a failure is returned but
 /// callers ignore it — the cache is disposable and the folders remain the truth.
 ///

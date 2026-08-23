@@ -335,7 +335,7 @@ After `print_success()` in `cli/new.rs`, call `post_create::prompt_and_reveal(pa
 Calls the existing platform-correct `reveal_folder()` on Yes.
 
 ### Interactive `fastf recent`
-`cli/recent.rs` decides interactive vs plain by `!args.plain && std::io::stdout().is_terminal()`. In interactive mode: `dialoguer::Select` picker over the filtered `library::Project`s + a `[Quit]` sentinel at the end. Selecting a project enters `tui::actions::project_action_menu()` which loops until Back/Quit. **v0.9:** `--prune` is gone (the cache self-heals); the picker sources from `library::discover` and reads tags straight off `project.tags`.
+`cli/recent.rs` decides interactive vs plain by `!args.plain && std::io::stdout().is_terminal()`. In interactive mode it opens the guided browser (`recent::browse`) over the filtered `library::Project`s, with `Quit` as the last row. Selecting a project enters `tui::actions::project_action_menu()` which loops until Back/Quit. **v0.9:** `--prune` is gone (the cache self-heals); the picker sources from `library::discover` and reads tags straight off `project.tags`.
 
 The metadata display (`show_metadata`) tries `read_metadata` first; on success it calls `print_structured_metadata` which computes max-key-width and emits aligned `key  value` pairs with a `variables:` sub-block. Dim `(empty)` for empty values. Falls back to raw markdown on `Ok(None)`. Yellow warning on missing file.
 
@@ -355,7 +355,7 @@ Scripting compat: `--plain` flag or non-TTY stdout → classic column-aligned li
 
 The free-text branch in `eval_one` searches `tags`, all `meta.variables.values()`, `folder`, `template`, `template_name`, and `id` — case-insensitive substring. **`path` is intentionally excluded** so home-dir text never produces phantom matches. There's a regression test that proves this.
 
-`cli/search::run` walks `library::discover` (newest-first), reads each metadata file (silently skipping projects with unreadable PROJECT_INFO.md), and renders matches via `recent::run_picker` on TTY or a plain list when piped/`--plain`. `query::evaluate(preds, meta)` takes only `&Metadata` (v0.9 dropped the `ProjectRecord` arg).
+`cli/search::run` walks `library::discover` (newest-first), reads each metadata file (silently skipping projects with unreadable PROJECT_INFO.md), and renders matches through `recent::browse` (the one guided browser) on TTY or a plain list when piped/`--plain`. `query::evaluate(preds, meta)` takes only `&Metadata` (v0.9 dropped the `ProjectRecord` arg).
 
 **Journal** entries are markdown lines under a `## Journal` section in the body. Format: `- 2026-04-20T14:32:11Z — message`. Append-only and chronological — `append_journal_entry` always appends at EOF after the section, never edits existing entries. `parse_journal_entries` walks the section and stops at the next `## ` heading. `notes --since YYYY-MM-DD` filters by lexicographic timestamp comparison (cheap and correct because ISO-8601 is sortable as string).
 
@@ -410,7 +410,7 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 - v0.4: `project_info::split_frontmatter_body()` is `pub` (not `pub(crate)`) so integration tests can assert byte-identity round-trips. The internal `extract_frontmatter` helper from v0.3 was folded into it — there's now one splitter.
 - v0.4: `Predicate::Free` is the parser fallthrough, so any non-empty term that isn't `tag:`, `key=…`, `key>…`, `key<…` becomes a free-text predicate. Don't add another fallthrough below it (would be unreachable). Free terms search **case-insensitive substring** (not prefix) — keep it that way for grep-like UX.
 - v0.4: `path` is intentionally NOT searched by `Predicate::Free`. There's a regression test (`free_does_not_match_path`) that asserts this; if you ever extend the field set, don't break that guarantee silently — home-dir leakage is a privacy footgun.
-- v0.4/v1.7.0: `cli::recent::run_picker` is `pub` because `cli::search` reuses it. The action menu it opens is `tui::actions::project_action_menu`, shared with the guided browser — a new picker action goes there, not in `cli/recent.rs`, which is now just `fastf recent`/`fastf open` (args, filter, plain list, picker loop).
+- v0.4/v1.7.0: `cli::recent::browse` is `pub` because `cli::search` reuses it — it is the one door from a shell into `tui::browser::run_paged_browser`. The action menu is `tui::actions::project_action_menu`, shared with the guided menu; a new action goes there, not in `cli/recent.rs`, which is now just `fastf recent`/`fastf open` (args, filter, plain list).
 - v1.6.1: **`cli::extra::classify_extra` reads the flag list from clap, not from a hand-written match.** `trailing_var_arg` means every token after the first one clap cannot parse lands in `extra`; the classifier sorts that bucket using `cmd.get_arguments()` for *that* subcommand (long, short, `get_action().takes_values()`). So the rule for adding a flag is two steps, not three: declare it in clap, handle it in that command's `apply_extra` (`cli::new`, `cli::apply`, `RegisterFlags`). The `_ =>` arm of each `apply_extra` bails by name, and `main.rs`'s `every_declared_flag_is_handled_after_the_positional` calls it with every declared long, so forgetting the second step fails the suite instead of making the flag work before the positional and silently do nothing after it. An undeclared `--key=value` is a template variable; anything else is an error (`warn_unknown` is gone — an ignored request is not an outcome).
 - register writes PROJECT_INFO.md in two steps: `project_info::write(&plan, &tmpl, &tags)` (which uses `library::now_iso8601` inside `Metadata::from_plan`), then `project_info::write_frontmatter` to patch `created` to the resolved timestamp. Don't try to plumb the timestamp through `from_plan` — it'd break the byte-identity guarantee on the round-trip test and pollute the signature for a register-only concern.
 - v0.5: `register` builds its `ProjectPlan` directly (pub struct fields) instead of calling `project::plan()` because plan always sets `root_path = cfg.base_dir.join(folder_name)`. Register's `root_path` is the canonical path of the existing folder. Don't refactor plan to take a path override — keep the two flows separate.
@@ -823,6 +823,34 @@ gestures: `initial` is editable starting text (what a rejected value comes back
 as), `default_value` keeps `dialoguer::Input::default`'s `prompt [default]:`
 contract where an empty answer means the default. Converting a `default` site to
 an `initial` one changes what typing `0` into a field showing `20` produces.
+
+**The main-menu frame reads caches and probes, and scans nothing.**
+`tui::frame` builds its counts from `library::index_summary`, which reads
+`.fastf-index.json` with no staleness check and no directory walk. A summary
+whose cost grew with the library would make the menu slower the more it had to
+say. Because the numbers can be stale they are labelled `from index`; the one
+line that must be live — whether a base is actually there — is the Phase 9
+probe. `the_frame_reports_the_library_from_the_index_without_scanning` asserts a
+`scan_base` trace count of zero. The session ring is a `Mutex<Vec<String>>` in
+that module: in memory, per process, three entries. Anything durable belongs in
+the project's journal.
+
+**`live_select`'s filter line is part of the block height.** The block is taken
+back by line count (`clear_last_lines`), so anything drawn between the prompt and
+the last item has to be counted in `drawn` and subtracted from the viewport
+capacity, or every later redraw is off by one. While the filter is open **every
+printable key is a letter** — `q`, `j` and `/` included — which is why the key
+match is split into a filter branch and a normal branch rather than one match
+with guards. Esc clears the filter before it cancels, because a filter can hide
+the Back row. Page keys **clamp** where arrows **wrap**: wrapping a page jump
+lands somewhere nobody asked for.
+
+**There is one project browser.** `cli::recent::run_picker` was a second,
+size-less list used by `fastf recent` and `fastf search`, so the same library
+looked different depending on which door you came through. Both now call
+`tui::browser::run_paged_browser` through `cli::recent::browse`; the only
+difference is `leave_label`, which says `Quit` from a shell and `Back to main
+menu` from the guided menu.
 
 **A content mutation patches the row; only a structural change reloads.**
 `tui::actions::ActionLoop` is `Patched { project, stale }` / `Removed { path }` /

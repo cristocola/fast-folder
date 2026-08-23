@@ -283,6 +283,15 @@ pub mod pty {
             self
         }
 
+        /// PageDown / PageUp — one viewport of the list.
+        pub fn page_down(self) -> Self {
+            self.push(b"\x1b[6~", 400)
+        }
+
+        pub fn page_up(self) -> Self {
+            self.push(b"\x1b[5~", 400)
+        }
+
         /// Home, for editing the front of a line a validator refused.
         pub fn home(self) -> Self {
             self.push(b"\x1b[H", 300)

@@ -294,8 +294,9 @@ fn a_tag_patches_its_row_without_rescanning_the_library() {
         .down(MENU_PROJECTS)
         .enter()
         .enter() // select the project
-        .down(2) // Add tag
+        .down(3) // → Tags
         .enter()
+        .enter() // → Add a tag (no known tags yet, so it asks for one)
         .line("draft")
         .pause(700)
         // Still a one-project page: project, Back.
@@ -351,7 +352,7 @@ fn a_delete_drops_its_row_without_rescanning_the_library() {
         .down(MENU_PROJECTS)
         .enter()
         .enter() // the newest row: Doomed_Project
-        .down(8) // → Delete folder permanently
+        .down(7) // → Delete folder permanently
         .enter()
         .line("Doomed_Project") // typed confirmation
         .pause(800)
@@ -955,5 +956,241 @@ fn a_search_that_matches_nothing_keeps_the_query() {
     assert!(
         out.contains("Projects — Page 1/1"),
         "the corrected query should have opened the browser:\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The frame, the keys, and one browser (v1.7.0)
+// ---------------------------------------------------------------------------
+
+/// The main menu says what the library looks like, and it costs no scan.
+///
+/// The counts come from each base's own `.fastf-index.json` and are labelled as
+/// such, so opening the menu does not get slower the more it has to say. A base
+/// that is configured but not mounted is named rather than silently dropped.
+#[test]
+fn the_frame_reports_the_library_from_the_index_without_scanning() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+    sb.plant_project(&sb.base, "2026-02-02_Beta_ID0002", "ID0002");
+    // Build the cache once, up front, the way ordinary use would.
+    sb.ok(&["reindex"]);
+
+    // A base that is configured and then taken away.
+    let gone = sb.tmp.path().join("unplugged");
+    fs::create_dir_all(&gone).unwrap();
+    sb.ok(&["config", "set", "bases", &gone.display().to_string()]);
+    fs::remove_dir_all(&gone).unwrap();
+
+    let trace = sb.tmp.path().join("trace");
+    let (out, code) = launch_traced(&sb, pty::Script::new().esc().build(), &trace);
+
+    assert_eq!(code, 0, "the menu should open and quit:\n{out}");
+    assert!(
+        out.contains("2 projects") && out.contains("(from index)"),
+        "the frame should report the indexed count, and say it is from the index:\n{out}"
+    );
+    assert!(
+        out.contains("highest ID0002"),
+        "the frame should report the highest ID:\n{out}"
+    );
+    assert!(
+        out.contains("(not mounted)"),
+        "a configured base that is gone should be named:\n{out}"
+    );
+
+    let counts = fs::read_to_string(&trace).unwrap_or_default();
+    let scans = counts.lines().filter(|line| *line == "scan_base").count();
+    assert_eq!(
+        scans, 0,
+        "opening the menu must not scan a single base (traced {scans}):\n{counts}"
+    );
+}
+
+/// `/` filters the list, and Enter opens the row that is left.
+#[test]
+fn the_browser_filter_narrows_to_one_row() {
+    let sb = Sandbox::new();
+    sb.ok(&["config", "set", "recent-default-limit", "9"]);
+    plant_dated_project(&sb, "Aardvark", "ID0001", "2026-01-01T00:00:00Z", 64);
+    plant_dated_project(&sb, "Buffalo", "ID0002", "2026-02-02T00:00:00Z", 64);
+    plant_dated_project(&sb, "Capybara", "ID0003", "2026-03-03T00:00:00Z", 64);
+
+    let script = pty::Script::new()
+        .down(MENU_PROJECTS)
+        .enter()
+        .pause(600)
+        .key("/")
+        .key("buff") // lower case: the filter is case-insensitive
+        .pause(600)
+        .enter() // opens the only row left
+        .pause(600)
+        .esc() // action menu → list
+        .pause(400)
+        .esc() // list → main menu
+        .esc()
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "filtering should not end the session:\n{out}");
+    assert!(
+        out.contains("filter: buff"),
+        "the filter line should be drawn under the prompt:\n{out}"
+    );
+    // What the filtered list itself contained: from the last time the filter
+    // line was drawn to the action menu it opened, Buffalo is the only project
+    // on screen.
+    let filtered_at = out.rfind("filter: buff").expect("the filter was drawn");
+    // The *next* action menu after the filter, not the last one in the stream:
+    // the main menu asks the same question, and it is drawn again at the end.
+    let opened = filtered_at
+        + out[filtered_at..]
+            .find("What would you like to do?")
+            .expect("an action menu was opened");
+    let filtered_view = &out[filtered_at..opened];
+    assert!(
+        filtered_view.contains("Buffalo"),
+        "the matching row should stay:\n{filtered_view}"
+    );
+    assert!(
+        !filtered_view.contains("Aardvark") && !filtered_view.contains("Capybara"),
+        "the rows that do not match should be gone:\n{filtered_view}"
+    );
+}
+
+/// PageDown moves the highlight by a viewport rather than a row.
+#[test]
+fn page_keys_move_by_a_viewport() {
+    let sb = Sandbox::new();
+    sb.ok(&["config", "set", "recent-default-limit", "40"]);
+    for n in 1..=40 {
+        plant_dated_project(
+            &sb,
+            &format!("P{n:02}"),
+            &format!("ID{n:04}"),
+            &format!("2026-01-{:02}T00:00:00Z", (n % 28) + 1),
+            32,
+        );
+    }
+
+    let script = pty::Script::new()
+        .down(MENU_PROJECTS)
+        .enter()
+        .pause(700)
+        .page_down()
+        .pause(500)
+        .page_up()
+        .pause(500)
+        .esc()
+        .esc()
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "page keys should not end the session:\n{out}");
+    // A 40-row list cannot fit a 24-row terminal, so the window hint is drawn on
+    // every repaint — which is why counting hints proves nothing. What proves it
+    // is a hint that does *not* start at row 1: only a scroll produces one, and
+    // one arrow key cannot reach it in this script.
+    let starts: Vec<usize> = out
+        .match_indices("(rows ")
+        .filter_map(|(at, marker)| {
+            out[at + marker.len()..]
+                .split('–')
+                .next()?
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })
+        .collect();
+    assert!(
+        !starts.is_empty(),
+        "the viewport hint should be drawn for a list taller than the terminal:\n{out}"
+    );
+    assert!(
+        starts.iter().any(|start| *start > 1),
+        "PageDown should have scrolled the window past the first row \
+         (window starts seen: {starts:?}):\n{out}"
+    );
+}
+
+/// `fastf recent` on a terminal opens the same browser the menu opens, with the
+/// Size column and the same action menu. It used to have a second, size-less
+/// picker of its own.
+#[test]
+fn fastf_recent_opens_the_same_browser() {
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Solo", "ID0001", "2026-01-01T00:00:00Z", 4096);
+
+    let script = pty::Script::new()
+        .pause(700)
+        .enter()
+        .pause(700)
+        .esc()
+        .esc()
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &["recent"],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+
+    assert_eq!(code, 0, "`fastf recent` should exit cleanly:\n{out}");
+    assert!(
+        out.contains("Size") && out.contains("Projects — Page 1/1"),
+        "`fastf recent` should show the guided browser with sizes:\n{out}"
+    );
+    assert!(
+        out.contains("Quit"),
+        "started from a shell, the last row says Quit, not Back to main menu:\n{out}"
+    );
+}
+
+/// Copy path always says what it did. With no clipboard tool on PATH it prints
+/// the path instead — a Copy that silently does nothing is the worst version.
+#[test]
+fn copy_path_falls_back_to_printing_the_path() {
+    let sb = Sandbox::new();
+    let root = plant_dated_project(&sb, "Copied", "ID0001", "2026-01-01T00:00:00Z", 64);
+    // An empty PATH: no wl-copy, no xclip, no pbcopy.
+    let empty = sb.tmp.path().join("empty-path");
+    fs::create_dir_all(&empty).unwrap();
+
+    let script = pty::Script::new()
+        .down(MENU_PROJECTS)
+        .enter()
+        .pause(600)
+        .enter() // open the row
+        .down(1) // → Copy path
+        .enter()
+        .pause(600)
+        .esc()
+        .esc()
+        .esc()
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("PATH", empty.as_path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+
+    assert_eq!(code, 0, "Copy path should not end the session:\n{out}");
+    assert!(
+        out.contains("no clipboard tool found"),
+        "with nothing on PATH it should say so:\n{out}"
+    );
+    assert!(
+        out.contains(&root.display().to_string()),
+        "and print the path it could not copy:\n{out}"
     );
 }

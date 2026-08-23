@@ -87,9 +87,39 @@ Where each press lands:
 Back and Cancel rows stay on the menus that had them: Esc is the shortcut, the
 row is the discoverable path.
 
+### Keys in a project list
+
+| Key | What it does |
+|---|---|
+| ↑ / ↓, `k` / `j`, Tab | move the highlight, wrapping at the ends |
+| PageUp / PageDown | move by a screenful, stopping at the ends |
+| Home / End | first row, last row |
+| `/` | filter: type to narrow the list to rows containing what you type |
+| Enter, Space | open the highlighted row |
+| Esc, `q` | leave (with a filter open, the first Esc clears the filter) |
+
+While a filter is open every printable key is a letter, `q` and `j` included, so
+you can search for anything. The filter matches the whole row — id, template,
+date, base, name, tags — case-insensitively.
+
 Text fields are editable, not just typeable: Left/Right, Home/End, Backspace and
 Delete all work, and a value a prompt rejects stays on the line to be corrected
 rather than being cleared for you to type again.
+
+### The main-menu frame
+
+Under the banner, the guided menu shows what your library looks like: each
+configured base and whether it is there, how many projects are indexed, the
+highest ID, the newest project, and the last few things you did this session.
+
+The counts come from each base's `.fastf-index.json` and nothing else — no
+directory is scanned to draw it, so the menu does not get slower as the library
+grows. That is also why the numbers are labelled `from index`: they are as fresh
+as the last time a list was drawn. `fastf reindex` refreshes them.
+
+Turn it off with `fastf config set show-frame false`, or under Settings →
+Workflow prompts. It is a separate setting from `show-banner`: the banner is
+decoration, the frame is information.
 
 ### Nothing you answered is lost
 
@@ -128,8 +158,12 @@ It now controls both the guided TUI's Projects page size and the default
 fastf config set recent-default-limit 20
 ```
 
+`fastf recent` and `fastf search` open this same browser on a terminal — the
+same rows, the same Size column, the same action menu — differing only in that
+their last row says Quit rather than Back to main menu.
+
 ```bash
-fastf recent                         # interactive picker (default on a terminal)
+fastf recent                         # the guided browser (default on a terminal)
 fastf recent --plain                 # plain list, script friendly
 fastf recent --limit 50
 fastf recent --template rust-project
@@ -140,7 +174,13 @@ fastf open ID0047                    # reveal in the system file manager
 fastf open my-crate                  # substring match on project name
 ```
 
-The picker shows inline tags. Selecting a project opens an action menu: open folder, show metadata, add or remove tags, journal notes, move to another base, rename, unregister, or delete. Piping the output engages the plain list automatically:
+Rows show inline tags. Selecting a project opens an action menu, most-used first: open folder, copy path, show metadata, Tags, Journal, move to another base, rename, unregister, delete.
+
+**Copy path** puts the project's folder on the clipboard, using whichever of `wl-copy`, `xclip`, `xsel`, `clip`, or `pbcopy` is installed, and says which one it used. Where there is no clipboard tool — a headless session, a plain SSH login — it prints the path on its own line instead, so a terminal selection still works. It always says what it did.
+
+**Tags** adds a tag by picking one the library already uses (or typing a new one), removes tags by ticking them in a list rather than retyping them exactly, and re-derives the template's automatic tags from the project's current variables.
+
+Piping the output engages the plain list automatically:
 
 ```bash
 fastf recent | grep music-video

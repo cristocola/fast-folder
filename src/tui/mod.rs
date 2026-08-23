@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod browser;
+pub mod frame;
 pub mod menu;
 pub mod pickers;
 pub mod prompt;

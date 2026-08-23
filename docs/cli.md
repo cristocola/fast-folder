@@ -121,6 +121,17 @@ Turn it off with `fastf config set show-frame false`, or under Settings →
 Workflow prompts. It is a separate setting from `show-banner`: the banner is
 decoration, the frame is information.
 
+### Everything the command line can do
+
+The menu reaches the whole tool now. Register asks whether you are registering
+one folder or every unregistered folder in a base, shows the same preview
+`--recursive --dry-run` prints before it writes anything, and asks whether the
+projects should keep the folder's own date or take today's. Generating a template
+from a folder asks whether to bundle binary and large files. Settings gains a
+**Maintenance** submenu — Reindex, Check and recover, Show data locations — which
+run the same commands with the same output, and **Project basics** gains the
+register naming pattern, the last configuration key that was command-line only.
+
 ### Nothing you answered is lost
 
 A value is checked at the prompt that asked for it, and questions are asked in

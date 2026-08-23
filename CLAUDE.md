@@ -824,6 +824,19 @@ as), `default_value` keeps `dialoguer::Input::default`'s `prompt [default]:`
 contract where an empty answer means the default. Converting a `default` site to
 an `initial` one changes what typing `0` into a field showing `20` produces.
 
+**The guided menu reaches the whole tool, and it does so by calling the CLI's
+own functions.** Maintenance runs `cli::reindex::run`, `cli::reconcile::run` and
+`cli::paths_cmd::run`; bulk register runs `register::run_recursive` twice, once
+with `dry_run: true` for the preview and once to commit. Reusing the function
+rather than re-rendering its output is what stops the two surfaces drifting.
+
+**The template builder's new mode ends in the same review menu edit mode uses.**
+It used to end at `Save template? [Y/n]`, so noticing a wrong folder name on the
+summary meant answering no and repeating six steps. `is_edit` now decides only
+the heading and whether an existing file needs an overwrite confirmation.
+Sections return `Result<bool>` (see the Phase 7 note): `false` is a cancel and
+leaves the scratch `Template` untouched, which is what makes Esc safe there.
+
 **The main-menu frame reads caches and probes, and scans nothing.**
 `tui::frame` builds its counts from `library::index_summary`, which reads
 `.fastf-index.json` with no staleness check and no directory walk. A summary

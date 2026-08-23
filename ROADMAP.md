@@ -245,6 +245,13 @@ release is about it: one way out of every prompt, typed input that survives a
 validation failure, a browser that stops rescanning the library, and parity with
 what the command line can already do.
 
+- [x] Phase 11: parity with the command line, and a builder that lets you change
+  your mind — the menu can bulk-register a base after showing the same preview
+  `--recursive --dry-run` prints, choose a created date, bundle assets when
+  generating a template from a folder, reindex, run recovery, show data
+  locations, and set the register naming pattern. The template builder's new
+  mode ends in the review menu instead of a bare Save prompt; folders and files
+  get per-item Add / Edit / Remove; a file can be declared empty.
 - [x] Phase 10: the main-menu frame, a better action menu, more keys, one
   browser — the menu shows each base and whether it is there, indexed counts,
   the highest ID and this session's last few actions, all from the caches and a

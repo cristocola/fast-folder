@@ -68,92 +68,14 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
 
         println!("\n{}", "Step 6/6  Review".bold());
         print_template_summary(&tmpl);
-    } else {
-        // ── Edit template: pick-a-section menu first ───────────────────────────
-        // Show the section menu immediately — no forced linear pass.
-        // Labels rebuild on every iteration so they reflect current state.
-        loop {
-            let meta_label = format!(
-                "Metadata          {} · {} · {}",
-                tmpl.name, tmpl.slug, tmpl.naming_pattern
-            );
-            let id_label = format!(
-                "ID config          {}{}",
-                tmpl.id.prefix,
-                "0".repeat(tmpl.id.digits)
-            );
-            let var_label = if tmpl.variables.is_empty() {
-                "Variables          (none)".to_string()
-            } else {
-                let names: Vec<&str> = tmpl.variables.iter().map(|v| v.slug.as_str()).collect();
-                format!(
-                    "Variables          {}  ({})",
-                    tmpl.variables.len(),
-                    names.join(", ")
-                )
-            };
-            let folder_count = flatten_tree(&tmpl.structure, "").len();
-            let struct_label = if tmpl.structure.is_empty() {
-                "Folder structure   (none)".to_string()
-            } else {
-                format!(
-                    "Folder structure   {} folder{}",
-                    folder_count,
-                    if folder_count == 1 { "" } else { "s" }
-                )
-            };
-            let files_label = if tmpl.files.is_empty() {
-                "Files              (none)".to_string()
-            } else {
-                let names: Vec<&str> = tmpl.files.iter().map(|f| f.path.as_str()).collect();
-                format!(
-                    "Files              {}  ({})",
-                    tmpl.files.len(),
-                    names.join(", ")
-                )
-            };
+    }
 
-            let items: Vec<String> = vec![
-                meta_label,
-                id_label,
-                var_label,
-                struct_label,
-                files_label,
-                "Save".to_string(),
-                "Discard changes".to_string(),
-            ];
-
-            // Esc at the section menu is Discard changes: this menu's parent is
-            // the Templates menu it was opened from.
-            let Some(choice) = prompt::select("What would you like to edit?", &items, 0)? else {
-                println!("Discarded.");
-                return Ok(());
-            };
-
-            let section = match choice {
-                0 => edit_metadata(&mut tmpl)?,
-                1 => edit_id(&mut tmpl)?,
-                2 => edit_variables(&mut tmpl, false)?,
-                3 => edit_structure(&mut tmpl, true)?,
-                4 => edit_files(&mut tmpl, true)?,
-                5 => {
-                    if let Err(e) = tmpl.validate() {
-                        eprintln!("\n{} {}\n", "Cannot save:".red().bold(), e);
-                        continue;
-                    }
-                    break;
-                }
-                _ => {
-                    println!("Discarded.");
-                    return Ok(());
-                }
-            };
-            // A cancelled section returns here with the template untouched.
-            if section {
-                println!();
-                print_template_summary(&tmpl);
-            }
-        }
+    // Both modes end in the same review menu. New mode used to end at a bare
+    // "Save template? [Y/n]", so noticing a wrong folder name on the summary
+    // meant answering no and starting the six steps again.
+    if !review_loop(&mut tmpl)? {
+        println!("Discarded.");
+        return Ok(());
     }
 
     // Save flow.
@@ -170,27 +92,98 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
         }
     }
 
-    // Edit mode already confirmed via the review menu's Save choice;
-    // only new-template mode shows a final Save? Y/N.
-    let save = if is_edit {
-        true
-    } else {
-        prompt::confirm("Save template?", true)?.unwrap_or(false)
-    };
-
-    if save {
-        tmpl.save_to_file(&dest)?;
-        println!(
-            "\n{} template '{}' saved to {}",
-            "✓".green().bold(),
-            tmpl.slug.green(),
-            dest.display()
-        );
-    } else {
-        println!("Discarded.");
-    }
+    tmpl.save_to_file(&dest)?;
+    println!(
+        "\n{} template '{}' saved to {}",
+        "✓".green().bold(),
+        tmpl.slug.green(),
+        dest.display()
+    );
 
     Ok(())
+}
+
+/// The section menu both modes end in. `true` means Save.
+///
+/// Labels rebuild on every iteration so they reflect current state, and Esc is
+/// Discard changes: this menu's parent is the Templates menu it came from.
+fn review_loop(tmpl: &mut Template) -> Result<bool> {
+    loop {
+        let meta_label = format!(
+            "Metadata          {} · {} · {}",
+            tmpl.name, tmpl.slug, tmpl.naming_pattern
+        );
+        let id_label = format!(
+            "ID config          {}{}",
+            tmpl.id.prefix,
+            "0".repeat(tmpl.id.digits)
+        );
+        let var_label = if tmpl.variables.is_empty() {
+            "Variables          (none)".to_string()
+        } else {
+            let names: Vec<&str> = tmpl.variables.iter().map(|v| v.slug.as_str()).collect();
+            format!(
+                "Variables          {}  ({})",
+                tmpl.variables.len(),
+                names.join(", ")
+            )
+        };
+        let folder_count = flatten_tree(&tmpl.structure, "").len();
+        let struct_label = if tmpl.structure.is_empty() {
+            "Folder structure   (none)".to_string()
+        } else {
+            format!(
+                "Folder structure   {} folder{}",
+                folder_count,
+                if folder_count == 1 { "" } else { "s" }
+            )
+        };
+        let files_label = if tmpl.files.is_empty() {
+            "Files              (none)".to_string()
+        } else {
+            let names: Vec<&str> = tmpl.files.iter().map(|f| f.path.as_str()).collect();
+            format!(
+                "Files              {}  ({})",
+                tmpl.files.len(),
+                names.join(", ")
+            )
+        };
+
+        let items: Vec<String> = vec![
+            meta_label,
+            id_label,
+            var_label,
+            struct_label,
+            files_label,
+            "Save".to_string(),
+            "Discard changes".to_string(),
+        ];
+
+        let Some(choice) = prompt::select("What would you like to edit?", &items, 0)? else {
+            return Ok(false);
+        };
+
+        let section = match choice {
+            0 => edit_metadata(tmpl)?,
+            1 => edit_id(tmpl)?,
+            2 => edit_variables(tmpl, false)?,
+            3 => edit_structure(tmpl, true)?,
+            4 => edit_files(tmpl, true)?,
+            5 => {
+                if let Err(e) = tmpl.validate() {
+                    eprintln!("\n{} {}\n", "Cannot save:".red().bold(), e);
+                    continue;
+                }
+                return Ok(true);
+            }
+            _ => return Ok(false),
+        };
+        // A cancelled section returns here with the template untouched.
+        if section {
+            println!();
+            print_template_summary(tmpl);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -310,53 +303,107 @@ fn edit_structure(tmpl: &mut Template, is_edit_pass: bool) -> Result<bool> {
         "Hint:".yellow()
     );
 
-    let mut collect_fresh = true;
+    // Re-entry with folders already declared gets the same Add / Edit / Remove
+    // treatment variables have had since v1.0. It used to be all-or-nothing:
+    // "Replace folder structure?" meant retyping every path to fix one typo.
     if is_edit_pass && !tmpl.structure.is_empty() {
-        let flat = flatten_tree(&tmpl.structure, "");
-        println!("  Current structure:");
-        for p in &flat {
-            println!("    {}", p.dimmed());
-        }
-        let replace = answered!(prompt::confirm(
-            "Replace folder structure? (No = keep existing)",
-            false
-        ));
-        if !replace {
-            collect_fresh = false;
-        }
+        return structure_submenu(tmpl);
     }
 
-    if collect_fresh {
-        let mut paths: Vec<String> = vec![];
-        loop {
-            let path = answered!(prompt::text(
-                "Folder path (empty to finish)",
-                TextOpts::new().allow_empty()
-            ));
-            if path.is_empty() {
-                break;
-            }
-            paths.push(path);
+    let mut paths: Vec<String> = vec![];
+    loop {
+        let path = answered!(prompt::text(
+            "Folder path (empty to finish)",
+            TextOpts::new().allow_empty()
+        ));
+        if path.is_empty() {
+            break;
         }
-        tmpl.structure = parse_paths_to_tree(&paths);
+        paths.push(path);
     }
+    tmpl.structure = parse_paths_to_tree(&paths);
 
     Ok(true)
 }
 
+/// Add / Edit / Remove / Replace all, over the flattened folder paths.
+fn structure_submenu(tmpl: &mut Template) -> Result<bool> {
+    loop {
+        let mut paths = flatten_tree(&tmpl.structure, "");
+        println!("  Current structure:");
+        for path in &paths {
+            println!("    {}", path.dimmed());
+        }
+
+        let mut items: Vec<&str> = vec!["Add a folder"];
+        if !paths.is_empty() {
+            items.push("Edit a folder path");
+            items.push("Remove a folder");
+        }
+        items.push("Replace all");
+        items.push("Done");
+
+        let labels: Vec<String> = items.iter().map(|item| (*item).to_string()).collect();
+        let Some(choice) = prompt::select("Folder structure", &labels, 0)? else {
+            return Ok(true);
+        };
+
+        match items[choice] {
+            "Add a folder" => {
+                let path = answered!(prompt::text(
+                    "Folder path (e.g. 01_Assets/01_Audio)",
+                    TextOpts::new().allow_empty()
+                ));
+                if !path.trim().is_empty() {
+                    paths.push(path);
+                }
+            }
+            "Edit a folder path" => {
+                let Some(index) = prompt::select("Which folder?", &paths, 0)? else {
+                    continue;
+                };
+                let edited = answered!(prompt::text(
+                    "Folder path",
+                    TextOpts::new().initial(paths[index].clone()).allow_empty()
+                ));
+                if edited.trim().is_empty() {
+                    paths.remove(index);
+                } else {
+                    paths[index] = edited;
+                }
+            }
+            "Remove a folder" => {
+                let Some(index) = prompt::select("Which folder?", &paths, 0)? else {
+                    continue;
+                };
+                paths.remove(index);
+            }
+            "Replace all" => {
+                paths.clear();
+                loop {
+                    let path = answered!(prompt::text(
+                        "Folder path (empty to finish)",
+                        TextOpts::new().allow_empty()
+                    ));
+                    if path.is_empty() {
+                        break;
+                    }
+                    paths.push(path);
+                }
+            }
+            _ => return Ok(true),
+        }
+
+        // Rebuilt from the flattened list every time, so a nested path added
+        // here merges into the tree the same way the linear pass builds it.
+        tmpl.structure = parse_paths_to_tree(&paths);
+        println!();
+    }
+}
+
 fn edit_files(tmpl: &mut Template, is_edit_pass: bool) -> Result<bool> {
     if is_edit_pass && !tmpl.files.is_empty() {
-        println!("  Current files:");
-        for f in &tmpl.files {
-            println!("    {} {}", "•".cyan(), f.path.green());
-        }
-        let replace = answered!(prompt::confirm(
-            "Replace all files? (No = keep existing)",
-            false
-        ));
-        if replace {
-            tmpl.files.clear();
-        }
+        return files_submenu(tmpl);
     }
 
     loop {
@@ -369,11 +416,61 @@ fn edit_files(tmpl: &mut Template, is_edit_pass: bool) -> Result<bool> {
         }
         match collect_file(&tmpl.variables)? {
             Some(entry) => tmpl.files.push(entry),
-            None => return Ok(false),
+            // Esc abandons the file being written, not the ones already
+            // collected — and not the whole template.
+            None => continue,
         }
     }
 
     Ok(true)
+}
+
+/// Add / Edit / Remove, over the declared placeholder files.
+fn files_submenu(tmpl: &mut Template) -> Result<bool> {
+    loop {
+        println!("  Current files:");
+        for file in &tmpl.files {
+            println!("    {} {}", "•".cyan(), file.path.green());
+        }
+
+        let mut items: Vec<&str> = vec!["Add a file"];
+        if !tmpl.files.is_empty() {
+            items.push("Edit a file");
+            items.push("Remove a file");
+        }
+        items.push("Done");
+
+        let labels: Vec<String> = items.iter().map(|item| (*item).to_string()).collect();
+        let Some(choice) = prompt::select("Files", &labels, 0)? else {
+            return Ok(true);
+        };
+
+        match items[choice] {
+            "Add a file" => {
+                if let Some(entry) = collect_file(&tmpl.variables)? {
+                    tmpl.files.push(entry);
+                }
+            }
+            "Edit a file" => {
+                let paths: Vec<String> = tmpl.files.iter().map(|file| file.path.clone()).collect();
+                let Some(index) = prompt::select("Which file?", &paths, 0)? else {
+                    continue;
+                };
+                if let Some(entry) = collect_file(&tmpl.variables)? {
+                    tmpl.files[index] = entry;
+                }
+            }
+            "Remove a file" => {
+                let paths: Vec<String> = tmpl.files.iter().map(|file| file.path.clone()).collect();
+                let Some(index) = prompt::select("Which file?", &paths, 0)? else {
+                    continue;
+                };
+                tmpl.files.remove(index);
+            }
+            _ => return Ok(true),
+        }
+        println!();
+    }
 }
 
 /// Interactive Add / Edit / Remove / Reorder submenu for variables.
@@ -623,6 +720,22 @@ fn collect_file(vars: &[Variable]) -> Result<Option<FileEntry>> {
     else {
         return Ok(None);
     };
+
+    // An empty file was unreachable: the content loop only ended on an empty
+    // line once at least one line had been typed, so `.gitkeep` and every other
+    // marker file could not be declared at all.
+    let modes = ["Type the file's contents", "Empty file"];
+    let mode_labels: Vec<String> = modes.iter().map(|m| m.to_string()).collect();
+    let Some(mode) = prompt::select("  Contents", &mode_labels, 0)? else {
+        return Ok(None);
+    };
+    if modes[mode] == "Empty file" {
+        return Ok(Some(FileEntry {
+            path,
+            template: String::new(),
+            content: String::new(),
+        }));
+    }
 
     // Show the substitution tokens the user has at their disposal RIGHT BEFORE
     // they type content, so there's no guessing what `{...}` strings work.

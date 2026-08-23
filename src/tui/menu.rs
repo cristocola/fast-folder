@@ -387,6 +387,112 @@ fn menu_apply() -> Result<()> {
 }
 
 fn menu_register() -> Result<()> {
+    let Some(scope) = menu(
+        "Register what?",
+        &["One folder", "Every unregistered folder in a base", "Back"],
+        0,
+    )?
+    else {
+        return Ok(());
+    };
+    match scope.as_str() {
+        "One folder" => menu_register_one(),
+        "Every unregistered folder in a base" => menu_register_recursive(),
+        _ => Ok(()),
+    }
+}
+
+/// Bulk onboarding: preview first, then commit. The preview is the same
+/// renderer `fastf register --recursive --dry-run` uses.
+fn menu_register_recursive() -> Result<()> {
+    let Some(base) = prompt::text(
+        "Base folder whose children to register",
+        TextOpts::new().validate(existing_directory),
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(template_slug) = ask_optional_template()? else {
+        return Ok(());
+    };
+    let Some(use_today) = ask_created_is_today()? else {
+        return Ok(());
+    };
+
+    register::run_recursive(register::RecursiveArgs {
+        base: std::path::PathBuf::from(base.trim()),
+        template_slug: template_slug.clone(),
+        vars: HashMap::new(),
+        use_today,
+        dry_run: true,
+    })?;
+
+    let Some(true) = prompt::confirm("Register these folders now?", false)? else {
+        prompt::report_cancelled("nothing was registered");
+        println!();
+        return Ok(());
+    };
+
+    register::run_recursive(register::RecursiveArgs {
+        base: std::path::PathBuf::from(base.trim()),
+        template_slug,
+        vars: HashMap::new(),
+        use_today,
+        dry_run: false,
+    })?;
+    println!();
+    Ok(())
+}
+
+/// "Attach a template?" then the picker. The outer `Option` is the cancel.
+fn ask_optional_template() -> Result<Option<Option<String>>> {
+    let Some(use_template) = prompt::confirm(
+        "Attach a template (enables tags + variable capture)?",
+        false,
+    )?
+    else {
+        return Ok(None);
+    };
+    if !use_template {
+        return Ok(Some(None));
+    }
+    match core_template::load_all() {
+        Ok(ts) if !ts.is_empty() => Ok(prompt_template_slug("Template to attach")?.map(Some)),
+        Ok(_) => {
+            println!(
+                "  {} no templates available — continuing without one.",
+                "·".dimmed()
+            );
+            Ok(Some(None))
+        }
+        Err(e) => {
+            println!(
+                "  {} could not load templates ({e}) — continuing without one.",
+                "warning:".yellow().bold()
+            );
+            Ok(Some(None))
+        }
+    }
+}
+
+/// Which date a registered project should claim as its creation date.
+///
+/// `register` defaults to the folder's own timestamp, which is almost always
+/// what a folder that predates fastf should keep. The menu could not say
+/// otherwise at all before.
+fn ask_created_is_today() -> Result<Option<bool>> {
+    let Some(choice) = menu(
+        "Created date for these projects",
+        &["The folder's own date", "Today"],
+        0,
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(choice == "Today"))
+}
+
+fn menu_register_one() -> Result<()> {
     // 1. Folder path.
     // Validated here, before the three questions that follow it.
     let Some(path) = prompt::text(
@@ -441,6 +547,10 @@ fn menu_register() -> Result<()> {
         return Ok(());
     };
 
+    let Some(use_today) = ask_created_is_today()? else {
+        return Ok(());
+    };
+
     // 4. Optional --apply (only meaningful with a template).
     let apply_structure = if template_slug.is_some() {
         match prompt::confirm("Fill in missing template folders/files?", false)? {
@@ -457,7 +567,7 @@ fn menu_register() -> Result<()> {
         vars: HashMap::new(),
         apply_structure,
         rename,
-        use_today: false,
+        use_today,
         created_override: None,
         yes: false,
     })?;
@@ -537,11 +647,23 @@ fn template_from_folder_flow() -> Result<()> {
     else {
         return Ok(());
     };
+    // The menu used to hard-code `bundle_assets: false`, so binary files in the
+    // source folder were silently left out of the template and there was no way
+    // to ask for them without dropping to the command line. `run_from_folder`
+    // does its own size confirmation, so answering yes here does not commit to
+    // anything: `yes: false` leaves that second question in place.
+    let Some(bundle_assets) = prompt::confirm(
+        "Bundle binary and large files into the template (copied byte-for-byte)?",
+        false,
+    )?
+    else {
+        return Ok(());
+    };
     template::run_from_folder(template::FromFolderArgs {
         path,
         slug,
         force,
-        bundle_assets: false,
+        bundle_assets,
         yes: false,
         dry_run: false,
     })
@@ -615,6 +737,7 @@ fn menu_settings() -> Result<()> {
                 "Project list (page size)  (TUI page size / CLI recent limit)",
                 "Post-create actions  (git / reveal / editor / path / commands)",
                 "ID counter",
+                "Maintenance  (reindex / check and recover / data locations)",
                 "Back",
             ],
             0,
@@ -636,6 +759,7 @@ fn menu_settings() -> Result<()> {
                 menu_settings_postcreate()
             }
             "ID counter" => menu_id(),
+            "Maintenance  (reindex / check and recover / data locations)" => menu_maintenance(),
             "Back" => break,
             other => anyhow::bail!("unhandled menu item '{other}'"),
         };
@@ -654,6 +778,41 @@ fn set_from_prompt(key: &str, prompt_text: &str, opts: TextOpts<'_>) -> Result<(
     }
 }
 
+/// Reindex, recovery, and where fastf keeps its files — the three commands a TUI
+/// user had to leave the menu for.
+///
+/// Every arm is the CLI command's own function, so the output is the output, not
+/// a second rendering of it that can drift.
+fn menu_maintenance() -> Result<()> {
+    loop {
+        let Some(choice) = menu(
+            "Maintenance",
+            &[
+                "Reindex  (rescan every base)",
+                "Check and recover  (finish or roll back interrupted work)",
+                "Show data locations",
+                "Back",
+            ],
+            0,
+        )?
+        else {
+            break;
+        };
+
+        let outcome = match choice.as_str() {
+            "Reindex  (rescan every base)" => crate::cli::reindex::run(),
+            "Check and recover  (finish or roll back interrupted work)" => {
+                crate::cli::reconcile::run()
+            }
+            "Show data locations" => crate::cli::paths_cmd::run(),
+            _ => break,
+        };
+        contain(outcome)?;
+        println!();
+    }
+    Ok(())
+}
+
 fn menu_settings_basics() -> Result<()> {
     loop {
         let Some(choice) = menu(
@@ -663,6 +822,7 @@ fn menu_settings_basics() -> Result<()> {
                 "Set default template",
                 "Set date format",
                 "Set editor",
+                "Set register naming pattern",
                 "Back",
             ],
             0,
@@ -707,6 +867,29 @@ fn menu_settings_basics() -> Result<()> {
                 "Editor command (e.g. nvim, code, nano)",
                 TextOpts::new().allow_empty(),
             ),
+            "Set register naming pattern" => {
+                println!(
+                    "  {}  used by `register --rename` when no template is attached; must contain {{id}}",
+                    "Hint:".yellow()
+                );
+                let current = Config::load()?.register_naming_pattern.clone();
+                set_from_prompt(
+                    "register-naming-pattern",
+                    "Register naming pattern",
+                    TextOpts::new()
+                        .default_value(current)
+                        // The same rule `config set` enforces: without {id},
+                        // registering two folders with the same {name} renames
+                        // them both to the same target.
+                        .validate(|raw| {
+                            if raw.contains("{id}") {
+                                Ok(())
+                            } else {
+                                Err("the pattern must contain {id}".to_string())
+                            }
+                        }),
+                )
+            }
             "Back" => break,
             other => anyhow::bail!("unhandled menu item '{other}'"),
         };

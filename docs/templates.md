@@ -114,6 +114,20 @@ Two interpolation rules are worth knowing:
 
 Templates always use `/` as the path separator, on every platform. fastf translates to `\` on Windows at runtime. Path escape guards reject empty and dot components, `..`, absolute paths, and drive letters when a template loads, after tokens are interpolated, and again at the write boundary. That means a safe-looking declaration cannot escape through a variable or custom date format that renders as `..`.
 
+## The interactive builder
+
+`fastf template new`, or **Manage templates → Create new template** from the
+guided menu, walks through metadata, ID format, variables, folder structure and
+placeholder files, and then lands in a **review menu**: every section with its
+current contents, plus Save and Discard. Pick any section to go back into it.
+Editing an existing template opens the same menu straight away.
+
+Nothing throws work away. Esc inside a section returns to the review menu with
+that section unchanged, not with the template gone. Variables, folders and files
+each have Add / Edit / Remove, so correcting one typo does not mean retyping the
+rest — and a file can be declared empty, which is what `.gitkeep` and other
+marker files need.
+
 ## Generating a template from a real folder
 
 Point fastf at an existing project and get a ready-to-edit template:
@@ -123,7 +137,7 @@ fastf template from-folder ./my-project my-template
 fastf template from-folder ./delivery-kit client-kit --bundle-assets
 ```
 
-Text files become editable template files. With `--bundle-assets`, binary and large files are copied into the template byte for byte (fastf confirms the total size first). The project's own `PROJECT_INFO.md` is skipped, since fastf owns that file.
+From the guided menu the same flow asks whether to bundle. Text files become editable template files. With `--bundle-assets`, binary and large files are copied into the template byte for byte (fastf confirms the total size first). The project's own `PROJECT_INFO.md` is skipped, since fastf owns that file.
 
 ## Reserved filename
 

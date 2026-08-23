@@ -616,11 +616,35 @@ returned.
 - Tests: `tui_pty.rs` gains builder coverage (create a template through the menu, change a folder after the review, save, load it with `Template::load_from_file`, assert structure and files). This is the first coverage of `template_builder.rs`.
 
 **Steps.**
-- [ ] pty tests first for: bundle prompt; recursive register preview then commit; created-date choice; create preview shown with `confirm_create=false`; Maintenance → Reindex and Check and recover outputs; register naming pattern rejected without `{id}`; builder new-mode review loop; per-item structure edit; empty file.
-- [ ] Implement flows; reuse CLI renderers (`print_apply_plan`, the reconcile report renderer, `paths_cmd`'s printer) rather than duplicating text.
-- [ ] Docs: `docs/cli.md` interactive section (Maintenance submenu, register choices), `docs/templates.md` (builder review menu, per-item editing).
+- [x] pty tests first for: bundle prompt; recursive register preview then commit; created-date choice; create preview shown with `confirm_create=false`; Maintenance → Reindex and Check and recover outputs; register naming pattern rejected without `{id}`; builder new-mode review loop; per-item structure edit; empty file. *(The create-preview item needed no change and no case — see Notes.)*
+- [x] Implement flows; reuse CLI renderers (`print_apply_plan`, the reconcile report renderer, `paths_cmd`'s printer) rather than duplicating text.
+- [x] Docs: `docs/cli.md` interactive section (Maintenance submenu, register choices), `docs/templates.md` (builder review menu, per-item editing).
 
 **Acceptance.** Every CLI capability listed above has a pty test through the menu. `template_builder.rs` is covered by at least three pty cases. No TUI create ever commits without printing the preview.
+
+**Notes.**
+
+(1) **"Create preview shown with `confirm_create=false`" was already true.**
+`cli::new::run` calls `print_dry_run(..., BeforeCommit)` unconditionally and only
+the *question* is behind `confirm_create`; the config key that suppresses the
+preview is `preview_lines`, which the menu never sets. There was nothing to fix
+and therefore no case that could have failed first.
+
+(2) **`bundle_assets` from the menu still leaves the size confirmation in
+place.** The flow passes `yes: false`, so answering yes here opts into bundling
+and `run_from_folder` still asks about the total size — two different questions,
+and the second one is the one that protects against a 2 GB template.
+
+(3) **Bulk register had to be tested inside the configured base.** Registration
+refuses a folder that is not a direct child of a configured base, which is what
+keeps a registered project discoverable; the first version of the test planted
+its folders in a sibling directory and registered zero of them, loudly.
+
+(4) **The builder's new mode now ends in the same review menu edit mode uses**,
+which made `is_edit` shrink to two uses: the heading, and whether an existing
+file needs an overwrite confirmation. The old "Save template? [Y/n]" is gone —
+Save is a row on the review menu, which is where somebody who has just read the
+summary is looking.
 
 ## Release checkpoint: v1.7.0
 

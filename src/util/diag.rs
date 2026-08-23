@@ -9,7 +9,7 @@
 //!
 //! Routing them all through here means there is exactly one sink to change when
 //! a surface needs something other than stderr, and one thing for
-//! `tests/layering.rs` to allow. `fastf ui` renders warnings its own way from
+//! `tests/layering.rs` to allow. A non-terminal surface renders warnings from
 //! returned values; what reaches this function is what nothing above could have
 //! reported.
 

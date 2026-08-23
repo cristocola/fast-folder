@@ -12,8 +12,8 @@ env:
 jobs:
   # Clippy runs on both platforms because `#[cfg(windows)]` code is invisible to
   # a Linux-only lint job, and `--all-targets` on Windows also covers the
-  # Windows-only test cases in `windows_semantics.rs`. Formatting and the
-  # frontend syntax check are platform-independent, so they run once.
+  # Windows-only test cases in `windows_semantics.rs`. Formatting is
+  # platform-independent, so it runs once.
   lint:
     name: fmt + clippy (${{ matrix.os }})
     strategy:
@@ -30,11 +30,6 @@ jobs:
       - run: cargo fmt --all -- --check
         if: runner.os == 'Linux'
       - run: cargo clippy --all-targets -- -D warnings
-      # Mandated by README.md, CLAUDE.md and src/ui/CLAUDE.md, and run by no job
-      # until now. The frontend is vanilla JS with no build step, so this is the
-      # only thing standing between a typo and a blank page.
-      - run: node --check src/ui/web/app.js
-        if: runner.os == 'Linux'
 
   test:
     name: test (${{ matrix.os }})

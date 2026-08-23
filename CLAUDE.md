@@ -7,9 +7,8 @@ folders from **folder templates** — code, research, finance, music video,
 photography, film. Config, templates and the counter live together in one data
 dir; projects live in one or more *bases*.
 
-Three surfaces sit on one core: the guided terminal menu (`fastf`, the daily
-one), the command line (`fastf new`, …), and a local browser UI (`fastf ui`).
-`core` and `util` know about none of them.
+Two surfaces sit on one core: the guided terminal menu (`fastf`, the daily one)
+and the command line (`fastf new`, …). `core` and `util` know about neither.
 
 ## Build commands
 
@@ -29,10 +28,6 @@ FASTF_FAULT=move:before-commit-rename:abort ...   # kills the process there
 
 # Work counting — how many times an expensive thing happened:
 FASTF_TRACE_FILE=/tmp/counts cargo test           # one line per traced operation
-
-# Browser UI — same `cargo build` (server + embedded frontend live in the lib)
-FASTF_UI_DIR=src/ui/web cargo run -- ui   # frontend live-reload (assets from disk)
-node --check src/ui/web/app.js            # run after every frontend edit
 ```
 
 Both `FASTF_FAULT` and `FASTF_TRACE_FILE` are compiled out of release builds, so
@@ -45,12 +40,8 @@ Do not hard-code a total here; run the gates in [`ROADMAP.md`](ROADMAP.md).
 `ls` and the module names cover the shape. This is only what a filename does not
 tell you.
 
-- `src/lib.rs` exposes `core/ cli/ tui/ ui/ util/ bootstrap/` so integration
+- `src/lib.rs` exposes `core/ cli/ tui/ util/ bootstrap/` so integration
   tests can `use fastf::…`. `src/main.rs` is the clap binary.
-- `src/bin/fastf-ui.rs` — second `[[bin]]`, a windowless Windows launcher shim
-  over `cli::ui::run(app: true)`. **Not a second server**; the server lives only
-  in `src/ui/`. Errors surface through a raw `MessageBoxW` extern, because std
-  discards `println!` with no console attached. Only Windows artifacts ship it.
 - `src/bootstrap.rs` — first-run setup. Ships two deliberately universal
   templates (`general`, `client-project`); the domain templates in
   `examples/templates/` are a gallery to copy from, not bundled.
@@ -81,8 +72,6 @@ tell you.
   project-row builder), `pickers.rs` (one template picker, one base picker),
   `prompt.rs` (**the only module that may name a dialoguer prompt**), `vars.rs`,
   `template_builder.rs`.
-- `src/ui/` — the browser UI. Has its own CLAUDE.md; `docs/UI.md` is the
-  route-by-route reference. Do not re-list endpoints here.
 - `docs/` — the user-facing reference. **When behaviour changes, update the
   matching `docs/` file, not the README.**
 - `packaging/` + `.github/workflows/` — release machinery; see the `release`
@@ -90,22 +79,21 @@ tell you.
 - `tests/` — see `tests/CLAUDE.md` for the harness rules and what each suite
   guards.
 
-**Four CLAUDE.md files, each next to what it governs and each loading when you
+**Three CLAUDE.md files, each next to what it governs and each loading when you
 touch that directory.** This one is orientation, layering, the data-dir and
 counter models, the argument layer, and the traps that belong to no single
 module. `src/core/CLAUDE.md` is the engine — templates, interpolation, path
 safety, `PROJECT_INFO.md`, create/apply/register, moving, recovery, locking,
-search, output. `src/tui/CLAUDE.md` is the guided menu. `src/ui/CLAUDE.md` is the
-browser UI (`docs/UI.md` is its route-by-route reference). `tests/CLAUDE.md` is
-the suites. Put a decision beside the code it constrains, not here.
+search, output. `src/tui/CLAUDE.md` is the guided menu. `tests/CLAUDE.md` is the
+suites. Put a decision beside the code it constrains, not here.
 
 ### The layering rule
 
-**`core` and `util` import nothing from `cli`, `tui` or `ui`, never prompt, and
-never print.** Three surfaces run the same functions: a `println!` in `core` is
-output the browser cannot suppress, and `colored` in `core` is ANSI in a JSON
-response. `cli` may call `tui` helpers; new shared interactive code goes in
-`src/tui/`, not `cli/`.
+**`core` and `util` import nothing from `cli` or `tui`, never prompt, and never
+print.** Both surfaces run the same functions, and a scripted `fastf new` has
+nobody to answer a prompt: a `println!` in `core` is output no caller can
+suppress, and `colored` in `core` is ANSI in a piped stdout. `cli` may call `tui`
+helpers; new shared interactive code goes in `src/tui/`, not `cli/`.
 
 `tests/layering.rs` enforces all of it by reading the source — an import is not
 something a runtime test can see. Three exceptions, named there and nowhere
@@ -162,10 +150,8 @@ why every test harness must redirect `HOME` (`tests/common/env`).
 `Ok(default)` when the file is *absent*, so a fallback can only mask a parse or
 I/O error — and the config decides which directories are the library, so
 defaulting answers a different question with a success. Every surface propagates
-it: the CLI exits 1 (`main.rs` adds a `hint:` line naming the file), the TUI
-refuses to open a menu, the browser's `ui::load_config` tags it with
-`SERVER_ERROR_PREFIX` so `status_for` answers 500 rather than blaming the
-request.
+it: the CLI exits 1 (`main.rs` adds a `hint:` line naming the file) and the TUI
+refuses to open a menu.
 
 **`config::expand_base_path` / `resolve_base_dir_input` are the only way in for a
 base path.** The first expands `~` and requires absolute; the second adds
@@ -296,8 +282,8 @@ documented `$EDITOR` fallback never ran.
   module looks right and silently races.
 - Concurrency tests must spawn **processes**, not threads: a thread test passes
   against an in-process `Mutex` while production stays broken.
-- **A Windows thread's stack is 1 MiB, not the main thread's 8.** The browser's
-  size scan runs on worker threads, so any recursion bound must hold there —
+- **A Windows thread's stack is 1 MiB, not the main thread's 8.** The TUI
+  browser's size scan runs on worker threads, so any recursion bound must hold there —
   `paths::MAX_WALK_DEPTH` is 64 for that reason, not 256.
 - **Never match a source path with a `/` suffix.** `Path::display()` uses the
   platform separator, so `shown.ends_with("util/diag.rs")` silently matches
@@ -307,9 +293,6 @@ documented `$EDITOR` fallback never ran.
   reads as the ANSI codepage and writes UTF-8, double-encoding every non-ASCII
   character; this repo is full of `—`, `→`, `…`, `✓`. It silently corrupted nine
   files and broke a `char` literal.
-- Never put a backtick inside a JS template literal in `app.js`, including inside
-  an HTML comment — it terminates the string and the error points at the
-  following identifier. `node --check src/ui/web/app.js` catches it.
 - `util::yaml` is the only module that names the YAML crate, and
   `the_emitted_bytes_are_the_ones_we_have_always_emitted` pins its output. These
   files are diffed, committed and hand-edited by users, so the bytes may not move.

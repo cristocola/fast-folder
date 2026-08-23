@@ -1,6 +1,6 @@
 # Template authoring guide
 
-A template is a folder inside your templates directory. It holds a metadata manifest and a file tree that gets reproduced into every project built from it. You can author templates three ways: step by step in the TUI (`fastf template new`), visually in the browser UI (`fastf ui`), or by editing the files directly. All three produce the same on-disk format.
+A template is a folder inside your templates directory. It holds a metadata manifest and a file tree that gets reproduced into every project built from it. You can author templates two ways: step by step in the TUI (`fastf template new`), or by editing the files directly. Both produce the same on-disk format.
 
 ## Anatomy of a template
 

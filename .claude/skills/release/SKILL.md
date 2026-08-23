@@ -54,13 +54,13 @@ uses, so treat them as the source unless the maintainer supplies a new original.
 ## Windows MSI (WiX)
 
 `packaging/wix/main.wxs` is WiX v5 authoring, built in release.yml's windows leg
-via `dotnet tool install --global wix` + `wix build`. It installs fastf.exe +
-fastf-ui.exe to Program Files, appends INSTALLFOLDER to the system PATH (removed
+via `dotnet tool install --global wix` + `wix build`. It installs fastf.exe to
+Program Files, appends INSTALLFOLDER to the system PATH (removed
 on uninstall), includes LICENSE, and authors a full `WixUI_InstallDir` wizard
 (welcome → license → install-dir → finish; the license page reads
 `packaging/wix/LICENSE.rtf`, hand-written ASCII RTF), `<Icon>`/ARPPRODUCTICON
 from `packaging/icons/fastf.ico`, and a ProgramMenuFolder "Fast Folder" shortcut
-targeting fastf-ui.exe.
+targeting fastf.exe.
 
 - The `UpgradeCode` GUID is **permanent** — never regenerate it.
 - MSI version must be numeric (the tag with `v` stripped). Dev dispatch runs use
@@ -76,7 +76,7 @@ targeting fastf-ui.exe.
   + `-ext`). The extension's major must match the wix tool's major (5.x); if a
   patch version is missing on NuGet, fall back to 5.0.1/5.0.0. WiX v6+ demands a
   paid OSMF EULA in CI — stay pinned.
-- The Windows zip ships `fastf-ui.exe` + `docs/` alongside the binary.
+- The Windows zip ships `docs/` alongside the binary.
 
 ## Packaging-sensitive code
 
@@ -91,6 +91,6 @@ subcommand in that guard.**
 README is compact (~150 lines: hero + quick start + features + install + docs
 links); the deep material lives in `docs/` — `cli.md` (command reference +
 recipes), `templates.md` (authoring), `projects.md`
-(PROJECT_INFO.md/discovery/moves/reconcile), `windows.md` (MSI + PATH), `UI.md`
-(dev/API). **When features change, update the matching `docs/` file, not the
+(PROJECT_INFO.md/discovery/moves/reconcile) and `windows.md` (MSI + PATH).
+**When features change, update the matching `docs/` file, not the
 README.** House style: minimal em dashes and comma chains in user-facing docs.

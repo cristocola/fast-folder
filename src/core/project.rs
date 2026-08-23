@@ -58,7 +58,7 @@ pub struct FilePreview {
 ///
 /// This is the data 255 lines of `println!` used to compute inline, which meant
 /// the only way to test any of it was to read terminal output — so none of it
-/// was tested. `cli::render` turns this into text; `fastf ui` could turn it into
+/// was tested. `cli::render` turns this into text; another surface could turn it into
 /// JSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DryRunReport {
@@ -292,23 +292,7 @@ pub fn create(
     config: &Config,
     run_post: bool,
 ) -> Result<ProjectPlan> {
-    let (realized, _) = create_inner(plan, template, counters, config, run_post, None)?;
-    Ok(realized)
-}
-
-/// Like [`create`], but files larger than `defer_over` bytes are **not** copied
-/// inline — they're returned as [`assets::CopyJob`]s for the caller to run in
-/// the background (the UI's job model). Everything else (structure, small/text
-/// files, counter, PROJECT_INFO.md, cache) is done synchronously so the project
-/// is immediately usable. Post-create is skipped (the caller owns it).
-pub fn create_deferred(
-    plan: &ProjectPlan,
-    template: &Template,
-    counters: &mut Counters,
-    config: &Config,
-    defer_over: u64,
-) -> Result<(ProjectPlan, Vec<assets::CopyJob>)> {
-    create_inner(plan, template, counters, config, false, Some(defer_over))
+    create_inner(plan, template, counters, config, run_post)
 }
 
 fn create_inner(
@@ -317,8 +301,7 @@ fn create_inner(
     counters: &mut Counters,
     config: &Config,
     run_post: bool,
-    defer_over: Option<u64>,
-) -> Result<(ProjectPlan, Vec<assets::CopyJob>)> {
+) -> Result<ProjectPlan> {
     //
     // This used to be `exists()` followed by `create_dir_all()`. Because
     // `create_dir_all` succeeds on a directory that is already there, two
@@ -401,8 +384,8 @@ fn create_inner(
     // ordinary error from the copy loop), a full disk, and a template file
     // vanishing mid-copy. The counter is only saved on the success path, so a
     // rolled-back create does not burn an ID either.
-    match provision_project(&realized, template, counters, config, run_post, defer_over) {
-        Ok(deferred) => Ok((realized, deferred)),
+    match provision_project(&realized, template, counters, config, run_post) {
+        Ok(()) => Ok(realized),
         Err(err) => {
             match crate::util::fs_retry::remove_dir_all(&realized.root_path) {
                 // Say it *here* — this is the only code that knows a folder was
@@ -439,8 +422,7 @@ fn provision_project(
     counters: &mut Counters,
     config: &Config,
     run_post: bool,
-    defer_over: Option<u64>,
-) -> Result<Vec<assets::CopyJob>> {
+) -> Result<()> {
     crate::util::faults::check("create:after-root-dir")?;
 
     // Compute tags: literal template tags + auto-derived tags from tag_from.
@@ -474,9 +456,9 @@ fn provision_project(
 
     crate::util::faults::check("create:after-pinfo")?;
 
-    // Scoped v2 journal alongside the metadata. The initial empty journal makes
-    // an interrupted inline create visible without storing arbitrary absolute
-    // paths; deferred jobs replace it with validated relative copies below.
+    // Scoped v2 journal alongside the metadata. It makes an interrupted create
+    // visible without storing arbitrary absolute paths, and is cleared below
+    // once every file has landed.
     crate::core::provisioning::write_create_journal(
         &plan.root_path,
         &template.slug,
@@ -488,16 +470,8 @@ fn provision_project(
     // Create subfolder structure
     create_structure(&template.structure, &plan.root_path, &plan.vars, &plan.ctx)?;
 
-    // Reproduce the template's files/ subtree into the new project. Large files
-    // may be deferred (returned as jobs) when a threshold is given.
-    let deferred = copy_template_files(
-        template,
-        &plan.root_path,
-        &plan.vars,
-        &plan.ctx,
-        false,
-        defer_over,
-    )?;
+    // Reproduce the template's files/ subtree into the new project.
+    copy_template_files(template, &plan.root_path, &plan.vars, &plan.ctx, false)?;
 
     crate::util::faults::check("create:before-counter-save")?;
 
@@ -514,24 +488,10 @@ fn provision_project(
         Counters::record(config, base, plan.counter_value);
     }
 
-    // Everything that runs inline has landed. If files were deferred to a
-    // background job, the project stays flagged and the marker now lists those
-    // copies — the job clears both when the last one lands (see
-    // `ui::spawn_copy_job`). Otherwise the project is complete right here.
-    if deferred.is_empty() {
-        crate::core::project_info::clear_provisioning(&plan.root_path)
-            .context("clearing the in-progress flag")?;
-        crate::core::provisioning::clear_create(&plan.root_path)
-            .context("clearing create journal")?;
-    } else {
-        crate::core::provisioning::write_create_journal(
-            &plan.root_path,
-            &template.slug,
-            &template.files_dir(),
-            &deferred,
-        )
-        .context("updating create journal")?;
-    }
+    // Every file has landed, so the project is complete right here.
+    crate::core::project_info::clear_provisioning(&plan.root_path)
+        .context("clearing the in-progress flag")?;
+    crate::core::provisioning::clear_create(&plan.root_path).context("clearing create journal")?;
 
     // Update the base's disposable cache so `recent`/`search` reflect the new
     // project without a rescan. Best-effort — the folder's PROJECT_INFO.md is
@@ -555,12 +515,12 @@ fn provision_project(
     // Post-create actions (opt-in). Template override > config default.
     if run_post {
         // Deliberately dropped: this path is `create` without a surface — the
-        // browser server and the CLI both call `run_post_create` themselves,
-        // after the lock, and render what it returns.
+        // CLI calls `run_post_create` itself, after the lock, and renders what
+        // it returns.
         let _ = run_post_create(&abs_path, template, config);
     }
 
-    Ok(deferred)
+    Ok(())
 }
 
 /// Run the resolved post-create actions for a finished project.
@@ -707,7 +667,7 @@ pub fn apply(
     }
 
     // Files from the files/ subtree — never overwrite.
-    copy_template_files(template, target, &vars, &ctx, true, None)?;
+    copy_template_files(template, target, &vars, &ctx, true)?;
 
     Ok(())
 }
@@ -772,18 +732,13 @@ fn validate_rendered_template_paths(
 /// skipped. When `skip_existing` is set (apply semantics) existing files are
 /// left untouched.
 ///
-/// When `defer_over` is `Some(limit)`, files larger than `limit` are **not**
-/// copied here — they're returned as [`assets::CopyJob`]s for a background
-/// copier. (`None` copies everything inline; the returned vec is empty.)
 fn copy_template_files(
     template: &Template,
     dest_root: &Path,
     vars: &HashMap<String, String>,
     ctx: &RenderContext,
     skip_existing: bool,
-    defer_over: Option<u64>,
-) -> Result<Vec<assets::CopyJob>> {
-    let mut deferred = Vec::new();
+) -> Result<()> {
     let files_dir = template.files_dir();
     for entry in assets::walk(&files_dir)? {
         // Between files is the safe place to notice Ctrl-C: nothing is
@@ -837,19 +792,6 @@ fn copy_template_files(
             continue;
         }
 
-        // Defer large files to a background job (always verbatim — the threshold
-        // is ≥ the text-interpolation cap).
-        if let Some(limit) = defer_over
-            && entry.size > limit
-        {
-            deferred.push(assets::CopyJob {
-                src: files_dir.join(&entry.os_rel),
-                dest,
-                bytes: entry.size,
-            });
-            continue;
-        }
-
         let force_verbatim = assets::is_verbatim(&entry.rel, &template.verbatim)
             || entry.size > assets::TEXT_MAX_BYTES;
         assets::copy_file(
@@ -860,7 +802,7 @@ fn copy_template_files(
             ctx,
         )?;
     }
-    Ok(deferred)
+    Ok(())
 }
 
 #[cfg(test)]

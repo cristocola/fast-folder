@@ -1,9 +1,9 @@
 # CLAUDE.md — `src/tui/`
 
-Every interactive terminal surface. The guided menu is the daily one, so its
-polish matters more than the browser UI's: cancel is always possible, typed input
-is never thrown away by a later validation failure, and a network-share stall is
-never a frozen screen.
+Every interactive terminal surface. The guided menu is how the tool is used day
+to day, so its polish is the product's polish: cancel is always possible, typed
+input is never thrown away by a later validation failure, and a network-share
+stall is never a frozen screen.
 
 The root `CLAUDE.md` has the layering rule and the module list; `src/core/CLAUDE.md`
 has the engine underneath.
@@ -138,7 +138,7 @@ checked addition, and returns `None` on **any** read failure rather than a parti
 number. `directory_size_until` adds a cancel token checked once per entry, so
 teardown is bounded on a share — and **a cancelled walk also returns `None`**, so
 a caller that cancels must discard the result rather than record it as
-`unavailable`. Sizes never enter `Project`, the cache, metadata or `/api/state`.
+`unavailable`. Sizes never enter `Project`, the cache or metadata.
 
 **Base lists are probed, never `is_dir`-ed.** `paths::probe_dirs` /
 `mounted_bases` run the `metadata` call on a helper thread and `recv_timeout` it,

@@ -97,7 +97,6 @@ pub fn run(args: NewArgs) -> Result<()> {
         template_slug: tmpl.slug.clone(),
         variables: raw_vars,
         base_dir_override: args.base_dir_override.clone(),
-        defer_over: None,
     })?;
     drop(created.take_mutation_lock());
     let plan = created.plan;
@@ -209,8 +208,8 @@ pub fn apply_extra(args: &mut NewArgs, recognized: Vec<Recognized>) -> Result<()
 /// fire (`--yes`, `--no-post`, `prompt_open_after_create=false`, a resolved
 /// `post_create` that already reveals, no terminal). This owns the prompt and
 /// the reveal call, and it lives here rather than in `core::post_create`
-/// because `core` may not prompt: the same module runs for `fastf ui`, where
-/// there is nobody at a terminal to answer.
+/// because `core` may not prompt: the same module runs where there is nobody at
+/// a terminal to answer.
 fn prompt_and_reveal(path: &std::path::Path) -> Result<()> {
     let open = crate::tui::prompt::confirm("Open project folder?", true)?.unwrap_or(false);
     if open {

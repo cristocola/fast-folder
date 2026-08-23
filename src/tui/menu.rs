@@ -1158,8 +1158,8 @@ fn menu_settings_postcreate() -> Result<()> {
 ///
 /// **Collect every answer first, then take the lock, reload, mutate and save.**
 /// This used to load the config, sit on a prompt for as long as the terminal was
-/// unattended, and then write the whole struct back — reverting anything the
-/// browser UI or another `fastf config set` had changed in the meantime, with no
+/// unattended, and then write the whole struct back — reverting anything
+/// another `fastf config set` had changed in the meantime, with no
 /// sign that it had happened. `cli::new::run` is the same shape: decide outside
 /// the lock, commit inside it.
 fn edit_postcreate_commands() -> Result<()> {

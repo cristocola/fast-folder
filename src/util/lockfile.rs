@@ -1,11 +1,10 @@
 //! A cross-process lock over the fastf data directory.
 //!
 //! The global ID counter is a read-modify-write across two files
-//! (`counters.toml` plus a scan of every base), and until now nothing
-//! serialized it between processes. The browser UI's `WRITE_LOCK` is an
-//! in-process `Mutex`, so it cannot see a `fastf new` running in a terminal —
-//! which is the documented workflow. Ten concurrent creates reliably minted
-//! duplicate IDs.
+//! (`counters.toml` plus a scan of every base), and nothing used to serialize it
+//! between processes. An in-process `Mutex` cannot: a `fastf new` in one
+//! terminal cannot see one in another, which is the documented workflow. Ten
+//! concurrent creates reliably minted duplicate IDs.
 //!
 //! This lock closes that. It is held across the whole plan→create→save span, so
 //! ID allocation and the folder claim are one indivisible step no matter how

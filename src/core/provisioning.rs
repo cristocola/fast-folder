@@ -139,8 +139,8 @@ fn read_create_journal(root: &Path) -> Result<CreateJournal> {
 /// What kind of unfinished work a marker or journal represents.
 ///
 /// Was six magic strings written by literal at eleven sites. The serialized
-/// names are unchanged: `docs/UI.md` documents them and the frontend renders
-/// them.
+/// names are unchanged: they sit in journals on disk that an older or newer
+/// binary has to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum IncompleteKind {
@@ -1154,7 +1154,7 @@ mod tests {
         assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
     }
 
-    /// `docs/UI.md` documents these names and the frontend renders them, so the
+    /// These names are on disk in journals another build has to read, so the
     /// enum must serialize to exactly the strings the eleven literals produced.
     #[test]
     fn incomplete_kinds_serialize_to_their_documented_names() {

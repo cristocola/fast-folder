@@ -13,8 +13,8 @@
 //! `recent`, `search`, `tag`, and `note`.
 //!
 //! # Architecture
-//! [`register_core`] is a compatibility adapter over `core::operations`; the
-//! browser UI calls the shared operation directly. The CLI [`run`] is a thin
+//! [`register_core`] is a compatibility adapter over `core::operations`. The
+//! CLI [`run`] is a thin
 //! shell that gathers the interactive confirmations
 //! (rename preview, PROJECT_INFO.md overwrite) and then delegates to
 //! `register_core`, finally printing the success summary.
@@ -49,7 +49,7 @@ pub enum PinfoConflict {
     /// Immediate no-op: keep the existing project and perform no follow-ups.
     Skip,
     /// Refuse to register at all — bail *before* any write so the caller can
-    /// confirm and retry cleanly. Used by the browser UI.
+    /// confirm and retry cleanly.
     Abort,
 }
 

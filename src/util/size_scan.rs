@@ -17,7 +17,7 @@ use std::thread::JoinHandle;
 
 /// How many trees are walked at once.
 ///
-/// Two, matching the browser UI frontend's `PROJECT_SIZE_CONCURRENCY`. These
+/// Two. These
 /// walks are latency-bound rather than CPU-bound — a share answers two `readdir`
 /// round-trips in about the time it answers one — while a wider pool would just
 /// make a spinning disk seek against itself.

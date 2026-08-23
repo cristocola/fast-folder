@@ -162,9 +162,9 @@ pub fn run(args: MoveArgs) -> Result<()> {
 
 /// Run the move on a worker thread and report progress from this one.
 ///
-/// A cross-filesystem move can copy for minutes; before this the CLI sat
-/// completely silent for the whole of it, while the browser UI showed phase,
-/// bytes and a cancel button for the same operation.
+/// A cross-filesystem move can copy for minutes; without this the CLI would sit
+/// completely silent for the whole of it, with no phase, no byte count and no
+/// way to cancel.
 ///
 /// Ctrl-C feeds the engine's cancel flag rather than killing the process, so an
 /// interrupted move aborts *before* the source is removed — the invariant the

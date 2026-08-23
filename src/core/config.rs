@@ -348,15 +348,13 @@ pub fn resolve_base_dir_input(raw: &str) -> Result<std::path::PathBuf> {
     Ok(expanded.canonicalize().unwrap_or(expanded))
 }
 
-/// First-run onboarding core, shared by the TUI prompt and the web UI's
-/// `/api/base/init`: validate via [`resolve_base_dir_input`] and persist the
-/// result as `base_dir`. Returns the resolved path.
+/// First-run onboarding core: validate via [`resolve_base_dir_input`] and
+/// persist the result as `base_dir`. Returns the resolved path.
 pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
     let resolved = resolve_base_dir_input(raw)?;
     // A load-mutate-save, so it takes the same cross-process lock as
     // `config set`. No caller holds the lock already (the lock is not
-    // reentrant): the web UI's `/api/base/init` takes only `WRITE_LOCK`, and the
-    // TUI's onboarding runs before anything else.
+    // reentrant): the TUI's onboarding runs before anything else.
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let mut config = Config::load()?;
     config.base_dir = paths::storable(&resolved, "the base directory")?;

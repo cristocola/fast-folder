@@ -162,7 +162,7 @@ fn a_corrupt_config_stops_the_menu() {
 
 /// Settings held a loaded `Config` across the prompt and then wrote the whole
 /// `bases` list back from that stale copy, silently reverting anything the
-/// browser UI or another `fastf config set` had written meanwhile. The rule is
+/// another `fastf config set` had written meanwhile. The rule is
 /// the one `edit_postcreate_commands` already follows: prompt first, then lock,
 /// then reload.
 ///

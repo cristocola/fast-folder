@@ -25,34 +25,21 @@ It is the same tool for very different people:
 - A **project manager** gets every engagement structured and numbered the same way.
 - A **developer** gets a code scaffold with configs ready to build.
 
-One engine drives three interfaces, so you can work whichever way fits the moment:
+One engine drives two interfaces, so you can work whichever way fits the moment:
 
 ```bash
-fastf                       # interactive terminal menu
+fastf                       # guided terminal menu: pick, answer, done
 fastf new general --name="spring campaign"    # -> 2026-07-16_Spring_Campaign_ID0048/
-fastf ui                    # local browser UI, same engine, point and click
 ```
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/08bb830c-1c85-42f7-b94c-85ddfa34e795" alt="Fast Folder browser UI" width="820">
-</p>
+## The guided menu
 
-## The browser UI
-
-That screenshot is `fastf ui`: a full point-and-click interface served by the same binary. No Electron, no Node, no separate server process. The frontend is embedded in the executable and talks to the same engine the CLI uses, so both always see the same templates, settings, and projects.
-
-- **Visual template editor.** Build variables, folder structure, and templated files without touching YAML. Drop real assets (a logo, a delivery video) into a template from a disk path.
-- **Create with live preview.** Fill in variables and watch the folder tree and generated file contents update before anything is written.
-- **Manage everything.** Search with the full query language, tag projects, write journal notes, and bulk-move projects between drives with verified copies.
-- **Local only.** The server refuses non-loopback binds and rejects mismatched
-  `Host` or cross-origin requests. Closing the dedicated app window shuts it down.
-
-```bash
-fastf ui --app      # dedicated app window (Chromium/Chrome), also in your app menu as "Fast Folder"
-fastf ui            # same thing in your default browser
-```
-
-Prefer the terminal? Everything the UI does has a CLI or TUI equivalent, and the rest of this README speaks fluent shell.
+Running `fastf` with no arguments opens the terminal menu, which is the way most
+work gets done. It creates projects with a live preview of the folder tree,
+browses the library with sizes and tags, moves projects between drives with a
+progress bar you can cancel, builds templates step by step, and edits every
+setting in place. Nothing it does is menu-only: every action has a scriptable
+`fastf <command>` equivalent, and the rest of this README speaks fluent shell.
 
 The whole tool is a single self-contained Rust binary (under 4 MB) with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
 
@@ -77,7 +64,7 @@ Domain-specific templates live in the [`examples/templates/`](examples/templates
 
 - **Fills in file contents, not just folder names.** Your answers land inside the files themselves: a client brief with the client's name already written in, a shot list titled for the artist, a report header with the right month, a code project's config ready to build. Text files get placeholders substituted, and binary files (a logo, a video asset) are copied exactly as they are.
 - **A template is just a folder.** One small settings file plus a folder tree that gets reproduced into every project. Share a template by copying its folder. Or point fastf at a finished project and it generates a template from it (`fastf template from-folder`).
-- **Three ways to work, one engine.** A guided menu in the terminal, a browser UI with a visual template editor, and a scriptable command line for automation. All three read the same templates and settings, so nothing gets out of sync.
+- **Two ways to work, one engine.** A guided menu in the terminal and a scriptable command line for automation. Both read the same templates and settings, so nothing gets out of sync.
 - **No hidden database.** A folder is a project because it contains a small `PROJECT_INFO.md` metadata file inside it. Delete the folder and the project is simply gone. Nothing to maintain, nothing to drift out of sync.
 - **Every project is findable again.** Unique IDs, creation dates, tags, and searchable metadata. Jump to any project with `fastf open ID0047`, browse recent work, or keep timestamped journal notes per project.
 - **Search that understands your projects.** Plain text works (`fastf search ariana`), and so do precise filters: `fastf search template=music-video tag:draft created>2026-01-01`.
@@ -102,7 +89,7 @@ paru -S fast-folder-bin    # prebuilt static binary
 paru -S fast-folder        # build from source
 ```
 
-Both install the `fastf` command, shell completions, man pages, and a "Fast Folder" app-menu entry for the browser UI.
+Both install the `fastf` command, shell completions, man pages, and a "Fast Folder" app-menu entry that opens the guided menu in your terminal.
 
 ### Linux (release archive)
 
@@ -150,12 +137,10 @@ Portable mode keeps the classic single-folder layout. To opt in, put an empty `c
 | [docs/cli.md](docs/cli.md) | Full command reference and usage recipes: create, search, tags, journal, register, move, config |
 | [docs/templates.md](docs/templates.md) | Template authoring: `template.yaml`, variables, transforms, tokens, bundled assets |
 | [docs/projects.md](docs/projects.md) | The project model: `PROJECT_INFO.md`, discovery, bases, safe moves, crash recovery |
-| [docs/UI.md](docs/UI.md) | Browser UI architecture, HTTP API, frontend development |
 | [docs/windows.md](docs/windows.md) | Windows install, PATH setup, data locations |
 
-A note on the browser UI: the server accepts loopback addresses only, validates
-`Host` and same-origin `Origin`, and has no authentication. Keep it local. With
-`fastf ui --app`, closing the app window stops the server.
+fastf has no network surface: it reads and writes ordinary files on the machine
+it runs on, and nothing else.
 
 ## Contributing
 
@@ -167,7 +152,6 @@ implementation PR or commit.
 cargo test                                # the whole suite
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-node --check src/ui/web/app.js            # frontend sanity check
 ```
 
 Tests are hermetic: they redirect all state through `FASTF_INSTALL_DIR` (and `HOME`) into temp directories and never touch a real install.
@@ -175,7 +159,6 @@ Tests are hermetic: they redirect all state through `FASTF_INSTALL_DIR` (and `HO
 | Suite | Covers |
 |---|---|
 | [`create.rs`](tests/create.rs) · [`metadata.rs`](tests/metadata.rs) · [`search.rs`](tests/search.rs) · [`template_engine.rs`](tests/template_engine.rs) · [`register.rs`](tests/register.rs) · [`move.rs`](tests/move.rs) · [`data_dir.rs`](tests/data_dir.rs) | core flows end to end |
-| [`ui_projects.rs`](tests/ui_projects.rs) · [`ui_templates.rs`](tests/ui_templates.rs) · [`ui_jobs.rs`](tests/ui_jobs.rs) · [`ui_security.rs`](tests/ui_security.rs) | the browser UI's request layer |
 | [`cli_counter.rs`](tests/cli_counter.rs) · [`cli_flags.rs`](tests/cli_flags.rs) · [`cli_output.rs`](tests/cli_output.rs) | what `fastf <args>` actually does to disk, as a process |
 | [`crash_recovery.rs`](tests/crash_recovery.rs) | interruption at each unsafe boundary, via fault injection |
 | [`concurrency.rs`](tests/concurrency.rs) | several fastf **processes** racing each other |
@@ -193,16 +176,14 @@ Two things worth knowing before you change the copy or move paths:
   error there) or `FASTF_FAULT=create:mid-copy:abort` (kills the process there).
   See `util::faults::ALL_FAULT_POINTS`. Compiled out of release builds.
 - **Work counting.** Operations that cost real I/O name themselves, so a claim
-  like "the browser no longer rescans the library" can be asserted rather than
-  believed. `FASTF_TRACE_FILE=/tmp/counts fastf` appends one line per traced
+  like "the project browser no longer rescans the library" can be asserted rather
+  than believed. `FASTF_TRACE_FILE=/tmp/counts fastf` appends one line per traced
   operation. Also compiled out of release builds.
 - **Lint the other platform too.** `#[cfg(unix)]` code does not compile on a
   Windows machine and `#[cfg(windows)]` code does not compile on a Linux one, so
   `cargo clippy --all-targets --target x86_64-pc-windows-gnu` (or
   `--target x86_64-unknown-linux-gnu` from Windows) catches what your local
   clippy cannot. CI lints on both platforms regardless.
-
-For frontend work, `FASTF_UI_DIR=src/ui/web fastf ui` serves assets from disk so you can edit and refresh without rebuilding.
 
 Pull requests are welcome. Please make sure the checks above pass first.
 

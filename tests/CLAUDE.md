@@ -8,7 +8,7 @@ including the `HOME` redirect, which is not optional: an unconfigured `base_dir`
 falls back to the home directory, and a harness that skips it scans the
 developer's real one and self-heals the counter from their real projects. That
 rule used to be re-typed in four files, which is three chances to drop it.
-Fixtures live in `common::fixtures`, and the UI router helpers in `common::ui`.
+Fixtures live in `common::fixtures`.
 
 **A file per subject, a binary per subject — except the pty suite.** `cargo test`
 runs test *binaries* sequentially, so splitting is free for fast suites and
@@ -21,9 +21,6 @@ The suites, and what each guards — the intent, not the case list:
 - `create.rs`, `metadata.rs`, `search.rs`, `template_engine.rs`, `register.rs`,
   `move.rs`, `data_dir.rs` — the core flows, split out of the 2700-line
   `integration.rs` whose 67 tests all queued behind one mutex.
-- `ui_projects.rs`, `ui_templates.rs`, `ui_jobs.rs`, `ui_security.rs` — the
-  browser-UI request layer through the pure router `ui::route_request`, split out
-  of `ui_server.rs` the same way.
 - `cli_counter.rs`, `cli_flags.rs`, `cli_output.rs` — what `fastf <args>` does to
   disk, split out of `cli_surface.rs`.
 - `crash_recovery.rs` — every create failpoint asserted against the same invariants,
@@ -43,8 +40,8 @@ The suites, and what each guards — the intent, not the case list:
   cadence), and `Confirm` takes a bare `y`/`n` with no Enter — a trailing `\r`
   survives into the next prompt and silently accepts its default.
 - `layering.rs` — reads the source rather than running it: `core` and `util` may
-  not reach for a `dialoguer` prompt, because the same functions serve `fastf ui`,
-  where there is no terminal to answer one. An import is not something a runtime
+  not reach for a `dialoguer` prompt, because the same functions serve scripted
+  runs, where there is no terminal to answer one. An import is not something a runtime
   test can see.
 - `windows_semantics.rs` — reserved names, trailing dots, control chars, unicode,
   >MAX_PATH, case-only rename, read-only files, a real sharing violation, junctions.

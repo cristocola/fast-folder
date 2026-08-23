@@ -53,8 +53,8 @@ impl PostCreate {
 }
 
 /// One thing a post-create action has to say. `core` collects them; a surface
-/// decides how they look, because `fastf ui` cannot render an ANSI checkmark
-/// into a JSON response and a script piping stdout does not want one either.
+/// decides how they look, because a script piping stdout does not want an ANSI
+/// checkmark and the TUI does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Note {
     /// An action succeeded and is worth confirming.

@@ -13,9 +13,10 @@
 Everyone who works in projects has a folder convention: how a new project should be named, which subfolders it needs, which starter files belong inside. In practice the convention lives in someone's head or a wiki page, and every rushed deadline erodes it a little more. fastf makes the convention executable. You describe the structure once as a template. From then on, creating a project means answering a few questions, and the result is always right: consistent name, complete folder skeleton, starter files pre-filled with your answers, a unique project ID, and metadata that lets you find the project again months later.
 
 fastf is a **single-user** tool for self-contained project trees made from
-ordinary files and directories. Its interfaces on one computer share the same
-state, but it does not coordinate simultaneous writers on multiple computers or
-promise team-wide locking for a shared drive.
+ordinary files and directories. Both its surfaces share the same state on one
+computer, but it does not coordinate simultaneous writers on multiple computers
+or promise team-wide locking for a shared drive. It has no network surface at
+all: it reads and writes files on the machine it runs on, and nothing else.
 
 It is the same tool for very different people:
 
@@ -34,12 +35,16 @@ fastf new general --name="spring campaign"    # -> 2026-07-16_Spring_Campaign_ID
 
 ## The guided menu
 
-Running `fastf` with no arguments opens the terminal menu, which is the way most
-work gets done. It creates projects with a live preview of the folder tree,
-browses the library with sizes and tags, moves projects between drives with a
-progress bar you can cancel, builds templates step by step, and edits every
-setting in place. Nothing it does is menu-only: every action has a scriptable
-`fastf <command>` equivalent, and the rest of this README speaks fluent shell.
+Running `fastf` with no arguments opens the terminal menu, which is how most work
+gets done. It creates projects with a live preview of the folder tree, browses
+the library with folder sizes and tags filling in as they are measured, moves
+projects between drives with a progress bar you can cancel, builds templates step
+by step, and edits every setting in place. Esc always goes back, a rejected
+answer comes back editable rather than lost, and a network share that has gone
+away is reported rather than left as a frozen screen.
+
+Nothing it does is menu-only: every action has a scriptable `fastf <command>`
+equivalent, and the rest of this README speaks fluent shell.
 
 The whole tool is a single self-contained Rust binary (under 4 MB) with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
 
@@ -138,9 +143,6 @@ Portable mode keeps the classic single-folder layout. To opt in, put an empty `c
 | [docs/templates.md](docs/templates.md) | Template authoring: `template.yaml`, variables, transforms, tokens, bundled assets |
 | [docs/projects.md](docs/projects.md) | The project model: `PROJECT_INFO.md`, discovery, bases, safe moves, crash recovery |
 | [docs/windows.md](docs/windows.md) | Windows install, PATH setup, data locations |
-
-fastf has no network surface: it reads and writes ordinary files on the machine
-it runs on, and nothing else.
 
 ## Contributing
 

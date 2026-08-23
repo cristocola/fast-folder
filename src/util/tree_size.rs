@@ -10,6 +10,8 @@ use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::util::paths::is_link_like;
+
 /// Sum the logical lengths of every regular file below `root`, abandoning the
 /// walk once `cancel` is set.
 ///
@@ -85,28 +87,6 @@ fn directory_size_at(root: &Path, cancel: &AtomicBool, depth: usize) -> io::Resu
         })?;
     }
     Ok(total)
-}
-
-/// Treat every Windows reparse point as link-like. Junctions are the important
-/// case here: some are directories without `FileType::is_symlink()`, but walking
-/// them would still leave the project tree and could introduce cycles.
-fn is_link_like(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-
-    #[cfg(not(windows))]
-    {
-        false
-    }
 }
 
 #[cfg(test)]

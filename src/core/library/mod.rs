@@ -1,4 +1,4 @@
-//! Filesystem-as-truth project library (v0.9).
+//! Filesystem-as-truth project library.
 //!
 //! The source of truth for "what projects exist" is the filesystem: a folder is
 //! a project **iff** it contains a `PROJECT_INFO.md` with YAML frontmatter. The

@@ -99,6 +99,35 @@ template file whose name is not valid UTF-8 was opened at a `?`-substituted path
 that does not exist, so the create aborted naming a path the user never wrote.
 Validation stays textual because every dangerous component is ASCII.
 
+**Path safety is two layers, and lexical is only the first.**
+`SafeRelativePath` and `paths::require_native_relative` prove the *text* of a
+path cannot escape its root. They say nothing about the filesystem, and
+`create_dir_all` walks straight through an existing `docs -> /outside` — so a
+template file at `docs/new.md` applied to a folder with such a link landed
+outside the folder while every lexical check passed.
+
+`paths::contained_destination(root, rel)` is the physical layer: `root` must be a
+real directory, every existing component of `root/rel` must be a real directory
+(the last may be an ordinary file), and none may be a link. A component that does
+not exist yet is fine — nothing can be reached through a path that is not there.
+**Call it immediately before the write**, which is where every caller does:
+`assets::copy_file` takes `(dest_root, rel)` rather than a joined path for
+exactly that reason, and `create_structure`, `apply`'s structure loop,
+`copy_template_files`, `Template::save_to_file`'s file flush,
+`template_import`'s asset bundling and `provisioning`'s create-journal resume all
+go through it. `copy_job` is the one that takes a joined path, because a
+`CopyJob` is a pair of absolute paths by the time it exists — its caller derives
+the destination through the helper first.
+
+This closes the gap where a link is already sitting in the tree. It is not a
+race-free `openat2` fortress and does not claim to be; the threat model is one
+user's own filesystem, stated in `ROADMAP.md`.
+
+`paths::is_link_like` is the **one** definition of "link" in the crate, and it is
+the widest one: any Windows reparse point, not only what `FileType::is_symlink()`
+reports. Junctions are the case that matters, and `tree_size` shares it so a
+second walker cannot end up with a weaker rule.
+
 `paths::display_path` strips `\\?\` **for display and metadata only**. The
 verbatim form is what makes paths past MAX_PATH work. Strip at display, never at
 storage.
@@ -134,8 +163,10 @@ and an exhaustiveness test fails if a field is added without updating the list.
 it is wrong: `flatten` routes every field through serde's `Content` buffer, so a
 plain unquoted scalar in a hand-edited file (`year: 2026`) arrives as an integer
 and the `String` field rejects it — and `read_project_meta` drops that error, so
-the project disappears from discovery. Verified in `serde-1.0.229/src/private/de.rs:1255`
-and the YAML crate's deserializer.
+the project disappears from discovery. Verified against serde's
+`private::de::ContentDeserializer` and the YAML crate's deserializer — the
+behaviour is `flatten`'s design, not a version's bug, so there is no release to
+wait for.
 
 `render` returns `Result` because the fallback it replaced wrote an *invisible
 project*: a `# yaml-serialize-error` comment between valid `---` delimiters
@@ -162,12 +193,33 @@ necessarily own; `register` explicitly claims one.
 ## Create, apply, register
 
 `project::plan()` resolves variables, mints the ID (`counter_value =
-next_value(...)`, so preview and commit agree), interpolates the folder name with
-`interpolate_name_with`, and validates every rendered path. It writes nothing.
+next_value(...)?`, so preview and commit agree), interpolates the folder name
+with `interpolate_name_with`, and validates every rendered path. It writes
+nothing.
+
+**`validated::ProjectFolderName` is the one validator for what a project folder
+may be called.** `plan`, `library::rename_project_inner` and `operations`'
+register-rename all go through it, so a name refused in one is refused in all
+three — the rule used to live only in the rename path. `naming::sanitize_name`
+still does the character work underneath it and still *refuses nothing*: it maps
+illegal characters and trims what Windows would trim, and returns `""` for `".."`
+and leaves a leading `.` alone. `ProjectFolderName` supplies the opinion —
+non-empty, not dot-prefixed (discovery skips those), one path component — and its
+error names the rendered value and the pattern that produced it, because the user
+typed a variable, not a folder name.
+
+`Template::validate` refuses a `naming_pattern` starting with `.` at save time,
+so the invisible-project case is caught before any project exists. It also
+requires a non-empty `id.prefix` (register's `parse_id_token` would otherwise
+match any trailing digits — `Album_2024` becomes ID 2024) and `1 <= id.digits <=
+MAX_ID_DIGITS`.
 
 `create_inner` claims the folder with `fs::create_dir` — **not**
 `create_dir_all`, which succeeds on an existing directory and let two racers
-merge into one folder. Everything after the claim lives in `provision_project` so
+merge into one folder. Before that it re-checks that `root_path.parent()` **is**
+the configured base: defense in depth, because `base.join("")` is `base` itself
+and its parent is one level up, which is how an empty rendered name once planted
+a folder beside the library instead of inside it. Everything after the claim lives in `provision_project` so
 a failure rolls the folder back; **nothing may sit between the claim and that
 call**, or an early return skips the rollback and leaks the folder. A failpoint
 placed one line too early found exactly that.
@@ -292,6 +344,22 @@ in its name (`reconcile_unlocked`, `unregister_project_unlocked`,
 `delete_project_unlocked`, `rename_project_unlocked`), each `#[doc(hidden)]` with
 a `*_configured` application entry point.
 
+**Every write to the templates directory goes through `operations` too.**
+`save_template(&template, original_slug)` and `delete_template(slug)` are the
+only ways in; `Template::save_to_file` is `pub(crate)` so that stays true, and
+`tests/layering.rs` refuses `save_to_file(` or `remove_dir_all(` anywhere under
+`src/cli` or `src/tui`. `save_template`'s `original_slug` is the slug the
+template was *loaded* under: when it differs, the directory is renamed before
+the manifest is written, because the builder's edit mode can change a slug and
+without the rename the old directory stayed behind as a stale duplicate.
+`delete_template` refuses a template directory that is not a real directory
+directly under the templates directory — `remove_dir_all` follows a link, and
+the link's target is somewhere it has no business removing.
+
+**Bootstrap is the one exception.** `bootstrap.rs` writes the two bundled
+templates on first run without the lock: it runs before the data directory has a
+lock file to take, and only into a templates directory it has just found empty.
+
 `util::fs_retry` wraps the destructive filesystem calls (Windows sharing
 violations from Defender or the indexer, plus read-only attribute clearing).
 
@@ -333,15 +401,37 @@ rescan; `note` does not, because the cache stores no journal.
 
 `PostCreate` on both `Config` and `Template`; a template-level block overrides the
 global one entirely. All fields default to off: `git_init`, `reveal`,
-`open_in_editor`, `print_path` (for `$(fastf new ...)` pipelines), and
-`commands`, whose `{path}` token is substituted before execution.
+`open_in_editor`, `print_path` (for `$(fastf new ...)` pipelines), and `commands`.
+
+**A project path never appears inside shell source.** Every child fastf spawns
+for a project goes through `post_create::project_command`, which sets the project
+as `current_dir` **and** as `PROJECT_PATH_VAR` (`FASTF_PROJECT_PATH`).
+`rewrite_path_token` then turns a `{path}` in a command into `"$FASTF_PROJECT_PATH"`
+(`"%FASTF_PROJECT_PATH%"` on Windows) rather than into the path — a folder name
+may legally contain `;`, `&`, `$`, `(`, `)` and a backtick, and `sanitize_name`
+leaves every one of them alone, so substituting the path split the command in
+two. `{path}` is **not** deprecated: after the rewrite there is nothing to
+migrate. A token already wrapped in a matching pair of quotes is replaced as a
+unit so `code "{path}"` does not come out double-quoted; Windows paths cannot
+contain `"`, so the quoted expansion is safe for every legal path.
 
 Commands run synchronously through the user's shell (`cmd /c` on Windows, `sh -c`
 elsewhere). **There is no sandbox** — template authors control this.
 
-`core::post_create::run` returns `Vec<Note>` and does **not** print: `core` may
-not write to a stdout the caller may be piping. `Note::Path` is separate from `Note::Done` because
-`print_path`'s line is the run's *output*, so it goes to stdout alone and last.
+**Reveal on Windows is `util::shell_open` (`ShellExecuteW`), not `cmd /c start`.**
+std quotes `start`'s argument correctly, but `cmd.exe` expands `%VAR%` inside the
+command line it reconstructs afterwards, so a folder named `%USERPROFILE%` opened
+the home directory. `ShellExecuteW` takes the path as an argument, with no
+command line to expand. The editor **does** stay on `cmd /c start` on Windows —
+`code` is a `.cmd` shim only cmd can resolve — but its path argument is the
+quoted variable, so the folder's own name never reaches the parser.
+
+`core::post_create::run` returns `Vec<Note>` — no `Result`, because every
+individual failure is already a `Note::Warning`: the project on disk is finished
+and correct whatever the editor did. It does **not** print: `core` may not write
+to a stdout the caller may be piping. `Note::Path` is separate from `Note::Done`
+because `print_path`'s line is the run's *output*, so it goes to stdout alone and
+last.
 
 `resolve_post_create()` is `pub` so `cli::new`'s open-prompt can avoid
 double-opening when `reveal: true` is already set.

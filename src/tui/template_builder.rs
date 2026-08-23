@@ -1,5 +1,7 @@
 use crate::cli::render;
-use crate::core::template::{FileEntry, FolderNode, Template, Transform, VarType, Variable};
+use crate::core::template::{
+    FileEntry, FolderNode, MAX_ID_DIGITS, Template, Transform, VarType, Variable,
+};
 use crate::tui::prompt::{self, TextOpts};
 /// Interactive step-by-step template builder.
 /// Works for both creating new templates and editing existing ones.
@@ -28,6 +30,10 @@ macro_rules! answered {
 
 pub fn build_template(existing: Option<Template>) -> Result<()> {
     let is_edit = existing.is_some();
+    // The slug this template was loaded under. Edit mode can change the slug,
+    // and the save has to rename the directory rather than leaving the old one
+    // behind as a stale duplicate.
+    let original_slug = existing.as_ref().map(|t| t.slug.clone());
     let mut tmpl = existing.unwrap_or_default();
     if tmpl.version.is_empty() {
         tmpl.version = "1".to_string();
@@ -93,12 +99,14 @@ pub fn build_template(existing: Option<Template>) -> Result<()> {
         }
     }
 
-    tmpl.save_to_file(&dest)?;
+    // Every answer is in before the lock is taken — a prompt under `DataLock`
+    // would stall every other fastf for as long as the terminal sits unattended.
+    let manifest = crate::core::operations::save_template(&tmpl, original_slug.as_deref())?;
     println!(
         "\n{} template '{}' saved to {}",
         "✓".green().bold(),
         tmpl.slug.green(),
-        dest.display()
+        manifest.display()
     );
 
     Ok(())
@@ -233,11 +241,22 @@ fn edit_metadata(tmpl: &mut Template) -> Result<bool> {
     );
     let naming_pattern = answered!(prompt::text(
         "Naming pattern",
-        TextOpts::new().default_value(if tmpl.naming_pattern.is_empty() {
-            "{date}_{id}".to_string()
-        } else {
-            tmpl.naming_pattern.clone()
-        })
+        TextOpts::new()
+            .default_value(if tmpl.naming_pattern.is_empty() {
+                "{date}_{id}".to_string()
+            } else {
+                tmpl.naming_pattern.clone()
+            })
+            // Discovery skips dot-prefixed directories, so a pattern starting
+            // with '.' names projects fastf cannot see. Same rule as
+            // `Template::validate`, said at the prompt.
+            .validate(|value| {
+                if value.trim_start().starts_with('.') {
+                    Err("a naming pattern may not start with '.' — fastf would not see the projects it names".to_string())
+                } else {
+                    Ok(())
+                }
+            })
     ));
 
     // Committed only once every answer is in, so a cancel halfway leaves the
@@ -250,22 +269,25 @@ fn edit_metadata(tmpl: &mut Template) -> Result<bool> {
 }
 
 fn edit_id(tmpl: &mut Template) -> Result<bool> {
+    // The same bounds `Template::validate` enforces, applied at the prompt so
+    // the rejection lands on the field the user is looking at rather than three
+    // screens later on save. An empty prefix is refused because register
+    // recovers IDs by matching `<prefix><digits>` in a folder name, and with no
+    // prefix that matches any trailing digits at all.
     let prefix = answered!(prompt::text(
         "ID prefix",
-        TextOpts::new()
-            .default_value(tmpl.id.prefix.clone())
-            .allow_empty()
+        TextOpts::new().default_value(tmpl.id.prefix.clone())
     ));
 
     let id_digits_str = answered!(prompt::text(
         "ID digits (zero-padded width)",
         TextOpts::new()
             .default_value(tmpl.id.digits.to_string())
-            // An ID wider than nine digits is not a padding choice, it is a
-            // typo; the old `unwrap_or` swallowed both silently.
+            // An ID wider than the counter's maximum is not a padding choice, it
+            // is a typo; the old `unwrap_or` swallowed both silently.
             .validate(|value| match value.trim().parse::<usize>() {
-                Ok(n) if (1..=9).contains(&n) => Ok(()),
-                Ok(_) => Err("expected a number between 1 and 9".to_string()),
+                Ok(n) if (1..=MAX_ID_DIGITS).contains(&n) => Ok(()),
+                Ok(_) => Err(format!("expected a number between 1 and {MAX_ID_DIGITS}")),
                 Err(_) => Err(format!("expected a number, got '{}'", value.trim())),
             })
     ));
@@ -305,7 +327,7 @@ fn edit_structure(tmpl: &mut Template, is_edit_pass: bool) -> Result<bool> {
     );
 
     // Re-entry with folders already declared gets the same Add / Edit / Remove
-    // treatment variables have had since v1.0. It used to be all-or-nothing:
+    // treatment variables have. It used to be all-or-nothing:
     // "Replace folder structure?" meant retyping every path to fix one typo.
     if is_edit_pass && !tmpl.structure.is_empty() {
         return structure_submenu(tmpl);

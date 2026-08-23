@@ -171,7 +171,7 @@ pub struct RegisterOutcome {
 // ---------------------------------------------------------------------------
 
 /// Onboard an existing folder by writing a `PROJECT_INFO.md` into it — fully
-/// non-interactive. This is register's whole job in v0.9: the file makes the
+/// non-interactive. This is register's whole job: the file makes the
 /// folder discoverable (filesystem-as-truth); there is no separate index.
 ///
 /// The ID is **recovered from the folder name** (`ID####` token, any digit
@@ -272,8 +272,10 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         // it read the data-dir counter alone, the prompt offered
         // `..._ID0001` and the folder came out `..._ID0011`.
         let counters = Counters::load().unwrap_or_default();
-        let id_value = parse_id_token(&current_name, &tmpl.id.prefix)
-            .unwrap_or_else(|| Counters::next_value(&cfg, &counters));
+        let id_value = match parse_id_token(&current_name, &tmpl.id.prefix) {
+            Some(recovered) => recovered,
+            None => Counters::next_value(&cfg, &counters)?,
+        };
         let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
         let mut preview_vars = if args.template_slug.is_some() {
             build_plan_vars(&tmpl, &collected_vars, &id_str)?

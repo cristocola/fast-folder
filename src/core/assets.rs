@@ -155,6 +155,12 @@ pub(crate) const CANCELLED_MSG: &str = "copy cancelled";
 /// `cancel` is polled between chunks: when set, the exact partial sibling is
 /// removed and the copy returns a `CANCELLED_MSG` error so no half-written
 /// file is ever left in place.
+///
+/// Unlike [`copy_file`] this takes an already-joined `dest`, because a
+/// [`CopyJob`] is a pair of absolute paths by the time it exists. Its one
+/// production caller — `provisioning`'s create-journal resume — derives that
+/// destination through [`crate::util::paths::contained_destination`] first, and
+/// a new caller must do the same.
 pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) -> Result<()> {
     if entry_exists(&job.dest)? {
         anyhow::bail!(
@@ -354,18 +360,6 @@ fn walk_inner(root: &Path, current: &Path, depth: usize, out: &mut Vec<AssetEntr
     Ok(())
 }
 
-/// Require an existing, non-symlink directory. `Path::is_dir()` follows links
-/// and treats a missing path as `false`; neither is strong enough at a copy
-/// boundary where "missing" must never be mistaken for an empty tree.
-pub fn require_real_directory(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("{label} does not exist: {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        anyhow::bail!("{label} is not a real directory: {}", path.display());
-    }
-    Ok(())
-}
-
 /// Does a directory entry occupy this exact path? Unlike `Path::exists`, this
 /// sees broken symlinks and propagates metadata errors instead of treating them
 /// as a free destination.
@@ -484,13 +478,23 @@ pub fn is_verbatim(rel: &str, verbatim: &[String]) -> bool {
 /// (binary) transparently falls back to a byte copy. `force_verbatim` short-
 /// circuits straight to the byte copy (used for `verbatim` globs and oversize
 /// files).
+///
+/// `dest_root` is the tree the copy must stay inside, and `rel` is the path
+/// beneath it: the two are joined here, through
+/// [`crate::util::paths::contained_destination`], immediately before the write.
+/// Passing an
+/// already-joined path would have skipped exactly the check that matters —
+/// `create_dir_all` walks straight through an existing `docs -> /outside`.
 pub fn copy_file(
     src: &Path,
-    dest: &Path,
+    dest_root: &Path,
+    rel: &Path,
     force_verbatim: bool,
     vars: &HashMap<String, String>,
     ctx: &crate::core::naming::RenderContext,
 ) -> Result<()> {
+    let dest = crate::util::paths::contained_destination(dest_root, rel)?;
+    let dest = dest.as_path();
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating parent dirs for {}", dest.display()))?;
@@ -691,7 +695,8 @@ mod tests {
         let dest = tmp.path().join("out_small.txt");
         copy_file(
             &small,
-            &dest,
+            tmp.path(),
+            Path::new("out_small.txt"),
             false,
             &vars,
             &crate::core::naming::RenderContext::now("%Y-%m-%d"),
@@ -703,7 +708,8 @@ mod tests {
         let dest = tmp.path().join("out_verbatim.txt");
         copy_file(
             &small,
-            &dest,
+            tmp.path(),
+            Path::new("out_verbatim.txt"),
             true,
             &vars,
             &crate::core::naming::RenderContext::now("%Y-%m-%d"),
@@ -725,7 +731,8 @@ mod tests {
         let dest = tmp.path().join("out_big.md");
         copy_file(
             &big,
-            &dest,
+            tmp.path(),
+            Path::new("out_big.md"),
             false,
             &vars,
             &crate::core::naming::RenderContext::now("%Y-%m-%d"),

@@ -41,6 +41,77 @@ impl fmt::Display for TemplateSlug {
     }
 }
 
+/// A folder name a project may actually be created under.
+///
+/// **The one validator for "what may a project folder be called".** `plan`,
+/// `rename_project_inner` and `register`'s `--rename` all go through it, so a
+/// name that is refused in one of them is refused in all three.
+///
+/// [`crate::core::naming::sanitize_name`] does the character-level work — it maps the
+/// characters no filesystem accepts and trims the trailing dots and spaces
+/// Windows strips silently. What it deliberately does not do is *refuse*: it
+/// returns `""` for `".."` and leaves a leading `.` alone, because it has no
+/// opinion about whether an empty or hidden name is meaningful to its caller.
+/// This type has that opinion:
+///
+/// - **Empty** cannot be joined onto a base. `base.join("")` is `base` itself,
+///   which `exists()` answers yes to — that is how `--name=..` came to claim a
+///   folder named `_2` beside the base rather than inside it.
+/// - **Dot-prefixed** would be invisible: discovery skips dot-prefixed
+///   directories (they are fastf's own staging), so the project would show up
+///   once from the write-through cache and then vanish at the next rescan.
+/// - **More than one path component** would put the project somewhere other
+///   than the base it was planned for.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProjectFolderName(String);
+
+impl ProjectFolderName {
+    pub fn parse(raw: &str) -> Result<Self> {
+        let sanitized = crate::core::naming::sanitize_name(raw.trim());
+
+        if sanitized.is_empty() {
+            // Two different empties, and saying "every character in it is one a
+            // folder name may not contain" about `""` is nonsense.
+            if raw.trim().is_empty() {
+                bail!("a folder name cannot be empty");
+            }
+            bail!(
+                "'{}' leaves no usable folder name: nothing survives trimming the \
+                 trailing dots and spaces a filesystem would strip anyway",
+                raw.trim()
+            );
+        }
+        if sanitized.starts_with('.') {
+            bail!(
+                "a folder name may not start with '.': fastf would not see the project \
+                 (got '{sanitized}')"
+            );
+        }
+        // Belt and braces. `sanitize_name` maps both separators to `_`, so this
+        // cannot fire today — but it is the rule the type exists to state, and a
+        // future change to the character map must not quietly repeal it.
+        if sanitized.contains('/') || sanitized.contains('\\') {
+            bail!("a folder name must be a single path component (got '{sanitized}')");
+        }
+
+        Ok(Self(sanitized))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for ProjectFolderName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// A non-empty relative path whose components cannot escape its eventual root.
 ///
 /// Both slash styles are accepted at the boundary. The stored representation
@@ -106,6 +177,60 @@ impl fmt::Display for SafeRelativePath {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_folder_name_survives_sanitizing_and_stays_visible() {
+        for (raw, expected) in [
+            ("Spring Campaign", "Spring Campaign"),
+            ("  padded  ", "padded"),
+            // Sanitizing still happens; it just no longer has the last word.
+            ("a/b", "a_b"),
+            ("a\\b", "a_b"),
+            ("Draft .", "Draft"),
+            ("CON", "CON_"),
+        ] {
+            assert_eq!(
+                ProjectFolderName::parse(raw).unwrap().as_str(),
+                expected,
+                "parsing {raw:?}"
+            );
+        }
+    }
+
+    /// The two shapes that used to reach `create_dir` and should not.
+    ///
+    /// Note what is *not* here: a name of purely illegal characters. `?*|`
+    /// sanitizes to `___`, which is a real, visible, findable folder — silly,
+    /// but not a defect. Only names that sanitize away to nothing are refused.
+    #[test]
+    fn a_project_folder_name_refuses_empty_and_hidden_names() {
+        for raw in ["", "   "] {
+            let error = ProjectFolderName::parse(raw)
+                .expect_err("an empty name must be refused")
+                .to_string();
+            assert!(error.contains("cannot be empty"), "{raw:?} gave: {error}");
+        }
+
+        for raw in ["..", ".", "...", ". . ."] {
+            let error = ProjectFolderName::parse(raw)
+                .expect_err("a name that sanitizes away must be refused")
+                .to_string();
+            assert!(
+                error.contains("leaves no usable folder name"),
+                "{raw:?} gave: {error}"
+            );
+        }
+
+        for raw in [".hidden", ".fastf-transactions", " .git"] {
+            let error = ProjectFolderName::parse(raw)
+                .expect_err("expected a dot-prefixed name to be refused")
+                .to_string();
+            assert!(
+                error.contains("may not start with '.'"),
+                "{raw:?} gave: {error}"
+            );
+        }
+    }
 
     #[test]
     fn template_slug_accepts_only_one_safe_component() {

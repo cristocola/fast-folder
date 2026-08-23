@@ -214,8 +214,8 @@ fn run_editor(term: &Term, editor: &mut LineEditor, opts: &TextOpts<'_>) -> Resu
                 if let Some(validator) = &opts.validator
                     && let Err(message) = validator(&value)
                 {
-                    // The text stays on the line. Losing it is the defect Phase 8
-                    // is named after, and a validator is where it happened most.
+                    // The text stays on the line: a rejected answer is corrected,
+                    // never retyped. A validator is where that mattered most.
                     error = Some(message);
                     continue;
                 }

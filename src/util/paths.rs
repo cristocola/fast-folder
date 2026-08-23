@@ -195,17 +195,120 @@ fn strip_verbatim(raw: &str) -> String {
 
 /// Require an existing, non-symlink regular file.
 ///
-/// The counterpart to [`crate::core::assets::require_real_directory`], and the
-/// same reasoning: `Path::is_file()` follows links and reads a missing path as
-/// `false`, neither of which is strong enough at a boundary where a journal, a
-/// manifest, or a project's metadata is about to be trusted.
+/// The counterpart to [`require_real_directory`], and the same reasoning:
+/// `Path::is_file()` follows links and reads a missing path as `false`, neither
+/// of which is strong enough at a boundary where a journal, a manifest, or a
+/// project's metadata is about to be trusted.
 pub(crate) fn require_real_file(path: &Path, label: &str) -> Result<()> {
     let metadata = std::fs::symlink_metadata(path)
         .with_context(|| format!("{label} is missing: {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+    if is_link_like(&metadata) || !metadata.file_type().is_file() {
         bail!("{label} is not a real file: {}", path.display());
     }
     Ok(())
+}
+
+/// `path` must be a directory that is genuinely there, not a link to one.
+///
+/// `Path::is_dir()` follows links and answers `false` for a missing path, so it
+/// cannot tell "no such directory" from "a link to one somewhere else" — and the
+/// difference is the whole question wherever fastf is about to write, delete, or
+/// trust a tree.
+pub fn require_real_directory(path: &Path, label: &str) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("{label} does not exist: {}", path.display()))?;
+    if is_link_like(&metadata) || !metadata.file_type().is_dir() {
+        bail!("{label} is not a real directory: {}", path.display());
+    }
+    Ok(())
+}
+
+/// **Every Windows reparse point counts as a link**, not only the ones std
+/// reports as symlinks.
+///
+/// Junctions are the case that matters: some are directories that
+/// `FileType::is_symlink()` does not always flag, and walking one leaves the
+/// tree fastf thinks it is working in. There is exactly one definition of this
+/// in the crate so a second write path cannot end up with a weaker one.
+pub(crate) fn is_link_like(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Join `rel` beneath `root`, refusing if any existing part of the result is a
+/// link.
+///
+/// `SafeRelativePath` and `require_native_relative` are **lexical**: they
+/// prove the text of a path cannot escape its root. Nothing proved the same
+/// about the filesystem, and `create_dir_all` walks straight through an existing
+/// `docs -> /outside` — so a template file at `docs/new.md` applied to a folder
+/// with such a link wrote outside the folder entirely, while every lexical check
+/// passed.
+///
+/// This is the physical half. `root` must be a real directory; every component
+/// of `root/rel` that already exists must be a real directory too, except the
+/// last, which must simply not be a link; and a component that does not exist
+/// yet is fine, because nothing can be reached through a path that is not there.
+///
+/// **Call it immediately before the write.** That is the stated single-user
+/// threat model: this closes the gap where a link is already sitting in the tree,
+/// not a race against something actively rewriting it mid-operation. There is no
+/// `openat2` fortress here and none is claimed.
+pub fn contained_destination(root: &Path, rel: &Path) -> Result<PathBuf> {
+    require_real_directory(root, "destination root")?;
+    require_native_relative(rel, "destination")?;
+
+    let mut current = root.to_path_buf();
+    let mut components = rel.components().peekable();
+    while let Some(component) = components.next() {
+        current.push(component);
+        let metadata = match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Nothing exists here, so nothing below it exists either: the
+                // rest of the path cannot pass through a link.
+                current.extend(components);
+                return Ok(current);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("checking {}", display_path(&current)));
+            }
+        };
+
+        if is_link_like(&metadata) {
+            let target = std::fs::read_link(&current)
+                .map(|target| display_path(&target))
+                .unwrap_or_else(|_| "elsewhere".to_string());
+            bail!(
+                "refusing to write through a link: {} -> {target}",
+                display_path(&current)
+            );
+        }
+        // An intermediate component has to be a directory, or the join is
+        // meaningless; the final one may be an ordinary file being replaced.
+        if components.peek().is_some() && !metadata.file_type().is_dir() {
+            bail!(
+                "refusing to write through {}: it is not a directory",
+                display_path(&current)
+            );
+        }
+    }
+
+    Ok(current)
 }
 
 /// Require a native relative path with only ordinary components: non-empty,
@@ -487,5 +590,106 @@ mod tests {
         );
         assert!(!probe.usable(), "an unresponsive base is not a target");
         assert_eq!(probe.note(), "  (unresponsive)");
+    }
+
+    // -----------------------------------------------------------------------
+    // contained_destination
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_plain_tree_and_a_nonexistent_tail_both_pass() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs/existing.md"), b"here").unwrap();
+
+        // Every component exists.
+        assert_eq!(
+            contained_destination(&root, Path::new("docs/existing.md")).unwrap(),
+            root.join("docs/existing.md")
+        );
+        // The tail does not — and nothing can be reached through a path that is
+        // not there, so this is the ordinary case, not a special one.
+        assert_eq!(
+            contained_destination(&root, Path::new("docs/new.md")).unwrap(),
+            root.join("docs/new.md")
+        );
+        assert_eq!(
+            contained_destination(&root, Path::new("deep/deeper/new.md")).unwrap(),
+            root.join("deep/deeper/new.md")
+        );
+    }
+
+    #[test]
+    fn a_root_that_is_missing_or_a_file_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+
+        assert!(contained_destination(&tmp.path().join("missing"), Path::new("x")).is_err());
+        assert!(contained_destination(&file, Path::new("x")).is_err());
+    }
+
+    /// The lexical layer still applies: an escaping `rel` never gets as far as
+    /// the filesystem check.
+    #[test]
+    fn an_escaping_relative_path_is_refused_before_anything_is_inspected() {
+        let tmp = tempfile::tempdir().unwrap();
+        for rel in ["../outside", "/etc/passwd", "a/../../b"] {
+            assert!(
+                contained_destination(tmp.path(), Path::new(rel)).is_err(),
+                "{rel} should be refused"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_anywhere_along_the_path_is_refused_and_named() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        // A link mid-path: `root/docs -> outside`.
+        symlink(&outside, root.join("docs")).unwrap();
+        let error = contained_destination(&root, Path::new("docs/new.md"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("refusing to write through a link"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("docs"),
+            "the error must name the link: {error}"
+        );
+
+        // A link at the leaf: the file itself points elsewhere.
+        std::fs::write(outside.join("target.txt"), b"precious").unwrap();
+        symlink(outside.join("target.txt"), root.join("leaf.txt")).unwrap();
+        assert!(contained_destination(&root, Path::new("leaf.txt")).is_err());
+
+        // And the root itself being a link is refused by `require_real_directory`.
+        let linked_root = tmp.path().join("linked-root");
+        symlink(&outside, &linked_root).unwrap();
+        assert!(contained_destination(&linked_root, Path::new("x")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_intermediate_component_that_is_a_file_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("notes"), b"a file, not a directory").unwrap();
+        let error = contained_destination(tmp.path(), Path::new("notes/inner.md"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("not a directory"),
+            "unexpected error: {error}"
+        );
     }
 }

@@ -213,8 +213,15 @@ fn materialize(
     template.save_to_file(&paths::template_manifest(slug))?;
 
     let mut bundled_bytes = 0;
+    let files_dir = paths::template_files_dir(slug);
     for asset in &assets {
-        let target = paths::template_files_dir(slug).join(&asset.relative);
+        // The template directory is fastf's, but `--force` reuses one that was
+        // already there, and a pre-planted `files/sub -> /outside` would send
+        // the bundle out of it.
+        let target = crate::util::paths::contained_destination(&files_dir, &asset.relative)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
         crate::util::atomic::copy(&asset.source, &target)
             .with_context(|| format!("bundling {}", asset.relative.display()))?;
         bundled_bytes += asset.bytes;

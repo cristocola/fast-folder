@@ -140,12 +140,11 @@ pub(crate) fn project_action_menu(
 
         match items[choice] {
             "Open project folder" => {
-                if !path.exists() {
-                    eprintln!(
-                        "{} project folder no longer exists at {}",
-                        "warning:".yellow().bold(),
-                        path_str
-                    );
+                // The path came from a cache, and a cache travels with the
+                // projects. Check what it names before handing it to the
+                // system file manager.
+                if let Err(e) = library::revalidate_for_read(project) {
+                    eprintln!("{} {e:#}", "warning:".yellow().bold());
                     continue;
                 }
                 if let Err(e) = crate::core::post_create::reveal_folder(path) {

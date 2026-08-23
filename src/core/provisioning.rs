@@ -65,7 +65,7 @@ pub fn write_create_journal(
     template_files: &Path,
     jobs: &[CopyJob],
 ) -> Result<()> {
-    assets::require_real_directory(root, "new project root")?;
+    crate::util::paths::require_real_directory(root, "new project root")?;
     TemplateSlug::parse(template_slug)?;
     let mut relative_jobs = Vec::with_capacity(jobs.len());
     for job in jobs {
@@ -175,7 +175,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
         let Ok(base) = configured.canonicalize() else {
             continue;
         };
-        if assets::require_real_directory(&base, "configured base").is_err() {
+        if crate::util::paths::require_real_directory(&base, "configured base").is_err() {
             continue;
         }
         let Ok(entries) = fs::read_dir(&base) else {
@@ -240,7 +240,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
 }
 
 fn list_move_transactions(base: &Path, root: &Path, out: &mut Vec<Incomplete>) {
-    if assets::require_real_directory(root, "transaction root").is_err() {
+    if crate::util::paths::require_real_directory(root, "transaction root").is_err() {
         out.push(Incomplete {
             path: root.display().to_string(),
             kind: IncompleteKind::MoveV2Invalid,
@@ -319,7 +319,11 @@ pub fn reconcile_unlocked(cfg: &Config) -> ReconcileReport {
     let mut report = ReconcileReport::default();
     for configured in cfg.effective_bases() {
         let base = match configured.canonicalize() {
-            Ok(base) if assets::require_real_directory(&base, "configured base").is_ok() => base,
+            Ok(base)
+                if crate::util::paths::require_real_directory(&base, "configured base").is_ok() =>
+            {
+                base
+            }
             _ => {
                 report.unrecoverable.push(format!(
                     "configured base is unavailable; left all recovery state untouched: {}",
@@ -477,7 +481,20 @@ fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
     let mut all_done = true;
     for entry in &journal.jobs {
         let source = template.files_dir().join(&entry.source);
-        let destination = root.join(&entry.destination);
+        // Lexically validated when the journal was read; checked against the
+        // filesystem here, immediately before the copy, so a link planted in
+        // the half-built project since the crash stops the resume.
+        let destination = match crate::util::paths::contained_destination(root, &entry.destination)
+        {
+            Ok(destination) => destination,
+            Err(error) => {
+                all_done = false;
+                report
+                    .unrecoverable
+                    .push(format!("{}: {error:#}", root.display()));
+                continue;
+            }
+        };
         match fs::symlink_metadata(&destination) {
             Ok(metadata)
                 if !metadata.file_type().is_symlink()
@@ -572,7 +589,7 @@ fn reconcile_transactions(
     root: &Path,
     report: &mut ReconcileReport,
 ) {
-    if let Err(error) = assets::require_real_directory(root, "transaction root") {
+    if let Err(error) = crate::util::paths::require_real_directory(root, "transaction root") {
         report
             .unrecoverable
             .push(format!("{}: {error:#}; left untouched", root.display()));
@@ -672,7 +689,7 @@ fn reconcile_transaction(
             let staging_exists = entry_exists_quiet(&staging);
             let final_exists = entry_exists_quiet(&final_path);
             if staging_exists && !final_exists {
-                if assets::require_real_directory(&staging, "move staging").is_err() {
+                if crate::util::paths::require_real_directory(&staging, "move staging").is_err() {
                     report.unrecoverable.push(format!(
                         "{}: staging is not a real directory; left untouched",
                         operation_dir.display()
@@ -856,7 +873,7 @@ fn configured_real_base(cfg: &Config, wanted: &Path) -> Result<PathBuf> {
             continue;
         };
         if candidate == wanted {
-            assets::require_real_directory(&candidate, "configured base")?;
+            crate::util::paths::require_real_directory(&candidate, "configured base")?;
             return Ok(candidate);
         }
     }
@@ -864,7 +881,7 @@ fn configured_real_base(cfg: &Config, wanted: &Path) -> Result<PathBuf> {
 }
 
 fn confirm_project_identity(path: &Path, expected: &str, label: &str) -> Result<()> {
-    assets::require_real_directory(path, label)?;
+    crate::util::paths::require_real_directory(path, label)?;
     let pinfo = crate::core::project_info::pinfo_path(path);
     crate::util::paths::require_real_file(&pinfo, "PROJECT_INFO.md")?;
     let metadata = crate::core::project_info::read_metadata(path)?

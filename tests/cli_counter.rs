@@ -1,10 +1,6 @@
 //! The command surface: The ID counter, and what a base carries about it.
 //!
-//! These drive the **real binary** rather than calling library functions,
-//! because the defects they cover lived in the plumbing between clap and the
-//! core — flags dropped into `trailing_var_arg`, one caller computing an ID
-//! differently from another, a config field read raw instead of resolved. Only
-//! a process sees that.
+//! Driven as a **real process** — see `common::mod`'s preamble for why.
 
 mod common;
 
@@ -51,7 +47,7 @@ fn id_reset_is_gone_and_says_why() {
     );
 }
 
-/// The headline of the v1.2 counter design: three bases holding different
+/// The headline of the counter design: three bases holding different
 /// highest IDs must all converge on the largest one.
 #[test]
 fn id_sync_propagates_the_highest_id_to_every_base() {
@@ -76,7 +72,7 @@ fn id_sync_propagates_the_highest_id_to_every_base() {
 /// A base whose counter file outranks its own projects is authoritative — that
 /// is what carries the number across a machine that cannot see the other bases.
 ///
-/// Not a v1.2.0 regression (the floor already consulted base counters); this
+/// Not a regression the floor could have caught (it already consulted base counters); this
 /// pins the rule down so a future simplification of `floor` cannot drop it.
 #[test]
 fn a_base_counter_above_its_projects_is_authoritative() {
@@ -98,7 +94,7 @@ fn a_base_counter_above_its_projects_is_authoritative() {
 /// Without re-stamping the cache, every create would force a full rescan of
 /// every base, defeating the cache entirely.
 ///
-/// Guards the cost of the new propagation rather than an old bug: v1.2.0 never
+/// Guards the cost of propagation rather than an old bug: propagation never
 /// wrote other bases at all, so it passed this vacuously.
 #[test]
 fn propagating_the_counter_does_not_invalidate_other_bases_caches() {
@@ -212,5 +208,44 @@ fn listing_templates_reads_no_template_file_contents() {
         0,
         "listing must not read template file contents, traced {}",
         trace.summary()
+    );
+}
+
+/// `fastf id set` accepted any value above the floor, `u64::MAX` included — and
+/// then the next create computed `value + 1` and overflowed: a panic in a debug
+/// build, a silent wrap to zero in a release one. Both ends are now bounded.
+#[test]
+fn the_counter_has_a_maximum_and_stops_cleanly_at_it() {
+    const MAX: u64 = 999_999_999_999;
+
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let err = sb.fails(&["id", "set", &(MAX + 1).to_string()]);
+    assert!(
+        err.contains(&MAX.to_string()),
+        "the refusal must name the maximum: {err}"
+    );
+    let err = sb.fails(&["id", "set", &u64::MAX.to_string()]);
+    assert!(
+        err.contains(&MAX.to_string()),
+        "the refusal must name the maximum: {err}"
+    );
+
+    // The maximum itself is a legal setting.
+    sb.ok(&["id", "set", &MAX.to_string()]);
+
+    // And the create that would have to mint MAX + 1 fails, saying so, without
+    // leaving a folder behind.
+    let before = fs::read_dir(&sb.base).unwrap().count();
+    let err = sb.fails(&["new", "race", "--name=Overflow", "--yes", "--no-preview"]);
+    assert!(
+        err.contains("maximum") && err.contains(&MAX.to_string()),
+        "the create must name the maximum it hit: {err}"
+    );
+    assert_eq!(
+        fs::read_dir(&sb.base).unwrap().count(),
+        before,
+        "no folder may be created once the counter is exhausted"
     );
 }

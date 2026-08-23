@@ -12,14 +12,21 @@ use std::path::{Path, PathBuf};
 use fastf::core::{library, naming, project_info};
 
 /// A discoverable project folder, so `library` functions have something real.
+///
+/// `folder` is **single-quoted** in the frontmatter. A plain YAML scalar may not
+/// begin with `%` (the directive indicator), and `%USERPROFILE%` is a perfectly
+/// legal Windows folder name — the unquoted fixture made such a project
+/// undiscoverable and looked like a product defect. `project_info::write` quotes
+/// it correctly through `util::yaml`; only this hand-rolled fixture did not.
 fn write_project(base: &Path, folder: &str, id: &str) -> PathBuf {
     let dir = base.join(folder);
     fs::create_dir_all(&dir).unwrap();
+    let quoted = format!("'{}'", folder.replace('\'', "''"));
     fs::write(
         project_info::pinfo_path(&dir),
         format!(
             "---\nid: {id}\ntemplate: t\ntemplate_name: T\n\
-             created: 2026-01-01T00:00:00Z\nfolder: {folder}\npath: x\n\
+             created: 2026-01-01T00:00:00Z\nfolder: {quoted}\npath: x\n\
              variables: {{}}\ntags: []\n---\n"
         ),
     )
@@ -353,4 +360,104 @@ fn long_paths_work_and_display_cleanly() {
         "verbatim prefix leaked into display output: {shown}"
     );
     assert!(Path::new(&shown).is_absolute());
+}
+
+// ---------------------------------------------------------------------------
+// Post-create on cmd.exe
+// ---------------------------------------------------------------------------
+
+/// `cmd.exe` expands `%VAR%` inside the command line it reconstructs, *after*
+/// std has quoted the arguments. A project folder called `%USERPROFILE%` is a
+/// legal folder name, and `cmd /c start "" <path>` opened the user's home
+/// directory instead of it.
+///
+/// The rewrite means the path never appears in a command line at all: the shell
+/// gets `"%FASTF_PROJECT_PATH%"`, which expands to the variable fastf set, not
+/// to anything in the folder's own name. `&` is the other half of the same
+/// problem — it is `cmd`'s command separator and is legal in a folder name.
+#[cfg(windows)]
+#[test]
+fn a_windows_project_name_with_percent_and_ampersand_cannot_reach_cmd() {
+    use fastf::core::post_create::{PROJECT_PATH_VAR, rewrite_path_token};
+
+    let rewritten = rewrite_path_token("if exist {path} echo yes");
+    assert!(
+        !rewritten.contains("{path}"),
+        "the token must not survive: {rewritten}"
+    );
+    assert_eq!(
+        rewritten,
+        format!("if exist \"%{PROJECT_PATH_VAR}%\" echo yes"),
+        "the Windows expansion must be the quoted variable"
+    );
+
+    // A quoted token is replaced as a unit rather than double-quoted, which on
+    // cmd would make the argument an empty string followed by a bare path.
+    assert_eq!(
+        rewrite_path_token("code \"{path}\""),
+        format!("code \"%{PROJECT_PATH_VAR}%\"")
+    );
+}
+
+/// The names themselves are creatable and survive discovery — otherwise the
+/// case above would be theoretical.
+///
+/// **Not `cfg(windows)`**, even though the syntax it names is cmd's: `%` and `&`
+/// are legal in a folder name on every platform, and the failure this catches —
+/// a `%`-leading name that will not round-trip through frontmatter — is
+/// platform-independent. Gating it to Windows meant it could only fail on CI,
+/// which is exactly what happened.
+#[test]
+fn folder_names_that_are_cmd_syntax_round_trip_through_discovery() {
+    let tmp = tempfile::tempdir().unwrap();
+    for folder in ["%USERPROFILE%", "Q1 & Q2", "100%25"] {
+        let sanitized = naming::sanitize_name(folder);
+        assert_eq!(sanitized, folder, "these are all legal folder names");
+        write_project(tmp.path(), folder, "ID0001");
+    }
+
+    let found = library::scan_base(tmp.path());
+    assert_eq!(found.len(), 3, "all three must be discoverable");
+}
+
+/// A junction is a link. `contained_destination` must refuse to write through
+/// one exactly as it refuses a symlink on unix, or the containment guarantee
+/// holds on one platform and not the other.
+///
+/// This is the reason `paths::is_link_like` tests the reparse-point attribute
+/// rather than only `FileType::is_symlink()`: there is one definition of "link"
+/// in the crate, and it is the widest one.
+#[cfg(windows)]
+#[test]
+fn apply_refuses_to_write_through_a_junction_in_the_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = tmp.path().join("outside");
+    let target = tmp.path().join("target");
+    fs::create_dir_all(&outside).unwrap();
+    fs::create_dir_all(&target).unwrap();
+
+    let made = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(target.join("docs"))
+        .arg(&outside)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !made {
+        eprintln!("skipping: the OS refused to create a junction");
+        return;
+    }
+
+    let error = fastf::util::paths::contained_destination(&target, Path::new("docs/new.md"))
+        .expect_err("a junction mid-path must be refused")
+        .to_string();
+    assert!(
+        error.contains("refusing to write through a link"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        fs::read_dir(&outside).unwrap().count(),
+        0,
+        "nothing may be created beyond the junction"
+    );
 }

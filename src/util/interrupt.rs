@@ -43,6 +43,10 @@ pub fn check() -> anyhow::Result<()> {
 /// otherwise be visible to any test running in parallel — which is exactly how
 /// this module's own test started failing. It lives here, next to the state it
 /// guards, so anything reaching for `raise_for_test` finds the lock too.
+///
+/// **Lock order:** a test that also needs
+/// [`crate::util::test_env::ENV_LOCK`] takes that one **first**. The same note
+/// is on that lock.
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

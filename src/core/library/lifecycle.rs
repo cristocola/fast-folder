@@ -10,10 +10,9 @@ use super::cache::*;
 use super::guard::*;
 use super::model::*;
 use crate::core::assets;
-use crate::core::naming;
 
 // ---------------------------------------------------------------------------
-// Unregister / delete / rename (v1.0)
+// Unregister / delete / rename
 // ---------------------------------------------------------------------------
 
 /// Unregister a project: remove its `PROJECT_INFO.md` so it stops being a
@@ -141,15 +140,7 @@ pub(crate) fn stranded_rename_message(context: &str, staging: &Path, rollback: &
 }
 
 pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Result<Project> {
-    let sanitized = naming::sanitize_name(new_folder.trim());
-    if sanitized.is_empty() {
-        anyhow::bail!("new folder name is empty");
-    }
-    // Discovery skips dot-prefixed dirs (staging folders) — a dot name would
-    // make the project invisible.
-    if sanitized.starts_with('.') {
-        anyhow::bail!("folder names may not start with '.'");
-    }
+    let sanitized = crate::core::validated::ProjectFolderName::parse(new_folder)?.into_string();
     if sanitized == project.name {
         anyhow::bail!("'{}' is already the folder's name", sanitized);
     }

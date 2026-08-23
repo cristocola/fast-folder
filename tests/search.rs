@@ -1,7 +1,4 @@
 //! The query parser and evaluator.
-//!
-//! Split out of the single 2700-line `integration.rs`, whose 67 tests all
-//! queued behind one mutex in one binary.
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -17,9 +14,7 @@ mod common;
 use common::env::with_fresh_install;
 use common::fixtures::write_template;
 
-/// This binary's own lock. `FASTF_INSTALL_DIR` and `HOME` are process-wide, so
-/// every test in a binary shares one — and separate binaries are separate
-/// processes, which is what lets these suites run in parallel with each other.
+/// This binary's lock over the process environment — see `common::env`.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn sandboxed<R>(body: impl FnOnce(&Path) -> R) -> R {

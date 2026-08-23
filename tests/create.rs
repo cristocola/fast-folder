@@ -1,7 +1,4 @@
 //! Creating projects: plan, claim, provision, roll back.
-//!
-//! Split out of the single 2700-line `integration.rs`, whose 67 tests all
-//! queued behind one mutex in one binary.
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -19,9 +16,7 @@ mod common;
 use common::env::with_fresh_install;
 use common::fixtures::{minimal_template_yaml, write_template};
 
-/// This binary's own lock. `FASTF_INSTALL_DIR` and `HOME` are process-wide, so
-/// every test in a binary shares one — and separate binaries are separate
-/// processes, which is what lets these suites run in parallel with each other.
+/// This binary's lock over the process environment — see `common::env`.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn sandboxed<R>(body: impl FnOnce(&Path) -> R) -> R {
@@ -461,11 +456,7 @@ fn template_slug_and_structure_paths_are_contained() {
             ..template::Template::default()
         };
         let escaped_dir = install.join("escaped");
-        let derived_path = install
-            .join("templates")
-            .join(&invalid_slug.slug)
-            .join("template.yaml");
-        assert!(invalid_slug.save_to_file(&derived_path).is_err());
+        assert!(fastf::core::operations::save_template(&invalid_slug, None).is_err());
         assert!(
             !escaped_dir.exists(),
             "slug rejection must happen before creating a derived directory"
@@ -817,7 +808,7 @@ structure:
 
 #[test]
 fn config_ignores_removed_project_info_keys() {
-    // v0.9 dropped the `project_info_*` / `pinfo_*` config knobs (metadata is now
+    // The `project_info_*` / `pinfo_*` config knobs are gone (metadata is now
     // mandatory and always named PROJECT_INFO.md). Old configs that still carry
     // those keys must keep parsing — serde ignores unknown fields — and the
     // surviving fields must load normally.
@@ -886,4 +877,213 @@ fn bundled_templates_do_not_emit_duplicate_project_info() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Names that must never reach the filesystem
+// ---------------------------------------------------------------------------
+
+/// A gallery-style template: the folder name is the user's answer, with no
+/// `{id}` to make it safe. Every domain template in `examples/templates/` is
+/// shaped this way, so what a `{name}` renders to *is* the folder name.
+fn name_only_template_yaml(slug: &str) -> String {
+    format!(
+        r#"name: Name Only
+slug: {slug}
+description: fixture
+naming_pattern: "{{name}}"
+id:
+  prefix: T
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+    transform: none
+"#
+    )
+}
+
+/// `--name=.hidden` used to create a project fastf could not see: discovery
+/// skips dot-prefixed directories, so the folder showed up once from the
+/// write-through cache and then vanished at the next rescan.
+///
+/// `--name=..` was worse. It sanitizes to `""`, `base.join("")` is the base,
+/// which `exists()` answers yes to, so the collision loop moved on to `_2` — and
+/// `create_inner` resolved that against the base's *parent*, planting `_2`
+/// one level above the library.
+///
+/// Both must fail in `plan`, before a single directory is created.
+#[test]
+fn a_name_that_would_be_invisible_or_empty_is_refused_before_anything_is_written() {
+    sandboxed(|install| {
+        write_template(install, "named", &name_only_template_yaml("named"));
+
+        let mut cfg = Config::default();
+        let base = install.join("projects");
+        fs::create_dir_all(&base).unwrap();
+        cfg.base_dir = base.display().to_string();
+
+        let tmpl = template::find_by_slug("named").unwrap();
+        let counters = Counters::load().unwrap();
+
+        for (raw, expected) in [
+            (".hidden", "may not start with '.'"),
+            // `interpolate_name` sanitizes each variable *before* assembling
+            // the pattern, so `..` reaches `ProjectFolderName` already reduced
+            // to "" — the empty case, not the trimmed-away one.
+            ("..", "cannot be empty"),
+            (".", "cannot be empty"),
+            // `"   "` is not here: the required-variable check refuses an
+            // all-whitespace answer one layer earlier, which is the better
+            // error. What matters is that nothing gets through, not which
+            // gate stops it.
+        ] {
+            let mut vars = HashMap::new();
+            vars.insert("name".to_string(), raw.to_string());
+            let error = project::plan(&tmpl, &vars, &cfg, &counters)
+                .expect_err("the plan must be refused")
+                .chain()
+                .map(|cause| cause.to_string())
+                .collect::<Vec<_>>()
+                .join(": ");
+
+            assert!(error.contains(expected), "--name={raw:?} gave: {error}");
+            // The error names the pattern too — the user typed a variable, not
+            // a folder name, and needs to see how it became one.
+            assert!(error.contains("{name}"), "--name={raw:?} gave: {error}");
+        }
+
+        // Nothing was created: not in the base, not beside it.
+        assert_eq!(
+            fs::read_dir(&base).unwrap().count(),
+            0,
+            "the base must still be empty"
+        );
+        let stray: Vec<String> = fs::read_dir(install)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with('_'))
+            .collect();
+        assert!(stray.is_empty(), "planted beside the base: {stray:?}");
+
+        // And no ID was burned.
+        assert_eq!(Counters::load_base(&base), 0);
+    });
+}
+
+/// The same rule, one layer earlier: a template whose pattern *starts* with `.`
+/// renders a dot-prefixed name for every project it ever makes, so it is refused
+/// when the template is saved rather than once per create.
+#[test]
+fn a_template_whose_pattern_starts_with_a_dot_cannot_be_saved() {
+    sandboxed(|install| {
+        let dir = install.join("templates").join("hidden");
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut tmpl = template::Template {
+            name: "Hidden".to_string(),
+            slug: "hidden".to_string(),
+            naming_pattern: ".{id}".to_string(),
+            ..Default::default()
+        };
+
+        let manifest = dir.join("template.yaml");
+        let error = fastf::core::operations::save_template(&tmpl, None)
+            .expect_err("a dot-prefixed pattern must be refused")
+            .to_string();
+        assert!(error.contains("may not start with '.'"), "{error}");
+        assert!(
+            !manifest.exists(),
+            "validation must precede the write, not follow it"
+        );
+
+        // The same template with a visible pattern saves fine.
+        tmpl.naming_pattern = "{id}".to_string();
+        assert_eq!(
+            fastf::core::operations::save_template(&tmpl, None).unwrap(),
+            manifest
+        );
+        assert!(manifest.exists());
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Post-create: the project path is data, never source
+// ---------------------------------------------------------------------------
+
+/// A post-create command used to be `raw.replace("{path}", &path)` and then
+/// `sh -c`. `sanitize_name` leaves `;`, `&`, `$`, `(`, `)`, backtick and `^`
+/// alone — they are all legal in a folder name — so a project called
+/// `Live; touch pwned` split the command in two, and the second half ran.
+///
+/// After the rewrite the shell sees `"$FASTF_PROJECT_PATH"`: one argument, no
+/// re-parsing, whatever the folder is called.
+#[cfg(unix)]
+#[test]
+fn a_project_name_full_of_shell_syntax_cannot_split_a_post_create_command() {
+    sandboxed(|install| {
+        write_template(install, "hostile", &name_only_template_yaml("hostile"));
+
+        let mut cfg = Config::default();
+        let base = install.join("projects");
+        fs::create_dir_all(&base).unwrap();
+        cfg.base_dir = base.display().to_string();
+        // `test -d` proves the token resolves to the real folder; the `touch`
+        // proves the command ran as one command with the right argument.
+        cfg.post_create.commands = vec![
+            "test -d {path} && touch \"$FASTF_PROJECT_PATH/ok\"".to_string(),
+            "pwd > cwd.txt".to_string(),
+        ];
+
+        let tmpl = template::find_by_slug("hostile").unwrap();
+        let mut vars = HashMap::new();
+        // Every metacharacter `sanitize_name` passes through. `/`, `\`, `:` and
+        // friends are mapped to `_`, so this is what a hostile name can be.
+        vars.insert(
+            "name".to_string(),
+            "Live; touch pwned && $(touch subbed) `touch ticked`".to_string(),
+        );
+
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        let plan = project::create(&plan, &tmpl, &mut counters, &cfg, true).unwrap();
+
+        // The command ran, once, against the right folder.
+        assert!(
+            plan.root_path.join("ok").exists(),
+            "the command did not run against the project: {:?}",
+            fs::read_dir(&plan.root_path)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>()
+        );
+
+        // `current_dir` is the project, so a relative redirect lands inside it.
+        let cwd = fs::read_to_string(plan.root_path.join("cwd.txt")).unwrap();
+        assert_eq!(
+            fs::canonicalize(cwd.trim()).unwrap(),
+            fs::canonicalize(&plan.root_path).unwrap()
+        );
+
+        // And nothing the folder name asked for happened, anywhere.
+        for stray in ["pwned", "subbed", "ticked"] {
+            assert!(
+                !plan.root_path.join(stray).exists(),
+                "'{stray}' was created inside the project — the name was executed"
+            );
+            assert!(
+                !base.join(stray).exists(),
+                "'{stray}' was created in the base — the name was executed"
+            );
+            assert!(
+                !install.join(stray).exists(),
+                "'{stray}' was created in the install dir — the name was executed"
+            );
+        }
+    });
 }

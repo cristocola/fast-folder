@@ -55,14 +55,17 @@ tell you.
   `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus
   report-only pre-v2 discovery), `template_import.rs` (the from-folder engine),
   `assets.rs` (the template-file copy engine: walk, classify, interpolate or
-  byte-copy), `validated.rs` (typed slugs and relative paths), `project_info.rs`.
+  byte-copy), `validated.rs` (typed slugs, relative paths and project folder
+  names), `project_info.rs`.
 - `src/util/` — `lockfile` (cross-process `DataLock`), `atomic` (THE atomic
   write), `fs_retry` (Windows sharing violations), `interrupt` (Ctrl-C
   rollback), `faults` (failpoints), `trace` (work counting), `diag` (the one
   warning sink), `yaml` (the one place the YAML crate is named), `time` (one
   clock), `paths` (data-dir resolution, `display_path`, the shared boundary
-  checks, base probing), `tree_size`, `size_scan`, `live_select`,
-  `human_bytes`, `clipboard`, `tty`.
+  checks including `contained_destination` and `is_link_like`, base probing),
+  `shell_open` (Windows `ShellExecuteW`), `test_env` (the one env-mutation guard,
+  test-only), `tree_size`, `size_scan`, `live_select`, `human_bytes`,
+  `clipboard`, `tty`.
 - `src/cli/` — one module per subcommand, plus `render.rs`, the only module that
   prints a plan, a create or an apply. `move_project.rs` is named that way
   because `move` is a keyword.
@@ -196,6 +199,25 @@ the counter self-heal, so it uses `read_base_readonly` (fresh cache or scan, no
 write), never `discover` (which writes). Route it through `discover` and previews
 start writing caches.
 
+**A `CacheEntry`'s `dir` must be exactly one ordinary path component, not
+dot-prefixed.** `into_project` returns `Option` and drops anything else: an
+absolute `dir` *replaces* the base under `Path::join`, and `../..` survived the
+`strip_prefix` on the next rewrite, so an entry reading `/etc` produced a
+"project" at `/etc`. One component because discovery is depth-1; not
+dot-prefixed because `scan_base` skips those. A rejected entry is **not** treated
+like a vanished folder — a folder that has gone is transient and the row is
+dropped, but an entry pointing outside its base means the file is no longer
+fastf's own bookkeeping, so the cache is abandoned and the base rescanned.
+
+`library::revalidate_for_read` is the cheap sibling of `guard`'s mutation
+revalidation, for handing a discovered path to **another program**: a real
+directory, a direct child of its own base, holding a real `PROJECT_INFO.md`. No
+canonicalize, no config reload, no id check — those protect a mutation. `fastf
+open` and the TUI's Reveal call it before spawning the file manager. Ordinary
+metadata reads keep trusting discovery: after the one-component rule the path is
+a direct child by construction, and reading the user's own `PROJECT_INFO.md` is
+what discovery is.
+
 `scan_base` skips dot-prefixed directories, including `.fastf-transactions`, so
 private staging containing a `PROJECT_INFO.md` cannot appear as a duplicate
 project.
@@ -232,8 +254,20 @@ without that re-stamp, every create would invalidate every other base's cache.
 **`Counters::next_value(cfg, counters)` is the one expression for "which ID comes
 next."** Three callers drifted before, and the preview confirmed `ID0001` while
 the commit wrote `ID0011`. There is no way to lower it: `id set` refuses anything
-at or below the floor and names what holds it, `id reset` is gone, and
-`POST /api/counter` applies the same rule.
+at or below the floor and names what holds it, and `id reset` is gone.
+
+**The counter is bounded at both ends.** `Counters::MAX_VALUE` is
+`999_999_999_999` — twelve digits, so every reachable value renders inside the
+widest `id.digits` a template may declare, and below 2^53 so a JSON consumer
+reads it exactly. `next_value` returns `Result<u64>` and `checked_add`s against
+it; `operations::set_counter` refuses anything above it. Without the ceiling,
+`id set` accepted `u64::MAX` (above the floor was the only rule) and the next
+create's `+ 1` overflowed: a panic in debug, a wrap to zero in release.
+
+`Counters::propagate` **must not** `unwrap_or_default()` the data-dir counter.
+A read error reads as zero, zero is below everything, so the write proceeds and
+overwrites what could not be read — the exact file whose job is to stop an
+unplugged base from restarting numbering. It warns and skips instead.
 
 `naming::id_value` rejects any id containing a hyphen. An interim build wrote
 UUIDs, and reading the trailing digits of one would put the floor at 20044.
@@ -273,13 +307,16 @@ documented `$EDITOR` fallback never ran.
 
 - `dialoguer::Input::interact_text()` takes ownership of `self`. Never reuse an
   `Input` across iterations — recreate it each time.
-- Rust 2024 makes `std::env::set_var`/`remove_var` unsafe. In tests they are
-  wrapped in `unsafe { }` with the suite's `SERIAL` mutex held.
+- Rust 2024 makes `std::env::set_var`/`remove_var` unsafe, and `setenv` is not
+  thread-safe underneath. **One guard per binary**: `util::test_env` under
+  `src/`, `tests/common/env` under `tests/`, and `tests/layering.rs` fails the
+  build if either name appears anywhere else.
 - `clippy::field_reassign_with_default` is allowed at the test-file level;
   rewriting every `Config::default()` builder into struct-literal form is churn.
-- `FASTF_FAULT`, `FASTF_TRACE_FILE` and the interrupt flag are process-global, so
-  their test locks live beside the state they guard — a private mutex per test
-  module looks right and silently races.
+- The interrupt flag is process-global, so its test lock lives beside it
+  (`interrupt::TEST_LOCK`) — a private mutex per test module looks right and
+  silently races. Lock order is `test_env::ENV_LOCK` first, then that one.
+  `faults` needs no lock: its arming is thread-local.
 - Concurrency tests must spawn **processes**, not threads: a thread test passes
   against an in-process `Mutex` while production stays broken.
 - **A Windows thread's stack is 1 MiB, not the main thread's 8.** The TUI

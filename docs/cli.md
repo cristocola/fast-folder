@@ -399,6 +399,8 @@ This happens on its own: on every create, and on every `fastf id show`. Run `fas
 
 Because of that, the counter **cannot be lowered**, and there is no `fastf id reset`. A lower number would hand out an ID that already exists, so `fastf id set` refuses any value at or below the current floor and tells you what is holding it.
 
+It also has a ceiling: **999999999999** (twelve digits, the widest `id.digits` a template may declare). `fastf id set` refuses anything above it, and a create that would have to mint one past it fails saying so rather than wrapping around to zero.
+
 ## Shell completions
 
 ```bash

@@ -272,13 +272,14 @@ could not be read.
    maximum fails with the maximum named and no folder created.
 
 **Acceptance.**
-- [ ] All gates pass.
-- [ ] `grep -rn '+ 1' src/core/counter.rs` shows no counter arithmetic outside
-      `next_value`; `grep -rn "delete the lock" src/` is empty.
-- [ ] The three name tests, the `.{id}` test, the counter-maximum tests and the
-      unreadable-manifest test were written against the current build first and
-      observed failing (note which ones in the Phase log).
-- [ ] `docs/templates.md`, `docs/cli.md`, `ROADMAP.md` updated; `src/core/CLAUDE.md`
+- [x] All gates pass (Windows clippy included; the cross-*link* still cannot run
+      here — see Phase 1).
+- [x] `grep -rn '+ 1' src/core/counter.rs` matches only the comment explaining
+      the overflow it replaced; `grep -rn "delete the lock" src/` matches only
+      the test that asserts the message no longer says it.
+- [x] Every new test was run against the pre-change build and observed failing —
+      see the Phase log for what each one did there.
+- [x] `docs/templates.md`, `docs/cli.md`, `ROADMAP.md` updated; `src/core/CLAUDE.md`
       "Create, apply, register" names `ProjectFolderName` as the one validator.
 
 ---
@@ -345,13 +346,18 @@ practice.
 5. `src/core/CLAUDE.md` "Post-create actions" rewritten to the new contract.
 
 **Acceptance.**
-- [ ] All gates pass, including Windows clippy on CI (the `extern "system"` block is
-      `cfg(windows)` and must be linted there).
-- [ ] `grep -rn 'Command::new("cmd")' src/` shows only the editor shim and test
-      helpers; no `start` anywhere.
-- [ ] The injection test was observed failing on the pre-change build.
+- [x] All gates pass. The `extern "system"` block is linted by local
+      `--target x86_64-pc-windows-gnu` clippy and by CI's Windows runner.
+- [x] `grep -rn 'Command::new("cmd")' src/` finds only three test helpers
+      (`transactions.rs`, `assets.rs`, `library/tests.rs`, all inside
+      `mod tests`). No `start` outside the editor shim — which the Decisions
+      above deliberately keep on `cmd /c` for `.cmd` shim resolution, with the
+      path passed as the quoted variable.
+- [x] The injection test was observed failing on the pre-change build: with the
+      old `raw.replace("{path}", …)` restored it reported `'pwned' was created
+      inside the project — the name was executed`.
 - [ ] **Needs the maintainer:** a Windows smoke of "Reveal" from the TUI action
-      menu and of `fastf open` (the outstanding manual item in `ROADMAP.md`).
+      menu and of `fastf open` (recorded in `ROADMAP.md`).
 
 ---
 
@@ -399,10 +405,13 @@ guarded by "templates dir is empty". `src/core/CLAUDE.md` "Locking and mutation"
    and deletes wait for any running fastf operation.
 
 **Acceptance.**
-- [ ] All gates pass.
-- [ ] `grep -rn 'save_to_file\|remove_dir_all' src/cli src/tui` is empty.
-- [ ] The concurrency test passes and was observed interleaving on the old build.
-- [ ] `src/core/CLAUDE.md` lists the new operations and the bootstrap exception.
+- [x] All gates pass.
+- [x] `grep -rn 'save_to_file\|remove_dir_all' src/cli src/tui` is empty, and
+      `tests/layering.rs` now fails the build if either reappears.
+- [x] The concurrency test passes and was observed interleaving on the old
+      build: with the direct `remove_dir_all` restored it reported "the delete
+      ran to completion while the data lock was held".
+- [x] `src/core/CLAUDE.md` lists the new operations and the bootstrap exception.
 
 ---
 
@@ -458,11 +467,16 @@ deny-by-default link detection this phase needs on Windows
    `src/core/CLAUDE.md` "Path safety" describes lexical + physical as two layers.
 
 **Acceptance.**
-- [ ] All gates pass, Windows CI included (junction test).
-- [ ] The apply-through-link test was observed writing into `outside/` on the old
-      build.
-- [ ] `grep -rn 'create_dir_all' src/core/assets.rs src/core/project.rs` shows each
-      call preceded by `contained_destination`.
+- [x] All gates pass; the junction test is `cfg(windows)` and lints clean under
+      the `x86_64-pc-windows-gnu` target. CI's Windows runner runs it.
+- [x] The apply-through-link test was observed failing on the pre-change build
+      (`apply must refuse to write through the link: ()` — it returned `Ok`).
+- [x] `grep -rn 'create_dir_all' src/core/assets.rs src/core/project.rs`: every
+      production call is preceded by `contained_destination`, except two that are
+      correct as they are — `create_inner`'s base creation (the base itself, just
+      checked to be the configured one; a base that is a link to a mounted drive
+      is legitimate) and `copy_job`'s parent (its caller derives the destination
+      through the helper, noted in its doc comment).
 
 ---
 
@@ -519,10 +533,13 @@ already (`operations::delete` etc. revalidate).
 4. ROADMAP + `docs/projects.md` text.
 
 **Acceptance.**
-- [ ] All gates pass.
-- [ ] The forged-cache test was observed listing `/etc` (or naming it in `open`) on
-      the old build.
-- [ ] `src/core/CLAUDE.md` "Filesystem as truth" states the one-component rule.
+- [x] All gates pass.
+- [x] The forged-cache test was observed listing `/etc` on the old build —
+      `forged entries were served as projects: ["/etc", ".../base/..",
+      ".../install/outside"]`.
+- [x] The one-component rule is stated in the **root** `CLAUDE.md`'s "Filesystem
+      as truth", which is where the cache and discovery model lives (the plan
+      named `src/core/CLAUDE.md`; that file covers the engine, not discovery).
 
 ---
 
@@ -578,11 +595,14 @@ env guard. No `--test-threads=1` anywhere (correct; keep it that way).
    --all-targets -q || break; done`) — the race was intermittent.
 
 **Acceptance.**
-- [ ] All gates pass; the ten-run loop is clean.
-- [ ] With a `fastf` TUI left open in another terminal, `cargo test` does not block
-      on it and leaves no `.fastf.lock` in the real data dir (check with `fastf
-      paths` + `ls -la`).
-- [ ] `grep -rn 'TEST_LOCK' src/` shows only `interrupt::TEST_LOCK`.
+- [x] All gates pass; the ten-run loop is clean (ten consecutive
+      `cargo test --all-targets -q`, no failures).
+- [x] `cargo test` leaves no `.fastf.lock` in the real data dir — deleted before
+      the loop, still absent after all ten runs. (The "TUI open in another
+      terminal" half is the same property observed from the other side; the
+      lock file is the check that does not need a human.)
+- [x] `grep -rn 'TEST_LOCK' src/` shows only `interrupt::TEST_LOCK` (its
+      definition, and the two modules that take it).
 
 ---
 
@@ -632,9 +652,15 @@ push to a branch to exercise `ci.yml` via PR; inspect that `gates` ran and the s
 steps printed the version.
 
 **Acceptance.**
-- [ ] PR CI green; the dry-run release shows `gates → build → (release skipped)`.
-- [ ] `grep -n 'uses:' .github/workflows/*.yml` shows only SHA pins.
-- [ ] `ROADMAP.md` gates and `PUBLISHING.md` updated.
+- [x] The dry-run release
+      ([run 32645482828](https://github.com/cristocola/fast-folder/actions/runs/32645482828))
+      is green end to end: `gates` (all eight CI jobs) → `build` (three targets)
+      → `smoke` (three jobs) → `publish release: skipped`. Both Windows smoke
+      steps printed `fastf 2.0.0` — the ZIP's exe and the MSI payload's.
+- [x] `grep -n 'uses:' .github/workflows/*.yml` shows only SHA pins. The one
+      exception is `uses: ./.github/workflows/ci.yml`, the repository's own
+      reusable workflow, which is a path and not a pinnable ref.
+- [x] `ROADMAP.md` gates and `PUBLISHING.md` updated, plus the `release` skill.
 
 ---
 
@@ -677,14 +703,25 @@ must be clean for `src/ tests/ docs/ *.md` except format names and the ROADMAP
 release table.
 
 **Acceptance.**
-- [ ] All gates pass (docs build included).
-- [ ] The `git grep` above is clean.
-- [ ] Each `CLAUDE.md` read top to bottom once by the phase agent; anything that
-      describes a past version rather than a present rule was removed.
+- [x] All gates pass (docs build included).
+- [x] The `git grep` above is clean for `src/ tests/ docs/`; the only remaining
+      matches anywhere are `ROADMAP.md`'s release table and this file, both
+      named as exceptions.
+- [x] Each `CLAUDE.md` read top to bottom; anything describing a past version
+      rather than a present rule was removed, and three live errors were found
+      that way — `tree_size::directory_size` no longer exists (Phase 1 removed
+      it), `tests/CLAUDE.md` stated the harness rules twice after Phase 7, and
+      the root module list was missing `shell_open`, `test_env` and the new
+      `paths` helpers.
 
 ---
 
 ## Release — v2.0.0
+
+**All nine phases are complete.** `Cargo.toml` is at `2.0.0` so the built binary
+reports the release it is; **no tag has been pushed and no release cut** —
+publication is the maintainer's explicit call, and `release.yml` refuses a tag
+that does not match this number anyway.
 
 Only on an explicit "release" from the maintainer; follow the `release` skill.
 Release notes must say: the browser UI (`fastf ui`, `fastf-ui.exe`, the
@@ -729,3 +766,109 @@ fastf refuses to write through links; cache entries outside a base are ignored.
   the WiX `UiLauncher` component belonged to no `ComponentGroup`, so removing it
   needed no other edit. The Windows cross-*link* could not run here (no
   `mingw-w64-gcc`); Windows clippy did.
+- **Phase 2 — 2026-08-23, `phase-02-names-and-numbers`.** Observed failing on the
+  pre-change build: the `.hidden`/`..` create test (planned `.hidden` and got a
+  `ProjectPlan`), the `.{id}` template test (`save_to_file` returned `Ok`),
+  `fastf id set 1000000000000` (succeeded, printing "counter raised to
+  1000000000000"), and both manifest tests — the undecodable one is the
+  important one, because `save_to_file` returned `Ok` there and the file was
+  gone. The `ProjectFolderName` property could not compile, the type not
+  existing yet.
+
+  Four deviations from the plan, all narrowing:
+  - `--name=` "of only illegal characters" is **not** refused and should not be:
+    `?*|` sanitizes to `___`, a real visible folder. Only names that sanitize
+    away to *nothing* are refused. The test cases are `..`, `.`, `...`.
+  - `--name="   "` is refused one layer earlier, by the required-variable check.
+    Noted in the test rather than asserted on `ProjectFolderName`.
+  - The unreadable-manifest fixture the plan named (a *directory* at the manifest
+    path) proves the message but not the defect: the old code's atomic rename
+    onto a non-empty directory failed anyway. A manifest containing invalid UTF-8
+    is the fixture where the old code returned `Ok` and destroyed the file. Both
+    cases are tested.
+  - `Template::validate`'s digit ceiling is `template::MAX_ID_DIGITS` (12,
+    matching `Counters::MAX_VALUE`'s width), which *widens* the TUI builder's
+    previous 1..=9. The builder now shares the constant instead of its own bound.
+- **Phase 3 — 2026-08-23, `phase-03-shelling-out`.** As planned. Two notes:
+  `post_create::project_command(program, project_path)` is the single funnel the
+  plan implied but did not name — it sets `current_dir` and `FASTF_PROJECT_PATH`
+  together, so a future child cannot get one without the other. And the "no
+  `start` anywhere" acceptance line contradicts the phase's own decision to keep
+  the editor on `cmd /c start` for `.cmd` shims; read as "no `start` in
+  `reveal_folder`", which holds. The Windows reveal smoke stays open for the
+  maintainer — CI compiles and lints `ShellExecuteW` but cannot open a window.
+- **Phase 4 — 2026-08-23, `phase-04-template-writes-locked`.** Two deviations.
+  The operations' tests are **integration** tests in `tests/template_engine.rs`
+  rather than unit tests in `operations.rs`: both take `DataLock`, whose path is
+  `install_dir().join(".fastf.lock")`, so a unit test would lock the developer's
+  real data directory — the very defect Phase 7 exists to fix. And the
+  concurrency test's lock holder is **the test process itself**
+  (`DataLock::acquire_at` on the sandbox's lock file) rather than a second
+  spawned fastf: a race between two children is a race, and would pass or fail
+  on scheduling. Holding the real lock makes the question exact.
+
+  Found while wiring it: the builder's edit mode could already change a slug, and
+  `save_to_file(&tmpl.file_path())` wrote the new manifest into a fresh directory
+  and left the old one behind as a second template with the same contents.
+  `save_template`'s `original_slug` fixes that; it is why the parameter exists.
+- **Phase 5 — 2026-08-23, `phase-05-destination-containment`.** As planned, plus
+  three things the plan did not name. `assets::copy_file` now takes
+  `(dest_root, rel)` instead of a joined `dest`, because a caller that joins
+  first has already skipped the check. `paths::is_link_like` is a new single
+  definition of "link" — the reparse-point attribute, not just
+  `FileType::is_symlink()` — and `tree_size`'s private copy is gone, so a walker
+  cannot end up with a weaker rule than a writer. And `require_real_directory`
+  moved to `paths` as the plan said, which upgrades **every** existing caller
+  (transactions, provisioning, move_engine, guard, and Phase 4's
+  `delete_template`) from the symlink-only test to the reparse-point one.
+- **Phase 6 — 2026-08-23, `phase-06-cache-hints`.** One correction to the plan.
+  It said a rejected entry "sets the `dropped` flag that already triggers a
+  rescan" — `dropped` triggers a *rewrite*, not a rescan, so rejecting every
+  entry of a forged cache rewrote it empty and the base's real projects
+  disappeared until its mtime next changed. The test caught it. A rejected entry
+  now abandons the cache and rescans, which is the honest response: a vanished
+  folder is a transient row to drop, but an entry naming a path outside its base
+  means the file is no longer fastf's own bookkeeping.
+- **Phase 7 — 2026-08-23, `phase-07-test-isolation`.** As planned, with three
+  notes. `common::env::EnvGuard` became **public and general**
+  (`apply`/`set`/`remove`) rather than private, because `data_dir.rs`'s
+  `with_user_dir_env` and `crash_recovery.rs`'s `arm`/`disarm` both had to go
+  through it — `with_sandbox` now hands the guard to its body for that reason.
+  The `tests/` half of the source scan therefore has real work to do, not just
+  the lib's.
+
+  Two mistakes worth recording because the phase is about exactly them.
+  `EnvGuard` guards do **not** nest: `ENV_LOCK` is a plain `Mutex` and taking it
+  twice on one thread deadlocks — the first version of the unwind test did, and
+  hung. And the first version of `a_panicking_test_body_still_restores_the_environment`
+  used a private `PANIC_SERIAL` instead of the binary's `SERIAL`, so it raced the
+  other tests in `data_dir.rs` and failed intermittently: a second mutex over the
+  same process-global, which is the defect this phase removes.
+- **Phase 9 — 2026-08-23, `phase-09-docs-and-comments`.** As planned. The
+  ROADMAP's "Current phase" became a v2.0.0 summary in *guarantees* rather than
+  the nine-deep stack of "Previously:" entries the phases had accumulated —
+  `PLAN.md` is the phase-by-phase record and the ROADMAP should not be a second
+  one. `src/core/CLAUDE.md`'s pinned `serde-1.0.229/src/private/de.rs:1255`
+  became the item name rather than a newer line number: the `flatten` behaviour
+  it documents is serde's design, not a version's bug, so there is nothing to
+  re-pin.
+
+  Also carried here from the Phase 8 dry run: the first `gates` run failed on
+  the Windows leg because Phase 6's forged-cache test compared a canonicalized
+  discovery path to a raw `base.join(...)` — different strings for one directory
+  once `\\?\` and 8.3 short names are involved. Fixed on the Phase 6 branch and
+  merged up the stack, which is the gate doing exactly its job on its first
+  run.
+
+  The gate earned itself twice more after that. A second dry run failed on
+  Windows because Phase 3's `folder_names_that_are_cmd_syntax_round_trip_through_discovery`
+  hand-wrote `folder: %USERPROFILE%` unquoted, and a plain YAML scalar may not
+  begin with `%` — the directive indicator. The product was never wrong
+  (`project_info::write` goes through `util::yaml` and emits
+  `folder: '%USERPROFILE%'`; verified against the release binary), but the
+  fixture was, and the test is no longer `cfg(windows)`: `%` and `&` are legal
+  folder names everywhere, so gating it to Windows meant it could only fail on
+  CI. And smoke-testing the release binary by hand turned up a message that read
+  "'' leaves no usable folder name: every character in it is one a folder name
+  may not contain" for `--name=..` — nonsense about a string with no characters,
+  now two distinct messages.

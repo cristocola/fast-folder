@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use crate::core::assets;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::naming::{RenderContext, interpolate_name, sanitize_name};
+use crate::core::naming::{RenderContext, interpolate_name};
 pub use crate::core::plan::ProjectPlan;
 use crate::core::template::{FolderNode, Template};
-use crate::core::validated::SafeRelativePath;
+use crate::core::validated::{ProjectFolderName, SafeRelativePath};
 
 /// How many `_2`, `_3`… variants to try before giving up on a colliding name.
 ///
@@ -223,7 +223,7 @@ pub fn plan(
     // Read-only by contract: `next_value` consults `library::max_id`, which
     // never writes, so previewing a plan still touches no disk. Convergence
     // (which does write) happens on the create path — see `Counters::record`.
-    let counter_value = Counters::next_value(config, counters);
+    let counter_value = Counters::next_value(config, counters)?;
     let id_str = Counters::format_id(&template.id.prefix, template.id.digits, counter_value);
     vars.insert("id".to_string(), id_str.clone());
 
@@ -234,15 +234,22 @@ pub fn plan(
 
     // Interpolate folder name. Use `interpolate_name` so empty variables don't
     // leave `__` gaps or leading/trailing underscores in the folder name.
-    // Sanitize the assembled result as well as the individual variables: the
-    // pattern itself can contribute a trailing dot or a literal reserved device
-    // name that no single variable is responsible for. `sanitize_name` is
-    // idempotent, so the double pass is free.
-    let base_name = sanitize_name(&crate::core::naming::interpolate_name_with(
-        &template.naming_pattern,
-        &vars,
-        &ctx,
-    ));
+    // `ProjectFolderName` sanitizes the assembled result as well as the
+    // individual variables — the pattern itself can contribute a trailing dot or
+    // a literal reserved device name that no single variable is responsible for
+    // — and then refuses what sanitizing alone would let through. The error
+    // names both the rendered value and the pattern that produced it, because
+    // the user typed a variable, not a folder name.
+    let rendered_name =
+        crate::core::naming::interpolate_name_with(&template.naming_pattern, &vars, &ctx);
+    let base_name = ProjectFolderName::parse(&rendered_name)
+        .with_context(|| {
+            format!(
+                "template '{}' rendered its naming pattern '{}' as '{rendered_name}'",
+                template.slug, template.naming_pattern
+            )
+        })?
+        .into_string();
 
     let base = config.resolve_base_dir();
 
@@ -302,22 +309,27 @@ fn create_inner(
     config: &Config,
     run_post: bool,
 ) -> Result<ProjectPlan> {
+    // Defense in depth, before a single directory is created: the folder must
+    // land directly in the base the plan was made against.
     //
-    // This used to be `exists()` followed by `create_dir_all()`. Because
-    // `create_dir_all` succeeds on a directory that is already there, two
-    // concurrent creates could both pass the check and then both write into the
-    // same folder — the second silently overwriting the first's files and
-    // PROJECT_INFO.md. `create_dir` fails with `AlreadyExists` instead, so the
-    // filesystem itself arbitrates and exactly one caller can ever win.
-    let parent = plan
-        .root_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    if !parent.as_os_str().is_empty() {
-        fs::create_dir_all(&parent).with_context(|| format!("creating {}", parent.display()))?;
+    // `plan` builds `root_path` as `base.join(folder_name)`, so this holds by
+    // construction — until `folder_name` is something `join` treats specially.
+    // `base.join("")` is `base` itself, and its parent is the base's *parent*:
+    // that is how `--name=..` came to create a folder called `_2` one level
+    // above the library. `ProjectFolderName` now refuses those names at the
+    // plan, and this refuses a plan that carries one anyway.
+    let base = config.resolve_base_dir();
+    let parent = plan.root_path.parent().unwrap_or(Path::new(""));
+    if parent != base.as_path() {
+        anyhow::bail!(
+            "refusing to create '{}': it would land in {} rather than in the base {}",
+            plan.folder_name,
+            crate::util::paths::display_path(parent),
+            crate::util::paths::display_path(&base)
+        );
     }
+    let parent = parent.to_path_buf();
+    fs::create_dir_all(&parent).with_context(|| format!("creating {}", parent.display()))?;
 
     // Claim the project folder with a single atomic operation.
     //
@@ -539,12 +551,10 @@ pub fn run_post_create(
     if actions.is_empty() {
         return Vec::new();
     }
-    match crate::core::post_create::run(&actions, root, config) {
-        Ok(notes) => notes,
-        Err(e) => vec![crate::core::post_create::Note::Warning(format!(
-            "post-create step failed: {e}"
-        ))],
-    }
+    // No `Result` to unwrap: every individual failure is already a
+    // `Note::Warning`, because the project on disk is finished and correct
+    // whatever the editor did. The `Err` arm this used to carry was dead code.
+    crate::core::post_create::run(&actions, root, config)
 }
 
 pub fn resolve_post_create(
@@ -650,7 +660,7 @@ pub fn apply(
     vars: &HashMap<String, String>,
     config: &Config,
 ) -> Result<()> {
-    assets::require_real_directory(target, "apply target")?;
+    crate::util::paths::require_real_directory(target, "apply target")?;
     let vars = crate::core::vars::rendered_values(template, vars)?;
     let ctx = RenderContext::now(&config.date_format);
 
@@ -658,6 +668,13 @@ pub fn apply(
     for action in apply_plan_resolved(template, target, &vars, &ctx)? {
         match action {
             ApplyAction::CreateFolder(p) => {
+                // The plan joined this onto `target` lexically. Re-derive the
+                // relative part and re-check it physically, here, right before
+                // the write.
+                let rel = p
+                    .strip_prefix(target)
+                    .with_context(|| format!("{} is not inside the apply target", p.display()))?;
+                let p = crate::util::paths::contained_destination(target, rel)?;
                 fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
             }
             ApplyAction::SkipFolder(_) => {}
@@ -672,6 +689,9 @@ pub fn apply(
     Ok(())
 }
 
+/// `parent` is checked as a real directory by `contained_destination` on the
+/// way in at every level, so a link planted mid-tree stops the recursion rather
+/// than redirecting it.
 fn create_structure(
     nodes: &[FolderNode],
     parent: &Path,
@@ -682,7 +702,7 @@ fn create_structure(
         let raw = SafeRelativePath::parse(&node.name)?;
         let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
         let actual_path = SafeRelativePath::parse(&rendered)?;
-        let path = actual_path.join_to(parent);
+        let path = crate::util::paths::contained_destination(parent, &actual_path.to_path_buf())?;
         fs::create_dir_all(&path)
             .with_context(|| format!("creating directory {}", path.display()))?;
         if !node.children.is_empty() {
@@ -762,15 +782,14 @@ fn copy_template_files(
         }
         // Built from the *native* path, so a name that is not valid UTF-8 lands
         // spelled exactly as it was rather than with `?` where its bytes were.
-        // `require_native_relative` is what keeps this inside `dest_root`.
-        // Built from the *native* path, so a name that is not valid UTF-8 lands
-        // spelled exactly as it was rather than with `?` where its bytes were.
-        // `require_native_relative` is what keeps this inside `dest_root`.
+        // `require_native_relative` proves the *text* cannot escape `dest_root`;
+        // `contained_destination` proves the filesystem beneath it does not
+        // either, and is re-run per entry immediately before each write.
         let native = assets::interp_rel_os(&entry.os_rel, vars, ctx);
         crate::util::paths::require_native_relative(&native, "template file")?;
-        let dest = dest_root.join(&native);
 
         if entry.is_dir() {
+            let dest = crate::util::paths::contained_destination(dest_root, &native)?;
             fs::create_dir_all(&dest)
                 .with_context(|| format!("creating directory {}", dest.display()))?;
             continue;
@@ -788,7 +807,7 @@ fn copy_template_files(
             continue;
         }
 
-        if skip_existing && dest.exists() {
+        if skip_existing && dest_root.join(&native).exists() {
             continue;
         }
 
@@ -796,7 +815,8 @@ fn copy_template_files(
             || entry.size > assets::TEXT_MAX_BYTES;
         assets::copy_file(
             &files_dir.join(&entry.os_rel),
-            &dest,
+            dest_root,
+            &native,
             force_verbatim,
             vars,
             ctx,
@@ -840,12 +860,10 @@ mod tests {
     /// `interrupt::check()` inside the copy loop — without the collateral.
     #[test]
     fn interrupted_create_rolls_back_and_leaves_no_partial_project() {
+        // `ENV_LOCK` first, then the interrupt flag's lock — the documented
+        // order, in both modules.
+        let (_env, tmp) = crate::util::test_env::EnvGuard::sandbox();
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        // SAFETY: the SERIAL lock keeps other tests in this binary off these vars.
-        unsafe {
-            std::env::set_var("FASTF_INSTALL_DIR", tmp.path());
-        }
 
         let template = template_on_disk(&tmp.path().join("tpl"), 3);
         let base = tmp.path().join("base");
@@ -873,22 +891,14 @@ mod tests {
             0,
             "a rolled-back create must not burn an ID"
         );
-
-        unsafe {
-            std::env::remove_var("FASTF_INSTALL_DIR");
-        }
     }
 
     /// The success path must end with no in-progress markings at all — otherwise
     /// every healthy project would look half-built to `reconcile`.
     #[test]
     fn successful_create_clears_provisioning_state() {
+        let (_env, tmp) = crate::util::test_env::EnvGuard::sandbox();
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        // SAFETY: as above.
-        unsafe {
-            std::env::set_var("FASTF_INSTALL_DIR", tmp.path());
-        }
         crate::util::interrupt::reset();
 
         let template = template_on_disk(&tmp.path().join("tpl"), 2);
@@ -922,10 +932,6 @@ mod tests {
             !pinfo.contains("provisioning"),
             "finished metadata must not carry the flag:\n{pinfo}"
         );
-
-        unsafe {
-            std::env::remove_var("FASTF_INSTALL_DIR");
-        }
     }
 
     // -----------------------------------------------------------------------

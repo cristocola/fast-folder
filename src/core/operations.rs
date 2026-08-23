@@ -93,7 +93,7 @@ pub fn preview_apply(
 ) -> Result<ApplyOutcome> {
     let config = Config::load()?;
     let template = template::find_by_slug(template_slug)?;
-    assets::require_real_directory(target, "apply target")?;
+    crate::util::paths::require_real_directory(target, "apply target")?;
     let actions = project::apply_plan(&template, target, variables, &config.date_format)?;
     Ok(ApplyOutcome { actions })
 }
@@ -106,7 +106,7 @@ pub fn apply(
     let _mutation_lock = DataLock::acquire()?;
     let config = Config::load()?;
     let template = template::find_by_slug(template_slug)?;
-    assets::require_real_directory(target, "apply target")?;
+    crate::util::paths::require_real_directory(target, "apply target")?;
     // The authoritative occupancy plan is computed only after the lock is held.
     let actions = project::apply_plan(&template, target, variables, &config.date_format)?;
     project::apply(&template, target, variables, &config)?;
@@ -232,8 +232,10 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "registered".to_string());
-        let id_value = parse_id_token(&folder_name, &template.id.prefix)
-            .unwrap_or_else(|| Counters::next_value(&config, &counters));
+        let id_value = match parse_id_token(&folder_name, &template.id.prefix) {
+            Some(recovered) => recovered,
+            None => Counters::next_value(&config, &counters)?,
+        };
         let id = Counters::format_id(&template.id.prefix, template.id.digits, id_value);
 
         for configured in config.effective_bases() {
@@ -339,7 +341,7 @@ fn configured_parent(config: &Config, canonical: &Path) -> Result<PathBuf> {
             continue;
         };
         if configured == parent {
-            assets::require_real_directory(&configured, "configured base")?;
+            crate::util::paths::require_real_directory(&configured, "configured base")?;
             return Ok(configured);
         }
     }
@@ -374,10 +376,10 @@ fn desired_registration_name(
             "register_naming_pattern",
         )
     };
-    let desired = sanitize_name(&interpolate_name(pattern, variables, &config.date_format));
-    if desired.is_empty() {
-        bail!("{source} resolved to an empty name — cannot rename");
-    }
+    let rendered = interpolate_name(pattern, variables, &config.date_format);
+    let desired = crate::core::validated::ProjectFolderName::parse(&rendered)
+        .with_context(|| format!("{source} resolved to '{rendered}'"))?
+        .into_string();
     Ok(Some(desired))
 }
 
@@ -576,6 +578,12 @@ pub fn set_counter(value: u64) -> Result<CounterOutcome> {
     if value <= floor {
         bail!("the counter cannot go below {floor}; pass a value above {floor} to raise it");
     }
+    if value > Counters::MAX_VALUE {
+        bail!(
+            "the counter cannot go above {}; the next create would have no ID to mint",
+            Counters::MAX_VALUE
+        );
+    }
     Counters::record(&config, &config.resolve_base_dir(), value);
     Ok(CounterOutcome {
         value: Counters::floor(&config),
@@ -588,6 +596,79 @@ pub fn reindex() -> Result<(Config, usize)> {
     let config = Config::load()?;
     let total = library::reindex(&config);
     Ok((config, total))
+}
+
+// ---------------------------------------------------------------------------
+// Templates
+// ---------------------------------------------------------------------------
+
+/// Persist a template, optionally renaming its directory first.
+///
+/// The one way to write a template. `Template::save_to_file` is `pub(crate)`
+/// so that stays true: a surface that writes a manifest itself writes it with
+/// no lock held, and a create running in another terminal can read half of it.
+///
+/// `original_slug` is the slug the template was **loaded** under. When it
+/// differs from `template.slug` the directory is renamed before the manifest is
+/// written — the builder's edit mode can change a slug, and without the rename
+/// the new manifest landed in a fresh directory while the old one stayed behind
+/// as a second, stale template with the same contents.
+///
+/// Returns the manifest path.
+pub fn save_template(template: &Template, original_slug: Option<&str>) -> Result<PathBuf> {
+    let _mutation_lock = DataLock::acquire()?;
+
+    // Validate before anything moves. `save_to_file` validates too, but a
+    // rename that happened first would have to be undone.
+    template.validate()?;
+    let slug = crate::core::validated::TemplateSlug::parse(&template.slug)?;
+    let dir = crate::util::paths::template_dir(slug.as_str());
+
+    if let Some(original) = original_slug {
+        let original = crate::core::validated::TemplateSlug::parse(original)?;
+        if original.as_str() != slug.as_str() {
+            let from = crate::util::paths::template_dir(original.as_str());
+            if from.exists() {
+                if dir.exists() {
+                    bail!(
+                        "template '{slug}' already exists — rename '{original}' to something else"
+                    );
+                }
+                fs::rename(&from, &dir)
+                    .with_context(|| format!("renaming template '{original}' to '{slug}'"))?;
+            }
+        }
+    }
+
+    let manifest = crate::util::paths::template_manifest(slug.as_str());
+    template.save_to_file(&manifest)?;
+    Ok(manifest)
+}
+
+/// Remove a template directory and everything bundled in it.
+///
+/// The caller confirms first, outside the lock — `DataLock` is not reentrant
+/// and must never be held across a prompt.
+pub fn delete_template(slug: &str) -> Result<()> {
+    let _mutation_lock = DataLock::acquire()?;
+
+    let slug = crate::core::validated::TemplateSlug::parse(slug)?;
+    let dir = crate::util::paths::template_dir(slug.as_str());
+
+    // A recursive delete follows what it is pointed at. The template directory
+    // must be a real directory sitting directly under the templates directory —
+    // never a link, whose target is somewhere this has no business removing.
+    crate::util::paths::require_real_directory(&dir, "template directory")?;
+    if dir.parent() != Some(crate::util::paths::templates_dir().as_path()) {
+        bail!(
+            "refusing to delete {}: it is not directly inside the templates directory",
+            crate::util::paths::display_path(&dir)
+        );
+    }
+
+    crate::util::fs_retry::remove_dir_all(&dir)
+        .with_context(|| format!("deleting template '{slug}'"))?;
+    Ok(())
 }
 
 pub fn template_from_folder(

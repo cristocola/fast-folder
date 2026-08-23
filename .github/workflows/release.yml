@@ -7,8 +7,17 @@ on:
   # (the release job below is tag-gated).
   workflow_dispatch:
 
+# Read-only by default. Only `release` gets write access, and only to the three
+# things it actually needs. A blanket `contents: write` here applied to every
+# job, including ones that only build.
 permissions:
-  contents: write
+  contents: read
+
+# One release per ref at a time. Two pushes of the same tag (a retag, a
+# re-run) could otherwise upload assets over each other.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,12 +29,15 @@ jobs:
   # a different version than its assets are named for.
   #
   # The job runs unconditionally (a skipped job would skip `build` with it on a
-  # workflow_dispatch dry run); the comparison is what is tag-gated.
+  # workflow_dispatch dry run); the comparisons are what is tag-gated.
   verify-version:
     name: tag matches Cargo.toml
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # `git merge-base` below needs history, not just the tagged commit.
+          fetch-depth: 0
       - name: Compare tag to crate version
         if: github.ref_type == 'tag'
         run: |
@@ -36,10 +48,32 @@ jobs:
             echo "::error::tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${crate}; bump the crate or retag"
             exit 1
           fi
+      # A tag can be pushed at any commit in the repository, including one that
+      # was never merged and therefore never had CI run against it in the shape
+      # that ships.
+      - name: Tag must be on main
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} points at a commit that is not an ancestor of main; merge first, then tag"
+            exit 1
+          fi
+
+  # The whole of CI, run as this workflow's gate. Before this, a tag could ship
+  # binaries without a single test having run: `build` did `cargo build` and
+  # nothing else.
+  gates:
+    name: gates
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      checks: write
+      issues: write
 
   build:
     name: build (${{ matrix.target }})
-    needs: verify-version
+    needs: [verify-version, gates]
     strategy:
       fail-fast: false
       matrix:
@@ -52,13 +86,20 @@ jobs:
             os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned here and **only** here. There is deliberately no
+      # `rust-toolchain.toml`: that would follow the AUR source package and
+      # every contributor's checkout around, and the MSRV job derives its
+      # toolchain from `Cargo.toml`'s `rust-version` instead. What is published
+      # should be built by a known compiler; what people build themselves
+      # should not be pinned to ours.
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: "1.97.1"
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.target }}
 
@@ -125,7 +166,7 @@ jobs:
             -arch x64 `
             -o "fastf-$name-x86_64.msi"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pkg-${{ matrix.target }}
           path: |
@@ -134,20 +175,117 @@ jobs:
             fastf-*.msi
           if-no-files-found: error
 
-  release:
-    name: publish release
+  # Unpack what was actually built and run it. `build` verified the binary in
+  # its own tree; this verifies the *archive* — that the thing a user downloads
+  # contains a working `fastf` reporting the version on the tin.
+  smoke-linux:
+    name: smoke (${{ matrix.target }})
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl]
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pkg-${{ matrix.target }}
+      - name: Unpack and run
+        run: |
+          archive=$(ls fastf-*-${{ matrix.target }}.tar.gz)
+          tar xzf "$archive"
+          bin="${archive%.tar.gz}/fastf"
+          reported=$("$bin" --version)
+          echo "$reported"
+          # The version must be the tag, not merely present. A dry run has no
+          # tag to compare against, so only the tagged path asserts.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            expected="fastf ${GITHUB_REF_NAME#v}"
+            [ "$reported" = "$expected" ] || {
+              echo "::error::archive reports '$reported', expected '$expected'"
+              exit 1
+            }
+          fi
+          "$bin" completions bash > /dev/null
+
+  smoke-windows:
+    name: smoke (windows)
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pkg-x86_64-pc-windows-msvc
+      - name: Unpack the ZIP and run
+        shell: pwsh
+        run: |
+          $zip = (Get-ChildItem fastf-*.zip)[0]
+          Expand-Archive -Path $zip -DestinationPath unpacked
+          $bin = (Get-ChildItem -Recurse unpacked -Filter fastf.exe)[0].FullName
+          $reported = & $bin --version
+          Write-Host $reported
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $expected = "fastf " + $env:GITHUB_REF_NAME.TrimStart("v")
+            if ($reported -ne $expected) {
+              Write-Host "::error::archive reports '$reported', expected '$expected'"
+              exit 1
+            }
+          }
+          & $bin completions powershell | Out-Null
+
+      # An administrative install extracts the MSI's payload without installing
+      # it, so the exe that ships inside the installer is exercised too — not
+      # only the one in the ZIP.
+      - name: Extract the MSI and run what is inside it
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem fastf-*.msi)[0].FullName
+          $dir = Join-Path $PWD "msi-extract"
+          $proc = Start-Process msiexec -ArgumentList "/a", "`"$msi`"", "/qn", "TARGETDIR=`"$dir`"" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::msiexec administrative install failed with $($proc.ExitCode)"
+            exit 1
+          }
+          $bin = (Get-ChildItem -Recurse $dir -Filter fastf.exe)[0].FullName
+          $reported = & $bin --version
+          Write-Host $reported
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $expected = "fastf " + $env:GITHUB_REF_NAME.TrimStart("v")
+            if ($reported -ne $expected) {
+              Write-Host "::error::MSI payload reports '$reported', expected '$expected'"
+              exit 1
+            }
+          }
+
+  release:
+    name: publish release
+    needs: [smoke-linux, smoke-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    # The only job with write access, and the only one that needs the OIDC
+    # token that signs the provenance attestation.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           merge-multiple: true
 
       - name: Checksums
         run: sha256sum fastf-* > SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
+      # Signed, verifiable evidence of which workflow at which commit produced
+      # each asset. `gh attestation verify <file> --repo <owner>/<repo>`.
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            fastf-*.tar.gz
+            fastf-*.zip
+            fastf-*.msi
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             fastf-*

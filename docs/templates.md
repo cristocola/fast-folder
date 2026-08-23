@@ -23,6 +23,12 @@ Everything under `files/` is copied into each new project:
 
 There is no per-file configuration. The directory is the spec, which also makes sharing trivial: a template is a folder, so copy the folder. Version it in git, send it to a teammate, or drop a gallery example from [`examples/templates/`](../examples/templates/) into your own templates directory.
 
+Saving or deleting a template through fastf waits for any fastf operation
+already running — including one in another terminal — so a template cannot be
+edited or removed out from under a `fastf new` that is halfway through copying
+it. Editing `template.yaml` in your own editor is outside that, as it should be:
+the directory is yours.
+
 ## template.yaml
 
 The manifest holds metadata only. The file spec lives in `files/`.
@@ -86,6 +92,26 @@ Non-empty folders are implied by the paths of files in `files/`. Only truly empt
 The template `slug` is one directory component and may contain only ASCII
 letters, digits, `-`, and `_`. A `structure` name may use safe nested syntax
 such as `src/components`; it is not limited to one component.
+
+### What `naming_pattern` and `id:` may be
+
+- `naming_pattern` is required and **may not start with `.`**. fastf finds
+  projects by scanning for folders that hold a `PROJECT_INFO.md`, and it skips
+  dot-prefixed folders (those are its own staging), so a pattern like `.{id}`
+  would name projects fastf could never see again. The template is refused when
+  you save it, not once per project.
+- `id.prefix` is required. `fastf register` recovers a project's ID by finding
+  `<prefix><digits>` in an existing folder name, and with no prefix that match
+  is "any trailing digits" — `Album_2024` would register as ID 2024.
+- `id.digits` must be between **1 and 12**. Twelve is the width of the highest
+  ID the counter can reach, so every ID a template can produce fits the padding
+  it asked for.
+
+Whatever the pattern renders to also has to be a folder name fastf can find
+again: not empty, not starting with `.`, and a single path component. A project
+whose answers render to nothing (`--name=..`) is refused before any folder is
+created, and the error names both the rendered value and the pattern that
+produced it.
 
 ## Variables and transforms
 
@@ -158,7 +184,31 @@ git_init = true
 reveal = false
 open_in_editor = false   # opens config.editor (or $EDITOR) with the project folder
 print_path = false       # prints the absolute path, useful for pipelines: $(fastf new ...)
-commands = []            # shell commands; {path} is replaced with the project's absolute path
+commands = []            # shell commands, run inside the project folder
 ```
 
 A template-level `post_create:` replaces the global block entirely. Commands run synchronously through the system shell, so only use templates you trust.
+
+### How a command finds the project
+
+Every program fastf starts for a project — `git init`, your editor, and each of
+these commands — runs with the project folder as its **working directory** and
+with `FASTF_PROJECT_PATH` set to the project's absolute path. So in a new
+command, write `.` or `"$FASTF_PROJECT_PATH"` (`"%FASTF_PROJECT_PATH%"` on
+Windows):
+
+```toml
+commands = [
+  "npm install",                          # . is already the project
+  "tar czf ../backup.tgz .",
+  "echo \"$FASTF_PROJECT_PATH\" | xclip",
+]
+```
+
+`{path}` still works and needs no migration. It is **not** replaced with the
+path: it expands to a quoted reference to that same variable, so the folder's
+name never becomes part of the command's source text. That matters because a
+folder name can legally contain `;`, `&`, `$`, `(`, `)` and a backtick, and a
+project called `Live; rm -rf ~` would otherwise be two commands rather than one
+argument. A `{path}` you have already quoted yourself (`code "{path}"`) is
+replaced as a unit, so it does not end up double-quoted.

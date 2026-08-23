@@ -16,7 +16,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::core::assets::{self, Progress};
+use crate::core::assets::Progress;
 
 pub const TRANSACTIONS_DIR: &str = ".fastf-transactions";
 pub const JOURNAL_FILE: &str = "move.json";
@@ -107,7 +107,7 @@ impl MoveManifest {
     /// Scan exactly once before copying. Unsupported entries fail the entire
     /// move; links and special files are never followed or silently omitted.
     pub fn scan(root: &Path) -> Result<Self> {
-        assets::require_real_directory(root, "move source")?;
+        crate::util::paths::require_real_directory(root, "move source")?;
         let mut entries = Vec::new();
         scan_inner(root, root, &mut entries)?;
         entries.sort_by(|left, right| left.path.cmp(&right.path));
@@ -278,8 +278,8 @@ impl MoveTransaction {
         target_folder: &Path,
         project_id: &str,
     ) -> Result<Self> {
-        assets::require_real_directory(source_base, "source base")?;
-        assets::require_real_directory(target_base, "target base")?;
+        crate::util::paths::require_real_directory(source_base, "source base")?;
+        crate::util::paths::require_real_directory(target_base, "target base")?;
         validate_folder(source_folder, "source")?;
         validate_folder(target_folder, "target")?;
 
@@ -383,14 +383,14 @@ impl MoveTransaction {
                 self.operation_dir.display()
             );
         }
-        assets::require_real_directory(&self.operation_dir, "move transaction")?;
+        crate::util::paths::require_real_directory(&self.operation_dir, "move transaction")?;
         crate::util::fs_retry::remove_dir_all(&self.operation_dir)
             .with_context(|| format!("removing move transaction {}", self.operation_dir.display()))
     }
 }
 
 pub fn ensure_transaction_root(target_base: &Path) -> Result<PathBuf> {
-    assets::require_real_directory(target_base, "target base")?;
+    crate::util::paths::require_real_directory(target_base, "target base")?;
     let root = target_base.join(TRANSACTIONS_DIR);
     match fs::create_dir(&root) {
         Ok(()) => {}
@@ -400,7 +400,7 @@ pub fn ensure_transaction_root(target_base: &Path) -> Result<PathBuf> {
                 .with_context(|| format!("creating transaction root {}", root.display()));
         }
     }
-    assets::require_real_directory(&root, "transaction root")?;
+    crate::util::paths::require_real_directory(&root, "transaction root")?;
     Ok(root)
 }
 
@@ -472,8 +472,8 @@ pub fn copy_to_staging(
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    assets::require_real_directory(source, "move source")?;
-    assets::require_real_directory(staging, "move staging")?;
+    crate::util::paths::require_real_directory(source, "move source")?;
+    crate::util::paths::require_real_directory(staging, "move staging")?;
     manifest.validate()?;
     let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
 

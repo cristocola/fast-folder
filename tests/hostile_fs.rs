@@ -20,11 +20,12 @@ use fastf::core::{
 
 mod common;
 
+/// This binary's lock over the process environment — see `common::env`.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 /// Fresh install dir + base, with HOME redirected — see `common::env`.
 fn sandbox<R>(body: impl FnOnce(&Path, &Path) -> R) -> R {
-    common::env::with_sandbox(&SERIAL, |sb| body(&sb.install, &sb.base))
+    common::env::with_sandbox(&SERIAL, |sb, _guard| body(&sb.install, &sb.base))
 }
 
 fn write_hostile_template(install: &Path, slug: &str) {
@@ -315,7 +316,7 @@ fn destroyed_counter_self_heals_from_the_projects_on_disk() {
 }
 
 // ---------------------------------------------------------------------------
-// Path fidelity and bounded recursion (v1.7.1)
+// Path fidelity and bounded recursion
 // ---------------------------------------------------------------------------
 
 /// A pathologically deep tree degrades instead of blowing the stack.
@@ -350,4 +351,261 @@ fn a_very_deep_tree_is_refused_rather_than_overflowing_the_stack() {
         message.contains("too deep") || message.contains("depth"),
         "the error should say what happened: {message}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Writes never follow a link out of the tree they are meant to fill
+// ---------------------------------------------------------------------------
+
+/// `SafeRelativePath` proves the *text* of `docs/new.md` cannot escape the apply
+/// target. Nothing proved the same about the filesystem, and `create_dir_all`
+/// walks straight through an existing `docs -> outside`: the file landed outside
+/// the folder while every lexical check passed.
+#[cfg(unix)]
+#[test]
+fn apply_refuses_to_write_through_a_link_in_the_target() {
+    use std::os::unix::fs::symlink;
+
+    sandbox(|install, base| {
+        let dir = install.join("templates").join("linky");
+        fs::create_dir_all(dir.join("files/docs")).unwrap();
+        fs::write(
+            dir.join("template.yaml"),
+            "name: T\nslug: linky\nnaming_pattern: \"{id}\"\nid:\n  prefix: L\n  digits: 3\n",
+        )
+        .unwrap();
+        fs::write(dir.join("files/docs/new.md"), "template body\n").unwrap();
+
+        let target = base.join("target");
+        let outside = base.join("outside");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, target.join("docs")).unwrap();
+
+        let tmpl = template::find_by_slug("linky").unwrap();
+        let error = project::apply(&tmpl, &target, &HashMap::new(), &Config::default())
+            .expect_err("apply must refuse to write through the link")
+            .to_string();
+
+        assert!(
+            error.contains("refusing to write through a link"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("docs"),
+            "the error must name the link: {error}"
+        );
+        assert!(
+            !outside.join("new.md").exists(),
+            "the file was written outside the apply target"
+        );
+        assert_eq!(
+            fs::read_dir(&outside).unwrap().count(),
+            0,
+            "nothing may be created beyond the link"
+        );
+    });
+}
+
+/// The same rule on the way in. `template from-folder --force` reuses an
+/// existing template directory, so a `files/sub -> outside` planted there would
+/// send the bundle out of the templates directory.
+#[cfg(unix)]
+#[test]
+fn template_ingestion_refuses_a_pre_planted_link_before_writing_a_byte() {
+    use std::os::unix::fs::symlink;
+
+    sandbox(|install, base| {
+        // A source project with a nested binary worth bundling.
+        let source = base.join("source");
+        fs::create_dir_all(source.join("sub")).unwrap();
+        fs::write(source.join("sub/asset.bin"), [0u8, 159, 146, 150]).unwrap();
+
+        // A template directory that already exists, with a hostile link inside.
+        let outside = install.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let files = install.join("templates").join("ingest").join("files");
+        fs::create_dir_all(&files).unwrap();
+        symlink(&outside, files.join("sub")).unwrap();
+
+        let result = fastf::core::operations::template_from_folder(&source, "ingest", true, true);
+
+        // Either the pre-existing directory is cleared first (in which case the
+        // link is gone and the bundle is contained), or the write is refused.
+        // What must never happen is a byte landing beyond the link.
+        assert_eq!(
+            fs::read_dir(&outside).unwrap().count(),
+            0,
+            "the bundle was written through the link: {result:?}"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// A cache entry is a hint, and never authorizes a path outside its base
+// ---------------------------------------------------------------------------
+
+/// Write a cache file whose entries name arbitrary directories, then make it
+/// look **fresh**: the staleness gate compares the base's mtime to the cache
+/// file's, and overwriting a file in place does not bump the directory's mtime,
+/// so a planted cache is trusted without a rescan. This is the delivery route —
+/// caches travel with the projects by design, so a synced folder or an unpacked
+/// archive brings one along.
+fn plant_cache(base: &Path, dirs: &[&str]) {
+    let entries: Vec<String> = dirs
+        .iter()
+        .enumerate()
+        .map(|(i, dir)| {
+            let escaped = dir.replace('\\', "\\\\");
+            format!(
+                "{{\"dir\":\"{escaped}\",\"id\":\"ID900{i}\",\"template\":\"t\",\
+                 \"template_name\":\"T\",\"name\":\"forged\",\
+                 \"created\":\"2026-01-01T00:00:00Z\",\"tags\":[]}}"
+            )
+        })
+        .collect();
+    fs::write(
+        base.join(library::CACHE_FILENAME),
+        format!("{{\"version\":1,\"entries\":[{}]}}", entries.join(",")),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_forged_cache_cannot_make_discovery_name_a_path_outside_the_base() {
+    sandbox(|install, base| {
+        // A sentinel outside the base that must never be reported as a project.
+        let outside = install.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("sentinel"), b"untouched").unwrap();
+
+        write_project(base, "real", &valid_frontmatter("ID0001", "real"));
+        let cfg = config_for(base);
+        assert_eq!(library::discover(&cfg).len(), 1);
+
+        let escape = outside.display().to_string();
+        plant_cache(
+            base,
+            &["/etc", "../outside", "..", ".hidden", "a/b", &escape],
+        );
+
+        // Every hostile entry is dropped. The drop rewrites the cache, and the
+        // rescan that follows finds the one project that is really there.
+        let found = library::discover(&cfg);
+        assert_eq!(
+            found.len(),
+            1,
+            "forged entries were served as projects: {:?}",
+            found.iter().map(|p| p.path.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(found[0].id, "ID0001");
+        // Canonicalized on both sides: discovery canonicalizes its bases, and on
+        // Windows that adds the `\\?\` verbatim prefix and resolves 8.3 short
+        // names, so a raw `base.join(...)` is a different string for the same
+        // directory.
+        assert_eq!(
+            fs::canonicalize(&found[0].path).unwrap(),
+            fs::canonicalize(base.join("real")).unwrap()
+        );
+
+        // Nothing outside the base was touched, listed, or reported.
+        assert_eq!(
+            fs::read_to_string(outside.join("sentinel")).unwrap(),
+            "untouched"
+        );
+    });
+}
+
+/// The read side. `fastf open` hands a discovered path to the system file
+/// manager, and until now took whatever the cache said.
+#[test]
+fn opening_a_project_checks_the_path_before_spawning_anything() {
+    sandbox(|install, base| {
+        let outside = install.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+
+        let real = write_project(base, "real", &valid_frontmatter("ID0001", "real"));
+        let project = library::Project {
+            id: "ID0001".to_string(),
+            template: "t".to_string(),
+            template_name: "T".to_string(),
+            name: "real".to_string(),
+            path: real.clone(),
+            base: base.to_path_buf(),
+            created: "2026-01-01T00:00:00Z".to_string(),
+            tags: vec![],
+            exists: true,
+        };
+        // The real thing passes, or the guard would be useless.
+        library::revalidate_for_read(&project).unwrap();
+
+        // Not a direct child of its own base.
+        let elsewhere = library::Project {
+            path: outside.clone(),
+            ..project.clone()
+        };
+        assert!(library::revalidate_for_read(&elsewhere).is_err());
+
+        // A directory with no PROJECT_INFO.md is not a project folder.
+        let bare = base.join("bare");
+        fs::create_dir_all(&bare).unwrap();
+        let bare_project = library::Project {
+            path: bare,
+            ..project.clone()
+        };
+        let error = library::revalidate_for_read(&bare_project)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("not a project folder"),
+            "unexpected: {error}"
+        );
+
+        // A missing folder.
+        let gone = library::Project {
+            path: base.join("gone"),
+            ..project.clone()
+        };
+        assert!(library::revalidate_for_read(&gone).is_err());
+    });
+}
+
+/// A project directory replaced by a link to somewhere else must not be opened
+/// — the folder fastf would spawn a file manager on is not the project.
+#[cfg(unix)]
+#[test]
+fn a_project_directory_replaced_by_a_link_is_not_opened() {
+    use std::os::unix::fs::symlink;
+
+    sandbox(|install, base| {
+        let outside = install.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(
+            project_info::pinfo_path(&outside),
+            valid_frontmatter("ID0001", "outside"),
+        )
+        .unwrap();
+
+        let linked = base.join("linked");
+        symlink(&outside, &linked).unwrap();
+
+        let project = library::Project {
+            id: "ID0001".to_string(),
+            template: "t".to_string(),
+            template_name: "T".to_string(),
+            name: "linked".to_string(),
+            path: linked,
+            base: base.to_path_buf(),
+            created: "2026-01-01T00:00:00Z".to_string(),
+            tags: vec![],
+            exists: true,
+        };
+        let error = library::revalidate_for_read(&project)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("not a real directory"),
+            "unexpected error: {error}"
+        );
+    });
 }

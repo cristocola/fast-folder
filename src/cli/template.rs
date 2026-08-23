@@ -211,7 +211,8 @@ pub fn delete(slug: &str, yes: bool) -> Result<()> {
             return Ok(());
         }
     }
-    fs::remove_dir_all(&dir)?;
+    // Confirmed above, outside the lock; the operation takes it.
+    crate::core::operations::delete_template(slug)?;
     println!("Deleted template '{}'.", slug);
     Ok(())
 }

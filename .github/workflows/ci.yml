@@ -1,10 +1,23 @@
 name: CI
 
+# `workflow_call` is what lets `release.yml` run this *whole* file as its gate,
+# rather than a tag being able to publish something CI has never seen.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
+  # An advisory is published against a dependency, not against a commit, so a
+  # push-only audit never fires for a lockfile nobody has touched. Weekly.
+  schedule:
+    - cron: "17 6 * * 1"
+
+# Least privilege for every job here: this workflow only ever reads the
+# repository. `release.yml` grants `contents: write` to the one job that
+# publishes, and nothing else.
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,34 +27,43 @@ jobs:
   # a Linux-only lint job, and `--all-targets` on Windows also covers the
   # Windows-only test cases in `windows_semantics.rs`. Formatting is
   # platform-independent, so it runs once.
+  #
+  # Everything but `audit` skips on the weekly schedule: re-running the suite
+  # against an unchanged tree proves nothing, and the advisory database is the
+  # only thing that moved.
   lint:
     name: fmt + clippy (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --all -- --check
         if: runner.os == 'Linux'
       - run: cargo clippy --all-targets -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked
 
   # Optimizations change timing, and the concurrency suite races real processes.
@@ -53,50 +75,64 @@ jobs:
   # debug job above is what covers crash recovery.
   test-release:
     name: test --release (windows)
+    if: github.event_name != 'schedule'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked --release
 
   # `rust-version` in Cargo.toml is a promise to users on older toolchains, and
   # nothing verified it — the stated MSRV could break with no signal at all.
   msrv:
     name: minimum supported Rust version
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Read rust-version from Cargo.toml
         id: msrv
         run: |
           version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "MSRV is $version"
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo check --locked --all-targets
 
   # Catches advisories against dependencies. This is the job that would have
-  # flagged serde_yaml as unmaintained.
+  # flagged serde_yaml as unmaintained, and the one the weekly schedule exists
+  # for: an advisory is published against a crate, not against a commit.
   audit:
     name: dependency advisories
     runs-on: ubuntu-latest
+    # The action reports through a check run, and opens an issue when the
+    # weekly schedule finds something. Granted here and nowhere else.
+    permissions:
+      contents: read
+      checks: write
+      issues: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   docs:
     name: docs build clean
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo doc --no-deps --locked

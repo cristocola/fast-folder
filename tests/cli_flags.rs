@@ -1,10 +1,6 @@
 //! The command surface: Flags, variables, and the argument layer between clap and the core.
 //!
-//! These drive the **real binary** rather than calling library functions,
-//! because the defects they cover lived in the plumbing between clap and the
-//! core — flags dropped into `trailing_var_arg`, one caller computing an ID
-//! differently from another, a config field read raw instead of resolved. Only
-//! a process sees that.
+//! Driven as a **real process** — see `common::mod`'s preamble for why.
 
 mod common;
 

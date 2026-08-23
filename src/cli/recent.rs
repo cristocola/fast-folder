@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 use std::io::IsTerminal;
 
@@ -154,13 +154,17 @@ pub fn open(query: &str) -> Result<()> {
     let cfg = Config::load()?;
     let project = library::resolve(&cfg, query)?;
 
-    if !project.path.exists() {
-        anyhow::bail!(
-            "project '{}' no longer exists on disk at {}",
+    // `resolve` may have answered from a cache, and a cache is a file that
+    // travels with the projects — a synced folder or an unpacked archive can
+    // bring one along. Check what the path names before spawning the system
+    // file manager on it.
+    library::revalidate_for_read(&project).with_context(|| {
+        format!(
+            "project '{}' cannot be opened at {}",
             project.id,
             crate::util::paths::display_path(&project.path)
-        );
-    }
+        )
+    })?;
     println!(
         "{} Opening {} ({})",
         "→".cyan().bold(),

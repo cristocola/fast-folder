@@ -196,6 +196,25 @@ the counter self-heal, so it uses `read_base_readonly` (fresh cache or scan, no
 write), never `discover` (which writes). Route it through `discover` and previews
 start writing caches.
 
+**A `CacheEntry`'s `dir` must be exactly one ordinary path component, not
+dot-prefixed.** `into_project` returns `Option` and drops anything else: an
+absolute `dir` *replaces* the base under `Path::join`, and `../..` survived the
+`strip_prefix` on the next rewrite, so an entry reading `/etc` produced a
+"project" at `/etc`. One component because discovery is depth-1; not
+dot-prefixed because `scan_base` skips those. A rejected entry is **not** treated
+like a vanished folder — a folder that has gone is transient and the row is
+dropped, but an entry pointing outside its base means the file is no longer
+fastf's own bookkeeping, so the cache is abandoned and the base rescanned.
+
+`library::revalidate_for_read` is the cheap sibling of `guard`'s mutation
+revalidation, for handing a discovered path to **another program**: a real
+directory, a direct child of its own base, holding a real `PROJECT_INFO.md`. No
+canonicalize, no config reload, no id check — those protect a mutation. `fastf
+open` and the TUI's Reveal call it before spawning the file manager. Ordinary
+metadata reads keep trusting discovery: after the one-component rule the path is
+a direct child by construction, and reading the user's own `PROJECT_INFO.md` is
+what discovery is.
+
 `scan_base` skips dot-prefixed directories, including `.fastf-transactions`, so
 private staging containing a `PROJECT_INFO.md` cannot appear as a duplicate
 project.

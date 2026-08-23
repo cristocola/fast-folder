@@ -92,7 +92,7 @@ pub(crate) fn read_base_readonly(base: &Path) -> Vec<Project> {
         Some(cache) if !cache_is_stale(base) => cache
             .entries
             .into_iter()
-            .map(|entry| entry.into_project(base))
+            .filter_map(|entry| entry.into_project(base))
             .collect(),
         _ => scan_base(base),
     }

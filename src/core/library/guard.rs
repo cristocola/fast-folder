@@ -37,6 +37,45 @@ pub fn revalidate_project(cfg: &Config, candidate: &Project) -> Result<Project> 
     revalidate_project_in_base(candidate, &configured)
 }
 
+/// The cheap sibling of `revalidate_project_in_base`, for handing a
+/// discovered path to **another program**.
+///
+/// `fastf open` and the TUI's Reveal spawn the system file manager on a path
+/// that came from a cache, and a cache is a file that travels with the projects
+/// — a synced folder or an unpacked archive can bring one along. The write paths
+/// have always revalidated; these read paths did not, so a forged entry named
+/// the directory that got opened.
+///
+/// Deliberately *not* the full guard: no canonicalize, no config reload, no id
+/// comparison. Those exist to protect a mutation. Opening a folder needs three
+/// things — it is really a directory, it is a direct child of its own base, and
+/// it holds a `PROJECT_INFO.md`, which is what makes it a project at all.
+///
+/// Ordinary metadata reads keep trusting discovery: after `CacheEntry::into_project`'s
+/// one-component rule the path is a direct child of the base by construction,
+/// and reading the user's own `PROJECT_INFO.md` is what discovery *is*.
+pub fn revalidate_for_read(project: &Project) -> Result<()> {
+    crate::util::paths::require_real_directory(&project.path, "project folder")?;
+    if project.path.parent() != Some(project.base.as_path()) {
+        anyhow::bail!(
+            "refusing to open: {} is not a direct child of its base {}",
+            crate::util::paths::display_path(&project.path),
+            crate::util::paths::display_path(&project.base)
+        );
+    }
+    crate::util::paths::require_real_file(
+        &project_info::pinfo_path(&project.path),
+        "project metadata",
+    )
+    .with_context(|| {
+        format!(
+            "refusing to open {}: it is not a project folder",
+            crate::util::paths::display_path(&project.path)
+        )
+    })?;
+    Ok(())
+}
+
 /// The compatibility-library boundary does not own a [`Config`], but it still
 /// refuses stale, forged, linked, or non-child project records.
 pub(crate) fn revalidate_recorded_project(candidate: &Project) -> Result<Project> {

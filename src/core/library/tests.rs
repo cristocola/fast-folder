@@ -83,8 +83,58 @@ fn cache_round_trips_base_relative() {
     // Loading reconstructs the absolute path via base.join(dir).
     let cache = load_cache(base).unwrap();
     assert_eq!(cache.entries.len(), 1);
-    let reconstructed = cache.entries[0].clone().into_project(base);
+    let reconstructed = cache.entries[0].clone().into_project(base).unwrap();
     assert_eq!(reconstructed.path, base.join("proj_a"));
+}
+
+/// A cache entry is a hint, and a hint may not name a path outside its base.
+///
+/// `dir` used to be joined onto the base with no validation: `Path::join`
+/// *replaces* the base when given an absolute path, so `/etc` produced a
+/// "project" at `/etc`. Caches travel with the projects by design, and
+/// overwriting one in place does not bump the base's mtime, so a planted cache
+/// reads as fresh.
+#[test]
+fn a_cache_entry_that_leaves_its_base_is_dropped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+
+    let hostile = [
+        "/etc", "../../x", "..", ".", "D:/x", r"D:\x", ".hidden", "a/b", r"a\b",
+        "",
+        // Not here: "   ". It is a single contained component, and containment
+        // is the rule. If no such directory exists the `is_dir()` check on the
+        // fast path drops it like any other stale entry.
+    ];
+    for dir in hostile {
+        let entry = CacheEntry {
+            dir: dir.to_string(),
+            id: "ID0001".to_string(),
+            template: "gen".to_string(),
+            template_name: "General".to_string(),
+            name: "forged".to_string(),
+            created: "2026-01-01T00:00:00Z".to_string(),
+            tags: vec![],
+        };
+        assert!(
+            entry.into_project(base).is_none(),
+            "dir {dir:?} should have been dropped"
+        );
+    }
+
+    // And an ordinary name still works, or the rule would be useless.
+    let entry = CacheEntry {
+        dir: "proj_a".to_string(),
+        id: "ID0001".to_string(),
+        template: "gen".to_string(),
+        template_name: "General".to_string(),
+        name: "proj_a".to_string(),
+        created: "2026-01-01T00:00:00Z".to_string(),
+        tags: vec![],
+    };
+    let project = entry.into_project(base).expect("a plain name is valid");
+    assert_eq!(project.path, base.join("proj_a"));
+    assert_eq!(project.base, base);
 }
 
 #[test]

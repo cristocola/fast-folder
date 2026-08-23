@@ -53,7 +53,17 @@ pub(crate) fn discover_base(base: &Path) -> Vec<Project> {
             let mut projects = Vec::new();
             let mut dropped = false;
             for entry in cache.entries {
-                let project = entry.into_project(base);
+                // A *rejected* entry is not the same as a vanished folder. A
+                // folder that has gone is an ordinary, transient state: drop the
+                // row and rewrite. An entry that names a path outside its own
+                // base means the file is not fastf's own bookkeeping any more,
+                // and the only honest response is to stop reading it and go
+                // back to the folders — which are the truth.
+                let Some(project) = entry.into_project(base) else {
+                    let projects = scan_base(base);
+                    let _ = write_cache(base, &projects);
+                    return projects;
+                };
                 if project.path.is_dir() {
                     projects.push(project);
                 } else {

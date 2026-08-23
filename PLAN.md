@@ -533,10 +533,13 @@ already (`operations::delete` etc. revalidate).
 4. ROADMAP + `docs/projects.md` text.
 
 **Acceptance.**
-- [ ] All gates pass.
-- [ ] The forged-cache test was observed listing `/etc` (or naming it in `open`) on
-      the old build.
-- [ ] `src/core/CLAUDE.md` "Filesystem as truth" states the one-component rule.
+- [x] All gates pass.
+- [x] The forged-cache test was observed listing `/etc` on the old build —
+      `forged entries were served as projects: ["/etc", ".../base/..",
+      ".../install/outside"]`.
+- [x] The one-component rule is stated in the **root** `CLAUDE.md`'s "Filesystem
+      as truth", which is where the cache and discovery model lives (the plan
+      named `src/core/CLAUDE.md`; that file covers the engine, not discovery).
 
 ---
 
@@ -798,3 +801,11 @@ fastf refuses to write through links; cache entries outside a base are ignored.
   moved to `paths` as the plan said, which upgrades **every** existing caller
   (transactions, provisioning, move_engine, guard, and Phase 4's
   `delete_template`) from the symlink-only test to the reparse-point one.
+- **Phase 6 — 2026-08-23, `phase-06-cache-hints`.** One correction to the plan.
+  It said a rejected entry "sets the `dropped` flag that already triggers a
+  rescan" — `dropped` triggers a *rewrite*, not a rescan, so rejecting every
+  entry of a forged cache rewrote it empty and the base's real projects
+  disappeared until its mtime next changed. The test caught it. A rejected entry
+  now abandons the cache and rescans, which is the honest response: a vanished
+  folder is a transient row to drop, but an entry naming a path outside its base
+  means the file is no longer fastf's own bookkeeping.

@@ -57,19 +57,40 @@ impl CacheEntry {
         }
     }
 
-    pub(crate) fn into_project(self, base: &Path) -> Project {
-        let path = base.join(self.dir.replace('/', std::path::MAIN_SEPARATOR_STR));
-        Project {
+    /// Rebuild a `Project` from a cache entry, or drop the entry.
+    ///
+    /// **A cache entry is a hint, and a hint may not name a path outside its
+    /// own base.** `dir` used to be joined onto the base with no validation at
+    /// all: `Path::join` *replaces* the base when given an absolute path, so an
+    /// entry reading `/etc` produced a "project" at `/etc`, and `../..`
+    /// survived the `strip_prefix` on the next rewrite. Caches travel with the
+    /// projects by design — that is what makes them portable across operating
+    /// systems — so a synced folder or an unpacked archive is a delivery route
+    /// for one, and overwriting the file in place does not bump the base's
+    /// mtime, so a planted cache reads as fresh.
+    ///
+    /// Discovery is depth-1 (`SCAN_DEPTH`), so a legitimate `dir` is exactly
+    /// one ordinary path component and never dot-prefixed (`scan_base` skips
+    /// those). Anything else is dropped, which sets the caller's `dropped` flag
+    /// and triggers the rescan that rebuilds the cache from the folders.
+    pub(crate) fn into_project(self, base: &Path) -> Option<Project> {
+        let dir = crate::core::validated::SafeRelativePath::parse(&self.dir).ok()?;
+        let dir = dir.as_str();
+        if dir.contains('/') || dir.starts_with('.') {
+            return None;
+        }
+
+        Some(Project {
             id: self.id,
             template: self.template,
             template_name: self.template_name,
             name: self.name,
-            path,
+            path: base.join(dir),
             base: base.to_path_buf(),
             created: self.created,
             tags: self.tags,
             exists: true,
-        }
+        })
     }
 }
 
@@ -179,7 +200,7 @@ pub fn cache_upsert(base: &Path, project: &Project) {
         Some(cache) => cache
             .entries
             .into_iter()
-            .map(|e| e.into_project(base))
+            .filter_map(|e| e.into_project(base))
             .collect(),
         None => scan_base(base),
     };
@@ -218,7 +239,7 @@ pub(crate) fn cache_remove(base: &Path, dir: &str) {
         .entries
         .into_iter()
         .filter(|e| e.dir != target)
-        .map(|e| e.into_project(base))
+        .filter_map(|e| e.into_project(base))
         .collect();
     let _ = write_cache(base, &projects);
 }

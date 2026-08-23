@@ -57,6 +57,14 @@ Each base carries a small `.fastf-index.json` cache at its root, next to the pro
 - If the base changed since the cache was written, fastf rescans and rewrites it.
 - Cached entries whose folders disappeared are dropped automatically.
 - Deleting the cache file costs one rescan and nothing else.
+- **An entry can only ever point at a direct child of its own base.** The cache
+  travels with the projects, which is what makes it portable — and also means a
+  synced folder or an unpacked archive can bring somebody else's along. An entry
+  naming anything but a plain folder name inside the base is rejected, the whole
+  cache is abandoned, and the base is rescanned from the folders.
+- Opening a project (`fastf open`, or Open project folder in the menu) checks
+  that the folder really is a direct child of its base and really does hold a
+  `PROJECT_INFO.md` before handing the path to your file manager.
 
 There is no prune command because none is needed. For changes fastf could not observe (folders moved on another machine, hand-edited metadata), run:
 

@@ -20,6 +20,25 @@ file paths and byte lengths, publishes the complete staging directory, and only
 then attempts to remove the source. The project must remain untouched by other
 programs while it is moving.
 
+### What fastf trusts
+
+One OS account. Bases, templates, `config.toml`, the counters and the caches are
+the user's own files and are trusted as content — a template's `post_create`
+commands are executable configuration and run with the user's privileges, which
+is the feature. There is **no network surface** of any kind.
+
+Two things fastf enforces anyway, because they are the routes by which a file
+that travels can start naming somewhere it should not:
+
+- **A cache entry can only ever point at a direct child of its own base.**
+  `.fastf-index.json` travels with the projects by design (that is what makes it
+  portable across operating systems), so a synced folder or an unpacked archive
+  can deliver one. An entry naming anything else is rejected, the cache is
+  abandoned, and the base is rescanned from the folders. `fastf open` and the
+  TUI's Reveal check the folder is a real direct child holding a
+  `PROJECT_INFO.md` before handing the path to the system file manager.
+- **A write never follows a link.** See below.
+
 A write fastf performs beneath a root it controls — a new project, an apply
 target, a template's `files/` — never follows a link, junction or reparse point
 that is already there. Both layers are enforced: the path text cannot escape its
@@ -37,7 +56,12 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v2.0.0 in progress — two surfaces, one engine, nothing trusted by accident** (`PLAN.md` drives it, one phase per PR)
-- Status: **Phase 5 landed: destination containment.** No write fastf performs
+- Status: **Phase 6 landed: cache entries are hints.** A `.fastf-index.json`
+  entry can never name a path outside its base — a forged one is rejected, the
+  cache abandoned and the base rescanned — and `fastf open` and the TUI's Reveal
+  check the folder before spawning anything. The trust model fastf actually has
+  is written down in the product contract above.
+- Previously: **Phase 5 landed: destination containment.** No write fastf performs
   beneath a root it controls follows an existing link, junction or reparse
   point. `paths::contained_destination` checks every component immediately
   before the write, and `paths::is_link_like` is the single, widest definition
@@ -131,6 +155,9 @@ Regression coverage grows with the relevant release:
 - [x] Apply through a link in the target is refused and the outside directory
   stays empty (v2.0.0, unix symlink + windows junction); template ingestion
   refuses a pre-planted link before writing a byte.
+- [x] A planted cache naming `/etc`, `..` or an absolute path outside the base
+  lists nothing and opens nothing; a project directory replaced by a link is
+  refused by `open` (v2.0.0).
 
 Manual move smoke and follow-up:
 

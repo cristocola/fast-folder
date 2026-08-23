@@ -697,10 +697,16 @@ must be clean for `src/ tests/ docs/ *.md` except format names and the ROADMAP
 release table.
 
 **Acceptance.**
-- [ ] All gates pass (docs build included).
-- [ ] The `git grep` above is clean.
-- [ ] Each `CLAUDE.md` read top to bottom once by the phase agent; anything that
-      describes a past version rather than a present rule was removed.
+- [x] All gates pass (docs build included).
+- [x] The `git grep` above is clean for `src/ tests/ docs/`; the only remaining
+      matches anywhere are `ROADMAP.md`'s release table and this file, both
+      named as exceptions.
+- [x] Each `CLAUDE.md` read top to bottom; anything describing a past version
+      rather than a present rule was removed, and three live errors were found
+      that way — `tree_size::directory_size` no longer exists (Phase 1 removed
+      it), `tests/CLAUDE.md` stated the harness rules twice after Phase 7, and
+      the root module list was missing `shell_open`, `test_env` and the new
+      `paths` helpers.
 
 ---
 
@@ -827,3 +833,18 @@ fastf refuses to write through links; cache entries outside a base are ignored.
   used a private `PANIC_SERIAL` instead of the binary's `SERIAL`, so it raced the
   other tests in `data_dir.rs` and failed intermittently: a second mutex over the
   same process-global, which is the defect this phase removes.
+- **Phase 9 — 2026-08-23, `phase-09-docs-and-comments`.** As planned. The
+  ROADMAP's "Current phase" became a v2.0.0 summary in *guarantees* rather than
+  the nine-deep stack of "Previously:" entries the phases had accumulated —
+  `PLAN.md` is the phase-by-phase record and the ROADMAP should not be a second
+  one. `src/core/CLAUDE.md`'s pinned `serde-1.0.229/src/private/de.rs:1255`
+  became the item name rather than a newer line number: the `flatten` behaviour
+  it documents is serde's design, not a version's bug, so there is nothing to
+  re-pin.
+
+  Also carried here from the Phase 8 dry run: the first `gates` run failed on
+  the Windows leg because Phase 6's forged-cache test compared a canonicalized
+  discovery path to a raw `base.join(...)` — different strings for one directory
+  once `\\?\` and 8.3 short names are involved. Fixed on the Phase 6 branch and
+  merged up the stack, which is the gate doing exactly its job on its first
+  run.

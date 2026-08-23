@@ -499,7 +499,14 @@ fn a_forged_cache_cannot_make_discovery_name_a_path_outside_the_base() {
             found.iter().map(|p| p.path.clone()).collect::<Vec<_>>()
         );
         assert_eq!(found[0].id, "ID0001");
-        assert_eq!(found[0].path, base.join("real"));
+        // Canonicalized on both sides: discovery canonicalizes its bases, and on
+        // Windows that adds the `\\?\` verbatim prefix and resolves 8.3 short
+        // names, so a raw `base.join(...)` is a different string for the same
+        // directory.
+        assert_eq!(
+            fs::canonicalize(&found[0].path).unwrap(),
+            fs::canonicalize(base.join("real")).unwrap()
+        );
 
         // Nothing outside the base was touched, listed, or reported.
         assert_eq!(

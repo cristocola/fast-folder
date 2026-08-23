@@ -380,7 +380,7 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
 - `print_path`: print absolute path on stdout (for `$(fastf new ...)` shell pipelines)
 - `commands`: list of shell commands; `{path}` token replaced with project's absolute path
 
-### Output display (`core/project.rs`)
+### Output display (`cli/render.rs`, v1.7.0)
 `print_tree(nodes, indent)` is the single shared tree renderer — used by dry-run, `template show`, and the template builder summary. Call it with `"  "` indent for breathing room in dry-run, `""` for compact display in `template show`.
 
 `print_project_path(path, folder_name)` renders a full path with the parent directory dimmed and the project/folder name bold white, prefixed by a cyan `→`. Used in both dry-run and success output. In success output, `canonicalize()` is called first since the folder exists.
@@ -823,6 +823,31 @@ gestures: `initial` is editable starting text (what a rejected value comes back
 as), `default_value` keeps `dialoguer::Input::default`'s `prompt [default]:`
 contract where an empty answer means the default. Converting a `default` site to
 an `initial` one changes what typing `0` into a field showing `20` produces.
+
+**`util::diag` is the one sink for anything `core` or `util` says.** `warn` for
+a best-effort failure that must not change what the operation did (a cache not
+rewritten, a counter not saved), `note` for something the caller could not have
+known and did not ask for (a partial project rolled back), `fatal` for the two
+paths that cannot return a `Result` — an armed failpoint calling `abort`, and a
+data directory that cannot be resolved. `tests/layering.rs` allows `util::diag`,
+`util::live_select` (which draws by design) and `util::trace`, and nothing else.
+
+**`core::post_create::run` returns `Vec<Note>`, it does not print.** The same
+runner serves `fastf new` and `fastf ui`, and a browser cannot suppress an ANSI
+checkmark written to the process's stdout. `Note::Path` is separate from
+`Note::Done` because `print_path`'s line is the run's **output** — it is what
+`$(fastf new ...)` captures — so it goes to stdout alone and last.
+
+**Four module cycles are gone, and the fixes are all "the shared thing did not
+belong to either module".** `now_iso8601` → `util::time` (a timestamp is not a
+library concern, and `project_info` and `provisioning` both imported `library`
+for it); `ProjectPlan` → `core::plan` (`project` builds one, `project_info`
+writes from one); `apply_transform` → `core::template`, beside the `Transform`
+enum it matches on (`naming` imported `template` for the enum while `template`
+imported `naming` for interpolation). `Metadata::from_plan_at` / `write_at` /
+`render_at` take the timestamp, so register writes its `PROJECT_INFO.md` **once**
+instead of writing it with `now` and rewriting the frontmatter to patch
+`created`.
 
 **The guided menu reaches the whole tool, and it does so by calling the CLI's
 own functions.** Maintenance runs `cli::reindex::run`, `cli::reconcile::run` and

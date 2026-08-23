@@ -728,12 +728,12 @@ fn is_cross_device_error(error: &std::io::Error) -> bool {
 
 fn report_cleanup_pending(outcome: &MoveOutcome, source: &Path) {
     if outcome.cleanup_pending {
-        eprintln!(
-            "warning: move published at {}, but source cleanup is pending at {}; \
+        crate::util::diag::warn(format!(
+            "move published at {}, but source cleanup is pending at {}; \
              the move transaction was retained",
             outcome.project.path.display(),
             source.display()
-        );
+        ));
     }
 }
 
@@ -824,10 +824,10 @@ fn staged_copy_verify_commit(
         Err(error) => {
             // Publication is a point of no return. Preserve the transaction and
             // return a truthful successful outcome with cleanup pending.
-            eprintln!(
-                "warning: move published at {}, but cleanup is pending ({error:#})",
+            crate::util::diag::warn(format!(
+                "move published at {}, but cleanup is pending ({error:#})",
                 new_path.display()
-            );
+            ));
             let moved = moved_view(project, new_base, new_path);
             return Ok(MoveOutcome {
                 project: moved,
@@ -842,44 +842,44 @@ fn staged_copy_verify_commit(
     if let Err(error) = crate::util::faults::check("move:after-publication")
         .and_then(|()| crate::util::faults::check("move:after-commit-before-source-removal"))
     {
-        eprintln!(
-            "warning: move published at {}, but cleanup is pending ({error:#})",
+        crate::util::diag::warn(format!(
+            "move published at {}, but cleanup is pending ({error:#})",
             new_path.display()
-        );
+        ));
         cleanup_pending = true;
         retain_transaction = true;
     } else if let Err(error) = transaction.set_phase(MovePhase::CleanupPending) {
-        eprintln!(
-            "warning: move published at {}, but the cleanup phase could not be recorded ({error:#})",
+        crate::util::diag::warn(format!(
+            "move published at {}, but the cleanup phase could not be recorded ({error:#})",
             new_path.display()
-        );
+        ));
         cleanup_pending = true;
         retain_transaction = true;
     } else if let Err(error) = crate::util::faults::check("move:before-source-cleanup")
         .and_then(|()| crate::util::faults::check("move:source-cleanup"))
     {
-        eprintln!(
-            "warning: move published at {}, but source cleanup is pending at {} ({error:#})",
+        crate::util::diag::warn(format!(
+            "move published at {}, but source cleanup is pending at {} ({error:#})",
             new_path.display(),
             project.path.display()
-        );
+        ));
         cleanup_pending = true;
         retain_transaction = true;
     } else if let Err(error) = revalidate_recorded_project(project)
         .and_then(|_| manifest.verify_recovery_pair(&project.path, new_path))
         .and_then(|_| crate::util::fs_retry::remove_dir_all(&project.path).map_err(Into::into))
     {
-        eprintln!(
-            "warning: move published at {}, but source cleanup is pending at {} ({error:#})",
+        crate::util::diag::warn(format!(
+            "move published at {}, but source cleanup is pending at {} ({error:#})",
             new_path.display(),
             project.path.display()
-        );
+        ));
         cleanup_pending = true;
         retain_transaction = true;
     } else if let Err(error) = crate::util::faults::check("move:after-source-cleanup") {
-        eprintln!(
-            "warning: source cleanup completed, but transaction cleanup is pending ({error:#})"
-        );
+        crate::util::diag::warn(format!(
+            "source cleanup completed, but transaction cleanup is pending ({error:#})"
+        ));
         retain_transaction = true;
     }
 
@@ -889,7 +889,9 @@ fn staged_copy_verify_commit(
         finish_move_bookkeeping(project, &old_base, new_base, new_path)
     };
     if !retain_transaction && let Err(error) = transaction.remove() {
-        eprintln!("warning: could not clear completed move transaction: {error:#}");
+        crate::util::diag::warn(format!(
+            "could not clear completed move transaction: {error:#}"
+        ));
     }
     set_phase(progress, "done");
     Ok(MoveOutcome {
@@ -911,7 +913,9 @@ fn finish_move_bookkeeping(
         metadata.path = crate::util::paths::display_path(&moved.path);
         metadata.folder = moved.name.clone();
     }) {
-        eprintln!("warning: could not update PROJECT_INFO.md after move: {error:#}");
+        crate::util::diag::warn(format!(
+            "could not update PROJECT_INFO.md after move: {error:#}"
+        ));
     }
 
     let old_dir = project
@@ -1154,7 +1158,9 @@ fn rename_project_inner(project: &Project, new_folder: &str) -> Result<Project> 
             meta.path = crate::util::paths::display_path(&renamed.path);
         })
     {
-        eprintln!("warning: could not update PROJECT_INFO.md folder/path: {err:#}");
+        crate::util::diag::warn(format!(
+            "could not update PROJECT_INFO.md folder/path: {err:#}"
+        ));
     }
 
     remove_from_base_cache(project);
@@ -1281,11 +1287,10 @@ pub fn reindex(cfg: &Config) -> usize {
     total
 }
 
-/// Current UTC timestamp, ISO-8601 (seconds precision). Lives here in the
-/// library layer (the successor to the deleted `index` module).
-pub fn now_iso8601() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-}
+/// Compatibility re-export: the clock moved to [`crate::util::time`], which is
+/// where a timestamp belongs. `library` was importing nothing else from
+/// `project_info` or `provisioning`, and both of them imported this.
+pub use crate::util::time::now_iso8601;
 
 #[cfg(test)]
 mod tests {

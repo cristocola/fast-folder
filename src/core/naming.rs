@@ -1,31 +1,5 @@
 use chrono::Local;
 
-use crate::core::template::Transform;
-
-/// Apply a transform to a raw string value.
-pub fn apply_transform(value: &str, transform: &Transform) -> String {
-    match transform {
-        Transform::None => value.to_string(),
-        Transform::TitleUnderscore => to_title_underscore(value),
-        Transform::UpperUnderscore => value.replace(' ', "_").to_uppercase(),
-        Transform::LowerUnderscore => value.replace(' ', "_").to_lowercase(),
-    }
-}
-
-/// "ariana grande" or "Ariana Grande" → "Ariana_Grande"
-fn to_title_underscore(s: &str) -> String {
-    s.split_whitespace()
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("_")
-}
-
 /// Substitute `{token}` placeholders in `pattern`. Built-in tokens
 /// (`{date}`, `{YYYY}`, `{MM}`, `{DD}`) resolve automatically; everything else
 /// comes from `vars`. Unrecognized tokens are left literal.
@@ -231,14 +205,6 @@ pub fn sanitize_name(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_title_underscore() {
-        assert_eq!(to_title_underscore("ariana grande"), "Ariana_Grande");
-        assert_eq!(to_title_underscore("Ariana Grande"), "Ariana_Grande");
-        assert_eq!(to_title_underscore("ARIANA GRANDE"), "Ariana_Grande");
-        assert_eq!(to_title_underscore("single"), "Single");
-    }
 
     /// Build a var map from `(slug, value)` pairs.
     fn vars_of(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {

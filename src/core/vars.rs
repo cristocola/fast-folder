@@ -53,7 +53,7 @@ pub fn rendered_values(
         .iter()
         .map(|variable| {
             let value = raw.get(&variable.slug).cloned().unwrap_or_default();
-            let transformed = crate::core::naming::apply_transform(&value, &variable.transform);
+            let transformed = crate::core::template::apply_transform(&value, &variable.transform);
             (
                 variable.slug.clone(),
                 crate::core::naming::sanitize_name(&transformed),

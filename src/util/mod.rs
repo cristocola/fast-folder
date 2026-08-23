@@ -1,5 +1,6 @@
 pub mod atomic;
 pub mod clipboard;
+pub mod diag;
 pub mod faults;
 pub mod fs_retry;
 pub mod human_bytes;
@@ -8,6 +9,7 @@ pub(crate) mod live_select;
 pub mod lockfile;
 pub mod paths;
 pub(crate) mod size_scan;
+pub mod time;
 pub mod trace;
 pub(crate) mod tree_size;
 pub mod tty;

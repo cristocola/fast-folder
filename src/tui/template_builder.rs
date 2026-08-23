@@ -1,3 +1,4 @@
+use crate::cli::render;
 use crate::core::template::{FileEntry, FolderNode, Template, Transform, VarType, Variable};
 use crate::tui::prompt::{self, TextOpts};
 /// Interactive step-by-step template builder.
@@ -886,7 +887,6 @@ fn flatten_tree(nodes: &[FolderNode], prefix: &str) -> Vec<String> {
 
 /// Print a template summary without needing it saved to disk.
 fn print_template_summary(t: &Template) {
-    use crate::core::project;
     println!("\n{} {}", "Template:".bold(), t.name.green().bold());
     println!("  Slug:    {}", t.slug);
     println!("  Pattern: {}", t.naming_pattern);
@@ -909,7 +909,7 @@ fn print_template_summary(t: &Template) {
 
     if !t.structure.is_empty() {
         println!("\n{}", "Folder structure:".bold());
-        project::print_tree(&t.structure, "", None);
+        render::print_tree(&t.structure, "");
     }
 
     if !t.files.is_empty() {

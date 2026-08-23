@@ -1,5 +1,4 @@
 use anyhow::Result;
-use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
@@ -53,34 +52,44 @@ impl PostCreate {
     }
 }
 
-/// Run every enabled post-create action. Individual failures are logged to
-/// stderr and do NOT abort — the project on disk is already real and correct;
-/// post-create actions are conveniences.
-pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result<()> {
+/// One thing a post-create action has to say. `core` collects them; a surface
+/// decides how they look, because `fastf ui` cannot render an ANSI checkmark
+/// into a JSON response and a script piping stdout does not want one either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Note {
+    /// An action succeeded and is worth confirming.
+    Done(String),
+    /// An action failed. Never fatal — the project on disk is already real and
+    /// correct; post-create actions are conveniences.
+    Warning(String),
+    /// `print_path`'s line. Not a message about the run: it is the run's
+    /// **output**, meant for `$(fastf new ...)`, so it goes to stdout on its own
+    /// and last.
+    Path(String),
+}
+
+/// Run every enabled post-create action, returning what happened.
+///
+/// Individual failures are reported, never propagated: the folder exists and is
+/// correct whatever the editor did.
+pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result<Vec<Note>> {
+    let mut notes = Vec::new();
     if actions.is_empty() {
-        return Ok(());
+        return Ok(notes);
     }
 
-    // git_init: idempotent. Silent on success; warn on failure.
+    // git_init: idempotent.
     if actions.git_init {
         match Command::new("git")
             .arg("init")
             .current_dir(project_path)
             .status()
         {
-            Ok(s) if s.success() => {
-                println!("  {} git init", "✓".green());
-            }
-            Ok(s) => eprintln!(
-                "{} git init exited with status {}",
-                "warning:".yellow().bold(),
-                s
-            ),
-            Err(e) => eprintln!(
-                "{} could not run git: {} (is git installed and on PATH?)",
-                "warning:".yellow().bold(),
-                e
-            ),
+            Ok(s) if s.success() => notes.push(Note::Done("git init".to_string())),
+            Ok(s) => notes.push(Note::Warning(format!("git init exited with status {s}"))),
+            Err(e) => notes.push(Note::Warning(format!(
+                "could not run git: {e} (is git installed and on PATH?)"
+            ))),
         }
     }
 
@@ -88,24 +97,17 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result
     if actions.reveal
         && let Err(e) = reveal_folder(project_path)
     {
-        eprintln!(
-            "{} could not reveal folder: {}",
-            "warning:".yellow().bold(),
-            e
-        );
+        notes.push(Note::Warning(format!("could not reveal folder: {e}")));
     }
 
     // open_in_editor: spawn the configured editor with the folder.
     if actions.open_in_editor {
         let editor = config.resolve_editor();
         match spawn_editor(&editor, project_path) {
-            Ok(()) => println!("  {} opened in {}", "✓".green(), editor),
-            Err(e) => eprintln!(
-                "{} could not open editor '{}': {}",
-                "warning:".yellow().bold(),
-                editor,
-                e
-            ),
+            Ok(()) => notes.push(Note::Done(format!("opened in {editor}"))),
+            Err(e) => notes.push(Note::Warning(format!(
+                "could not open editor '{editor}': {e}"
+            ))),
         }
     }
 
@@ -113,34 +115,24 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Result
     for raw in &actions.commands {
         let cmd = raw.replace("{path}", &project_path.display().to_string());
         match run_shell(&cmd, project_path) {
-            Ok(status) if status.success() => {
-                println!("  {} {}", "✓".green(), raw.dimmed());
-            }
-            Ok(status) => eprintln!(
-                "{} command exited with status {}: {}",
-                "warning:".yellow().bold(),
-                status,
-                raw
-            ),
-            Err(e) => eprintln!(
-                "{} command failed: {} ({})",
-                "warning:".yellow().bold(),
-                raw,
-                e
-            ),
+            Ok(status) if status.success() => notes.push(Note::Done(raw.clone())),
+            Ok(status) => notes.push(Note::Warning(format!(
+                "command exited with status {status}: {raw}"
+            ))),
+            Err(e) => notes.push(Note::Warning(format!("command failed: {raw} ({e})"))),
         }
     }
 
-    // print_path: emit the absolute path on its own line so shell pipelines can use it.
-    // Done last so noisy command output never trails it.
+    // print_path: the absolute path on its own line so shell pipelines can use
+    // it. Last, so noisy command output never trails it.
     if actions.print_path {
         let canonical = project_path
             .canonicalize()
             .unwrap_or_else(|_| project_path.to_path_buf());
-        println!("{}", canonical.display());
+        notes.push(Note::Path(canonical.display().to_string()));
     }
 
-    Ok(())
+    Ok(notes)
 }
 
 #[cfg(windows)]

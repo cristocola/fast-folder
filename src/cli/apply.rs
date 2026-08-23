@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::cli::extra::Recognized;
+use crate::cli::render;
 use crate::core::config::Config;
 use crate::core::project;
 use crate::core::template;
@@ -94,11 +95,11 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     let actions = project::apply_plan(&tmpl, &target, &raw_vars, &config.date_format)?;
 
     if args.dry_run {
-        project::print_apply_plan(&actions, project::PreviewKind::DryRun);
+        render::print_apply_plan(&actions, render::PreviewKind::DryRun);
         return Ok(());
     }
 
-    project::print_apply_plan(&actions, project::PreviewKind::BeforeCommit);
+    render::print_apply_plan(&actions, render::PreviewKind::BeforeCommit);
 
     // Short-circuit if nothing to do
     let will_create = actions.iter().any(|a| {

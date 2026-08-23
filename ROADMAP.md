@@ -286,6 +286,19 @@ what the command line can already do.
   pickers, three base pickers and two byte formatters became one each, and
   `tests/layering.rs` fails the build if `core` or `util` reaches for a prompt.
 
+### v1.7.1 — core structure
+
+Track C of [`PLAN.md`](PLAN.md). No behaviour change: the proof is the unchanged
+test suite plus the guard each phase adds.
+
+- [x] Phase 12: rendering out of core, and the module cycles broken — `core`
+  produces `DryRunReport`/`ApplyReport` and `cli/render.rs` turns them into text,
+  so the dry-run's content is testable for the first time; `core::post_create`
+  returns notes instead of printing them; every best-effort warning goes through
+  `util::diag`; `now_iso8601`, `ProjectPlan` and `apply_transform` moved to
+  where they belong and four module cycles went with them; register writes its
+  metadata once. `tests/layering.rs` keeps it that way.
+
 ## Release and documentation gates
 
 Every release must pass:

@@ -4,6 +4,7 @@ pub mod counter;
 pub mod library;
 pub mod naming;
 pub mod operations;
+pub mod plan;
 pub mod post_create;
 pub mod project;
 pub mod project_info;

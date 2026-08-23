@@ -137,7 +137,9 @@ pub enum Transform {
     LowerUnderscore,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+// `PartialEq`/`Eq` so a `DryRunReport` can be compared in a test: a preview is
+// data now, and comparing two of them is how the interpolation is checked.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct FolderNode {
     pub name: String,
     #[serde(default)]
@@ -384,7 +386,7 @@ pub fn load_all() -> Result<Vec<Template>> {
         }
         match Template::load_from_file(&manifest) {
             Ok(t) => templates.push(t),
-            Err(e) => eprintln!("warning: skipping {}: {}", manifest.display(), e),
+            Err(e) => crate::util::diag::warn(format!("skipping {}: {}", manifest.display(), e)),
         }
     }
     templates.sort_by(|a, b| a.name.cmp(&b.name));
@@ -417,8 +419,48 @@ fn validate_structure(nodes: &[FolderNode], template_slug: &str) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Transforms
+// ---------------------------------------------------------------------------
+//
+// These live beside `Transform` rather than in `naming`, which is where they
+// were: `naming` had to import `template` for the enum, and `template` imports
+// `naming` for interpolation, so the two modules each needed the other.
+
+/// Apply a transform to a raw string value.
+pub fn apply_transform(value: &str, transform: &Transform) -> String {
+    match transform {
+        Transform::None => value.to_string(),
+        Transform::TitleUnderscore => to_title_underscore(value),
+        Transform::UpperUnderscore => value.replace(' ', "_").to_uppercase(),
+        Transform::LowerUnderscore => value.replace(' ', "_").to_lowercase(),
+    }
+}
+
+/// "ariana grande" or "Ariana Grande" → "Ariana_Grande"
+fn to_title_underscore(s: &str) -> String {
+    s.split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_title_underscore() {
+        assert_eq!(super::to_title_underscore("ariana grande"), "Ariana_Grande");
+        assert_eq!(super::to_title_underscore("Ariana Grande"), "Ariana_Grande");
+        assert_eq!(super::to_title_underscore("ARIANA GRANDE"), "Ariana_Grande");
+        assert_eq!(super::to_title_underscore("single"), "Single");
+    }
+
     use super::*;
 
     /// A field added to `Template` without being added to `OWNED_KEYS` would be

@@ -121,6 +121,22 @@ impl Metadata {
     /// `tags` is the combined literal + auto-derived tag list computed in
     /// `project::create()` before writing the file.
     pub fn from_plan(plan: &ProjectPlan, tmpl: &Template, tags: Vec<String>) -> Self {
+        Self::from_plan_at(plan, tmpl, tags, crate::util::time::now_iso8601())
+    }
+
+    /// [`Metadata::from_plan`] with the creation timestamp supplied.
+    ///
+    /// Register needs this: it claims a folder that already existed, so the
+    /// project's `created` is the folder's own date, not now. It used to write
+    /// the file with `now` and then rewrite the frontmatter to patch the field —
+    /// two writes, and the second one only worked because
+    /// `to_string_preserving_unknown` happens to be lossless.
+    pub fn from_plan_at(
+        plan: &ProjectPlan,
+        tmpl: &Template,
+        tags: Vec<String>,
+        created: String,
+    ) -> Self {
         // Drop the synthetic "id" entry — it's already a top-level field.
         let variables: BTreeMap<String, String> = tmpl
             .variables
@@ -135,7 +151,7 @@ impl Metadata {
             id: plan.id_str.clone(),
             template: tmpl.slug.clone(),
             template_name: tmpl.name.clone(),
-            created: crate::core::library::now_iso8601(),
+            created,
             folder: plan.folder_name.clone(),
             // `display_path`, not `.display()`: register (and any caller that
             // canonicalizes first) hands us a `\\?\`-prefixed path on Windows,
@@ -158,7 +174,17 @@ impl Metadata {
 /// the file looked fine and the project was invisible to discovery from the
 /// moment it was created.
 pub fn render(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<String> {
-    let meta = Metadata::from_plan(plan, tmpl, tags.to_vec());
+    render_at(plan, tmpl, tags, crate::util::time::now_iso8601())
+}
+
+/// [`render`] with the creation timestamp supplied — see [`Metadata::from_plan_at`].
+pub fn render_at(
+    plan: &ProjectPlan,
+    tmpl: &Template,
+    tags: &[String],
+    created: String,
+) -> Result<String> {
+    let meta = Metadata::from_plan_at(plan, tmpl, tags.to_vec(), created);
 
     // Serialize frontmatter via serde_yaml so colons, quotes, multibyte values,
     // etc. all escape correctly. serde_yaml's output already ends with `\n`
@@ -238,8 +264,18 @@ pub fn render(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<St
 /// Write `<root>/PROJECT_INFO.md`. Metadata is mandatory in v0.9 (the file is
 /// the project's identity), so there is no "disabled" path.
 pub fn write(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<()> {
+    write_at(plan, tmpl, tags, crate::util::time::now_iso8601())
+}
+
+/// [`write()`] with the creation timestamp supplied — see [`Metadata::from_plan_at`].
+pub fn write_at(
+    plan: &ProjectPlan,
+    tmpl: &Template,
+    tags: &[String],
+    created: String,
+) -> Result<()> {
     let path = pinfo_path(&plan.root_path);
-    let body = render(plan, tmpl, tags)?;
+    let body = render_at(plan, tmpl, tags, created)?;
     // Atomic: this file *is* the project's identity, so a half-written one would
     // make the project unreadable rather than merely stale.
     crate::util::atomic::write(&path, body).with_context(|| format!("writing {}", path.display()))
@@ -358,7 +394,7 @@ pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
         )
     })?;
 
-    let timestamp = crate::core::library::now_iso8601();
+    let timestamp = crate::util::time::now_iso8601();
     let entry_line = format!("- {} — {}\n", timestamp, message);
 
     let new_content = if content.contains("## Journal") {

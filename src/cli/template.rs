@@ -3,7 +3,7 @@ use colored::Colorize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::core::project;
+use crate::cli::render;
 use crate::core::template::{self, FileEntry, FolderNode, Template};
 use crate::util::paths;
 use crate::util::tty;
@@ -74,7 +74,7 @@ pub fn show(slug: &str) -> Result<()> {
 
     if !t.structure.is_empty() {
         println!("\n{}", "Folder structure:".bold());
-        project::print_tree(&t.structure, "", None);
+        render::print_tree(&t.structure, "");
     }
 
     if !t.files.is_empty() {
@@ -333,7 +333,7 @@ fn print_from_folder_preview(slug: &str, scan: &ScanResult, bundle_assets: bool)
 
     if !scan.structure.is_empty() {
         println!("\n{}", "Folder structure:".bold());
-        project::print_tree(&scan.structure, "  ", None);
+        render::print_tree(&scan.structure, "  ");
     }
     if !scan.text_files.is_empty() {
         println!("\n{}", "Files:".bold());

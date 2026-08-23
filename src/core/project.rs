@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use colored::Colorize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,8 +6,9 @@ use std::path::{Path, PathBuf};
 use crate::core::assets;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::naming::{interpolate, interpolate_name, sanitize_name};
-use crate::core::template::{FileEntry, FolderNode, Template};
+use crate::core::naming::{interpolate_name, sanitize_name};
+pub use crate::core::plan::ProjectPlan;
+use crate::core::template::{FolderNode, Template};
 use crate::core::validated::SafeRelativePath;
 
 /// How many `_2`, `_3`… variants to try before giving up on a colliding name.
@@ -30,18 +30,171 @@ pub(crate) fn suffixed_name(name: &str, attempt: u32) -> String {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct ProjectPlan {
-    /// The resolved root folder name (after pattern interpolation).
+// ---------------------------------------------------------------------------
+// Reports — what a preview *is*, before anything decides how it looks
+// ---------------------------------------------------------------------------
+
+/// One template variable as the create will use it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedValue {
+    pub slug: String,
+    /// After the transform and filesystem sanitization. Empty is legal.
+    pub value: String,
+    /// The transform's config name, or `None` for `Transform::None`.
+    pub transform: Option<&'static str>,
+}
+
+/// The first few lines of one templated file, interpolated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilePreview {
+    /// The file's path in the new project, tokens resolved.
+    pub path: String,
+    pub lines: Vec<String>,
+    /// Lines beyond `config.preview_lines`.
+    pub hidden: usize,
+}
+
+/// Everything a create preview says, with nothing about how it is drawn.
+///
+/// This is the data 255 lines of `println!` used to compute inline, which meant
+/// the only way to test any of it was to read terminal output — so none of it
+/// was tested. `cli::render` turns this into text; `fastf ui` could turn it into
+/// JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DryRunReport {
     pub folder_name: String,
-    /// Full path where the project root will be created.
     pub root_path: PathBuf,
-    /// Resolved variable map (slug → final value, after transforms).
-    pub vars: HashMap<String, String>,
-    /// The ID string used (e.g. "ID0047").
-    pub id_str: String,
-    /// Counter value used.
-    pub counter_value: u64,
+    /// The template's folder tree with every name interpolated.
+    pub structure: Vec<FolderNode>,
+    /// Files the `files/` subtree will produce, as project-relative paths.
+    pub files: Vec<String>,
+    pub values: Vec<ResolvedValue>,
+    pub id: String,
+    /// The counter before and after this create.
+    pub counter: (u64, u64),
+    /// `{date}` as `config.date_format` renders it.
+    pub date: String,
+    /// `{YYYY}`, `{MM}`, `{DD}`.
+    pub date_parts: (String, String, String),
+    pub previews: Vec<FilePreview>,
+}
+
+/// Build the preview for a plan. Reads the template's `files/` subtree; writes
+/// nothing.
+pub fn plan_report(plan: &ProjectPlan, template: &Template, config: &Config) -> DryRunReport {
+    let now = chrono::Local::now();
+
+    let files = match assets::walk(&template.files_dir()) {
+        Ok(entries) => entries
+            .iter()
+            .filter(|e| e.is_file() && !assets::is_excluded(&e.rel, &template.exclude))
+            .map(|e| assets::interp_rel(&e.rel, &plan.vars, &config.date_format))
+            .filter(|rel| !crate::core::project_info::path_is_reserved(rel))
+            .collect(),
+        // A template with no `files/` directory is ordinary, not an error.
+        Err(_) => Vec::new(),
+    };
+
+    let values = template
+        .variables
+        .iter()
+        .map(|var| ResolvedValue {
+            slug: var.slug.clone(),
+            value: plan.vars.get(&var.slug).cloned().unwrap_or_default(),
+            transform: match var.transform {
+                crate::core::template::Transform::None => None,
+                crate::core::template::Transform::TitleUnderscore => Some("title_underscore"),
+                crate::core::template::Transform::UpperUnderscore => Some("upper_underscore"),
+                crate::core::template::Transform::LowerUnderscore => Some("lower_underscore"),
+            },
+        })
+        .collect();
+
+    let previews = if config.preview_lines > 0 {
+        template
+            .files
+            .iter()
+            .filter(|entry| !entry.template.is_empty())
+            .map(|entry| {
+                let rendered = crate::core::naming::interpolate(
+                    &entry.template,
+                    &plan.vars,
+                    &config.date_format,
+                );
+                let all: Vec<&str> = rendered.lines().collect();
+                let shown = all.len().min(config.preview_lines);
+                FilePreview {
+                    path: crate::core::naming::interpolate(
+                        &entry.path,
+                        &plan.vars,
+                        &config.date_format,
+                    ),
+                    lines: all.iter().take(shown).map(|l| l.to_string()).collect(),
+                    hidden: all.len().saturating_sub(shown),
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    DryRunReport {
+        folder_name: plan.folder_name.clone(),
+        root_path: plan.root_path.clone(),
+        structure: interpolated_structure(&template.structure, &plan.vars, &config.date_format),
+        files,
+        values,
+        id: plan.id_str.clone(),
+        counter: (plan.counter_value.saturating_sub(1), plan.counter_value),
+        date: now.format(&config.date_format).to_string(),
+        date_parts: (
+            now.format("%Y").to_string(),
+            now.format("%m").to_string(),
+            now.format("%d").to_string(),
+        ),
+        previews,
+    }
+}
+
+/// The same tree with `{token}` placeholders resolved in every folder name.
+///
+/// `interpolate_name`, never `interpolate`: these are path components, so an
+/// empty optional variable must take its leftover separator with it.
+pub fn interpolated_structure(
+    nodes: &[FolderNode],
+    vars: &HashMap<String, String>,
+    date_format: &str,
+) -> Vec<FolderNode> {
+    nodes
+        .iter()
+        .map(|node| FolderNode {
+            name: interpolate_name(&node.name, vars, date_format),
+            children: interpolated_structure(&node.children, vars, date_format),
+        })
+        .collect()
+}
+
+/// What an apply will do, counted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyReport {
+    pub creates: usize,
+    pub skips: usize,
+}
+
+impl ApplyReport {
+    pub fn of(actions: &[ApplyAction]) -> Self {
+        let mut report = ApplyReport {
+            creates: 0,
+            skips: 0,
+        };
+        for action in actions {
+            match action {
+                ApplyAction::CreateFolder(_) | ApplyAction::CreateFile(_) => report.creates += 1,
+                ApplyAction::SkipFolder(_) | ApplyAction::SkipFile(_) => report.skips += 1,
+            }
+        }
+        report
+    }
 }
 
 /// Build a project plan: resolve variables, interpolate names, compute paths.
@@ -118,234 +271,6 @@ pub fn plan(
         id_str,
         counter_value,
     })
-}
-
-/// Which side of the commit a preview is being printed on.
-///
-/// Both printers are called twice: once for `--dry-run`, which writes nothing,
-/// and once immediately before the real thing. They used to print the same
-/// header either way, so every real create and apply announced that nothing
-/// would be created and then created it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviewKind {
-    /// `--dry-run`: this is the whole command, and nothing is written.
-    DryRun,
-    /// The plan about to be committed (the confirmation, if any, comes next).
-    BeforeCommit,
-}
-
-impl PreviewKind {
-    fn header(self) -> &'static str {
-        match self {
-            PreviewKind::DryRun => "Preview  ·  dry run — nothing will be created",
-            PreviewKind::BeforeCommit => "Preview",
-        }
-    }
-}
-
-/// Print the planned project tree. Creates nothing either way — see
-/// [`PreviewKind`] for what the header promises.
-pub fn print_dry_run(plan: &ProjectPlan, template: &Template, config: &Config, kind: PreviewKind) {
-    println!("\n{}", kind.header().yellow().bold());
-    println!();
-
-    // Tree with a 2-space indent for visual breathing room
-    println!("  {}/", plan.folder_name.cyan().bold());
-    print_tree(
-        &template.structure,
-        "  ",
-        Some((&plan.vars, &config.date_format)),
-    );
-
-    // Bundled files (the whole files/ subtree, incl. binaries), interpolated names.
-    if let Ok(entries) = assets::walk(&template.files_dir()) {
-        let files: Vec<String> = entries
-            .iter()
-            .filter(|e| e.is_file() && !assets::is_excluded(&e.rel, &template.exclude))
-            .map(|e| assets::interp_rel(&e.rel, &plan.vars, &config.date_format))
-            .filter(|rel| !crate::core::project_info::path_is_reserved(rel))
-            .collect();
-        if !files.is_empty() {
-            println!("\n  {}", "Files:".bold());
-            for f in &files {
-                println!("    {} {}", "•".cyan(), f.green());
-            }
-        }
-    }
-
-    // Resolved values table: every variable (with its transform), plus the ID
-    // and every built-in date token, so the user sees exactly what will be substituted.
-    print_resolved_values(plan, template, config);
-
-    // File content previews: interpolated first N lines of each templated file.
-    if config.preview_lines > 0 {
-        print_file_previews(plan, template, config);
-    }
-
-    // Full path: parent dimmed, project folder name bold
-    println!();
-    print_project_path(&plan.root_path, &plan.folder_name);
-}
-
-fn print_resolved_values(plan: &ProjectPlan, template: &Template, config: &Config) {
-    let now = chrono::Local::now();
-    println!("\n  {}", "Resolved:".bold());
-
-    // User-defined variables (label + resolved value + transform)
-    for var in &template.variables {
-        let value = plan.vars.get(&var.slug).cloned().unwrap_or_default();
-        let transform_note = match var.transform {
-            crate::core::template::Transform::None => String::new(),
-            crate::core::template::Transform::TitleUnderscore => {
-                " (transform: title_underscore)".to_string()
-            }
-            crate::core::template::Transform::UpperUnderscore => {
-                " (transform: upper_underscore)".to_string()
-            }
-            crate::core::template::Transform::LowerUnderscore => {
-                " (transform: lower_underscore)".to_string()
-            }
-        };
-        println!(
-            "    {:<16} {}{}",
-            var.slug.cyan(),
-            if value.is_empty() {
-                "(empty)".dimmed().to_string()
-            } else {
-                value.green().to_string()
-            },
-            transform_note.dimmed()
-        );
-    }
-
-    // ID token + counter delta
-    println!(
-        "    {:<16} {}  {}",
-        "{id}".cyan(),
-        plan.id_str.green(),
-        format!(
-            "(counter {} → {})",
-            plan.counter_value.saturating_sub(1),
-            plan.counter_value
-        )
-        .dimmed()
-    );
-
-    // Date tokens
-    println!(
-        "    {:<16} {}",
-        "{date}".cyan(),
-        now.format(&config.date_format).to_string().green()
-    );
-    println!(
-        "    {:<16} {} / {} / {}",
-        "{YYYY}/{MM}/{DD}".cyan(),
-        now.format("%Y").to_string().green(),
-        now.format("%m").to_string().green(),
-        now.format("%d").to_string().green(),
-    );
-}
-
-fn print_file_previews(plan: &ProjectPlan, template: &Template, config: &Config) {
-    let previewable: Vec<&FileEntry> = template
-        .files
-        .iter()
-        .filter(|f| !f.template.is_empty())
-        .collect();
-
-    if previewable.is_empty() {
-        return;
-    }
-
-    println!("\n  {}", "Previews:".bold());
-    for entry in previewable {
-        let rendered = interpolate(&entry.template, &plan.vars, &config.date_format);
-        let lines: Vec<&str> = rendered.lines().collect();
-        let shown = lines.len().min(config.preview_lines);
-        let hidden = lines.len().saturating_sub(shown);
-
-        let display_path = interpolate(&entry.path, &plan.vars, &config.date_format);
-        println!("    {} {}", "•".cyan(), display_path.green().bold());
-        println!(
-            "    {}",
-            "┌──────────────────────────────────────────".dimmed()
-        );
-        for line in lines.iter().take(shown) {
-            println!("    {} {}", "│".dimmed(), line);
-        }
-        if hidden > 0 {
-            println!(
-                "    {} {}",
-                "│".dimmed(),
-                format!(
-                    "… {} more line{} hidden",
-                    hidden,
-                    if hidden == 1 { "" } else { "s" }
-                )
-                .dimmed()
-            );
-        }
-        println!(
-            "    {}",
-            "└──────────────────────────────────────────".dimmed()
-        );
-    }
-}
-
-/// Print what was created (success summary).
-pub fn print_success(plan: &ProjectPlan, template: &Template) {
-    println!("\n{}  {}", "✓".green().bold(), "Project created".bold());
-    println!("  {} {}", "Template:".dimmed(), template.name);
-    println!("  {} {}", "ID:".dimmed(), plan.id_str);
-    println!();
-    // Canonicalize now that the folder exists, for the real absolute path
-    let resolved = plan
-        .root_path
-        .canonicalize()
-        .unwrap_or_else(|_| plan.root_path.clone());
-    print_project_path(&resolved, &plan.folder_name);
-}
-
-/// Display a project path with the parent directory dimmed and the folder name bold.
-fn print_project_path(path: &std::path::Path, folder_name: &str) {
-    let parent = path
-        .parent()
-        .map(|p| {
-            format!(
-                "{}{}",
-                crate::util::paths::display_path(p),
-                std::path::MAIN_SEPARATOR
-            )
-        })
-        .unwrap_or_default();
-    println!(
-        "  {} {}{}",
-        "→".cyan().bold(),
-        parent.dimmed(),
-        folder_name.bold().white()
-    );
-}
-
-/// Print a folder tree. Pass `vars` to resolve `{token}` placeholders in folder
-/// names (e.g. during dry-run). Pass `None` when showing a raw template definition.
-pub fn print_tree(
-    nodes: &[FolderNode],
-    indent: &str,
-    vars: Option<(&HashMap<String, String>, &str)>,
-) {
-    for (i, node) in nodes.iter().enumerate() {
-        let is_last = i == nodes.len() - 1;
-        let connector = if is_last { "└── " } else { "├── " };
-        let name = match vars {
-            Some((v, fmt)) => interpolate_name(&node.name, v, fmt),
-            None => node.name.clone(),
-        };
-        println!("{}{}{}/", indent, connector, name.cyan());
-        if !node.children.is_empty() {
-            let child_indent = format!("{}{}   ", indent, if is_last { " " } else { "│" });
-            print_tree(&node.children, &child_indent, vars);
-        }
-    }
 }
 
 /// Create the project on disk: folders, files, and increment the counter.
@@ -480,17 +405,18 @@ fn create_inner(
                 // Say it *here* — this is the only code that knows a folder was
                 // removed. `main` used to claim it on every interrupt, including
                 // a Ctrl-C at the menu with nothing in flight.
-                Ok(()) => eprintln!(
-                    "{} removed the partial project at {}",
-                    "rolled back:".yellow().bold(),
+                // Said *here* — this is the only code that knows a folder was
+                // removed. `main` used to claim it on every interrupt, including
+                // a Ctrl-C at the menu with nothing in flight.
+                Ok(()) => crate::util::diag::note(format!(
+                    "rolled back — removed the partial project at {}",
                     crate::util::paths::display_path(&realized.root_path)
-                ),
-                Err(cleanup) => eprintln!(
-                    "{} could not remove the partial project at {} ({cleanup}) — \
+                )),
+                Err(cleanup) => crate::util::diag::warn(format!(
+                    "could not remove the partial project at {} ({cleanup}) — \
                      inspect it and remove it manually when safe",
-                    "warning:".yellow().bold(),
                     crate::util::paths::display_path(&realized.root_path)
-                ),
+                )),
             }
             Err(err)
         }
@@ -620,7 +546,7 @@ fn provision_project(
         name: plan.folder_name.clone(),
         path: abs_path.clone(),
         base: abs_path.parent().map(Path::to_path_buf).unwrap_or_default(),
-        created: crate::core::library::now_iso8601(),
+        created: crate::util::time::now_iso8601(),
         tags,
         exists: true,
     };
@@ -630,7 +556,10 @@ fn provision_project(
 
     // Post-create actions (opt-in). Template override > config default.
     if run_post {
-        run_post_create(&abs_path, template, config);
+        // Deliberately dropped: this path is `create` without a surface — the
+        // browser server and the CLI both call `run_post_create` themselves,
+        // after the lock, and render what it returns.
+        let _ = run_post_create(&abs_path, template, config);
     }
 
     Ok(deferred)
@@ -643,18 +572,20 @@ fn provision_project(
 /// `commands` list, and holding a process-wide lock across those would stall
 /// every other fastf for as long as they take. ID allocation needs the lock;
 /// running someone's `npm install` does not.
-pub fn run_post_create(root: &Path, template: &Template, config: &Config) {
+pub fn run_post_create(
+    root: &Path,
+    template: &Template,
+    config: &Config,
+) -> Vec<crate::core::post_create::Note> {
     let actions = resolve_post_create(template, config);
     if actions.is_empty() {
-        return;
+        return Vec::new();
     }
-    println!();
-    if let Err(e) = crate::core::post_create::run(&actions, root, config) {
-        eprintln!(
-            "{} post-create step failed: {}",
-            "warning:".yellow().bold(),
-            e
-        );
+    match crate::core::post_create::run(&actions, root, config) {
+        Ok(notes) => notes,
+        Err(e) => vec![crate::core::post_create::Note::Warning(format!(
+            "post-create step failed: {e}"
+        ))],
     }
 }
 
@@ -781,49 +712,6 @@ pub fn apply(
     Ok(())
 }
 
-/// Render an `apply` plan as a human-readable report. See [`PreviewKind`].
-pub fn print_apply_plan(actions: &[ApplyAction], kind: PreviewKind) {
-    println!("\n{}", kind.header().yellow().bold());
-    println!();
-    let mut creates = 0usize;
-    let mut skips = 0usize;
-    for a in actions {
-        match a {
-            ApplyAction::CreateFolder(p) => {
-                creates += 1;
-                println!("  {} {}", "[create]".green().bold(), p.display());
-            }
-            ApplyAction::SkipFolder(p) => {
-                skips += 1;
-                println!(
-                    "  {} {}",
-                    "[skip]  ".dimmed(),
-                    p.display().to_string().dimmed()
-                );
-            }
-            ApplyAction::CreateFile(p) => {
-                creates += 1;
-                println!("  {} {}", "[create]".green().bold(), p.display());
-            }
-            ApplyAction::SkipFile(p) => {
-                skips += 1;
-                println!(
-                    "  {} {}",
-                    "[skip]  ".dimmed(),
-                    p.display().to_string().dimmed()
-                );
-            }
-        }
-    }
-    println!();
-    println!(
-        "  {} {} to create · {} already present",
-        "Summary:".bold(),
-        creates.to_string().green(),
-        skips.to_string().dimmed()
-    );
-}
-
 fn create_structure(
     nodes: &[FolderNode],
     parent: &Path,
@@ -928,12 +816,10 @@ fn copy_template_files(
         // but it must be *said* — a silently missing file in a new project is
         // the kind of thing a user discovers days later.
         if !entry.is_file() {
-            eprintln!(
-                "{} skipped '{}' from template '{}' — links and special files are not reproduced",
-                "warning:".yellow().bold(),
-                entry.rel,
-                template.slug
-            );
+            crate::util::diag::warn(format!(
+                "skipped '{}' from template '{}' — links and special files are not reproduced",
+                entry.rel, template.slug
+            ));
             continue;
         }
 
@@ -1088,5 +974,190 @@ mod tests {
         unsafe {
             std::env::remove_var("FASTF_INSTALL_DIR");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Reports
+    //
+    // The dry-run's *content* had no test of any kind, because computing it and
+    // printing it were the same 255 lines: the only way to check what a preview
+    // said was to read terminal output. These check the data.
+    // -----------------------------------------------------------------------
+
+    use crate::core::plan::ProjectPlan;
+    use crate::core::template::{FileEntry, FolderNode, Transform, VarType, Variable};
+
+    fn report_template() -> Template {
+        Template {
+            name: "Shoot".to_string(),
+            slug: "shoot".to_string(),
+            naming_pattern: "{date}_{artist}_{id}".to_string(),
+            variables: vec![
+                Variable {
+                    slug: "artist".to_string(),
+                    label: "Artist".to_string(),
+                    var_type: VarType::Text,
+                    required: true,
+                    options: Vec::new(),
+                    default: String::new(),
+                    transform: Transform::TitleUnderscore,
+                },
+                Variable {
+                    slug: "note".to_string(),
+                    label: "Note".to_string(),
+                    var_type: VarType::Text,
+                    required: false,
+                    options: Vec::new(),
+                    default: String::new(),
+                    transform: Transform::None,
+                },
+            ],
+            structure: vec![FolderNode {
+                name: "{artist}".to_string(),
+                children: vec![FolderNode {
+                    name: "{note}_raw".to_string(),
+                    children: Vec::new(),
+                }],
+            }],
+            files: vec![FileEntry {
+                path: "BRIEF.md".to_string(),
+                template: "# {artist}\nline two\nline three\nline four\n".to_string(),
+                content: String::new(),
+            }],
+            ..Template::default()
+        }
+    }
+
+    fn report_plan(vars: &[(&str, &str)]) -> ProjectPlan {
+        ProjectPlan {
+            folder_name: "2026-01-01_Aria_ID0048".to_string(),
+            root_path: PathBuf::from("/base/2026-01-01_Aria_ID0048"),
+            vars: vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            id_str: "ID0048".to_string(),
+            counter_value: 48,
+        }
+    }
+
+    #[test]
+    fn the_report_interpolates_the_tree_with_name_rules() {
+        let config = Config {
+            preview_lines: 0,
+            ..Config::default()
+        };
+        // `note` is empty, so `{note}_raw` must lose the orphaned separator —
+        // the rule that separates `interpolate_name` from `interpolate`, and the
+        // one a raw substitution in the renderer would have got wrong.
+        let report = plan_report(
+            &report_plan(&[("artist", "Aria"), ("note", "")]),
+            &report_template(),
+            &config,
+        );
+
+        assert_eq!(
+            report.structure,
+            vec![FolderNode {
+                name: "Aria".to_string(),
+                children: vec![FolderNode {
+                    name: "raw".to_string(),
+                    children: Vec::new(),
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn the_report_names_each_transform_and_marks_an_empty_value() {
+        let config = Config {
+            preview_lines: 0,
+            ..Config::default()
+        };
+        let report = plan_report(
+            &report_plan(&[("artist", "Aria"), ("note", "")]),
+            &report_template(),
+            &config,
+        );
+
+        assert_eq!(
+            report.values,
+            vec![
+                ResolvedValue {
+                    slug: "artist".to_string(),
+                    value: "Aria".to_string(),
+                    transform: Some("title_underscore"),
+                },
+                ResolvedValue {
+                    slug: "note".to_string(),
+                    value: String::new(),
+                    transform: None,
+                },
+            ]
+        );
+        assert_eq!(report.id, "ID0048");
+        assert_eq!(report.counter, (47, 48));
+    }
+
+    #[test]
+    fn a_preview_is_cut_at_the_configured_line_count_and_says_how_many_are_left() {
+        let config = Config {
+            preview_lines: 2,
+            ..Config::default()
+        };
+        let report = plan_report(
+            &report_plan(&[("artist", "Aria"), ("note", "")]),
+            &report_template(),
+            &config,
+        );
+
+        assert_eq!(report.previews.len(), 1);
+        let preview = &report.previews[0];
+        assert_eq!(preview.path, "BRIEF.md");
+        // File *content* uses raw interpolation, so the value goes in verbatim.
+        assert_eq!(
+            preview.lines,
+            vec!["# Aria".to_string(), "line two".to_string()]
+        );
+        assert_eq!(preview.hidden, 2);
+    }
+
+    #[test]
+    fn preview_lines_zero_means_no_previews_are_even_computed() {
+        let config = Config {
+            preview_lines: 0,
+            ..Config::default()
+        };
+        let report = plan_report(
+            &report_plan(&[("artist", "Aria"), ("note", "")]),
+            &report_template(),
+            &config,
+        );
+        assert!(report.previews.is_empty());
+    }
+
+    #[test]
+    fn an_apply_report_counts_creates_and_skips() {
+        let actions = vec![
+            ApplyAction::CreateFolder(PathBuf::from("a")),
+            ApplyAction::SkipFolder(PathBuf::from("b")),
+            ApplyAction::CreateFile(PathBuf::from("c")),
+            ApplyAction::SkipFile(PathBuf::from("d")),
+            ApplyAction::CreateFile(PathBuf::from("e")),
+        ];
+        assert_eq!(
+            ApplyReport::of(&actions),
+            ApplyReport {
+                creates: 3,
+                skips: 2
+            }
+        );
+        assert_eq!(
+            ApplyReport::of(&[]),
+            ApplyReport {
+                creates: 0,
+                skips: 0
+            }
+        );
     }
 }

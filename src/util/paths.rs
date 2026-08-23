@@ -57,10 +57,10 @@ pub fn install_dir() -> PathBuf {
     match try_install_dir() {
         Ok((dir, _)) => dir,
         Err(err) => {
-            eprintln!(
-                "fastf: cannot determine data directory: {err}. \
+            crate::util::diag::fatal(format!(
+                "cannot determine data directory: {err}. \
                  Set FASTF_INSTALL_DIR to choose one."
-            );
+            ));
             std::process::exit(2);
         }
     }

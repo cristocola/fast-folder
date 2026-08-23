@@ -3,6 +3,7 @@ use colored::Colorize;
 use std::collections::HashMap;
 
 use crate::cli::extra::Recognized;
+use crate::cli::render;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::project;
@@ -63,12 +64,12 @@ pub fn run(args: NewArgs) -> Result<()> {
     let plan = project::plan(&tmpl, &raw_vars, &config, &counters)?;
 
     if args.dry_run {
-        project::print_dry_run(&plan, &tmpl, &config, project::PreviewKind::DryRun);
+        render::print_dry_run(&plan, &tmpl, &config, render::PreviewKind::DryRun);
         return Ok(());
     }
 
     // Show preview and confirm (unless --yes or confirm_create disabled globally)
-    project::print_dry_run(&plan, &tmpl, &config, project::PreviewKind::BeforeCommit);
+    render::print_dry_run(&plan, &tmpl, &config, render::PreviewKind::BeforeCommit);
     if !args.yes && config.confirm_create {
         tty::require_tty(
             "confirm",
@@ -101,14 +102,15 @@ pub fn run(args: NewArgs) -> Result<()> {
     let plan = created.plan;
     let tmpl = created.template;
     let config = created.config;
-    project::print_success(&plan, &tmpl);
+    render::print_success(&plan, &tmpl);
 
     if !args.no_post {
         let root = plan
             .root_path
             .canonicalize()
             .unwrap_or_else(|_| plan.root_path.clone());
-        project::run_post_create(&root, &tmpl, &config);
+        let notes = project::run_post_create(&root, &tmpl, &config);
+        crate::cli::render::print_post_create_notes(&notes);
     }
 
     // "Open project folder?" prompt — skip in non-interactive / headless modes

@@ -58,6 +58,91 @@ fn core_does_not_prompt() {
     );
 }
 
+/// `core` and `util` produce data; `cli`, `tui` and `ui` render it.
+///
+/// Two surfaces render the same operations (a terminal and an HTTP server) and
+/// a third will, so a `println!` inside `core` is output one of them cannot
+/// suppress, redirect, or translate — and `colored` inside `core` is ANSI in a
+/// JSON response. The exceptions are named here rather than left to judgement:
+/// `util::diag` is the one warning sink, and `util::live_select` draws a picker
+/// by design.
+#[test]
+fn core_and_util_do_not_render() {
+    const RENDERING: [&str; 5] = ["use colored", "println!", "eprintln!", "print!", "eprint!"];
+    const ALLOWED: [&str; 3] = ["util/diag.rs", "util/live_select.rs", "util/trace.rs"];
+
+    let mut offenders = Vec::new();
+    for layer in ["core", "util"] {
+        for path in sources(layer) {
+            let shown = path.display().to_string();
+            if ALLOWED.iter().any(|allowed| shown.ends_with(allowed)) {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            let mut in_tests = false;
+            for (number, line) in text.lines().enumerate() {
+                // A unit test may print: it is describing a failure to a human
+                // who is already looking at a terminal.
+                if line.trim_start().starts_with("mod tests") {
+                    in_tests = true;
+                }
+                if in_tests {
+                    continue;
+                }
+                // A comment may name what it replaced.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if RENDERING.iter().any(|marker| line.contains(marker)) {
+                    offenders.push(format!("{shown}:{}  {}", number + 1, line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "core and util must not render — return the data, or warn through \
+         `util::diag`:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// The layers below never reach up into the ones above.
+#[test]
+fn core_and_util_do_not_import_the_surfaces() {
+    const UPWARD: [&str; 3] = ["crate::cli", "crate::tui", "crate::ui"];
+
+    let mut offenders = Vec::new();
+    for layer in ["core", "util"] {
+        for path in sources(layer) {
+            let text = fs::read_to_string(&path).unwrap();
+            for (number, line) in text.lines().enumerate() {
+                // A doc link is not a dependency: `[crate::ui::jobs_active]` in
+                // a comment tells a reader where something is used, and removing
+                // it would make the documentation worse to satisfy a rule about
+                // code.
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                if UPWARD.iter().any(|marker| line.contains(marker)) {
+                    offenders.push(format!(
+                        "{}:{}  {}",
+                        path.display(),
+                        number + 1,
+                        line.trim()
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "core and util must not depend on a surface:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// Exactly one module may name a `dialoguer` prompt type.
 ///
 /// An earlier attempt at a cancel contract moved twenty-nine prompts to

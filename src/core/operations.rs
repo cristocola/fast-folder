@@ -408,12 +408,11 @@ fn write_registration_metadata(
     tags: &[String],
     created: &str,
 ) -> Result<()> {
-    project_info::write(plan, template, tags).context("writing project metadata")?;
-    let created = created.to_string();
-    project_info::write_frontmatter(&project_info::pinfo_path(&plan.root_path), |metadata| {
-        metadata.created = created.clone();
-    })
-    .context("patching created timestamp")
+    // One write. This used to write the file with `now` and then rewrite the
+    // frontmatter to patch `created`, which meant a registered project's
+    // identity file existed briefly with the wrong date in it.
+    project_info::write_at(plan, template, tags, created.to_string())
+        .context("writing project metadata")
 }
 
 pub fn resolve_created(
@@ -427,7 +426,7 @@ pub fn resolve_created(
         return Ok(format!("{parsed}T00:00:00Z"));
     }
     if use_today {
-        return Ok(library::now_iso8601());
+        return Ok(crate::util::time::now_iso8601());
     }
     let metadata =
         fs::metadata(path).with_context(|| format!("reading metadata of {}", path.display()))?;
@@ -436,7 +435,7 @@ pub fn resolve_created(
             let date: DateTime<Utc> = value.into();
             Ok(date.to_rfc3339_opts(SecondsFormat::Secs, true))
         }
-        Err(_) => Ok(library::now_iso8601()),
+        Err(_) => Ok(crate::util::time::now_iso8601()),
     }
 }
 

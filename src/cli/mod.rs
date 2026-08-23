@@ -10,6 +10,7 @@ pub mod recent;
 pub mod reconcile;
 pub mod register;
 pub mod reindex;
+pub mod render;
 pub mod search;
 pub mod tag;
 pub mod template;

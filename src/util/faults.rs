@@ -69,7 +69,7 @@ pub fn check(name: &str) -> Result<()> {
     }
     if mode == "abort" {
         // No unwinding, no destructors, no cleanup: a hard process stop.
-        eprintln!("fastf: fault injection aborting at '{name}'");
+        crate::util::diag::fatal(format!("fault injection aborting at '{name}'"));
         std::process::abort();
     }
     anyhow::bail!("injected fault at '{name}'")

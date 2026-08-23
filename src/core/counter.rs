@@ -92,10 +92,10 @@ impl Counters {
         // The target base first — its cache is being rewritten by this create
         // anyway, so its mtime bump is already paid for.
         if let Err(err) = Self::save_base(base, value) {
-            eprintln!(
-                "warning: could not record the ID counter in {} ({err})",
+            crate::util::diag::warn(format!(
+                "could not record the ID counter in {} ({err})",
                 base.display()
-            );
+            ));
         }
         Self::propagate(cfg, value);
     }
@@ -117,10 +117,10 @@ impl Counters {
             match Self::save_base(&base, value) {
                 Ok(true) => crate::core::library::touch_cache(&base),
                 Ok(false) => {}
-                Err(err) => eprintln!(
-                    "warning: could not record the ID counter in {} ({err})",
+                Err(err) => crate::util::diag::warn(format!(
+                    "could not record the ID counter in {} ({err})",
                     base.display()
-                ),
+                )),
             }
         }
         let mut local = Self::load().unwrap_or_default();
@@ -131,10 +131,10 @@ impl Counters {
             // unplugged drive restart numbering — not something to find out about
             // later, from two projects sharing an ID.
             if let Err(err) = local.save() {
-                eprintln!(
-                    "warning: could not record the ID counter in {} ({err})",
+                crate::util::diag::warn(format!(
+                    "could not record the ID counter in {} ({err})",
                     paths::counters_path().display()
-                );
+                ));
             }
         }
     }

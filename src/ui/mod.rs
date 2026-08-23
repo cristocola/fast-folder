@@ -799,7 +799,8 @@ fn create_project(request: CreateRequest) -> Result<Value> {
     let job_id = if deferred.is_empty() {
         drop(mutation_lock);
         if !actions.is_empty() {
-            post_create::run(&actions, &plan.root_path, &config)?;
+            // Notes are for a terminal; the browser reports through Progress.
+            let _ = post_create::run(&actions, &plan.root_path, &config)?;
         }
         None
     } else {

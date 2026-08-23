@@ -675,12 +675,36 @@ Each phase here is behaviour-neutral. The proof is the unchanged test suite plus
 - Guard: a unit test that scans `src/core/**` and `src/util/**` for `use colored`, `use dialoguer`, `println!`, `eprintln!`, `print!` and allows only `util/diag.rs` and `util/live_select.rs` (which renders by design). A second scan asserts no `crate::cli`, `crate::tui`, `crate::ui` under `core`/`util`.
 
 **Steps.**
-- [ ] Guard tests first (failing), then the moves.
-- [ ] `DryRunReport`/`ApplyReport` with unit tests for the report content (this is the first direct test of the dry-run data).
-- [ ] `from_plan_at`; remove register's second write; round-trip tests unchanged.
-- [ ] `CLAUDE.md`: "Output display" section moves its function names to `cli/render.rs`; gotcha on `util::diag` as the one sink; cycles paragraph deleted if present.
+- [x] Guard tests first (failing), then the moves.
+- [x] `DryRunReport`/`ApplyReport` with unit tests for the report content (this is the first direct test of the dry-run data).
+- [x] `from_plan_at`; remove register's second write; round-trip tests unchanged.
+- [x] `CLAUDE.md`: "Output display" section moves its function names to `cli/render.rs`; gotcha on `util::diag` as the one sink; cycles paragraph deleted if present.
 
 **Acceptance.** Guard tests pass. `cargo tree`-independent check: `grep -rln "colored\|dialoguer" src/core src/util` lists only `live_select.rs`. All existing tests pass unchanged.
+
+**Notes.**
+
+(1) **`util::diag` needed three functions, not one.** `warn` is right for a
+best-effort failure, but the rollback message in `create_inner` is not a warning
+— a rollback that *worked* is the one piece of code that knows a folder was
+removed saying so — and the two `process::exit`/`abort` paths are not warnings
+either. `warn` / `note` / `fatal`, one prefix each, all in one file.
+
+(2) **The `grep` in the acceptance now also matches `util/interrupt.rs` and
+`util/tty.rs`.** Both are doc comments *about* dialoguer plus one
+`dialoguer::console::Term` (a terminal toolkit, not a prompt), so the guard test
+asks the question the acceptance meant: no rendering, and no `.interact()`.
+
+(3) **The guard skips comment lines**, in both directions. A doc link like
+`[crate::ui::jobs_active]` tells a reader where something is used and is not a
+dependency, and a comment saying "this replaced 255 lines of `println!`" is not
+a `println!`. Removing either to satisfy a rule about code would make the source
+worse.
+
+(4) **`print_tree` lost its variables parameter.** Interpolating a tree is now
+part of building the report (`project::interpolated_structure`), so the renderer
+prints names as given — which is also what `template show` wants, and what it was
+already passing `None` for.
 
 ## Phase 13: Split `library.rs` (pure move)
 

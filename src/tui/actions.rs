@@ -28,8 +28,13 @@ use crate::util::size_scan::SizeCell;
 pub enum ActionLoop {
     BackToList,
     /// One row's content changed; the library's shape did not.
+    ///
+    /// Boxed because a `Project` is much larger than any other variant here, and
+    /// every `ActionLoop` would otherwise be that size — a lint the Windows
+    /// clippy leg catches and the Linux one does not, since the threshold
+    /// depends on the target's type sizes.
     Patched {
-        project: Project,
+        project: Box<Project>,
         stale: Vec<PathBuf>,
     },
     /// The row is gone from the library.
@@ -208,7 +213,7 @@ pub(crate) fn project_action_menu(
                         ));
                         let stale = vec![project.path.clone(), moved.path.clone()];
                         return Ok(ActionLoop::Patched {
-                            project: moved,
+                            project: Box::new(moved),
                             stale,
                         });
                     }
@@ -232,7 +237,7 @@ pub(crate) fn project_action_menu(
                         ));
                         let stale = vec![project.path.clone(), renamed.path.clone()];
                         return Ok(ActionLoop::Patched {
-                            project: renamed,
+                            project: Box::new(renamed),
                             stale,
                         });
                     }
@@ -494,7 +499,7 @@ fn journal_menu(project: &Project, reload_after_change: bool) -> Result<Option<A
                     // The journal is not shown in a row, but the row's size is
                     // now wrong, so the snapshot has to go.
                     return Ok(Some(ActionLoop::Patched {
-                        project: project.clone(),
+                        project: Box::new(project.clone()),
                         stale: vec![project.path.clone()],
                     }));
                 }
@@ -518,7 +523,7 @@ fn retagged(project: &Project, tags: Vec<String>) -> ActionLoop {
         // The tag was written into `PROJECT_INFO.md`, so the folder is a few
         // bytes bigger than the snapshot says. Measure it again.
         stale: vec![project.path.clone()],
-        project: patched,
+        project: Box::new(patched),
     }
 }
 

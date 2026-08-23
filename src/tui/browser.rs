@@ -132,7 +132,7 @@ where
                     // whose new metadata no longer satisfies the query leaves the
                     // list.
                     if keeps(&project) {
-                        projects[row] = project;
+                        projects[row] = *project;
                     } else {
                         projects.remove(row);
                     }

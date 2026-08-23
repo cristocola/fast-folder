@@ -407,4 +407,51 @@ mod tests {
         let absent: Config = toml::from_str("").unwrap();
         assert_eq!(absent.on_name_collision, NameCollision::Suffix);
     }
+
+    /// `expand_base_path` is one half of "the only way in" for a base path, and
+    /// had no test of any kind. It expands `~` and requires an absolute path —
+    /// and, crucially, **creates nothing**: extra `bases` use it precisely so a
+    /// missing one is not conjured into existence at an unmounted mount point,
+    /// shadowing the drive it stands for.
+    #[test]
+    fn expand_base_path_expands_home_requires_absolute_and_creates_nothing() {
+        use super::expand_base_path;
+
+        assert!(
+            expand_base_path("relative/path").is_err(),
+            "a relative path is not a base"
+        );
+        assert!(expand_base_path("   ").is_err(), "empty is not a base");
+
+        let absolute = if cfg!(windows) {
+            "C:\\Projects"
+        } else {
+            "/srv/projects"
+        };
+        let expanded = expand_base_path(absolute).unwrap();
+        assert!(expanded.is_absolute());
+        assert!(
+            !expanded.exists(),
+            "expansion must not create the directory: {}",
+            expanded.display()
+        );
+    }
+
+    /// The other half: `resolve_base_dir_input` *does* create and canonicalize,
+    /// because it is what a user typed as the place their projects should live.
+    #[test]
+    fn resolve_base_dir_input_creates_and_canonicalizes() {
+        use super::resolve_base_dir_input;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let wanted = tmp.path().join("nested").join("projects");
+        let resolved = resolve_base_dir_input(&wanted.display().to_string()).unwrap();
+
+        assert!(resolved.is_dir(), "it must exist afterwards");
+        assert_eq!(
+            resolved,
+            wanted.canonicalize().unwrap(),
+            "and be the canonical form"
+        );
+    }
 }

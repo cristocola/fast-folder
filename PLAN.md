@@ -869,11 +869,33 @@ mistake worth reporting.
 - New tests: unit tests for `expand_base_path` (relative rejected, `~` expanded, absolute kept, no `create_dir_all`), `resolve_base_dir_input` (creates and canonicalizes), `suffix_on_name_collision`; `template_import` unit tests for text/binary/large classification and the reserved root file; `cli_surface.rs` cases for `paths`, `reindex`, `reconcile` (clean and with a planted v2 transaction), `tag add/remove/list`, `template list/show/delete --yes`; the gallery test asserts all 8 by name and runs `project::plan` on each with sample variables; document in `docs/templates.md` that a gallery template without `files/` is structure-only, or add a minimal `files/` to the two (decide by what each template is for; prefer documenting).
 
 **Steps.**
-- [ ] Harness unification; suites split; `tests/CLAUDE.md` updated (it becomes the place that says "use `common::env`"), README suite table updated.
-- [ ] New tests as listed.
-- [ ] `cargo test` wall time recorded before and after in the PR (expect the in-process suites to parallelize across binaries).
+- [x] Harness unification; suites split; `tests/CLAUDE.md` updated (it becomes the place that says "use `common::env`"), README suite table updated.
+- [x] New tests as listed.
+- [x] `cargo test` wall time recorded before and after in the PR (expect the in-process suites to parallelize across binaries). *(The expectation was wrong — see Notes.)*
 
 **Acceptance.** `grep -rn "fn with_fresh_install" tests` returns one definition. `tests/` has no file over 1000 lines. Every `src/cli/*.rs` module is driven by at least one process-level test. The gallery test names all 8 templates.
+
+**Notes.**
+
+(1) **The parallelism premise was wrong, and the measurement said so.**
+`cargo test` runs test *binaries* sequentially — only the tests inside one
+binary run in parallel. So splitting a **fast** suite is free (the eleven
+in-process binaries together take under a second), and splitting a **slow** one
+is a straight loss: making the pty suite three targets took the whole run from
+27s to 46s, because its fixed keystroke schedules stopped overlapping.
+`tui_pty.rs` is therefore one binary with three modules under `tests/tui_pty/`,
+which gets the files under 1000 lines without paying for it. Final warm wall
+time: **27s before, 28s after**, with 25 binaries instead of 11.
+
+(2) **`cli/ui.rs` is the one command module with no process test**, deliberately:
+it starts an HTTP server and opens a browser. The layer it launches is covered by
+four suites through the pure router, which is the part that can be wrong.
+
+(3) **The gallery test was worse than it looked.** `seen >= 5` against eight
+templates meant three could rot away unnoticed, and it stopped at `validate`, so
+the "and plan" in its name was never true. It now names all eight, asserts the
+directory listing matches that list, and plans each one with a sample answer per
+variable.
 
 ## Phase 17: CLAUDE.md as a working document, dependencies refreshed
 

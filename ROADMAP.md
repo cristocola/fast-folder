@@ -291,6 +291,12 @@ what the command line can already do.
 Track C of [`PLAN.md`](PLAN.md). No behaviour change: the proof is the unchanged
 test suite plus the guard each phase adds.
 
+- [x] Phase 16: one test harness, faster suites, the coverage gaps — the sandbox
+  and its `HOME` redirect are defined once in `tests/common/env`, the two
+  2700-line and 1300-line suites are split by subject, and the modules that had
+  no coverage at all (`expand_base_path`, `template_import`, `paths`, `reindex`,
+  `reconcile`, `tag`, `template`) have some. The gallery test names all eight
+  templates and plans each instead of counting to five.
 - [x] Phase 15: types over strings, path fidelity, bounded recursion — job
   status and phase, the recovery kinds and the name-collision policy are enums
   whose serialized names are unchanged and asserted; a template file whose name

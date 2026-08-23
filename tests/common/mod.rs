@@ -14,6 +14,10 @@
 
 #![allow(dead_code)] // each test binary uses a different subset
 
+pub mod env;
+pub mod fixtures;
+pub mod ui;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};

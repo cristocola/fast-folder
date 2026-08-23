@@ -174,17 +174,17 @@ Tests are hermetic: they redirect all state through `FASTF_INSTALL_DIR` (and `HO
 
 | Suite | Covers |
 |---|---|
-| [`integration.rs`](tests/integration.rs) | core flows end to end |
-| [`ui_server.rs`](tests/ui_server.rs) | the browser UI's request layer |
+| [`create.rs`](tests/create.rs) · [`metadata.rs`](tests/metadata.rs) · [`search.rs`](tests/search.rs) · [`template_engine.rs`](tests/template_engine.rs) · [`register.rs`](tests/register.rs) · [`move.rs`](tests/move.rs) · [`data_dir.rs`](tests/data_dir.rs) | core flows end to end |
+| [`ui_projects.rs`](tests/ui_projects.rs) · [`ui_templates.rs`](tests/ui_templates.rs) · [`ui_jobs.rs`](tests/ui_jobs.rs) · [`ui_security.rs`](tests/ui_security.rs) | the browser UI's request layer |
+| [`cli_counter.rs`](tests/cli_counter.rs) · [`cli_flags.rs`](tests/cli_flags.rs) · [`cli_output.rs`](tests/cli_output.rs) | what `fastf <args>` actually does to disk, as a process |
 | [`crash_recovery.rs`](tests/crash_recovery.rs) | interruption at each unsafe boundary, via fault injection |
 | [`concurrency.rs`](tests/concurrency.rs) | several fastf **processes** racing each other |
 | [`windows_semantics.rs`](tests/windows_semantics.rs) | reserved names, long paths, links, read-only files |
 | [`hostile_fs.rs`](tests/hostile_fs.rs) | corrupt caches, markers and metadata |
 | [`properties.rs`](tests/properties.rs) | generated-input properties (proptest) |
-| [`cli_surface.rs`](tests/cli_surface.rs) | what `fastf <args>` actually does to disk, as a process |
 | [`tui_pty.rs`](tests/tui_pty.rs) | the interactive menu through a real terminal (unix) |
 | [`repo_hygiene.rs`](tests/repo_hygiene.rs) | no tracked file describes the machine it was written on |
-| [`layering.rs`](tests/layering.rs) | `core` and `util` never reach for a terminal prompt |
+| [`layering.rs`](tests/layering.rs) | `core` and `util` never render, prompt, or reach for a surface |
 
 Two things worth knowing before you change the copy or move paths:
 

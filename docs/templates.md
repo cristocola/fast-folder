@@ -128,6 +128,11 @@ each have Add / Edit / Remove, so correcting one typo does not mean retyping the
 rest — and a file can be declared empty, which is what `.gitkeep` and other
 marker files need.
 
+A template may declare **no files at all**. Two gallery templates
+(`photography`, `video-production`) are structure-only: they scaffold a shoot's
+folders and leave the documents to you. A template with no `files/` directory is
+legal and creates exactly the folders it declares.
+
 ## Generating a template from a real folder
 
 Point fastf at an existing project and get a ready-to-edit template:

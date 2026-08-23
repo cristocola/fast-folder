@@ -1,22 +1,43 @@
 # CLAUDE.md — fastf test suites
 
-There are **eleven** integration binaries — `integration.rs` (core flows),
-`ui_server.rs` (browser-UI request layer), the five v1.1 suites
-`crash_recovery.rs`, `concurrency.rs`, `windows_semantics.rs`, `hostile_fs.rs`,
-`properties.rs`, the v1.2.1 `cli_surface.rs`, the v1.3 `tui_pty.rs`, the
-v1.6.1 `repo_hygiene.rs`, and the v1.7.0 `layering.rs`. What each guards — the intent, not the case list:
+**Every in-process suite uses `common::env`.** `with_fresh_install(&SERIAL, …)`
+for one data directory, `with_sandbox(&SERIAL, …)` where a project base is
+needed too. `FASTF_INSTALL_DIR` and `HOME` are process-wide, so each binary
+keeps its **own** `static SERIAL` and every test in it goes through the helper —
+including the `HOME` redirect, which is not optional: an unconfigured `base_dir`
+falls back to the home directory, and a harness that skips it scans the
+developer's real one and self-heals the counter from their real projects. That
+rule used to be re-typed in four files, which is three chances to drop it.
+Fixtures live in `common::fixtures`, and the UI router helpers in `common::ui`.
+
+**A file per subject, a binary per subject — except the pty suite.** `cargo test`
+runs test *binaries* sequentially, so splitting is free for fast suites and
+expensive for slow ones: making the pty tests three targets added nineteen
+seconds of wall time, because their fixed keystroke schedules stopped
+overlapping. `tui_pty.rs` is therefore one binary with three modules under
+`tests/tui_pty/`. Everything else is a target per subject.
+
+The suites, and what each guards — the intent, not the case list:
+- `create.rs`, `metadata.rs`, `search.rs`, `template_engine.rs`, `register.rs`,
+  `move.rs`, `data_dir.rs` — the core flows, split out of the 2700-line
+  `integration.rs` whose 67 tests all queued behind one mutex.
+- `ui_projects.rs`, `ui_templates.rs`, `ui_jobs.rs`, `ui_security.rs` — the
+  browser-UI request layer through the pure router `ui::route_request`, split out
+  of `ui_server.rs` the same way.
+- `cli_counter.rs`, `cli_flags.rs`, `cli_output.rs` — what `fastf <args>` does to
+  disk, split out of `cli_surface.rs`.
 - `crash_recovery.rs` — every create failpoint asserted against the same invariants,
   plus real subprocesses killed with abort. Debug-only (failpoints are compiled out
   of release).
 - `concurrency.rs` — races real **processes**, not threads: a thread test passes
   against an in-process `Mutex` while production stays broken.
-- `cli_surface.rs` — what `fastf <args>` actually does to disk. Every case is a
-  v1.2.0 regression: the bugs lived between clap and the core (flags dropped into
-  `trailing_var_arg`, one caller computing an ID differently from another, a config
-  field read raw instead of resolved), which only a process can see. **Write the
-  test against the broken build first** — two of these passed pre-fix and were
-  relabelled as design guards rather than left to look like regressions they aren't.
-- `tui_pty.rs` (v1.3, unix) — the interactive menu through a real terminal, which
+- The `cli_*.rs` suites drive the **real binary**, because their defects lived
+  between clap and the core (flags dropped into `trailing_var_arg`, one caller
+  computing an ID differently from another, a config field read raw instead of
+  resolved) and only a process sees that. **Write the test against the broken
+  build first** — several have passed pre-fix and were relabelled as design
+  guards rather than left to look like regressions they aren't.
+- `tui_pty.rs` (v1.3, unix; modules `menu`, `browser`, `flows`) — the interactive menu through a real terminal, which
   is the only place its worst defect was visible: any recoverable error ended the
   session. Keystrokes must be **spaced**, not burst (`pty::Script` handles the
   cadence), and `Confirm` takes a bare `y`/`n` with no Enter — a trailing `\r`

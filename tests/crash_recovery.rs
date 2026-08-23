@@ -28,54 +28,21 @@ use std::sync::Mutex;
 use fastf::core::{config::Config, counter::Counters, library, project, provisioning, template};
 use fastf::util::faults::FAULT_ENV;
 
+mod common;
+
 /// `FASTF_INSTALL_DIR` and `FASTF_FAULT` are process-wide.
 static SERIAL: Mutex<()> = Mutex::new(());
 
-struct Sandbox {
-    _tmp: tempfile::TempDir,
-    install: std::path::PathBuf,
-    base: std::path::PathBuf,
-}
+use common::env::{Sandbox, with_sandbox};
 
-/// Fresh install dir + base, with HOME redirected so an unconfigured base can
-/// never reach the developer's real home directory.
+/// Fresh install dir + base, with HOME redirected — see `common::env`.
 fn sandbox<R>(body: impl FnOnce(&Sandbox) -> R) -> R {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let install = tmp.path().join("install");
-    let base = tmp.path().join("base");
-    fs::create_dir_all(install.join("templates")).unwrap();
-    fs::create_dir_all(&base).unwrap();
-
-    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    let old_home = std::env::var_os(home_var);
-    // SAFETY: SERIAL keeps other tests in this binary off these variables.
-    unsafe {
-        std::env::set_var("FASTF_INSTALL_DIR", &install);
-        std::env::set_var(home_var, tmp.path());
-    }
-
-    let sb = Sandbox {
-        _tmp: tmp,
-        install,
-        base,
-    };
-    let out = body(&sb);
-
-    unsafe {
-        std::env::remove_var("FASTF_INSTALL_DIR");
-        std::env::remove_var(FAULT_ENV);
-        match old_home {
-            Some(v) => std::env::set_var(home_var, v),
-            None => std::env::remove_var(home_var),
-        }
-    }
-    out
+    with_sandbox(&SERIAL, body)
 }
 
 /// A template with a handful of files, so `create:mid-copy` has something to
 /// land in the middle of.
-fn write_template(install: &Path, slug: &str) {
+fn write_crash_template(install: &Path, slug: &str) {
     let dir = install.join("templates").join(slug);
     fs::create_dir_all(dir.join("files/assets")).unwrap();
     fs::write(
@@ -145,7 +112,7 @@ const MOVE_TARGET_ENV: &str = "FASTF_MOVE_TARGET_BASE";
 fn interrupted_create_leaves_nothing_behind_at_every_failpoint() {
     for point in CREATE_POINTS {
         sandbox(|sb| {
-            write_template(&sb.install, "crash");
+            write_crash_template(&sb.install, "crash");
             let cfg = config_for(&sb.base);
             let tmpl = template::find_by_slug("crash").unwrap();
             let mut counters = Counters::load().unwrap();
@@ -187,7 +154,7 @@ fn interrupted_create_leaves_nothing_behind_at_every_failpoint() {
 #[test]
 fn successful_create_is_reported_clean_by_reconcile() {
     sandbox(|sb| {
-        write_template(&sb.install, "crash");
+        write_crash_template(&sb.install, "crash");
         let cfg = config_for(&sb.base);
         let tmpl = template::find_by_slug("crash").unwrap();
         let mut counters = Counters::load().unwrap();
@@ -207,7 +174,7 @@ fn successful_create_is_reported_clean_by_reconcile() {
 #[test]
 fn create_v2_recovery_resumes_scoped_copies_and_is_idempotent() {
     sandbox(|sb| {
-        write_template(&sb.install, "crash");
+        write_crash_template(&sb.install, "crash");
         let cfg = config_for(&sb.base);
         let tmpl = template::find_by_slug("crash").unwrap();
         let mut counters = Counters::load().unwrap();
@@ -304,7 +271,7 @@ fn transaction_count(target: &Path) -> usize {
 fn hard_killed_staged_moves_reconcile_without_data_loss() {
     for point in MOVE_ABORT_POINTS {
         sandbox(|sb| {
-            write_template(&sb.install, "crash");
+            write_crash_template(&sb.install, "crash");
             let target = sb.install.parent().unwrap().join("target");
             fs::create_dir_all(&target).unwrap();
             let mut cfg = config_for(&sb.base);
@@ -424,7 +391,7 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
 #[test]
 fn hard_killed_create_is_visible_and_reported() {
     sandbox(|sb| {
-        write_template(&sb.install, "crash");
+        write_crash_template(&sb.install, "crash");
         let home = sb.install.parent().unwrap();
 
         // Point the real binary at our sandbox base.
@@ -486,7 +453,7 @@ fn hard_killed_create_is_visible_and_reported() {
 #[test]
 fn hard_kill_before_metadata_does_not_produce_a_phantom_project() {
     sandbox(|sb| {
-        write_template(&sb.install, "crash");
+        write_crash_template(&sb.install, "crash");
         let home = sb.install.parent().unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_fastf"))
             .args(["config", "set", "base-dir", &sb.base.display().to_string()])
@@ -530,7 +497,7 @@ fn hard_kill_before_metadata_does_not_produce_a_phantom_project() {
 #[test]
 fn a_fault_after_source_cleanup_retains_the_transaction_for_the_next_pass() {
     sandbox(|sb| {
-        write_template(&sb.install, "crash");
+        write_crash_template(&sb.install, "crash");
         let target = sb.install.parent().unwrap().join("target");
         fs::create_dir_all(&target).unwrap();
         let mut cfg = config_for(&sb.base);
@@ -616,7 +583,7 @@ fn a_fault_after_source_cleanup_retains_the_transaction_for_the_next_pass() {
 #[test]
 fn a_hard_killed_template_save_leaves_a_loadable_manifest() {
     sandbox(|sb| {
-        write_template(&sb.install, "crash");
+        write_crash_template(&sb.install, "crash");
         let manifest = sb.install.join("templates/crash/template.yaml");
         let before = fs::read_to_string(&manifest).unwrap();
 

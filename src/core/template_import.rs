@@ -241,3 +241,73 @@ fn humanize_slug(slug: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ImportPlan, MAX_TEXT_BYTES, classify_file};
+    use std::fs;
+
+    fn classified(name: &str, bytes: &[u8], bundle_assets: bool) -> ImportPlan {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, bytes).unwrap();
+        let mut plan = ImportPlan::default();
+        classify_file(
+            tmp.path(),
+            &path,
+            bytes.len() as u64,
+            bundle_assets,
+            &mut plan,
+        )
+        .unwrap();
+        plan
+    }
+
+    /// The three-way split every from-folder scan makes, and the only place it
+    /// is decided. Nothing tested it before.
+    #[test]
+    fn text_becomes_editable_binary_is_bundled_or_skipped() {
+        let text = classified("NOTES.md", b"# hello\n", false);
+        assert_eq!(text.text_files.len(), 1);
+        assert_eq!(text.text_files[0].path, "NOTES.md");
+        assert_eq!(text.text_files[0].content, "# hello\n");
+        assert!(text.assets.is_empty());
+
+        // 0xFF is not valid UTF-8, so the read fails and the file is not text.
+        let binary = classified("logo.bin", &[0xFF, 0x00, 0xFF], true);
+        assert!(binary.text_files.is_empty());
+        assert_eq!(binary.assets.len(), 1, "asked for, so bundled");
+
+        let unbundled = classified("logo.bin", &[0xFF, 0x00, 0xFF], false);
+        assert!(unbundled.assets.is_empty());
+        assert_eq!(unbundled.skipped, 1, "not asked for, so counted and left");
+    }
+
+    /// Size decides before content does: a file past the cap is an asset even
+    /// if every byte of it is text.
+    #[test]
+    fn a_large_text_file_is_an_asset_not_an_editable_file() {
+        let big = vec![b'a'; (MAX_TEXT_BYTES + 1) as usize];
+        let plan = classified("HUGE.md", &big, true);
+        assert!(plan.text_files.is_empty());
+        assert_eq!(plan.assets.len(), 1);
+    }
+
+    /// fastf owns `PROJECT_INFO.md` at the root: importing one would produce a
+    /// template that overwrites the metadata of every project made from it.
+    #[test]
+    fn the_reserved_root_file_is_neither_imported_nor_counted() {
+        let plan = classified("PROJECT_INFO.md", b"---\nid: ID0001\n---\n", true);
+        assert!(plan.text_files.is_empty());
+        assert!(plan.assets.is_empty());
+        assert_eq!(
+            plan.skipped, 0,
+            "skipped counts what was *left out*, not this"
+        );
+
+        // Nested is fine — the reservation is root-only.
+        let nested = classified("docs/PROJECT_INFO.md", b"notes\n", false);
+        assert_eq!(nested.text_files.len(), 1);
+    }
+}

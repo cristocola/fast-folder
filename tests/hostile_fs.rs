@@ -18,34 +18,16 @@ use fastf::core::{
     config::Config, counter::Counters, library, project, project_info, provisioning, template,
 };
 
+mod common;
+
 static SERIAL: Mutex<()> = Mutex::new(());
 
+/// Fresh install dir + base, with HOME redirected — see `common::env`.
 fn sandbox<R>(body: impl FnOnce(&Path, &Path) -> R) -> R {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let install = tmp.path().join("install");
-    let base = tmp.path().join("base");
-    fs::create_dir_all(install.join("templates")).unwrap();
-    fs::create_dir_all(&base).unwrap();
-    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    let old_home = std::env::var_os(home_var);
-    // SAFETY: SERIAL keeps other tests in this binary off these variables.
-    unsafe {
-        std::env::set_var("FASTF_INSTALL_DIR", &install);
-        std::env::set_var(home_var, tmp.path());
-    }
-    let out = body(&install, &base);
-    unsafe {
-        std::env::remove_var("FASTF_INSTALL_DIR");
-        match old_home {
-            Some(v) => std::env::set_var(home_var, v),
-            None => std::env::remove_var(home_var),
-        }
-    }
-    out
+    common::env::with_sandbox(&SERIAL, |sb| body(&sb.install, &sb.base))
 }
 
-fn write_template(install: &Path, slug: &str) {
+fn write_hostile_template(install: &Path, slug: &str) {
     let dir = install.join("templates").join(slug);
     fs::create_dir_all(dir.join("files")).unwrap();
     fs::write(
@@ -247,7 +229,7 @@ fn absent_base_is_treated_as_empty() {
 #[test]
 fn base_vanishing_between_plan_and_create_fails_cleanly() {
     sandbox(|install, base| {
-        write_template(install, "t");
+        write_hostile_template(install, "t");
         let cfg = config_for(base);
         let tmpl = template::find_by_slug("t").unwrap();
         let mut counters = Counters::load().unwrap();
@@ -281,7 +263,7 @@ fn read_only_base_errors_cleanly() {
     use std::os::unix::fs::PermissionsExt;
 
     sandbox(|install, base| {
-        write_template(install, "t");
+        write_hostile_template(install, "t");
         let cfg = config_for(base);
         let tmpl = template::find_by_slug("t").unwrap();
         let mut counters = Counters::load().unwrap();
@@ -307,7 +289,7 @@ fn read_only_base_errors_cleanly() {
 #[test]
 fn destroyed_counter_self_heals_from_the_projects_on_disk() {
     sandbox(|install, base| {
-        write_template(install, "t");
+        write_hostile_template(install, "t");
         write_project(base, "a", &valid_frontmatter("H007", "a"));
         write_project(base, "b", &valid_frontmatter("H042", "b"));
 

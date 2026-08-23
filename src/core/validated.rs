@@ -70,9 +70,15 @@ impl ProjectFolderName {
         let sanitized = crate::core::naming::sanitize_name(raw.trim());
 
         if sanitized.is_empty() {
+            // Two different empties, and saying "every character in it is one a
+            // folder name may not contain" about `""` is nonsense.
+            if raw.trim().is_empty() {
+                bail!("a folder name cannot be empty");
+            }
             bail!(
-                "'{raw}' leaves no usable folder name: every character in it is one \
-                 a folder name may not contain"
+                "'{}' leaves no usable folder name: nothing survives trimming the \
+                 trailing dots and spaces a filesystem would strip anyway",
+                raw.trim()
             );
         }
         if sanitized.starts_with('.') {
@@ -198,7 +204,14 @@ mod tests {
     /// but not a defect. Only names that sanitize away to nothing are refused.
     #[test]
     fn a_project_folder_name_refuses_empty_and_hidden_names() {
-        for raw in ["", "   ", "..", ".", "...", ". . ."] {
+        for raw in ["", "   "] {
+            let error = ProjectFolderName::parse(raw)
+                .expect_err("an empty name must be refused")
+                .to_string();
+            assert!(error.contains("cannot be empty"), "{raw:?} gave: {error}");
+        }
+
+        for raw in ["..", ".", "...", ". . ."] {
             let error = ProjectFolderName::parse(raw)
                 .expect_err("a name that sanitizes away must be refused")
                 .to_string();

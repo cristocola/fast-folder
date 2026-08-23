@@ -2,6 +2,7 @@ pub mod assets;
 pub mod config;
 pub mod counter;
 pub mod library;
+pub mod move_engine;
 pub mod naming;
 pub mod operations;
 pub mod plan;

@@ -47,7 +47,10 @@ Gotchas sections below for the parts that bite.
 - `src/bootstrap.rs` — first-run setup. Ships two deliberately universal templates
   (`general`, `client-project`); domain templates live in `examples/templates/` and
   are NOT bundled.
-- `src/core/` — the library proper. `library.rs` (filesystem-as-truth discovery),
+- `src/core/` — the library proper. `library/` (filesystem-as-truth discovery,
+  a facade over `model` / `discovery` / `cache` / `guard` / `lifecycle` /
+  `resolve`, so every `library::…` path still resolves), `move_engine.rs`
+  (the staged move, which the library facade delegates to),
   `operations.rs` (shared mutation boundary), `project.rs` (plan/create/apply),
   `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus
   report-only pre-v2 discovery), `template_import.rs` (from-folder engine),
@@ -177,7 +180,7 @@ create/apply/UI file routes repeat the typed boundary check. Base overrides use
 `config::resolve_base_dir_input` (`~` expansion + absolute-only + canonicalize),
 including CLI `new`, UI preview/create, and UI settings.
 
-### Filesystem-as-truth library (`core/library.rs`, v0.9)
+### Filesystem-as-truth library (`core/library/`, v0.9)
 There is **no `projects.jsonl`**. The project list is discovered from the filesystem: a folder is a project iff it holds a `PROJECT_INFO.md`, whose frontmatter `id` is authoritative (folder name is cosmetic, never consulted for discovery). `discover(cfg)` unions `cfg.effective_bases()` (`base_dir` + config `bases`), newest-first.
 
 Each base carries a **disposable** `.fastf-index.json` cache at its root, co-located with the projects so it travels with them and is portable (entries store a base-relative `dir`, valid across `/mnt/…` and `D:\…`). The cache is never authoritative — `discover_base` self-heals: if the base's mtime is newer than the cache (or either can't be stat'd) it rescans + rewrites; otherwise it trusts cached metadata but existence-checks each entry and drops (rewriting away) any whose folder disappeared. **No manual prune, ever** — the "missing" state is transient. `fastf reindex` forces a full rescan for external edits fastf can't observe.
@@ -437,7 +440,7 @@ Without `--template`, a stub `Template` is used (`slug = "(registered)"` = `REGI
   are bundled only when requested. Root `PROJECT_INFO.md` remains excluded.
 - v0.9: the counter self-heal lives in `project::plan()`: `counter_value = max(counters.get(), library::max_id(config)) + 1`, then `id_str`/`folder_name` derive from it. Doing it in `plan()` (not `create`) keeps `id_str`→`folder_name` consistent and makes preview show the true next ID. `create_inner` persists `plan.counter_value` and drops the old `index::append`, replacing it with `library::cache_upsert(abs_path.parent(), &project)` (base = the new folder's canonical parent, which matches `discover`'s canonicalized bases; even if `strip_prefix` fails the entry falls back to the basename = correct depth-1 `dir`).
 - v0.9: `naming::parse_id_token(name, prefix)` (folder-name ID recovery, register-only) vs `naming::id_value(id)` (trailing-digit extraction for `max_id`, prefix-agnostic). `max_id` uses `id_value` because ids across templates have different prefixes; register uses `parse_id_token` with the template's prefix. Don't swap them.
-- v0.9: discovery is **depth-1** (`SCAN_DEPTH` const in `library.rs`) — direct children of each base only. Matches the user's flat layouts. If you make it configurable, thread it through `scan_base`/`reindex`/`read_base_readonly`, not just `discover`.
+- v0.9: discovery is **depth-1** (`SCAN_DEPTH` const in `library/model.rs`) — direct children of each base only. Matches the user's flat layouts. If you make it configurable, thread it through `scan_base`/`reindex`/`read_base_readonly`, not just `discover`.
 - v0.9: `tag add/remove/reauto` (CLI + UI `project_tag`) call `library::refresh_cache(&project.path)` after mutating the frontmatter so the cache's tags stay fresh without a rescan. `note` doesn't (the cache stores no journal). `load_state`/`search_projects` also read metadata fresh per project for the `tags` field, so UI display is correct even if a cache is momentarily stale.
 - v0.10: `Project.base` must be populated at BOTH construction points (`into_project` and `project_from_meta`) — adding a third constructor without threading the base will compile only if you remember the field, so any new `Project { .. }` literal needs a conscious `base:` decision (usually `path.parent()`). Do NOT add `base` to `CacheEntry` — base-relative portability is the point of the cache format.
 - v1.4.1: `move_project` falls back to copy **only** for Unix `EXDEV` or
@@ -837,6 +840,24 @@ runner serves `fastf new` and `fastf ui`, and a browser cannot suppress an ANSI
 checkmark written to the process's stdout. `Note::Path` is separate from
 `Note::Done` because `print_path`'s line is the run's **output** — it is what
 `$(fastf new ...)` captures — so it goes to stdout alone and last.
+
+**`core::library` is a facade over six submodules, and the move engine is not
+one of them.** `library/mod.rs` re-exports everything under the paths callers
+already used, so nothing outside had to change. The split is by responsibility:
+`model` (what a `Project` is, plus `base_label` and the layout constants),
+`discovery` (the cache-accelerated walk), `cache` (`.fastf-index.json` I/O),
+`guard` (revalidating a cached project before anything destructive),
+`lifecycle` (unregister / delete / rename), `resolve` (query → project, and the
+counter floor). `core::move_engine` left the library entirely because it depends
+on a different world — transactions, staged copies, retries, failpoints, a
+progress handle — and nothing else in the library touches any of it.
+
+Two things about visibility there. Cross-submodule items are `pub(crate)`, not
+`pub(super)`: a glob re-export (`pub use cache::*`) is what keeps the old paths
+working, and a named `pub use` of a `pub(super)` item is a compile error.
+And `library/tests.rs` stays one file — those tests were written against the
+module as a whole and reach across what are now submodule boundaries, so
+splitting them would mean rewriting them, which a pure move may not do.
 
 **Four module cycles are gone, and the fixes are all "the shared thing did not
 belong to either module".** `now_iso8601` → `util::time` (a timestamp is not a

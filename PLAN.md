@@ -718,10 +718,30 @@ already passing `None` for.
 - Narrow visibility inside the new modules to `pub(super)` where only `library` siblings call a function.
 
 **Steps.**
-- [ ] Move; `pub use`; `cargo doc` clean (a `pub` item's docs may not link to a `pub(crate)` one).
-- [ ] `CLAUDE.md` "Project layout": list the submodules in one line each; update every `library.rs:NNN`-style mention to the new file.
+- [x] Move; `pub use`; `cargo doc` clean (a `pub` item's docs may not link to a `pub(crate)` one).
+- [x] `CLAUDE.md` "Project layout": list the submodules in one line each; update every `library.rs:NNN`-style mention to the new file.
 
 **Acceptance.** Identical test results; `wc -l` of no file under `src/core/library/` exceeds 500 production lines; `move_engine.rs` has no dependency on `discovery`/`cache` beyond `touch_cache`/`refresh_cache` calls through the public API.
+
+**Notes.**
+
+(1) **Cross-submodule items are `pub(crate)`, not `pub(super)`.** The facade
+keeps the old paths working with glob re-exports (`pub use cache::*`), and a
+*named* `pub use` of a `pub(super)` item is a compile error (E0365) while a glob
+silently drops it. `pub(crate)` is the visibility that both the siblings and the
+re-export can see. Nothing widened beyond the crate.
+
+(2) **`library/tests.rs` is 1084 lines and stayed one file.** The acceptance
+counts *production* lines, and those tests were written against the module as a
+whole — several reach into two or three of what are now separate submodules. A
+pure move may not rewrite them.
+
+(3) **`move_engine` needs more of the library than the acceptance predicted**:
+`cache_remove`, `cache_upsert`, `project_from_meta`, `revalidate_*` and
+`to_forward_slashes` as well as `touch_cache`/`refresh_cache`. All of it goes
+through the `library::` facade, which is what the acceptance was protecting; the
+dependency is one-directional and the engine no longer sits in the same file as
+discovery.
 
 ## Phase 14: One clock, one load, lazy templates
 

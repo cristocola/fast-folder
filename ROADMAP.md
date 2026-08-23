@@ -291,6 +291,11 @@ what the command line can already do.
 Track C of [`PLAN.md`](PLAN.md). No behaviour change: the proof is the unchanged
 test suite plus the guard each phase adds.
 
+- [x] Phase 13: split `library.rs` — 1268 production lines with nine
+  responsibilities became a facade over `model` / `discovery` / `cache` /
+  `guard` / `lifecycle` / `resolve`, with the staged move engine moved out to
+  `core::move_engine` beside `transactions`. Every `library::…` path callers
+  used still resolves; no logic changed.
 - [x] Phase 12: rendering out of core, and the module cycles broken — `core`
   produces `DryRunReport`/`ApplyReport` and `cli/render.rs` turns them into text,
   so the dry-run's content is testable for the first time; `core::post_create`

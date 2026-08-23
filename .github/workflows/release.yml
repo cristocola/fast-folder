@@ -34,7 +34,7 @@ jobs:
     name: tag matches Cargo.toml
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # `git merge-base` below needs history, not just the tagged commit.
           fetch-depth: 0
@@ -86,7 +86,7 @@ jobs:
             os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Pinned here and **only** here. There is deliberately no
       # `rust-toolchain.toml`: that would follow the AUR source package and
@@ -216,7 +216,7 @@ jobs:
       # Before the download: `actions/checkout` clears the workspace, which
       # would take the artifacts with it. Only wanted for
       # `packaging/windows/assert-standalone.ps1`.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pkg-x86_64-pc-windows-msvc

@@ -19,6 +19,16 @@ warnings`, **on Windows targets too** — the lint thresholds differ, and
 a failpoint or tracer test is dead in release and live in debug. The non-obvious
 parts:
 
+`.cargo/config.toml` gives `x86_64-pc-windows-msvc` one flag,
+`target-feature=+crt-static`, so the Windows binary carries its own C runtime.
+Without it the exe imports `VCRUNTIME140.dll` and dies before `main` on any
+machine without the Visual C++ Redistributable — a clean install or a fresh VM,
+never a developer's box, which is why it shipped that way through v2.0.0. It is
+scoped to the one triple, so Linux and musl builds never read it. Deleting it
+fails CI: `packaging/windows/assert-standalone.ps1` reads the exe's PE import
+table on every Windows job. A `RUSTFLAGS` in the environment *replaces* that
+config rather than adding to it.
+
 ```bash
 # Cross-compile for Windows (from Linux). A local convenience; CI builds on a
 # real Windows runner. Needs `rustup target add x86_64-pc-windows-gnu` plus a

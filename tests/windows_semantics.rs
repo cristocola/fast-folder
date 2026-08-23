@@ -12,14 +12,21 @@ use std::path::{Path, PathBuf};
 use fastf::core::{library, naming, project_info};
 
 /// A discoverable project folder, so `library` functions have something real.
+///
+/// `folder` is **single-quoted** in the frontmatter. A plain YAML scalar may not
+/// begin with `%` (the directive indicator), and `%USERPROFILE%` is a perfectly
+/// legal Windows folder name — the unquoted fixture made such a project
+/// undiscoverable and looked like a product defect. `project_info::write` quotes
+/// it correctly through `util::yaml`; only this hand-rolled fixture did not.
 fn write_project(base: &Path, folder: &str, id: &str) -> PathBuf {
     let dir = base.join(folder);
     fs::create_dir_all(&dir).unwrap();
+    let quoted = format!("'{}'", folder.replace('\'', "''"));
     fs::write(
         project_info::pinfo_path(&dir),
         format!(
             "---\nid: {id}\ntemplate: t\ntemplate_name: T\n\
-             created: 2026-01-01T00:00:00Z\nfolder: {folder}\npath: x\n\
+             created: 2026-01-01T00:00:00Z\nfolder: {quoted}\npath: x\n\
              variables: {{}}\ntags: []\n---\n"
         ),
     )
@@ -394,7 +401,12 @@ fn a_windows_project_name_with_percent_and_ampersand_cannot_reach_cmd() {
 
 /// The names themselves are creatable and survive discovery — otherwise the
 /// case above would be theoretical.
-#[cfg(windows)]
+///
+/// **Not `cfg(windows)`**, even though the syntax it names is cmd's: `%` and `&`
+/// are legal in a folder name on every platform, and the failure this catches —
+/// a `%`-leading name that will not round-trip through frontmatter — is
+/// platform-independent. Gating it to Windows meant it could only fail on CI,
+/// which is exactly what happened.
 #[test]
 fn folder_names_that_are_cmd_syntax_round_trip_through_discovery() {
     let tmp = tempfile::tempdir().unwrap();

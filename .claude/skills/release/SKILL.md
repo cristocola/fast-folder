@@ -12,8 +12,14 @@ with the maintainer's AUR SSH key**, because it needs `updpkgsums`/`makepkg`.
 ## Routine (as executed for 1.1.1 on 2026-07-27)
 
 1. Bump the crate version in `Cargo.toml`.
-2. Tag `v<version>` and push — the Release workflow builds linux-gnu, linux-musl
-   (static), and windows-msvc archives plus the MSI, and publishes `SHA256SUMS`.
+2. Tag `v<version>` **on main** and push. The Release workflow now gates itself:
+   `verify-version` checks the tag against `Cargo.toml` *and* that the tagged
+   commit is an ancestor of `main`; `gates` runs the whole of `ci.yml`; `build`
+   needs both. It builds linux-gnu, linux-musl (static) and windows-msvc
+   archives plus the MSI, unpacks each one and runs `fastf --version` against
+   the tag (the MSI's payload is extracted with `msiexec /a`), attests build
+   provenance, and publishes `SHA256SUMS`. There is nothing left to run by hand
+   before tagging.
 3. `packaging/aur/update.sh <version>`.
 4. `makepkg -f` in **both** package dirs to validate. The source package's
    `check()` runs the whole release suite.
@@ -31,13 +37,26 @@ system upgrades and installing `fast-folder` itself. Read-only package queries
 and build-only `makepkg -f` validation are allowed. The maintainer performs all
 local package updates and installation smoke tests manually.
 
-Worth doing: verify the `-bin` sha256 against the release's own `SHA256SUMS`.
+Worth doing: verify the `-bin` sha256 against the release's own `SHA256SUMS`,
+and `gh attestation verify <asset> --repo cristocola/fast-folder` for provenance.
 
 **The AUR RPC (`/rpc/v5/info`) lags the git push by minutes** — don't panic when
 it still shows the old version. `git ls-remote origin master` is the
 authoritative check.
 
 ## Packaging layout
+
+**Every `uses:` is pinned to a full commit SHA** with a `# vX.Y.Z` comment;
+`.github/dependabot.yml` opens the bumps weekly. Do not reintroduce a floating
+tag or branch (`@v4`, `@master`) — keep the comment in step with the pin when
+one changes. The release toolchain is pinned in `release.yml` only; there is
+deliberately **no `rust-toolchain.toml`**, so the AUR source build and
+contributors keep their own stable and the MSRV job keeps deriving from
+`Cargo.toml`.
+
+`ci.yml` also runs weekly on a schedule, where every job but `audit` skips: an
+advisory is published against a crate, not against a commit, so a push-only
+audit never fires for a lockfile nobody has touched.
 
 Release/packaging live in `.github/workflows/{ci,release}.yml` and `packaging/`
 (fastf.desktop, icons/ extracted from the official icon.ico, aur/fast-folder +

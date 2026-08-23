@@ -56,7 +56,13 @@ responsibility of the filesystem and backups.
 ## Current phase
 
 - Release: **v2.0.0 in progress — two surfaces, one engine, nothing trusted by accident** (`PLAN.md` drives it, one phase per PR)
-- Status: **Phase 7 landed: test isolation.** One lock per binary guards
+- Status: **Phase 8 landed: the release pipeline.** A tag cannot publish what CI
+  would reject: `release.yml` runs the whole of `ci.yml` as a gate, requires the
+  tag to be an ancestor of `main`, unpacks and runs every archive (and the MSI's
+  payload) before publishing, and attests provenance. Only the publishing job
+  has write access; every third-party action is pinned to a commit SHA, with
+  Dependabot opening the bumps.
+- Previously: **Phase 7 landed: test isolation.** One lock per binary guards
   environment mutation — `util::test_env` under `src/`, `common::env` under
   `tests/`, enforced by a source scan — and every guard restores what it changed
   on unwind. No unit test can lock the developer's real data directory any more.
@@ -113,7 +119,10 @@ release that wants it.
 
 ## Release and documentation gates
 
-Every release must pass:
+**The Release workflow runs all of this itself** — `release.yml`'s `gates` job
+calls `ci.yml` in full, and `build` needs it. A tag can no longer publish
+something CI has never seen, so this list is what to expect green rather than a
+checklist to work through by hand.
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`

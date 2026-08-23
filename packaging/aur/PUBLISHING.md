@@ -37,6 +37,17 @@ release (pkgver bump + checksums + .SRCINFO).
 
 Prerequisite: the GitHub release `v<version>` exists (the Release workflow ran on the tag).
 
+The workflow gates itself now, so a release that exists has already passed the
+whole of CI on both platforms, had its tag checked against `Cargo.toml` **and**
+against `main`, and had its archives unpacked and run (`fastf --version` must
+equal the tag; the MSI's payload is extracted with an administrative install and
+run too). Every asset also carries a signed build-provenance attestation:
+
+```bash
+gh attestation verify fastf-v<version>-x86_64-unknown-linux-musl.tar.gz \
+  --repo cristocola/fast-folder
+```
+
 ```bash
 cd <repo>/packaging/aur
 ./update.sh 1.0.0                 # bumps pkgver, fills sha256sums, regenerates .SRCINFO

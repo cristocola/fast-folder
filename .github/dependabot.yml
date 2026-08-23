@@ -1,0 +1,16 @@
+# Every `uses:` in this repository is pinned to a full commit SHA, which is the
+# only pin a tag cannot be moved out from under. The cost of that is a pin that
+# never updates, so this opens the PRs that update them.
+#
+# The `# vX.Y.Z` comment beside each SHA is what makes a bump readable; keep it
+# in step with the pin.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"

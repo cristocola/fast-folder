@@ -92,6 +92,14 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked --release
 
+      # The published exe has to start on a clean Windows install, where no
+      # Visual C++ Redistributable exists — `.cargo/config.toml` links the CRT
+      # statically for that. Asserted here, on a PR, rather than only in
+      # `release.yml`, where the fix would mean re-cutting a tag.
+      - name: release binary depends on no redistributable CRT
+        shell: pwsh
+        run: ./packaging/windows/assert-standalone.ps1 target/release/fastf.exe
+
   # `rust-version` in Cargo.toml is a promise to users on older toolchains, and
   # nothing verified it — the stated MSRV could break with no signal at all.
   msrv:

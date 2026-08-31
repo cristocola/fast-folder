@@ -608,6 +608,33 @@ pub fn ids_in(base: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The path a command will print for `dir`, canonicalized the way discovery
+/// does and then shown the way `util::paths::display_path` does.
+///
+/// `canonicalize` on Windows returns the verbatim `\\?\C:\...` form, which is
+/// what makes long paths work and is deliberately *not* what fastf prints — so
+/// a test that compares raw `canonicalize` output passes on unix and fails on
+/// Windows for a reason that has nothing to do with the behaviour under test.
+pub fn shown_path(dir: &Path) -> String {
+    let canonical = dir.canonicalize().expect("the folder should exist");
+    let raw = canonical.display().to_string();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match raw.strip_prefix(r"\\?\") {
+        // Only a plain drive path unwraps; a device path means something
+        // specific — the same rule `display_path` follows.
+        Some(rest)
+            if rest.len() >= 2
+                && rest.as_bytes()[0].is_ascii_alphabetic()
+                && rest.as_bytes()[1] == b':' =>
+        {
+            rest.to_string()
+        }
+        _ => raw,
+    }
+}
+
 /// A fake program that records the argv it was called with, one argument per
 /// line, and exits 0.
 ///

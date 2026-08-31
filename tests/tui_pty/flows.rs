@@ -321,10 +321,10 @@ fn an_ambiguous_path_query_opens_a_picker_and_prints_the_choice() {
     );
 
     let printed = fs::read_to_string(&captured).unwrap();
-    let chosen = sb.base.join("shared_one").canonicalize().unwrap();
+    let chosen = common::shown_path(&sb.base.join("shared_one"));
     assert_eq!(
         printed,
-        format!("{}\n", chosen.display()),
+        format!("{chosen}\n"),
         "stdout must carry the chosen path and nothing the picker drew"
     );
 }

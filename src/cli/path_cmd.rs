@@ -16,9 +16,10 @@ use crate::util::paths;
 /// Resolve `query` and print the project's folder path.
 pub fn run(query: &str) -> Result<()> {
     let cfg = Config::load()?;
-    // A picker only ever appears on a terminal. Redirected — which is how this
-    // command is normally used — an ambiguous query is the same error it has
-    // always been, so nothing but the path can reach stdout.
+    // An ambiguous query asks, when there is a terminal on stderr to ask on —
+    // which `cd "$(fastf path lullaby)"` has, its stdout being a pipe. The
+    // picker never writes to stdout, so the line below stays the only thing
+    // there. With no terminal at all it is the error it has always been.
     let project = match crate::cli::target::one_project(
         &cfg,
         query,
@@ -36,8 +37,8 @@ pub fn run(query: &str) -> Result<()> {
     print_path(&project)
 }
 
-/// Revalidate, then print the bare line — the shared tail with the picker path.
-pub(crate) fn print_path(project: &library::Project) -> Result<()> {
+/// Revalidate, then print the bare line.
+fn print_path(project: &library::Project) -> Result<()> {
     // Same check as `open` and `copy`: a discovered path is a hint until it has
     // been looked at, and this one is about to be pasted into another command.
     library::revalidate_for_read(project).with_context(|| {

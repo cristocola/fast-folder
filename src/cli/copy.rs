@@ -32,9 +32,9 @@ pub fn run(query: &str) -> Result<()> {
     report_copy(&project)
 }
 
-/// Revalidate, then copy — the shared tail, so `copy` and a picker-driven copy
-/// check the same things and say the same words.
-pub(crate) fn report_copy(project: &library::Project) -> Result<()> {
+/// Revalidate, then copy — the tail both a direct and a picker-driven `copy`
+/// arrive at, so they check the same things and say the same words.
+fn report_copy(project: &library::Project) -> Result<()> {
     // `resolve` may have answered from a cache, and a cache is a file that
     // travels with the projects. Check what the path names before handing it to
     // another program, exactly as `open` does.
@@ -57,7 +57,7 @@ pub(crate) fn report_copy(project: &library::Project) -> Result<()> {
 /// answer: the path goes on its own line instead, which is what a terminal
 /// selection wants anyway. A Copy that silently did nothing is the worst
 /// possible version of this. The wording matches the TUI's Copy path.
-pub(crate) fn announce(shown: &str) {
+fn announce(shown: &str) {
     let tool = clipboard::copy(shown);
     match tool {
         Some(tool) => println!("{}  Copied with {}", "✓".green().bold(), tool.dimmed()),

@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{Sandbox, recorder};
+use common::{Sandbox, recorder, shown_path};
 use std::fs;
 
 /// A sandbox whose configured terminal is a recorder, plus that recorder.
@@ -164,7 +164,7 @@ fn a_relaunched_child_with_no_tty_falls_through_to_plain_output() {
 fn path_headless_gui_copies_and_notifies_but_still_prints() {
     let (sb, _rec) = sandbox_with_recorder();
     let dir = sb.plant_project(&sb.base, "proj", "ID0001");
-    let expected = dir.canonicalize().unwrap();
+    let expected = shown_path(&dir);
 
     // A PATH holding nothing but a fake `notify-send`: no clipboard tool is
     // found either, which is the honest state of a machine like this.
@@ -179,14 +179,14 @@ fn path_headless_gui_copies_and_notifies_but_still_prints() {
     assert_eq!(run.code, 0, "{}", run.output);
     assert_eq!(
         run.output,
-        format!("{}\n", expected.display()),
+        format!("{expected}\n"),
         "the path is still printed, and it is still the only thing on stdout"
     );
     let argv = notify.argv().expect("a notification should have been sent");
     assert_eq!(argv[0], "-a", "notifications are attributed to fastf");
     assert_eq!(argv[1], "fastf");
     assert!(
-        argv.last().unwrap() == &expected.display().to_string(),
+        argv.last().unwrap() == &expected,
         "the notification must carry the path, got {argv:?}"
     );
 }
@@ -219,7 +219,7 @@ fn an_ambiguous_query_from_a_launcher_opens_a_terminal_instead_of_erroring() {
 fn a_redirected_path_writes_the_file_and_opens_nothing() {
     let (sb, rec) = sandbox_with_recorder();
     let dir = sb.plant_project(&sb.base, "proj", "ID0001");
-    let expected = dir.canonicalize().unwrap();
+    let expected = shown_path(&dir);
 
     let target = sb.tmp.path().join("captured.txt");
     let file = fs::File::create(&target).unwrap();
@@ -236,7 +236,7 @@ fn a_redirected_path_writes_the_file_and_opens_nothing() {
     assert!(!rec.was_called(), "a redirect must never open a window");
     assert_eq!(
         fs::read_to_string(&target).unwrap(),
-        format!("{}\n", expected.display()),
+        format!("{expected}\n"),
         "the file must hold the path and nothing else"
     );
 }

@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{Sandbox, ids_in};
+use common::{Sandbox, ids_in, shown_path};
 use std::fs;
 
 /// Break `config.toml` so every command has to decide what a config it cannot
@@ -613,13 +613,13 @@ fn template_list_show_and_delete_work_from_the_command_line() {
 fn path_prints_the_bare_path_and_nothing_else() {
     let sb = Sandbox::new();
     let dir = sb.plant_project(&sb.base, "proj", "ID0001");
-    let expected = dir.canonicalize().unwrap();
+    let expected = shown_path(&dir);
 
     let out = sb.run(&["path", "ID0001"]);
     assert!(out.status.success(), "fastf path failed: {out:?}");
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        format!("{}\n", expected.display()),
+        format!("{expected}\n"),
         "stdout must be the path and a newline, nothing else"
     );
 
@@ -627,7 +627,7 @@ fn path_prints_the_bare_path_and_nothing_else() {
     let numeric = sb.run(&["path", "1"]);
     assert_eq!(
         String::from_utf8_lossy(&numeric.stdout),
-        format!("{}\n", expected.display())
+        format!("{expected}\n")
     );
 }
 
@@ -639,7 +639,7 @@ fn path_prints_the_bare_path_and_nothing_else() {
 fn copy_without_any_clipboard_tool_prints_the_path_instead() {
     let sb = Sandbox::new();
     let dir = sb.plant_project(&sb.base, "proj", "ID0001");
-    let expected = dir.canonicalize().unwrap();
+    let expected = shown_path(&dir);
 
     let empty = sb.tmp.path().join("no-tools");
     fs::create_dir_all(&empty).unwrap();
@@ -660,7 +660,7 @@ fn copy_without_any_clipboard_tool_prints_the_path_instead() {
         "copy must say what it did:\n{stdout}"
     );
     assert!(
-        stdout.contains(&expected.display().to_string()),
+        stdout.contains(&expected),
         "copy must fall back to printing the path:\n{stdout}"
     );
 }
@@ -680,6 +680,22 @@ fn path_and_copy_refuse_a_stale_project() {
     // The folder stays; its metadata does not. The cache only stat-checks the
     // directory, so the project still resolves — and must then be refused.
     fs::remove_file(dir.join("PROJECT_INFO.md")).unwrap();
+
+    // The cache is consulted only while it is newer than its own base, and an
+    // atomic write renames into that base — bumping the directory's mtime after
+    // the file's. Whether the fast path is taken at all therefore comes down to
+    // the filesystem's timestamp granularity, which is not what this test is
+    // about. Re-stamp the cache so it is unambiguously the newer of the two.
+    let cache = fs::OpenOptions::new()
+        .write(true)
+        .open(sb.base.join(".fastf-index.json"))
+        .expect("the first run should have written a cache");
+    cache
+        .set_times(
+            fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5)),
+        )
+        .unwrap();
 
     let err = sb.fails(&["path", "ID0001"]);
     assert!(

@@ -1,9 +1,9 @@
 # PLAN.md — v2.1.0: fastf answers the launcher
 
-> **Done. v2.1.0 was published 2026-08-31, and v2.1.1 the same day.** This file
-> is kept as the phase-by-phase record, the way the v2.0.0 plan was before it.
-> One box is still open, in Phase 4, and it needs a desktop rather than CI: the
-> launcher smoke test. It is also tracked in `ROADMAP.md`.
+> **Done. v2.1.0 was published 2026-08-31, and v2.1.1 the same day.** Every box
+> is ticked, including the two that needed a human: the maintainer ran the
+> launcher smoke test on the desktop and checked Windows. This file is kept as
+> the phase-by-phase record, the way the v2.0.0 plan was before it.
 >
 > It was written to be worked one phase per session: read PLAN.md, do phase N,
 > run the gates, tick only the boxes whose named verification actually ran,
@@ -419,9 +419,9 @@ format.
       `a_redirected_path_writes_the_file_and_opens_nothing` — both with a
       display exported).
 - [x] Windows clippy leg clean with the `cfg(unix)` modules absent.
-- [ ] **Needs the maintainer:** a real launcher smoke test — Alt+Space:
-      `fastf search <term>`, an ambiguous `fastf open <term>`, a
-      single-match `fastf copy <term>`, bare `fastf`. CI cannot do this.
+- [x] **Maintainer smoke test, 2026-08-31.** Confirmed on the desktop, on the
+      installed build, plus a pass on Windows. CI has no desktop session and
+      could never have covered either.
 
 **Differed from the plan.**
 - **`Sandbox::run_like_a_launcher`, not `run_null`.** `Stdio::null()` on stdout
@@ -474,9 +474,8 @@ release is ready to cut.
 - [x] Release notes approved and v2.1.0 published — tag on `main`, all 16
       Release-workflow jobs green, both AUR packages bumped to 2.1.0-1.
 
-**Note.** The one remaining unticked box in this plan is Phase 4's launcher
-smoke test, which needs a desktop session and cannot be automated. It is listed
-under "Outstanding" in `ROADMAP.md` so it does not live only here.
+**Note.** Closed 2026-08-31. Nothing in this plan is outstanding; what it opened
+and did not finish lives in `ROADMAP.md`'s backlog rather than here.
 
 ---
 

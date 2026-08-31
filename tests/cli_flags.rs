@@ -289,3 +289,54 @@ fn recursive_register_passes_its_variables_to_every_child() {
         );
     }
 }
+
+/// Two user-facing lists name the config keys — `config set --help` and the
+/// error an unknown key gets — and nothing kept them in step. `show-frame` was
+/// accepted, documented in `docs/cli.md`, and named in the error's list, but
+/// missing from `--help`: the one place someone looks to find out what they can
+/// set. A key is only really shipped when both lists know about it.
+#[test]
+fn both_lists_of_config_keys_agree() {
+    let sb = Sandbox::new();
+
+    let help = sb.ok(&["config", "set", "--help"]);
+    let from_help: Vec<String> = help
+        .lines()
+        .skip_while(|line| !line.starts_with("Valid keys:"))
+        .skip(1)
+        // The list ends at the first blank line; wrapped description lines are
+        // indented further than the key column and carry no second column.
+        .take_while(|line| !line.trim().is_empty())
+        .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_string)
+        .collect();
+    assert!(
+        from_help.len() > 5,
+        "the help's key list was not parsed at all:\n{help}"
+    );
+
+    let err = sb.fails(&["config", "set", "definitely-not-a-key", "x"]);
+    let list = err
+        .split_once("Valid keys:")
+        .unwrap_or_else(|| panic!("the refusal should list the valid keys:\n{err}"))
+        .1;
+    let from_error: Vec<String> = list
+        .split(',')
+        .map(|key| key.trim().trim_end_matches('.').to_string())
+        .filter(|key| !key.is_empty())
+        .collect();
+
+    for key in &from_error {
+        assert!(
+            from_help.contains(key),
+            "`{key}` is accepted but missing from `config set --help`:\n{help}"
+        );
+    }
+    for key in &from_help {
+        assert!(
+            from_error.contains(key),
+            "`{key}` is offered by `config set --help` but the refusal never names it"
+        );
+    }
+}

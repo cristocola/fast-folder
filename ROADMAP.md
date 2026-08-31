@@ -91,13 +91,10 @@ responsibility of the filesystem and backups.
     `--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`.
   - A clipboard tool runs in its own process group, so a launcher reaping its
     children can no longer kill the process that owns the selection.
-- Outstanding, and needing the maintainer:
-  - **The launcher smoke test** (`PLAN.md` Phase 4, the one unticked box): from
-    Alt+Space, a `fastf search <term>`, an ambiguous `fastf open <term>`, a
-    single-match `fastf copy <term>`, and a bare `fastf`. CI has no desktop
-    session and cannot do this.
-  - A TUI screenshot or asciinema for the README hero.
-  - The Windows smokes listed under "Manual move smoke" below.
+- Verified by hand, 2026-08-31: the launcher smoke test (`PLAN.md` Phase 4) on
+  a desktop session, plus a Windows pass. Neither is reachable from CI.
+- Outstanding, and needing the maintainer: a TUI screenshot or asciinema for the
+  README hero.
 - Last reviewed: **2026-08-31**
 
 ## Release train

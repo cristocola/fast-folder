@@ -147,6 +147,39 @@ enum Commands {
         query: String,
     },
 
+    /// Copy a project's folder path to the clipboard
+    #[command(
+        after_help = "Says which clipboard tool it used, and prints the path instead\n\
+        when the system has none.\n\n\
+        For `cd \"$(fastf path api)\"` use `fastf path`, which prints the bare\n\
+        path and nothing else. `fastf paths` (plural) is unrelated: it shows\n\
+        where fastf keeps its own data.\n\n\
+        Examples:\n  \
+            fastf copy ID0047\n  \
+            fastf copy 47                          # the ID number\n  \
+            fastf copy lullaby                     # name substring match"
+    )]
+    Copy {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
+        query: String,
+    },
+
+    /// Print a project's folder path on stdout, and nothing else
+    #[command(
+        after_help = "Prints the path followed by a newline, with no colour and no\n\
+        decoration, so it can be substituted straight into another command.\n\n\
+        To put the path on the clipboard instead, use `fastf copy`. `fastf paths`\n\
+        (plural) is unrelated: it shows where fastf keeps its own data.\n\n\
+        Examples:\n  \
+            cd \"$(fastf path api)\"\n  \
+            fastf path ID0047\n  \
+            fastf path 47                          # the ID number"
+    )]
+    Path {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
+        query: String,
+    },
+
     /// Move a project folder into another configured base
     #[command(
         name = "move",
@@ -403,7 +436,8 @@ enum Commands {
             2. Portable mode: the binary's own directory, if it already contains\n     \
                a config.toml or templates/ folder\n  \
             3. Your user config directory (~/.config/fastf on Linux,\n     \
-               %APPDATA%\\fastf on Windows)")]
+               %APPDATA%\\fastf on Windows)\n\n\
+            For a *project's* folder path, use `fastf path <query>` (singular).")]
     Paths,
 
     /// Generate man pages into a directory (used by packaging)
@@ -734,6 +768,8 @@ fn run() -> Result<()> {
         }),
 
         Some(Commands::Open { query }) => cli::recent::open(&query),
+        Some(Commands::Copy { query }) => cli::copy::run(&query),
+        Some(Commands::Path { query }) => cli::path_cmd::run(&query),
         Some(Commands::Move { query, base, yes }) => {
             cli::move_project::run(cli::move_project::MoveArgs { query, base, yes })
         }

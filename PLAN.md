@@ -182,10 +182,12 @@ the CLI commands should mirror `open`'s `revalidate_for_read` instead.
    `ROADMAP.md`: tick/remove the backlog `fastf path <query>` item.
 
 **Acceptance.**
-- [ ] All gates pass.
-- [ ] `fastf path <id> | cat` output is byte-exactly the path plus `\n`.
-- [ ] With an empty `PATH`, `fastf copy <id>` exits 0 and prints the path.
-- [ ] The clipboard comment in `clipboard.rs` names the process-group reason.
+- [x] All gates pass.
+- [x] `fastf path <id> | cat` output is byte-exactly the path plus `\n`
+      (`path_prints_the_bare_path_and_nothing_else`).
+- [x] With an empty `PATH`, `fastf copy <id>` exits 0 and prints the path
+      (`copy_without_any_clipboard_tool_prints_the_path_instead`).
+- [x] The clipboard comment in `clipboard.rs` names the process-group reason.
 
 ---
 

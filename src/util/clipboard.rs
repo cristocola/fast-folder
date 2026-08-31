@@ -41,13 +41,26 @@ pub fn copy(text: &str) -> Option<&'static str> {
 /// Run one tool with `text` on its stdin. `false` if it could not be run or
 /// exited non-zero, so the next candidate gets a turn.
 fn feed(tool: &str, args: &[&str], text: &str) -> bool {
-    let Ok(mut child) = Command::new(tool)
+    let mut command = Command::new(tool);
+    command
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
+        .stderr(Stdio::null());
+
+    // A Wayland/X11 clipboard tool does not copy and exit — it forks and keeps
+    // running, because on those systems the *process* that offered the
+    // selection is what serves it to whoever pastes. That fork inherits our
+    // process group, and a desktop launcher reaps the group when the command it
+    // started exits: the owner dies, and the paste comes back empty. Its own
+    // group detaches it from ours. Looks removable; is not.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    let Ok(mut child) = command.spawn() else {
         return false;
     };
     if let Some(stdin) = child.stdin.as_mut()

@@ -12,6 +12,8 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf new [slug]` | Create a project from a template |
 | `fastf recent` | Interactive project picker with inline tags |
 | `fastf open <query>` | Reveal a project folder by ID or name |
+| `fastf copy <query>` | Put a project's folder path on the clipboard |
+| `fastf path <query>` | Print a project's folder path, and nothing else |
 | `fastf search <expr>...` | Search projects by text, field, date, or tag |
 | `fastf register <dir>` | Onboard an existing folder by writing its `PROJECT_INFO.md` |
 | `fastf apply <slug> <dir>` | Add missing template structure to an existing folder |
@@ -202,6 +204,31 @@ that finds anything:
 
 A query that matches several projects is ambiguous: fastf lists the candidates
 and asks for a full ID.
+
+### Getting a project's path
+
+Two verbs, because a script and a pair of hands want different things.
+
+```bash
+fastf path ID0047                    # prints /mnt/projects/2026-04-02_Lullaby_ID0047
+cd "$(fastf path api)"               # what it exists for
+fastf copy ID0047                    # puts that path on the clipboard
+```
+
+`fastf path` prints the path followed by a newline — no colour, no decoration,
+nothing else on stdout — so it can be substituted straight into another
+command. `fastf copy` is the command-line half of the TUI's **Copy path**: it
+uses whichever of `wl-copy`, `xclip`, `xsel`, `clip`, or `pbcopy` is installed
+and says which one it used, and where the system has no clipboard tool at all
+it prints the path instead, so a terminal selection still works. It always says
+what it did.
+
+Both check the folder before answering. A project that resolves from the
+per-base cache but no longer has its `PROJECT_INFO.md` is refused by name
+rather than handed to the clipboard or to a shell.
+
+`fastf paths` (plural) is a different command entirely: it shows where fastf
+keeps its own data. See [Configuration](#configuration).
 
 Rows show inline tags. Selecting a project opens an action menu, most-used first: open folder, copy path, show metadata, Tags, Journal, move to another base, rename, unregister, delete.
 

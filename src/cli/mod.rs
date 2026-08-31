@@ -1,10 +1,12 @@
 pub mod apply;
 pub mod config;
+pub mod copy;
 pub mod extra;
 pub mod id;
 pub mod move_project;
 pub mod new;
 pub mod note;
+pub mod path_cmd;
 pub mod paths_cmd;
 pub mod recent;
 pub mod reconcile;

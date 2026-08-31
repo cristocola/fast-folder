@@ -70,7 +70,11 @@ responsibility of the filesystem and backups.
   - [x] Phase 1 — the resolver answers with data (`Resolution`) instead of an
         error string, so a caller can offer the candidates to a picker, and an
         all-digits query matches the ID *number* (`fastf open 37` → ID0037).
-  - [ ] Phase 2 — `fastf copy` and `fastf path`.
+  - [x] Phase 2 — `fastf copy` puts a project's path on the clipboard and says
+        so; `fastf path` prints the bare path for `cd "$(fastf path api)"`. Both
+        revalidate the folder first. A clipboard tool now runs in its own
+        process group, so a launcher reaping its children cannot kill the
+        process that owns the selection.
   - [ ] Phase 3 — the ambiguity picker serves the verb it interrupted.
   - [ ] Phase 4 — a terminal when there is no terminal.
   - [ ] Phase 5 — sweep and release prep.
@@ -181,7 +185,7 @@ This work does not use GitHub issues, a separate ADR system, or a changelog.
 - Project lifecycle states.
 - Declarative post-create workflows.
 - Scriptability: `--json`/`--format` output, `search --limit/--template/--since/--tag`,
-  a `fastf path <query>` command, `print_path` as a `new` flag rather than only a
+  `print_path` as a `new` flag rather than only a
   config toggle, `--color=auto|always|never` (`colored` currently gates on stdout
   only, so stderr gets ANSI when redirected), documented exit codes, and
   `completions <shell>` as a typed `clap_complete::Shell` rather than a bare

@@ -39,6 +39,50 @@ pub fn headless_gui() -> bool {
     }
 }
 
+/// Open a terminal window whose shell starts at `dir`.
+///
+/// An *explicit* request — `fastf term`, the action menu's "Open terminal
+/// here" — so `terminal = "none"`, which switches off the automatic relaunch,
+/// does not switch this off: `Disabled` degrades to probing, exactly like an
+/// unconfigured terminal.
+pub fn open_terminal_at(cfg: &Config, dir: &std::path::Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use crate::core::config::TerminalPreference;
+        let preference = cfg.resolve_terminal();
+        let name = match &preference {
+            TerminalPreference::Named(_) => preference.name(),
+            TerminalPreference::Disabled | TerminalPreference::Probe => None,
+        };
+        crate::util::term_open::open_terminal_at(name, dir)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = cfg;
+        crate::util::term_open::open_terminal_at(None, dir)
+    }
+}
+
+/// Is this process the sole occupant of a window the relaunch opened for it —
+/// `FASTF_RELAUNCHED` set, with a real terminal on stdin and stderr?
+///
+/// When it is, "open a terminal at the project" means *become the shell here*:
+/// this window exists only because fastf had a picker to show, and spawning a
+/// second one would strand it.
+pub fn window_is_ours() -> bool {
+    #[cfg(unix)]
+    {
+        use std::io::IsTerminal;
+        std::env::var_os(crate::util::relaunch::RELAUNCHED_VAR).is_some()
+            && std::io::stdin().is_terminal()
+            && std::io::stderr().is_terminal()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 /// A desktop notification, where the platform has one. `true` if it went out.
 pub fn notify(summary: &str, body: &str) -> bool {
     #[cfg(unix)]

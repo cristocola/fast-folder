@@ -14,6 +14,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf open <query>` | Reveal a project folder by ID or name |
 | `fastf copy <query>` | Put a project's folder path on the clipboard |
 | `fastf path <query>` | Print a project's folder path, and nothing else |
+| `fastf term <query>` | Open a terminal window at a project's folder |
 | `fastf search <expr>...` | Search projects by text, field, date, or tag |
 | `fastf register <dir>` | Onboard an existing folder by writing its `PROJECT_INFO.md` |
 | `fastf apply <slug> <dir>` | Add missing template structure to an existing folder |
@@ -74,13 +75,14 @@ prints is read by nobody. Refusing there is the same as doing nothing.
 So when fastf is asked for something interactive and can prove that nothing can
 read its output, it opens a terminal and runs the same command again inside it.
 This applies to the guided menu (`fastf` with no arguments), `fastf recent`,
-`fastf search`, and the ambiguous branch of `open`, `copy`, and `path`. A window
-that only showed text waits for Enter before closing; one that showed a picker
-or a menu closes as soon as you leave it.
+`fastf search`, and the ambiguous branch of `open`, `copy`, `path`, and `term`.
+A window that only showed text waits for Enter before closing; one that showed
+a picker or a menu closes as soon as you leave it — except `term`'s, which
+*becomes* the shell at the project you picked.
 
 A single match needs no window: `fastf copy ID0047` from a launcher copies the
-path and raises a desktop notification, and `fastf path ID0047` does the same
-while still printing the line.
+path and raises a desktop notification, `fastf path ID0047` does the same while
+still printing the line, and `fastf term ID0047` opens the terminal directly.
 
 **Every one of these must hold before a window is opened**, which is what keeps
 scripts out of it:
@@ -232,8 +234,8 @@ fastf open my-crate                  # substring match on project name
 
 ### How a query resolves
 
-Every command that takes a `<query>` — `open`, `move`, `tag`, `note`, `notes`,
-and the new `copy` and `path` — matches it the same way, taking the first tier
+Every command that takes a `<query>` — `open`, `copy`, `path`, `term`, `move`,
+`tag`, `note`, and `notes` — matches it the same way, taking the first tier
 that finds anything:
 
 1. **Exact ID** — `ID0047`.
@@ -273,10 +275,37 @@ rather than handed to the clipboard or to a shell.
 `fastf paths` (plural) is a different command entirely: it shows where fastf
 keeps its own data. See [Configuration](#configuration).
 
+### Opening a terminal there
+
+```bash
+fastf term ID0047                    # a terminal window, shell already in the project
+fastf term lullaby                   # same query tiers as open/copy/path
+```
+
+`fastf term` opens a terminal emulator whose shell starts at the project's
+folder. Which emulator is the `terminal` config key, else `$TERMINAL`, else the
+first of `konsole`, `gnome-terminal`, `xfce4-terminal`, `alacritty`, `kitty`,
+`foot`, `wezterm`, `xterm` that is installed — each driven with its own
+directory flag. Unlike the relaunch, `xdg-terminal-exec` is not consulted: it
+resolves a *command runner* and cannot be told a starting directory. And
+because `fastf term` is an explicit request for a terminal,
+`fastf config set terminal none` — which switches off the automatic relaunch —
+does not switch it off. (An *ambiguous* headless `term` with `terminal = none`
+still has no window to ask in, so it errors into the journal like any suppressed
+relaunch.)
+
+From a desktop launcher, an unambiguous `fastf term ID0047` opens the window
+directly. An ambiguous one opens a terminal to show the picker — and after you
+pick, that same window becomes the shell at the project rather than spawning a
+second one.
+
+On Windows it opens Windows Terminal (`wt`) when it is installed, and a new
+`cmd` console otherwise — see [windows.md](windows.md).
+
 ### Ambiguous queries
 
-When `open`, `copy`, or `path` matches several projects and there is a terminal
-to ask on, fastf shows a picker of the candidates. Enter performs the verb you
+When `open`, `copy`, `path`, or `term` matches several projects and there is a
+terminal to ask on, fastf shows a picker of the candidates. Enter performs the verb you
 typed on the project you chose — the picker serves the verb it interrupted, so
 it never drops into the project action menu; `fastf` and `fastf recent` are how
 you reach that. Esc cancels, says so, and exits 0, because deciding not to act
@@ -299,7 +328,11 @@ error: 'shared' is ambiguous — 2 matches. Specify a full ID:
 `move`, `tag`, `note`, and `notes` resolve queries the same way but do not open
 a picker; an ambiguous query is always the error above.
 
-Rows show inline tags. Selecting a project opens an action menu, most-used first: open folder, copy path, show metadata, Tags, Journal, move to another base, rename, unregister, delete.
+Rows show inline tags. Selecting a project opens an action menu, most-used first: open folder, copy path, open terminal here, show metadata, Tags, Journal, move to another base, rename, unregister, delete.
+
+**Open terminal here** opens a terminal window whose shell starts in the
+project's folder — the same emulator resolution as `fastf term`, and always a
+new window, since the TUI is keeping the one you are in.
 
 **Copy path** puts the project's folder on the clipboard, using whichever of `wl-copy`, `xclip`, `xsel`, `clip`, or `pbcopy` is installed, and says which one it used. Where there is no clipboard tool — a headless session, a plain SSH login — it prints the path on its own line instead, so a terminal selection still works. It always says what it did.
 
@@ -469,10 +502,11 @@ fastf config set default-template rust-project
 fastf config set date-format "%Y-%m-%d"
 fastf config set editor nvim
 
-# Terminal to open when fastf is launched without one (a desktop launcher).
-# Empty = $TERMINAL, else probe. Names a program, not a command line.
+# Terminal to open when fastf is launched without one (a desktop launcher),
+# and the emulator `fastf term` opens. Empty = $TERMINAL, else probe. Names a
+# program, not a command line.
 fastf config set terminal kitty
-fastf config set terminal none                   # never open a window
+fastf config set terminal none                   # never relaunch (fastf term still works)
 
 # Extra folders to index beyond base-dir, comma separated
 fastf config set bases "/mnt/projects/clients,/srv/archive"

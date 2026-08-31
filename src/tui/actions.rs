@@ -115,6 +115,7 @@ pub(crate) fn project_action_menu(
         let mut items: Vec<&str> = vec![
             "Open project folder",
             "Copy path",
+            "Open terminal here",
             "Show project metadata",
             "Tags",
             "Journal",
@@ -156,6 +157,24 @@ pub(crate) fn project_action_menu(
                 }
             }
             "Copy path" => copy_path(&path_str),
+            "Open terminal here" => {
+                // Same revalidation as Open: the path came from a cache. The
+                // TUI owns this terminal, so a new window is always spawned —
+                // never the exec `fastf term` does in a relaunched window.
+                if let Err(e) = library::revalidate_for_read(project) {
+                    eprintln!("{} {e:#}", "warning:".yellow().bold());
+                    continue;
+                }
+                match Config::load()
+                    .and_then(|cfg| crate::cli::terminal::open_terminal_at(&cfg, path))
+                {
+                    Ok(()) => println!("{}  Terminal opened", "✓".green().bold()),
+                    Err(e) => eprintln!(
+                        "{} could not open a terminal: {e:#}",
+                        "warning:".yellow().bold()
+                    ),
+                }
+            }
             "Show project metadata" => {
                 if !path.exists() {
                     eprintln!(

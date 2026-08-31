@@ -718,7 +718,7 @@ fn an_ambiguous_copy_errors_with_candidates_when_piped() {
     sb.plant_project(&sb.base, "shared_one", "ID0011");
     sb.plant_project(&sb.base, "shared_two", "ID0012");
 
-    for verb in ["copy", "path", "open"] {
+    for verb in ["copy", "path", "open", "term"] {
         let out = sb.run_headless(&[verb, "shared"]);
         assert!(
             !out.status.success(),

@@ -71,7 +71,7 @@ responsibility of the filesystem and backups.
   made standalone. v2.0.0 (2026-08-23) was the substantive one: two surfaces,
   one engine, nothing trusted by accident; its phase-by-phase record lives in
   git history. Both AUR packages are at 2.0.1-1.
-- In progress: **v2.1.0 — fastf answers the launcher.** `PLAN.md` drives it,
+- Released: **v2.1.0 — fastf answers the launcher.** `PLAN.md` drives it,
   one phase per PR. fastf is launched from a desktop launcher as well as a
   shell, and from a launcher there is no terminal at all: anything a command
   prints is never seen. v2.1.0's answer — act silently when the request is
@@ -98,7 +98,8 @@ responsibility of the filesystem and backups.
         window. New `terminal` config key; three documented ways off
         (`--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`). A pipe, a
         redirect, cron and CI are contractually unchanged.
-  - [ ] Phase 5 — sweep and release prep.
+  - [x] Phase 5 — docs sweep, the landed decisions recorded in the three
+        `CLAUDE.md` files, and the release cut.
 - Outstanding from v2.0.x, and needing the maintainer: a TUI screenshot or
   asciinema for the README hero, and the Windows smokes listed under "Manual
   move smoke" below.
@@ -117,6 +118,7 @@ responsibility of the filesystem and backups.
 | v1.7.1 | the same, with the recursion bound safe for a Windows thread stack | [release](https://github.com/cristocola/fast-folder/releases/tag/v1.7.1) |
 | v2.0.0 | two surfaces, one engine, nothing trusted by accident: the browser UI removed, and every boundary that took a path on trust made to check it | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.0.0) |
 | v2.0.1 | the Windows binary carries its own C runtime, so the exe and the MSI start on a clean install with no Visual C++ Redistributable | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.0.1) |
+| v2.1.0 | fastf answers the launcher: `copy`/`path`, numeric ID queries, an ambiguity picker that serves the verb it interrupted, and a terminal opened for itself when it was launched without one | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.1.0) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find

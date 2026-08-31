@@ -76,12 +76,17 @@ tell you.
   warning sink), `yaml` (the one place the YAML crate is named), `time` (one
   clock), `paths` (data-dir resolution, `display_path`, the shared boundary
   checks including `contained_destination` and `is_link_like`, base probing),
-  `shell_open` (Windows `ShellExecuteW`), `test_env` (the one env-mutation guard,
-  test-only), `tree_size`, `size_scan`, `live_select`, `human_bytes`,
-  `clipboard`, `tty`.
+  `shell_open` (Windows `ShellExecuteW`), `relaunch` + `notify` (unix-only: the
+  headless-GUI terminal relaunch and `notify-send`), `test_env` (the one
+  env-mutation guard, test-only), `tree_size`, `size_scan`, `live_select`,
+  `human_bytes`, `clipboard`, `tty`.
 - `src/cli/` — one module per subcommand, plus `render.rs`, the only module that
-  prints a plan, a create or an apply. `move_project.rs` is named that way
-  because `move` is a keyword.
+  prints a plan, a create or an apply; `target.rs` (resolve a query to one
+  project, asking when it is ambiguous — the flow `open`/`copy`/`path` share);
+  and `terminal.rs` (the `Config`↔`util::relaunch` seam, since `util` may not
+  read `Config`). `move_project.rs` is named that way because `move` is a
+  keyword, and `path_cmd.rs`/`paths_cmd.rs` because both would otherwise read
+  like `std::path` at their call sites.
 - `src/tui/` — every interactive terminal surface: `menu.rs` (the guided menu and
   Settings), `frame.rs` (the library summary under it), `browser.rs` (the paged
   project browser), `actions.rs` (the project action menu), `rows.rs` (the one
@@ -288,6 +293,54 @@ UUIDs, and reading the trailing digits of one would put the floor at 20044.
 **Known limit:** `DataLock` is per data-directory, so two *different machines*
 writing one shared base are not serialized and can mint the same number.
 Same-machine concurrency is safe.
+
+## Answering the launcher
+
+fastf is started from a shell **and** from a desktop launcher, and from a
+launcher there is no terminal at all: stdin `/dev/null`, stdout and stderr
+journald **sockets**, nothing printed ever seen. Three rules came out of that,
+and they are the ones to keep straight.
+
+**The picker serves the verb it interrupted.** An ambiguous `open`/`copy`/`path`
+shows `tui::pickers::pick_project` and then performs the verb that was typed. It
+must never open the project action menu — that is `fastf` and `fastf recent`.
+`cli::target::one_project` is the one flow, returning `Target::{Project,
+Cancelled, HandedOff}`; the last two are both exit 0 and are **not**
+interchangeable, because reporting a relaunch as `Cancelled —` writes a lie into
+the journal of a command that was just handed to a window.
+
+**The picker's gate is stderr, not stdout.** `recent`/`search` probe stdout
+because there it chooses an output *format*. "Can I ask?" is `util::tty`'s
+question and its answer is stderr — gating on stdout would make the picker
+unreachable from `cd "$(fastf path lullaby)"`, which redirects stdout by
+construction, and would reintroduce the exact defect `util::tty` exists to fix.
+
+**The relaunch fires only where output provably has no reader.** All of:
+no stream is a TTY; stdout *and* stderr are each a socket, character device, or
+closed (`EBADF`) — never a regular file or FIFO, which mean somebody is keeping
+the bytes; a display is set; `SSH_CONNECTION` unset; neither `FASTF_RELAUNCHED`
+(the loop guard, set on the child) nor `FASTF_NO_RELAUNCH` set. `INVOCATION_ID`
+and `JOURNAL_STREAM` are useless discriminators — a systemd-managed desktop sets
+them for everything. Two accepted misfires, documented with their three escape
+hatches (`--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`): a systemd user
+service running an interactive fastf command with the session display imported,
+and cron with `>/dev/null 2>&1` **plus** an exported display.
+
+The emulator argv conventions are not interchangeable and the wrong one silently
+does something else: `gnome-terminal --` (its `-e` is deprecated and takes one
+string), `xfce4-terminal -x` (its `-e` shell-parses one string), `xterm -e` last,
+`kitty`/`foot` trailing. `candidate_commands` is pure so each is unit-tested.
+argv is passed as argv, never through a shell.
+
+`util::tty::mark_interactive_surface` has exactly **two** choke points —
+`require_tty`'s success path (every dialoguer prompt and picker) and
+`live_select` after its `is_term` check (the browser bypasses `require_tty`) —
+and `main` reads it only to decide whether a relaunched window pauses before
+closing.
+
+Everything above is `cfg(unix)`. Windows allocates a console for a console
+application launched from the shell surface, so none of these modules exist
+there — and the Windows clippy leg must stay clean with them absent.
 
 ---
 

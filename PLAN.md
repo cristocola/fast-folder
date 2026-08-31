@@ -465,9 +465,14 @@ release is ready to cut.
    workflow, MSI, AUR bumps).
 
 **Acceptance.**
-- [ ] All gates pass on the release commit.
+- [x] All gates pass on the release commit.
 - [ ] **Needs the maintainer:** approve the release notes and run the
       launcher smoke test from Phase 4 on the installed build.
+
+**Note.** Steps 1-4 are done and the version is bumped to 2.1.0. The tag and
+the Release workflow are deliberately **not** pushed: publishing is the
+maintainer's call, and the AUR half is machine-bound anyway. Everything before
+`git tag v2.1.0` is ready.
 
 ---
 
@@ -498,4 +503,14 @@ process-group hardening.
 
 ## Phase log
 
-(One line per finished phase: date, PR, what differed from the plan.)
+- **2026-08-31 — Phases 1-5, one PR.** Worked in a single session rather than
+  one per phase, so the five phases are five commits on `v2.1.0-launcher`
+  instead of five stacked PRs; each still ran the full gates before the next
+  began. What differed is recorded per phase above. The three that matter:
+  the picker's interactivity gate is **stderr only** (Phase 3), because
+  gating on stdout would repeat the defect `util::tty` exists to fix and would
+  hide the picker from `cd "$(fastf path x)"`; `one_project` returns a
+  `Target` enum rather than `Option<Project>`, so a relaunch is not reported as
+  a cancel; and the relaunch harness gives the child a **socketpair** rather
+  than `/dev/null`, because "the parent printed nothing" has to be observable
+  and journald is a socket.

@@ -390,9 +390,26 @@ lexicographically, which is cheap and correct because ISO-8601 sorts as text.
 **Slice a timestamp with `.get(..10)`, never `[..10]`** — a hand-edited file can
 put anything there, and byte-slicing panicked on the first multi-byte character.
 
-`library::resolve(cfg, query)` is the shared resolver: exact id → id prefix →
-case-insensitive name substring, with a structured error listing candidates when
-ambiguous.
+**`library::resolve_matches(cfg, query) -> Resolution` is the shared resolver**,
+and `resolve` is a thin wrapper over it plus three `pub(crate)` error builders,
+so the three messages exist exactly once and a picker-driven caller reports the
+same text as a piped one. Tiers: exact id → **id number** → id prefix →
+case-insensitive name substring.
+
+`Resolution::{NoProjects, NoMatch, One(Box<Project>), Many(Vec<Project>)}` exists
+because an ambiguity flattened into an error string cannot be offered to a
+picker — `cli::target::one_project` is the caller that needed the candidates as
+data. `One` is boxed: the Windows clippy leg fires `large_enum_variant` on the
+unboxed form where Linux does not (the `ActionLoop` precedent). `Many` carries
+the **whole** candidate set; only the error *text* is capped at ten.
+
+The numeric tier reads an all-digits query as an id *number*
+(`naming::id_value`), so `fastf open 37` finds ID0037 whatever prefix and padding
+width a template declares. It sits **below** exact id, because a template may
+declare a digits-only id prefix and then an all-digits string is a legal complete
+id; and **above** the prefix tier, because `4` otherwise matches everything from
+ID0040 to ID0049. A digit run too long for `u64` is not a number and falls
+through — `numeric_query` returns `None` rather than saturating.
 
 Tag mutations call `library::refresh_cache` so lists stay fresh without a
 rescan; `note` does not, because the cache stores no journal.

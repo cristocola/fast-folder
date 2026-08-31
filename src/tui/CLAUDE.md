@@ -121,6 +121,22 @@ included — which is why the key match is split into a filter branch and a norm
 branch rather than one match with guards. Esc clears the filter before it cancels,
 because a filter can hide the Back row. Page keys **clamp** where arrows **wrap**.
 
+**The columns run ID, folder name, base, template, date, then Size** — priority
+order, because a row is clamped from the *right* and whatever sits last is what
+gets eaten. The name used to be last, and the terminal the launcher relaunch
+opens is often 80 columns: an ambiguous `fastf open lullaby` showed a picker whose
+rows had lost the only column that told the projects apart. The date is last of
+the text columns because every bundled naming pattern already carries it inside
+the folder name. `the_folder_name_survives_a_narrow_window` pins it, with a
+fixture realistic enough to fail on the old order — a toy one fits in 80 columns
+whichever way round it is.
+
+The name cell is padded by **display width** (`pad_str`), unlike the slug columns
+beside it, because it is the one cell that can hold anything; a name wider than
+the column is left ragged rather than truncated. `cli::recent::print_plain` keeps
+its own older order and is not this table — it prints the full path on a second
+line, so it never truncates a name, and its output is a scripting contract.
+
 **Row widths are measured from the projects, never from the sizes**
 (`tui::rows::RowWidths`), and the Size cell is a fixed width. A label may only
 change inside its own Size cell, or the table reflows under the reader as

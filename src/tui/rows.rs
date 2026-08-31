@@ -7,6 +7,8 @@
 
 use std::path::Path;
 
+use dialoguer::console::measure_text_width;
+
 use crate::core::library::{self, Project};
 use crate::util::human_bytes::human_bytes;
 use crate::util::size_scan::SizeCell;
@@ -26,6 +28,7 @@ pub const PENDING_LABEL: &str = "scanning…";
 /// or the table reflows under the reader as background snapshots land.
 pub struct RowWidths {
     pub id: usize,
+    pub name: usize,
     pub template: usize,
     pub base: usize,
 }
@@ -42,6 +45,15 @@ impl RowWidths {
                 .map(|p| p.id.len())
                 .max()
                 .unwrap_or(4),
+            // Display columns, not bytes: a folder name is the one cell a user
+            // can fill with anything, accents and CJK included, and `.len()`
+            // would pad it to the wrong place.
+            name: projects
+                .clone()
+                .into_iter()
+                .map(|p| measure_text_width(&p.name))
+                .max()
+                .unwrap_or(8),
             template: projects
                 .clone()
                 .into_iter()
@@ -90,29 +102,51 @@ pub(crate) fn project_row(
     size: Option<SizeCell>,
     mark_missing: bool,
 ) -> String {
+    // **The folder name comes second, right after the ID.** A row is clamped
+    // from the right, so whatever sits last is what gets eaten — and the window
+    // the launcher relaunch opens is often 80 columns, far narrower than the
+    // terminal anyone starts fastf in by hand. The name was last, so the one
+    // column the reader is actually looking for was the first to go.
+    //
+    // The date is last of the text columns because every bundled naming pattern
+    // already carries it inside the folder name, so it is the cheapest thing to
+    // lose. Size, when there is one, follows: it is a fixed-width cell and must
+    // not move when a background snapshot lands.
+    let mut name = project.name.clone();
+    if mark_missing && !project.path.exists() {
+        name.push_str("  (missing)");
+    }
+
     let mut row = format!(
-        "{:<id_w$}  {:<tmpl_w$}  {}  {:<base_w$}  ",
+        "{:<id_w$}  {}  {:<base_w$}  {:<tmpl_w$}  {}",
         project.id,
+        // Padded by display width, unlike the slug columns beside it, because
+        // this is the cell that can hold anything.
+        pad_to(&name, widths.name),
+        library::base_label(&project.base),
         project.template,
         date_cell(&project.created),
-        library::base_label(&project.base),
         id_w = widths.id,
-        tmpl_w = widths.template,
         base_w = widths.base,
+        tmpl_w = widths.template,
     );
     if let Some(cell) = size {
         row.push_str(&format!(
-            "Size {:>size_w$}  ",
+            "  Size {:>size_w$}",
             cell_label(cell),
             size_w = SIZE_CELL
         ));
     }
-    row.push_str(&project.name);
-    if mark_missing && !project.path.exists() {
-        row.push_str("  (missing)");
-    }
     row.push_str(&tag_cell(&project.tags));
     row
+}
+
+/// Left-align `text` in a `width`-column cell, counting display columns. A
+/// value wider than the cell is returned as it is rather than truncated — a
+/// name that overflows makes one row ragged, where cutting it would hide the
+/// thing the row exists to show.
+fn pad_to(text: &str, width: usize) -> String {
+    dialoguer::console::pad_str(text, width, dialoguer::console::Alignment::Left, None).into_owned()
 }
 
 /// The Size cell for one row. Its fixed width belongs to the caller's format
@@ -323,6 +357,69 @@ mod tests {
         assert!(pending[0].contains(PENDING_LABEL));
         assert!(known[0].contains("2.0 KB"));
         assert!(known[1].contains("unavailable"));
+    }
+
+    /// The regression this ordering exists for. A relaunched terminal opens at
+    /// whatever size its emulator defaults to — commonly 80 columns — and the
+    /// row is clamped from the right. With the name last, an ambiguous
+    /// `fastf open lullaby` showed a picker whose rows had lost the only column
+    /// that tells the projects apart.
+    #[test]
+    fn the_folder_name_survives_a_narrow_window() {
+        // Realistic on every count: a template slug and a base label of the
+        // length people actually use, and names from a naming pattern that
+        // carries the date and the ID. Toy fixtures fit in 80 columns whatever
+        // the order, and prove nothing.
+        let realistic = |id: &str, name: &str| Project {
+            template: "music-video".to_string(),
+            base: PathBuf::from("/mnt/projects/01_PROJECTS"),
+            ..project(id, name)
+        };
+        let projects = [
+            realistic("ID0047", "2026-04-02_Lullaby_Live_Session_ID0047"),
+            realistic("ID0051", "2026-05-19_Lullaby_Remix_Master_ID0051"),
+        ];
+        let widths = RowWidths::measure(projects.iter());
+
+        for p in &projects {
+            let row = clamp_label(&project_row(p, &widths, None, true), 80);
+            assert!(
+                row.contains(&p.name),
+                "the folder name must survive an 80-column window:\n{row}"
+            );
+        }
+    }
+
+    /// ID, folder name, base, template, date. The order is the priority order:
+    /// what identifies the project first, what is cheapest to lose last (the
+    /// date is already inside the folder name).
+    #[test]
+    fn the_columns_run_from_most_to_least_worth_keeping() {
+        let projects = [project("ID0047", "Lullaby")];
+        let widths = RowWidths::measure(projects.iter());
+        let row = project_row(
+            &projects[0],
+            &widths,
+            Some(SizeCell::Known(Some(2048))),
+            false,
+        );
+
+        let at = |needle: &str| {
+            row.find(needle)
+                .unwrap_or_else(|| panic!("{needle} missing from row: {row}"))
+        };
+        let order = [
+            at("ID0047"),
+            at("Lullaby"),
+            at("base"),       // the base label
+            at("general"),    // the template slug
+            at("2026-08-18"), // the date
+            at("Size"),
+        ];
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "columns are out of order in: {row}"
+        );
     }
 
     /// Which terminal column a row's project name starts at.

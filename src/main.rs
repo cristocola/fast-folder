@@ -134,10 +134,11 @@ enum Commands {
 
     /// Open a previously created project folder in the system file manager
     #[command(
-        after_help = "The query is matched against (in order): exact ID, ID prefix,\n\
-        then case-insensitive substring of the project name.\n\n\
+        after_help = "The query is matched against (in order): exact ID, the ID's\n\
+        number, ID prefix, then case-insensitive substring of the project name.\n\n\
         Examples:\n  \
             fastf open ID0047\n  \
+            fastf open 37                          # the ID number (finds ID0037)\n  \
             fastf open 0047                        # ID prefix match\n  \
             fastf open lullaby                     # name substring match"
     )]

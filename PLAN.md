@@ -114,11 +114,14 @@ digit run as `Option<u64>`.
    `fastf open 37` example line.
 
 **Acceptance.**
-- [ ] All gates pass.
-- [ ] The numeric-tier test was observed failing on the pre-phase build.
-- [ ] `resolve_ambiguous_errors_with_candidates` and
+- [x] All gates pass.
+- [x] The numeric-tier test was observed failing on the pre-phase build
+      (`an_all_digit_query_matches_the_id_number_exactly` and
+      `the_numeric_tier_sits_between_exact_id_and_prefix`, both FAILED before
+      the tier existed).
+- [x] `resolve_ambiguous_errors_with_candidates` and
       `resolve_distinguishes_no_match_exact_and_ambiguous` pass **unmodified**.
-- [ ] `grep -rn "is ambiguous" src/` shows the string in exactly one place.
+- [x] `grep -rn "is ambiguous" src/` shows the string in exactly one place.
 
 ---
 

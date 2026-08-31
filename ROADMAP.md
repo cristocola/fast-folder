@@ -55,31 +55,29 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Release: **v2.0.1, published 2026-08-24** — v2.0.0 with the Windows binary
+- Released: **v2.0.1, published 2026-08-24** — v2.0.0 with the Windows binary
   made standalone. v2.0.0 (2026-08-23) was the substantive one: two surfaces,
-  one engine, nothing trusted by accident. `PLAN.md` drove it, one phase per
-  PR; that file is the phase-by-phase record and this is the summary. Both AUR
-  packages are at 2.0.1-1.
-- Status: **all nine phases landed.** What changed, as guarantees rather than
-  phases:
-  - The browser UI is gone, and with it fastf's only network surface. v1.7.1
-    remains the last release that has `fastf ui`.
-  - One validator decides what a project folder may be called; a name that would
-    be invisible or empty is refused before any directory is made.
-  - The ID counter has a maximum and cannot overflow.
-  - A project path never reaches a shell as source text, and Windows "Reveal"
-    passes the path as data.
-  - Every template write goes through `core::operations` under `DataLock`.
-  - No write beneath a root fastf controls follows a link, junction or reparse
-    point.
-  - A cache entry can only ever point at a direct child of its own base, and
-    `open` checks a folder before spawning anything on it.
-  - One lock per test binary guards environment mutation, and no test can reach
-    the developer's real data directory.
-  - A tag cannot publish what CI would reject.
-- Outstanding, and needing the maintainer: a TUI screenshot or asciinema for the
-  README hero, and the Windows smokes listed under "Manual move smoke" below.
-- Last reviewed: **2026-08-23**
+  one engine, nothing trusted by accident; its phase-by-phase record lives in
+  git history. Both AUR packages are at 2.0.1-1.
+- In progress: **v2.1.0 — fastf answers the launcher.** `PLAN.md` drives it,
+  one phase per PR. fastf is launched from a desktop launcher as well as a
+  shell, and from a launcher there is no terminal at all: anything a command
+  prints is never seen. v2.1.0's answer — act silently when the request is
+  unambiguous, open a terminal when there is text to show or a question to ask
+  and nowhere to show it, and make the clipboard a first-class verb. Scripts
+  are contractually unaffected: a pipe, a redirect, cron or CI keeps today's
+  exact behaviour.
+  - [x] Phase 1 — the resolver answers with data (`Resolution`) instead of an
+        error string, so a caller can offer the candidates to a picker, and an
+        all-digits query matches the ID *number* (`fastf open 37` → ID0037).
+  - [ ] Phase 2 — `fastf copy` and `fastf path`.
+  - [ ] Phase 3 — the ambiguity picker serves the verb it interrupted.
+  - [ ] Phase 4 — a terminal when there is no terminal.
+  - [ ] Phase 5 — sweep and release prep.
+- Outstanding from v2.0.x, and needing the maintainer: a TUI screenshot or
+  asciinema for the README hero, and the Windows smokes listed under "Manual
+  move smoke" below.
+- Last reviewed: **2026-08-31**
 
 ## Release train
 

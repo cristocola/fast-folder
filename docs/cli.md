@@ -181,8 +181,27 @@ fastf recent --since 2026-01-01
 fastf recent --tag draft
 
 fastf open ID0047                    # reveal in the system file manager
+fastf open 47                        # the ID number, however it is padded
 fastf open my-crate                  # substring match on project name
 ```
+
+### How a query resolves
+
+Every command that takes a `<query>` — `open`, `move`, `tag`, `note`, `notes`,
+and the new `copy` and `path` — matches it the same way, taking the first tier
+that finds anything:
+
+1. **Exact ID** — `ID0047`.
+2. **ID number** — an all-digits query is read as the ID's *number*, so `47`
+   finds `ID0047` whatever prefix and padding width your template uses. This
+   tier sits below exact ID, because a template may declare a digits-only ID
+   prefix, and above the prefix tier, because otherwise `4` matches everything
+   from `ID0040` to `ID0049`.
+3. **ID prefix** — `ID004` finds `ID0047` when nothing else starts that way.
+4. **Name substring**, case-insensitive — `lullaby`.
+
+A query that matches several projects is ambiguous: fastf lists the candidates
+and asks for a full ID.
 
 Rows show inline tags. Selecting a project opens an action menu, most-used first: open folder, copy path, show metadata, Tags, Journal, move to another base, rename, unregister, delete.
 

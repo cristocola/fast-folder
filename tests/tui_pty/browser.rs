@@ -107,7 +107,7 @@ fn a_tag_patches_its_row_without_rescanning_the_library() {
         .down(MENU_PROJECTS)
         .enter()
         .enter() // select the project
-        .down(3) // → Tags
+        .down(4) // → Tags
         .enter()
         .enter() // → Add a tag (no known tags yet, so it asks for one)
         .line("draft")
@@ -166,7 +166,7 @@ fn a_delete_drops_its_row_without_rescanning_the_library() {
         .down(MENU_PROJECTS)
         .enter()
         .enter() // the newest row: Doomed_Project
-        .down(7) // → Delete folder permanently
+        .down(8) // → Delete folder permanently
         .enter()
         .line("Doomed_Project") // typed confirmation
         .pause(800)

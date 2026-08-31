@@ -15,6 +15,7 @@ pub mod relaunch;
 #[cfg(windows)]
 pub(crate) mod shell_open;
 pub(crate) mod size_scan;
+pub mod term_open;
 #[cfg(test)]
 pub(crate) mod test_env;
 pub mod time;

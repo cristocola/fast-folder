@@ -97,6 +97,9 @@ shortcut, or the Start menu already allocates a console for it. The `terminal`
 config key is read on every platform but only acted on where the relaunch
 exists.
 
+`fastf term <query>` works here too: it opens Windows Terminal (`wt`) at the
+project's folder when it is installed, and a new `cmd` console there otherwise.
+
 ## "VCRUNTIME140.dll was not found"
 
 Releases up to and including v2.0.0 linked the Microsoft C runtime dynamically, so `fastf.exe` needed the Visual C++ Redistributable. Most developer machines already have it and most clean installs do not, and where it was missing Windows refused to start the program and named that DLL.

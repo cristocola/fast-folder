@@ -647,23 +647,33 @@ pub fn recorder(dir: &Path, name: &str) -> Recorder {
     use std::os::unix::fs::PermissionsExt;
     fs::create_dir_all(dir).unwrap();
     let log = dir.join(format!("{name}.log"));
+    let cwd_log = dir.join(format!("{name}.cwd"));
     let program = dir.join(name);
+    // The working directory goes to its own file, written before the argv log:
+    // `wait_for_call` polls the argv log, so by the time it answers, the cwd is
+    // already on disk.
     fs::write(
         &program,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\nexit 0\n",
+            "#!/bin/sh\npwd >> {}\nprintf '%s\\n' \"$@\" >> {}\nexit 0\n",
+            cwd_log.display(),
             log.display()
         ),
     )
     .unwrap();
     fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
-    Recorder { program, log }
+    Recorder {
+        program,
+        log,
+        cwd_log,
+    }
 }
 
 #[cfg(unix)]
 pub struct Recorder {
     pub program: PathBuf,
     pub log: PathBuf,
+    pub cwd_log: PathBuf,
 }
 
 #[cfg(unix)]
@@ -703,6 +713,23 @@ impl Recorder {
     pub fn was_called(&self) -> bool {
         self.wait_for_call(std::time::Duration::from_millis(400))
             .is_some()
+    }
+
+    /// The working directory of the one invocation, or `None` if it was never
+    /// called. Polls, for the same reason `argv` does.
+    pub fn cwd(&self) -> Option<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Ok(raw) = fs::read_to_string(&self.cwd_log)
+                && raw.ends_with('\n')
+            {
+                return Some(raw.trim_end().to_string());
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }
 

@@ -180,6 +180,21 @@ enum Commands {
         query: String,
     },
 
+    /// Open a terminal window at a project's folder
+    #[command(
+        after_help = "Opens the terminal named by the `terminal` config key, else\n\
+        $TERMINAL, else probes the known emulators. `terminal = \"none\"` only\n\
+        disables the automatic relaunch, not this explicit request.\n\n\
+        Examples:\n  \
+            fastf term ID0047\n  \
+            fastf term 47                          # the ID number\n  \
+            fastf term lullaby                     # name substring match"
+    )]
+    Term {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
+        query: String,
+    },
+
     /// Move a project folder into another configured base
     #[command(
         name = "move",
@@ -823,6 +838,7 @@ fn run() -> Result<()> {
         Some(Commands::Open { query }) => cli::recent::open(&query),
         Some(Commands::Copy { query }) => cli::copy::run(&query),
         Some(Commands::Path { query }) => cli::path_cmd::run(&query),
+        Some(Commands::Term { query }) => cli::term_cmd::run(&query),
         Some(Commands::Move { query, base, yes }) => {
             cli::move_project::run(cli::move_project::MoveArgs { query, base, yes })
         }

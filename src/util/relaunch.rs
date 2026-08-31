@@ -32,31 +32,79 @@ pub const RELAUNCHED_VAR: &str = "FASTF_RELAUNCHED";
 pub const NO_RELAUNCH_VAR: &str = "FASTF_NO_RELAUNCH";
 
 /// How an emulator wants the command to run appended to its own argv.
-enum ArgStyle {
+pub(crate) enum ArgStyle {
     /// A flag introducing the command: `konsole -e fastf search x`.
     Flag(&'static str),
     /// The command with no flag at all: `kitty fastf search x`.
     Trailing,
 }
 
+/// How an emulator is told which directory its shell starts in — the other
+/// thing fastf asks of a terminal (`term_open`). Always the two-token
+/// `--flag <dir>` form: GOption and getopt_long both take it, and it keeps the
+/// argv free of `OsString` concatenation.
+pub(crate) enum CwdStyle {
+    /// A flag naming the directory: `konsole --workdir <dir>`.
+    Flag(&'static str),
+    /// A subcommand, then the flag: `wezterm start --cwd <dir>`.
+    Subcommand(&'static str, &'static str),
+    /// No flag at all (xterm): the spawner's `current_dir` is what carries it.
+    Inherit,
+}
+
+/// One emulator fastf knows how to drive: its program name and both argv
+/// conventions, kept in one row so the two never drift apart.
+pub(crate) struct Emulator {
+    pub(crate) program: &'static str,
+    pub(crate) run: ArgStyle,
+    pub(crate) cwd: CwdStyle,
+}
+
+const fn emulator(program: &'static str, run: ArgStyle, cwd: CwdStyle) -> Emulator {
+    Emulator { program, run, cwd }
+}
+
 /// The emulators fastf knows how to drive, in probe order.
 ///
-/// The flags are not interchangeable and the wrong one silently does something
-/// else:
+/// The `run` flags are not interchangeable and the wrong one silently does
+/// something else:
 /// - `gnome-terminal` wants `--`; its `-e` is deprecated and takes a *single
 ///   string* it then splits itself.
 /// - `xfce4-terminal`'s `-e` shell-parses one string too, so it must be `-x`.
 /// - `xterm`'s `-e` must be its last option.
 /// - `kitty` and `foot` take the command as trailing argv with no flag.
-const TERMINALS: &[(&str, ArgStyle)] = &[
-    ("konsole", ArgStyle::Flag("-e")),
-    ("gnome-terminal", ArgStyle::Flag("--")),
-    ("xfce4-terminal", ArgStyle::Flag("-x")),
-    ("alacritty", ArgStyle::Flag("-e")),
-    ("kitty", ArgStyle::Trailing),
-    ("foot", ArgStyle::Trailing),
-    ("wezterm", ArgStyle::Flag("start")),
-    ("xterm", ArgStyle::Flag("-e")),
+///
+/// The `cwd` flags are each emulator's own long option; xterm has none, and its
+/// shell starts in the inherited working directory instead.
+pub(crate) const TERMINALS: &[Emulator] = &[
+    emulator("konsole", ArgStyle::Flag("-e"), CwdStyle::Flag("--workdir")),
+    emulator(
+        "gnome-terminal",
+        ArgStyle::Flag("--"),
+        CwdStyle::Flag("--working-directory"),
+    ),
+    emulator(
+        "xfce4-terminal",
+        ArgStyle::Flag("-x"),
+        CwdStyle::Flag("--working-directory"),
+    ),
+    emulator(
+        "alacritty",
+        ArgStyle::Flag("-e"),
+        CwdStyle::Flag("--working-directory"),
+    ),
+    emulator("kitty", ArgStyle::Trailing, CwdStyle::Flag("--directory")),
+    emulator(
+        "foot",
+        ArgStyle::Trailing,
+        CwdStyle::Flag("--working-directory"),
+    ),
+    emulator(
+        "wezterm",
+        ArgStyle::Flag("start"),
+        CwdStyle::Subcommand("start", "--cwd"),
+    ),
+    emulator("xterm", ArgStyle::Flag("-e"), CwdStyle::Inherit),
 ];
 
 /// The XDG default-terminal resolver, tried before probing the table: on a
@@ -221,15 +269,15 @@ fn candidate_commands(
             .unwrap_or(name);
         let style = TERMINALS
             .iter()
-            .find(|(known, _)| *known == base)
-            .map(|(_, style)| style)
+            .find(|e| e.program == base)
+            .map(|e| &e.run)
             .unwrap_or(&ArgStyle::Flag("-e"));
         candidates.push(build(name, style, exe, args));
     }
 
     candidates.push(build(XDG_RESOLVER, &ArgStyle::Trailing, exe, args));
-    for (program, style) in TERMINALS {
-        candidates.push(build(program, style, exe, args));
+    for emulator in TERMINALS {
+        candidates.push(build(emulator.program, &emulator.run, exe, args));
     }
     candidates
 }

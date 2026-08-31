@@ -515,7 +515,7 @@ enum ConfigAction {
             base-dir                    Directory where new projects are created (default: home directory)\n  \
             bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
-            terminal                    Terminal emulator to open when launched without one\n                                        (default: $TERMINAL, else probe; \"none\" disables)\n  \
+            terminal                    Terminal emulator to open when launched without one\n                              (default: $TERMINAL, else probe; \"none\" disables)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \
             date-format                 strftime format for the {date} token (default: %Y-%m-%d)\n  \
             preview-lines               Lines per file in dry-run preview (default: 8, 0 = none)\n  \

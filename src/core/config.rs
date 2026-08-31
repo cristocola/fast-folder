@@ -90,6 +90,15 @@ pub struct Config {
     #[serde(default = "default_register_naming_pattern")]
     pub register_naming_pattern: String,
 
+    /// Terminal emulator to open when fastf is asked for something interactive
+    /// with no terminal to do it in — a desktop launcher. Empty = `$TERMINAL`
+    /// if set, otherwise probe the known emulators. `"none"` turns the whole
+    /// relaunch off. Names a *program*, not a command line.
+    ///
+    /// Never read raw — see [`Config::resolve_terminal`].
+    #[serde(default)]
+    pub terminal: String,
+
     /// What to do when the resolved folder name is already taken:
     /// `"suffix"` (default) appends `_2`, `_3`… , `"error"` refuses.
     ///
@@ -166,6 +175,7 @@ impl Default for Config {
             base_dir: String::new(),
             bases: Vec::new(),
             editor: String::new(),
+            terminal: String::new(),
             default_template: String::new(),
             date_format: default_date_format(),
             preview_lines: default_preview_lines(),
@@ -273,6 +283,26 @@ impl Config {
     }
 
     /// Resolve editor: configured, or $EDITOR, or fallback.
+    /// What the `terminal` key means, with `$TERMINAL` folded in.
+    ///
+    /// The three answers are genuinely different — do not collapse `Disabled`
+    /// into "empty name": `"none"` is a user saying *never open a window*, and
+    /// an empty value is a user who has not thought about it and should get the
+    /// probe.
+    pub fn resolve_terminal(&self) -> TerminalPreference {
+        let configured = self.terminal.trim();
+        if configured.eq_ignore_ascii_case("none") {
+            return TerminalPreference::Disabled;
+        }
+        if !configured.is_empty() {
+            return TerminalPreference::Named(configured.to_string());
+        }
+        match std::env::var("TERMINAL") {
+            Ok(name) if !name.trim().is_empty() => TerminalPreference::Named(name.trim().into()),
+            _ => TerminalPreference::Probe,
+        }
+    }
+
     pub fn resolve_editor(&self) -> String {
         if !self.editor.is_empty() {
             return self.editor.clone();
@@ -284,6 +314,28 @@ impl Config {
                 "nano".to_string()
             }
         })
+    }
+}
+
+/// Which terminal emulator the headless-GUI relaunch should use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalPreference {
+    /// `terminal = "none"` — never open a window; behave as fastf always has.
+    Disabled,
+    /// A program named by the config or by `$TERMINAL`.
+    Named(String),
+    /// Nothing configured: try the known emulators in order.
+    Probe,
+}
+
+impl TerminalPreference {
+    /// The program name to hand `util::relaunch`, or `None` to probe.
+    /// `Disabled` never reaches it — the caller checks for that first.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            TerminalPreference::Named(name) => Some(name),
+            _ => None,
+        }
     }
 }
 

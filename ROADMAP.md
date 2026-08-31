@@ -20,6 +20,18 @@ file paths and byte lengths, publishes the complete staging directory, and only
 then attempts to remove the source. The project must remain untouched by other
 programs while it is moving.
 
+### What fastf may start
+
+fastf spawns programs on the user's behalf in five places, all of them
+configuration rather than input: a template's `post_create` commands, the
+editor, the file manager for Reveal, a clipboard tool
+(`wl-copy`/`xclip`/`xsel`/`clip`/`pbcopy`), and — new in v2.1.0, unix only — a
+terminal emulator plus `notify-send`. The emulator is named by the `terminal`
+config key, else `$TERMINAL`, else `xdg-terminal-exec`, else the first known
+emulator on `PATH`; it is started only when fastf has been asked for something
+interactive and can prove nothing can read its output, and it is given the
+process's own argv as argv, never through a shell.
+
 ### What fastf trusts
 
 One OS account. Bases, templates, `config.toml`, the counters and the caches are
@@ -55,31 +67,43 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Release: **v2.0.1, published 2026-08-24** — v2.0.0 with the Windows binary
+- Released: **v2.0.1, published 2026-08-24** — v2.0.0 with the Windows binary
   made standalone. v2.0.0 (2026-08-23) was the substantive one: two surfaces,
-  one engine, nothing trusted by accident. `PLAN.md` drove it, one phase per
-  PR; that file is the phase-by-phase record and this is the summary. Both AUR
-  packages are at 2.0.1-1.
-- Status: **all nine phases landed.** What changed, as guarantees rather than
-  phases:
-  - The browser UI is gone, and with it fastf's only network surface. v1.7.1
-    remains the last release that has `fastf ui`.
-  - One validator decides what a project folder may be called; a name that would
-    be invisible or empty is refused before any directory is made.
-  - The ID counter has a maximum and cannot overflow.
-  - A project path never reaches a shell as source text, and Windows "Reveal"
-    passes the path as data.
-  - Every template write goes through `core::operations` under `DataLock`.
-  - No write beneath a root fastf controls follows a link, junction or reparse
-    point.
-  - A cache entry can only ever point at a direct child of its own base, and
-    `open` checks a folder before spawning anything on it.
-  - One lock per test binary guards environment mutation, and no test can reach
-    the developer's real data directory.
-  - A tag cannot publish what CI would reject.
-- Outstanding, and needing the maintainer: a TUI screenshot or asciinema for the
-  README hero, and the Windows smokes listed under "Manual move smoke" below.
-- Last reviewed: **2026-08-23**
+  one engine, nothing trusted by accident; its phase-by-phase record lives in
+  git history. Both AUR packages are at 2.0.1-1.
+- Released: **v2.1.0 — fastf answers the launcher.** `PLAN.md` drives it,
+  one phase per PR. fastf is launched from a desktop launcher as well as a
+  shell, and from a launcher there is no terminal at all: anything a command
+  prints is never seen. v2.1.0's answer — act silently when the request is
+  unambiguous, open a terminal when there is text to show or a question to ask
+  and nowhere to show it, and make the clipboard a first-class verb. Scripts
+  are contractually unaffected: a pipe, a redirect, cron or CI keeps today's
+  exact behaviour.
+  - [x] Phase 1 — the resolver answers with data (`Resolution`) instead of an
+        error string, so a caller can offer the candidates to a picker, and an
+        all-digits query matches the ID *number* (`fastf open 37` → ID0037).
+  - [x] Phase 2 — `fastf copy` puts a project's path on the clipboard and says
+        so; `fastf path` prints the bare path for `cd "$(fastf path api)"`. Both
+        revalidate the folder first. A clipboard tool now runs in its own
+        process group, so a launcher reaping its children cannot kill the
+        process that owns the selection.
+  - [x] Phase 3 — an ambiguous `open`/`copy`/`path` shows a project picker on a
+        terminal, and Enter performs the verb that was interrupted rather than
+        opening the action menu. Esc cancels with exit 0. Without a terminal the
+        candidate-list error is unchanged, so scripts see nothing new.
+  - [x] Phase 4 — launched headless inside a graphical session, fastf opens a
+        terminal and re-runs itself there (the menu, `recent`, `search`, and the
+        ambiguous branch of `open`/`copy`/`path`) instead of writing to the
+        journal. A single-match `copy`/`path` copies and notifies without a
+        window. New `terminal` config key; three documented ways off
+        (`--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`). A pipe, a
+        redirect, cron and CI are contractually unchanged.
+  - [x] Phase 5 — docs sweep, the landed decisions recorded in the three
+        `CLAUDE.md` files, and the release cut.
+- Outstanding from v2.0.x, and needing the maintainer: a TUI screenshot or
+  asciinema for the README hero, and the Windows smokes listed under "Manual
+  move smoke" below.
+- Last reviewed: **2026-08-31**
 
 ## Release train
 
@@ -94,6 +118,7 @@ responsibility of the filesystem and backups.
 | v1.7.1 | the same, with the recursion bound safe for a Windows thread stack | [release](https://github.com/cristocola/fast-folder/releases/tag/v1.7.1) |
 | v2.0.0 | two surfaces, one engine, nothing trusted by accident: the browser UI removed, and every boundary that took a path on trust made to check it | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.0.0) |
 | v2.0.1 | the Windows binary carries its own C runtime, so the exe and the MSI start on a clean install with no Visual C++ Redistributable | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.0.1) |
+| v2.1.0 | fastf answers the launcher: `copy`/`path`, numeric ID queries, an ambiguity picker that serves the verb it interrupted, and a terminal opened for itself when it was launched without one | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.1.0) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find
@@ -183,7 +208,7 @@ This work does not use GitHub issues, a separate ADR system, or a changelog.
 - Project lifecycle states.
 - Declarative post-create workflows.
 - Scriptability: `--json`/`--format` output, `search --limit/--template/--since/--tag`,
-  a `fastf path <query>` command, `print_path` as a `new` flag rather than only a
+  `print_path` as a `new` flag rather than only a
   config toggle, `--color=auto|always|never` (`colored` currently gates on stdout
   only, so stderr gets ANSI when redirected), documented exit codes, and
   `completions <shell>` as a typed `clap_complete::Shell` rather than a bare

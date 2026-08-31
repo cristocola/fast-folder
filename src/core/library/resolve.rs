@@ -14,24 +14,62 @@ use super::model::*;
 // Resolution + counter self-heal
 // ---------------------------------------------------------------------------
 
-/// Resolve a project by query: exact ID → ID prefix → case-insensitive name
-/// substring. Ambiguous queries error with the candidate list.
-pub fn resolve(cfg: &Config, query: &str) -> Result<Project> {
+/// What a query resolved to, as data rather than as a `Result`.
+///
+/// [`resolve`] collapses this into a `Result<Project>` for the callers that
+/// only ever want one project. The surfaces that can *offer* a choice — the
+/// verbs that may open an ambiguity picker — match on this instead, because an
+/// error string cannot be shown in a picker.
+#[derive(Debug)]
+pub enum Resolution {
+    /// The library is empty — no base holds a project at all.
+    NoProjects,
+    /// Projects exist; none matched the query.
+    NoMatch,
+    /// Exactly one match. **Boxed**: `Project` is large, and the Windows clippy
+    /// leg fires `large_enum_variant` on the unboxed form where Linux does not.
+    One(Box<Project>),
+    /// Several matches, in discovery order (newest first). The full list, not
+    /// the truncated one the ambiguity *message* shows.
+    Many(Vec<Project>),
+}
+
+/// Resolve a query against the library, reporting the candidates as data.
+///
+/// Tiers, first non-empty wins: exact ID → **numeric** → ID prefix →
+/// case-insensitive name substring.
+///
+/// The numeric tier is what makes `fastf open 37` find `ID0037`: an all-digits
+/// query is read as an ID *number* and compared with [`naming::id_value`], so
+/// it is prefix-agnostic and immune to padding width. It sits *below* the exact
+/// tier because a template may declare a digits-only ID prefix, which makes an
+/// all-digits string a legal complete ID; it sits *above* the prefix tier
+/// because otherwise `4` matches everything from ID0040 to ID0049.
+pub fn resolve_matches(cfg: &Config, query: &str) -> Resolution {
     let projects = discover(cfg);
     if projects.is_empty() {
-        anyhow::bail!("no projects found — create one with `fastf new` first");
+        return Resolution::NoProjects;
     }
 
     // 1. Exact ID.
     let mut matches: Vec<&Project> = projects.iter().filter(|p| p.id == query).collect();
-    // 2. ID prefix.
+    // 2. ID number.
+    if matches.is_empty()
+        && let Some(n) = numeric_query(query)
+    {
+        matches = projects
+            .iter()
+            .filter(|p| naming::id_value(&p.id) == Some(n))
+            .collect();
+    }
+    // 3. ID prefix.
     if matches.is_empty() {
         matches = projects
             .iter()
             .filter(|p| p.id.starts_with(query))
             .collect();
     }
-    // 3. Name substring (case-insensitive).
+    // 4. Name substring (case-insensitive).
     if matches.is_empty() {
         let q = query.to_lowercase();
         matches = projects
@@ -41,20 +79,60 @@ pub fn resolve(cfg: &Config, query: &str) -> Result<Project> {
     }
 
     match matches.len() {
-        0 => anyhow::bail!("no project matches '{}' — try `fastf recent`", query),
-        1 => Ok(matches[0].clone()),
-        _ => {
-            let mut msg = format!(
-                "'{}' is ambiguous — {} matches. Specify a full ID:\n",
-                query,
-                matches.len()
-            );
-            for p in matches.iter().take(10) {
-                msg.push_str(&format!("  {}  {}  ({})\n", p.id, p.name, p.template));
-            }
-            anyhow::bail!("{}", msg.trim_end())
-        }
+        0 => Resolution::NoMatch,
+        1 => Resolution::One(Box::new(matches[0].clone())),
+        _ => Resolution::Many(matches.into_iter().cloned().collect()),
     }
+}
+
+/// An all-ASCII-digits query as a number, or `None` when it is not one — which
+/// includes a digit run too long for `u64`, so an absurd query falls through to
+/// the ordinary tiers instead of matching nothing forever.
+fn numeric_query(query: &str) -> Option<u64> {
+    if query.is_empty() || !query.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    query.parse::<u64>().ok()
+}
+
+/// Resolve a project by query, or fail with the message that names the reason.
+///
+/// A thin wrapper over [`resolve_matches`] and the three error builders below —
+/// which is where the messages live, exactly once each, so a picker-driven
+/// caller and a piped one report identical text.
+pub fn resolve(cfg: &Config, query: &str) -> Result<Project> {
+    match resolve_matches(cfg, query) {
+        Resolution::NoProjects => Err(no_projects_error()),
+        Resolution::NoMatch => Err(no_match_error(query)),
+        Resolution::One(project) => Ok(*project),
+        Resolution::Many(candidates) => Err(ambiguous_error(query, &candidates)),
+    }
+}
+
+/// The library is empty.
+pub(crate) fn no_projects_error() -> anyhow::Error {
+    anyhow::anyhow!("no projects found — create one with `fastf new` first")
+}
+
+/// Projects exist, but none matched.
+pub(crate) fn no_match_error(query: &str) -> anyhow::Error {
+    anyhow::anyhow!("no project matches '{}' — try `fastf recent`", query)
+}
+
+/// Several matched, and the caller could not (or would not) ask which.
+///
+/// The listing is capped at ten in the *text* only; `Resolution::Many` carries
+/// the whole set, because a picker can scroll and an error message cannot.
+pub(crate) fn ambiguous_error(query: &str, candidates: &[Project]) -> anyhow::Error {
+    let mut msg = format!(
+        "'{}' is ambiguous — {} matches. Specify a full ID:\n",
+        query,
+        candidates.len()
+    );
+    for p in candidates.iter().take(10) {
+        msg.push_str(&format!("  {}  {}  ({})\n", p.id, p.name, p.template));
+    }
+    anyhow::anyhow!("{}", msg.trim_end())
 }
 
 /// Highest numeric ID across all bases — the floor the global counter

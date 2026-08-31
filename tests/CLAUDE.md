@@ -29,6 +29,19 @@ The suites, and what each guards — the intent, not the case list:
   through a real terminal, which is the only place its worst defect was visible:
   any recoverable error ended the session. `tests/tui_pty/harness.rs` states the
   rules that keep these from being flaky.
+- `relaunch.rs` (unix) — when fastf opens a terminal for itself and, mostly, when
+  it must not: a pipe, a redirect, an ssh session, a missing display, either off
+  switch, and the loop guard all keep today's behaviour exactly.
+  **Harness rule: every test in this suite pins `config set terminal <recorder>`
+  first**, so no run can start a real emulator on a developer's desktop or on a
+  CI runner that happens to have a display. `common::recorder` is that fixture —
+  a shell script that appends its argv to a file — and it is also how
+  `notify-send` is observed. It **polls** for the call: fastf spawns the terminal
+  and returns without waiting, which is the whole point, so reading the log once
+  tests the scheduler. `Sandbox::run_like_a_launcher` is the environment itself:
+  stdin on `/dev/null`, stdout and stderr sharing one **socket**, because that is
+  what journald gives a launcher's children and a socket is precisely what a pipe
+  is not.
 - `layering.rs` — reads the source rather than running it: `core` and `util` may
   not reach for a `dialoguer` prompt, because the same functions serve scripted
   runs, where there is no terminal to answer one. An import is not something a runtime

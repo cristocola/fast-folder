@@ -134,15 +134,49 @@ enum Commands {
 
     /// Open a previously created project folder in the system file manager
     #[command(
-        after_help = "The query is matched against (in order): exact ID, ID prefix,\n\
-        then case-insensitive substring of the project name.\n\n\
+        after_help = "The query is matched against (in order): exact ID, the ID's\n\
+        number, ID prefix, then case-insensitive substring of the project name.\n\n\
         Examples:\n  \
             fastf open ID0047\n  \
+            fastf open 37                          # the ID number (finds ID0037)\n  \
             fastf open 0047                        # ID prefix match\n  \
             fastf open lullaby                     # name substring match"
     )]
     Open {
         /// Project ID (e.g. ID0047), ID prefix, or name substring
+        query: String,
+    },
+
+    /// Copy a project's folder path to the clipboard
+    #[command(
+        after_help = "Says which clipboard tool it used, and prints the path instead\n\
+        when the system has none.\n\n\
+        For `cd \"$(fastf path api)\"` use `fastf path`, which prints the bare\n\
+        path and nothing else. `fastf paths` (plural) is unrelated: it shows\n\
+        where fastf keeps its own data.\n\n\
+        Examples:\n  \
+            fastf copy ID0047\n  \
+            fastf copy 47                          # the ID number\n  \
+            fastf copy lullaby                     # name substring match"
+    )]
+    Copy {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
+        query: String,
+    },
+
+    /// Print a project's folder path on stdout, and nothing else
+    #[command(
+        after_help = "Prints the path followed by a newline, with no colour and no\n\
+        decoration, so it can be substituted straight into another command.\n\n\
+        To put the path on the clipboard instead, use `fastf copy`. `fastf paths`\n\
+        (plural) is unrelated: it shows where fastf keeps its own data.\n\n\
+        Examples:\n  \
+            cd \"$(fastf path api)\"\n  \
+            fastf path ID0047\n  \
+            fastf path 47                          # the ID number"
+    )]
+    Path {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
         query: String,
     },
 
@@ -402,7 +436,8 @@ enum Commands {
             2. Portable mode: the binary's own directory, if it already contains\n     \
                a config.toml or templates/ folder\n  \
             3. Your user config directory (~/.config/fastf on Linux,\n     \
-               %APPDATA%\\fastf on Windows)")]
+               %APPDATA%\\fastf on Windows)\n\n\
+            For a *project's* folder path, use `fastf path <query>` (singular).")]
     Paths,
 
     /// Generate man pages into a directory (used by packaging)
@@ -480,6 +515,7 @@ enum ConfigAction {
             base-dir                    Directory where new projects are created (default: home directory)\n  \
             bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
+            terminal                    Terminal emulator to open when launched without one\n                              (default: $TERMINAL, else probe; \"none\" disables)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \
             date-format                 strftime format for the {date} token (default: %Y-%m-%d)\n  \
             preview-lines               Lines per file in dry-run preview (default: 8, 0 = none)\n  \
@@ -503,6 +539,8 @@ enum ConfigAction {
             fastf config set bases \"/mnt/projects/clients,/srv/archive\"\n  \
             fastf config set default-template music-video\n  \
             fastf config set date-format %d-%m-%Y\n  \
+            fastf config set terminal kitty\n  \
+            fastf config set terminal none          # never open a terminal window\n  \
             fastf config set prompt-open-after-create false\n  \
             fastf config set on-name-collision error\n  \
             fastf config set post_create.reveal true")]
@@ -605,7 +643,9 @@ fn main() {
     // part-way through copying a template's assets.
     fastf::util::interrupt::install();
 
-    if let Err(e) = run() {
+    let outcome = run();
+
+    if let Err(e) = &outcome {
         // A prompt that failed or was unwound past left the cursor hidden.
         fastf::util::interrupt::restore_terminal();
 
@@ -626,9 +666,47 @@ fn main() {
             // until it is repaired, so say what actually gets the user moving.
             eprintln!("  hint: fix the file, or delete it to start over with defaults");
         }
+        pause_before_the_window_closes();
         std::process::exit(1);
     }
+
+    pause_before_the_window_closes();
 }
+
+/// Hold a relaunched terminal window open until the user has read it.
+///
+/// Only ever reached inside a window fastf opened for itself
+/// (`util::relaunch`): closing on the last line of output would make the whole
+/// mechanism pointless, since the text would flash past exactly as it does in
+/// the journal. A window that ran a picker or a menu already had the user's
+/// attention and closes at once — the alternative is a keypress demanded of
+/// somebody who just pressed a key.
+///
+/// After `restore_terminal` and in cooked mode, so there is no ordering hazard
+/// with the interrupt module, and skipped entirely on an interrupt: Ctrl-C means
+/// go away.
+#[cfg(unix)]
+fn pause_before_the_window_closes() {
+    use std::io::{BufRead, IsTerminal, Write};
+
+    if std::env::var_os(fastf::util::relaunch::RELAUNCHED_VAR).is_none()
+        || fastf::util::tty::interactive_surface_ran()
+        || fastf::util::interrupt::is_set()
+        || !std::io::stdin().is_terminal()
+        || !std::io::stderr().is_terminal()
+    {
+        return;
+    }
+    eprint!("\n{}", colored::Colorize::dimmed("press Enter to close…"));
+    let _ = std::io::stderr().flush();
+    let mut discard = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut discard);
+}
+
+/// Windows has no relaunch machinery: a console application started from the
+/// shell surface already gets a console.
+#[cfg(not(unix))]
+fn pause_before_the_window_closes() {}
 
 /// Does this error chain say that the configuration file itself is unreadable?
 ///
@@ -658,7 +736,16 @@ fn run() -> Result<()> {
 
     match cli.command {
         // No subcommand → interactive TUI
-        None => tui::menu::run(),
+        None => {
+            // A launcher's `fastf` has no terminal to draw a menu on, and the
+            // menu's own refusal would be written to the journal. Open a window
+            // and run the menu in it; anywhere else this is false.
+            let cfg = fastf::core::config::Config::load()?;
+            if cli::terminal::hand_off_to_a_terminal(&cfg, false) {
+                return Ok(());
+            }
+            tui::menu::run()
+        }
 
         Some(Commands::New {
             template,
@@ -733,6 +820,8 @@ fn run() -> Result<()> {
         }),
 
         Some(Commands::Open { query }) => cli::recent::open(&query),
+        Some(Commands::Copy { query }) => cli::copy::run(&query),
+        Some(Commands::Path { query }) => cli::path_cmd::run(&query),
         Some(Commands::Move { query, base, yes }) => {
             cli::move_project::run(cli::move_project::MoveArgs { query, base, yes })
         }

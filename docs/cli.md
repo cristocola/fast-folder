@@ -12,6 +12,8 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf new [slug]` | Create a project from a template |
 | `fastf recent` | Interactive project picker with inline tags |
 | `fastf open <query>` | Reveal a project folder by ID or name |
+| `fastf copy <query>` | Put a project's folder path on the clipboard |
+| `fastf path <query>` | Print a project's folder path, and nothing else |
 | `fastf search <expr>...` | Search projects by text, field, date, or tag |
 | `fastf register <dir>` | Onboard an existing folder by writing its `PROJECT_INFO.md` |
 | `fastf apply <slug> <dir>` | Add missing template structure to an existing folder |
@@ -61,6 +63,49 @@ error: no terminal to confirm on — pass --yes to apply without confirming
 ```
 
 That includes `fastf move`: without a terminal and without `--yes` it refuses rather than moving the folder on the strength of a confirmation nobody saw. `fastf recent` and `fastf search` fall back to their plain list instead.
+
+#### Launched from a desktop launcher
+
+There is one carve-out, and it is the reason v2.1.0 exists. Run from krunner,
+rofi, or a `.desktop` entry there is no terminal *anywhere*: stdin is
+`/dev/null`, stdout and stderr are journald sockets, and every line a command
+prints is read by nobody. Refusing there is the same as doing nothing.
+
+So when fastf is asked for something interactive and can prove that nothing can
+read its output, it opens a terminal and runs the same command again inside it.
+This applies to the guided menu (`fastf` with no arguments), `fastf recent`,
+`fastf search`, and the ambiguous branch of `open`, `copy`, and `path`. A window
+that only showed text waits for Enter before closing; one that showed a picker
+or a menu closes as soon as you leave it.
+
+A single match needs no window: `fastf copy ID0047` from a launcher copies the
+path and raises a desktop notification, and `fastf path ID0047` does the same
+while still printing the line.
+
+**Every one of these must hold before a window is opened**, which is what keeps
+scripts out of it:
+
+- none of stdin, stdout, or stderr is a terminal;
+- stdout *and* stderr are each a socket, a character device, or closed — never a
+  regular file or a pipe, because those mean somebody is keeping the bytes;
+- `WAYLAND_DISPLAY` or `DISPLAY` is set;
+- `SSH_CONNECTION` is unset;
+- `--plain` was not passed, and `terminal` is not `none`.
+
+A pipe, a redirect, `nohup`, cron, and CI therefore behave exactly as they did
+in v2.0.1. Three ways to turn the behaviour off entirely:
+
+```bash
+fastf search rust --plain            # per run
+FASTF_NO_RELAUNCH=1 fastf search rust
+fastf config set terminal none       # permanently
+```
+
+Which emulator gets opened is `terminal` in the config, else `$TERMINAL`, else
+`xdg-terminal-exec`, else the first of `konsole`, `gnome-terminal`,
+`xfce4-terminal`, `alacritty`, `kitty`, `foot`, `wezterm`, `xterm` that is
+installed. The value names a *program*, not a command line. None of this exists
+on Windows — see [windows.md](windows.md).
 
 ### One way out: Esc
 
@@ -181,8 +226,78 @@ fastf recent --since 2026-01-01
 fastf recent --tag draft
 
 fastf open ID0047                    # reveal in the system file manager
+fastf open 47                        # the ID number, however it is padded
 fastf open my-crate                  # substring match on project name
 ```
+
+### How a query resolves
+
+Every command that takes a `<query>` — `open`, `move`, `tag`, `note`, `notes`,
+and the new `copy` and `path` — matches it the same way, taking the first tier
+that finds anything:
+
+1. **Exact ID** — `ID0047`.
+2. **ID number** — an all-digits query is read as the ID's *number*, so `47`
+   finds `ID0047` whatever prefix and padding width your template uses. This
+   tier sits below exact ID, because a template may declare a digits-only ID
+   prefix, and above the prefix tier, because otherwise `4` matches everything
+   from `ID0040` to `ID0049`.
+3. **ID prefix** — `ID004` finds `ID0047` when nothing else starts that way.
+4. **Name substring**, case-insensitive — `lullaby`.
+
+A query that matches several projects is ambiguous; what happens then depends
+on where you typed it — see [Ambiguous queries](#ambiguous-queries).
+
+### Getting a project's path
+
+Two verbs, because a script and a pair of hands want different things.
+
+```bash
+fastf path ID0047                    # prints /mnt/projects/2026-04-02_Lullaby_ID0047
+cd "$(fastf path api)"               # what it exists for
+fastf copy ID0047                    # puts that path on the clipboard
+```
+
+`fastf path` prints the path followed by a newline — no colour, no decoration,
+nothing else on stdout — so it can be substituted straight into another
+command. `fastf copy` is the command-line half of the TUI's **Copy path**: it
+uses whichever of `wl-copy`, `xclip`, `xsel`, `clip`, or `pbcopy` is installed
+and says which one it used, and where the system has no clipboard tool at all
+it prints the path instead, so a terminal selection still works. It always says
+what it did.
+
+Both check the folder before answering. A project that resolves from the
+per-base cache but no longer has its `PROJECT_INFO.md` is refused by name
+rather than handed to the clipboard or to a shell.
+
+`fastf paths` (plural) is a different command entirely: it shows where fastf
+keeps its own data. See [Configuration](#configuration).
+
+### Ambiguous queries
+
+When `open`, `copy`, or `path` matches several projects and there is a terminal
+to ask on, fastf shows a picker of the candidates. Enter performs the verb you
+typed on the project you chose — the picker serves the verb it interrupted, so
+it never drops into the project action menu; `fastf` and `fastf recent` are how
+you reach that. Esc cancels, says so, and exits 0, because deciding not to act
+is not a failure.
+
+The picker draws on stderr, which is the stream a prompt lives on, so
+`cd "$(fastf path lullaby)"` can still ask which Lullaby you meant while stdout
+carries nothing but the chosen path.
+
+Without a terminal — a pipe, a redirect of *both* streams, cron, CI — there is
+nobody to answer, so fastf prints the candidate list as an error and exits
+non-zero, exactly as it always has:
+
+```
+error: 'shared' is ambiguous — 2 matches. Specify a full ID:
+  ID0012  shared_two  (general)
+  ID0011  shared_one  (general)
+```
+
+`move`, `tag`, `note`, and `notes` resolve queries the same way but do not open
+a picker; an ambiguous query is always the error above.
 
 Rows show inline tags. Selecting a project opens an action menu, most-used first: open folder, copy path, show metadata, Tags, Journal, move to another base, rename, unregister, delete.
 
@@ -198,7 +313,11 @@ fastf recent | grep music-video
 
 The standalone `fastf recent` and `fastf search` commands retain their existing
 command-line output; live Size fields are exclusive to the guided TUI, so
-scripts do not acquire a new column.
+scripts do not acquire a new column. The one exception is a run with no terminal
+at all in a graphical session — a desktop launcher — where they open a terminal
+and run there instead of printing to nobody; a pipe, a redirect, cron and CI are
+untouched, and `--plain` opts out. The full conditions are under
+[Launched from a desktop launcher](#launched-from-a-desktop-launcher).
 
 Deleted a project folder manually? The next `fastf recent` simply won't list it. The per-base cache heals itself, so there is no prune command. If you moved folders or edited metadata outside fastf, run `fastf reindex`.
 
@@ -350,6 +469,11 @@ fastf config set default-template rust-project
 fastf config set date-format "%Y-%m-%d"
 fastf config set editor nvim
 
+# Terminal to open when fastf is launched without one (a desktop launcher).
+# Empty = $TERMINAL, else probe. Names a program, not a command line.
+fastf config set terminal kitty
+fastf config set terminal none                   # never open a window
+
 # Extra folders to index beyond base-dir, comma separated
 fastf config set bases "/mnt/projects/clients,/srv/archive"
 fastf config set bases ""                        # clear the list
@@ -370,6 +494,19 @@ fastf config set post_create.print_path true
 ```
 
 Run `fastf config set --help` for the complete key list with descriptions.
+
+### Environment variables
+
+| Variable | What it does |
+|---|---|
+| `FASTF_INSTALL_DIR` | Overrides where fastf keeps config, templates, and its counter |
+| `FASTF_NO_RELAUNCH` | Set to anything to stop fastf ever opening a terminal for itself |
+| `TERMINAL` | Consulted when `terminal` is not configured |
+| `EDITOR` | Used when `editor` is not configured |
+
+`FASTF_RELAUNCHED` is set by fastf on the copy of itself it starts inside a
+terminal. It is internal — it is what stops a relaunch relaunching — and there is
+no reason to set it by hand.
 
 A `config.toml` that exists but cannot be parsed stops every command, including
 the interactive menu, and names the file. fastf will not fall back to defaults

@@ -62,9 +62,10 @@ Each base carries a small `.fastf-index.json` cache at its root, next to the pro
   synced folder or an unpacked archive can bring somebody else's along. An entry
   naming anything but a plain folder name inside the base is rejected, the whole
   cache is abandoned, and the base is rescanned from the folders.
-- Opening a project (`fastf open`, or Open project folder in the menu) checks
-  that the folder really is a direct child of its base and really does hold a
-  `PROJECT_INFO.md` before handing the path to your file manager.
+- Handing a project's path to another program — `fastf open`, `fastf copy`,
+  `fastf path`, or Open project folder in the menu — checks that the folder
+  really is a direct child of its base and really does hold a `PROJECT_INFO.md`
+  first. A cached row is a hint until it has been looked at.
 
 There is no prune command because none is needed. For changes fastf could not observe (folders moved on another machine, hand-edited metadata), run:
 

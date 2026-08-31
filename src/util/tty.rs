@@ -14,6 +14,15 @@
 
 use anyhow::{Result, bail};
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Did anything this run actually stop and wait for the user?
+///
+/// Only `main` reads it, and only to decide whether a relaunched terminal window
+/// should pause before it closes: a window that just printed a list must not
+/// vanish before it can be read, and one that ran a menu already had the user's
+/// attention for as long as they wanted it.
+static SURFACE_RAN: AtomicBool = AtomicBool::new(false);
 
 /// Can a prompt be drawn and answered right now?
 ///
@@ -29,7 +38,21 @@ pub fn prompt_available() -> bool {
 /// flag or setting that avoids the prompt.
 pub fn require_tty(what: &str, how: &str) -> Result<()> {
     if prompt_available() {
+        // One of exactly two choke points — every dialoguer prompt reaches here
+        // through `prompt::ready()`, and every picker through that. The other is
+        // `live_select`, which the browser reaches without passing this way.
+        mark_interactive_surface();
         return Ok(());
     }
     bail!("no terminal to {what} on — {how}")
+}
+
+/// Record that a prompt, picker or menu was drawn and waited on.
+pub fn mark_interactive_surface() {
+    SURFACE_RAN.store(true, Ordering::Relaxed);
+}
+
+/// Did any interactive surface run this process?
+pub fn interactive_surface_ran() -> bool {
+    SURFACE_RAN.load(Ordering::Relaxed)
 }

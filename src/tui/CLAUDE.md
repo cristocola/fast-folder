@@ -75,6 +75,21 @@ The template builder's sections return `Result<bool>`: `false` is a cancel and
 leaves the scratch `Template` untouched (`edit_metadata` collects all four answers
 before assigning any). Both modes end in the same review menu.
 
+## Pickers
+
+`tui::pickers` holds all three — template, base, project — because a picker is a
+picker and the duplicates drifted (two template pickers with different labels,
+three base pickers of which one clamped and one marked the default).
+
+`pick_project` is the **ambiguity** picker, reached when `open`, `copy` or
+`path` matched several projects. It is deliberately not the browser: the
+browser's Enter opens the whole action menu, and a picker that interrupted a
+verb must serve that verb and nothing else. It is also deliberately not
+`live_select` — the candidate list is static, already narrowed by the query,
+with no sizes landing later, and `live_select` carries three load-bearing caller
+obligations this list has no use for. Rows come from `rows::project_row` like
+every other project list, so the columns match what the browser shows.
+
 ## Lists
 
 `util::live_select` owns the key loop for the paged browser, because

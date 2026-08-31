@@ -202,8 +202,8 @@ that finds anything:
 3. **ID prefix** — `ID004` finds `ID0047` when nothing else starts that way.
 4. **Name substring**, case-insensitive — `lullaby`.
 
-A query that matches several projects is ambiguous: fastf lists the candidates
-and asks for a full ID.
+A query that matches several projects is ambiguous; what happens then depends
+on where you typed it — see [Ambiguous queries](#ambiguous-queries).
 
 ### Getting a project's path
 
@@ -229,6 +229,32 @@ rather than handed to the clipboard or to a shell.
 
 `fastf paths` (plural) is a different command entirely: it shows where fastf
 keeps its own data. See [Configuration](#configuration).
+
+### Ambiguous queries
+
+When `open`, `copy`, or `path` matches several projects and there is a terminal
+to ask on, fastf shows a picker of the candidates. Enter performs the verb you
+typed on the project you chose — the picker serves the verb it interrupted, so
+it never drops into the project action menu; `fastf` and `fastf recent` are how
+you reach that. Esc cancels, says so, and exits 0, because deciding not to act
+is not a failure.
+
+The picker draws on stderr, which is the stream a prompt lives on, so
+`cd "$(fastf path lullaby)"` can still ask which Lullaby you meant while stdout
+carries nothing but the chosen path.
+
+Without a terminal — a pipe, a redirect of *both* streams, cron, CI — there is
+nobody to answer, so fastf prints the candidate list as an error and exits
+non-zero, exactly as it always has:
+
+```
+error: 'shared' is ambiguous — 2 matches. Specify a full ID:
+  ID0012  shared_two  (general)
+  ID0011  shared_one  (general)
+```
+
+`move`, `tag`, `note`, and `notes` resolve queries the same way but do not open
+a picker; an ambiguous query is always the error above.
 
 Rows show inline tags. Selecting a project opens an action menu, most-used first: open folder, copy path, show metadata, Tags, Journal, move to another base, rename, unregister, delete.
 

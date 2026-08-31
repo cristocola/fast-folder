@@ -16,7 +16,19 @@ use crate::util::paths;
 /// Resolve `query` and print the project's folder path.
 pub fn run(query: &str) -> Result<()> {
     let cfg = Config::load()?;
-    let project = library::resolve(&cfg, query)?;
+    // A picker only ever appears on a terminal. Redirected — which is how this
+    // command is normally used — an ambiguous query is the same error it has
+    // always been, so nothing but the path can reach stdout.
+    let Some(project) = crate::cli::target::one_project(
+        &cfg,
+        query,
+        "Which project's path?",
+        &crate::cli::target::full_id_hint("path"),
+    )?
+    else {
+        crate::tui::prompt::report_cancelled("no path printed");
+        return Ok(());
+    };
     print_path(&project)
 }
 

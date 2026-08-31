@@ -75,7 +75,10 @@ responsibility of the filesystem and backups.
         revalidate the folder first. A clipboard tool now runs in its own
         process group, so a launcher reaping its children cannot kill the
         process that owns the selection.
-  - [ ] Phase 3 — the ambiguity picker serves the verb it interrupted.
+  - [x] Phase 3 — an ambiguous `open`/`copy`/`path` shows a project picker on a
+        terminal, and Enter performs the verb that was interrupted rather than
+        opening the action menu. Esc cancels with exit 0. Without a terminal the
+        candidate-list error is unchanged, so scripts see nothing new.
   - [ ] Phase 4 — a terminal when there is no terminal.
   - [ ] Phase 5 — sweep and release prep.
 - Outstanding from v2.0.x, and needing the maintainer: a TUI screenshot or

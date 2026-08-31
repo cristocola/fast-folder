@@ -243,10 +243,26 @@ tty::prompt_available()`. Cancel convention: `prompt::report_cancelled`
    and the piped behaviour.
 
 **Acceptance.**
-- [ ] All gates pass (layering enforces the picker's placement by itself).
-- [ ] The pty picker test was observed failing on the pre-phase build.
-- [ ] Piped ambiguity output is byte-identical to Phase 1's.
-- [ ] Esc exits 0 and prints a `Cancelled —` line.
+- [x] All gates pass (layering enforces the picker's placement by itself).
+- [x] The pty picker test was observed failing on the pre-phase build
+      (`an_ambiguous_path_query_opens_a_picker_and_prints_the_choice`: exit 1
+      with the ambiguity error, no picker drawn).
+- [x] Piped ambiguity output is byte-identical to Phase 1's
+      (`an_ambiguous_copy_errors_with_candidates_when_piped`, which covers all
+      three verbs — it replaces the separately-named
+      `an_ambiguous_open_still_errors_when_piped`).
+- [x] Esc exits 0 and prints a `Cancelled —` line.
+
+**Differed from the plan.** The interactivity gate is **stderr only**
+(`tty::prompt_available()`), not `stdout().is_terminal() && …`. The plan cited
+`recent`/`search`'s gate, but those two probe stdout to choose an output
+*format* (plain list vs browser), which is a different question from "can I
+ask?". Gating on stdout would have made the picker unreachable in the one place
+`path` exists for — `cd "$(fastf path lullaby)"` redirects stdout by
+construction — and would have repeated the exact defect `util::tty` was written
+to fix. stdout's contract is unaffected either way: the picker draws on stderr,
+so a redirected `fastf path` still emits the path and nothing else, which is
+what the pty test asserts on both halves.
 
 ---
 

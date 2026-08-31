@@ -15,4 +15,5 @@ pub mod reindex;
 pub mod render;
 pub mod search;
 pub mod tag;
+pub mod target;
 pub mod template;

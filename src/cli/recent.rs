@@ -152,7 +152,18 @@ pub fn browse(projects: Vec<Project>, empty_message: &str) -> Result<()> {
 /// `fastf open <query>` — resolve a project and reveal it in the file manager.
 pub fn open(query: &str) -> Result<()> {
     let cfg = Config::load()?;
-    let project = library::resolve(&cfg, query)?;
+    // Ambiguity on a terminal is a question, not a failure — and the answer
+    // opens the project, rather than dropping into the action menu.
+    let Some(project) = crate::cli::target::one_project(
+        &cfg,
+        query,
+        "Which project?",
+        &crate::cli::target::full_id_hint("open"),
+    )?
+    else {
+        crate::tui::prompt::report_cancelled("nothing was opened");
+        return Ok(());
+    };
 
     // `resolve` may have answered from a cache, and a cache is a file that
     // travels with the projects — a synced folder or an unpacked archive can

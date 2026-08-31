@@ -15,7 +15,16 @@ use crate::util::{clipboard, paths};
 /// Resolve `query` and copy the project's folder path.
 pub fn run(query: &str) -> Result<()> {
     let cfg = Config::load()?;
-    let project = library::resolve(&cfg, query)?;
+    let Some(project) = crate::cli::target::one_project(
+        &cfg,
+        query,
+        "Which project's path?",
+        &crate::cli::target::full_id_hint("copy"),
+    )?
+    else {
+        crate::tui::prompt::report_cancelled("nothing was copied");
+        return Ok(());
+    };
     report_copy(&project)
 }
 

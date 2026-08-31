@@ -166,6 +166,49 @@ impl Sandbox {
         String::from_utf8_lossy(&out.stderr).into_owned()
     }
 
+    /// Run fastf the way a desktop launcher does: **no terminal anywhere**.
+    ///
+    /// stdin is `/dev/null` (a character device) and stdout and stderr share one
+    /// socket, which is byte-for-byte the shape systemd gives a launcher's
+    /// children — journald is a socket, not a pipe. A pipe is what `run` uses
+    /// and is deliberately different: a pipe means somebody is reading.
+    ///
+    /// The socket is also how the test can still see the output, which
+    /// `/dev/null` would not allow — and "the parent printed nothing" is half
+    /// of what the relaunch tests are checking.
+    #[cfg(unix)]
+    pub fn run_like_a_launcher(&self, args: &[&str], env: &[(&str, &str)]) -> LauncherRun {
+        use std::io::Read;
+        use std::os::fd::OwnedFd;
+        use std::os::unix::net::UnixStream;
+
+        let (ours, theirs) = UnixStream::pair().expect("socketpair");
+        let out: OwnedFd = theirs.try_clone().expect("dup").into();
+        let err: OwnedFd = theirs.into();
+
+        let mut cmd = self.command();
+        cmd.args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(out))
+            .stderr(std::process::Stdio::from(err));
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+        let mut child = cmd.spawn().expect("running fastf");
+        // Both of the child's ends are owned by `cmd`, which drops them here;
+        // the read below then ends at EOF when the child exits.
+        drop(cmd);
+
+        let mut output = Vec::new();
+        let mut ours = ours;
+        ours.read_to_end(&mut output).expect("reading the socket");
+        let status = child.wait().expect("waiting for fastf");
+        LauncherRun {
+            output: String::from_utf8_lossy(&output).into_owned(),
+            code: status.code().unwrap_or(-1),
+        }
+    }
+
     pub fn spawn(&self, args: &[&str]) -> Child {
         self.command()
             .args(args)
@@ -563,4 +606,84 @@ pub fn ids_in(base: &Path) -> Vec<String> {
                 .map(|v| v.trim().to_string())
         })
         .collect()
+}
+
+/// A fake program that records the argv it was called with, one argument per
+/// line, and exits 0.
+///
+/// Used wherever a test needs to prove *what fastf would have run* without
+/// running it: a terminal emulator, `notify-send`. **Every relaunch test pins
+/// one of these** — see `tests/CLAUDE.md` — so no suite can open a real window
+/// on somebody's desktop or on a CI runner that happens to have a display.
+#[cfg(unix)]
+pub fn recorder(dir: &Path, name: &str) -> Recorder {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(dir).unwrap();
+    let log = dir.join(format!("{name}.log"));
+    let program = dir.join(name);
+    fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    Recorder { program, log }
+}
+
+#[cfg(unix)]
+pub struct Recorder {
+    pub program: PathBuf,
+    pub log: PathBuf,
+}
+
+#[cfg(unix)]
+impl Recorder {
+    /// The argv of the one invocation, or `None` if it was never called.
+    ///
+    /// **Polls.** fastf spawns the terminal and returns without waiting for it —
+    /// that is the whole point, the window outlives the process — so the log is
+    /// written some time after the parent has already exited. Reading it once
+    /// tests the scheduler rather than fastf.
+    pub fn argv(&self) -> Option<Vec<String>> {
+        self.wait_for_call(std::time::Duration::from_secs(5))
+    }
+
+    /// Was it called within `budget`? Positive assertions should use the long
+    /// budget `argv` picks; negative ones need only long enough that a call
+    /// already in flight would have landed.
+    pub fn wait_for_call(&self, budget: std::time::Duration) -> Option<Vec<String>> {
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            // A log that exists but has no trailing newline is a `printf` still
+            // in progress; waiting for the newline makes the read atomic enough.
+            if let Ok(raw) = fs::read_to_string(&self.log)
+                && raw.ends_with('\n')
+            {
+                return Some(raw.lines().map(str::to_string).collect());
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// For the negative assertions: a short settle, so "it was not called" is
+    /// not just "it has not been called *yet*".
+    pub fn was_called(&self) -> bool {
+        self.wait_for_call(std::time::Duration::from_millis(400))
+            .is_some()
+    }
+}
+
+/// What a run with no terminal anywhere produced.
+#[cfg(unix)]
+pub struct LauncherRun {
+    /// Everything written to stdout and stderr, which share one socket exactly
+    /// as they do under journald.
+    pub output: String,
+    pub code: i32,
 }

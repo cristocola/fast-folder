@@ -7,7 +7,11 @@ pub mod human_bytes;
 pub mod interrupt;
 pub(crate) mod live_select;
 pub mod lockfile;
+#[cfg(unix)]
+pub mod notify;
 pub mod paths;
+#[cfg(unix)]
+pub mod relaunch;
 #[cfg(windows)]
 pub(crate) mod shell_open;
 pub(crate) mod size_scan;

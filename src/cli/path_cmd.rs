@@ -19,15 +19,19 @@ pub fn run(query: &str) -> Result<()> {
     // A picker only ever appears on a terminal. Redirected — which is how this
     // command is normally used — an ambiguous query is the same error it has
     // always been, so nothing but the path can reach stdout.
-    let Some(project) = crate::cli::target::one_project(
+    let project = match crate::cli::target::one_project(
         &cfg,
         query,
         "Which project's path?",
         &crate::cli::target::full_id_hint("path"),
-    )?
-    else {
-        crate::tui::prompt::report_cancelled("no path printed");
-        return Ok(());
+    )? {
+        crate::cli::target::Target::Project(project) => *project,
+        crate::cli::target::Target::Cancelled => {
+            crate::tui::prompt::report_cancelled("no path printed");
+            return Ok(());
+        }
+        // A terminal is running this again; it will print the path.
+        crate::cli::target::Target::HandedOff => return Ok(()),
     };
     print_path(&project)
 }
@@ -45,6 +49,16 @@ pub(crate) fn print_path(project: &library::Project) -> Result<()> {
     })?;
 
     // No `colored` call, deliberately: the bare line is the script contract.
-    println!("{}", paths::display_path(&project.path));
+    let shown = paths::display_path(&project.path);
+    println!("{shown}");
+
+    // From a launcher that line went to the journal, where it is a trace and
+    // not an answer. Degrade to what `copy` does — the clipboard and a
+    // notification — rather than to nothing. The print stays: it costs nothing
+    // and it is the one record of what the command decided.
+    if crate::cli::terminal::headless_gui() {
+        crate::util::clipboard::copy(&shown);
+        crate::cli::terminal::notify("Path copied", &shown);
+    }
     Ok(())
 }

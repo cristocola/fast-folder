@@ -20,6 +20,18 @@ file paths and byte lengths, publishes the complete staging directory, and only
 then attempts to remove the source. The project must remain untouched by other
 programs while it is moving.
 
+### What fastf may start
+
+fastf spawns programs on the user's behalf in five places, all of them
+configuration rather than input: a template's `post_create` commands, the
+editor, the file manager for Reveal, a clipboard tool
+(`wl-copy`/`xclip`/`xsel`/`clip`/`pbcopy`), and — new in v2.1.0, unix only — a
+terminal emulator plus `notify-send`. The emulator is named by the `terminal`
+config key, else `$TERMINAL`, else `xdg-terminal-exec`, else the first known
+emulator on `PATH`; it is started only when fastf has been asked for something
+interactive and can prove nothing can read its output, and it is given the
+process's own argv as argv, never through a shell.
+
 ### What fastf trusts
 
 One OS account. Bases, templates, `config.toml`, the counters and the caches are
@@ -79,7 +91,13 @@ responsibility of the filesystem and backups.
         terminal, and Enter performs the verb that was interrupted rather than
         opening the action menu. Esc cancels with exit 0. Without a terminal the
         candidate-list error is unchanged, so scripts see nothing new.
-  - [ ] Phase 4 — a terminal when there is no terminal.
+  - [x] Phase 4 — launched headless inside a graphical session, fastf opens a
+        terminal and re-runs itself there (the menu, `recent`, `search`, and the
+        ambiguous branch of `open`/`copy`/`path`) instead of writing to the
+        journal. A single-match `copy`/`path` copies and notifies without a
+        window. New `terminal` config key; three documented ways off
+        (`--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`). A pipe, a
+        redirect, cron and CI are contractually unchanged.
   - [ ] Phase 5 — sweep and release prep.
 - Outstanding from v2.0.x, and needing the maintainer: a TUI screenshot or
   asciinema for the README hero, and the Windows smokes listed under "Manual

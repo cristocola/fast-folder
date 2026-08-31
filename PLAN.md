@@ -402,17 +402,46 @@ format.
    `docs/windows.md` — one sentence: no relaunch machinery on Windows.
 
 **Acceptance.**
-- [ ] All gates pass.
-- [ ] The recorder test proves the exact re-exec argv and that the parent
-      printed nothing and exited 0.
-- [ ] The loop-guard test proves a relaunched no-TTY child behaves like
-      today's build.
-- [ ] `fastf search <term> | cat` and `fastf path <id> > f` behave
-      byte-identically to v2.0.1.
-- [ ] Windows clippy leg clean with the `cfg(unix)` modules absent.
+- [x] All gates pass.
+- [x] The recorder test proves the exact re-exec argv and that the parent
+      printed nothing and exited 0
+      (`a_null_stdio_gui_session_relaunches_through_the_configured_terminal`).
+- [x] The loop-guard test proves a relaunched no-TTY child behaves like
+      today's build (`a_relaunched_child_with_no_tty_falls_through_to_plain_output`).
+- [x] `fastf search <term> | cat` and `fastf path <id> > f` behave
+      byte-identically to v2.0.1
+      (`a_piped_stdout_never_relaunches_even_with_a_display`,
+      `a_redirected_path_writes_the_file_and_opens_nothing` — both with a
+      display exported).
+- [x] Windows clippy leg clean with the `cfg(unix)` modules absent.
 - [ ] **Needs the maintainer:** a real launcher smoke test — Alt+Space:
       `fastf search <term>`, an ambiguous `fastf open <term>`, a
       single-match `fastf copy <term>`, bare `fastf`. CI cannot do this.
+
+**Differed from the plan.**
+- **`Sandbox::run_like_a_launcher`, not `run_null`.** `Stdio::null()` on stdout
+  and stderr would satisfy the rule but make the output unobservable, and half
+  of what these tests check is that the parent printed *nothing*. The harness
+  gives the child one **socketpair** across stdout and stderr instead, which is
+  also the more faithful fixture: journald is a socket, and a socket is exactly
+  what a pipe is not.
+- **`one_project` returns a `Target` enum**, not `Option<Project>`. A handoff
+  and a cancelled picker are both `Ok` and exit 0, but they are not the same
+  event, and `Ok(None)` made a relaunch print `Cancelled — nothing was copied`
+  into the journal of a command that had just been handed to a window.
+- **`paths::find_on_path` treats a value with a separator as a path**, rather
+  than joining it onto every `PATH` entry. `terminal = "/opt/kitty/bin/kitty"`
+  is a legal setting and would otherwise never resolve; the test recorder
+  depends on the same thing.
+- **`src/cli/terminal.rs`** holds the seam. The plan had the surfaces call
+  `util::relaunch` directly, but every one of them would then repeat the
+  `cfg(unix)`, the `TerminalPreference` match and the notify-on-failure
+  fallback. `util` still never reads `Config`.
+- Three tests beyond the listed set:
+  `an_ambiguous_query_from_a_launcher_opens_a_terminal_instead_of_erroring`
+  (the case that motivated the phase),
+  `a_redirected_path_writes_the_file_and_opens_nothing`, and
+  `a_missing_display_is_enough_to_suppress_it`.
 
 ---
 

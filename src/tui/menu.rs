@@ -822,6 +822,7 @@ fn menu_settings_basics() -> Result<()> {
                 "Set default template",
                 "Set date format",
                 "Set editor",
+                "Set terminal",
                 "Set register naming pattern",
                 "Back",
             ],
@@ -867,6 +868,20 @@ fn menu_settings_basics() -> Result<()> {
                 "Editor command (e.g. nvim, code, nano)",
                 TextOpts::new().allow_empty(),
             ),
+            "Set terminal" => {
+                println!(
+                    "  {}  the emulator to open when fastf is launched without a terminal (a desktop launcher);",
+                    "Hint:".yellow()
+                );
+                println!(
+                    "        empty = $TERMINAL, else probe the known ones. \"none\" never opens a window."
+                );
+                set_from_prompt(
+                    "terminal",
+                    "Terminal command (e.g. konsole, kitty, none)",
+                    TextOpts::new().allow_empty(),
+                )
+            }
             "Set register naming pattern" => {
                 println!(
                     "  {}  used by `register --rename` when no template is attached; must contain {{id}}",

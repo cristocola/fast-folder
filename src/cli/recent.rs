@@ -28,6 +28,15 @@ pub fn run(args: RecentArgs) -> Result<()> {
     }
     let limit = args.limit.unwrap_or(cfg.recent_default_limit).max(1);
 
+    // Nothing below this line can be read from a desktop launcher: stdout and
+    // stderr are journald sockets there, and the picker has no terminal to draw
+    // on. Rather than working into the void, open a terminal and run this again
+    // inside it. In every other context — a shell, a pipe, cron, CI — this is
+    // false and nothing changes.
+    if crate::cli::terminal::hand_off_to_a_terminal(&cfg, args.plain) {
+        return Ok(());
+    }
+
     // Filesystem-as-truth: discover projects from their PROJECT_INFO.md across
     // all bases (cache-accelerated). Already sorted newest-first.
     let projects = library::discover(&cfg);
@@ -154,15 +163,19 @@ pub fn open(query: &str) -> Result<()> {
     let cfg = Config::load()?;
     // Ambiguity on a terminal is a question, not a failure — and the answer
     // opens the project, rather than dropping into the action menu.
-    let Some(project) = crate::cli::target::one_project(
+    let project = match crate::cli::target::one_project(
         &cfg,
         query,
         "Which project?",
         &crate::cli::target::full_id_hint("open"),
-    )?
-    else {
-        crate::tui::prompt::report_cancelled("nothing was opened");
-        return Ok(());
+    )? {
+        crate::cli::target::Target::Project(project) => *project,
+        crate::cli::target::Target::Cancelled => {
+            crate::tui::prompt::report_cancelled("nothing was opened");
+            return Ok(());
+        }
+        // A terminal is running this again; it will open the project.
+        crate::cli::target::Target::HandedOff => return Ok(()),
     };
 
     // `resolve` may have answered from a cache, and a cache is a file that

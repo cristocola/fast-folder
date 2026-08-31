@@ -49,6 +49,15 @@ pub fn run(args: SearchArgs) -> Result<()> {
         );
     }
 
+    // Nothing below this line can be read from a desktop launcher: stdout and
+    // stderr are journald sockets there, and the picker has no terminal to draw
+    // on. Rather than working into the void, open a terminal and run this again
+    // inside it. In every other context — a shell, a pipe, cron, CI — this is
+    // false and nothing changes.
+    if crate::cli::terminal::hand_off_to_a_terminal(&cfg, args.plain) {
+        return Ok(());
+    }
+
     let predicates = query::parse(&args.terms);
 
     // Now that bare terms parse to Predicate::Free, predicates can only be

@@ -13,22 +13,44 @@ use anyhow::Result;
 use crate::core::config::Config;
 use crate::core::library::{self, Project, Resolution};
 
-/// Resolve `query` to exactly one project, asking when it is ambiguous.
+/// What a verb should do next, once the query has been resolved.
 ///
-/// `Ok(None)` means the user cancelled the picker: the caller reports it and
-/// returns `Ok(())`, because deciding not to act is not a failure.
+/// The two non-project answers are both exit 0 and are **not** the same thing:
+/// one is the user declining, which is worth a line, and the other is this run
+/// being superseded by one inside a terminal, where a second voice in the
+/// journal would only be confusing.
+pub enum Target {
+    /// Act on this project. Boxed — `Project` is large, and the Windows clippy
+    /// leg fires `large_enum_variant` where Linux does not.
+    Project(Box<Project>),
+    /// The picker was cancelled. Say so, and stop.
+    Cancelled,
+    /// A terminal emulator now owns a rerun of this exact command. Say nothing,
+    /// and stop — doing the work here as well would do it twice.
+    HandedOff,
+}
+
+/// Resolve `query` to exactly one project, asking when it is ambiguous.
 ///
 /// `prompt` heads the picker; `how` names the way to answer the same question
 /// without a prompt, both for `require_tty`'s refusal and for the error a
 /// script sees.
-pub fn one_project(cfg: &Config, query: &str, prompt: &str, how: &str) -> Result<Option<Project>> {
+pub fn one_project(cfg: &Config, query: &str, prompt: &str, how: &str) -> Result<Target> {
     match library::resolve_matches(cfg, query) {
         Resolution::NoProjects => Err(library::no_projects_error()),
         Resolution::NoMatch => Err(library::no_match_error(query)),
-        Resolution::One(project) => Ok(Some(*project)),
+        Resolution::One(project) => Ok(Target::Project(project)),
         Resolution::Many(candidates) => {
             if can_ask() {
-                crate::tui::pickers::pick_project(prompt, &candidates, how)
+                match crate::tui::pickers::pick_project(prompt, &candidates, how)? {
+                    Some(project) => Ok(Target::Project(Box::new(project))),
+                    None => Ok(Target::Cancelled),
+                }
+            } else if crate::cli::terminal::hand_off_to_a_terminal(cfg, false) {
+                // Launched from a desktop launcher: the candidate list would go
+                // to the journal and the command would look like it did nothing.
+                // A terminal now owns the rerun, and it will show the picker.
+                Ok(Target::HandedOff)
             } else {
                 // Piped, redirected, cron, CI: somebody is reading this and
                 // nobody is answering it. The error text is unchanged.

@@ -88,6 +88,15 @@ These rules run on every platform, not just Windows, so a project created on Lin
 
 Save `template.yaml` as **UTF-8**. Notepad and `Out-File -Encoding utf8` in Windows PowerShell 5.1 add a byte-order mark; fastf skips it, so either encoding loads. If a template fails to parse, the error names the file and reminds you to check the encoding.
 
+## Launching without a terminal
+
+None of the terminal-opening machinery described for Linux in
+[cli.md](cli.md#launched-from-a-desktop-launcher) exists on Windows, and nothing
+is missing: `fastf.exe` is a console application, so starting it from Win+R, a
+shortcut, or the Start menu already allocates a console for it. The `terminal`
+config key is read on every platform but only acted on where the relaunch
+exists.
+
 ## "VCRUNTIME140.dll was not found"
 
 Releases up to and including v2.0.0 linked the Microsoft C runtime dynamically, so `fastf.exe` needed the Visual C++ Redistributable. Most developer machines already have it and most clean installs do not, and where it was missing Windows refused to start the program and named that DLL.

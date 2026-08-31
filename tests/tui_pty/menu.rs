@@ -559,7 +559,8 @@ fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
         .down(MENU_SETTINGS)
         .enter()
         .enter() // Project basics
-        .down(4) // → Set register naming pattern
+        // base dir, default template, date format, editor, terminal, pattern.
+        .down(5) // → Set register naming pattern
         .enter()
         .key("{date}_{name}") // no {id}
         .enter()

@@ -369,6 +369,42 @@ pub fn storable(path: &Path, label: &str) -> Result<String> {
     })
 }
 
+/// Is `name` an executable on `PATH`, and where?
+///
+/// Spawning and catching `NotFound` would be simpler, but `clip.exe` under WSL
+/// and `wl-copy` without a Wayland socket both *start* and then fail, and each
+/// of those spawns is a visible pause. The clipboard needed that first; the
+/// relaunch and the notifier need the same answer about a terminal emulator and
+/// `notify-send`, so the lookup lives here rather than three times over.
+pub fn find_on_path(name: &str) -> Option<PathBuf> {
+    // A value with a separator in it is a path, not a name — `PATH` is not
+    // consulted for `/usr/bin/konsole`, and joining it onto every `PATH` entry
+    // would find nothing. This is what `terminal = "/opt/kitty/bin/kitty"` in
+    // the config relies on.
+    let candidate = Path::new(name);
+    if candidate.components().count() > 1 {
+        return is_executable(candidate).then(|| candidate.to_path_buf());
+    }
+
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| is_executable(candidate))
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
+}
+
 pub fn config_path() -> PathBuf {
     install_dir().join("config.toml")
 }

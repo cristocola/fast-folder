@@ -63,6 +63,10 @@ where
     if !term.is_term() {
         return Err(io::Error::new(io::ErrorKind::NotConnected, "not a terminal").into());
     }
+    // The browser reaches this picker without passing `tty::require_tty`, so the
+    // other choke point for "something waited for the user" is here. A relaunched
+    // terminal that ran a browser must not also pause before closing.
+    crate::util::tty::mark_interactive_surface();
 
     let labels = frame(default);
     if labels.is_empty() {

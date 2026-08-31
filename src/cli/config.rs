@@ -57,6 +57,22 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
+        "terminal:".green(),
+        match config.resolve_terminal() {
+            crate::core::config::TerminalPreference::Disabled =>
+                "none (never opens a window)".to_string(),
+            crate::core::config::TerminalPreference::Named(name) =>
+                if config.terminal.trim().is_empty() {
+                    format!("{name} (from $TERMINAL)")
+                } else {
+                    name
+                },
+            crate::core::config::TerminalPreference::Probe =>
+                "(probe: konsole, gnome-terminal, kitty, …)".to_string(),
+        }
+    );
+    println!(
+        "  {:<26} {}",
         "default_template:".green(),
         if config.default_template.is_empty() {
             "(always prompt)".to_string()
@@ -223,6 +239,10 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                 config.editor = value.to_string();
                 println!("Set editor = {}", value);
             }
+            "terminal" => {
+                config.terminal = value.to_string();
+                println!("Set terminal = {}", value);
+            }
             "default_template" => {
                 config.default_template = value.to_string();
                 println!("Set default_template = {}", value);
@@ -344,7 +364,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                 );
             }
             other => bail!(
-                "unknown config key '{}'. Valid keys: base-dir, bases, editor, default-template, date-format, \
+                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, default-template, date-format, \
              preview-lines, prompt-open-after-create, confirm-create, show-banner, show-frame, \
              recent-default-limit, register-naming-pattern, on-name-collision, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",

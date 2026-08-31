@@ -15,15 +15,19 @@ use crate::util::{clipboard, paths};
 /// Resolve `query` and copy the project's folder path.
 pub fn run(query: &str) -> Result<()> {
     let cfg = Config::load()?;
-    let Some(project) = crate::cli::target::one_project(
+    let project = match crate::cli::target::one_project(
         &cfg,
         query,
         "Which project's path?",
         &crate::cli::target::full_id_hint("copy"),
-    )?
-    else {
-        crate::tui::prompt::report_cancelled("nothing was copied");
-        return Ok(());
+    )? {
+        crate::cli::target::Target::Project(project) => *project,
+        crate::cli::target::Target::Cancelled => {
+            crate::tui::prompt::report_cancelled("nothing was copied");
+            return Ok(());
+        }
+        // A terminal is running this again; it will do the copying.
+        crate::cli::target::Target::HandedOff => return Ok(()),
     };
     report_copy(&project)
 }
@@ -54,7 +58,8 @@ pub(crate) fn report_copy(project: &library::Project) -> Result<()> {
 /// selection wants anyway. A Copy that silently did nothing is the worst
 /// possible version of this. The wording matches the TUI's Copy path.
 pub(crate) fn announce(shown: &str) {
-    match clipboard::copy(shown) {
+    let tool = clipboard::copy(shown);
+    match tool {
         Some(tool) => println!("{}  Copied with {}", "✓".green().bold(), tool.dimmed()),
         None => {
             println!(
@@ -63,5 +68,19 @@ pub(crate) fn announce(shown: &str) {
             );
             println!("{shown}");
         }
+    }
+
+    // Launched from a desktop launcher, every line above went to the journal.
+    // The copy itself is the useful part and has already happened, so all that
+    // is left is to say so where it can actually be seen. Best-effort: a system
+    // without `notify-send` gets a silent success, which is still the thing the
+    // user asked for.
+    if crate::cli::terminal::headless_gui() {
+        let summary = if tool.is_some() {
+            "Path copied"
+        } else {
+            "fastf: no clipboard tool"
+        };
+        crate::cli::terminal::notify(summary, shown);
     }
 }

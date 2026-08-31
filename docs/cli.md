@@ -64,6 +64,49 @@ error: no terminal to confirm on — pass --yes to apply without confirming
 
 That includes `fastf move`: without a terminal and without `--yes` it refuses rather than moving the folder on the strength of a confirmation nobody saw. `fastf recent` and `fastf search` fall back to their plain list instead.
 
+#### Launched from a desktop launcher
+
+There is one carve-out, and it is the reason v2.1.0 exists. Run from krunner,
+rofi, or a `.desktop` entry there is no terminal *anywhere*: stdin is
+`/dev/null`, stdout and stderr are journald sockets, and every line a command
+prints is read by nobody. Refusing there is the same as doing nothing.
+
+So when fastf is asked for something interactive and can prove that nothing can
+read its output, it opens a terminal and runs the same command again inside it.
+This applies to the guided menu (`fastf` with no arguments), `fastf recent`,
+`fastf search`, and the ambiguous branch of `open`, `copy`, and `path`. A window
+that only showed text waits for Enter before closing; one that showed a picker
+or a menu closes as soon as you leave it.
+
+A single match needs no window: `fastf copy ID0047` from a launcher copies the
+path and raises a desktop notification, and `fastf path ID0047` does the same
+while still printing the line.
+
+**Every one of these must hold before a window is opened**, which is what keeps
+scripts out of it:
+
+- none of stdin, stdout, or stderr is a terminal;
+- stdout *and* stderr are each a socket, a character device, or closed — never a
+  regular file or a pipe, because those mean somebody is keeping the bytes;
+- `WAYLAND_DISPLAY` or `DISPLAY` is set;
+- `SSH_CONNECTION` is unset;
+- `--plain` was not passed, and `terminal` is not `none`.
+
+A pipe, a redirect, `nohup`, cron, and CI therefore behave exactly as they did
+in v2.0.1. Three ways to turn the behaviour off entirely:
+
+```bash
+fastf search rust --plain            # per run
+FASTF_NO_RELAUNCH=1 fastf search rust
+fastf config set terminal none       # permanently
+```
+
+Which emulator gets opened is `terminal` in the config, else `$TERMINAL`, else
+`xdg-terminal-exec`, else the first of `konsole`, `gnome-terminal`,
+`xfce4-terminal`, `alacritty`, `kitty`, `foot`, `wezterm`, `xterm` that is
+installed. The value names a *program*, not a command line. None of this exists
+on Windows — see [windows.md](windows.md).
+
 ### One way out: Esc
 
 **Esc backs out of anything.** Every menu, every list, every confirmation and
@@ -270,7 +313,11 @@ fastf recent | grep music-video
 
 The standalone `fastf recent` and `fastf search` commands retain their existing
 command-line output; live Size fields are exclusive to the guided TUI, so
-scripts do not acquire a new column.
+scripts do not acquire a new column. The one exception is a run with no terminal
+at all in a graphical session — a desktop launcher — where they open a terminal
+and run there instead of printing to nobody; a pipe, a redirect, cron and CI are
+untouched, and `--plain` opts out. The full conditions are under
+[Launched from a desktop launcher](#launched-from-a-desktop-launcher).
 
 Deleted a project folder manually? The next `fastf recent` simply won't list it. The per-base cache heals itself, so there is no prune command. If you moved folders or edited metadata outside fastf, run `fastf reindex`.
 
@@ -422,6 +469,11 @@ fastf config set default-template rust-project
 fastf config set date-format "%Y-%m-%d"
 fastf config set editor nvim
 
+# Terminal to open when fastf is launched without one (a desktop launcher).
+# Empty = $TERMINAL, else probe. Names a program, not a command line.
+fastf config set terminal kitty
+fastf config set terminal none                   # never open a window
+
 # Extra folders to index beyond base-dir, comma separated
 fastf config set bases "/mnt/projects/clients,/srv/archive"
 fastf config set bases ""                        # clear the list
@@ -442,6 +494,19 @@ fastf config set post_create.print_path true
 ```
 
 Run `fastf config set --help` for the complete key list with descriptions.
+
+### Environment variables
+
+| Variable | What it does |
+|---|---|
+| `FASTF_INSTALL_DIR` | Overrides where fastf keeps config, templates, and its counter |
+| `FASTF_NO_RELAUNCH` | Set to anything to stop fastf ever opening a terminal for itself |
+| `TERMINAL` | Consulted when `terminal` is not configured |
+| `EDITOR` | Used when `editor` is not configured |
+
+`FASTF_RELAUNCHED` is set by fastf on the copy of itself it starts inside a
+terminal. It is internal — it is what stops a relaunch relaunching — and there is
+no reason to set it by hand.
 
 A `config.toml` that exists but cannot be parsed stops every command, including
 the interactive menu, and names the file. fastf will not fall back to defaults

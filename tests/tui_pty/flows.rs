@@ -356,3 +356,69 @@ fn esc_on_the_ambiguity_picker_cancels_with_exit_0_and_says_so() {
         "cancelling should say what did not happen:\n{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The relaunched window
+// ---------------------------------------------------------------------------
+
+/// A window fastf opened for itself must not close on the last line of output:
+/// the text would flash past exactly as it does in the journal, which is the
+/// problem the whole mechanism exists to solve.
+///
+/// `FASTF_RELAUNCHED` is what the relaunch sets on the child, so setting it here
+/// *is* being that child — there is no window to open on a CI runner.
+#[test]
+fn a_relaunched_run_with_nothing_interactive_waits_for_enter() {
+    let sb = Sandbox::new();
+
+    // Nothing to browse, so `recent` prints one line and is done: no prompt, no
+    // picker, nothing that waited for the user.
+    let script = pty::Script::new().pause(600).key("\r").build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &["recent"],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_RELAUNCHED", std::path::Path::new("1")),
+        ],
+        &script,
+        DEADLINE,
+    );
+
+    assert_eq!(code, 0, "the pause is not a failure:\n{out}");
+    assert!(
+        out.contains("press Enter to close"),
+        "a relaunched window that only printed must hold itself open:\n{out}"
+    );
+}
+
+/// The other half: a window that ran a picker or a menu already had the user's
+/// attention for as long as they wanted it, so demanding one more keypress from
+/// somebody who has just pressed a key is noise.
+#[test]
+fn a_relaunched_run_that_showed_a_picker_does_not_wait() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "proj", "ID0001");
+
+    // With a project to show, `recent` opens the browser — an interactive
+    // surface. Esc leaves it, and that must be the end of the process.
+    let script = pty::Script::new().pause(600).esc().pause(600).build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &["recent"],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_RELAUNCHED", std::path::Path::new("1")),
+        ],
+        &script,
+        DEADLINE,
+    );
+
+    assert_eq!(code, 0, "leaving the browser is not a failure:\n{out}");
+    assert!(
+        !out.contains("press Enter to close"),
+        "a window that already waited for the user must not wait again:\n{out}"
+    );
+}

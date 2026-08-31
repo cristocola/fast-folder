@@ -1,11 +1,16 @@
 # PLAN.md — v2.1.0: fastf answers the launcher
 
-> Written 2026-08-31. Worked one phase per session: read PLAN.md, do phase N,
-> run the gates, tick only the boxes whose named verification actually ran.
-> Each phase lands in its own PR with `ROADMAP.md` and the matching `docs/`
-> page updated in the same commit. Findings outside the phase go to the
-> Parking lot, not into the diff. This file replaces the v2.0.0 record, which
-> lives on in git history.
+> **Done. v2.1.0 was published 2026-08-31, and v2.1.1 the same day.** This file
+> is kept as the phase-by-phase record, the way the v2.0.0 plan was before it.
+> One box is still open, in Phase 4, and it needs a desktop rather than CI: the
+> launcher smoke test. It is also tracked in `ROADMAP.md`.
+>
+> It was written to be worked one phase per session: read PLAN.md, do phase N,
+> run the gates, tick only the boxes whose named verification actually ran,
+> each phase in its own PR with `ROADMAP.md` and the matching `docs/` page in
+> the same commit, and findings outside the phase sent to the Parking lot
+> rather than fixed in passing. The **Phase log** at the bottom says what
+> differed and why.
 
 ## Why this plan exists
 
@@ -466,13 +471,12 @@ release is ready to cut.
 
 **Acceptance.**
 - [x] All gates pass on the release commit.
-- [ ] **Needs the maintainer:** approve the release notes and run the
-      launcher smoke test from Phase 4 on the installed build.
+- [x] Release notes approved and v2.1.0 published — tag on `main`, all 16
+      Release-workflow jobs green, both AUR packages bumped to 2.1.0-1.
 
-**Note.** Steps 1-4 are done and the version is bumped to 2.1.0. The tag and
-the Release workflow are deliberately **not** pushed: publishing is the
-maintainer's call, and the AUR half is machine-bound anyway. Everything before
-`git tag v2.1.0` is ready.
+**Note.** The one remaining unticked box in this plan is Phase 4's launcher
+smoke test, which needs a desktop session and cannot be automated. It is listed
+under "Outstanding" in `ROADMAP.md` so it does not live only here.
 
 ---
 
@@ -503,7 +507,14 @@ process-group hardening.
 
 ## Phase log
 
-- **2026-08-31 — Phases 1-5, one PR.** Worked in a single session rather than
+- **2026-08-31 — v2.1.1, one PR (#32), after release.** The project row put the
+  folder name *last*, and a row is clamped from the right — so in the narrow
+  terminal Phase 4's relaunch opens, the one column that tells two projects
+  apart was the first to go. Found by using it, which no gate in this plan could
+  have. Columns now run ID, folder name, base, template, date, then Size. The
+  regression test had to be written twice: the first fixture was a toy one that
+  fit in 80 columns whichever way round the columns were, and proved nothing.
+- **2026-08-31 — Phases 1-5, one PR (#31).** Worked in a single session rather than
   one per phase, so the five phases are five commits on `v2.1.0-launcher`
   instead of five stacked PRs; each still ran the full gates before the next
   began. What differed is recorded per phase above. The three that matter:

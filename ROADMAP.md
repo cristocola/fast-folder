@@ -67,46 +67,37 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Released: **v2.0.1, published 2026-08-24** — v2.0.0 with the Windows binary
-  made standalone. v2.0.0 (2026-08-23) was the substantive one: two surfaces,
-  one engine, nothing trusted by accident; its phase-by-phase record lives in
-  git history. Both AUR packages are at 2.0.1-1.
-- Released: **v2.1.1, published 2026-08-31** — v2.1.0's project row put the
-  folder name last, and a row is clamped from the right, so the one column that
-  tells two projects apart was the first to go in the narrow terminal the
-  relaunch opens. Columns now run ID, folder name, base, template, date.
-- Released: **v2.1.0 — fastf answers the launcher.** `PLAN.md` drives it,
-  one phase per PR. fastf is launched from a desktop launcher as well as a
-  shell, and from a launcher there is no terminal at all: anything a command
-  prints is never seen. v2.1.0's answer — act silently when the request is
-  unambiguous, open a terminal when there is text to show or a question to ask
-  and nowhere to show it, and make the clipboard a first-class verb. Scripts
-  are contractually unaffected: a pipe, a redirect, cron or CI keeps today's
-  exact behaviour.
-  - [x] Phase 1 — the resolver answers with data (`Resolution`) instead of an
-        error string, so a caller can offer the candidates to a picker, and an
-        all-digits query matches the ID *number* (`fastf open 37` → ID0037).
-  - [x] Phase 2 — `fastf copy` puts a project's path on the clipboard and says
-        so; `fastf path` prints the bare path for `cd "$(fastf path api)"`. Both
-        revalidate the folder first. A clipboard tool now runs in its own
-        process group, so a launcher reaping its children cannot kill the
-        process that owns the selection.
-  - [x] Phase 3 — an ambiguous `open`/`copy`/`path` shows a project picker on a
-        terminal, and Enter performs the verb that was interrupted rather than
-        opening the action menu. Esc cancels with exit 0. Without a terminal the
-        candidate-list error is unchanged, so scripts see nothing new.
-  - [x] Phase 4 — launched headless inside a graphical session, fastf opens a
-        terminal and re-runs itself there (the menu, `recent`, `search`, and the
-        ambiguous branch of `open`/`copy`/`path`) instead of writing to the
-        journal. A single-match `copy`/`path` copies and notifies without a
-        window. New `terminal` config key; three documented ways off
-        (`--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`). A pipe, a
-        redirect, cron and CI are contractually unchanged.
-  - [x] Phase 5 — docs sweep, the landed decisions recorded in the three
-        `CLAUDE.md` files, and the release cut.
-- Outstanding from v2.0.x, and needing the maintainer: a TUI screenshot or
-  asciinema for the README hero, and the Windows smokes listed under "Manual
-  move smoke" below.
+- Released: **v2.1.1, published 2026-08-31** — a same-day fix for v2.1.0. The
+  project row put the folder name last, and a row is clamped from the right, so
+  in the narrow terminal the relaunch opens, the one column that tells two
+  projects apart was the first to go. Columns now run ID, folder name, base,
+  template, date, then Size. Both AUR packages are at 2.1.1-1.
+- Released: **v2.1.0, published 2026-08-31 — fastf answers the launcher.**
+  `PLAN.md` drove it and is the phase-by-phase record. What changed, as
+  guarantees rather than phases:
+  - A query resolves through one resolver that answers with *data*
+    (`Resolution`), so an ambiguity can be offered to a picker instead of only
+    printed; and an all-digits query matches the ID **number**, so `fastf open
+    37` finds ID0037 whatever a template pads to.
+  - `fastf copy` puts a project's path on the clipboard and says so; `fastf
+    path` prints the bare path for `cd "$(fastf path api)"`. Both revalidate the
+    folder before handing it to anything else.
+  - An ambiguous `open`/`copy`/`path` on a terminal shows a picker that performs
+    the verb it interrupted, and never the project action menu. Esc exits 0.
+  - Launched with no terminal at all inside a graphical session, fastf opens one
+    and re-runs itself there rather than writing to the journal. It fires only
+    where output provably has no reader, so a pipe, a redirect, cron and CI are
+    byte-for-byte what they were in v2.0.1. Three documented ways off:
+    `--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`.
+  - A clipboard tool runs in its own process group, so a launcher reaping its
+    children can no longer kill the process that owns the selection.
+- Outstanding, and needing the maintainer:
+  - **The launcher smoke test** (`PLAN.md` Phase 4, the one unticked box): from
+    Alt+Space, a `fastf search <term>`, an ambiguous `fastf open <term>`, a
+    single-match `fastf copy <term>`, and a bare `fastf`. CI has no desktop
+    session and cannot do this.
+  - A TUI screenshot or asciinema for the README hero.
+  - The Windows smokes listed under "Manual move smoke" below.
 - Last reviewed: **2026-08-31**
 
 ## Release train
@@ -213,11 +204,26 @@ This work does not use GitHub issues, a separate ADR system, or a changelog.
 - Project lifecycle states.
 - Declarative post-create workflows.
 - Scriptability: `--json`/`--format` output, `search --limit/--template/--since/--tag`,
-  `print_path` as a `new` flag rather than only a
-  config toggle, `--color=auto|always|never` (`colored` currently gates on stdout
-  only, so stderr gets ANSI when redirected), documented exit codes, and
+  `print_path` as a `new` flag rather than only a config toggle,
+  `--color=auto|always|never` (`colored` currently gates on stdout only, so
+  stderr gets ANSI when redirected), documented exit codes, and
   `completions <shell>` as a typed `clap_complete::Shell` rather than a bare
   `String`.
+
+Carried over from the v2.1.0 plan's parking lot, so they do not stay buried in a
+closed plan file:
+
+- An ambiguity picker for `move`, `tag` and `note`. They gained v2.1.0's numeric
+  tier, but not the picker — they resolve and then act on the one project, so
+  offering a choice there is a larger change than it looks.
+- A native KRunner DBus runner: search-as-you-type from Alt+Space without
+  spawning fastf per keystroke. Its own deliverable, probably its own repository.
+- `reveal_folder` on unix blocks on `.status()`. A file-manager handler that runs
+  in the foreground would hang a `fastf open` that has no terminal to show the
+  wait in. Consider detaching it the way the relaunch spawn does.
+- `ptyxis` (the GNOME 47+ default) in the emulator table, if anyone asks.
+- A watchdog for a clipboard tool that does not fork — the `wl-copy --foreground`
+  shape. `clipboard::feed`'s `wait()` has no timeout.
 
 Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 

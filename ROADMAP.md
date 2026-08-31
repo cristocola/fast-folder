@@ -71,6 +71,10 @@ responsibility of the filesystem and backups.
   made standalone. v2.0.0 (2026-08-23) was the substantive one: two surfaces,
   one engine, nothing trusted by accident; its phase-by-phase record lives in
   git history. Both AUR packages are at 2.0.1-1.
+- Released: **v2.1.1, published 2026-08-31** — v2.1.0's project row put the
+  folder name last, and a row is clamped from the right, so the one column that
+  tells two projects apart was the first to go in the narrow terminal the
+  relaunch opens. Columns now run ID, folder name, base, template, date.
 - Released: **v2.1.0 — fastf answers the launcher.** `PLAN.md` drives it,
   one phase per PR. fastf is launched from a desktop launcher as well as a
   shell, and from a launcher there is no terminal at all: anything a command
@@ -119,6 +123,7 @@ responsibility of the filesystem and backups.
 | v2.0.0 | two surfaces, one engine, nothing trusted by accident: the browser UI removed, and every boundary that took a path on trust made to check it | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.0.0) |
 | v2.0.1 | the Windows binary carries its own C runtime, so the exe and the MSI start on a clean install with no Visual C++ Redistributable | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.0.1) |
 | v2.1.0 | fastf answers the launcher: `copy`/`path`, numeric ID queries, an ambiguity picker that serves the verb it interrupted, and a terminal opened for itself when it was launched without one | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.1.0) |
+| v2.1.1 | the folder name leads the project row, so the column that tells two projects apart survives a narrow relaunched window | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.1.1) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find

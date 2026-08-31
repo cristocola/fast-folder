@@ -1,6 +1,6 @@
 [package]
 name = "fastf"
-version = "2.1.0"
+version = "2.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Fast Folder Creator — template-driven project folder generator with a guided TUI and CLI"

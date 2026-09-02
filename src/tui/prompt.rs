@@ -22,7 +22,9 @@
 //!   is no way to cancel a text prompt through it.
 //!
 //! Rendering mirrors `dialoguer`'s `SimpleTheme` exactly, so the prompt strings
-//! the pty suite anchors on do not move.
+//! the pty suite anchors on do not move. `text` also ends every repaint by
+//! parking the terminal's caret back in the line it is editing and showing it
+//! there — see `LineEditor::render`.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -184,8 +186,10 @@ pub fn text(prompt: &str, opts: TextOpts<'_>) -> Result<Option<String>> {
         opts.default.clone(),
     );
 
-    term.hide_cursor()?;
     let outcome = run_editor(&term, &mut editor, &opts);
+    // The editor leaves the caret visible and parked in the text; this is the
+    // backstop for an error returned from the middle of a repaint, which is the
+    // one path that can exit with it still hidden.
     let _ = term.show_cursor();
     let _ = term.flush();
     outcome
@@ -283,14 +287,18 @@ impl LineEditor {
     }
 
     fn render(&mut self, term: &Term, columns: usize, error: Option<&str>) -> std::io::Result<()> {
+        // Hidden for the repaint only. A caret left visible through an
+        // erase-and-redraw skitters down the block and back on every keystroke.
+        term.hide_cursor()?;
         self.erase(term)?;
 
         let mut head = String::new();
         SimpleTheme
             .format_input_prompt(&mut head, &self.prompt, self.default.as_deref())
             .map_err(std::io::Error::other)?;
+        let head_width = head.chars().count();
 
-        let window = visible_window(&self.text, self.cursor, columns, head.chars().count());
+        let (window, offset) = visible_window(&self.text, self.cursor, columns, head_width);
         term.write_line(&format!("{head}{window}"))?;
         self.drawn = 1;
         if let Some(message) = error {
@@ -301,11 +309,27 @@ impl LineEditor {
             term.write_line(&line)?;
             self.drawn += 1;
         }
+
+        // Then put the caret where the next character will land. `write_line`
+        // ends the block a row *below* the text, and the editor used to leave it
+        // there hidden, so a rename prompt showed no insertion point at all: the
+        // text moved but nothing said where typing would go. The window is built
+        // to keep `head_width + offset` inside the line (`visible_window` leaves
+        // a column of headroom), and the clamp covers a prompt wider than the
+        // terminal, where there is no honest position to point at.
+        term.move_cursor_up(self.drawn)?;
+        term.move_cursor_right((head_width + offset).min(columns.saturating_sub(1)))?;
+        term.show_cursor()?;
         term.flush()
     }
 
     fn erase(&mut self, term: &Term) -> std::io::Result<()> {
         if self.drawn > 0 {
+            // `clear_last_lines` counts up from the line *after* the block,
+            // which is where the last `write_line` left the caret before
+            // `render` parked it in the text. Put it back before counting.
+            term.move_cursor_down(self.drawn)?;
+            term.write_str("\r")?;
             term.clear_last_lines(self.drawn)?;
             self.drawn = 0;
         }
@@ -321,24 +345,34 @@ fn byte_index(text: &str, n: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-/// The slice of `text` to show when it is longer than the line has room for.
+/// The slice of `text` to show when it is longer than the line has room for,
+/// and the cursor's char offset **within that slice** — which is what the caret
+/// is drawn at, and is not the cursor index once the window has scrolled.
 ///
 /// Windowing rather than wrapping is deliberate: a soft-wrapped line is what
 /// ghosts on the legacy Windows console, and it is also what makes
 /// `clear_last_lines` take back the wrong number of rows. The window always
 /// contains the cursor, and prefers to keep the end of the text visible, which
 /// is where a person typing is looking.
-fn visible_window(text: &str, cursor: usize, columns: usize, prompt_width: usize) -> String {
+fn visible_window(
+    text: &str,
+    cursor: usize,
+    columns: usize,
+    prompt_width: usize,
+) -> (String, usize) {
     let chars: Vec<char> = text.chars().collect();
     // One column of headroom so the cursor position itself never lands in the
     // last cell, which is where terminals disagree about wrapping.
     let room = columns.saturating_sub(prompt_width + 1);
     if room == 0 || chars.len() <= room {
-        return text.to_string();
+        return (text.to_string(), cursor.min(chars.len()));
     }
     let end = (cursor + 1).max(room).min(chars.len());
     let start = end - room;
-    chars[start..end].iter().collect()
+    (
+        chars[start..end].iter().collect(),
+        cursor.saturating_sub(start),
+    )
 }
 
 /// The one sentence a cancelled flow prints before returning to where it came
@@ -421,29 +455,62 @@ mod tests {
 
     #[test]
     fn a_short_line_is_shown_whole() {
-        assert_eq!(visible_window("hello", 5, 80, 6), "hello");
+        assert_eq!(visible_window("hello", 5, 80, 6), ("hello".to_string(), 5));
         // No room at all: better to show the text than nothing.
-        assert_eq!(visible_window("hello", 5, 4, 6), "hello");
+        assert_eq!(visible_window("hello", 5, 4, 6), ("hello".to_string(), 5));
     }
 
     #[test]
     fn a_long_line_windows_around_the_cursor_instead_of_wrapping() {
         let text: String = ('a'..='z').collect();
         // Room for 10 chars (20 columns minus a 9-char prompt minus headroom).
-        let at_end = visible_window(&text, 26, 20, 9);
+        let (at_end, offset) = visible_window(&text, 26, 20, 9);
         assert_eq!(at_end.chars().count(), 10);
         assert_eq!(at_end, "qrstuvwxyz", "the end of the text stays visible");
+        assert_eq!(offset, 10, "the caret sits after the last visible char");
 
         // Cursor moved back into the middle: the window follows it.
-        let middle = visible_window(&text, 12, 20, 9);
+        let (middle, offset) = visible_window(&text, 12, 20, 9);
         assert_eq!(middle.chars().count(), 10);
         assert!(
             middle.contains('l') && middle.contains('m'),
             "the window must contain the cursor: {middle}"
         );
+        assert_eq!(
+            middle.chars().nth(offset),
+            Some('m'),
+            "the caret offset points at the cursor's own char, not its index \
+             into the whole text"
+        );
 
         // And at the very start.
-        let start = visible_window(&text, 0, 20, 9);
+        let (start, offset) = visible_window(&text, 0, 20, 9);
         assert_eq!(start, "abcdefghij");
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn the_caret_column_always_lands_inside_the_line() {
+        // Whatever the text, the window and the cursor's place in it, the column
+        // the caret is moved to must stay on the row. A caret parked past the
+        // last cell is where terminals disagree about wrapping.
+        let text: String = ('a'..='z').collect();
+        let prompt_width = 9;
+        for columns in [12usize, 20, 26, 80] {
+            for cursor in 0..=text.chars().count() {
+                let (window, offset) = visible_window(&text, cursor, columns, prompt_width);
+                assert!(
+                    offset <= window.chars().count(),
+                    "offset {offset} outside window {window:?}"
+                );
+                if columns > prompt_width + 1 {
+                    assert!(
+                        prompt_width + offset < columns,
+                        "caret at column {} in a {columns}-column line",
+                        prompt_width + offset
+                    );
+                }
+            }
+        }
     }
 }

@@ -31,6 +31,18 @@ drops `interact`'s bare-`y`/`n`-without-Enter contract, and `Input` has no
 never a byte offset, and windows a long line around the cursor rather than
 wrapping.
 
+**The line editor parks the terminal's caret in the text and shows it there.**
+It draws its block with `write_line`, which ends a row *below* the line being
+edited, and it hides the caret for the repaint — so leaving it where the drawing
+finished gave a rename prompt no insertion point at all. `render` therefore ends
+with `move_cursor_up(drawn)`, `move_cursor_right(prompt width + the cursor's
+offset **within the window**)` and `show_cursor`; `erase` moves back down and
+`\r`s first, because `clear_last_lines` counts up from the line after the block.
+The offset is not the cursor index once a long line has scrolled, which is why
+`visible_window` returns both. `a_text_prompt_parks_a_visible_caret_after_the_text`
+is the only pty assertion that names cursor escapes — here the cursor is the
+behaviour — and it derives every number from the prompt strings.
+
 `TextOpts` has both `initial` (editable starting text — what a rejected value
 comes back as) and `default_value` (dialoguer's `prompt [default]:` contract,
 where an empty answer means the default). They are different gestures: converting

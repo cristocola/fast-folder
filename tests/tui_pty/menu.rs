@@ -588,3 +588,67 @@ fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
         "the corrected pattern should have been saved:\n{shown}"
     );
 }
+
+/// The caret is visible, and it sits in the line being edited.
+///
+/// `prompt::text` draws its line with `write_line`, so the block ends a row
+/// *below* the text, and the editor hid the caret for the repaint. Together
+/// those left a rename — or any other text prompt — with no insertion point at
+/// all: the text moved as you typed and nothing said where the next character
+/// would land.
+///
+/// This is the one assertion in the pty suite that names cursor escapes, because
+/// here the cursor *is* the behaviour. Everything it matches is derived from the
+/// prompt strings rather than hard-coded, so a reworded prompt moves the numbers
+/// with it.
+#[test]
+fn a_text_prompt_parks_a_visible_caret_after_the_text() {
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Mut", "ID0001", "2026-01-01T00:00:00Z", 64);
+
+    let script = pty::Script::new()
+        .down(MENU_PROJECTS)
+        .enter()
+        .enter() // select the project
+        // → Rename folder. One base is configured, so "Move to another base" is
+        // not in the list and Rename is the seventh row.
+        .down(6)
+        .enter()
+        .pause(700)
+        .esc() // leave the name alone → the action menu
+        .pause(600)
+        .esc() // → the list
+        .pause(600)
+        .esc() // → main menu
+        .pause(400)
+        .esc() // quit
+        .build();
+    let (out, code) = launch(&sb, script);
+
+    assert_eq!(code, 0, "the rename prompt should cancel cleanly:\n{out}");
+
+    // `initial` puts the folder name on the line, and the caret goes after it.
+    let label = "New folder name: ";
+    let line = format!("{label}Mut\r\n");
+    let drawn = out
+        .find(&line)
+        .unwrap_or_else(|| panic!("the rename prompt never drew its line:\n{out:?}"));
+    let after = &out[drawn + line.len()..];
+
+    let up = after.strip_prefix("\x1b[1A").unwrap_or_else(|| {
+        panic!("the caret must come back up onto the line it is editing, got:\n{after:?}")
+    });
+    let (column, rest) = up
+        .strip_prefix("\x1b[")
+        .and_then(|s| s.split_once('C'))
+        .unwrap_or_else(|| panic!("the caret must be moved along the line, got:\n{up:?}"));
+    assert_eq!(
+        column.parse::<usize>().unwrap(),
+        label.chars().count() + "Mut".chars().count(),
+        "the caret belongs after the text, not at the start of the prompt"
+    );
+    assert!(
+        rest.starts_with("\x1b[?25h"),
+        "the caret must be shown once it is in place, got:\n{rest:?}"
+    );
+}

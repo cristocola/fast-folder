@@ -67,35 +67,24 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Released: **v2.1.1, published 2026-08-31** — a same-day fix for v2.1.0. The
-  project row put the folder name last, and a row is clamped from the right, so
-  in the narrow terminal the relaunch opens, the one column that tells two
-  projects apart was the first to go. Columns now run ID, folder name, base,
-  template, date, then Size. Both AUR packages are at 2.1.1-1.
-- Released: **v2.1.0, published 2026-08-31 — fastf answers the launcher.**
-  `PLAN.md` drove it and is the phase-by-phase record. What changed, as
-  guarantees rather than phases:
-  - A query resolves through one resolver that answers with *data*
-    (`Resolution`), so an ambiguity can be offered to a picker instead of only
-    printed; and an all-digits query matches the ID **number**, so `fastf open
-    37` finds ID0037 whatever a template pads to.
-  - `fastf copy` puts a project's path on the clipboard and says so; `fastf
-    path` prints the bare path for `cd "$(fastf path api)"`. Both revalidate the
-    folder before handing it to anything else.
-  - An ambiguous `open`/`copy`/`path` on a terminal shows a picker that performs
-    the verb it interrupted, and never the project action menu. Esc exits 0.
-  - Launched with no terminal at all inside a graphical session, fastf opens one
-    and re-runs itself there rather than writing to the journal. It fires only
-    where output provably has no reader, so a pipe, a redirect, cron and CI are
-    byte-for-byte what they were in v2.0.1. Three documented ways off:
-    `--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`.
-  - A clipboard tool runs in its own process group, so a launcher reaping its
-    children can no longer kill the process that owns the selection.
+- Released: **v2.2.1, published 2026-09-03** — the text prompts show where you
+  are typing. `prompt::text` draws its line with `write_line`, which ends the
+  block a row *below* the text, and it hid the caret for the repaint and never
+  showed it again, so **Rename folder** — and every other typed field — offered
+  no insertion point at all. The line editor now parks the caret in the line it
+  is editing and shows it there, at the cursor's offset **within the visible
+  window** rather than its index into the whole string, which are different
+  numbers once a long line has scrolled.
+- Released: **v2.2.0, published 2026-09-01** — `fastf term` opens a terminal at
+  a project's folder, the fourth verb (with `open`, `copy`, `path`) that
+  resolves a query and hands the result to another program.
+- The v2.1.x guarantees are in the release train below and, phase by phase, in
+  `PLAN.md`; the current design is `CLAUDE.md`.
 - Verified by hand, 2026-08-31: the launcher smoke test (`PLAN.md` Phase 4) on
   a desktop session, plus a Windows pass. Neither is reachable from CI.
 - Outstanding, and needing the maintainer: a TUI screenshot or asciinema for the
   README hero.
-- Last reviewed: **2026-08-31**
+- Last reviewed: **2026-09-03**
 
 ## Release train
 
@@ -112,6 +101,8 @@ responsibility of the filesystem and backups.
 | v2.0.1 | the Windows binary carries its own C runtime, so the exe and the MSI start on a clean install with no Visual C++ Redistributable | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.0.1) |
 | v2.1.0 | fastf answers the launcher: `copy`/`path`, numeric ID queries, an ambiguity picker that serves the verb it interrupted, and a terminal opened for itself when it was launched without one | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.1.0) |
 | v2.1.1 | the folder name leads the project row, so the column that tells two projects apart survives a narrow relaunched window | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.1.1) |
+| v2.2.0 | `fastf term` opens a terminal at a project's folder | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.2.0) |
+| v2.2.1 | a text prompt shows its caret in the line being edited, so a rename has a visible insertion point | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.2.1) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find
@@ -175,6 +166,10 @@ Regression coverage grows with the relevant release:
 - [x] A planted cache naming `/etc`, `..` or an absolute path outside the base
   lists nothing and opens nothing; a project directory replaced by a link is
   refused by `open` (v2.0.0).
+- [x] A text prompt parks a visible caret after the text it is editing, driven
+  through a real pty and matched against the cursor escapes themselves — the one
+  place in that suite where the cursor is the behaviour rather than noise
+  (v2.2.1).
 
 Manual move smoke and follow-up:
 

@@ -78,8 +78,8 @@ tell you.
   checks including `contained_destination` and `is_link_like`, base probing),
   `shell_open` (Windows `ShellExecuteW`), `relaunch` + `notify` (unix-only: the
   headless-GUI terminal relaunch and `notify-send`), `test_env` (the one
-  env-mutation guard, test-only), `tree_size`, `size_scan`, `live_select`,
-  `human_bytes`, `clipboard`, `tty`.
+  env-mutation guard, test-only), `tree_size`, `size_scan`, `human_bytes`,
+  `clipboard`, `tty`.
 - `src/cli/` — one module per subcommand, plus `render.rs`, the only module that
   prints a plan, a create or an apply; `target.rs` (resolve a query to one
   project, asking when it is ambiguous — the flow `open`/`copy`/`path` share);
@@ -87,12 +87,17 @@ tell you.
   read `Config`). `move_project.rs` is named that way because `move` is a
   keyword, and `path_cmd.rs`/`paths_cmd.rs` because both would otherwise read
   like `std::path` at their call sites.
-- `src/tui/` — every interactive terminal surface: `menu.rs` (the guided menu and
-  Settings), `frame.rs` (the library summary under it), `browser.rs` (the paged
-  project browser), `actions.rs` (the project action menu), `rows.rs` (the one
-  project-row builder), `pickers.rs` (one template picker, one base picker),
-  `prompt.rs` (**the only module that may name a dialoguer prompt**), `vars.rs`,
-  `template_builder.rs`.
+- `src/tui/` — every interactive terminal surface. The guided app: `runtime.rs`
+  (the one module that owns the screen, the threads and the loop), `app/`
+  (`App`, `update`, the library state, the search query, the modal stack, the
+  palette), `view/` (renderers only, `&App` in), `command.rs` (**the one
+  registry** every key, palette entry, help line and hint comes from),
+  `msg.rs`/`effect.rs`, `theme.rs`, `fuzzy.rs`, `layout.rs`, `loaders.rs` (the
+  workers' reads), `widgets/`, `testing.rs` (fixtures for the suites). The
+  dialoguer flows the app still bridges to: `menu.rs` (create, register,
+  templates, settings), `actions.rs` (the project action menu),
+  `template_builder.rs`, `pickers.rs`, `vars.rs`, `rows.rs`, and `prompt.rs`
+  (**the only module that may name a dialoguer prompt**).
 - `docs/` — the user-facing reference. **When behaviour changes, update the
   matching `docs/` file, not the README.**
 - `packaging/` + `.github/workflows/` — release machinery; see the `release`
@@ -334,7 +339,7 @@ argv is passed as argv, never through a shell.
 
 `util::tty::mark_interactive_surface` has exactly **two** choke points —
 `require_tty`'s success path (every dialoguer prompt and picker) and
-`live_select` after its `is_term` check (the browser bypasses `require_tty`) —
+`tui::runtime::Runtime::init` (the guided app, after its own `require_tty`) —
 and `main` reads it only to decide whether a relaunched window pauses before
 closing.
 

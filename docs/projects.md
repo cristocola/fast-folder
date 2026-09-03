@@ -91,8 +91,8 @@ the size of anything reached through a link.
 Sizes are deliberately absent from `PROJECT_INFO.md`, the disposable
 `.fastf-index.json` cache, and the in-memory `Project` model. Project contents
 can change outside fastf at any time, so a persisted value would immediately
-become stale. Re-enter the TUI Projects browser to obtain a new snapshot. Acting
-on a project in the guided browser drops that project's snapshot. Tag it, rename it, or move it, and
+become stale. Reopen the guided app to obtain a new snapshot. Acting
+on a project in the guided app drops that project's snapshot. Tag it, rename it, or move it, and
 the row is measured again when you return to the list.
 
 ## The ID counter self-heals

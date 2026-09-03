@@ -1,0 +1,28 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fastf  ◈ 12 projects · ⬡ 3 templates · ⌂ 2 bases · ▲ ID0248 · ⚠ 1 needs atten… "
+" ── pulse ──  client-project ████████ 4   general ████████ 4                    "
+" ⌕ / to search  ·  words match fuzzily, tag:x  template=y  cr…   12/12 · newest "
+"┌ ◈ projects ──────────────────────────────────────────────────────────────────┐"
+"│  ID     PROJECT                                        CREATED    SIZE       │"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248                2026-08-28   scanning…│"
+"│  ID0247 2026-┌ Sort by ───────────────────────────────────────┐27   scanning…│"
+"│  ID0246 2026-│ ⌕                                              │26   scanning…│"
+"│  ID0245 2026-│                                                │25   scanning…│"
+"│  ID0244 2026-│ newest                                         │24   scanning…│"
+"│  ID0243 2026-│ oldest                                         │23   scanning…│"
+"│  ID0242 2026-│ name                                           │22   scanning…│"
+"│  ID0241 2026-│ id                                             │21   scanning…│"
+"│  ID0240 2026-│ template                                       │20   scanning…│"
+"│  ID0239 2026-│ base                                           │19   scanning…│"
+"│  ID0238 2026-│ size                                           │18   scanning…│"
+"│  ID0237 2026-└────────────────────────────────────────────────┘17   scanning…│"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" 12 of 12 projects  ·  ? for help                                               "
+" Esc close  ↑↓ scroll                                                           "

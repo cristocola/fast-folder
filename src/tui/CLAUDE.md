@@ -1,217 +1,230 @@
 # CLAUDE.md — `src/tui/`
 
-Every interactive terminal surface. The guided menu is how the tool is used day
-to day, so its polish is the product's polish: cancel is always possible, typed
-input is never thrown away by a later validation failure, and a network-share
-stall is never a frozen screen.
+Every interactive terminal surface. The guided app is how the tool is used day
+to day, so its polish is the product's polish: the list draws before a single
+folder has been walked, cancel is always possible, typed input is never thrown
+away by a later validation failure, and a network-share stall is never a frozen
+screen.
 
 The root `CLAUDE.md` has the layering rule and the module list; `src/core/CLAUDE.md`
-has the engine underneath.
+has the engine underneath. `PLAN.md` is the phase-by-phase record of the
+ratatui rebuild; what follows is the design as it stands.
 
-# The guided terminal menu
+# The guided app
 
-## One prompt module
+`tui::run(Entry)` is the door: `fastf` (`Entry::Menu`), `fastf recent`
+(`Entry::Recent`, the flags as a `Preset` chip and the rows already read) and
+`fastf search` (`Entry::Search`, the terms in the bar). `require_tty` runs
+**before** the screen is taken, with the same message the menu used, so an app
+that cannot be driven never switches a terminal nobody is holding to the
+alternate screen.
+
+## The shape: model, message, effect, view
+
+`app::App` is the model; `Msg` (`msg.rs`) is everything that can happen to it;
+`app::update(&mut App, Msg) -> Vec<Effect>` is the one state transition, and
+**it performs no I/O** — everything it wants done comes back as an `Effect`
+(`effect.rs`) that `runtime.rs` carries out. `view::view(&App, &mut Frame)`
+takes the app by shared reference, so a frame cannot change state and any state
+a test can construct can be rendered.
+
+That split is load-bearing twice over. `tests/tui_update.rs` drives the state
+machine with no terminal at all — a fixture `App`, messages in, effects out —
+and `tests/tui_snapshots.rs` renders frames through ratatui's `TestBackend`.
+And it is what keeps a slow filesystem out of the key handler: nothing in
+`update` blocks, because nothing in `update` reads a disk.
+
+The viewport is the app's, not ratatui's. `LibraryState.offset` is kept by
+`clamp_viewport` (arrows wrap, page keys clamp, the window moves by the minimum
+— `widgets::nav`), and the frame builds a `TableState` from it each time. A
+`TableState` that lived in the view would need `&mut App` to keep its offset,
+and a `TableState` rebuilt from scratch each frame — what the prototype did —
+throws the offset away and re-derives the window every draw.
+
+## One registry
+
+**Every command is declared once, in `command.rs`**, with its title, its
+description, the contexts it fires in, its default keys, its category, and
+whether the palette and the hint bar show it. The keymap (`lookup`), the fuzzy
+palette (`palette_entries`), the help overlay (`help_sections`) and the hint bar
+(`hints`) all read that list; the prototype carried four copies of its key
+table and they had already drifted. `tests/tui_commands.rs` holds the
+invariants: one key means one thing per context (global bindings count
+everywhere), every id is declared exactly once, every bound command is in its
+context's help.
+
+An `Availability` is a function of the app: `Disabled(reason)` is listed dimmed
+and pressing its key shows the reason; `Hidden` is not bound at all (Move with
+no other mounted base, Clear-filter with no filter).
+
+Keys are normalised into `Key` (`Char` with the Ctrl and Alt flags; shift
+folded into the character; Ctrl-letters lower-cased) by the input thread, which
+also drops `KeyEventKind::Release` — Windows delivers one for every press.
+
+**Naming trap.** Until the CLI's prompts move off dialoguer, `tests/layering.rs`
+greps `src/tui` for `Input::`, `Confirm::`, `Select::`, `Sort::` and
+`MultiSelect::` outside `prompt.rs`. A type called any of those in the app trips
+it, and so does a type whose name *ends* in one — `LineInput::new()` contains
+`Input::`. Hence `LineEdit`, `Order`, `PickState`. `tests/tui_commands.rs` says
+so before CI does.
+
+## The runtime owns the screen
+
+`runtime.rs` is the one module that takes the terminal: raw mode, the alternate
+screen and bracketed paste, **on stderr** — the stream fastf has always drawn
+prompts on, so `fastf > log` still opens the app and stdout keeps deciding
+output format. `Runtime::init` is the choke point that calls
+`tty::mark_interactive_surface` (the one `live_select` used to be), and it
+installs the panic hook that restores the screen — for a panic **on the main
+thread only**. A worker's panic is caught by `spawn_worker` and becomes a
+warning; restoring the screen for it would tear the frame down under a session
+that is still running.
+
+**Never call `Terminal::clear`.** In ratatui 0.30 it asks the terminal where
+its cursor is and waits up to two seconds for the answer, which a pty under
+test never sends. A fresh `Terminal` draws its first frame against an empty
+back buffer and the alternate screen starts blank, so there is nothing to clear.
+
+**The loop blocks.** `recv_timeout` on the one channel; a wake without a
+message is a `Tick` only while `App::needs_tick` says something is moving — a
+job, a toast about to expire, a size cell still pending — and otherwise just a
+look at `interrupt::is_set`. A burst of messages (a paste, a batch of sizes) is
+drained and drawn once. On each tick the runtime diffs `SizeScanner::cells_for`
+against what it last reported and hands the app only the news.
+
+**Where work runs.** Discovery, the header's summary (probes, indexes,
+templates, `list_incomplete`), on-demand metadata and every `operations::*`
+call go to a worker (`spawn_worker`, a 4 MiB stack because a Windows thread
+gets 1 MiB and discovery walks under `MAX_WALK_DEPTH`). The detail pane has one
+worker with a latest-wins slot, which is the debounce for a held arrow key.
+Reveal, terminal and clipboard spawns run on a worker too — `reveal_folder`
+blocks on `.status()` and `wl-copy` can hang. The scanner's `request`/`forget`
+are inline: they only take a mutex.
+
+**Ctrl-C is a key.** In raw mode it never becomes SIGINT. The app closes a
+dialog with it, else quits with `Exit::Interrupted`; `tui::run` then calls
+`interrupt::raise()` and returns an error so `main` prints `aborted.` and exits
+130 exactly as a signal would have. An external SIGINT is seen on the idle
+wake.
+
+**`diag` goes through the channel.** `Runtime::init` installs a `diag` sink
+that turns `warn`/`note` into `Msg::Diag`; a worker's `eprintln!` would land on
+the alternate screen mid-frame and be scrolled away on exit.
+
+## Discovery, patches and generations
+
+The first frame's counts come from `library::index_summary` — the index and
+nothing else, labelled `(from index)` — while `library::discover` runs on a
+worker; a pty test asserts opening the app over a fresh index performs one
+`discover` and zero `scan_base`.
+
+**A content mutation patches its row; only a structural change reloads.**
+`ListChange` (`effect.rs`) is `ActionLoop` under its new name: `Patched {
+project, stale }` replaces the row **by id** (a rename or a move changes the
+path), drops the size snapshots in `stale`, and lets `recompute` decide whether
+the row still satisfies the query; `Removed { path }` drops it; `Reload`
+discovers again. Adding one tag must never re-read every `PROJECT_INFO.md` in
+the library, and the pty suite traces that it does not.
+
+`LibraryState.generation`/`inflight`: a discovery answers with the generation it
+was sent with and is installed only if it is the one in flight. A patch or
+removal while one is in flight sets `dirty`, and the landing answer triggers
+one more discovery, because it may predate the change. Selection survives a
+re-filter, a re-sort and a reload by **path**; snapshot indices do not.
+
+## The table
+
+**The folder name is never cut.** It is the one column that tells projects
+apart, and a row is eaten from the right. `view::projects::choose_columns`
+measures the widest name and adds the optional columns only while it still fits
+whole, in the order a person misses them: the date, the size, the base, the
+template, the tags. (The old row put base and template before the date; in a
+table with a detail pane beside it the size and the date are what the row is
+for, and the pane shows the rest.) Widths are measured from the rows, never
+from the sizes, so a landing snapshot cannot reflow the table; the size cell is
+`rows::SIZE_CELL` wide and right-aligned.
+
+**Nothing blocks on a size.** The list draws first with `scanning…` in the
+cell; `util::size_scan` owns two workers, `request` **replaces** the queue with
+what is on screen, selected row first. Snapshots last for the session; a
+mutation's `stale` list is what `forget` is called with.
+
+**Bases are probed, never `is_dir`-ed** — `paths::probe_dirs` on the summary
+worker, because `is_dir()` on a dead SMB mount blocks for the operating
+system's timeout.
+
+## Search
+
+`app::search::Query` splits the bar: anything `core::query` parses with an
+operator is `structured` and evaluated by `core::query::evaluate` exactly as
+`fastf search` would; the bare words are `free` and matched fuzzily
+(`nucleo-matcher`, one pattern, every word must hit) against `id name template
+template_name tags…` plus the variable values once metadata is loaded. A row
+answers `tag:`, `template=`, `created>` from a `Metadata` synthesised from the
+`Project` (`row_meta`); a predicate on a template variable emits `LoadMeta` for
+the rows that lack it and they fill in as chunks land. Relevance is the sort
+while there are bare words, unless `s` chose one.
+
+## Modals and the palette
+
+`ModalStack`: Esc pops one; what a picker's answer means is data (`Then`), not
+a closure, so `update` stays inspectable. The palette ranks a title hit above a
+description hit — `open` is *Open project folder* before it is "open the
+action menu" — and Enter dispatches exactly the `CommandId` a key would.
+`#`/`@` restricts it to projects.
+
+## The bridged flows
+
+Create, register, templates, settings and the selected project's action menu
+are still the dialoguer flows in `menu.rs`, `actions.rs` and
+`template_builder.rs`, reached through `Effect::Suspend(Suspended::Legacy(..))`:
+the input thread is parked (a `Condvar` handshake — two readers on one tty is
+how keys go missing), the screen is released, the flow runs on the main screen
+in cooked mode, a flow that prints a result waits for `press Enter to return to
+fastf…`, and the screen is taken again. A recoverable error is reported the way
+`menu::contain` reports it; `menu::is_fatal` (the prompt itself failing, an
+interrupt) ends the app. Each phase of `PLAN.md` makes flows native and deletes
+their bridge variant.
+
+While those flows exist, the rules below still hold for them.
 
 **Every prompt goes through `tui::prompt`**, and `tests/layering.rs` fails the
-build if any other module under `src/tui` or `src/cli` names `dialoguer::Select`,
-`MultiSelect`, `Confirm`, `Input`, `Sort` or `FuzzySelect`. Consistency is the
-whole feature: an earlier attempt moved twenty-nine prompts to `interact_opt` by
-hand and missed several, so Esc backed out of some menus and was swallowed by
-others.
+build if any other module under `src/tui` or `src/cli` names a dialoguer prompt
+type. `Ok(None)` is a cancelled prompt and is never an error. `select`,
+`multi_select` and `sort` reuse dialoguer's `interact_opt` (Esc or `q` cancels
+in one keystroke); `confirm` and `text` are hand-rolled — `text` is the same
+line editor as `widgets::input::LineEdit` (char-index cursor, windowed not
+wrapped) and parks the terminal's caret in the line it is editing, which
+`a_text_prompt_parks_a_visible_caret_after_the_text` pins. `TextOpts` has both
+`initial` (editable starting text) and `default_value` (`prompt [default]:`);
+they are different gestures.
 
-**`Ok(None)` is a cancelled prompt and is never an error**, so `tui::menu::is_fatal`
-keeps treating a *broken* prompt (no terminal, stdin at EOF) as fatal and a
-cancelled one as an ordinary answer.
+**Menus match on labels, not indices.** Vocabulary: **Back** to a parent menu,
+**Cancel** to abandon an action. **A value with a local validity rule is
+checked at the prompt that collected it**, and dependent questions come after
+the value they depend on. The template builder's sections return
+`Result<bool>`: `false` is a cancel and leaves the scratch `Template` untouched.
+`tui::pickers` holds all three pickers; `pick_project` is the **ambiguity**
+picker for `open`/`copy`/`path`/`term` and deliberately not the app.
 
-`select`, `multi_select` and `sort` reuse dialoguer's `interact_opt`, which
-cancels on Esc or `q` in one keystroke. `confirm` and `text` are hand-rolled:
-`Confirm::interact_opt` makes Esc set a pending value that still needs Enter and
-drops `interact`'s bare-`y`/`n`-without-Enter contract, and `Input` has no
-`Key::Escape` arm at all. The line editor keeps its cursor as a **char index**,
-never a byte offset, and windows a long line around the cursor rather than
-wrapping.
+The session ring (`frame.rs`) is a `Mutex<Vec<String>>`, three entries, per
+process; the header reads it after every bridged flow. Anything durable belongs
+in the project's journal.
 
-**The line editor parks the terminal's caret in the text and shows it there.**
-It draws its block with `write_line`, which ends a row *below* the line being
-edited, and it hides the caret for the repaint — so leaving it where the drawing
-finished gave a rename prompt no insertion point at all. `render` therefore ends
-with `move_cursor_up(drawn)`, `move_cursor_right(prompt width + the cursor's
-offset **within the window**)` and `show_cursor`; `erase` moves back down and
-`\r`s first, because `clear_last_lines` counts up from the line after the block.
-The offset is not the cursor index once a long line has scrolled, which is why
-`visible_window` returns both. `a_text_prompt_parks_a_visible_caret_after_the_text`
-is the only pty assertion that names cursor escapes — here the cursor is the
-behaviour — and it derives every number from the prompt strings.
+## Testing the app
 
-`TextOpts` has both `initial` (editable starting text — what a rejected value
-comes back as) and `default_value` (dialoguer's `prompt [default]:` contract,
-where an empty answer means the default). They are different gestures: converting
-one to the other turns typing `0` into a field showing `20` into `200`.
+Three layers, each for what only it can see:
 
-`util::tty::prompt_available` probes **stderr**, because that is where a prompt is
-drawn. The old `stdout().is_terminal()` guards answered a different question:
-`fastf new t > out.txt` refused although a terminal was right there, and
-`2>/dev/null` sailed past into dialoguer's bare "IO error: not a terminal".
-**Stdout still decides output *format*** (`recent`/`search` plain list, the move
-progress line) — a genuinely different question. Every prompt goes through
-`tty::require_tty(what, how)`, whose message must name the flag that gets the same
-result without asking; a prompt whose absence changes what happens on disk
-(`fastf move`'s confirm) refuses rather than proceeding unconfirmed.
-
-## Menus
-
-**Menus match on labels, not indices.** Every submenu used to match a raw index
-with a trailing `unreachable!()`, so inserting a row silently reassigned the ones
-below it — the action menu's `move_idx` was a hard-coded `6`. Vocabulary: **Back**
-to a parent menu, **Cancel** to abandon an action, **Quit** only at the main menu.
-
-**The TUI contains errors; the discriminator is `dialoguer::Error`, not
-`io::Error`.** `tui::menu::contain` reports a failure and returns to the current
-submenu instead of unwinding to `main` (which exited 1 and threw away every
-answer already given). What must **never** be contained is a failure of the
-prompt *itself* — that returns to a loop which prompts and fails again forever.
-The obvious rule, "propagate anything with an `io::Error` in the chain", is
-exactly backwards: a mistyped path fails with `canonicalize`'s `NotFound` wrapped
-in context, which is the case containment exists for. Each menu arm builds an
-outcome and passes it to `contain(...)?`; an arm that uses `?` directly silently
-opts out.
-
-**A value with a local validity rule is checked at the prompt that collected it**
-(`TextOpts::validate`), and dependent questions come after the value they depend
-on. Register asked path, template, rename and apply and then had `register::run`
-reject the path. What survives at the core boundary is the *non-local* class — a
-race, a permission — which `contain` reports and which costs nothing already
-typed.
-
-The template builder's sections return `Result<bool>`: `false` is a cancel and
-leaves the scratch `Template` untouched (`edit_metadata` collects all four answers
-before assigning any). Both modes end in the same review menu.
-
-## Pickers
-
-`tui::pickers` holds all three — template, base, project — because a picker is a
-picker and the duplicates drifted (two template pickers with different labels,
-three base pickers of which one clamped and one marked the default).
-
-`pick_project` is the **ambiguity** picker, reached when `open`, `copy` or
-`path` matched several projects. It is deliberately not the browser: the
-browser's Enter opens the whole action menu, and a picker that interrupted a
-verb must serve that verb and nothing else. It is also deliberately not
-`live_select` — the candidate list is static, already narrowed by the query,
-with no sizes landing later, and `live_select` carries three load-bearing caller
-obligations this list has no use for. Rows come from `rows::project_row` like
-every other project list, so the columns match what the browser shows.
-
-## Lists
-
-`util::live_select` owns the key loop for the paged browser, because
-`dialoguer::Select` cannot repaint: `Term::read_key` has no timeout, and a `Term`
-over a read/write pair reports `is_term() == false`. The key is read on a
-throwaway thread and collected with `recv_timeout`, making the *wait*
-interruptible without the *read* being so.
-
-Three rules, all load-bearing:
-
-1. **Items are single-line and ANSI-free.** A repaint takes its block back by
-   line count (`clear_last_lines`), so one soft-wrapped row desynchronises every
-   later redraw. `tui::rows::clamp_label` is what guarantees it (unicode-width
-   aware, `…` tail, budget = columns − 3 for the `> ` prefix and a last-column
-   margin; columns == 0 passes through). Wrapped lines are what ghosted on the
-   legacy Windows console. Do not add colored strings to Select items, and reach
-   `dialoguer::console` through dialoguer rather than adding `console` as a
-   direct dependency.
-2. **Only the render thread may write while a live list is up.** On Windows
-   `move_cursor_up` derives its target from the *live* cursor position, so one
-   stray `println!` from another thread corrupts every later redraw. That is why
-   the size scanner threads are silent by construction.
-3. **The filter line counts in the block height.** Anything drawn between the
-   prompt and the last item must be in `drawn` and subtracted from the viewport
-   capacity.
-
-While the `/` filter is open **every printable key is a letter**, `q` and `j`
-included — which is why the key match is split into a filter branch and a normal
-branch rather than one match with guards. Esc clears the filter before it cancels,
-because a filter can hide the Back row. Page keys **clamp** where arrows **wrap**.
-
-**The columns run ID, folder name, base, template, date, then Size** — priority
-order, because a row is clamped from the *right* and whatever sits last is what
-gets eaten. The name used to be last, and the terminal the launcher relaunch
-opens is often 80 columns: an ambiguous `fastf open lullaby` showed a picker whose
-rows had lost the only column that told the projects apart. The date is last of
-the text columns because every bundled naming pattern already carries it inside
-the folder name. `the_folder_name_survives_a_narrow_window` pins it, with a
-fixture realistic enough to fail on the old order — a toy one fits in 80 columns
-whichever way round it is.
-
-The name cell is padded by **display width** (`pad_str`), unlike the slug columns
-beside it, because it is the one cell that can hold anything; a name wider than
-the column is left ragged rather than truncated. `cli::recent::print_plain` keeps
-its own older order and is not this table — it prints the full path on a second
-line, so it never truncates a name, and its output is a scripting contract.
-
-**Row widths are measured from the projects, never from the sizes**
-(`tui::rows::RowWidths`), and the Size cell is a fixed width. A label may only
-change inside its own Size cell, or the table reflows under the reader as
-snapshots land. `a_landing_size_does_not_reflow_the_row` compares **display
-columns**: the pending cell's `…` is three bytes and one column.
-
-**There is one project browser.** `fastf recent` and `fastf search` open the same
-one the menu does, through `cli::recent::browse`; they differ only in
-`leave_label`. Guard `show_cursor` with `is_terminal` — `Term::show_cursor` emits
-its escape whatever it is writing to, and restoring unconditionally on the error
-path put a literal `\x1b[?25h` into every piped error.
-
-`util::interrupt::restore_terminal` is the one cursor restore, called from
-`main`'s error path and from the signal handler before the second Ctrl-C exits
-130. The unix branch is raw `isatty` + `write` because a signal handler may not
-take std's stream lock.
-
-## Live sizes and unresponsive bases
-
-**Nothing blocks on a size.** The browser draws its list first and shows
-`scanning…` in a fixed-width cell until a snapshot lands. `util::size_scan` owns
-two workers over one queue; `request` **replaces** that queue with the visible
-page, selected row first, so turning the page reprioritizes at once instead of
-finishing work nobody is looking at. Snapshots live for one browser session and
-die with it; a mutation calls `forget`.
-
-`util::tree_size::directory_size_until` is the one shared walker: it sums
-regular-file logical lengths recursively, never follows links (`paths::is_link_like`,
-so junctions count as links too), ignores special nodes, uses checked addition,
-and returns `None` on **any** read failure rather than a partial number. Its
-cancel token is checked once per entry, so teardown is bounded on a share — and
-**a cancelled walk also returns `None`**, so a caller that cancels must discard
-the result rather than record it as `unavailable`. Sizes never enter `Project`, the cache or metadata.
-
-**Base lists are probed, never `is_dir`-ed.** `paths::probe_dirs` /
-`mounted_bases` run the `metadata` call on a helper thread and `recv_timeout` it,
-returning `Probe::{Mounted, Absent, Unresponsive}`. `is_dir()` on a dead SMB mount
-blocks for the operating system's timeout with nothing on screen. The abandoned
-thread is deliberate: it is blocked in the kernel and cannot be cancelled, and one
-parked thread is cheaper than the user's session.
-
-**A content mutation patches the row; only a structural change reloads.**
-`tui::actions::ActionLoop` is `Patched { project, stale }` / `Removed { path }` /
-`Reload` / `BackToList` / `Quit`. The browser used to answer every mutation by
-re-running `discover` across every base, so adding one tag re-read every
-`PROJECT_INFO.md` in the library. `stale` is what `size_scan::forget` is called
-with, and it is not empty for a tag: the tag was written into `PROJECT_INFO.md`,
-so the folder is bigger than the snapshot says. `run_paged_browser` takes a
-`keeps` predicate for the one thing a local patch cannot decide — a search row
-whose new metadata stopped matching.
-
-The `Patched` project is **boxed**: the Windows clippy leg refuses a
-`large_enum_variant` the Linux one accepts, and every `ActionLoop` would
-otherwise be `Project`-sized.
-
-## The main-menu frame
-
-`tui::frame` builds its counts from `library::index_summary`, which reads
-`.fastf-index.json` with no staleness check and no directory walk. A summary whose
-cost grew with the library would make the menu slower the more it had to say,
-which is backwards — so the numbers are labelled `from index`, and the one line
-that must be live (whether a base is there) is the probe. A pty test asserts a
-`scan_base` trace count of **zero** for opening the menu.
-
-The session ring is a `Mutex<Vec<String>>` in that module: in memory, per process,
-three entries. Anything durable belongs in the project's journal.
+- `tests/tui_update.rs` — the state machine, no terminal. Build with
+  `tui::testing::fixture`, send `Msg`s, assert on the `Effect`s.
+- `tests/tui_snapshots.rs` — the frames. `Theme::mono`, Unicode glyphs, fixed
+  dates, `/mnt/projects/…` paths (the hygiene test forbids real ones),
+  `insta` snapshots under `tests/snapshots/`. A deliberate change is reviewed
+  with `INSTA_UPDATE=always` and committed.
+- `tests/tui_pty/` — the runtime through a real 120×40 pty. **ratatui redraws
+  only the cells that changed**, so the raw transcript is fragments: `1 of 1
+  projects` never appears contiguously, and a word can arrive one letter at a
+  time. `harness::app_screen` replays the transcript (up to the last
+  `LeaveAlternateScreen`) into a `vt100` terminal and returns the frame a person
+  saw; `pty::plain` (escapes stripped) is for what a bridged flow printed in
+  cooked mode. Match on the screen, never on the stream.

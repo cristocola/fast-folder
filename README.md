@@ -33,15 +33,19 @@ fastf                       # guided terminal menu: pick, answer, done
 fastf new general --name="spring campaign"    # -> 2026-07-16_Spring_Campaign_ID0048/
 ```
 
-## The guided menu
+## The guided app
 
-Running `fastf` with no arguments opens the terminal menu, which is how most work
-gets done. It creates projects with a live preview of the folder tree, browses
-the library with folder sizes and tags filling in as they are measured, moves
-projects between drives with a progress bar you can cancel, builds templates step
-by step, and edits every setting in place. Esc always goes back, a rejected
-answer comes back editable rather than lost, and a network share that has gone
-away is reported rather than left as a frozen screen.
+Running `fastf` with no arguments opens the guided app, which is how most work
+gets done: one full-screen dashboard that shows the whole library — every base,
+the newest project, the busiest templates, folder sizes filling in as they are
+measured — and acts on it. Type to search (bare words match fuzzily,
+`tag:draft template=music-video created>2026-01-01` match exactly), press a key
+to open a project's folder, a terminal in it, or its action menu, and `c` for a
+command palette that finds any command or project by name. Creating a project
+with a live preview of the folder tree, registering folders, building templates
+step by step and editing every setting are one keystroke away. Esc always goes
+back, a rejected answer comes back editable rather than lost, and a network
+share that has gone away is reported rather than left as a frozen screen.
 
 Nothing it does is menu-only: every action has a scriptable `fastf <command>`
 equivalent, and the rest of this README speaks fluent shell.
@@ -69,7 +73,7 @@ Domain-specific templates live in the [`examples/templates/`](examples/templates
 
 - **Fills in file contents, not just folder names.** Your answers land inside the files themselves: a client brief with the client's name already written in, a shot list titled for the artist, a report header with the right month, a code project's config ready to build. Text files get placeholders substituted, and binary files (a logo, a video asset) are copied exactly as they are.
 - **A template is just a folder.** One small settings file plus a folder tree that gets reproduced into every project. Share a template by copying its folder. Or point fastf at a finished project and it generates a template from it (`fastf template from-folder`).
-- **Two ways to work, one engine.** A guided menu in the terminal and a scriptable command line for automation. Both read the same templates and settings, so nothing gets out of sync.
+- **Two ways to work, one engine.** A guided app in the terminal and a scriptable command line for automation. Both read the same templates and settings, so nothing gets out of sync.
 - **No hidden database.** A folder is a project because it contains a small `PROJECT_INFO.md` metadata file inside it. Delete the folder and the project is simply gone. Nothing to maintain, nothing to drift out of sync.
 - **Every project is findable again.** Unique IDs, creation dates, tags, and searchable metadata. Jump to any project with `fastf open ID0047` — or just `fastf open 47` — browse recent work, or keep timestamped journal notes per project.
 - **Works from your app launcher, not only a shell.** Bind fastf to a hotkey and `fastf copy lullaby` puts that project's folder on the clipboard with a notification; ask it something that needs a list or a question and it opens a terminal for itself instead of answering into the void. Pipes, redirects, cron and CI are untouched.
@@ -95,7 +99,7 @@ paru -S fast-folder-bin    # prebuilt static binary
 paru -S fast-folder        # build from source
 ```
 
-Both install the `fastf` command, shell completions, man pages, and a "Fast Folder" app-menu entry that opens the guided menu in your terminal.
+Both install the `fastf` command, shell completions, man pages, and a "Fast Folder" app-menu entry that opens the guided app in your terminal.
 
 ### Linux (release archive)
 

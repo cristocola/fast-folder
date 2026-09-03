@@ -74,7 +74,7 @@ prints is read by nobody. Refusing there is the same as doing nothing.
 
 So when fastf is asked for something interactive and can prove that nothing can
 read its output, it opens a terminal and runs the same command again inside it.
-This applies to the guided menu (`fastf` with no arguments), `fastf recent`,
+This applies to the guided app (`fastf` with no arguments), `fastf recent`,
 `fastf search`, and the ambiguous branch of `open`, `copy`, `path`, and `term`.
 A window that only showed text waits for Enter before closing; one that showed
 a picker or a menu closes as soon as you leave it — except `term`'s, which
@@ -109,118 +109,135 @@ Which emulator gets opened is `terminal` in the config, else `$TERMINAL`, else
 installed. The value names a *program*, not a command line. None of this exists
 on Windows — see [windows.md](windows.md).
 
-### One way out: Esc
+### The guided app
 
-**Esc backs out of anything.** Every menu, every list, every confirmation and
-every text field takes it, and `q` works wherever a list is on screen. You never
-have to reach for Ctrl-C to leave a prompt, and nothing you have already answered
-is thrown away by leaving one.
+Running `fastf` with no arguments opens the guided app: one full-screen
+dashboard that shows the library and acts on it, rather than a menu that asks
+one question at a time. It is drawn on stderr, so `fastf > log` still opens it
+and nothing you type reaches a pipe.
 
-Where each press lands:
+```
+ fastf  ◈ 12 projects · ⬡ 3 templates · ⌂ 2 bases · ▲ ID0248 · ⚠ 1 needs attention
+ bases  → projects (9)  ·  archive (3)  ·  usb (not mounted)
+ ── pulse ──  general ████████ 7   music-video ████ 4
+ ⌕ tag:draft lulla                                          4/12 · relevance
+┌ ◈ projects ──────────────────────────────────┐┌ ID0248 ─────────────────────┐
+│▸ ID0248 2026-09-01_Lullaby_Remix_ID0248 3.2 MB││2026-09-01_Lullaby_Remix_ID… │
+│  ID0247 2026-08-30_Client_Acme_ID0247  scanning…││music-video · projects       │
+└──────────────────────────────────────────────┘└─────────────────────────────┘
+ ✓  Added 1 tag to ID0248
+ / search  Enter actions  o open  t terminal  y copy path  n new  c commands  ? help  q quit
+```
 
-| Where you are | Esc |
-|---|---|
-| A submenu | its parent menu |
-| The main menu | quits, the same as the Quit item |
-| A confirmation | the action is not taken; back to the menu that offered it |
-| Anywhere in the create wizard | `Cancelled — nothing was created`; no folder, and the ID counter is untouched |
-| The project list | the main menu |
-| A project's action menu | back to the list, same row selected |
-| A settings field | back to the settings submenu, value unchanged |
-| The template builder, editing | its section menu, the section left as it was |
-| The template builder, creating | asks `Discard this template?` first |
+What is on screen, top to bottom:
 
-Back and Cancel rows stay on the menus that had them: Esc is the shortcut, the
-row is the discoverable path.
+- **The header** — how many projects, templates and bases there are, the
+  highest ID, and `⚠ n needs attention` when an interrupted create or move is
+  waiting for `fastf reconcile`. On a tall terminal it also lists each base
+  with whether it is mounted, the busiest templates, the newest project, and
+  the last few things this session did. The first frame's counts come from each
+  base's index and are labelled `(from index)` until discovery answers.
+- **The search bar** — see below.
+- **The project table** — ID, folder name, then the date, the size, the base,
+  the template and the tags, as many as fit. The folder name is never cut: a
+  narrow window drops the other columns first, tags before the template, the
+  template before the base.
+- **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
+  selected project's template, base and date, its journal, its tags, its
+  template variables, the top of its folder and the first lines of its notes.
+- **The template strip** (terminals 30 rows or taller) — one card per
+  template with how many projects use it. Tab reaches it; Enter filters the
+  list by the card.
+- **The status line and the hint bar** — what the last action did, and the
+  keys that matter where you are.
 
-### Keys in a project list
+Below 60×16 the app says so and waits for a bigger window or `q`.
+
+#### Keys
+
+`?` shows every key for where you are. `c` (or `:`, or Ctrl-P) opens the
+**command palette**, which lists every command with its key and filters as you
+type — `open` finds *Open project folder*, `#lull` jumps to the project. The
+keys that matter most:
 
 | Key | What it does |
 |---|---|
-| ↑ / ↓, `k` / `j`, Tab | move the highlight, wrapping at the ends |
+| ↑ / ↓, `k` / `j` | move the highlight, wrapping at the ends |
 | PageUp / PageDown | move by a screenful, stopping at the ends |
-| Home / End | first row, last row |
-| `/` | filter: type to narrow the list to rows containing what you type |
-| Enter, Space | open the highlighted row |
-| Esc, `q` | leave (with a filter open, the first Esc clears the filter) |
+| Home / End, `g` / `G` | first row, last row |
+| Tab / Shift-Tab | move focus between the list, the detail pane and the template strip |
+| `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
+| `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size |
+| `f` / `F` | show only the selected project's template / show every template again |
+| `i` | show or hide the detail pane |
+| Enter | the selected project's action menu: open, copy path, terminal, metadata, tags, journal, move, rename, unregister, delete |
+| `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
+| `n`, `e`, `T`, `,` | create a project, register a folder, manage templates, settings |
+| F5, `R` | reload the library, reindex every base from its folders |
+| `q` | quit |
+| Esc | close a dialog, leave the search bar, clear the query, clear the template filter — and only then quit |
+| Ctrl-C | leave at once (exit 130, `aborted.`) |
 
-While a filter is open every printable key is a letter, `q` and `j` included, so
-you can search for anything. The filter matches the whole row — id, template,
-date, base, name, tags — case-insensitively.
+#### Searching
 
-Text fields are editable, not just typeable: Left/Right, Home/End, Backspace and
-Delete all work, and a value a prompt rejects stays on the line to be corrected
-rather than being cleared for you to type again.
+Bare words match **fuzzily**: `lulrmx` finds `Lullaby_Remix`, case and accents
+ignored, and the characters that matched are highlighted in the row. Every word
+must hit somewhere in the ID, the folder name, the template or the tags. While
+the query has bare words the list is sorted by how well each row matched; `s`
+overrides that.
 
-### The main-menu frame
+Anything with an operator is the [`fastf search` grammar](#search), evaluated
+exactly: `tag:draft`, `template=music-video`, `artist=Aria*`,
+`created>2026-01-01`, and they combine with the bare words. A predicate on a
+template variable needs the rows' metadata, which is read for the rows that
+lack it and filled in as it lands; everything else is answered from the row.
 
-Under the banner, the guided menu shows what your library looks like: each
-configured base and whether it is there, how many projects are indexed, the
-highest ID, the newest project, and the last few things you did this session.
+The bar's right edge counts what matched — `4/12` — and names the sort order
+and the template filter. When nothing matches, the status line says so and the
+query stays in the bar, one keystroke from being fixed.
 
-The counts come from each base's `.fastf-index.json` and nothing else — no
-directory is scanned to draw it, so the menu does not get slower as the library
-grows. That is also why the numbers are labelled `from index`: they are as fresh
-as the last time a list was drawn. `fastf reindex` refreshes them.
-
-Turn it off with `fastf config set show-frame false`, or under Settings →
-Workflow prompts. It is a separate setting from `show-banner`: the banner is
-decoration, the frame is information.
-
-### Everything the command line can do
-
-The menu reaches the whole tool now. Register asks whether you are registering
-one folder or every unregistered folder in a base, shows the same preview
-`--recursive --dry-run` prints before it writes anything, and asks whether the
-projects should keep the folder's own date or take today's. Generating a template
-from a folder asks whether to bundle binary and large files. Settings gains a
-**Maintenance** submenu — Reindex, Check and recover, Show data locations — which
-run the same commands with the same output, and **Project basics** gains the
-register naming pattern, the last configuration key that was command-line only.
-
-### Nothing you answered is lost
-
-A value is checked at the prompt that asked for it, and questions are asked in
-dependency order. Registering a folder checks the path before it asks about
-templates or renaming; applying a template checks the target folder before the
-dry-run question and before a single variable; generating a template from a
-folder checks the source and the slug as each is typed. A search that matches
-nothing comes back with your query still in the field, one keystroke from being
-fixed. Settings fields, the ID counter and the template builder all behave the
-same way: the reason appears under the line, the text stays on it.
-
-## Browsing projects
-
-From the guided `fastf` menu, choose **Projects** to browse the complete library
-newest first. The browser is paged, with Previous, Next, and Back controls; each
-prompt shows `Page X/Y`. The same paged browser is used after choosing Search
-from the guided menu. The current selection is highlighted across the full
-terminal row, so columns such as Size remain easy to track back to the selected
-project.
+#### Sizes
 
 The list appears immediately. It never waits for a folder to be measured.
 
 Sizes are walked in the background, two at a time. The row you have selected is
-measured first, then the rest of the page. A row shows `scanning…` until its
-result arrives, then updates in place. You do not have to press anything. Only
-the current page is measured, and the snapshots last until you leave that
-Projects session. On a slow disk or a network share this is the difference
-between a list you can use at once and one that appears seconds later.
+measured first, then the rest of the screen. A row shows `scanning…` until its
+result arrives, then updates in place — you do not have to press anything. The
+snapshots last for the session; acting on a project (a tag, a rename, a move)
+drops that project's snapshot so it is measured again.
 
-`recent-default-limit` is retained as the configuration key for compatibility.
-It now controls both the guided TUI's Projects page size and the default
-`--limit` for `fastf recent`:
+#### The flows that open their own screen
+
+Creating a project (`n`), registering a folder (`e`), managing templates (`T`)
+and the settings (`,`) run on the main screen, asking their questions the way
+`fastf new`, `fastf register`, `fastf template …` and `fastf config` do, and
+the dashboard comes back when they return. A flow that prints a result — create,
+register — waits for Enter first, so it can be read. The selected project's
+action menu (Enter) works the same way.
+
+In these flows **Esc backs out of anything**, one level at a time: every menu,
+every confirmation and every text field takes it, and nothing you have already
+answered is thrown away by leaving one. A value a prompt rejects — a folder that
+does not exist, a page size of 0, a slug with a space in it — stays on the line
+to be corrected rather than being cleared for you to type again, and the reason
+appears under it. Register checks the path before it asks about templates or
+renaming; applying a template checks the target folder before the dry-run
+question and before a single variable. Anywhere in the create wizard, Esc means
+`Cancelled — nothing was created`: no folder, and the ID counter is untouched.
+
+The `show-banner` and `show-frame` settings belonged to the old menu and are
+now ignored; they still parse.
+
+## Browsing projects
+
+`fastf recent` and `fastf search` open the same app on a terminal. `recent`'s
+filters become a chip in front of the search bar —
+`[recent: template=music-video since=2026-01-01 limit=20]` — that the query is
+applied on top of; `search`'s terms are put straight into the bar. Both fall
+back to the plain list when stdout is not a terminal or `--plain` is passed.
 
 ```bash
-fastf config set recent-default-limit 20
-```
-
-`fastf recent` and `fastf search` open this same browser on a terminal — the
-same rows, the same Size column, the same action menu — differing only in that
-their last row says Quit rather than Back to main menu.
-
-```bash
-fastf recent                         # the guided browser (default on a terminal)
+fastf recent                         # the guided app (default on a terminal)
 fastf recent --plain                 # plain list, script friendly
 fastf recent --limit 50
 fastf recent --template rust-project
@@ -230,6 +247,14 @@ fastf recent --tag draft
 fastf open ID0047                    # reveal in the system file manager
 fastf open 47                        # the ID number, however it is padded
 fastf open my-crate                  # substring match on project name
+```
+
+`recent-default-limit` is retained as the configuration key and is the default
+`--limit` for `fastf recent`. The app itself is not paged — it scrolls — so the
+key no longer sizes a page.
+
+```bash
+fastf config set recent-default-limit 20
 ```
 
 ### How a query resolves

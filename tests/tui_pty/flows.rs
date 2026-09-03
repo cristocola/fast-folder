@@ -1,4 +1,5 @@
-//! The guided flows: bulk register, maintenance, and the template builder.
+//! The bridged flows: bulk register, maintenance, and the template builder —
+//! reached from the dashboard, run on the main screen, returned from.
 //!
 //! Driven through a real terminal — `harness.rs` states why, and the rules
 //! every suite in this binary follows.
@@ -22,8 +23,8 @@ fn the_menu_can_register_a_whole_base_after_previewing_it() {
     }
 
     let script = pty::Script::new()
-        .down(MENU_REGISTER)
-        .enter()
+        .key(KEY_REGISTER)
+        .pause(600)
         .down(1) // → Every unregistered folder in a base
         .enter()
         .line(&legacy.display().to_string())
@@ -34,11 +35,17 @@ fn the_menu_can_register_a_whole_base_after_previewing_it() {
         .pause(900)
         .key("y") // register these folders now?
         .pause(1200)
-        .esc()
+        .enter() // press Enter to return to fastf
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let out = pty::plain(&out);
 
-    assert_eq!(code, 0, "bulk register should return to the menu:\n{out}");
+    assert_eq!(
+        code, 0,
+        "bulk register should return to the dashboard:\n{out}"
+    );
     assert!(
         out.contains("dry run") || out.contains("Preview"),
         "the preview should be shown before anything is written:\n{out}"
@@ -57,8 +64,8 @@ fn declining_the_bulk_register_preview_writes_nothing() {
     fs::create_dir_all(legacy.join("One")).unwrap();
 
     let script = pty::Script::new()
-        .down(MENU_REGISTER)
-        .enter()
+        .key(KEY_REGISTER)
+        .pause(600)
         .down(1)
         .enter()
         .line(&legacy.display().to_string())
@@ -69,11 +76,14 @@ fn declining_the_bulk_register_preview_writes_nothing() {
         .pause(900)
         .key("n") // register these folders now? → no
         .pause(700)
-        .esc()
+        .enter() // press Enter to return to fastf
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let out = pty::plain(&out);
 
-    assert_eq!(code, 0, "declining should return to the menu:\n{out}");
+    assert_eq!(code, 0, "declining should return to the dashboard:\n{out}");
     assert!(
         !legacy.join("One/PROJECT_INFO.md").exists(),
         "a declined preview must write nothing:\n{out}"
@@ -88,8 +98,8 @@ fn the_menu_can_register_with_todays_date() {
     fs::create_dir_all(&folder).unwrap();
 
     let script = pty::Script::new()
-        .down(MENU_REGISTER)
-        .enter()
+        .key(KEY_REGISTER)
+        .pause(600)
         .enter() // One folder
         .line(&folder.display().to_string())
         .pause(400)
@@ -99,11 +109,14 @@ fn the_menu_can_register_with_todays_date() {
         .down(1) // created date → Today
         .enter()
         .pause(900)
-        .esc()
+        .enter() // press Enter to return to fastf
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let out = pty::plain(&out);
 
-    assert_eq!(code, 0, "register should return to the menu:\n{out}");
+    assert_eq!(code, 0, "register should return to the dashboard:\n{out}");
     let meta = fs::read_to_string(folder.join("PROJECT_INFO.md")).expect("registered");
     // Not the folder's own timestamp: the current year, from `now`.
     let year = meta
@@ -124,8 +137,8 @@ fn the_maintenance_menu_runs_reindex_recover_and_paths() {
     sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
 
     let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter()
+        .key(KEY_SETTINGS)
+        .pause(600)
         .down(6) // → Maintenance
         .enter()
         .enter() // → Reindex
@@ -137,12 +150,17 @@ fn the_maintenance_menu_runs_reindex_recover_and_paths() {
         .enter()
         .pause(900)
         .esc() // Maintenance → Settings
-        .esc() // → main menu
-        .esc()
+        .esc() // → the dashboard
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let out = pty::plain(&out);
 
-    assert_eq!(code, 0, "maintenance should return to the menu:\n{out}");
+    assert_eq!(
+        code, 0,
+        "maintenance should return to the dashboard:\n{out}"
+    );
     assert!(
         out.contains("Reindexed") || out.contains("project"),
         "reindex should report what it found:\n{out}"
@@ -164,8 +182,8 @@ fn the_builder_new_mode_ends_in_the_review_menu() {
     let sb = Sandbox::new();
 
     let script = pty::Script::new()
-        .down(MENU_TEMPLATES)
-        .enter()
+        .key(KEY_TEMPLATES)
+        .pause(600)
         .enter() // → Create new template
         // Step 1: metadata
         .line("Demo") // name
@@ -204,12 +222,17 @@ fn the_builder_new_mode_ends_in_the_review_menu() {
         .down(5)
         .enter()
         .pause(900)
-        .esc()
-        .esc()
+        .esc() // Templates → the dashboard
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let out = pty::plain(&out);
 
-    assert_eq!(code, 0, "the builder should return to the menu:\n{out}");
+    assert_eq!(
+        code, 0,
+        "the builder should return to the dashboard:\n{out}"
+    );
     let manifest = sb.install.join("templates/demo/template.yaml");
     let text = fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("no manifest: {e}\n{out}"));
     assert!(
@@ -230,8 +253,8 @@ fn the_builder_can_declare_an_empty_file() {
     let sb = Sandbox::new();
 
     let script = pty::Script::new()
-        .down(MENU_TEMPLATES)
-        .enter()
+        .key(KEY_TEMPLATES)
+        .pause(600)
         .enter() // → Create new template
         .line("Marker")
         .line("marker")
@@ -252,12 +275,17 @@ fn the_builder_can_declare_an_empty_file() {
         .down(5) // review → Save
         .enter()
         .pause(900)
-        .esc()
-        .esc()
+        .esc() // Templates → the dashboard
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let out = pty::plain(&out);
 
-    assert_eq!(code, 0, "the builder should return to the menu:\n{out}");
+    assert_eq!(
+        code, 0,
+        "the builder should return to the dashboard:\n{out}"
+    );
     let file = sb.install.join("templates/marker/files/.gitkeep");
     assert!(file.exists(), "the empty file should exist:\n{out}");
     assert_eq!(
@@ -401,9 +429,9 @@ fn a_relaunched_run_that_showed_a_picker_does_not_wait() {
     let sb = Sandbox::new();
     sb.plant_project(&sb.base, "proj", "ID0001");
 
-    // With a project to show, `recent` opens the browser — an interactive
+    // With a project to show, `recent` opens the dashboard — an interactive
     // surface. Esc leaves it, and that must be the end of the process.
-    let script = pty::Script::new().pause(600).esc().pause(600).build();
+    let script = pty::Script::new().pause(1200).esc().pause(600).build();
     let (out, code) = pty::run(
         common::FASTF,
         &["recent"],

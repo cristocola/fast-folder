@@ -13,7 +13,7 @@ pub(crate) const SCAN_DEPTH: usize = 1;
 
 /// A discovered project — the in-memory view built either from a freshly-read
 /// `PROJECT_INFO.md` or from a cache entry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     /// Authoritative ID from the `PROJECT_INFO.md` frontmatter.
     pub id: String,

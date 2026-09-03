@@ -64,10 +64,15 @@ pub fn run(args: RecentArgs) -> Result<()> {
         !args.plain && std::io::stdout().is_terminal() && crate::util::tty::prompt_available();
 
     if interactive {
-        browse(
-            filtered.into_iter().cloned().collect(),
-            "No projects to show.",
-        )
+        crate::tui::run(crate::tui::Entry::Recent {
+            preset: crate::tui::Preset {
+                template: args.template.clone(),
+                since: args.since.clone(),
+                tag: args.tag.clone(),
+                limit: args.limit,
+            },
+            initial: filtered.into_iter().cloned().collect(),
+        })
     } else {
         print_plain(&filtered);
         Ok(())
@@ -135,27 +140,6 @@ pub fn print_plain(filtered: &[&Project]) {
         );
         println!("      {} {}", "→".dimmed(), path_str.dimmed());
     }
-}
-
-/// Open the guided browser over an already-filtered list.
-///
-/// `fastf recent` and `fastf search` used to have a second, size-less picker of
-/// their own (`run_picker`), so the same library looked different depending on
-/// which door you came through and only one of the two showed folder sizes.
-/// There is one browser now; the shell entry points differ only in their last
-/// row, which says Quit rather than Back to main menu.
-pub fn browse(projects: Vec<Project>, empty_message: &str) -> Result<()> {
-    let page_size = Config::load()?.recent_default_limit.max(1);
-    // The list is already filtered and already read: the loader hands back the
-    // same rows rather than discovering again.
-    let mut initial = Some(projects);
-    crate::tui::browser::run_paged_browser(
-        page_size,
-        empty_message,
-        "Quit",
-        move || Ok(initial.take().unwrap_or_default()),
-        |_| true,
-    )
 }
 
 /// `fastf open <query>` — resolve a project and reveal it in the file manager.

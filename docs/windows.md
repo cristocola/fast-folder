@@ -12,14 +12,14 @@ Both are self-contained. `fastf.exe` is a single file that uses nothing beyond W
 ## Option 1: MSI installer (recommended)
 
 1. Download the `.msi` from the releases page and run it. A standard setup wizard walks you through the license and the install folder.
-2. Launch **Fast Folder** from the Start Menu. It opens the guided menu in a console window. On the first launch it asks where your projects should live, suggesting `C:\Users\<you>\Projects`, and creates that folder for you.
+2. Launch **Fast Folder** from the Start Menu. It opens the guided app in a console window. On the first launch it asks where your projects should live, suggesting `C:\Users\<you>\Projects`, and creates that folder for you.
 3. For the CLI, open a **new** terminal (PowerShell or cmd). PATH changes only apply to terminals started after the install. Verify:
 
 ```powershell
 fastf --version
 ```
 
-The installer places `fastf.exe` — the CLI and the guided menu, one program — under `Program Files\fastf` and adds that directory to the PATH. The Start Menu shortcut runs it.
+The installer places `fastf.exe` — the CLI and the guided app, one program — under `Program Files\fastf` and adds that directory to the PATH. The Start Menu shortcut runs it.
 
 Upgrading is just running a newer MSI. Uninstall from Windows Settings > Apps like any other program. Uninstalling removes the shortcut and the PATH entry.
 

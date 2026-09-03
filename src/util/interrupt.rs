@@ -50,14 +50,23 @@ pub fn check() -> anyhow::Result<()> {
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Raise the flag without a real signal, so the interrupt-handling path can be
-/// tested deterministically. Sending an actual console control event on Windows
-/// reaches the whole process group — including the test runner — so simulating
-/// the flag is both safer and more precise: it drives exactly the code a real
-/// Ctrl-C reaches. Hold [`TEST_LOCK`] across the raise-and-reset.
+/// Raise the flag without a real signal.
+///
+/// The guided app runs the terminal in raw mode, where Ctrl-C arrives as a key
+/// rather than as SIGINT; when the user presses it at the root the app raises
+/// the flag itself so that `main`'s exit path says `aborted.` and exits 130
+/// exactly as a signal would have.
+pub fn raise() {
+    INTERRUPTED.store(true, Ordering::Relaxed);
+}
+
+/// [`raise`] for tests, which hold [`TEST_LOCK`] across the raise-and-reset.
+/// Sending an actual console control event on Windows reaches the whole process
+/// group — including the test runner — so simulating the flag is both safer and
+/// more precise: it drives exactly the code a real Ctrl-C reaches.
 #[cfg(test)]
 pub fn raise_for_test() {
-    INTERRUPTED.store(true, Ordering::Relaxed);
+    raise();
 }
 
 /// Reset the flag. Only for tests, which run many creates in one process.

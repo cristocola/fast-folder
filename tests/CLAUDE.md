@@ -25,10 +25,21 @@ The suites, and what each guards — the intent, not the case list:
   of release).
 - `concurrency.rs` — races real **processes**, not threads: a thread test passes
   against an in-process `Mutex` while production stays broken.
-- `tui_pty.rs` (unix; modules `menu`, `browser`, `flows`) — the interactive menu
-  through a real terminal, which is the only place its worst defect was visible:
-  any recoverable error ended the session. `tests/tui_pty/harness.rs` states the
-  rules that keep these from being flaky.
+- `tui_update.rs` — the guided app's state machine without a terminal: an
+  `App` from `tui::testing`'s fixtures, messages in, effects out.
+  `tui_commands.rs` — the command registry's invariants (one key means one
+  thing per context, every command has a title and a help entry, no type
+  name that `layering.rs` would read as a dialoguer prompt).
+  `tui_snapshots.rs` — the frames, through ratatui's `TestBackend` in the mono
+  theme at fixed sizes, against `tests/snapshots/*.snap` (`insta`; review a
+  deliberate change with `INSTA_UPDATE=always cargo test --test tui_snapshots`
+  and commit the file).
+- `tui_pty.rs` (unix; modules `menu`, `browser`, `flows`) — the guided app
+  through a real terminal: the runtime, the threads, the bridged dialoguer
+  flows, which a test backend cannot see. `tests/tui_pty/harness.rs` states the
+  rules that keep these from being flaky — above all that ratatui redraws only
+  the cells that changed, so a frame is read back through `app_screen` (a
+  `vt100` replay of the transcript), never matched in the raw stream.
 - `relaunch.rs` (unix) — when fastf opens a terminal for itself and, mostly, when
   it must not: a pipe, a redirect, an ssh session, a missing display, either off
   switch, and the loop guard all keep today's behaviour exactly.
@@ -65,11 +76,11 @@ The suites, and what each guards — the intent, not the case list:
 owns its `FASTF_INSTALL_DIR`, redirects `HOME` into itself, and runs the built
 binary (`run`/`ok`/`fails`/`spawn`), plus `with_bases` for multi-base fixtures
 and `plant_project` for "this base already holds ID0082". It also carries
-`pty::run` (unix, `libc::forkpty`) — `dialoguer` refuses to prompt without a
-TTY, so confirmations and pickers are invisible to a pipe-based test, which is
-exactly where the rename prompt once spent a release offering one folder name
-and committing another. `#![allow(dead_code)]` because each binary uses a
-different subset.
+`pty::run` (unix, `libc::forkpty`, a 120×40 window) — the app cannot draw and
+`dialoguer` refuses to prompt without a TTY, so the dashboard, confirmations
+and pickers are invisible to a pipe-based test, which is exactly where the
+rename prompt once spent a release offering one folder name and committing
+another. `#![allow(dead_code)]` because each binary uses a different subset.
 
 **Write a test against the broken build first.** Several have passed pre-fix and
 were relabelled as design guards rather than left looking like regressions they

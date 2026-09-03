@@ -64,7 +64,7 @@ fn core_does_not_prompt() {
 /// output neither can suppress, redirect or translate — and `colored` inside
 /// `core` is ANSI in a stdout a script is piping. The exceptions are named here
 /// rather than left to judgement: `util::diag` is the one warning sink, and
-/// `util::live_select` draws a picker by design.
+/// `util::trace` writes its counts by design.
 #[test]
 fn core_and_util_do_not_render() {
     const RENDERING: [&str; 5] = ["use colored", "println!", "eprintln!", "print!", "eprint!"];
@@ -72,7 +72,7 @@ fn core_and_util_do_not_render() {
     // uses the platform separator, so a `/` suffix never matches on Windows —
     // and the first version of this list flagged `util::diag` itself there, on
     // the one platform nobody ran it on locally.
-    const ALLOWED: [&str; 3] = ["diag.rs", "live_select.rs", "trace.rs"];
+    const ALLOWED: [&str; 2] = ["diag.rs", "trace.rs"];
 
     let mut offenders = Vec::new();
     for layer in ["core", "util"] {
@@ -176,9 +176,8 @@ fn only_tui_prompt_prompts() {
             }
             let text = fs::read_to_string(&path).unwrap();
             for (number, line) in text.lines().enumerate() {
-                // `select_live` is fastf's own picker, and `dialoguer::console`
-                // is a terminal toolkit, not a prompt.
-                if line.contains("live_select") || line.contains("console::") {
+                // `dialoguer::console` is a terminal toolkit, not a prompt.
+                if line.contains("console::") {
                     continue;
                 }
                 if PROMPT_TYPES.iter().any(|t| line.contains(t)) {
@@ -200,9 +199,9 @@ fn util_does_not_prompt() {
     let mut offenders = Vec::new();
     for path in sources("util") {
         let text = fs::read_to_string(&path).unwrap();
-        // `live_select` and the row helpers draw with dialoguer's console
-        // primitives (width measurement, truncation, themes). Drawing is not
-        // prompting; `interact` is.
+        // The row helpers draw with dialoguer's console primitives (width
+        // measurement, truncation, themes). Drawing is not prompting;
+        // `interact` is.
         if text.contains(".interact()") || text.contains(".interact_text()") {
             offenders.push(path.display().to_string());
         }
@@ -210,6 +209,47 @@ fn util_does_not_prompt() {
     assert!(
         offenders.is_empty(),
         "util must not run a dialoguer prompt:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// The guided app's terminal library stays inside `tui`.
+///
+/// `ratatui` and `crossterm` are how the dashboard is drawn and how its keys
+/// are read. Nothing below `tui` may know about either: `core` and `util` serve
+/// scripted runs with no terminal, and `cli` prints — a key read or a frame
+/// drawn from there would be a second, unsynchronised owner of the screen.
+#[test]
+fn ratatui_and_crossterm_stay_under_tui() {
+    const TERMINAL: [&str; 2] = ["ratatui", "crossterm"];
+
+    let mut offenders = Vec::new();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files: Vec<PathBuf> = ["core", "util", "cli"]
+        .into_iter()
+        .flat_map(sources)
+        .collect();
+    files.push(root.join("src").join("main.rs"));
+    for path in files {
+        let text = fs::read_to_string(&path).unwrap();
+        for (number, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if TERMINAL.iter().any(|marker| line.contains(marker)) {
+                offenders.push(format!(
+                    "{}:{}  {}",
+                    path.display(),
+                    number + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "only src/tui may name ratatui or crossterm:\n  {}",
         offenders.join("\n  ")
     );
 }

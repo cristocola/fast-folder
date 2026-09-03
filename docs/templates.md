@@ -142,8 +142,8 @@ Templates always use `/` as the path separator, on every platform. fastf transla
 
 ## The interactive builder
 
-`fastf template new`, or **Manage templates → Create new template** from the
-guided menu, walks through metadata, ID format, variables, folder structure and
+`fastf template new`, or `T` then **Create new template** in the guided app,
+walks through metadata, ID format, variables, folder structure and
 placeholder files, and then lands in a **review menu**: every section with its
 current contents, plus Save and Discard. Pick any section to go back into it.
 Editing an existing template opens the same menu straight away.
@@ -168,7 +168,7 @@ fastf template from-folder ./my-project my-template
 fastf template from-folder ./delivery-kit client-kit --bundle-assets
 ```
 
-From the guided menu the same flow asks whether to bundle. Text files become editable template files. With `--bundle-assets`, binary and large files are copied into the template byte for byte (fastf confirms the total size first). The project's own `PROJECT_INFO.md` is skipped, since fastf owns that file.
+From the guided app (`T`, then **Generate template from existing folder**) the same flow asks whether to bundle. Text files become editable template files. With `--bundle-assets`, binary and large files are copied into the template byte for byte (fastf confirms the total size first). The project's own `PROJECT_INFO.md` is skipped, since fastf owns that file.
 
 ## Reserved filename
 

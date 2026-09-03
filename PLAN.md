@@ -1,526 +1,234 @@
-# PLAN.md — v2.1.0: fastf answers the launcher
+# PLAN.md — v3.0.0: the guided app on ratatui
 
-> **Done. v2.1.0 was published 2026-08-31, and v2.1.1 the same day.** Every box
-> is ticked, including the two that needed a human: the maintainer ran the
-> launcher smoke test on the desktop and checked Windows. This file is kept as
-> the phase-by-phase record, the way the v2.0.0 plan was before it.
->
-> It was written to be worked one phase per session: read PLAN.md, do phase N,
-> run the gates, tick only the boxes whose named verification actually ran,
-> each phase in its own PR with `ROADMAP.md` and the matching `docs/` page in
-> the same commit, and findings outside the phase sent to the Parking lot
-> rather than fixed in passing. The **Phase log** at the bottom says what
-> differed and why.
+> **In progress.** Phase 0 landed on `ratatui/phase-0-foundation`. This file
+> is worked one phase per session: read it, do phase N, run the gates, tick
+> only the boxes whose named verification actually ran, each phase in its own
+> PR into `main` with `ROADMAP.md` and the matching `docs/` page in the same
+> commit, and findings outside the phase sent to the Parking lot rather than
+> fixed in passing. The **Phase log** at the bottom says what differed and why.
 
 ## Why this plan exists
 
-fastf is launched two ways the current binary only half-serves: a shell, and a
-desktop launcher (KDE's krunner and friends), where the process has **no
-terminal at all** — stdin is `/dev/null`, stdout and stderr are journald
-sockets, and nothing a command prints is ever seen. From a launcher today:
+fastf's daily surface was a guided *menu*: a sequence of dialoguer prompts — a
+main menu, a paged list, an action menu, wizards. It could not show the library
+and act on it at the same time, had no fuzzy anything, no multi-select, and
+every screen was one prompt wide. A prototype on ratatui showed what one
+full-screen dashboard over the real core feels like; it was prototype-grade
+underneath (blocking discovery on the render thread, an 8 fps busy loop,
+substring "fuzzy", no tests), so it became the visual spec and nothing else.
 
-- `fastf open <query>` with one match works (it spawns the file manager and
-  needs no terminal). With several matches it prints the ambiguity list into
-  the void and exits 1 — from the launcher's point of view, nothing happened.
-- `fastf search <query>` starts, refuses or prints to nowhere, and exits.
-  The launcher shows a bouncing cursor, then nothing.
-- There is no command that puts a project's path on the clipboard. The TUI
-  action menu has **Copy path**; the command line has nothing, so the
-  launcher has nothing.
+**Goal:** rebuild `src/tui/` on ratatui as one full-screen app that reaches
+everything fastf can do — every menu item, every command-line-only capability,
+and what the tool lacks: batch move/delete/tag with marks, a fuzzy command
+palette, jump-to-project, live previews — with the engineering rules kept
+(layering, locking, probes-never-`is_dir`, patch-vs-reload, the launcher
+rules, the Windows clippy leg) and a test suite of the same seriousness as the
+rest of the repo.
 
-The v2.1.0 answer, in one sentence: **when fastf is asked something
-unambiguous it acts silently; when it needs to show text or ask a question
-and has no terminal, it opens one; and the clipboard becomes a first-class
-verb.** Three product decisions behind that:
+## Decisions (final)
 
-1. **The ambiguity picker serves the verb it interrupted.** A picker reached
-   from `open` opens the chosen project; from `copy` it copies. It never
-   detours into the full project action menu — that is what `fastf` (the
-   menu) and `fastf recent` are for.
-2. **Scripts must never notice any of this.** A pipe, a redirect, cron, CI:
-   stdout that is a regular file or FIFO means somebody is reading it, and
-   fastf keeps its exact current behavior — plain output, plain errors.
-   The relaunch fires only where output provably has no reader.
-3. **`fastf path` is for scripts, `fastf copy` is for hands.** `path` prints
-   the bare path to stdout (`cd "$(fastf path api)"`); `copy` puts it on the
-   clipboard and says so. In a headless GUI session — where stdout has no
-   reader — `path` degrades to copy-plus-notification rather than printing
-   into the void, so both verbs do the useful thing when typed into a
-   launcher.
+1. **In place, one crate, one binary.** End state: ratatui only. `browser.rs`
+   and `util::live_select` went in Phase 0; dialoguer stays for the CLI's
+   inline prompts until Phase 6, when `prompt.rs`/`pickers.rs`/`vars.rs` are
+   reimplemented on `Viewport::Inline` and dialoguer leaves `Cargo.toml`.
+2. **`fastf` opens the new app from Phase 0.** Flows not yet native (create,
+   register, templates, settings, the action menu) are reached through a
+   *suspend bridge* — the screen is released, the dialoguer flow runs on the
+   main screen, the app comes back — and each phase makes flows native and
+   deletes their bridge variant. `fastf recent`/`search` open the same app.
+3. **Elm-style.** `App` + `Msg` + `update(&mut App, Msg) -> Vec<Effect>`
+   (no I/O) + `view(&App, &mut Frame)`. A `Runtime` owns the terminal, an
+   input thread and worker threads (std, no tokio); the loop blocks on one
+   channel and ticks only while something on screen is moving. A modal stack.
+   **One command registry** drives keys, palette, help and hints.
+4. **Fuzzy with `nucleo-matcher`**; the search bar keeps `core::query` for
+   operators and scores bare words fuzzily, highlighted.
+5. **Marks and batch jobs** (Phase 2): every verb acts on the marks if any.
+6. **Reuse, never reimplement:** `SizeScanner`, `probe_dirs`, `index_summary`,
+   `operations::*`, `plan_report`, `clipboard`, `reveal_folder`,
+   `open_terminal_at`, the `LineEditor` (ported as `widgets::input::LineEdit`).
+7. **The screen is stderr**; unix builds enable crossterm's `use-dev-tty`.
+   `require_tty` runs before the screen is taken; `Runtime::init` is the
+   `mark_interactive_surface` choke point that replaced `live_select`'s.
+8. **Theme** from the environment: `NO_COLOR`/dumb → mono, truecolor →
+   rich, else ANSI-16; ASCII glyphs on conhost or `FASTF_ASCII=1`.
+9. **Tests:** pure `update` tests, `TestBackend`+`insta` snapshots, registry
+   invariants, layering additions, the pty suite on a `vt100` replay.
+10. **Delivery:** eight phases, one per session, each its own PR into `main`.
 
 ## Gates — every phase, before its PR
 
 - `cargo fmt --check`
-- `cargo clippy --all-targets -- -D warnings` — and `--release` (debug-only
-  code is dead in release, live in debug)
+- `cargo clippy --all-targets -- -D warnings` — and `--release`
 - `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings`
-  (local early warning; CI's Windows runner is the authority)
-- `cargo test --all-targets` and `cargo test --release`
+- `cargo test --all-targets` (includes `tui_update`, `tui_commands`,
+  `tui_snapshots` with committed snapshots, `tui_pty`, `layering`,
+  `repo_hygiene`) and `cargo test --release`
+- `cargo check --all-targets --target x86_64-pc-windows-msvc`
+- `cargo +1.88.0 check --locked --all-targets` (MSRV)
 - `RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --locked`
-- `cargo test --test repo_hygiene`
 - `ROADMAP.md` updated in the same commit; the matching `docs/` page when
   behaviour changed; the relevant `CLAUDE.md` only once the decision landed.
 
 ---
 
-## Phase 1 — structured resolution and numeric IDs
+## Phase 0 — foundation ✔ (this branch)
 
-**Goal.** `library::resolve` currently flattens ambiguity into an error
-string, so no caller can offer the candidates to a picker. After this phase
-the library answers with data — `Resolution` — and the old `resolve` is a
-thin wrapper producing byte-identical errors. Every resolver caller also
-gains a numeric tier: an all-digits query matches the project whose ID
-*number* equals it, so `fastf open 37` finds ID0037 instead of falling
-through to a name-substring search.
+**Goal.** The app exists, is the daily surface, and every old flow is still
+reachable. `runtime.rs`, `command.rs`, `theme.rs`, `fuzzy.rs`, `App`/`update`
+/`view`, the dashboard (header from the indexes, search bar with structured +
+fuzzy matching, the table with a sticky viewport and live sizes, the detail
+pane, the read-only template strip, status and hints), the palette, help, the
+too-small guard; `o t y p i s S f F / R F5` native; `n e T , Enter` bridged.
 
-**Evidence.** `src/core/library/resolve.rs:19-58`: tiers are exact ID → ID
-prefix → case-insensitive name substring; the ambiguous arm formats a string
-(capped at `take(10)`) and `bail!`s, so the candidate set dies there. Callers
-(`src/cli/recent.rs:155`, `src/cli/move_project.rs:36`, `src/cli/note.rs:40`
-and `:86`, `src/cli/tag.rs:22,39,67,107`) all use `library::resolve(&cfg,
-query)?`. `src/core/library/tests.rs` asserts on the error text
-(`resolve_distinguishes_no_match_exact_and_ambiguous`,
-`resolve_ambiguous_errors_with_candidates`) — those stay untouched and green.
-`naming::id_value` (`src/core/naming.rs:220`) already reads an ID's trailing
-digit run as `Option<u64>`.
+- [x] `Cargo.toml`: `ratatui 0.30` (no default features), `nucleo-matcher`,
+  `unicode-width`, unix `crossterm` with `use-dev-tty`; dev `insta`, `vt100`
+- [x] `util::diag::set_sink` (a worker's warning reaches the app, not the
+  alternate screen); `util::interrupt::raise`; `live_select.rs` and
+  `browser.rs` deleted; `frame.rs` is the session ring only
+- [x] `main.rs` → `tui::run(Entry::Menu)`; `cli::recent`/`cli::search` →
+  `Entry::Recent`/`Entry::Search`
+- [x] `tests/tui_update.rs` (27), `tests/tui_commands.rs` (7),
+  `tests/tui_snapshots.rs` (9, snapshots committed), `tests/layering.rs`
+  gains `ratatui_and_crossterm_stay_under_tui`
+- [x] `tests/tui_pty/*` rewritten for the app (39): the traced assertions
+  kept — one `discover` and zero `scan_base` on open over a fresh index, a
+  tag patches its row, a delete drops its row, sizes land with no input
+- [x] Gates: fmt, clippy ×3, `cargo test --all-targets`, `cargo test
+  --release`, MSVC check, MSRV check, docs — all run on 2026-09-03
+- [x] `docs/cli.md` "The guided app"; `ROADMAP.md`; `src/tui/CLAUDE.md`
+  rewritten; root `CLAUDE.md` and `tests/CLAUDE.md` pointers
+- [ ] Manual, needs the maintainer: run `fastf` in an 80×24 and a 120×40
+  window; `fastf search tag:x`; `fastf </dev/null`; `NO_COLOR=1 fastf`; a
+  launcher-started `fastf` still opens a window running the app
+- Measured: see the Phase log.
 
-**Decisions.**
-- `pub enum Resolution { NoProjects, NoMatch, One(Box<Project>), Many(Vec<Project>) }`
-  in `resolve.rs`. **Box the `One` variant**: `Project` is large and the
-  Windows clippy leg fires `large_enum_variant` where Linux does not
-  (`ActionLoop` precedent, root `CLAUDE.md`).
-- `pub fn resolve_matches(cfg: &Config, query: &str) -> Resolution`. Tiers:
-  exact ID → **numeric** → ID prefix → name substring. Numeric fires only
-  when the query is all ASCII digits and parses to `u64`; it matches
-  `naming::id_value(&p.id) == Some(n)`. Exact ID stays first because a
-  template may declare a digits-only ID prefix, making an all-digits string a
-  legal complete ID.
-- The three error messages move into `pub(crate)` builders in `resolve.rs`
-  (`no_projects_error()`, `no_match_error(query)`,
-  `ambiguous_error(query, &[Project])` — the last keeps the `take(10)` cap in
-  the *text* while `Many` carries the full list). `resolve()` becomes
-  `resolve_matches` + those builders, so the strings exist exactly once.
-- `move`, `tag`, `note` gain the numeric tier implicitly (desired) and do
-  **not** gain a picker in this plan (Parking lot).
+## Phase 1 — single-project actions, metadata, journal
 
-**Steps.**
-1. Add `Resolution` and `resolve_matches`; rewrite `resolve` as the wrapper.
-2. Tests in `src/core/library/tests.rs`, written against the broken build
-   first where the behaviour changes (the numeric-tier test must fail before
-   the tier exists): `an_all_digit_query_matches_the_id_number_exactly`
-   (library holding ID0004 plus ID0040–ID0049; `resolve(cfg, "4")` must
-   return ID0004 — today it is ambiguous), `the_numeric_tier_sits_between_exact_id_and_prefix`,
-   `a_numeric_query_too_large_for_u64_falls_through`,
-   `resolve_matches_reports_many_without_erroring`.
-3. Confirm `resolve_by_id_prefix_and_name` and both existing
-   ambiguity-text tests pass unchanged (the wrapper pin).
-4. Docs: the shared query paragraph in `docs/cli.md` (how a query resolves)
-   gains the numeric tier; `Open`'s `after_help` in `src/main.rs` gains a
-   `fastf open 37` example line.
+`app/actions.rs` with `ListChange`; the action-menu modal from the registry;
+`a A Ctrl-T N Ctrl-N r m u D M J`; a single move as a one-item job with the
+progress modal (`Arc<Mutex<Progress>>` + cancel flag from the runtime,
+snapshotted per tick); `$EDITOR` under `Suspend`; the sort picker; delete
+`src/tui/actions.rs` and the `ActionMenu` bridge; `validators.rs` for the
+prompt texts and messages, kept verbatim.
 
-**Acceptance.**
-- [x] All gates pass.
-- [x] The numeric-tier test was observed failing on the pre-phase build
-      (`an_all_digit_query_matches_the_id_number_exactly` and
-      `the_numeric_tier_sits_between_exact_id_and_prefix`, both FAILED before
-      the tier existed).
-- [x] `resolve_ambiguous_errors_with_candidates` and
-      `resolve_distinguishes_no_match_exact_and_ambiguous` pass **unmodified**.
-- [x] `grep -rn "is ambiguous" src/` shows the string in exactly one place.
+- [ ] update tests: each verb → `Action`; `Patched` + `ForgetSizes(stale)`;
+  `Removed` clamps; typed-confirm mismatch → `name did not match — nothing
+  deleted`; `y`/`n` answer a confirm without Enter
+- [ ] snapshots: `action_menu`, `delete_typed_confirm`, `metadata_view`,
+  `journal_view`, `move_progress`
+- [ ] pty: the tag and delete tests native (`discover == 1`);
+  `a_note_added_in_the_editor_is_appended` with a recorder `EDITOR`
+- [ ] docs/cli.md keys table; ROADMAP
 
----
+## Phase 2 — marks and batch jobs
 
-## Phase 2 — `fastf copy` and `fastf path`
+`app/jobs.rs`, the job runner, `Space * -`, `targets()`, batch
+confirm/progress/report modals, cancel mid-move, the debug-only
+`move:force-staged` failpoint and `FASTF_FAULT` as a comma list.
 
-**Goal.** Two new plain subcommands sharing `open`'s resolve→revalidate
-spine. `fastf copy <query>` puts the project path on the clipboard and says
-what it did; `fastf path <query>` prints the bare path to stdout and nothing
-else. The clipboard spawn is hardened so the copied text survives a launcher
-cleaning up its children. Ambiguity still errors in this phase (the picker is
-Phase 3) — ship value early, keep the diff reviewable.
+- [ ] update tests: marks, job construction in display order, per-item
+  patching, cancel keeps failed items marked
+- [ ] snapshots: `batch_delete_confirm`, `job_progress`, `job_report_with_failures`
+- [ ] pty: `a_batch_move_reports_each_item`;
+  `a_failed_move_surfaces_in_the_ui_and_leaves_the_list_consistent`
+  (`FASTF_FAULT=move:force-staged,move:after-staging`)
 
-**Evidence.** The only clipboard caller today is the TUI's private
-`copy_path` (`src/tui/actions.rs:316-327`), wording documented at
-`docs/cli.md:189` ("It always says what it did"). `util::clipboard::copy`
-(`src/util/clipboard.rs:29`) probes `wl-copy`/`xclip`/`xsel`/`clip.exe`/
-`clip`/`pbcopy`; the Wayland/X11 tools survive process exit by forking
-themselves — but the fork inherits fastf's process group, and a launcher
-that kills the group on exit kills the clipboard owner with it.
-`ROADMAP.md` already lists `fastf path <query>` in the Unscheduled backlog
-under Scriptability. `fastf open`'s revalidate-then-act shape is
-`src/cli/recent.rs:152-175`. Note the TUI's Copy path validates nothing —
-the CLI commands should mirror `open`'s `revalidate_for_read` instead.
+## Phase 3 — new-project wizard, register, apply
 
-**Decisions.**
-- New modules `src/cli/copy.rs` and `src/cli/path_cmd.rs` (`paths_cmd.rs`
-  naming precedent — `path` is not a keyword but symmetry helps), plus two
-  `Commands` variants and dispatch arms in `src/main.rs`. Plain positionals,
-  no `trailing_var_arg`, so `classify_extra` and the exhaustiveness test in
-  `main.rs` need no changes.
-- `copy`: `Config::load()?` → `library::resolve` → `revalidate_for_read`
-  (same `.with_context` shape as `recent::open`) → `clipboard::copy` →
-  print `✓  Copied with <tool>` or the documented fallback (print the path
-  on its own line) — wording matches `tui::actions::copy_path` exactly.
-- `path`: same spine, then one `println!` of
-  `util::paths::display_path(&project.path)` with **no `colored` call at
-  all** — the bare line is the script contract.
-- `fastf path` vs the existing `fastf paths` (data-dir info): a
-  cross-reference sentence in **both** commands' `after_help` and both
-  `docs/cli.md` entries.
-- `clipboard::feed` gains `process_group(0)` on unix
-  (`std::os::unix::process::CommandExt`, std since 1.64) with a comment
-  naming the reason: launchers signal the process group; the forked
-  `wl-copy`/`xclip` that owns the selection must not die with it. Looks
-  removable otherwise.
+`app/wizard.rs`, `app/register.rs`, `widgets/{form,tree}.rs`; preview from
+`project::plan_report`; post-create under `Suspend`; print-free
+`cli::register::{preview_rename, recursive_targets}` extracted; delete
+`menu_create/menu_register*/menu_apply` and their bridge variants.
 
-**Steps.**
-1. `clipboard.rs` hardening (one `#[cfg(unix)]` block in `feed`).
-2. The two command modules + clap variants + `src/cli/mod.rs`.
-3. Tests in `tests/cli_output.rs`:
-   `path_prints_the_bare_path_and_nothing_else` (stdout is exactly the path
-   + newline), `copy_without_any_clipboard_tool_prints_the_path_instead`
-   (`PATH` pointed at an empty dir), `path_and_copy_refuse_a_stale_project`
-   (plant a project, delete its `PROJECT_INFO.md` after the cache exists —
-   revalidate must refuse), `an_ambiguous_copy_errors_with_candidates_when_piped`
-   (pins the Phase 3 piped contract early).
-4. Docs: `docs/cli.md` command-overview rows + a short section for each;
-   `ROADMAP.md`: tick/remove the backlog `fastf path <query>` item.
+- [ ] update tests: step transitions; Esc at every step → `Cancelled —
+  nothing was created.`; `confirm_create=false` skips; validator messages
+- [ ] snapshots: `wizard_variables`, `wizard_preview`, `register_form`,
+  `register_recursive_preview`, `apply_preview`
+- [ ] pty: the create/register/apply tests native
 
-**Acceptance.**
-- [x] All gates pass.
-- [x] `fastf path <id> | cat` output is byte-exactly the path plus `\n`
-      (`path_prints_the_bare_path_and_nothing_else`).
-- [x] With an empty `PATH`, `fastf copy <id>` exits 0 and prints the path
-      (`copy_without_any_clipboard_tool_prints_the_path_instead`).
-- [x] The clipboard comment in `clipboard.rs` names the process-group reason.
+## Phase 4 — template studio, builder, from-folder
+
+`app/studio.rs`, `view/{templates,builder}.rs`; the builder as sections with
+a live tree; `cli::template::scan_source` `pub(crate)`; delete
+`template_builder.rs`, `menu_templates`, `template_from_folder_flow`.
+
+- [ ] update tests: section state; `Cannot save:` on an invalid template;
+  bundle confirm gating
+- [ ] snapshots: `builder_review`, `builder_variable_form`, `template_show`,
+  `from_folder_preview`
+- [ ] pty: the builder tests native; `deleting_a_template_asks_first`
+
+## Phase 5 — settings, ID counter, maintenance, onboarding, needs-attention
+
+`app/settings.rs`; a print-free `cli::config::apply` split from `set`; the
+onboarding modal; `⚠ n needs attention` opens the reconcile report; delete
+`menu.rs`.
+
+- [ ] update tests: every field → key + message; bases by text; onboarding
+  iff both base fields empty
+- [ ] snapshots: `settings_basics`, `settings_bases_with_probe_notes`,
+  `id_counter`, `onboarding`, `reconcile_report`
+- [ ] pty: the settings/maintenance tests native;
+  `first_run_asks_for_a_base_and_creates_it`
+
+## Phase 6 — retire dialoguer
+
+`inline.rs` on `Viewport::Inline` (stderr, `insert_before` for the transcript
+line); `prompt.rs`/`pickers.rs`/`vars.rs` over it; `rows.rs` on
+`unicode-width`; dialoguer removed; layering: delete the three dialoguer
+rules, add `only_the_runtime_touches_the_terminal` and `dialoguer_is_gone`.
+
+- [ ] the `LineEdit` tests cover the CLI prompts; inline select cancels on
+  Esc/`q`; confirm answers bare `y`/`n`
+- [ ] pty: `a_text_prompt_parks_a_visible_caret_after_the_text` rewritten;
+  the ambiguity-picker and relaunch tests still green
+
+## Phase 7 — polish and release
+
+Mouse (click row, wheel, click a palette entry); ASCII glyphs checked on
+conhost; `docs/windows.md`, README hero, `ROADMAP.md` release row; v3.0.0 via
+the `release` skill.
 
 ---
-
-## Phase 3 — the ambiguity picker serves the verb
-
-**Goal.** In an interactive terminal, an ambiguous `open`/`copy`/`path`
-query shows a project picker; Enter performs the invoked verb on the chosen
-project and nothing else; Esc cancels politely with exit 0. Piped and
-scripted invocations keep the exact Phase 1 error text.
-
-**Evidence.** There is no project picker — `src/tui/pickers.rs` holds only
-`pick_template` and `pick_base`; project selection today means the full
-browser (`src/tui/browser.rs`), whose Enter opens the whole action menu
-(`src/tui/actions.rs:51`), which is precisely what the launcher flow must
-not do. The interactivity gate convention is `src/cli/recent.rs:54-55` /
-`src/cli/search.rs:83-84`: `stdout().is_terminal() &&
-tty::prompt_available()`. Cancel convention: `prompt::report_cancelled`
-(`src/tui/prompt.rs:347`) + `Ok(())`, as in `cli/new.rs`, `cli/apply.rs`,
-`cli/register.rs`.
-
-**Decisions.**
-- `tui::pickers::pick_project(prompt: &str, candidates: &[Project], how: &str)
-  -> Result<Option<Project>>`, mirroring `pick_template`:
-  `tty::require_tty("pick a project", how)?`, rows via
-  `RowWidths::measure` + `rows::project_row(p, &widths, None, true)` +
-  `clamp_label(_, terminal_columns())`, selection via
-  `prompt::select_with_theme(..., &ProjectRowTheme::new(terminal_columns()))`.
-  **Not** `live_select`: the candidate list is static (no sizes land later),
-  already narrowed by the query, and `live_select` carries three
-  load-bearing caller obligations this list does not need.
-- One shared flow, used by all three verbs — new `src/cli/target.rs`:
-  `pub fn one_project(cfg, query, prompt, how) -> Result<Option<Project>>`
-  matching on `Resolution`: `One` → `Ok(Some)`, `Many` + interactive gate →
-  `pick_project`, `Many` otherwise → `Err(ambiguous_error(..))`, `NoMatch`/
-  `NoProjects` → their errors. `Ok(None)` means cancelled; the caller prints
-  `report_cancelled("nothing was opened" / "…copied" / "no path printed")`
-  and returns `Ok(())` — exit 0.
-- `cli::recent::open` is rewired through `one_project` (behaviour change for
-  terminals: picker instead of error — the point of the phase).
-- The `how` string names the escape: `` "give a full ID, e.g. `fastf copy ID0037`" ``.
-
-**Steps.**
-1. `pick_project` in `src/tui/pickers.rs`.
-2. `src/cli/target.rs` + rewire `open`, `copy`, `path`.
-3. Pty tests in `tests/tui_pty/flows.rs` (drive **`fastf path`**, never
-   `open` — `open` would spawn the real file manager on CI):
-   `an_ambiguous_path_query_opens_a_picker_and_prints_the_choice`
-   (`pty::run_stdout_to` captures the chosen path),
-   `esc_on_the_ambiguity_picker_cancels_with_exit_0_and_says_so`.
-4. `tests/cli_output.rs`: `an_ambiguous_open_still_errors_when_piped`
-   (headless run, exact `Specify a full ID` text).
-5. Docs: `open`/`copy`/`path` sections in `docs/cli.md` describe the picker
-   and the piped behaviour.
-
-**Acceptance.**
-- [x] All gates pass (layering enforces the picker's placement by itself).
-- [x] The pty picker test was observed failing on the pre-phase build
-      (`an_ambiguous_path_query_opens_a_picker_and_prints_the_choice`: exit 1
-      with the ambiguity error, no picker drawn).
-- [x] Piped ambiguity output is byte-identical to Phase 1's
-      (`an_ambiguous_copy_errors_with_candidates_when_piped`, which covers all
-      three verbs — it replaces the separately-named
-      `an_ambiguous_open_still_errors_when_piped`).
-- [x] Esc exits 0 and prints a `Cancelled —` line.
-
-**Differed from the plan.** The interactivity gate is **stderr only**
-(`tty::prompt_available()`), not `stdout().is_terminal() && …`. The plan cited
-`recent`/`search`'s gate, but those two probe stdout to choose an output
-*format* (plain list vs browser), which is a different question from "can I
-ask?". Gating on stdout would have made the picker unreachable in the one place
-`path` exists for — `cd "$(fastf path lullaby)"` redirects stdout by
-construction — and would have repeated the exact defect `util::tty` was written
-to fix. stdout's contract is unaffected either way: the picker draws on stderr,
-so a redirected `fastf path` still emits the path and nothing else, which is
-what the pty test asserts on both halves.
-
----
-
-## Phase 4 — a terminal when there is no terminal
-
-**Goal.** Launched fully headless inside a GUI session, fastf re-executes
-itself inside a terminal emulator instead of printing to nowhere: bare
-`fastf` (the menu), `fastf recent`, `fastf search`, and the ambiguous branch
-of `open`/`copy`/`path`. Headless single matches stay direct: `copy` copies
-and raises a desktop notification; `path` copies, notifies, **and** still
-prints (a journal trace costs nothing). A relaunched window that only showed
-text waits for Enter before closing; one that ran a picker or menu closes
-immediately. A new `terminal` config key names the emulator.
-
-**Evidence.** Nothing in the crate re-executes itself or spawns a terminal
-(`current_exe` appears once, in the portable-mode probe). The no-TTY
-convention is "refuse and name the escape hatch"
-(`tests/cli_output.rs::refuses_without_a_terminal`) — this phase is a
-deliberate, documented departure that must not leak into piped/scripted
-contexts. Under a launcher on a systemd-managed desktop: stdin `/dev/null`
-(chardev), stdout/stderr journald **stream sockets**, `WAYLAND_DISPLAY`/
-`DISPLAY` set; `INVOCATION_ID`/`JOURNAL_STREAM` are useless discriminators
-(the launcher's own service sets them for everything it spawns). Cron hands
-its children **pipes**; `nohup` a regular file; the test harness pipes.
-dialoguer prompts probe **stderr** (`src/util/tty.rs`), stdout decides
-format.
-
-**Decisions.**
-- **The rule** (all must hold): (1) stdin, stdout, stderr all non-TTY;
-  (2) `fstat` classifies both fd 1 and fd 2 as socket, character device, or
-  closed (`EBADF` = provably no reader) — never a regular file or FIFO;
-  (3) `WAYLAND_DISPLAY` or `DISPLAY` set; (4) `SSH_CONNECTION` unset;
-  (5) `FASTF_RELAUNCHED` and `FASTF_NO_RELAUNCH` unset; (6) `--plain` not
-  passed and the terminal preference is not `none`; (7) the command is one
-  of the listed surfaces. Accepted misfires, documented with their escape
-  hatches (`--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`): a systemd
-  user service running an interactive fastf command with the session display
-  imported (byte-for-byte the launcher environment), and cron with
-  `>/dev/null 2>&1` **plus** an exported display.
-- **`src/util/relaunch.rs`**, `#[cfg(unix)]` (precedent: `shell_open.rs` is
-  `cfg(windows)`). No printing — spawning from util is the `clipboard.rs`
-  precedent. API: `pub fn headless_gui_session() -> bool`;
-  `pub fn respawn_in_terminal(preference: Option<&str>) -> Result<()>`
-  (Ok = a terminal owns the rerun; caller exits 0). Private, pure,
-  unit-tested: `candidate_commands(pref, exe, args) -> Vec<Vec<OsString>>`,
-  `stream_has_no_reader(fd) -> bool` (raw `libc::fstat` + `S_IFMT` — POSIX,
-  allocation-free; `libc` is already a unix dependency).
-- **Emulator table** (program, leading args; argv appended after):
-  `konsole -e` · `gnome-terminal --` (its `-e` is deprecated and takes one
-  string) · `xfce4-terminal -x` (its `-e` shell-parses one string — never
-  use) · `alacritty -e` · `kitty` (trailing argv) · `foot` (trailing argv) ·
-  `wezterm start --` · `xterm -e` (must be last option). Resolution order:
-  config `terminal` → `$TERMINAL` → `xdg-terminal-exec` (the XDG default-
-  terminal resolver, trailing argv) → table probe. A configured/`$TERMINAL`
-  name is matched by basename against the table for its arg style; unknown
-  names get the xterm-compatible `-e` convention. A value with embedded
-  arguments is not supported — it names a program.
-- **Spawn**: `current_exe()` (fallback `args_os().next()`) +
-  `args_os().skip(1)` as `OsString`s — argv is passed as argv, never through
-  a shell. `.process_group(0)`, all stdio `Stdio::null()`,
-  `.env("FASTF_RELAUNCHED", "1")`, `spawn()`, drop the child, return. Every
-  candidate is tried in order; total failure → `Err`, caller falls through
-  to today's plain behaviour and best-effort-notifies. Inside the relaunch,
-  rule (5) makes the guard self-limiting: still no TTY → plain behaviour.
-- **Config**: `Config` gains `#[serde(default)] pub terminal: String` and
-  `resolve_terminal() -> TerminalPreference { Disabled, Named(String), Probe }`
-  (`"none"` → Disabled; empty → `$TERMINAL` else Probe) — never read the
-  field raw. Wire `terminal` into `cli::config::set`'s match + valid-keys
-  string, `config show`, and Settings → Basics via `set_from_prompt`
-  (`src/tui/menu.rs` pattern). The CLI passes the resolved preference into
-  `util::relaunch` — util does not read `Config` (layering).
-- **`src/util/notify.rs`** (`cfg(unix)`): `pub fn notify(summary, body) ->
-  bool` — spawns `notify-send -a fastf` when present, `Stdio::null()`,
-  best-effort. Promote `clipboard::which` to
-  `util::paths::find_on_path(name)` — clipboard, relaunch and notify all
-  need it.
-- **Pause-before-close**: `static SURFACE_RAN: AtomicBool` in
-  `src/util/tty.rs` + `mark_interactive_surface()` /
-  `interactive_surface_ran()`. Set in exactly two choke points:
-  `require_tty`'s success path (covers every dialoguer prompt via
-  `prompt::ready()` and every picker) and `live_select::select_live` after
-  its `is_term()` check (the browser bypasses `require_tty`). Read only in
-  `main.rs`: after the run (success or printed error), if
-  `FASTF_RELAUNCHED` is set, no interactive surface ran, interrupt is not
-  set, and stdin+stderr are TTYs → `press Enter to close…` + `read_line`.
-  Cooked mode, after `restore_terminal`, so no ordering hazard with the
-  interrupt module. Accepted tradeoff: a picker-driven `copy`'s ✓ line
-  flashes — the clipboard already has the payload.
-- **Wiring**: `recent`/`search` — where the existing `interactive` gate is
-  false, before discovery: if `!plain && headless_gui_session()` →
-  `respawn_in_terminal` and return. `target::one_project` — the `Many` arm
-  gains the same branch ahead of the error. Bare `fastf` — in `main.rs`
-  before the menu's `require_tty`. `copy`/`path` single match —
-  `headless_gui_session()` → degrade as in the Goal.
-- **Windows**: none of this module exists (`cfg(unix)` declarations);
-  launching a console exe from the Win+R/launcher surface already allocates
-  a console. Windows clippy `-D warnings` must stay clean.
-
-**Steps.**
-1. `util::relaunch` + `util::notify` + `find_on_path` promotion + unit tests
-   (`candidate_commands` exact argv per emulator; `stream_has_no_reader`
-   against a pipe = false, a tempfile = false, `/dev/null` = true).
-2. Config key end to end (struct, resolver, `config set`/`show`, Settings
-   menu, `ConfigAction::Set` after_help).
-3. The pause mark + `main.rs` hook.
-4. Wire the five surfaces.
-5. Harness: `Sandbox::run_null(args, env)` in `tests/common/mod.rs` —
-   `Stdio::null()` on all three streams, caller injects a fake
-   `DISPLAY=:99`; plus a recorder fixture (`#!/bin/sh` script writing `$@`
-   to a file, `chmod 755`). **Harness rule, added to `tests/CLAUDE.md`:
-   relaunch tests always pin `config set terminal <recorder>` so CI can
-   never spawn a real emulator.**
-6. New `tests/relaunch.rs` (`#![cfg(unix)]`), each written to fail first
-   where behaviour changes:
-   `a_piped_stdout_never_relaunches_even_with_a_display`,
-   `a_null_stdio_gui_session_relaunches_through_the_configured_terminal`
-   (recorder file holds the exe + original argv; parent exited 0, printed
-   nothing), `no_relaunch_env_and_terminal_none_both_suppress_it`,
-   `ssh_connection_suppresses_it`,
-   `a_relaunched_child_with_no_tty_falls_through_to_plain_output` (loop
-   guard: `FASTF_RELAUNCHED=1` preset, recorder untouched),
-   `path_headless_gui_copies_and_notifies_but_still_prints` (recorder
-   shadowing `notify-send` on `PATH`).
-7. Pty tests (`tests/tui_pty/flows.rs`):
-   `a_relaunched_run_with_nothing_interactive_waits_for_enter`
-   (`FASTF_RELAUNCHED=1`, empty library, `fastf recent` → expect the pause
-   line, send Enter, exit 0) and
-   `a_relaunched_run_that_showed_a_picker_does_not_wait`.
-8. Docs, same commit: `docs/cli.md` — the "Prompts and terminals" section
-   gains the headless-GUI carve-out; the line claiming `recent`/`search`
-   "retain their existing command-line output" is amended with the exact
-   suppression conditions; the config-keys table gains `terminal`; an
-   environment-variables note gains `FASTF_NO_RELAUNCH` (public) and
-   `FASTF_RELAUNCHED` (internal). `ROADMAP.md` — the product-contract
-   section gains a line for what fastf may now spawn (a terminal emulator
-   named by config/`$TERMINAL`/`xdg-terminal-exec`/probe; `notify-send`).
-   `docs/windows.md` — one sentence: no relaunch machinery on Windows.
-
-**Acceptance.**
-- [x] All gates pass.
-- [x] The recorder test proves the exact re-exec argv and that the parent
-      printed nothing and exited 0
-      (`a_null_stdio_gui_session_relaunches_through_the_configured_terminal`).
-- [x] The loop-guard test proves a relaunched no-TTY child behaves like
-      today's build (`a_relaunched_child_with_no_tty_falls_through_to_plain_output`).
-- [x] `fastf search <term> | cat` and `fastf path <id> > f` behave
-      byte-identically to v2.0.1
-      (`a_piped_stdout_never_relaunches_even_with_a_display`,
-      `a_redirected_path_writes_the_file_and_opens_nothing` — both with a
-      display exported).
-- [x] Windows clippy leg clean with the `cfg(unix)` modules absent.
-- [x] **Maintainer smoke test, 2026-08-31.** Confirmed on the desktop, on the
-      installed build, plus a pass on Windows. CI has no desktop session and
-      could never have covered either.
-
-**Differed from the plan.**
-- **`Sandbox::run_like_a_launcher`, not `run_null`.** `Stdio::null()` on stdout
-  and stderr would satisfy the rule but make the output unobservable, and half
-  of what these tests check is that the parent printed *nothing*. The harness
-  gives the child one **socketpair** across stdout and stderr instead, which is
-  also the more faithful fixture: journald is a socket, and a socket is exactly
-  what a pipe is not.
-- **`one_project` returns a `Target` enum**, not `Option<Project>`. A handoff
-  and a cancelled picker are both `Ok` and exit 0, but they are not the same
-  event, and `Ok(None)` made a relaunch print `Cancelled — nothing was copied`
-  into the journal of a command that had just been handed to a window.
-- **`paths::find_on_path` treats a value with a separator as a path**, rather
-  than joining it onto every `PATH` entry. `terminal = "/opt/kitty/bin/kitty"`
-  is a legal setting and would otherwise never resolve; the test recorder
-  depends on the same thing.
-- **`src/cli/terminal.rs`** holds the seam. The plan had the surfaces call
-  `util::relaunch` directly, but every one of them would then repeat the
-  `cfg(unix)`, the `TerminalPreference` match and the notify-on-failure
-  fallback. `util` still never reads `Config`.
-- Three tests beyond the listed set:
-  `an_ambiguous_query_from_a_launcher_opens_a_terminal_instead_of_erroring`
-  (the case that motivated the phase),
-  `a_redirected_path_writes_the_file_and_opens_nothing`, and
-  `a_missing_display_is_enough_to_suppress_it`.
-
----
-
-## Phase 5 — sweep and release prep
-
-**Goal.** The cross-cutting reading pass no single phase owns, then the
-release is ready to cut.
-
-**Steps.**
-1. Read `docs/cli.md`, `docs/projects.md`, `docs/windows.md`, `README.md`
-   top to bottom against the shipped behaviour; fix drift. README mentions
-   `open`/`search` in prose only — keep the command reference in `docs/`.
-2. `ROADMAP.md`: release-train entry for v2.1.0; confirm the backlog items
-   this plan absorbed are gone.
-3. Confirm completions and man pages need no hand edits (both derive from
-   clap).
-4. Root `CLAUDE.md` + `src/core/CLAUDE.md`/`src/tui/CLAUDE.md`: record the
-   landed decisions (Resolution enum, the relaunch rule and its accepted
-   misfires, the picker-serves-the-verb rule) where they now belong.
-5. Cut v2.1.0 with the `release` skill (version bump, tag, Release
-   workflow, MSI, AUR bumps).
-
-**Acceptance.**
-- [x] All gates pass on the release commit.
-- [x] Release notes approved and v2.1.0 published — tag on `main`, all 16
-      Release-workflow jobs green, both AUR packages bumped to 2.1.0-1.
-
-**Note.** Closed 2026-08-31. Nothing in this plan is outstanding; what it opened
-and did not finish lives in `ROADMAP.md`'s backlog rather than here.
-
----
-
-## Release — v2.1.0
-
-Minor version: new commands (`copy`, `path`), new resolver tier, new
-interactive behaviour, one new config key; no breaking changes (`--plain`
-and piped output are contractually unchanged). Notes must name: the two new
-commands and the `path`/`paths` distinction; numeric ID queries; the
-ambiguity picker; the launcher behaviour and all three ways to turn it off
-(`--plain`, `FASTF_NO_RELAUNCH=1`, `terminal = "none"`); the clipboard
-process-group hardening.
 
 ## Parking lot
 
-- A picker for `move`/`tag`/`note` ambiguity (they gained the numeric tier
-  only).
-- A native KRunner DBus-runner plugin — search-as-you-type from Alt+Space
-  without spawning fastf per keystroke. Separate deliverable, likely its own
-  repo.
-- `--json` output and the rest of the Scriptability backlog.
-- `reveal_folder` on unix blocks on `.status()` — a foreground file-manager
-  handler would hang a headless `open`. Consider detaching like the
-  relaunch spawn.
-- `ptyxis` (GNOME 47+ default) in the emulator table if anyone asks.
-- A watchdog for a clipboard tool that does not fork (`wl-copy --foreground`
-  shape): `feed`'s `wait()` currently has no timeout.
+- `reveal_folder` on unix blocks on `.status()` (already in ROADMAP); it runs
+  on a worker now, so the app does not freeze, but the spawn still waits.
+- `show-banner`/`show-frame` are inert; remove at v3.0.0.
+- `recent-default-limit` no longer sizes a page; rename to `recent-limit` at
+  the next major, keeping the old key parsing.
+- The header's `newest` comes from the first base with any projects, as the
+  old frame did; with the live snapshot it could be the true newest.
+- Mouse events are read and dropped until Phase 7.
 
 ## Phase log
 
-- **2026-08-31 — v2.1.1, one PR (#32), after release.** The project row put the
-  folder name *last*, and a row is clamped from the right — so in the narrow
-  terminal Phase 4's relaunch opens, the one column that tells two projects
-  apart was the first to go. Found by using it, which no gate in this plan could
-  have. Columns now run ID, folder name, base, template, date, then Size. The
-  regression test had to be written twice: the first fixture was a toy one that
-  fit in 80 columns whichever way round the columns were, and proved nothing.
-- **2026-08-31 — Phases 1-5, one PR (#31).** Worked in a single session rather than
-  one per phase, so the five phases are five commits on `v2.1.0-launcher`
-  instead of five stacked PRs; each still ran the full gates before the next
-  began. What differed is recorded per phase above. The three that matter:
-  the picker's interactivity gate is **stderr only** (Phase 3), because
-  gating on stdout would repeat the defect `util::tty` exists to fix and would
-  hide the picker from `cd "$(fastf path x)"`; `one_project` returns a
-  `Target` enum rather than `Option<Project>`, so a relaunch is not reported as
-  a cancel; and the relaunch harness gives the child a **socketpair** rather
-  than `/dev/null`, because "the parent printed nothing" has to be observable
-  and journald is a socket.
+- **Phase 0 (2026-09-03).** Decisions taken while building, beyond the plan:
+  - **`Terminal::clear` is never called.** In ratatui 0.30 it queries the
+    cursor position and waits two seconds for an answer a pty under test
+    never sends; a fresh `Terminal` needs no clear. `Terminal::resize` uses
+    `clear_viewport`, which does not query, so a real resize is fine.
+  - **The pty suite reads frames through `vt100`.** ratatui redraws only the
+    cells that changed, so `1 of 1 projects` never appears contiguously in the
+    transcript; `harness::app_screen` replays it into a 120×40 virtual
+    terminal. `pty::run` now gives the child a real window size — a sizeless
+    pty reports 0×0 and ratatui draws nothing.
+  - **Column priority changed.** The old row put base and template before the
+    date; the table adds date, size, base, template, tags in that order and
+    never cuts the folder name (`view::projects::choose_columns`). With a
+    detail pane beside the list, size and date are what the row is for.
+  - **Names that trip `only_tui_prompt_prompts`.** `Sort::` and `LineInput::`
+    matched the dialoguer-prompt grep; hence `Order` and `LineEdit`, and a
+    check in `tui_commands.rs` that says so before CI.
+  - **Onboarding** (`menu::onboard_first_run`) runs before the screen is
+    taken, on the main screen, where the answer stays visible.
+  - The palette ranks a title hit above a description hit; the hint bar leads
+    with the context's own commands.
+  - `validators.rs` was deferred to Phase 1: the app has no native text
+    prompt yet.
+  - Measured on the maintainer's machine, 2026-09-03: the release binary is
+    3.87 MB (4 056 544 bytes; v2.2.1 shipped under 4 MB, so the README's
+    claim still holds) and a cold `cargo build --release` — every
+    dependency from scratch, LTO, one codegen unit — took 26 s.

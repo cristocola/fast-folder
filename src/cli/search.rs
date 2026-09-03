@@ -77,7 +77,17 @@ pub fn run(args: SearchArgs) -> Result<()> {
         return Ok(());
     }
 
-    let owned_matches = matching_projects_from(projects, &predicates);
+    // Read fresh from disk: a query may name a template variable, which only
+    // the metadata holds.
+    let owned_matches: Vec<Project> = projects
+        .into_iter()
+        .filter(|project| {
+            project_info::read_metadata(&project.path)
+                .ok()
+                .flatten()
+                .is_some_and(|meta| query::evaluate(&predicates, &meta))
+        })
+        .collect();
     let matches: Vec<&Project> = owned_matches.iter().collect();
 
     if matches.is_empty() {
@@ -93,36 +103,13 @@ pub fn run(args: SearchArgs) -> Result<()> {
         !args.plain && std::io::stdout().is_terminal() && crate::util::tty::prompt_available();
 
     if interactive {
-        crate::cli::recent::browse(owned_matches, "No projects match that query.")
+        crate::tui::run(crate::tui::Entry::Search {
+            terms: args.terms.clone(),
+            initial: owned_matches,
+        })
     } else {
         // Shared with `fastf recent` — identical plain output (incl. base column).
         crate::cli::recent::print_plain(&matches);
         Ok(())
     }
-}
-
-/// Fresh, newest-first search results shared with the guided TUI's paged
-/// browser. Metadata is read on every call so a tag mutation can immediately
-/// add or remove a row from the result set.
-pub(crate) fn matching_projects(cfg: &Config, predicates: &[query::Predicate]) -> Vec<Project> {
-    matching_projects_from(library::discover(cfg), predicates)
-}
-
-fn matching_projects_from(projects: Vec<Project>, predicates: &[query::Predicate]) -> Vec<Project> {
-    projects
-        .into_iter()
-        .filter(|project| still_matches(project, predicates))
-        .collect()
-}
-
-/// Does one project still satisfy the query?
-///
-/// Read fresh from disk, because the guided browser asks this about a row it has
-/// just patched in memory: a tag added there may have taken the project out of
-/// its own search results, and the row has to go with it.
-pub(crate) fn still_matches(project: &Project, predicates: &[query::Predicate]) -> bool {
-    project_info::read_metadata(&project.path)
-        .ok()
-        .flatten()
-        .is_some_and(|meta| query::evaluate(predicates, &meta))
 }

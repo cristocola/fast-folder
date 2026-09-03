@@ -7,16 +7,8 @@ use crate::cli::register::{self, RegisterArgs};
 use crate::cli::{apply, config, id, template};
 use crate::core::config::Config;
 use crate::core::template as core_template;
-use crate::core::{library, query};
-use crate::tui::browser;
 use crate::tui::pickers::{pick_base, pick_template};
 use crate::tui::prompt::{self, TextOpts};
-
-const BANNER: &str = r#"  ___        _      ___    _    _
- | __|_ _ __| |_   | __|__| |__| |___ _ _
- | _/ _` (_-<  _|  | _/ _ \ / _` / -_) '_|
- |_|\__,_/__/\__|  |_|\___/_\__,_\___|_|"#;
-const BANNER_WIDTH: usize = 40;
 
 /// Should this error end the session, or just be reported?
 ///
@@ -33,7 +25,7 @@ const BANNER_WIDTH: usize = 40;
 /// Deliberately NOT "does the chain contain an `io::Error`": a bad path fails
 /// with `canonicalize`'s `NotFound` wrapped in context, so that rule would
 /// propagate the very case this exists to catch.
-fn is_fatal(err: &anyhow::Error) -> bool {
+pub(crate) fn is_fatal(err: &anyhow::Error) -> bool {
     crate::util::interrupt::is_set() || err.downcast_ref::<dialoguer::Error>().is_some()
 }
 
@@ -99,71 +91,12 @@ fn contain(result: Result<()>) -> Result<()> {
     }
 }
 
-pub fn run() -> Result<()> {
-    // Checked before the banner: a menu that cannot be driven should not put
-    // decoration on stdout for a session that never happens.
-    crate::util::tty::require_tty(
-        "show the menu",
-        "run a subcommand instead — see `fastf --help`",
-    )?;
-    // Banner is shown once based on the first config load. Honors show_banner.
-    let initial = Config::load()?;
-    if initial.show_banner {
-        println!();
-        println!("{}", BANNER.cyan().bold());
-        let tagline = format!("project scaffolder · v{}", env!("CARGO_PKG_VERSION"));
-        let pad = BANNER_WIDTH.saturating_sub(tagline.chars().count());
-        println!("{}{}", " ".repeat(pad), tagline.dimmed());
-        println!();
-    }
-    onboard_first_run(&initial)?;
-
-    loop {
-        // Reload config each iteration so changes in settings are reflected immediately
-        let cfg = Config::load()?;
-        crate::tui::frame::print(&cfg);
-
-        let choice = menu(
-            "What would you like to do?",
-            &[
-                "Create new project",
-                "Project list",
-                "Search projects",
-                "Register existing folder",
-                "Manage templates",
-                "View / edit settings",
-                "Quit",
-            ],
-            0,
-        )?;
-
-        // Every arm is contained: a typo in a path or a setting returns to this
-        // menu instead of ending the session.
-        // Esc at the top level is Quit — there is no parent to go back to.
-        match choice.as_deref() {
-            Some("Create new project") => contain(menu_create())?,
-            Some("Project list") => contain(menu_projects())?,
-            Some("Search projects") => contain(menu_search())?,
-            Some("Register existing folder") => contain(menu_register())?,
-            Some("Manage templates") => contain(menu_templates())?,
-            Some("View / edit settings") => contain(menu_settings())?,
-            Some("Quit") | None => {
-                println!("Goodbye.");
-                break;
-            }
-            Some(other) => anyhow::bail!("unhandled menu item '{other}'"),
-        }
-    }
-
-    Ok(())
-}
-
 /// First-run onboarding, mirroring the web UI's welcome dialog: when no base
 /// is configured anywhere, ask where projects should live (defaulting to the
 /// conventional `<home>/Projects`) and create + persist it via the shared
 /// `config::init_base_dir`. Enter accepts the suggestion; an empty answer
 /// skips (the prompt returns on the next launch until a base is set).
-fn onboard_first_run(cfg: &Config) -> Result<()> {
+pub(crate) fn onboard_first_run(cfg: &Config) -> Result<()> {
     if !cfg.base_dir.trim().is_empty() || !cfg.bases.is_empty() {
         return Ok(());
     }
@@ -213,7 +146,7 @@ fn onboard_first_run(cfg: &Config) -> Result<()> {
     }
 }
 
-fn menu_create() -> Result<()> {
+pub(crate) fn menu_create() -> Result<()> {
     let Some(tmpl) = pick_template("Select template", "name it instead: `fastf new <slug>`")?
     else {
         prompt::report_cancelled("nothing was created");
@@ -264,74 +197,6 @@ fn pick_base_interactively() -> Result<Option<Option<String>>> {
         Some(base) if Some(&base) == default_base.as_ref() => Ok(Some(None)),
         Some(base) => Ok(Some(Some(base.display().to_string()))),
         None => Ok(None),
-    }
-}
-
-fn menu_projects() -> Result<()> {
-    let page_size = Config::load()?.recent_default_limit.max(1);
-    browser::run_paged_browser(
-        page_size,
-        "No projects yet — create one with `fastf new`.",
-        "Back to main menu",
-        || {
-            let cfg = Config::load()?;
-            Ok(library::discover(&cfg))
-        },
-        // Every project belongs in the full library.
-        |_| true,
-    )?;
-    println!();
-    Ok(())
-}
-
-/// Search, with the query kept across a miss.
-///
-/// A query that matched nothing used to drop straight back to the main menu,
-/// so the only way to fix a typo in `tag:draft` was to type the whole thing
-/// again. It now comes back in the field, editable.
-fn menu_search() -> Result<()> {
-    let mut previous = String::new();
-    loop {
-        let mut opts = TextOpts::new().allow_empty();
-        if !previous.is_empty() {
-            opts = opts.initial(previous.clone());
-        }
-        let Some(query) = prompt::text(
-            "Search query (e.g. tag:draft  template=music-video  artist=Aria*)",
-            opts,
-        )?
-        else {
-            return Ok(());
-        };
-        let query = query.trim().to_string();
-        if query.is_empty() {
-            println!("{}", "  (cancelled)".dimmed());
-            return Ok(());
-        }
-
-        let terms: Vec<String> = query.split_whitespace().map(|s| s.to_string()).collect();
-        let predicates = query::parse(&terms);
-        let cfg = Config::load()?;
-        let matches = crate::cli::search::matching_projects(&cfg, &predicates);
-        if matches.is_empty() {
-            println!("{}", "No projects match that query.".dimmed());
-            previous = query;
-            continue;
-        }
-
-        let page_size = cfg.recent_default_limit.max(1);
-        browser::run_paged_browser(
-            page_size,
-            "No projects match that query.",
-            "Back to main menu",
-            || {
-                let cfg = Config::load()?;
-                Ok(crate::cli::search::matching_projects(&cfg, &predicates))
-            },
-            |project| crate::cli::search::still_matches(project, &predicates),
-        )?;
-        println!();
-        return Ok(());
     }
 }
 
@@ -386,7 +251,7 @@ fn menu_apply() -> Result<()> {
     Ok(())
 }
 
-fn menu_register() -> Result<()> {
+pub(crate) fn menu_register() -> Result<()> {
     let Some(scope) = menu(
         "Register what?",
         &["One folder", "Every unregistered folder in a base", "Back"],
@@ -575,7 +440,7 @@ fn menu_register_one() -> Result<()> {
     Ok(())
 }
 
-fn menu_templates() -> Result<()> {
+pub(crate) fn menu_templates() -> Result<()> {
     loop {
         let Some(choice) = menu(
             "Templates",
@@ -724,7 +589,7 @@ fn menu_id() -> Result<()> {
 // Settings — grouped submenus
 // ---------------------------------------------------------------------------
 
-fn menu_settings() -> Result<()> {
+pub(crate) fn menu_settings() -> Result<()> {
     loop {
         contain(config::show())?;
         println!();

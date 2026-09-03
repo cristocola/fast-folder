@@ -67,6 +67,15 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
+- In progress: **v3.0.0 — the guided app on ratatui.** One full-screen
+  dashboard replaces the menu-of-prompts: the library on screen and acted on,
+  fuzzy search and a command palette, sizes filling in without input, every
+  mutation patching its row. Delivered in phases, one per PR, in `PLAN.md`.
+  Phase 0 (the foundation) landed with this branch: the runtime, the command
+  registry, the dashboard, search, sort and filters, the native
+  open/terminal/copy/path actions, and the old dialoguer flows reachable
+  through a suspend bridge until each is made native. The gates gained
+  `tui_update`, `tui_commands`, `tui_snapshots` and a `vt100`-backed pty suite.
 - Released: **v2.2.1, published 2026-09-03** — the text prompts show where you
   are typing. `prompt::text` draws its line with `write_line`, which ends the
   block a row *below* the text, and it hid the caret for the repaint and never
@@ -84,7 +93,7 @@ responsibility of the filesystem and backups.
   a desktop session, plus a Windows pass. Neither is reachable from CI.
 - Outstanding, and needing the maintainer: a TUI screenshot or asciinema for the
   README hero.
-- Last reviewed: **2026-09-03**
+- Last reviewed: **2026-09-03** (Phase 0 of the ratatui rebuild)
 
 ## Release train
 
@@ -227,9 +236,5 @@ Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 - The action menu only offers "Move to another base" when one is already
   mounted; an `Unresponsive` base could offer a "retry probe" item instead of
   just being left out.
-- `tui_pty`'s `projects_browser_fills_in_sizes_without_any_input` is
-  timing-sensitive: it
-  asserts a background size snapshot reaches the list within one repaint tick,
-  and failed once under the CPU load of a full `cargo test --all-targets` while
-  passing every standalone run. The guarantee is right; the deadline is thin —
-  give it a longer window or anchor it on the scanner instead of the clock.
+- `show-banner` and `show-frame` belonged to the menu the guided app replaced;
+  they still parse and do nothing. Remove them at the next major.

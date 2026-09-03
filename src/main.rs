@@ -760,7 +760,7 @@ fn run() -> Result<()> {
             if cli::terminal::hand_off_to_a_terminal(&cfg, false) {
                 return Ok(());
             }
-            tui::menu::run()
+            tui::run(tui::Entry::Menu)
         }
 
         Some(Commands::New {

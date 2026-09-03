@@ -312,6 +312,51 @@ pub mod pty {
     /// One scripted keystroke: how long after launch to send it, and what.
     pub type Keystroke = (Duration, Vec<u8>);
 
+    /// The terminal every pty test runs in.
+    pub const PTY_COLS: u16 = 120;
+    pub const PTY_ROWS: u16 = 40;
+
+    /// The transcript with every escape sequence removed, so an assertion can
+    /// match text the way a person sees it. ratatui redraws only the cells
+    /// that changed, so the result is a stream of fragments, not screens:
+    /// match on words, never on a whole line.
+    pub fn plain(transcript: &str) -> String {
+        let mut out = String::with_capacity(transcript.len());
+        let mut chars = transcript.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '\x1b' {
+                out.push(c);
+                continue;
+            }
+            match chars.next() {
+                // CSI: parameters, intermediates, then one final byte.
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                // OSC: up to BEL or ST.
+                Some(']') => {
+                    let mut previous = '\0';
+                    for c in chars.by_ref() {
+                        if c == '\x07' || (previous == '\x1b' && c == '\\') {
+                            break;
+                        }
+                        previous = c;
+                    }
+                }
+                // Two-byte escapes (charset selection and the like).
+                Some('(') | Some(')') | Some('#') => {
+                    chars.next();
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
     /// A keystroke script on a fixed cadence.
     ///
     /// Keys are spaced rather than burst because `dialoguer` redraws between
@@ -510,14 +555,23 @@ pub mod pty {
         };
 
         let mut master: libc::c_int = -1;
-        // SAFETY: null term/winsize request the defaults; `master` is written by
+        // A real window size: the guided app lays itself out from it, and a
+        // pty with no size reports 0×0, which draws nothing. 120×40 is the
+        // large layout — the detail pane, the template strip, the tall header.
+        let winsize = libc::winsize {
+            ws_row: PTY_ROWS,
+            ws_col: PTY_COLS,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: a null termios requests the defaults; `master` is written by
         // the call and only read in the parent branch.
         let pid = unsafe {
             libc::forkpty(
                 &mut master,
                 std::ptr::null_mut(),
                 std::ptr::null(),
-                std::ptr::null(),
+                &winsize,
             )
         };
         assert!(pid >= 0, "forkpty failed");

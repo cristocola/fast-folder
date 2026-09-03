@@ -1,4 +1,5 @@
-//! The menu itself: it opens, it contains errors, it can be left.
+//! The app itself: it opens, it survives a mistake, it can be left — and the
+//! settings, register and template flows it bridges to still contain errors.
 //!
 //! Driven through a real terminal — `harness.rs` states why, and the rules
 //! every suite in this binary follows.
@@ -9,20 +10,25 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Baseline: the menu opens and Quit leaves cleanly. If this breaks, the
+/// Baseline: the app opens and `q` leaves cleanly. If this breaks, the
 /// navigation the other tests rely on is wrong, not the behaviour under test.
 #[test]
-fn the_menu_opens_and_quits_cleanly() {
+fn the_app_opens_and_quits_cleanly() {
     let sb = Sandbox::new();
-    let (out, code) = launch(&sb, pty::Script::new().down(MENU_QUIT).enter().build());
+    let (out, code) = launch(&sb, pty::Script::new().pause(600).key(KEY_QUIT).build());
+    let text = pty::plain(&out);
 
-    assert_eq!(code, 0, "quitting should succeed:\n{out}");
-    assert!(out.contains("Goodbye."), "expected a clean exit:\n{out}");
+    assert_eq!(code, 0, "quitting should succeed:\n{text}");
+    assert!(
+        text.contains("projects"),
+        "the dashboard never drew:\n{text}"
+    );
+    assert!(text.contains("Goodbye."), "expected a clean exit:\n{text}");
 }
 
 /// The headline regression, now closed from the other side. Register used to ask
 /// for the path *first* and reject it *last*, so a typo cost three more answered
-/// prompts and the whole session. The path is now checked at the prompt that
+/// prompts and the whole session. The path is checked at the prompt that
 /// collected it, and the text it rejected stays on the line to be corrected.
 #[test]
 fn a_bad_register_path_is_corrected_in_place() {
@@ -33,8 +39,8 @@ fn a_bad_register_path_is_corrected_in_place() {
     let typo = format!("{}XX", good.display());
 
     let script = pty::Script::new()
-        .down(MENU_REGISTER)
-        .enter()
+        .key(KEY_REGISTER)
+        .pause(600)
         .enter() // Register what? → One folder
         .key(&typo) // typed, not submitted
         .enter() // refused inline
@@ -47,21 +53,28 @@ fn a_bad_register_path_is_corrected_in_place() {
         .pause(500)
         .enter() // created date → the folder's own date
         .pause(900)
-        .esc() // back at the main menu → quit
+        .enter() // press Enter to return to fastf
+        .pause(600)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
 
     assert_eq!(
         code, 0,
-        "a mistyped path must not end the session (it exited {code}):\n{out}"
+        "a mistyped path must not end the session (it exited {code}):\n{text}"
     );
     assert!(
-        out.contains("no such folder"),
-        "the path should be refused where it was typed:\n{out}"
+        text.contains("no such folder"),
+        "the path should be refused where it was typed:\n{text}"
     );
     assert!(
         good.join("PROJECT_INFO.md").exists(),
-        "the corrected path should have been registered:\n{out}"
+        "the corrected path should have been registered:\n{text}"
+    );
+    assert!(
+        text.contains("Goodbye."),
+        "the dashboard should have come back after the flow:\n{text}"
     );
 }
 
@@ -72,8 +85,8 @@ fn a_bad_register_path_is_corrected_in_place() {
 fn an_invalid_setting_is_corrected_in_place() {
     let sb = Sandbox::new();
     let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter()
+        .key(KEY_SETTINGS)
+        .pause(600)
         .down(3) // Settings → Project list (page size)
         .enter()
         .enter() // → the page-size field
@@ -85,18 +98,20 @@ fn an_invalid_setting_is_corrected_in_place() {
         .enter()
         .pause(700)
         .esc() // → Settings
-        .esc() // → main menu
-        .esc() // quit
+        .esc() // → the dashboard
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
 
     assert!(
-        out.contains("must be at least 1"),
-        "the validation failure should be reported at the prompt:\n{out}"
+        text.contains("must be at least 1"),
+        "the validation failure should be reported at the prompt:\n{text}"
     );
     assert_eq!(
         code, 0,
-        "an invalid setting must not end the session (it exited {code}):\n{out}"
+        "an invalid setting must not end the session (it exited {code}):\n{text}"
     );
     let shown = sb.ok(&["config", "show"]);
     assert!(
@@ -105,36 +120,38 @@ fn an_invalid_setting_is_corrected_in_place() {
     );
 }
 
-/// Ctrl-C at the main menu, where nothing is in flight.
-///
-/// It used to announce "the partial project was removed" — untrue anywhere but
-/// mid-create — and leave the terminal's cursor hidden, because `dialoguer`
-/// balances hide/show only on the success path.
+/// Ctrl-C at the root, where nothing is in flight. In raw mode it is a key,
+/// not a signal — and it must still say `aborted.`, exit 130 and give the
+/// cursor back, exactly as the signal did.
 #[test]
-fn ctrl_c_at_the_menu_is_honest_and_restores_the_cursor() {
+fn ctrl_c_at_the_root_is_honest_and_restores_the_cursor() {
     let sb = Sandbox::new();
-    let (out, code) = launch(&sb, pty::Script::new().ctrl_c().build());
+    let (out, code) = launch(&sb, pty::Script::new().pause(600).ctrl_c().build());
 
-    assert_eq!(code, 130, "SIGINT should exit 130:\n{out}");
+    assert_eq!(code, 130, "Ctrl-C should exit 130:\n{out}");
     assert!(
         !out.contains("partial project"),
         "nothing was being created, so nothing was removed:\n{out}"
     );
     assert!(
-        out.contains("aborted"),
+        pty::plain(&out).contains("aborted"),
         "the exit should be announced:\n{out}"
     );
     assert!(
         out.contains("\x1b[?25h"),
         "the cursor must be shown again, or the user's shell is left blind"
     );
+    assert!(
+        out.contains("\x1b[?1049l"),
+        "the alternate screen must be left, or the shell is drawn over"
+    );
 }
 
 /// A `config.toml` that exists but does not parse changes which directory is
-/// the library, so the menu that used to open on the home directory — with the
+/// the library, so the app that used to open on the home directory — with the
 /// real projects nowhere in sight — has to refuse instead.
 #[test]
-fn a_corrupt_config_stops_the_menu() {
+fn a_corrupt_config_stops_the_app() {
     let sb = Sandbox::new();
     let config_path = sb.install.join("config.toml");
     let mut raw = fs::read_to_string(&config_path).unwrap();
@@ -142,23 +159,24 @@ fn a_corrupt_config_stops_the_menu() {
     fs::write(&config_path, raw).unwrap();
 
     let (out, code) = launch(&sb, pty::Script::new().pause(600).build());
+    let text = pty::plain(&out);
 
-    assert_eq!(code, 1, "an unreadable config must stop the menu:\n{out}");
+    assert_eq!(code, 1, "an unreadable config must stop the app:\n{text}");
     assert!(
-        out.contains("config.toml") && out.contains("hint:"),
-        "the failure must name the file and say how to recover:\n{out}"
+        text.contains("config.toml") && text.contains("hint:"),
+        "the failure must name the file and say how to recover:\n{text}"
     );
     assert!(
-        !out.contains("What would you like to do?"),
-        "no menu may open over a library fastf could not resolve:\n{out}"
+        !out.contains("\x1b[?1049h"),
+        "no dashboard may open over a library fastf could not resolve:\n{text}"
     );
 }
 
 /// Settings held a loaded `Config` across the prompt and then wrote the whole
-/// `bases` list back from that stale copy, silently reverting anything the
-/// another `fastf config set` had written meanwhile. The rule is
-/// the one `edit_postcreate_commands` already follows: prompt first, then lock,
-/// then reload.
+/// `bases` list back from that stale copy, silently reverting anything another
+/// `fastf config set` had written meanwhile. The rule is the one
+/// `edit_postcreate_commands` already follows: prompt first, then lock, then
+/// reload.
 ///
 /// The pty runs on its own thread so the test can write the config from a
 /// second process while the "Base directory to add" prompt is open.
@@ -171,8 +189,8 @@ fn adding_a_base_does_not_revert_a_concurrent_edit() {
     fs::create_dir_all(&concurrent).unwrap();
 
     let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter()
+        .key(KEY_SETTINGS)
+        .pause(600)
         .down(2) // Settings → Library bases
         .enter()
         .enter() // → Add a base directory
@@ -186,8 +204,8 @@ fn adding_a_base_does_not_revert_a_concurrent_edit() {
     let driver = launch_detached(&sb, script);
 
     // Well inside the window: the menu snapshots its config on entering the
-    // submenu (~3.4s) and writes after the answer (~6.5s).
-    std::thread::sleep(Duration::from_millis(5000));
+    // submenu (~3.0s) and writes after the answer (~6.1s).
+    std::thread::sleep(Duration::from_millis(4600));
     let out = sb.run(&["config", "set", "bases", &concurrent.display().to_string()]);
     assert!(
         out.status.success(),
@@ -273,8 +291,8 @@ fn removing_a_base_leaves_the_rest_of_a_concurrent_edit_alone() {
     sb.ok(&["config", "set", "bases", &list([&gone, &kept])]);
 
     let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter()
+        .key(KEY_SETTINGS)
+        .pause(600)
         .down(2) // Settings → Library bases
         .enter() // the list the user sees is snapshotted here
         .down(1) // → Remove <base_a>
@@ -287,7 +305,7 @@ fn removing_a_base_leaves_the_rest_of_a_concurrent_edit_alone() {
 
     // Meanwhile, elsewhere: base_a goes away and base_c arrives, so every
     // position in the menu's snapshot now means something different.
-    std::thread::sleep(Duration::from_millis(5000));
+    std::thread::sleep(Duration::from_millis(4600));
     let out = sb.run(&["config", "set", "bases", &list([&kept, &added])]);
     assert!(
         out.status.success(),
@@ -307,46 +325,51 @@ fn removing_a_base_leaves_the_rest_of_a_concurrent_edit_alone() {
     );
 }
 
-/// Esc at the top level is Quit: there is no parent to go back to.
+/// Esc at the root is Quit: there is no parent to go back to.
 #[test]
-fn esc_at_the_main_menu_quits() {
+fn esc_at_the_root_quits() {
     let sb = Sandbox::new();
-    let (out, code) = launch(&sb, pty::Script::new().esc().build());
+    let (out, code) = launch(&sb, pty::Script::new().pause(600).esc().build());
+    let text = pty::plain(&out);
 
-    assert_eq!(code, 0, "Esc at the main menu should exit cleanly:\n{out}");
-    assert!(out.contains("Goodbye."), "expected a clean exit:\n{out}");
+    assert_eq!(code, 0, "Esc at the root should exit cleanly:\n{text}");
+    assert!(text.contains("Goodbye."), "expected a clean exit:\n{text}");
 }
 
-/// Esc in a submenu goes to its parent, one level per press. Three levels down,
-/// three presses reach the shell — and no press may skip a level.
+/// Esc in a bridged submenu goes to its parent, one level per press, and the
+/// last press returns to the dashboard rather than ending the session.
 #[test]
 fn esc_backs_out_one_level_at_a_time() {
     let sb = Sandbox::new();
     let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter() // Settings
+        .key(KEY_SETTINGS)
+        .pause(600)
         .enter() // → Project basics
         .esc() // → Settings
-        .esc() // → main menu
+        .esc() // → the dashboard
+        .pause(500)
         .esc() // → quit
         .build();
     let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
 
     assert_eq!(
         code, 0,
-        "Esc must not end the session with a failure:\n{out}"
+        "Esc must not end the session with a failure:\n{text}"
     );
     assert!(
-        out.contains("Goodbye."),
-        "three levels, three presses, then the main menu's own exit:\n{out}"
+        text.contains("Goodbye."),
+        "two levels back, then the dashboard's own exit:\n{text}"
     );
     // The parent reappeared. Anchored on rows that belong to exactly one of the
     // two menus: "Set date format" is only in Project basics, "Library bases" is
     // only in Settings, and the second must be drawn after the last of the first.
-    let last_child_row = out.rfind("Set date format").expect("the submenu was drawn");
+    let last_child_row = text
+        .rfind("Set date format")
+        .expect("the submenu was drawn");
     assert!(
-        out[last_child_row..].contains("Library bases"),
-        "escaping the submenu should redraw its parent:\n{out}"
+        text[last_child_row..].contains("Library bases"),
+        "escaping the submenu should redraw its parent:\n{text}"
     );
 }
 
@@ -359,17 +382,21 @@ fn esc_in_the_create_wizard_creates_nothing() {
     let before = sb.local_counter();
 
     let script = pty::Script::new()
-        .enter() // Create new project → template picker
-        .esc() // cancel at the picker
+        .key(KEY_CREATE)
+        .pause(600)
+        .esc() // cancel at the template picker
         .pause(500)
-        .esc() // main menu → quit
+        .enter() // press Enter to return to fastf
+        .pause(500)
+        .esc() // quit
         .build();
     let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
 
-    assert_eq!(code, 0, "a cancelled create is not a failure:\n{out}");
+    assert_eq!(code, 0, "a cancelled create is not a failure:\n{text}");
     assert!(
-        out.contains("Cancelled"),
-        "the cancel should say so, not fail silently:\n{out}"
+        text.contains("Cancelled"),
+        "the cancel should say so, not fail silently:\n{text}"
     );
     assert!(
         common::project_dirs(&sb.base).is_empty(),
@@ -392,21 +419,25 @@ fn esc_at_a_required_variable_creates_nothing() {
     let before = sb.local_counter();
 
     let script = pty::Script::new()
-        .enter() // Create new project
-        .enter() // pick the only template
+        .key(KEY_CREATE)
+        .pause(600)
+        .enter() // pick the first template
         .pause(400)
-        .esc() // at the required "Name" variable
+        .esc() // at its first required variable
         .pause(500)
-        .esc() // main menu → quit
+        .enter() // press Enter to return to fastf
+        .pause(500)
+        .esc() // quit
         .build();
     let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
 
-    assert_eq!(code, 0, "a cancelled create is not a failure:\n{out}");
+    assert_eq!(code, 0, "a cancelled create is not a failure:\n{text}");
     assert!(
         common::project_dirs(&sb.base).is_empty(),
-        "a cancelled create must leave no folder behind:\n{out}"
+        "a cancelled create must leave no folder behind:\n{text}"
     );
-    assert_eq!(sb.local_counter(), before, "no ID may be consumed:\n{out}");
+    assert_eq!(sb.local_counter(), before, "no ID may be consumed:\n{text}");
 }
 
 /// Esc in a settings field leaves the value alone and returns to the submenu.
@@ -416,8 +447,8 @@ fn esc_in_a_settings_field_leaves_the_value_unchanged() {
     sb.ok(&["config", "set", "recent-default-limit", "7"]);
 
     let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter()
+        .key(KEY_SETTINGS)
+        .pause(600)
         .down(3) // Settings → Project list (page size)
         .enter()
         .enter() // → the page-size field
@@ -425,12 +456,18 @@ fn esc_in_a_settings_field_leaves_the_value_unchanged() {
         .esc() // abandon the edit
         .pause(400)
         .esc() // → Settings
-        .esc() // → main menu
+        .esc() // → the dashboard
+        .pause(500)
         .esc() // quit
         .build();
     let (out, code) = launch(&sb, script);
 
-    assert_eq!(code, 0, "Esc in a field is not a failure:\n{out}");
+    assert_eq!(
+        code,
+        0,
+        "Esc in a field is not a failure:\n{}",
+        pty::plain(&out)
+    );
     let shown = sb.ok(&["config", "show"]);
     assert!(
         shown.contains('7'),
@@ -446,8 +483,8 @@ fn a_bad_template_slug_is_refused_at_its_own_prompt() {
     fs::create_dir_all(source.join("01_Assets")).unwrap();
 
     let script = pty::Script::new()
-        .down(MENU_TEMPLATES)
-        .enter()
+        .key(KEY_TEMPLATES)
+        .pause(600)
         .down(1) // → Generate template from existing folder
         .enter()
         .line(&source.display().to_string())
@@ -463,17 +500,19 @@ fn a_bad_template_slug_is_refused_at_its_own_prompt() {
         .key("n") // overwrite if it exists?
         .key("n") // bundle binary/large files?
         .pause(900)
-        .esc() // Templates → main menu
-        .esc()
+        .esc() // Templates → the dashboard
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
 
-    assert_eq!(code, 0, "a bad slug must not end the session:\n{out}");
+    assert_eq!(code, 0, "a bad slug must not end the session:\n{text}");
     assert!(
         sb.install
             .join("templates/not-a-slug/template.yaml")
             .exists(),
-        "the corrected slug should have produced the template:\n{out}"
+        "the corrected slug should have produced the template:\n{text}"
     );
 }
 
@@ -485,44 +524,48 @@ fn apply_refuses_a_missing_target_before_asking_anything_else() {
     sb.write_template("race");
 
     let script = pty::Script::new()
-        .down(MENU_TEMPLATES)
-        .enter()
+        .key(KEY_TEMPLATES)
+        .pause(600)
         .down(3) // → Apply template to existing folder
         .enter()
-        .enter() // pick the only template
+        .enter() // pick the first template
         .pause(400)
         .line("/nope/does/not/exist")
         .pause(600)
         .esc() // give up on the target
         .pause(400)
-        .esc() // Templates → main menu
-        .esc()
+        .esc() // Templates → the dashboard
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
 
-    assert_eq!(code, 0, "a missing target must not end the session:\n{out}");
-    assert!(
-        out.contains("no such folder"),
-        "the target should be refused at its own prompt:\n{out}"
+    assert_eq!(
+        code, 0,
+        "a missing target must not end the session:\n{text}"
     );
     assert!(
-        !out.contains("Dry run first"),
-        "nothing that depends on the target may be asked before it is valid:\n{out}"
+        text.contains("no such folder"),
+        "the target should be refused at its own prompt:\n{text}"
+    );
+    assert!(
+        !text.contains("Dry run first"),
+        "nothing that depends on the target may be asked before it is valid:\n{text}"
     );
 }
 
 /// A base directory that is not absolute is refused where it is typed, and the
 /// text stays there — so making it absolute is a Home and a prefix, not a
-/// retype. Pre-Phase-8 the message appeared too, but only after the field had
-/// closed and thrown the value away.
+/// retype.
 #[test]
 fn a_relative_base_directory_is_corrected_in_place() {
     let sb = Sandbox::new();
     let prefix = sb.tmp.path().display().to_string();
 
     let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter()
+        .key(KEY_SETTINGS)
+        .pause(600)
         .enter() // Project basics
         .enter() // → Set base directory
         .key("relative/path")
@@ -533,15 +576,20 @@ fn a_relative_base_directory_is_corrected_in_place() {
         .enter()
         .pause(800)
         .esc() // → Settings
-        .esc() // → main menu
-        .esc()
+        .esc() // → the dashboard
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
 
-    assert_eq!(code, 0, "a rejected value must not end the session:\n{out}");
+    assert_eq!(
+        code, 0,
+        "a rejected value must not end the session:\n{text}"
+    );
     assert!(
-        out.contains("absolute path"),
-        "the reason should appear at the prompt:\n{out}"
+        text.contains("absolute path"),
+        "the reason should appear at the prompt:\n{text}"
     );
     let shown = sb.ok(&["config", "show"]);
     assert!(
@@ -556,8 +604,8 @@ fn a_relative_base_directory_is_corrected_in_place() {
 fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
     let sb = Sandbox::new();
     let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter()
+        .key(KEY_SETTINGS)
+        .pause(600)
         .enter() // Project basics
         // base dir, default template, date format, editor, terminal, pattern.
         .down(5) // → Set register naming pattern
@@ -568,19 +616,21 @@ fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
         .key("_{id}") // corrected in place
         .enter()
         .pause(700)
-        .esc()
-        .esc()
-        .esc()
+        .esc() // → Settings
+        .esc() // → the dashboard
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
 
     assert_eq!(
         code, 0,
-        "a refused pattern must not end the session:\n{out}"
+        "a refused pattern must not end the session:\n{text}"
     );
     assert!(
-        out.contains("must contain {id}"),
-        "the rule should be stated at the prompt:\n{out}"
+        text.contains("must contain {id}"),
+        "the rule should be stated at the prompt:\n{text}"
     );
     let shown = sb.ok(&["config", "show"]);
     assert!(
@@ -607,9 +657,9 @@ fn a_text_prompt_parks_a_visible_caret_after_the_text() {
     plant_dated_project(&sb, "Mut", "ID0001", "2026-01-01T00:00:00Z", 64);
 
     let script = pty::Script::new()
-        .down(MENU_PROJECTS)
-        .enter()
-        .enter() // select the project
+        .pause(800)
+        .enter() // the selected project's action menu
+        .pause(600)
         // → Rename folder. One base is configured, so "Move to another base" is
         // not in the list and Rename is the seventh row.
         .down(6)
@@ -617,11 +667,9 @@ fn a_text_prompt_parks_a_visible_caret_after_the_text() {
         .pause(700)
         .esc() // leave the name alone → the action menu
         .pause(600)
-        .esc() // → the list
+        .esc() // → the dashboard
         .pause(600)
-        .esc() // → main menu
-        .pause(400)
-        .esc() // quit
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
 

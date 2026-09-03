@@ -111,11 +111,19 @@ pub enum Context {
     Templates,
     /// The selected project's action menu is open.
     Actions,
+    /// The template studio: the list of templates with the selected one's
+    /// details beside it.
+    Studio,
+    /// The template builder, on its section list or on the variables or
+    /// files list — never while a form or a text area has the keys.
+    Builder,
+    /// The settings screen, on its list — not while a value is being edited.
+    Settings,
     /// The search bar is being edited.
     SearchEdit,
     /// The command palette is open.
     Palette,
-    /// Any other modal (a picker, help, a message).
+    /// Any other dialog: a confirmation, a picker, help, a message.
     Modal,
 }
 
@@ -127,11 +135,29 @@ impl Context {
             Context::Detail => "detail pane",
             Context::Templates => "template strip",
             Context::Actions => "project actions",
+            Context::Studio => "template studio",
+            Context::Builder => "template builder",
+            Context::Settings => "settings",
             Context::SearchEdit => "search bar",
             Context::Palette => "command palette",
             Context::Modal => "dialogs",
         }
     }
+
+    /// Every context, for the invariants and the help.
+    pub const ALL: [Context; 11] = [
+        Context::Global,
+        Context::Projects,
+        Context::Detail,
+        Context::Templates,
+        Context::Actions,
+        Context::Studio,
+        Context::Builder,
+        Context::Settings,
+        Context::SearchEdit,
+        Context::Palette,
+        Context::Modal,
+    ];
 }
 
 /// How the help overlay groups commands.
@@ -185,6 +211,7 @@ pub enum CommandId {
     // Global
     Quit,
     Back,
+    Close,
     Help,
     Palette,
     Reload,
@@ -237,12 +264,28 @@ pub enum CommandId {
     Reconcile,
     // The template strip
     StripFilter,
+    // The action menu
+    ActionsRun,
+    // The template studio
+    StudioNew,
+    StudioEdit,
+    StudioFromFolder,
+    StudioDelete,
+    // The template builder's lists
+    BuilderOpen,
+    BuilderAdd,
+    BuilderRemove,
+    BuilderMoveUp,
+    BuilderMoveDown,
+    // The settings list
+    SettingsChange,
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 47] = [
+    pub const ALL: [CommandId; 59] = [
         CommandId::Quit,
         CommandId::Back,
+        CommandId::Close,
         CommandId::Help,
         CommandId::Palette,
         CommandId::Reload,
@@ -288,6 +331,17 @@ impl CommandId {
         CommandId::Settings,
         CommandId::Reconcile,
         CommandId::StripFilter,
+        CommandId::ActionsRun,
+        CommandId::StudioNew,
+        CommandId::StudioEdit,
+        CommandId::StudioFromFolder,
+        CommandId::StudioDelete,
+        CommandId::BuilderOpen,
+        CommandId::BuilderAdd,
+        CommandId::BuilderRemove,
+        CommandId::BuilderMoveUp,
+        CommandId::BuilderMoveDown,
+        CommandId::SettingsChange,
     ];
 }
 
@@ -379,6 +433,42 @@ fn has_marks(app: &App) -> Availability {
     }
 }
 
+/// The studio's verbs on a template need one to be selected.
+fn has_studio_selection(app: &App) -> Availability {
+    match app.modals.top() {
+        Some(crate::tui::app::modal::Modal::Studio(studio)) if studio.selected_slug().is_some() => {
+            Availability::Enabled
+        }
+        _ => Availability::Disabled("no templates yet — n makes one"),
+    }
+}
+
+/// `a` and `d` belong to the builder's variables and files lists; `K`/`J`
+/// reorder the variables only. On the section list they are not bound.
+fn builder_list_open(app: &App) -> Availability {
+    use crate::tui::app::studio::Open;
+    match app.modals.top() {
+        Some(crate::tui::app::modal::Modal::Builder(builder))
+            if matches!(builder.open, Some(Open::Variables(_)) | Some(Open::Files(_))) =>
+        {
+            Availability::Enabled
+        }
+        _ => Availability::Hidden,
+    }
+}
+
+fn builder_variables_open(app: &App) -> Availability {
+    use crate::tui::app::studio::Open;
+    match app.modals.top() {
+        Some(crate::tui::app::modal::Modal::Builder(builder))
+            if matches!(builder.open, Some(Open::Variables(_))) =>
+        {
+            Availability::Enabled
+        }
+        _ => Availability::Hidden,
+    }
+}
+
 /// Move needs a mounted base to move to that is not the one the project is in.
 fn can_move(app: &App) -> Availability {
     let Some(project) = app.library.selected() else {
@@ -403,6 +493,37 @@ const LISTS: &[Context] = &[Context::Projects, Context::Detail, Context::Templat
 const PD: &[Context] = &[Context::Projects, Context::Detail];
 const ACTIONS: &[Context] = &[Context::Projects, Context::Detail, Context::Actions];
 const T: &[Context] = &[Context::Templates];
+/// Every list and every scrollable dialog: where the arrow keys go.
+const SCROLLERS: &[Context] = &[
+    Context::Projects,
+    Context::Detail,
+    Context::Templates,
+    Context::Actions,
+    Context::Studio,
+    Context::Builder,
+    Context::Settings,
+    Context::Modal,
+];
+/// The pages and the jumps: the project list, and the dialogs with a body to
+/// scroll.
+const PAGERS: &[Context] = &[
+    Context::Projects,
+    Context::Detail,
+    Context::Studio,
+    Context::Settings,
+    Context::Modal,
+];
+/// Every dialog that closes with Esc.
+const DIALOGS: &[Context] = &[
+    Context::Actions,
+    Context::Studio,
+    Context::Builder,
+    Context::Settings,
+    Context::Modal,
+];
+const STUDIO: &[Context] = &[Context::Studio];
+const BUILDER: &[Context] = &[Context::Builder];
+const SETTINGS: &[Context] = &[Context::Settings];
 
 macro_rules! cmd {
     ($id:ident, $title:expr, $desc:expr, $ctx:expr, [$($key:expr),* $(,)?], $cat:ident, palette = $pal:expr, hint = $hint:expr, $avail:expr) => {
@@ -448,8 +569,8 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Back,
         "Back",
-        "close the dialog, leave the search, clear the filter and the marks — then quit",
-        G,
+        "one step back: cancel a running job, clear the search, the filter, the marks — then quit",
+        LISTS,
         [Key::plain(KeyCode::Esc)],
         Navigate,
         palette = false,
@@ -460,10 +581,21 @@ pub static COMMANDS: &[Command] = &[
         Quit,
         "Quit",
         "leave fastf",
-        G,
+        LISTS,
         [Key::ch('q')],
         Navigate,
         palette = true,
+        hint = true,
+        always
+    ),
+    cmd!(
+        Close,
+        "Close",
+        "close this dialog — one level at a time, nothing already answered is lost",
+        DIALOGS,
+        [Key::plain(KeyCode::Esc), Key::ch('q')],
+        Navigate,
+        palette = false,
         hint = true,
         always
     ),
@@ -511,12 +643,12 @@ pub static COMMANDS: &[Command] = &[
         hint = false,
         always
     ),
-    // --- lists -----------------------------------------------------------
+    // --- lists and scrollable dialogs --------------------------------------
     cmd!(
         Down,
         "Down",
-        "next row (wraps at the end)",
-        LISTS,
+        "next row, or scroll down (a list wraps at the end)",
+        SCROLLERS,
         [Key::plain(KeyCode::Down), Key::ch('j')],
         Navigate,
         palette = false,
@@ -526,8 +658,8 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Up,
         "Up",
-        "previous row (wraps at the top)",
-        LISTS,
+        "previous row, or scroll up (a list wraps at the top)",
+        SCROLLERS,
         [Key::plain(KeyCode::Up), Key::ch('k')],
         Navigate,
         palette = false,
@@ -538,7 +670,7 @@ pub static COMMANDS: &[Command] = &[
         PageDown,
         "Page down",
         "a screenful down (stops at the end)",
-        PD,
+        PAGERS,
         [Key::plain(KeyCode::PageDown)],
         Navigate,
         palette = false,
@@ -549,7 +681,7 @@ pub static COMMANDS: &[Command] = &[
         PageUp,
         "Page up",
         "a screenful up (stops at the top)",
-        PD,
+        PAGERS,
         [Key::plain(KeyCode::PageUp)],
         Navigate,
         palette = false,
@@ -560,7 +692,7 @@ pub static COMMANDS: &[Command] = &[
         First,
         "First row",
         "jump to the top",
-        PD,
+        PAGERS,
         [Key::plain(KeyCode::Home), Key::ch('g')],
         Navigate,
         palette = false,
@@ -571,7 +703,7 @@ pub static COMMANDS: &[Command] = &[
         Last,
         "Last row",
         "jump to the bottom",
-        PD,
+        PAGERS,
         [Key::plain(KeyCode::End), Key::ch('G')],
         Navigate,
         palette = false,
@@ -947,6 +1079,131 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         has_strip_selection
     ),
+    // --- the action menu ---------------------------------------------------
+    cmd!(
+        ActionsRun,
+        "Run the highlighted action",
+        "the verb under the cursor — or press its own key",
+        &[Context::Actions],
+        [Key::plain(KeyCode::Enter)],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
+    ),
+    // --- the template studio ----------------------------------------------
+    cmd!(
+        StudioEdit,
+        "Edit this template",
+        "open the selected template in the builder",
+        STUDIO,
+        [Key::plain(KeyCode::Enter), Key::ch('e')],
+        Templates,
+        palette = false,
+        hint = true,
+        has_studio_selection
+    ),
+    cmd!(
+        StudioNew,
+        "New template",
+        "build a template from scratch: metadata, variables, folders, files",
+        STUDIO,
+        [Key::ch('n')],
+        Templates,
+        palette = true,
+        hint = true,
+        not_busy
+    ),
+    cmd!(
+        StudioFromFolder,
+        "Template from a folder",
+        "generate a template out of a folder that already has the shape you want",
+        STUDIO,
+        [Key::ch('g')],
+        Templates,
+        palette = true,
+        hint = true,
+        not_busy
+    ),
+    cmd!(
+        StudioDelete,
+        "Delete this template",
+        "delete the selected template and its bundled files — it asks first",
+        STUDIO,
+        [Key::ch('D')],
+        Templates,
+        palette = false,
+        hint = true,
+        has_studio_selection
+    ),
+    // --- the template builder ---------------------------------------------
+    cmd!(
+        BuilderOpen,
+        "Open",
+        "open the highlighted section, or save or discard from the section list; edit the highlighted variable or file",
+        BUILDER,
+        [Key::plain(KeyCode::Enter)],
+        Templates,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        BuilderAdd,
+        "Add",
+        "a new variable or file at the end of the list",
+        BUILDER,
+        [Key::ch('a')],
+        Templates,
+        palette = false,
+        hint = true,
+        builder_list_open
+    ),
+    cmd!(
+        BuilderRemove,
+        "Remove",
+        "take the highlighted variable or file out of the template",
+        BUILDER,
+        [Key::ch('d')],
+        Templates,
+        palette = false,
+        hint = true,
+        builder_list_open
+    ),
+    cmd!(
+        BuilderMoveUp,
+        "Move up",
+        "ask for this variable earlier",
+        BUILDER,
+        [Key::ch('K')],
+        Templates,
+        palette = false,
+        hint = true,
+        builder_variables_open
+    ),
+    cmd!(
+        BuilderMoveDown,
+        "Move down",
+        "ask for this variable later",
+        BUILDER,
+        [Key::ch('J')],
+        Templates,
+        palette = false,
+        hint = true,
+        builder_variables_open
+    ),
+    // --- the settings list -------------------------------------------------
+    cmd!(
+        SettingsChange,
+        "Change / run",
+        "flip a yes/no or cycle a choice where it stands, open a value on its line, or run the maintenance verb",
+        SETTINGS,
+        [Key::plain(KeyCode::Enter)],
+        Settings,
+        palette = false,
+        hint = true,
+        always
+    ),
 ];
 
 /// The command declared for `id`.
@@ -1007,7 +1264,7 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
 }
 
 /// The hint bar has one line, so a few titles get a shorter form there.
-fn hint_title(id: CommandId, title: &'static str) -> &'static str {
+pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
     match id {
         CommandId::Palette => "commands",
         CommandId::Actions => "actions",
@@ -1018,10 +1275,23 @@ fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::Search => "search",
         CommandId::Help => "help",
         CommandId::Quit => "quit",
+        CommandId::Close => "close",
         CommandId::StripFilter => "filter",
+        CommandId::ActionsRun => "run",
+        CommandId::StudioEdit => "edit",
+        CommandId::StudioNew => "new",
+        CommandId::StudioFromFolder => "from a folder",
+        CommandId::StudioDelete => "delete",
+        CommandId::BuilderOpen => "open / save",
+        CommandId::BuilderAdd => "add",
+        CommandId::BuilderRemove => "remove",
+        CommandId::BuilderMoveUp => "up",
+        CommandId::BuilderMoveDown => "down",
+        CommandId::SettingsChange => "change / run",
         _ => title,
     }
 }
+
 
 /// The help overlay: every command that fires in `ctx` (plus the global ones),
 /// grouped by category in `Category::ALL` order.

@@ -172,6 +172,10 @@ pub struct App {
     /// A create or a register produces a project no snapshot holds yet, so the
     /// selection is asked for by path and applied when discovery answers.
     pub select_when_found: Option<PathBuf>,
+    /// The row the last run left the cursor on, applied once discovery has
+    /// answered for the first time — by id, since a rename between runs must
+    /// not lose it.
+    pub select_id_when_found: Option<String>,
     pub ticks: u64,
     pub fuzzy: Fuzzy,
     next_action: u64,
@@ -202,6 +206,7 @@ impl App {
             session: crate::tui::frame::recent_actions(),
             studio_entry: None,
             select_when_found: None,
+            select_id_when_found: None,
             ticks: 0,
             fuzzy: Fuzzy::new(),
             next_action: 0,
@@ -223,6 +228,24 @@ impl App {
         }
         app.recompute();
         app
+    }
+
+    /// Start where the last run left off: the sort order, the pane, the row.
+    /// `fastf recent`/`search` keep their own order and rows and take only
+    /// the pane's state. Called before `start`, so the first frame is already
+    /// the remembered one.
+    pub fn apply_session(&mut self, session: &crate::tui::session::Session) {
+        if let Some(open) = session.detail_open {
+            self.detail_open = open;
+        }
+        if !self.is_menu {
+            return;
+        }
+        if let Some(order) = session.sort_order() {
+            self.library.explicit_sort = Some(order);
+        }
+        self.select_id_when_found = session.selected.clone();
+        self.recompute();
     }
 
     /// The first effects: the header's summary, and a discovery unless the
@@ -517,7 +540,14 @@ impl App {
                 {
                     self.select_when_found = None;
                 }
+                // The remembered row is applied once, on the first answer: a
+                // later discovery is a reload, and the cursor is wherever the
+                // user has since put it.
+                if let Some(id) = self.select_id_when_found.take() {
+                    self.library.select_id(&id);
+                }
                 let mut effects = self.after_rows_changed();
+
                 if self.library.dirty {
                     self.library.dirty = false;
                     effects.push(self.discover());

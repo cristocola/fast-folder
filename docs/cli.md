@@ -155,6 +155,13 @@ What is on screen, top to bottom:
 
 Below 60×16 the app says so and waits for a bigger window or `q`.
 
+The app remembers three things between runs — the sort order, whether the
+detail pane was open, and the row the cursor was on — in `state.toml` beside
+`config.toml` (`fastf paths` names the folder). `fastf recent` and `fastf
+search` keep their own order and rows and take only the pane's state. Delete
+the file to start fresh; a file that cannot be read is skipped with a note.
+
+
 #### Keys
 
 `?` shows every key for where you are. `c` (or `:`, or Ctrl-P) opens the

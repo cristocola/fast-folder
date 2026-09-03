@@ -21,7 +21,9 @@ pub mod pickers;
 pub mod prompt;
 pub mod rows;
 pub mod runtime;
+pub mod session;
 pub mod testing;
+
 pub mod theme;
 pub mod validators;
 pub mod vars;

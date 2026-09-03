@@ -35,7 +35,9 @@ use crate::tui::effect::{
 use crate::tui::entry::Entry;
 use crate::tui::loaders;
 use crate::tui::msg::{Mouse, MouseKind, Msg, Resumed};
+use crate::tui::session::Session;
 use crate::tui::theme::Theme;
+
 use crate::tui::view;
 use crate::util::size_scan::{SizeCell, SizeScanner};
 use crate::util::{diag, interrupt, tty};
@@ -61,7 +63,14 @@ pub fn run(entry: Entry, onboarding: Option<String>, theme: Theme) -> Result<Exi
     let mut runtime = Runtime::init(tx, rx)?;
     let outcome = runtime.main_loop(entry, onboarding, theme);
     runtime.shutdown();
-    outcome
+    let (exit, session) = outcome?;
+    // After the screen is given back and the sink is gone, so a refusal is
+    // printed where it can be read; and only on a clean exit — a session that
+    // ended in an error has nothing worth remembering.
+    if let Err(err) = session.save() {
+        diag::warn(format!("the session state was not saved: {err:#}"));
+    }
+    Ok(exit)
 }
 
 type Screen = Terminal<CrosstermBackend<Stderr>>;
@@ -134,15 +143,20 @@ impl Runtime {
         entry: Entry,
         onboarding: Option<String>,
         theme: Theme,
-    ) -> Result<Exit> {
+    ) -> Result<(Exit, Session)> {
+        // Read before the first frame: a note about a file that could not be
+        // read goes through the sink into the channel and lands as a status
+        // line, like any other.
+        let remembered = Session::load();
         let mut app = App::new(entry, theme, self.size());
+        app.apply_session(&remembered);
         if let Some(suggested) = onboarding {
             app.request_onboarding(suggested);
         }
         let mut effects = app.start();
         loop {
             if let Some(exit) = self.perform(&mut app, std::mem::take(&mut effects))? {
-                return Ok(exit);
+                return Ok((exit, Session::capture(&app, &remembered)));
             }
             self.terminal.draw(|frame| view::view(&app, frame))?;
 

@@ -639,3 +639,52 @@ fn a_failed_move_surfaces_in_the_ui_and_leaves_the_list_consistent() {
         "the failed row keeps its mark:\n{text}"
     );
 }
+
+/// The sort order, the pane and the row survive a restart: `state.toml` in
+/// the data directory, written after the screen is given back and read before
+/// the first frame.
+#[test]
+fn the_sort_order_and_the_cursor_survive_a_restart() {
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Zeta_Project", "ID0003", "2026-03-03T00:00:00Z", 512);
+    plant_dated_project(&sb, "Alpha_Project", "ID0002", "2026-02-02T00:00:00Z", 512);
+    plant_dated_project(&sb, "Mid_Project", "ID0001", "2026-01-01T00:00:00Z", 512);
+
+    // newest → oldest → name. The cursor followed Zeta through the re-sorts
+    // (selection is by path), so it sits on the last row; down wraps to Alpha.
+    let script = pty::Script::new()
+        .pause(1500)
+        .key("s")
+        .pause(200)
+        .key("s")
+        .pause(200)
+        .down(1)
+        .pause(400)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+    assert_eq!(code, 0, "the first run should quit cleanly:\n{screen}");
+    assert!(
+        screen.contains("· name"),
+        "the bar should say the order chosen:\n{screen}"
+    );
+    let state = fs::read_to_string(sb.install.join("state.toml")).unwrap_or_default();
+    assert!(
+        state.contains("sort = \"name\"") && state.contains("selected = \"ID0002\""),
+        "the run should leave its order and row behind:\n{state}"
+    );
+
+    let script = pty::Script::new().pause(2000).key(KEY_QUIT).build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+    assert_eq!(code, 0, "the second run should quit cleanly:\n{screen}");
+    assert!(
+        screen.contains("· name"),
+        "the order should come back on its own:\n{screen}"
+    );
+    assert!(
+        screen.contains("▸ ID0002"),
+        "the cursor should be back on the row it was left on:\n{screen}"
+    );
+}

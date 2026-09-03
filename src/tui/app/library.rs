@@ -77,6 +77,15 @@ impl Order {
             .unwrap_or(Self::CYCLE.len() - 1);
         Self::CYCLE[(at + 1) % Self::CYCLE.len()]
     }
+
+    /// The order a label names — one of the cycle's, never `Relevance`,
+    /// which is chosen by the query and not by a person.
+    pub fn from_label(label: &str) -> Option<Order> {
+        Self::CYCLE
+            .iter()
+            .copied()
+            .find(|order| order.label() == label.trim())
+    }
 }
 
 /// Where a fuzzy query hit a row, as char offsets into the id and the name.
@@ -418,6 +427,21 @@ impl LibraryState {
             .filtered
             .iter()
             .position(|&index| self.snapshot[index].path == path)
+        {
+            Some(at) => {
+                self.selected = Some(at);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Put the cursor on the row whose frontmatter id is `id`, if it is shown.
+    pub fn select_id(&mut self, id: &str) -> bool {
+        match self
+            .filtered
+            .iter()
+            .position(|&index| self.snapshot[index].id == id)
         {
             Some(at) => {
                 self.selected = Some(at);

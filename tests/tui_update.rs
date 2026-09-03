@@ -988,3 +988,208 @@ fn removing_a_row_drops_its_mark() {
     app.library.remove(&doomed);
     assert!(!app.library.marks.contains(&doomed));
 }
+
+// ---------------------------------------------------------------------------
+// Batch jobs over the marks (Phase 2)
+// ---------------------------------------------------------------------------
+
+/// The id an `Effect::Run` carries, when the effects are exactly one run.
+fn run_id(effects: &[Effect]) -> fastf::tui::effect::ActionId {
+    match effects {
+        [Effect::Run(id, _)] => *id,
+        other => panic!("expected one run, got {other:?}"),
+    }
+}
+
+fn item_done(id: fastf::tui::effect::ActionId, change: ListChange) -> Msg {
+    Msg::ActionDone {
+        id,
+        outcome: Ok(Box::new(fastf::tui::effect::ActionOutcome {
+            change,
+            message: "done".to_string(),
+            warning: None,
+            session: None,
+        })),
+    }
+}
+
+#[test]
+fn delete_over_marks_confirms_once_then_runs_each_item() {
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch(' ')); // mark row 0
+    press(&mut app, Key::ch(' ')); // mark row 1
+    let first = app.library.row(0).unwrap().path.clone();
+    let second = app.library.row(1).unwrap().path.clone();
+
+    // `D` over marks is a yes/no confirm, not the typed-name guard.
+    press(&mut app, Key::ch('D'));
+    assert!(matches!(app.modals.top(), Some(Modal::Confirm(_))));
+    let effects = press(&mut app, Key::ch('y'));
+    let id1 = run_id(&effects);
+    assert!(matches!(action_of(&effects), Action::Delete(project) if project.path == first));
+    assert!(app.job.is_some(), "a job is running");
+    assert_eq!(app.job.as_ref().unwrap().pending.len(), 1);
+
+    // The first item lands: its row goes, and the next item starts.
+    let effects = update(
+        &mut app,
+        item_done(
+            id1,
+            ListChange::Removed {
+                path: first.clone(),
+            },
+        ),
+    );
+    let id2 = run_id(&effects);
+    assert!(
+        !app.library.marks.contains(&first),
+        "a deleted row loses its mark"
+    );
+    assert!(matches!(action_of(&effects), Action::Delete(project) if project.path == second));
+
+    // The second lands: the job finishes clean — no report, just the status.
+    let effects = update(
+        &mut app,
+        item_done(
+            id2,
+            ListChange::Removed {
+                path: second.clone(),
+            },
+        ),
+    );
+    assert!(effects.is_empty());
+    assert!(app.job.is_none());
+    assert!(app.modals.is_empty(), "a clean job needs no report modal");
+    assert!(
+        app.status.text.contains("2 deleted"),
+        "{:?}",
+        app.status.text
+    );
+    assert!(app.library.marks.is_empty());
+}
+
+#[test]
+fn a_failed_item_keeps_its_mark_and_opens_a_report() {
+    let mut app = fixture(12, 80, 24);
+    let doomed = app.library.selected().unwrap().path.clone();
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch('D'));
+    let effects = press(&mut app, Key::ch('y'));
+    let id = run_id(&effects);
+
+    let effects = update(
+        &mut app,
+        Msg::ActionDone {
+            id,
+            outcome: Err("injected fault at 'delete:mid-copy'".to_string()),
+        },
+    );
+    assert!(effects.is_empty());
+    assert!(app.job.is_none(), "the job is over");
+    assert!(
+        app.library.marks.contains(&doomed),
+        "the failed row stays marked for a retry"
+    );
+    assert!(
+        app.status.text.contains("1 failed"),
+        "{:?}",
+        app.status.text
+    );
+    match app.modals.top() {
+        Some(Modal::Message { title, lines, .. }) => {
+            assert_eq!(title, "delete report");
+            assert!(lines.iter().any(|l| l.contains("mid-copy")), "{lines:?}");
+        }
+        other => panic!("expected the failure report, got {other:?}"),
+    }
+}
+
+#[test]
+fn esc_cancels_a_job_and_the_rest_stay_marked() {
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch(' ')); // mark row 0
+    press(&mut app, Key::ch(' ')); // mark row 1
+    let first = app.library.row(0).unwrap().path.clone();
+    let second = app.library.row(1).unwrap().path.clone();
+    press(&mut app, Key::ch('D'));
+    let effects = press(&mut app, Key::ch('y'));
+    let id1 = run_id(&effects);
+    assert_eq!(app.job.as_ref().unwrap().pending.len(), 1);
+
+    // Esc while an item runs asks the job to stop after it — no quitting, no
+    // CancelMove (nothing is in flight to cancel for a delete).
+    assert!(press(&mut app, Key::plain(KeyCode::Esc)).is_empty());
+    assert!(app.job.as_ref().unwrap().cancelled);
+
+    // The running item still lands: its row goes, its mark with it. Nothing
+    // new starts, and the unrun row keeps its mark.
+    let effects = update(
+        &mut app,
+        item_done(
+            id1,
+            ListChange::Removed {
+                path: first.clone(),
+            },
+        ),
+    );
+    assert!(effects.is_empty(), "no further item may start: {effects:?}");
+    assert!(app.job.is_none(), "the cancelled job is over");
+    assert!(!app.library.marks.contains(&first));
+    assert!(
+        app.library.marks.contains(&second),
+        "the unrun row stays marked"
+    );
+    assert!(app.library.snapshot.iter().any(|p| p.path == second));
+    assert!(
+        app.status.text.contains("1 deleted — cancelled"),
+        "{:?}",
+        app.status.text
+    );
+    match app.modals.top() {
+        Some(Modal::Message { title, lines, .. }) => {
+            assert_eq!(title, "delete report");
+            assert!(
+                lines.iter().any(|l| l.contains("1 project is left marked")),
+                "{lines:?}"
+            );
+        }
+        other => panic!("expected the cancel report, got {other:?}"),
+    }
+}
+
+#[test]
+fn move_over_marks_runs_a_move_job() {
+    let mut app = fixture(12, 80, 24);
+    app.summary = Some(sample_summary_moveable(12));
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch(' '));
+    let first = app.library.row(0).unwrap().clone();
+
+    press(&mut app, Key::ch('m'));
+    assert!(matches!(app.modals.top(), Some(Modal::Pick(_))));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        action_of(&effects),
+        Action::Move { project, .. } if **project == first
+    ));
+    assert!(app.job.is_some(), "the marks started a move job");
+    assert_eq!(app.job.as_ref().unwrap().pending.len(), 1);
+    assert!(app.move_progress.is_some(), "the progress modal is up");
+}
+
+#[test]
+fn unregister_over_marks_confirms_the_count_then_runs() {
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch('u'));
+    let prompt = match app.modals.top() {
+        Some(Modal::Confirm(confirm)) => confirm.prompt.clone(),
+        other => panic!("expected a batch confirm, got {other:?}"),
+    };
+    assert!(prompt.contains("2 projects"), "{prompt}");
+    let effects = press(&mut app, Key::ch('y'));
+    assert!(matches!(action_of(&effects), Action::Unregister(_)));
+    assert!(app.job.is_some());
+    assert_eq!(app.job.as_ref().unwrap().pending.len(), 1);
+}

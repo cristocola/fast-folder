@@ -35,6 +35,15 @@ impl JobKind {
         }
     }
 
+    /// The busy label while one item runs, matching the single-verb wording.
+    pub fn busy(self) -> &'static str {
+        match self {
+            JobKind::Delete => "deleting…",
+            JobKind::Unregister => "unregistering…",
+            JobKind::Move => "moving…",
+        }
+    }
+
     /// The finished report's headline, e.g. "3 deleted".
     pub fn done(self, count: usize) -> String {
         let noun = match self {

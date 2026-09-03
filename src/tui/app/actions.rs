@@ -70,6 +70,10 @@ impl TextPrompt {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfirmThen {
     Unregister,
+    /// Delete every marked project (the marks are the batch).
+    DeleteBatch,
+    /// Unregister every marked project (the marks are the batch).
+    UnregisterBatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

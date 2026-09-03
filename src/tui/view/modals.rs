@@ -42,8 +42,13 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
 
 /// The move job's progress, drawn over the dashboard while one runs. It is not
 /// a modal on the stack — it shares the lifetime of `App::busy` and disappears
-/// when the move answers.
+/// when the move answers. A batch job draws its own modal (`render_job`),
+/// which shows the move detail for its moving items, so this stays out of the
+/// way while `App::job` is up.
 pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
+    if app.job.is_some() {
+        return;
+    }
     let Some(progress) = &app.move_progress else {
         return;
     };
@@ -84,6 +89,66 @@ pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(" Ctrl-C cancels", theme.dim())),
     ];
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// A batch job's progress, drawn over the dashboard while one runs. Like
+/// `render_move_progress`, it is not a modal on the stack — it lives exactly
+/// as long as `App::job`. The modal names the item being acted on and counts
+/// the failures so far; a moving item's byte progress is folded in beneath.
+pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
+    let Some(job) = &app.job else {
+        return;
+    };
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let tall = app.move_progress.is_some() || !job.failed.is_empty();
+    let area = centered_fixed(area, 64, if tall { 11 } else { 8 });
+    frame.render_widget(Clear, area);
+    let block = frame_block(app, format!(" {} ", job.kind.verb()), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(" {} ", job.progress_line()),
+            theme.accent(),
+        )),
+        Line::from(Span::styled(
+            format!(
+                " {}",
+                match &job.inflight {
+                    Some(project) => fit(&project.name, inner.width as usize, g.ellipsis),
+                    None => "finishing…".to_string(),
+                }
+            ),
+            theme.text(),
+        )),
+    ];
+    if let Some(progress) = &app.move_progress {
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {} ", progress.phase.as_str()), theme.accent()),
+            Span::styled(
+                format!(
+                    "{} of {}",
+                    crate::util::human_bytes::human_bytes(progress.copied_bytes),
+                    crate::util::human_bytes::human_bytes(progress.total_bytes)
+                ),
+                theme.dim(),
+            ),
+        ]));
+    }
+    if !job.failed.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!(" {} failed so far", job.failed.len()),
+            theme.warn(),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " Esc or Ctrl-C cancels — the projects that have not run stay marked",
+        theme.dim(),
+    )));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

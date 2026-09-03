@@ -321,12 +321,10 @@ fn needs_selection(app: &App) -> Availability {
 }
 
 fn not_busy(app: &App) -> Availability {
-    match &app.busy {
-        Some(what) => {
-            let _ = what;
-            Availability::Disabled("working…")
-        }
-        None => Availability::Enabled,
+    if app.busy.is_some() || app.job.is_some() {
+        Availability::Disabled("working…")
+    } else {
+        Availability::Enabled
     }
 }
 

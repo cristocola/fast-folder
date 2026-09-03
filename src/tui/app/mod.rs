@@ -149,6 +149,8 @@ pub struct App {
     /// The latest snapshot of the move job that is running, for the progress
     /// modal; `None` when no move is in flight.
     pub move_progress: Option<Progress>,
+    /// A batch job over the marked projects, while one is running.
+    pub job: Option<jobs::Job>,
     pub status: Status,
     /// The last few things this session did, oldest first.
     pub session: Vec<String>,
@@ -177,6 +179,7 @@ impl App {
             busy: None,
             busy_id: None,
             move_progress: None,
+            job: None,
             status: Status::default(),
             session: crate::tui::frame::recent_actions(),
             ticks: 0,
@@ -541,6 +544,9 @@ impl App {
         self.busy = None;
         self.busy_id = None;
         self.move_progress = None;
+        if self.job.is_some() {
+            return self.on_job_item_done(outcome);
+        }
         match outcome {
             Ok(outcome) => {
                 let outcome = *outcome;
@@ -631,10 +637,10 @@ impl App {
             };
         }
         if key == Key::ctrl('c') {
-            // A move is running: Ctrl-C cancels it rather than quitting under a
-            // worker that is still mutating the filesystem.
-            if self.move_progress.is_some() {
-                return vec![Effect::CancelMove];
+            // A job or a move is running: Ctrl-C cancels it rather than
+            // quitting under a worker that is still mutating the filesystem.
+            if self.job.is_some() || self.move_progress.is_some() {
+                return self.request_cancel();
             }
             return if self.modals.pop().is_some() {
                 Vec::new()
@@ -872,6 +878,8 @@ impl App {
                 };
                 self.run_action("unregistering…", Action::Unregister(Box::new(project)))
             }
+            ConfirmThen::DeleteBatch => self.start_job(jobs::JobKind::Delete, None),
+            ConfirmThen::UnregisterBatch => self.start_job(jobs::JobKind::Unregister, None),
         }
     }
 
@@ -1086,7 +1094,14 @@ impl App {
                             },
                         )
                     }
-                    Then::MoveToBase => self.run_move(PathBuf::from(item.value.clone())),
+                    Then::MoveToBase => {
+                        let target = PathBuf::from(item.value.clone());
+                        if !self.library.marks.is_empty() {
+                            self.start_job(jobs::JobKind::Move, Some(target))
+                        } else {
+                            self.run_move(target)
+                        }
+                    }
                 }
             }
             KeyCode::Up | KeyCode::Down if !key.ctrl => {
@@ -1144,13 +1159,16 @@ impl App {
         }
         match id {
             CommandId::Quit => {
-                if self.move_progress.is_some() {
-                    // Quitting under a running move would abandon it mid-write.
-                    return vec![Effect::CancelMove];
+                // Quitting under a running move would abandon it mid-write.
+                if self.job.is_some() || self.move_progress.is_some() {
+                    return self.request_cancel();
                 }
                 vec![Effect::Quit(Exit::Normal)]
             }
             CommandId::Back => {
+                if self.job.is_some() {
+                    return self.request_cancel();
+                }
                 if !self.search.input.is_empty() {
                     self.search.input.clear();
                     return self.after_query_change();
@@ -1166,7 +1184,7 @@ impl App {
                     return Vec::new();
                 }
                 if self.move_progress.is_some() {
-                    return vec![Effect::CancelMove];
+                    return self.request_cancel();
                 }
                 vec![Effect::Quit(Exit::Normal)]
             }
@@ -1375,6 +1393,18 @@ impl App {
             }
             CommandId::Move => self.open_move_picker(),
             CommandId::Unregister => {
+                if !self.library.marks.is_empty() {
+                    let targets = self.library.targets();
+                    self.modals.push(Modal::Confirm(Confirm {
+                        prompt: format!(
+                            "Unregister {} project{}? Only PROJECT_INFO.md is removed — the files stay.",
+                            targets.len(),
+                            if targets.len() == 1 { "" } else { "s" }
+                        ),
+                        then: ConfirmThen::UnregisterBatch,
+                    }));
+                    return Vec::new();
+                }
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();
                 };
@@ -1385,6 +1415,20 @@ impl App {
                 Vec::new()
             }
             CommandId::Delete => {
+                if !self.library.marks.is_empty() {
+                    // The typed-name guard belongs to a single deletion; a
+                    // batch got its own yes/no confirmation instead.
+                    let targets = self.library.targets();
+                    self.modals.push(Modal::Confirm(Confirm {
+                        prompt: format!(
+                            "Delete {} project{} permanently? Everything inside the folders will be gone.",
+                            targets.len(),
+                            if targets.len() == 1 { "" } else { "s" }
+                        ),
+                        then: ConfirmThen::DeleteBatch,
+                    }));
+                    return Vec::new();
+                }
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();
                 };
@@ -1522,6 +1566,125 @@ impl App {
                 target,
             },
         )
+    }
+
+    // --- batch jobs -------------------------------------------------------
+
+    /// Run the verb over every marked project, one item at a time.
+    fn start_job(&mut self, kind: jobs::JobKind, target: Option<PathBuf>) -> Vec<Effect> {
+        let targets = self.library.targets();
+        if targets.is_empty() {
+            return Vec::new();
+        }
+        self.job = Some(jobs::Job::new(kind, targets, target));
+        self.job_advance()
+    }
+
+    /// Begin the next item of the running job. When nothing is left — every
+    /// item ran, or the job was cancelled — finish it.
+    fn job_advance(&mut self) -> Vec<Effect> {
+        let kind = match self.job.as_ref() {
+            Some(job) => job.kind,
+            None => return Vec::new(),
+        };
+        if kind == jobs::JobKind::Move {
+            self.move_progress = Some(Progress::new(&[]));
+        }
+        let Some(project) = self.job.as_mut().and_then(|job| job.begin_next().cloned()) else {
+            return self.job_finish();
+        };
+        let action = {
+            let job = self.job.as_ref().expect("the job is running");
+            job.action_for(&project)
+        };
+        self.run_action(kind.busy(), action)
+    }
+
+    /// One item's outcome landed: record it, patch the row, and move on.
+    fn on_job_item_done(&mut self, outcome: Result<Box<ActionOutcome>, String>) -> Vec<Effect> {
+        // The item that was running leaves `inflight`, whatever happened.
+        let id = self
+            .job
+            .as_mut()
+            .and_then(|job| job.clear_inflight())
+            .unwrap_or_else(|| "?".to_string());
+        match outcome {
+            Ok(outcome) => {
+                let outcome = *outcome;
+                if let Some(entry) = outcome.session {
+                    crate::tui::frame::record(entry);
+                    self.session = crate::tui::frame::recent_actions();
+                }
+                if let Some(warning) = outcome.warning
+                    && let Some(job) = &mut self.job
+                {
+                    job.warnings.push(warning);
+                }
+                self.apply_change(outcome.change);
+                if let Some(job) = &mut self.job {
+                    job.done += 1;
+                }
+            }
+            Err(error) => {
+                // A cancellation the user asked for is not a failure to list:
+                // the report says how many were left instead.
+                let cancelled = self.job.as_ref().is_some_and(|job| job.cancelled);
+                if !cancelled && let Some(job) = &mut self.job {
+                    job.failed.push((id, error));
+                }
+            }
+        }
+        self.job_advance()
+    }
+
+    /// The job has no items left to begin: report and clear it.
+    fn job_finish(&mut self) -> Vec<Effect> {
+        let Some(job) = self.job.take() else {
+            return Vec::new();
+        };
+        let mut headline = job.kind.done(job.done);
+        if !job.failed.is_empty() {
+            headline.push_str(&format!(", {} failed", job.failed.len()));
+        }
+        if job.cancelled {
+            headline.push_str(" — cancelled");
+        }
+        if let Some((title, body)) = job.report() {
+            // The rows the report names are the rows that still hold a mark,
+            // so Esc closes the report straight back onto a consistent list.
+            let level = if job.failed.is_empty() {
+                MessageLevel::Warn
+            } else {
+                MessageLevel::Error
+            };
+            self.modals.push(Modal::message(title, body, level));
+        }
+        if job.failed.is_empty() && !job.cancelled {
+            self.good(headline);
+        } else {
+            self.warn(headline);
+        }
+        Vec::new()
+    }
+
+    /// Stop after the current item: the in-flight move is told to cancel, and
+    /// the job marks itself as cancelled so the rest stay marked. A bare
+    /// single move (no job) just cancels at the runtime.
+    fn request_cancel(&mut self) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        if self.move_progress.is_some() {
+            effects.push(Effect::CancelMove);
+        }
+        match &mut self.job {
+            Some(job) => job.cancelled = true,
+            None => return effects,
+        }
+        // Between items nothing is in flight: finish now. Otherwise the
+        // current item's ActionDone finishes the job when it lands.
+        if self.busy.is_none() {
+            effects.extend(self.job_finish());
+        }
+        effects
     }
 
     /// `M`/`J`: read the full metadata or journal on a worker, then show it.

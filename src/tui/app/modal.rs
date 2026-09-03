@@ -6,6 +6,7 @@
 
 use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, TextPrompt};
 use crate::tui::app::palette::PaletteState;
+use crate::tui::app::settings::{Onboarding, SettingsState};
 use crate::tui::app::studio::{Builder, Studio};
 use crate::tui::app::wizard::Flow;
 use crate::tui::command::Context;
@@ -123,6 +124,10 @@ pub enum Modal {
     Studio(Studio),
     /// A template being written.
     Builder(Box<Builder>),
+    /// Every setting, the ID counter and maintenance.
+    Settings(Box<SettingsState>),
+    /// First run: where should projects live?
+    Onboarding(Onboarding),
     Message {
         title: String,
         lines: Vec<String>,

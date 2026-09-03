@@ -72,6 +72,41 @@ pub fn summary() -> Result<Summary> {
     Ok(summary)
 }
 
+/// Everything the settings screen shows. Read on a worker: the counter floor
+/// consults every mounted base, and `list_incomplete` walks the transactions.
+pub fn settings() -> Result<crate::tui::app::data::Settings> {
+    use crate::core::counter::Counters;
+
+    let cfg = Config::load()?;
+    let counters = Counters::load().unwrap_or_default();
+    let floor = Counters::floor(&cfg);
+    let next = Counters::next_value(&cfg, &counters).unwrap_or(floor);
+    let (data_dir, mode) = paths::try_install_dir()?;
+    Ok(crate::tui::app::data::Settings {
+        base_dir: cfg.base_dir.clone(),
+        bases: cfg.bases.clone(),
+        editor: cfg.editor.clone(),
+        terminal: cfg.terminal.clone(),
+        default_template: cfg.default_template.clone(),
+        date_preview: chrono::Local::now().format(&cfg.date_format).to_string(),
+        date_format: cfg.date_format.clone(),
+        preview_lines: cfg.preview_lines,
+        prompt_open_after_create: cfg.prompt_open_after_create,
+        confirm_create: cfg.confirm_create,
+        recent_default_limit: cfg.recent_default_limit,
+        register_naming_pattern: cfg.register_naming_pattern.clone(),
+        on_name_collision: cfg.on_name_collision.to_string(),
+        git_init: cfg.post_create.git_init,
+        reveal: cfg.post_create.reveal,
+        open_in_editor: cfg.post_create.open_in_editor,
+        print_path: cfg.post_create.print_path,
+        counter_floor: floor,
+        next_id: Counters::format_id("ID", 4, next),
+        data_dir: format!("{}   ({})", paths::display_path(&data_dir), mode.label()),
+        attention: provisioning::list_incomplete(&cfg).len(),
+    })
+}
+
 /// One template's details as `fastf template show` prints them, as lines.
 pub fn template_view(slug: &str) -> Vec<String> {
     match template::find_by_slug(slug) {
@@ -390,7 +425,37 @@ pub fn view(path: &Path, kind: crate::tui::effect::ViewKind) -> Vec<String> {
     match kind {
         crate::tui::effect::ViewKind::Metadata => metadata_view(path),
         crate::tui::effect::ViewKind::Journal => journal_view(path),
+        crate::tui::effect::ViewKind::DataLocations => data_locations(),
     }
+}
+
+/// Where fastf keeps its things, and how that was decided — `fastf paths` as
+/// lines. The one view that is about the installation, not a project.
+fn data_locations() -> Vec<String> {
+    let (dir, mode) = match paths::try_install_dir() {
+        Ok(resolved) => resolved,
+        Err(err) => return vec![format!("{err:#}")],
+    };
+    vec![
+        format!("Data dir      {}", paths::display_path(&dir)),
+        format!("Resolved via  {}", mode.label()),
+        String::new(),
+        format!(
+            "Config        {}",
+            paths::display_path(&paths::config_path())
+        ),
+        format!(
+            "Counter       {}",
+            paths::display_path(&paths::counters_path())
+        ),
+        "              this machine's copy — each base also carries".to_string(),
+        "              .fastf-counter.toml, which is the number both".to_string(),
+        "              operating systems read".to_string(),
+        format!(
+            "Templates     {}",
+            paths::display_path(&paths::templates_dir())
+        ),
+    ]
 }
 
 /// The full frontmatter, aligned `key  value` lines — the whole metadata, not

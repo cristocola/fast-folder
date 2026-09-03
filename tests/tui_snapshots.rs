@@ -593,3 +593,119 @@ mod studio {
         snap("from_folder_preview", render_to_string(&app, 100, 30));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Settings, the counter, maintenance and the first run (Phase 5)
+// ---------------------------------------------------------------------------
+
+mod settings {
+    use super::*;
+    use fastf::tui::app::App;
+    use fastf::tui::app::data::Settings;
+
+    fn press(app: &mut App, key: Key) {
+        let _ = update(app, Msg::Key(key));
+    }
+
+    fn sample() -> Settings {
+        Settings {
+            base_dir: "/mnt/projects".to_string(),
+            bases: vec![
+                "/media/usb/archive".to_string(),
+                "/mnt/shared/clients".to_string(),
+            ],
+            editor: "nvim".to_string(),
+            default_template: "music-video".to_string(),
+            date_format: "%Y-%m-%d".to_string(),
+            date_preview: "2026-09-03".to_string(),
+            preview_lines: 20,
+            prompt_open_after_create: true,
+            confirm_create: true,
+            recent_default_limit: 20,
+            register_naming_pattern: "{date}_{name}_{id}".to_string(),
+            on_name_collision: "suffix".to_string(),
+            git_init: true,
+            counter_floor: 248,
+            next_id: "ID0249".to_string(),
+            data_dir: "/home/user/.config/fastf   (user config dir)".to_string(),
+            attention: 1,
+            ..Settings::default()
+        }
+    }
+
+    fn open(app: &mut App) {
+        press(app, Key::ch(','));
+        let _ = update(app, Msg::SettingsLoaded(Box::new(sample())));
+    }
+
+    #[test]
+    fn settings_basics() {
+        let mut app = fixture(12, 100, 30);
+        open(&mut app);
+        snap("settings_basics", render_to_string(&app, 100, 30));
+    }
+
+    /// The base list, open as text — one folder per line.
+    #[test]
+    fn settings_bases_as_text() {
+        let mut app = fixture(12, 100, 30);
+        open(&mut app);
+        for _ in 0..10 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        press(&mut app, Key::plain(KeyCode::Enter));
+        snap("settings_bases_as_text", render_to_string(&app, 100, 30));
+    }
+
+    /// The counter, with the floor it cannot go below named in the question.
+    #[test]
+    fn id_counter() {
+        let mut app = fixture(12, 100, 30);
+        open(&mut app);
+        for _ in 0..16 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        press(&mut app, Key::plain(KeyCode::Enter));
+        snap("id_counter", render_to_string(&app, 100, 30));
+    }
+
+    #[test]
+    fn onboarding() {
+        let mut app = fixture(0, 100, 30);
+        app.request_onboarding("/home/user/Projects".to_string());
+        snap("onboarding", render_to_string(&app, 100, 30));
+    }
+
+    /// What `Check and recover` reports when it found something.
+    #[test]
+    fn reconcile_report() {
+        let mut app = fixture(12, 100, 30);
+        open(&mut app);
+        for _ in 0..19 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        let effects = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+        let id = match &effects[..] {
+            [fastf::tui::effect::Effect::Run(id, _)] => *id,
+            other => panic!("expected the reconcile action, got {other:?}"),
+        };
+        let _ = update(
+            &mut app,
+            Msg::ActionDone {
+                id,
+                outcome: Ok(Box::new(
+                    ActionOutcome::new(
+                        ListChange::None,
+                        "✓  Reconciled: 1 resumed, 0 committed, 1 rolled back",
+                    )
+                    .warning(Some(
+                        "1 project(s) were never finished being created and cannot be rebuilt \
+                         automatically: 2026-09-01_Half_Made_ID0250"
+                            .to_string(),
+                    )),
+                )),
+            },
+        );
+        snap("reconcile_report", render_to_string(&app, 100, 30));
+    }
+}

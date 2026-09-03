@@ -52,6 +52,40 @@ pub struct Prefs {
     pub register_naming_pattern: String,
 }
 
+/// Every setting the settings screen shows, read once with the screen.
+///
+/// Not a `Config`: only what a *row* is a function of, plus the two numbers
+/// that come from elsewhere (the counter floor and how many projects need
+/// attention). `core::config` stays the authority — every write goes through
+/// `cli::config::apply` on a worker and this is read back afterwards.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Settings {
+    pub base_dir: String,
+    pub bases: Vec<String>,
+    pub editor: String,
+    pub terminal: String,
+    pub default_template: String,
+    pub date_format: String,
+    /// Today, as `date_format` renders it.
+    pub date_preview: String,
+    pub preview_lines: usize,
+    pub prompt_open_after_create: bool,
+    pub confirm_create: bool,
+    pub recent_default_limit: usize,
+    pub register_naming_pattern: String,
+    pub on_name_collision: String,
+    pub git_init: bool,
+    pub reveal: bool,
+    pub open_in_editor: bool,
+    pub print_path: bool,
+    /// The highest ID seen anywhere, and what the next project would be called.
+    pub counter_floor: u64,
+    pub next_id: String,
+    pub data_dir: String,
+    /// Interrupted work `reconcile` would deal with.
+    pub attention: usize,
+}
+
 /// One template read in full: what a form needs to ask for its variables.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct TemplateInfo {

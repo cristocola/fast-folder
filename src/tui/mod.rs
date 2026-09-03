@@ -1,10 +1,10 @@
 //! Every interactive terminal surface.
 //!
 //! The guided app (`run`) is the daily one: a full-screen dashboard on
-//! ratatui. The modules that still name dialoguer — `prompt`, `pickers`,
-//! `vars`, `menu` — serve the command line's inline prompts and the settings
-//! flow the app has not made native yet; each phase of the rebuild retires
-//! some of them.
+//! ratatui, and every one of its flows is native. The modules that still name
+//! dialoguer — `prompt`, `pickers`, `vars` — serve the *command line*: the
+//! ambiguity picker `open`/`copy`/`path`/`term` share, and the variable
+//! prompts a scripted `fastf new` falls back to.
 
 pub mod app;
 pub mod command;
@@ -14,7 +14,6 @@ pub mod frame;
 pub mod fuzzy;
 pub mod layout;
 pub mod loaders;
-pub mod menu;
 pub mod msg;
 pub mod pickers;
 pub mod prompt;
@@ -40,14 +39,19 @@ pub fn run(entry: Entry) -> Result<()> {
         "show the menu",
         "run a subcommand instead — see `fastf --help`",
     )?;
+    // Loaded here, before the screen: a configuration that cannot be parsed
+    // must stop the app where the error can be read, and it is also what says
+    // whether this is a first run.
+    let cfg = crate::core::config::Config::load()?;
     let is_menu = entry.is_menu();
-    if is_menu {
-        // A brand-new install is asked for its projects folder before the
-        // dashboard opens, on the main screen, where the answer stays visible.
-        let cfg = crate::core::config::Config::load()?;
-        menu::onboard_first_run(&cfg)?;
-    }
-    match runtime::run(entry)? {
+    // A brand-new install is asked where its projects should live, as the
+    // first thing on the first frame.
+    let onboarding = (cfg.base_dir.trim().is_empty() && cfg.bases.is_empty()).then(|| {
+        crate::core::config::suggested_base_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default()
+    });
+    match runtime::run(entry, onboarding)? {
         effect::Exit::Normal => {
             if is_menu {
                 println!("Goodbye.");

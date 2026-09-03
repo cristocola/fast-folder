@@ -11,7 +11,7 @@ use crate::core::project_info::Metadata;
 use crate::tui::app::data::{ProjectDetail, Summary, TemplateInfo};
 use crate::tui::app::wizard::Preview;
 use crate::tui::command::Key;
-use crate::tui::effect::{ActionId, ActionOutcome, ListChange, SpawnKind};
+use crate::tui::effect::{ActionId, ActionOutcome, SpawnKind};
 use crate::util::diag::Level;
 
 #[derive(Debug)]
@@ -58,6 +58,9 @@ pub enum Msg {
         slug: String,
         lines: Vec<String>,
     },
+    /// The settings, read back.
+    SettingsLoaded(Box<crate::tui::app::data::Settings>),
+    SettingsFailed(String),
     /// A flow's preview is ready.
     Previewed(Box<Preview>),
     /// A flow's preview could not be built. `field` names the answer that was
@@ -92,8 +95,6 @@ pub enum Msg {
 /// What a suspended flow left behind.
 #[derive(Debug)]
 pub enum Resumed {
-    /// One of the dialoguer flows that is not native yet ran and returned.
-    Legacy { change: ListChange, quit: bool },
     /// The editor closed. `text` is `None` when nothing worth appending was
     /// written (the editor was cancelled, or left the scratch empty).
     Note {

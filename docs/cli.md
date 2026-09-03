@@ -180,7 +180,8 @@ keys that matter most:
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
 | Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — a verb then runs over **every mark** |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
-| `T`, `,` | the template studio, settings |
+| `T`, `,` | the template studio, the settings |
+| `!` | check and recover — what `⚠ n needs attention` means |
 | F5, `R` | reload the library, reindex every base from its folders |
 | `q` | quit |
 | Esc | close a dialog, leave the search bar, clear the query, clear the template filter — and only then quit |
@@ -264,8 +265,25 @@ one's details on the right, and the verbs on it — `n` a new one, Enter to edit
 delete (it asks first). The builder is described in
 [templates.md](templates.md#the-builder).
 
-The settings (`,`) still run on the main screen, asking their questions the way
-`fastf config` does, and the dashboard comes back when they return.
+`,` opens the **settings**: every setting fastf has, on one screen, grouped, with
+what it is set to beside it. Enter changes the highlighted one — a yes/no flips
+where it stands, a two-way choice cycles, and anything else opens on the line it
+is on, pre-filled, so a correction is a keystroke rather than a retype. A value
+`fastf config set` would refuse is refused here in the same words, under the
+value that is still there to be fixed; Esc leaves it unchanged. The library
+bases are one text area — one folder per line, `Ctrl-S` keeps it — because that
+is what the list is.
+
+The same screen holds the **ID counter** (what the highest ID is, what the next
+project gets, raising it, and making every mounted base agree on it) and
+**maintenance**: reindex every base, check and recover from work a crash left
+half-done, and where fastf keeps its config, counter and templates. `!` runs
+check-and-recover from anywhere, which is what the header's `⚠ n needs
+attention` is about.
+
+**On a brand-new install** the app asks where projects should live before it
+draws anything else, suggesting `<home>/Projects`. Enter creates the folder and
+records it; Esc skips and the question comes back next launch.
 
 The single-project actions are the other way round: they draw **over** the
 dashboard as dialogs. `Enter` or `a` opens the action menu, and a verb's own

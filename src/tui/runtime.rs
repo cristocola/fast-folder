@@ -29,7 +29,7 @@ use ratatui::crossterm::{cursor, execute};
 use crate::core::assets::{JobStatus, Progress};
 use crate::tui::app::{self, App};
 use crate::tui::effect::{
-    Action, ActionOutcome, Effect, Exit, FollowUp, LegacyFlow, ListChange, SpawnKind, Suspended,
+    Action, ActionOutcome, Effect, Exit, FollowUp, ListChange, SpawnKind, Suspended,
 };
 use crate::tui::entry::Entry;
 use crate::tui::loaders;
@@ -51,11 +51,12 @@ const WORKER_STACK: usize = 4 << 20;
 static SCREEN_OWNED: AtomicBool = AtomicBool::new(false);
 static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 
-/// Open the app and run it to its exit.
-pub fn run(entry: Entry) -> Result<Exit> {
+/// Open the app and run it to its exit. `onboarding` is the projects folder to
+/// suggest on a first run, and `None` on every other one.
+pub fn run(entry: Entry, onboarding: Option<String>) -> Result<Exit> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut runtime = Runtime::init(tx, rx)?;
-    let outcome = runtime.main_loop(entry);
+    let outcome = runtime.main_loop(entry, onboarding);
     runtime.shutdown();
     outcome
 }
@@ -125,8 +126,11 @@ impl Runtime {
             .unwrap_or((80, 24))
     }
 
-    fn main_loop(&mut self, entry: Entry) -> Result<Exit> {
+    fn main_loop(&mut self, entry: Entry, onboarding: Option<String>) -> Result<Exit> {
         let mut app = App::new(entry, Theme::detect(), self.size());
+        if let Some(suggested) = onboarding {
+            app.request_onboarding(suggested);
+        }
         let mut effects = app.start();
         loop {
             if let Some(exit) = self.perform(&mut app, std::mem::take(&mut effects))? {
@@ -313,6 +317,16 @@ impl Runtime {
                         let _ = tx.send(Msg::TemplateSourceLoaded { slug, result });
                     });
                 }
+                Effect::LoadSettings => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-settings", move || {
+                        let msg = match loaders::settings() {
+                            Ok(settings) => Msg::SettingsLoaded(Box::new(settings)),
+                            Err(err) => Msg::SettingsFailed(format!("{err:#}")),
+                        };
+                        let _ = tx.send(msg);
+                    });
+                }
                 Effect::LoadTemplateView { slug } => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-template", move || {
@@ -338,10 +352,6 @@ impl Runtime {
                         moving.cancel.store(true, Ordering::SeqCst);
                     }
                 }
-                Effect::Suspend(Suspended::Legacy(flow)) => {
-                    let resumed = self.run_legacy(flow)?;
-                    let _ = self.tx.send(Msg::Resumed(resumed));
-                }
                 Effect::Suspend(Suspended::Note(project)) => {
                     let resumed = self.run_note_editor(project)?;
                     let _ = self.tx.send(Msg::Resumed(resumed));
@@ -356,50 +366,6 @@ impl Runtime {
             }
         }
         Ok(None)
-    }
-
-    /// Give the terminal back, run one of the dialoguer flows, take it again.
-    ///
-    /// A fatal error — the prompt itself failing, an interrupt — ends the app;
-    /// anything else is reported the way `tui::menu::contain` reports it and
-    /// the dashboard comes back.
-    fn run_legacy(&mut self, flow: LegacyFlow) -> Result<Resumed> {
-        self.input.pause();
-        release_screen(&mut self.terminal);
-        eprintln!();
-        eprintln!(
-            "{}",
-            colored::Colorize::dimmed(format!("── fastf · {} ──", flow.title()).as_str())
-        );
-        eprintln!();
-
-        let outcome: Result<(ListChange, bool)> = match flow {
-            LegacyFlow::Settings => {
-                crate::tui::menu::menu_settings().map(|()| (ListChange::Reload, false))
-            }
-        };
-
-        let (change, quit) = match outcome {
-            Ok(result) => result,
-            Err(err) if crate::tui::menu::is_fatal(&err) => {
-                // Nothing to come back to: leave the terminal as it is.
-                return Err(err);
-            }
-            Err(err) => {
-                eprintln!(
-                    "{} {:#}",
-                    colored::Colorize::bold(colored::Colorize::red("error:")),
-                    err
-                );
-                (ListChange::Reload, false)
-            }
-        };
-
-        if !quit {
-            self.terminal = take_screen()?;
-            self.input.resume();
-        }
-        Ok(Resumed::Legacy { change, quit })
     }
 
     /// Give the terminal back and run a new project's post-create actions.
@@ -806,6 +772,87 @@ fn run_action(
                 )))
             } else {
                 outcome
+            })
+        }
+        Action::SetConfig { key, value } => {
+            let mut said = String::new();
+            crate::core::operations::update_config(|config| {
+                said = crate::cli::config::apply(config, key, &value)?;
+                Ok(())
+            })?;
+            // A base, a default template or a date format changes what the
+            // header, the strip and the wizard are functions of; the projects
+            // themselves only move when a base does, and a base change is a
+            // different library.
+            let change = if key == "base-dir" || key == "bases" {
+                ListChange::Reload
+            } else {
+                ListChange::SummaryOnly
+            };
+            Ok(ActionOutcome::new(change, said).settings())
+        }
+        Action::InitBaseDir(raw) => {
+            let resolved = crate::core::config::init_base_dir(&raw)?;
+            Ok(ActionOutcome::new(
+                ListChange::Reload,
+                format!("✓  Projects base set to {}", display_path(&resolved)),
+            )
+            .session(format!("base set to {}", display_path(&resolved))))
+        }
+        Action::RaiseCounter(value) => {
+            let outcome = crate::core::operations::set_counter(value)?;
+            Ok(ActionOutcome::new(
+                ListChange::SummaryOnly,
+                format!("✓  Global ID counter raised to {}", outcome.value),
+            )
+            .settings())
+        }
+        Action::SyncCounters => {
+            let outcome = crate::core::operations::converge_counter()?;
+            Ok(ActionOutcome::new(
+                ListChange::SummaryOnly,
+                format!("✓  Every mounted base reads {}", outcome.value),
+            )
+            .settings())
+        }
+        Action::Reconcile => {
+            let report = crate::core::operations::reconcile()?;
+            let message = if report.is_empty() {
+                "✓  Nothing to reconcile — every project is fully provisioned.".to_string()
+            } else {
+                format!(
+                    "✓  Reconciled: {} resumed, {} committed, {} rolled back",
+                    report.resumed, report.completed, report.rolled_back
+                )
+            };
+            let outcome = ActionOutcome::new(ListChange::Reload, message).settings();
+            let mut notes = Vec::new();
+            if !report.incomplete.is_empty() {
+                notes.push(format!(
+                    "{} project(s) were never finished being created and cannot be rebuilt \
+                     automatically: {}",
+                    report.incomplete.len(),
+                    report.incomplete.join(", ")
+                ));
+            }
+            if !report.unrecoverable.is_empty() {
+                notes.push(format!(
+                    "{} could not be recovered: {}",
+                    report.unrecoverable.len(),
+                    report.unrecoverable.join(", ")
+                ));
+            }
+            if !report.obsolete.is_empty() {
+                notes.push(format!(
+                    "{} obsolete v1 marker(s) left alone for manual inspection: {}",
+                    report.obsolete.len(),
+                    report.obsolete.join(", ")
+                ));
+            }
+            Ok(if notes.is_empty() {
+                outcome
+            } else {
+                outcome.warning(Some(notes.join("  ·  ")))
             })
         }
         Action::Unregister(project) => {

@@ -1,6 +1,6 @@
 # PLAN.md — v3.0.0: the guided app on ratatui
 
-> **In progress. Phase 4 is done (PR #39); the next phase is Phase 5.** This
+> **In progress. Phase 5 is done (PR #40); the next phase is Phase 6.** This
 > file is worked one phase per session: read it, do phase N, run the gates,
 > tick only the boxes whose named verification actually ran, each phase in its
 > own PR into `main` with `ROADMAP.md` and the matching `docs/` page in the
@@ -491,3 +491,38 @@ the `release` skill.
     saves a real template section by section, declares an empty `.gitkeep`,
     refuses an invalid one, deletes one after asking, and generates one from a
     folder after correcting its slug in place.
+- **Phase 5 (2026-09-03).** Decisions taken while building, beyond the plan:
+  - **One screen, not seven submenus.** The plan's snapshot names imply groups;
+    the groups are headings on one scrolling list rather than screens you enter.
+    Every setting is visible with its value beside it, which is the thing the
+    old menu could never do.
+  - **`cli::config::apply` is the whole validator.** Splitting the print-free
+    half out of `set` was the plan; what it bought is that `app/settings.rs`
+    knows nothing about what is legal, so there is no second validator to
+    drift, and the app's refusals are `config set`'s own words.
+  - **A yes/no is answered where it stands**, and so is a two-way choice. The
+    plan's "every field → key + message" reads as a dialog per field; opening
+    one to answer a question with two answers spends a keystroke on nothing.
+  - **`ActionOutcome::settings()`** re-reads the screen after a write, so it
+    shows what is on disk rather than what was typed — a `~/Projects` that the
+    config normalised to an absolute path shows as it was stored.
+  - **`run_action` refuses while one is already running.** Found while writing
+    the maintenance test: two Enters in a row started two actions, and because
+    `on_action_done` drops anything that is not the `ActionId` in flight, the
+    first outcome vanished silently — the row unpatched, the message never
+    shown. The registry's `not_busy` guards the keys; this guards the screens
+    whose rows are not commands.
+  - **The first-run dialog stays up until the folder exists.** Popping it on
+    Enter and reporting a failure as a status line would drop a first-time user
+    onto an empty dashboard with an error and no question.
+  - **`snapshots: settings_bases_with_probe_notes` became `settings_bases_as_text`.**
+    The probe notes belong to the header, which already draws them per base; the
+    thing worth pinning here is that the list is a text area.
+  - **The pty settings tests move by row count.** They used to walk named
+    submenus; a flat list is navigated by `down(n)`, so each script says which
+    row it lands on and the maintenance one says how many selectable rows there
+    are. Brittle in the same way the old `down(3)` was, and no more so.
+  - Measured on the maintainer's machine, 2026-09-03: the pty suite runs a
+    first run end to end (the folder is created and recorded), refuses a
+    counter below the floor and then raises it, and edits the base list as
+    text under a concurrent `config set`.

@@ -14,6 +14,7 @@ pub mod modal;
 pub mod palette;
 pub mod register;
 pub mod search;
+pub mod settings;
 pub mod studio;
 pub mod wizard;
 
@@ -29,7 +30,7 @@ use crate::tui::app::actions::{Confirm, ConfirmThen, MultiPick, MultiThen, TextP
 use crate::tui::command::{self, Availability, CommandId, Context, Key};
 use crate::tui::effect::{
     Action, ActionId, ActionOutcome, ApplyRequest, CreateRequest, Effect, Exit, FollowUp,
-    LegacyFlow, ListChange, Request, SpawnKind, Suspended, ViewKind,
+    ListChange, Request, SpawnKind, Suspended, ViewKind,
 };
 use crate::tui::entry::Entry;
 use crate::tui::fuzzy::Fuzzy;
@@ -45,11 +46,15 @@ use library::{LibraryState, Order};
 use modal::{MessageLevel, Modal, ModalStack, PickItem, PickState, Then};
 use palette::{PaletteState, PaletteTarget};
 use search::SearchState;
+use settings::{Editing, Kind, Onboarding, SettingsState};
 use studio::{Builder, Open, Row, Studio};
 use wizard::{Flow, FlowKind, Step};
 
 /// How long a status message stays, in ticks of 200 ms.
 const STATUS_TICKS: u64 = 30;
+/// How many rows the settings list shows before it scrolls — the height
+/// `view::builder::render_settings` asks for.
+const SETTINGS_ROWS: usize = 22;
 /// How many project details the pane remembers.
 const DETAIL_CACHE: usize = 64;
 
@@ -574,6 +579,24 @@ impl App {
                 }
                 Vec::new()
             }
+            Msg::SettingsLoaded(loaded) => {
+                match self.modals.top_mut() {
+                    Some(Modal::Settings(state)) => state.refresh(*loaded),
+                    // The first read is what decides whether a brand-new
+                    // install is asked where its projects should live.
+                    _ => self
+                        .modals
+                        .push(Modal::Settings(Box::new(SettingsState::new(*loaded)))),
+                }
+                Vec::new()
+            }
+            Msg::SettingsFailed(error) => {
+                if let Some(Modal::Settings(state)) = self.modals.top_mut() {
+                    state.pending = false;
+                }
+                self.error(format!("the settings could not be read: {error}"));
+                Vec::new()
+            }
             Msg::Previewed(preview) => self.on_previewed(*preview),
             Msg::PreviewFailed { field, error } => {
                 let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
@@ -591,17 +614,6 @@ impl App {
             }
             Msg::ActionDone { id, outcome } => self.on_action_done(id, outcome),
             Msg::Spawned { what, outcome } => self.on_spawned(what, outcome),
-            Msg::Resumed(Resumed::Legacy { change, quit }) => {
-                self.session = crate::tui::frame::recent_actions();
-                if quit {
-                    return vec![Effect::Quit(Exit::Normal)];
-                }
-                let mut effects = self.apply_change(change);
-                if !effects.contains(&Effect::LoadSummary) {
-                    effects.push(Effect::LoadSummary);
-                }
-                effects
-            }
             Msg::Resumed(Resumed::PostCreate) => {
                 self.session = crate::tui::frame::recent_actions();
                 Vec::new()
@@ -659,6 +671,11 @@ impl App {
                 if let Some(path) = outcome.select {
                     self.select_when_found = Some(path);
                 }
+                let reload_settings = outcome.reload_settings;
+                // The first-run question is answered once the folder exists.
+                if matches!(self.modals.top(), Some(Modal::Onboarding(_))) {
+                    self.modals.pop();
+                }
                 let mut effects = self.apply_change(outcome.change);
                 if let Some(FollowUp::PostCreate {
                     root,
@@ -670,10 +687,30 @@ impl App {
                         template_slug,
                     }));
                 }
+                if reload_settings && matches!(self.modals.top(), Some(Modal::Settings(_))) {
+                    if let Some(Modal::Settings(state)) = self.modals.top_mut() {
+                        state.editing = None;
+                        state.pending = true;
+                    }
+                    effects.push(Effect::LoadSettings);
+                }
                 effects
             }
             Err(error) => {
-                self.error(format!("error: {error}"));
+                // A refusal belongs on the field that earned it, wherever one
+                // is open: `config set`'s own message, under the value that is
+                // still there to be corrected.
+                match self.modals.top_mut() {
+                    Some(Modal::Settings(state)) if state.editing.is_some() => {
+                        state.pending = false;
+                        state.fail(error);
+                    }
+                    Some(Modal::Onboarding(state)) => {
+                        state.pending = false;
+                        state.error = Some(error);
+                    }
+                    _ => self.error(format!("error: {error}")),
+                }
                 Vec::new()
             }
         }
@@ -859,6 +896,8 @@ impl App {
             Some(Modal::Flow(_)) => self.on_flow_key(key),
             Some(Modal::Studio(_)) => self.on_studio_key(key),
             Some(Modal::Builder(_)) => self.on_builder_key(key),
+            Some(Modal::Settings(_)) => self.on_settings_key(key),
+            Some(Modal::Onboarding(_)) => self.on_onboarding_key(key),
             Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.on_scroll_modal_key(key),
             None => Vec::new(),
         }
@@ -983,6 +1022,19 @@ impl App {
                         text: message,
                     },
                 )
+            }
+            TextThen::RaiseCounter => {
+                self.modals.pop();
+                match text.trim().parse::<u64>() {
+                    Ok(value) => self.run_action(
+                        settings::Job::RaiseCounter.busy(),
+                        Action::RaiseCounter(value),
+                    ),
+                    Err(_) => {
+                        self.warn(format!("expected a number, got '{}'", text.trim()));
+                        Vec::new()
+                    }
+                }
             }
             TextThen::Delete { expect } => {
                 self.modals.pop();
@@ -1614,7 +1666,8 @@ impl App {
             CommandId::Register => self.open_register(),
             CommandId::ApplyTemplate => self.open_apply(),
             CommandId::Templates => self.open_studio(),
-            CommandId::Settings => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Settings))],
+            CommandId::Settings => self.open_settings(),
+            CommandId::Reconcile => self.run_job(settings::Job::Reconcile),
             CommandId::StripFilter => {
                 let slug = self.templates.selected_card().map(|c| c.slug.clone());
                 let next = if slug == self.library.template_filter {
@@ -2357,6 +2410,175 @@ impl App {
         Vec::new()
     }
 
+    // --- settings, the counter, maintenance ------------------------------
+
+    /// `,`: every setting on one screen. The list is built from a read, so the
+    /// screen opens when the answer lands rather than showing stale values.
+    fn open_settings(&mut self) -> Vec<Effect> {
+        vec![Effect::LoadSettings]
+    }
+
+    fn on_settings_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Settings(state)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if state.editing.is_some() {
+            return self.on_settings_edit_key(key);
+        }
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.modals.pop();
+                Vec::new()
+            }
+            KeyCode::Up | KeyCode::Char('k') if !key.ctrl => {
+                state.step(-1);
+                state.clamp_viewport(SETTINGS_ROWS);
+                Vec::new()
+            }
+            KeyCode::Down | KeyCode::Char('j') if !key.ctrl => {
+                state.step(1);
+                state.clamp_viewport(SETTINGS_ROWS);
+                Vec::new()
+            }
+            KeyCode::Enter => {
+                // A yes/no and a two-way choice are written where they stand:
+                // opening a dialog to answer a question with two answers is a
+                // keystroke spent on nothing.
+                if let Some((key, value)) = state.immediate_write() {
+                    return self.write_setting(key, value);
+                }
+                if let Some(Kind::Run(job)) = state.row().map(|row| row.kind.clone()) {
+                    return self.run_job(job);
+                }
+                state.begin_edit();
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn on_settings_edit_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Settings(state)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        // Esc leaves the value alone, which is what "Esc in a settings field →
+        // the value unchanged" has always meant.
+        if key.code == KeyCode::Esc && !key.ctrl {
+            state.editing = None;
+            return Vec::new();
+        }
+        let commit = match &mut state.editing {
+            Some(Editing::Value { input, error, .. }) => {
+                if key.code == KeyCode::Enter {
+                    true
+                } else {
+                    if input.apply(&key) {
+                        *error = None;
+                    }
+                    false
+                }
+            }
+            // A list is a document: Enter is a newline, so Ctrl-S commits.
+            Some(Editing::Bases { area, error }) => {
+                if key.code == KeyCode::Char('s') && key.ctrl {
+                    true
+                } else {
+                    if area.apply(&key) {
+                        *error = None;
+                    }
+                    false
+                }
+            }
+            None => false,
+        };
+        if !commit {
+            return Vec::new();
+        }
+        let Some((key, value)) = state.pending_write() else {
+            return Vec::new();
+        };
+        self.write_setting(key, value)
+    }
+
+    fn write_setting(&mut self, key: &'static str, value: String) -> Vec<Effect> {
+        self.run_action("saving…", Action::SetConfig { key, value })
+    }
+
+    /// One of the settings screen's verbs.
+    fn run_job(&mut self, job: settings::Job) -> Vec<Effect> {
+        match job {
+            settings::Job::RaiseCounter => {
+                let floor = match self.modals.top() {
+                    Some(Modal::Settings(state)) => state.settings.counter_floor,
+                    _ => 0,
+                };
+                let mut prompt = TextPrompt::new(
+                    validators::raise_counter_prompt(floor),
+                    TextThen::RaiseCounter,
+                );
+                prompt.input = crate::tui::widgets::input::LineEdit::with_text(floor.to_string());
+                self.modals.push(Modal::TextPrompt(prompt));
+                Vec::new()
+            }
+            settings::Job::SyncCounters => self.run_action(job.busy(), Action::SyncCounters),
+            settings::Job::Reindex => self.run_action(job.busy(), Action::Reindex),
+            settings::Job::Reconcile => self.run_action(job.busy(), Action::Reconcile),
+            settings::Job::DataLocations => vec![Effect::LoadView {
+                title: "data locations".to_string(),
+                path: PathBuf::new(),
+                kind: ViewKind::DataLocations,
+            }],
+        }
+    }
+
+    // --- first run --------------------------------------------------------
+
+    /// Ask where projects should live, before the first frame.
+    ///
+    /// The old flow asked on the main screen before the app opened, because
+    /// there was no app to ask in. This is a modal over the dashboard: the
+    /// suggestion is editable, Enter creates the folder and records it, and an
+    /// empty answer skips — the question returns next launch until a base is
+    /// set.
+    pub fn request_onboarding(&mut self, suggested: String) {
+        self.modals
+            .push(Modal::Onboarding(Onboarding::new(suggested)));
+    }
+
+    fn on_onboarding_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Onboarding(state)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.modals.pop();
+                self.info(validators::ONBOARDING_SKIPPED);
+                Vec::new()
+            }
+            KeyCode::Enter => {
+                let answer = state.input.text().trim().to_string();
+                if answer.is_empty() {
+                    self.modals.pop();
+                    self.info(validators::ONBOARDING_SKIPPED);
+                    return Vec::new();
+                }
+                // The dialog stays up until the folder exists: a path that
+                // cannot be created is refused here, with the text still on the
+                // line, rather than dropping a first-time user onto an empty
+                // dashboard with an error and no question.
+                state.pending = true;
+                state.error = None;
+                self.run_action("creating the base…", Action::InitBaseDir(answer))
+            }
+            _ => {
+                if state.input.apply(&key) {
+                    state.error = None;
+                }
+                Vec::new()
+            }
+        }
+    }
+
     fn next_focus(&self, forward: bool) -> Focus {
         let regions = self.regions();
         let mut ring = vec![Focus::Projects];
@@ -2375,7 +2597,19 @@ impl App {
         ring[next]
     }
 
+    /// Start one mutation on a worker.
+    ///
+    /// **Refused while one is already running.** The runtime answers with the
+    /// `ActionId` it was given and `on_action_done` drops anything that is not
+    /// the one in flight, so a second action started over the first would make
+    /// the first's outcome vanish — the row unpatched, the message never shown.
+    /// The command registry's `not_busy` guards the keys; this guards the
+    /// screens whose rows are not commands.
     fn run_action(&mut self, what: &'static str, action: Action) -> Vec<Effect> {
+        if let Some(running) = self.busy {
+            self.warn(format!("still {running}"));
+            return Vec::new();
+        }
         self.next_action += 1;
         let id = ActionId(self.next_action);
         self.busy = Some(what);

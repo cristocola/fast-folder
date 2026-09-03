@@ -322,19 +322,61 @@ the strip change, and not one folder moved, so re-reading every base would be a
 walk to answer a question none of them were asked. The landing summary also
 refreshes an open studio's list, keeping its selection by slug.
 
-## The bridged flow
+## Settings, the counter, maintenance, the first run
 
-Settings is still the dialoguer flow in `menu.rs`, with `pickers.rs` and
-`vars.rs` behind it, reached through `Effect::Suspend(Suspended::Legacy(..))`:
-the input thread is parked (a `Condvar` handshake — two readers on one tty is
-how keys go missing), the screen is released, the flow runs on the main screen
-in cooked mode, a flow that prints a result waits for `press Enter to return to
-fastf…`, and the screen is taken again. A recoverable error is reported the way
-`menu::contain` reports it; `menu::is_fatal` (the prompt itself failing, an
-interrupt) ends the app. Each phase of `PLAN.md` makes flows native and deletes
-their bridge variant.
+`,` opens `Modal::Settings`: every setting fastf has on one screen, grouped by
+heading, with what it is set to beside it. The menu this replaces was seven
+submenus deep, so seeing what fastf was configured to do meant walking the tree
+and remembering.
 
-While it exists, the rules below still hold for it.
+**A row's key is the configuration key.** `cli::config::apply` — the print-free
+half `fastf config set` now calls too — performs every write on a worker, so a
+refusal here is the refusal the command line has always made, in the same words,
+and there is no second validator to drift. `app/settings.rs` builds the rows and
+knows nothing about what is legal. A yes/no and a two-way choice are written
+where they stand: opening a dialog to answer a question with two answers spends
+a keystroke on nothing. Everything else opens **on its own line**, pre-filled,
+with the refusal under it and the text still there.
+
+The **library bases** are one `TextArea` — one folder per line, Ctrl-S to keep —
+because that is what the list is. The old menu added and removed them one prompt
+at a time and could not show you the set you were building.
+
+The **ID counter** and the three **maintenance** verbs (reindex, check and
+recover, data locations) are rows on the same screen; `!` is
+`CommandId::Reconcile` from anywhere, which is what the header's `⚠ n needs
+attention` is about.
+
+**`ActionOutcome::settings()`** asks the screen to re-read itself after a write.
+It shows what is on disk, not what was typed, so a value the config normalised
+(`~/Projects` → an absolute path) shows as it was stored.
+
+**The first run is a dialog.** `tui::run` loads the `Config` before the screen —
+which is also what makes a corrupt one stop the app where the error can be read
+— and hands `runtime::run` the folder to suggest when no base is configured
+anywhere. `App::request_onboarding` puts the question up before the first frame,
+so the app never opens on an empty dashboard with no explanation. It stays up
+until the folder exists: a path that cannot be created is refused with the text
+still on the line.
+
+**`run_action` refuses while one is already running.** The runtime answers with
+the `ActionId` it was given and `on_action_done` drops anything that is not the
+one in flight, so a second action started over the first would make the first's
+outcome vanish — the row unpatched, the message never shown. The command
+registry's `not_busy` guards the keys; this guards the screens whose rows are
+not commands.
+
+## Every flow is native
+
+There is no suspend bridge left and no `LegacyFlow`. `Suspended` has two
+variants, and both exist because the *terminal* is needed, not because a flow
+was not rewritten: `Note` (the `$EDITOR` journal flow) and `PostCreate` (`git
+init`, the editor, a template's own commands).
+
+`prompt.rs`, `pickers.rs` and `vars.rs` still name dialoguer, and they serve the
+**command line**: the ambiguity picker `open`/`copy`/`path`/`term` share, and
+the variable prompts a scripted `fastf new` falls back to. Phase 6 reimplements
+them on `Viewport::Inline`.
 
 **Every prompt goes through `tui::prompt`**, and `tests/layering.rs` fails the
 build if any other module under `src/tui` or `src/cli` names a dialoguer prompt
@@ -342,21 +384,16 @@ type. `Ok(None)` is a cancelled prompt and is never an error. `select`,
 `multi_select` and `sort` reuse dialoguer's `interact_opt` (Esc or `q` cancels
 in one keystroke); `confirm` and `text` are hand-rolled — `text` is the same
 line editor as `widgets::input::LineEdit` (char-index cursor, windowed not
-wrapped) and parks the terminal's caret in the line it is editing, which
-`a_text_prompt_parks_a_visible_caret_after_the_text` pins. `TextOpts` has both
-`initial` (editable starting text) and `default_value` (`prompt [default]:`);
-they are different gestures.
+wrapped) and parks the terminal's caret in the line it is editing. `TextOpts`
+has both `initial` (editable starting text) and `default_value` (`prompt
+[default]:`); they are different gestures.
 
-**Menus match on labels, not indices.** Vocabulary: **Back** to a parent menu,
-**Cancel** to abandon an action. **A value with a local validity rule is
-checked at the prompt that collected it**, and dependent questions come after
-the value they depend on. `tui::pickers` holds all three pickers; `pick_project`
-is the **ambiguity** picker for `open`/`copy`/`path`/`term` and deliberately not
-the app.
+`tui::pickers` holds all three pickers; `pick_project` is the **ambiguity**
+picker for `open`/`copy`/`path`/`term` and deliberately not the app.
 
 The session ring (`frame.rs`) is a `Mutex<Vec<String>>`, three entries, per
-process; the header reads it after every bridged flow. Anything durable belongs
-in the project's journal.
+process; the header reads it after every action. Anything durable belongs in the
+project's journal.
 
 ## Testing the app
 

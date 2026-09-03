@@ -9,7 +9,7 @@
 //! and was swallowed by others, which is worse than Esc never working.
 //!
 //! **`Ok(None)` is a cancelled prompt. It is never an error**, so
-//! `tui::menu::is_fatal` keeps classifying a *broken* prompt (no terminal, stdin
+//! `cli`'s error handling keeps classifying a *broken* prompt (no terminal, stdin
 //! at EOF) as fatal and a cancelled one as an ordinary answer.
 //!
 //! Two of the four are hand-rolled on `dialoguer::console::Term`:

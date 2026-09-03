@@ -48,6 +48,16 @@ impl Sandbox {
         sb
     }
 
+    /// A sandbox with **no base configured at all** — a brand-new install, so
+    /// the app asks where projects should live before it draws anything else.
+    pub fn unconfigured() -> Self {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let install = tmp.path().join("install");
+        let base = tmp.path().join("base");
+        fs::create_dir_all(install.join("templates")).unwrap();
+        Sandbox { tmp, install, base }
+    }
+
     /// Add extra library bases (`config set bases`), creating each directory.
     /// Returns their paths in the order given.
     pub fn with_bases(&self, names: &[&str]) -> Vec<PathBuf> {

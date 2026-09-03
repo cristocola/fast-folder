@@ -30,6 +30,17 @@ pub fn unregister_prompt(name: &str) -> String {
     )
 }
 
+/// The first-run question, and what skipping it says. The words are the
+/// onboarding flow's own.
+pub const ONBOARDING_PROMPT: &str = "Where should your projects live?";
+pub const ONBOARDING_SKIPPED: &str = "Skipped — set it anytime in Settings → Base directory.";
+
+/// `Raise the counter to (the next project will be this + 1)`, with the floor
+/// it cannot go below named, because that refusal is the one people meet.
+pub fn raise_counter_prompt(floor: u64) -> String {
+    format!("Raise the counter to (the next project will be this + 1; it is {floor} now)")
+}
+
 /// A rename's answer must be a folder name the filesystem can actually hold.
 /// The message is `ProjectFolderName::parse`'s, verbatim.
 pub fn folder_name(value: &str) -> Result<(), String> {

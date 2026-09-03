@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 use crate::tui::app::App;
+use crate::tui::app::settings::{Editing, SettingsState};
 use crate::tui::app::studio::{Builder, FileEdit, FileList, Open, Row, Section, Studio, VarList};
 use crate::tui::layout::centered;
 use crate::tui::theme::Theme;
@@ -533,4 +534,195 @@ fn render_file_edit<'a>(
         }),
         vec![("Ctrl-S", "keep"), ("Tab", "path / text"), ("Esc", "back")],
     )
+}
+
+// ---------------------------------------------------------------------------
+// Settings, and the first-run question
+// ---------------------------------------------------------------------------
+
+/// Every setting on one screen, grouped by heading, with what it is set to
+/// beside it. The menu this replaces was seven submenus deep, so seeing what
+/// fastf was configured to do meant walking the whole tree and remembering.
+pub fn render_settings(
+    app: &App,
+    state: &SettingsState,
+    frame: &mut Frame,
+    area: Rect,
+) -> Option<Position> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let area = sized(area, 22);
+    let (body, footer, keys) = frame_parts(app, " settings ".to_string(), frame, area)?;
+
+    let width = body.width as usize;
+    let items: Vec<ListItem> = state
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            if !row.selectable() {
+                return ListItem::new(Line::from(Span::styled(
+                    format!(" {}", row.label),
+                    theme.accent(),
+                )));
+            }
+            let cursor = if index == state.selected {
+                g.cursor
+            } else {
+                " "
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{cursor}  "), theme.accent()),
+                Span::styled(pad(row.label, 26), theme.text()),
+                Span::raw("  "),
+                Span::styled(
+                    fit(&row.value, width.saturating_sub(32), g.ellipsis),
+                    theme.dim(),
+                ),
+            ]))
+        })
+        .collect();
+    let mut list_state = ListState::default()
+        .with_offset(state.offset)
+        .with_selected(Some(state.selected));
+    frame.render_stateful_widget(
+        List::new(items).highlight_style(theme.selection),
+        body,
+        &mut list_state,
+    );
+
+    // The editor draws over the row it belongs to, so the value being changed
+    // stays where the eye already is.
+    let caret = state.editing.as_ref().and_then(|editing| {
+        let row = state.selected.checked_sub(state.offset)? as u16;
+        render_setting_editor(app, editing, frame, body, row)
+    });
+
+    let (text, style) = match (state.error(), state.pending) {
+        (Some(error), _) => (format!(" {} {error}", g.warn), theme.warn()),
+        (None, true) => (" working…".to_string(), theme.dim()),
+        (None, false) => (
+            format!(" {}", state.row().map(|row| row.hint).unwrap_or_default()),
+            theme.dim(),
+        ),
+    };
+    footer_line(
+        frame,
+        footer,
+        &fit(&text, footer.width as usize, g.ellipsis),
+        style,
+    );
+    let pairs: Vec<(&str, &str)> = match &state.editing {
+        Some(Editing::Bases { .. }) => vec![
+            ("Ctrl-S", "keep"),
+            ("Enter", "new line"),
+            ("Esc", "leave it unchanged"),
+        ],
+        Some(Editing::Value { .. }) => {
+            vec![("Enter", "keep"), ("Esc", "leave it unchanged")]
+        }
+        None => vec![
+            ("↑↓", "choose"),
+            ("Enter", "change / run"),
+            ("Esc", "close"),
+        ],
+    };
+    frame.render_widget(Paragraph::new(key_line(theme, &pairs)), keys);
+    caret
+}
+
+fn render_setting_editor(
+    app: &App,
+    editing: &Editing,
+    frame: &mut Frame,
+    body: Rect,
+    row: u16,
+) -> Option<Position> {
+    let theme = &app.theme;
+    if row >= body.height {
+        return None;
+    }
+    match editing {
+        Editing::Value { label, input, .. } => {
+            let line = Rect::new(body.x, body.y + row, body.width, 1);
+            frame.render_widget(Clear, line);
+            input.render_line(
+                line,
+                frame.buffer_mut(),
+                Span::styled(format!("   {}  ", pad(label, 26)), theme.accent()),
+                theme.text(),
+            )
+        }
+        Editing::Bases { area, .. } => {
+            // A list needs room, so it opens *over* its row in a frame of its
+            // own — an editor with no edges looks like the screen went wrong.
+            let height = (area.lines().len() as u16 + 2).clamp(4, body.height.saturating_sub(row));
+            let box_area = Rect::new(body.x, body.y + row, body.width, height);
+            // The whole band, not just the box: half a label showing past the
+            // edge of an editor reads as a drawing fault.
+            frame.render_widget(Clear, box_area);
+            let outer = block(app, " one base per line ".to_string());
+            let inner = outer.inner(box_area);
+            frame.render_widget(outer, box_area);
+            let mut editable = area.clone();
+            editable.render(inner, frame.buffer_mut(), theme.text())
+        }
+    }
+}
+
+/// The first-run question, over an empty dashboard.
+pub fn render_onboarding(
+    app: &App,
+    state: &crate::tui::app::settings::Onboarding,
+    frame: &mut Frame,
+    area: Rect,
+) -> Option<Position> {
+    let theme = &app.theme;
+    let area = crate::tui::layout::centered_fixed(area, 68.min(area.width), 9);
+    let (body, footer, keys) = frame_parts(app, " welcome ".to_string(), frame, area)?;
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                format!(" {}", crate::tui::validators::ONBOARDING_PROMPT),
+                theme.text(),
+            )),
+            Line::from(Span::styled(
+                " Every new project is created inside this folder. You can add more",
+                theme.dim(),
+            )),
+            Line::from(Span::styled(
+                " later — a second drive, a network share — under Settings.",
+                theme.dim(),
+            )),
+        ]),
+        Rect::new(body.x, body.y, body.width, 3),
+    );
+    let line = Rect::new(body.x, body.y + 4, body.width, 1);
+    let caret = state
+        .input
+        .render_line(line, frame.buffer_mut(), Span::raw(" "), theme.text());
+
+    let (text, style) = match (&state.error, state.pending) {
+        (Some(error), _) => (format!(" {} {error}", theme.glyphs.warn), theme.warn()),
+        (None, true) => (" creating it…".to_string(), theme.dim()),
+        (None, false) => (
+            " an empty answer skips — the question comes back next time".to_string(),
+            theme.dim(),
+        ),
+    };
+    footer_line(
+        frame,
+        footer,
+        &fit(&text, footer.width as usize, theme.glyphs.ellipsis),
+        style,
+    );
+    frame.render_widget(
+        Paragraph::new(key_line(
+            theme,
+            &[("Enter", "create it"), ("Esc", "skip for now")],
+        )),
+        keys,
+    );
+    caret
 }

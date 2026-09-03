@@ -42,6 +42,8 @@ pub enum TextThen {
     Delete {
         expect: String,
     },
+    /// Raise the global ID counter to the number typed.
+    RaiseCounter,
 }
 
 /// A single-line prompt drawn over the dashboard. Esc cancels; Enter submits

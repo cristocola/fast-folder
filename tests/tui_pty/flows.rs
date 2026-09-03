@@ -242,44 +242,42 @@ fn apply_fills_in_a_folder_from_the_preview() {
     );
 }
 
-/// Maintenance: the three commands that were command-line only.
+/// Maintenance: the three commands the menu could only reach by leaving it —
+/// reindex, check and recover, and where fastf keeps its things.
 #[test]
-fn the_maintenance_menu_runs_reindex_recover_and_paths() {
+fn maintenance_runs_reindex_recover_and_data_locations() {
     let sb = Sandbox::new();
     sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
 
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
-        .pause(600)
-        .down(6) // → Maintenance
-        .enter()
-        .enter() // → Reindex
         .pause(900)
+        // The settings list has 21 selectable rows; Reindex is the nineteenth.
+        .down(18) // → Reindex
+        .enter()
+        .pause(1200)
         .down(1) // → Check and recover
         .enter()
-        .pause(900)
-        .down(2) // → Show data locations
+        .pause(1200)
+        .down(1) // → Data locations
         .enter()
-        .pause(900)
-        .esc() // Maintenance → Settings
-        .esc() // → the dashboard
-        .pause(500)
-        .key(KEY_QUIT)
+        .pause(1000)
         .build();
-    let (out, code) = launch(&sb, script);
-    let out = pty::plain(&out);
+    let (out, _) = launch(&sb, script);
+    let screen = app_screen(&out);
+    let text = pty::plain(&out);
 
-    assert_eq!(
-        code, 0,
-        "maintenance should return to the dashboard:\n{out}"
+    assert!(
+        text.contains("Reindexed"),
+        "reindex should report what it found:\n{text}"
     );
     assert!(
-        out.contains("Reindexed") || out.contains("project"),
-        "reindex should report what it found:\n{out}"
+        text.contains("Nothing to reconcile") || text.contains("Reconciled"),
+        "recovery should say what it did:\n{text}"
     );
     assert!(
-        out.contains("data dir") || out.contains("templates"),
-        "the data locations should be printed:\n{out}"
+        screen.contains("Templates") && screen.contains("Data dir"),
+        "the data locations should be on screen:\n{screen}"
     );
 }
 
@@ -603,5 +601,101 @@ fn a_relaunched_run_that_showed_a_picker_does_not_wait() {
     assert!(
         !out.contains("press Enter to close"),
         "a window that already waited for the user must not wait again:\n{out}"
+    );
+}
+
+/// First run: the app asks where projects should live, creates the folder and
+/// records it — before it draws anything else, because there is nothing else
+/// to draw.
+#[test]
+fn first_run_asks_for_a_base_and_creates_it() {
+    let sb = Sandbox::unconfigured();
+    let wanted = sb.tmp.path().join("Projects");
+
+    let script = pty::Script::new()
+        .pause(700)
+        .key("\x15") // clear the suggestion
+        .key(&wanted.display().to_string())
+        .enter()
+        .pause(1500)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "the first run should end cleanly:\n{screen}");
+    assert!(
+        wanted.is_dir(),
+        "the folder should have been created:\n{screen}"
+    );
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    assert!(
+        config.contains(&wanted.display().to_string()),
+        "the base should have been recorded:\n{config}"
+    );
+}
+
+/// Skipping leaves the configuration alone, and the question comes back.
+#[test]
+fn first_run_can_be_skipped_and_writes_nothing() {
+    let sb = Sandbox::unconfigured();
+
+    let script = pty::Script::new()
+        .pause(700)
+        .esc() // skip
+        .pause(600)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "skipping is not a failure:\n{screen}");
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap_or_default();
+    assert!(
+        !config.contains("base_dir = \"/"),
+        "skipping must write no base:\n{config}"
+    );
+}
+
+/// The ID counter is raised from the settings screen, and never lowered.
+#[test]
+fn the_counter_is_raised_from_the_settings_screen() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0007", "ID0007");
+
+    let script = pty::Script::new()
+        .key(KEY_SETTINGS)
+        .pause(900)
+        .down(16) // → Counter
+        .enter() // → the number
+        .pause(500)
+        .key("\x15")
+        .key("3") // below the floor: refused
+        .enter()
+        .pause(900)
+        // The cursor never left the Counter row, so the second try is one key.
+        .enter()
+        .pause(400)
+        .key("\x15")
+        .key("40")
+        .enter()
+        .pause(1200)
+        .esc()
+        .pause(400)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+    let text = pty::plain(&out);
+
+    assert_eq!(code, 0, "a refused number is not a failure:\n{screen}");
+    assert!(
+        text.contains("cannot") || text.contains("below"),
+        "lowering the counter must be refused and say why:\n{text}"
+    );
+    let shown = sb.ok(&["id", "show"]);
+    assert!(
+        shown.contains("40"),
+        "the raise should have taken:\n{shown}"
     );
 }

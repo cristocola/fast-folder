@@ -234,12 +234,13 @@ pub enum CommandId {
     ApplyTemplate,
     Templates,
     Settings,
+    Reconcile,
     // The template strip
     StripFilter,
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 46] = [
+    pub const ALL: [CommandId; 47] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Help,
@@ -285,6 +286,7 @@ impl CommandId {
         CommandId::ApplyTemplate,
         CommandId::Templates,
         CommandId::Settings,
+        CommandId::Reconcile,
         CommandId::StripFilter,
     ];
 }
@@ -918,6 +920,17 @@ pub static COMMANDS: &[Command] = &[
         LISTS,
         [Key::ch(',')],
         Settings,
+        palette = true,
+        hint = false,
+        not_busy
+    ),
+    cmd!(
+        Reconcile,
+        "Check and recover",
+        "finish or roll back work a crash left half-done — what ⚠ needs attention means",
+        LISTS,
+        [Key::ch('!')],
+        Library,
         palette = true,
         hint = false,
         not_busy

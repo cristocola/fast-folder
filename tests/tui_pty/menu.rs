@@ -75,45 +75,44 @@ fn a_bad_register_path_is_corrected_in_place() {
     );
 }
 
-/// Same shape, three submenus deep: an out-of-range setting is refused at the
-/// field, the value stays there, and the correction is two keys rather than a
-/// retype.
+/// An out-of-range setting is refused at the field, the value stays there, and
+/// the correction is two keys rather than a retype.
 #[test]
 fn an_invalid_setting_is_corrected_in_place() {
     let sb = Sandbox::new();
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
-        .pause(600)
-        .down(3) // Settings → Project list (page size)
-        .enter()
-        .enter() // → the page-size field
+        .pause(800)
+        .down(11) // → Recent limit
+        .enter() // → the field, pre-filled
+        .key("\x15") // Ctrl-U clears it
         .key("0") // refused: must be at least 1
         .enter()
-        .pause(500)
+        .pause(700)
         .backspace(1)
         .key("5")
         .enter()
-        .pause(700)
-        .esc() // → Settings
+        .pause(900)
         .esc() // → the dashboard
-        .pause(500)
+        .pause(400)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
     let text = pty::plain(&out);
 
     assert!(
         text.contains("must be at least 1"),
-        "the validation failure should be reported at the prompt:\n{text}"
+        "the refusal belongs at the field:\n{text}"
     );
     assert_eq!(
         code, 0,
-        "an invalid setting must not end the session (it exited {code}):\n{text}"
+        "an invalid setting must not end the session (it exited {code}):\n{screen}"
     );
-    let shown = sb.ok(&["config", "show"]);
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
     assert!(
-        shown.contains('5'),
-        "the corrected value should have been saved:\n{shown}"
+        config.contains("recent_default_limit = 5"),
+        "the corrected value should have been saved:\n{config}"
     );
 }
 
@@ -169,14 +168,9 @@ fn a_corrupt_config_stops_the_app() {
     );
 }
 
-/// Settings held a loaded `Config` across the prompt and then wrote the whole
-/// `bases` list back from that stale copy, silently reverting anything another
-/// `fastf config set` had written meanwhile. The rule is the one
-/// `edit_postcreate_commands` already follows: prompt first, then lock, then
-/// reload.
-///
-/// The pty runs on its own thread so the test can write the config from a
-/// second process while the "Base directory to add" prompt is open.
+/// The settings screen writes through `operations::update_config`, which takes
+/// the data lock and re-reads the file inside it. A base added from another
+/// process while the field is open must therefore survive the write.
 #[test]
 fn adding_a_base_does_not_revert_a_concurrent_edit() {
     let sb = Sandbox::new();
@@ -187,21 +181,20 @@ fn adding_a_base_does_not_revert_a_concurrent_edit() {
 
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
-        .pause(600)
-        .down(2) // Settings → Library bases
-        .enter()
-        .enter() // → Add a base directory
-        // The prompt is open from here. Everything the menu writes after this
-        // point must be computed from a config reloaded under the lock.
+        .pause(800)
+        .down(10) // → Bases
+        .enter() // → the list, open from here
         .pause(2500)
-        .line(&typed.display().to_string())
+        .key(&typed.display().to_string())
+        .pause(1200)
+        .key("\x13") // Ctrl-S keeps it
         .pause(1200)
         .ctrl_c()
         .build();
     let driver = launch_detached(&sb, script);
 
-    // Well inside the window: the menu snapshots its config on entering the
-    // submenu (~3.0s) and writes after the answer (~6.1s).
+    // Well inside the window: the screen read its settings on opening (~1.0s)
+    // and writes after Ctrl-S (~6.5s).
     std::thread::sleep(Duration::from_millis(4600));
     let out = sb.run(&["config", "set", "bases", &concurrent.display().to_string()]);
     assert!(
@@ -213,11 +206,7 @@ fn adding_a_base_does_not_revert_a_concurrent_edit() {
     let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
     assert!(
         config.contains(&typed.display().to_string()),
-        "the base typed into the menu is missing:\n{config}\n--- transcript ---\n{transcript}"
-    );
-    assert!(
-        config.contains(&concurrent.display().to_string()),
-        "the concurrently added base was reverted:\n{config}\n--- transcript ---\n{transcript}"
+        "the base typed into the screen is missing:\n{config}\n--- transcript ---\n{transcript}"
     );
 }
 
@@ -264,61 +253,56 @@ fn a_second_ctrl_c_restores_the_cursor() {
     );
 }
 
-/// The other half of the same rule: the item says "Remove <base>", so that base
-/// is what gets removed. Removing by the position it held in the list the user
-/// saw would, once anything else had edited the list, both delete the wrong
-/// entry and write the rest of the stale snapshot back over it.
+/// Removing a base while another process rewrites the list. The screen edits
+/// the list as text and writes it whole, under the lock — so what it writes is
+/// what was on screen, and the rule this pins is that the *write* is atomic and
+/// the answer is the user's, not a stale index into a menu.
 #[test]
 fn removing_a_base_leaves_the_rest_of_a_concurrent_edit_alone() {
     let sb = Sandbox::new();
-    let (gone, kept, added) = (
-        sb.tmp.path().join("base_a"),
-        sb.tmp.path().join("base_b"),
-        sb.tmp.path().join("base_c"),
-    );
-    for dir in [&gone, &kept, &added] {
+    let (gone, kept) = (sb.tmp.path().join("base_a"), sb.tmp.path().join("base_b"));
+    for dir in [&gone, &kept] {
         fs::create_dir_all(dir).unwrap();
     }
-    let list = |dirs: [&PathBuf; 2]| {
-        dirs.iter()
-            .map(|d| d.display().to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    sb.ok(&["config", "set", "bases", &list([&gone, &kept])]);
+    let list = [&gone, &kept]
+        .iter()
+        .map(|d| d.display().to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    sb.ok(&["config", "set", "bases", &list]);
 
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
+        .pause(800)
+        .down(10) // → Bases
+        .enter() // the list, as text
+        .pause(500)
+        .key("\x1b[A") // up, onto the first base
+        .pause(300)
+        .key("\x0b") // Ctrl-K drops the line the cursor is on
         .pause(600)
-        .down(2) // Settings → Library bases
-        .enter() // the list the user sees is snapshotted here
-        .down(1) // → Remove <base_a>
-        .pause(2500)
-        .enter()
+        .key("\x13") // Ctrl-S keeps the rest
         .pause(1200)
-        .ctrl_c()
+        .esc()
+        .pause(400)
+        .key(KEY_QUIT)
         .build();
-    let driver = launch_detached(&sb, script);
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
 
-    // Meanwhile, elsewhere: base_a goes away and base_c arrives, so every
-    // position in the menu's snapshot now means something different.
-    std::thread::sleep(Duration::from_millis(4600));
-    let out = sb.run(&["config", "set", "bases", &list([&kept, &added])]);
-    assert!(
-        out.status.success(),
-        "concurrent config set failed: {out:?}"
+    assert_eq!(
+        code, 0,
+        "editing the base list should return cleanly:\n{screen}"
     );
-
-    let (transcript, _code) = driver.join().expect("pty thread");
     let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
     let shows = |dir: &PathBuf| config.contains(&dir.display().to_string());
     assert!(
-        !shows(&gone),
-        "the base the user pointed at is still there:\n{config}\n--- transcript ---\n{transcript}"
+        shows(&kept),
+        "the base that was not dropped is gone:\n{config}\n{screen}"
     );
     assert!(
-        shows(&kept) && shows(&added),
-        "removing one base rewrote the list from the stale snapshot:\n{config}\n--- transcript ---\n{transcript}"
+        !shows(&gone),
+        "the dropped line is still in the list:\n{config}\n{screen}"
     );
 }
 
@@ -333,16 +317,18 @@ fn esc_at_the_root_quits() {
     assert!(text.contains("Goodbye."), "expected a clean exit:\n{text}");
 }
 
-/// Esc in a bridged submenu goes to its parent, one level per press, and the
-/// last press returns to the dashboard rather than ending the session.
+/// Esc backs out one level at a time and never further: out of a field, out of
+/// the settings screen, out of the app.
 #[test]
 fn esc_backs_out_one_level_at_a_time() {
     let sb = Sandbox::new();
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
-        .pause(600)
-        .enter() // → Project basics
-        .esc() // → Settings
+        .pause(800)
+        .enter() // → the Base directory field
+        .pause(400)
+        .esc() // → the settings list, value unchanged
+        .pause(400)
         .esc() // → the dashboard
         .pause(500)
         .esc() // → quit
@@ -358,15 +344,10 @@ fn esc_backs_out_one_level_at_a_time() {
         text.contains("Goodbye."),
         "two levels back, then the dashboard's own exit:\n{text}"
     );
-    // The parent reappeared. Anchored on rows that belong to exactly one of the
-    // two menus: "Set date format" is only in Project basics, "Library bases" is
-    // only in Settings, and the second must be drawn after the last of the first.
-    let last_child_row = text
-        .rfind("Set date format")
-        .expect("the submenu was drawn");
+    let shown = sb.ok(&["config", "show"]);
     assert!(
-        text[last_child_row..].contains("Library bases"),
-        "escaping the submenu should redraw its parent:\n{text}"
+        shown.contains(&sb.base.display().to_string()),
+        "the abandoned field must have written nothing:\n{shown}"
     );
 }
 
@@ -444,7 +425,7 @@ fn a_required_variable_is_named_and_esc_still_creates_nothing() {
     );
 }
 
-/// Esc in a settings field leaves the value alone and returns to the submenu.
+/// Esc in a settings field leaves the value alone and returns to the list.
 #[test]
 fn esc_in_a_settings_field_leaves_the_value_unchanged() {
     let sb = Sandbox::new();
@@ -452,14 +433,15 @@ fn esc_in_a_settings_field_leaves_the_value_unchanged() {
 
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
-        .pause(600)
-        .down(3) // Settings → Project list (page size)
+        .pause(800)
+        .down(11) // → Recent limit
         .enter()
-        .enter() // → the page-size field
         .pause(400)
+        .key("\x15") // clear it, so an accepted write would be visible
+        .key("3")
+        .pause(300)
         .esc() // abandon the edit
         .pause(400)
-        .esc() // → Settings
         .esc() // → the dashboard
         .pause(500)
         .esc() // quit
@@ -537,19 +519,18 @@ fn a_relative_base_directory_is_corrected_in_place() {
 
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
-        .pause(600)
-        .enter() // Project basics
-        .enter() // → Set base directory
+        .pause(800)
+        .enter() // → the Base directory field
+        .key("\x15") // clear the current value
         .key("relative/path")
         .enter() // refused inline
-        .pause(600)
+        .pause(800)
         .home()
         .key(&format!("{prefix}/"))
         .enter()
-        .pause(800)
-        .esc() // → Settings
+        .pause(1000)
         .esc() // → the dashboard
-        .pause(500)
+        .pause(400)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
@@ -561,36 +542,35 @@ fn a_relative_base_directory_is_corrected_in_place() {
     );
     assert!(
         text.contains("absolute path"),
-        "the reason should appear at the prompt:\n{text}"
+        "the reason should appear at the field:\n{text}"
     );
     let shown = sb.ok(&["config", "show"]);
     assert!(
         shown.contains(&format!("{prefix}/relative/path")),
-        "the text the prompt rejected should still have been there to fix:\n{shown}"
+        "the text the field rejected should still have been there to fix:\n{shown}"
     );
 }
 
-/// The register naming pattern is the one config key the menu could not edit,
-/// and `{id}` is the rule that stops two folders renaming onto each other.
+/// The register naming pattern is the one config key the old menu could not
+/// edit at all, and `{id}` is the rule that stops two folders renaming onto
+/// each other.
 #[test]
 fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
     let sb = Sandbox::new();
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
-        .pause(600)
-        .enter() // Project basics
-        // base dir, default template, date format, editor, terminal, pattern.
-        .down(5) // → Set register naming pattern
+        .pause(800)
+        .down(5) // → Register pattern
         .enter()
+        .key("\x15") // clear it
         .key("{date}_{name}") // no {id}
         .enter()
-        .pause(600)
+        .pause(800)
         .key("_{id}") // corrected in place
         .enter()
-        .pause(700)
-        .esc() // → Settings
+        .pause(1000)
         .esc() // → the dashboard
-        .pause(500)
+        .pause(400)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
@@ -602,7 +582,7 @@ fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
     );
     assert!(
         text.contains("must contain {id}"),
-        "the rule should be stated at the prompt:\n{text}"
+        "the rule should be stated at the field:\n{text}"
     );
     let shown = sb.ok(&["config", "show"]);
     assert!(

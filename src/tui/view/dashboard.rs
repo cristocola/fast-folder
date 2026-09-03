@@ -272,7 +272,14 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
         // A flow, the studio and the builder draw their own key line inside
         // their frame, beside what the keys act on; repeating it down here
         // would say it twice.
-        Some(Modal::Flow(_)) | Some(Modal::Studio(_)) | Some(Modal::Builder(_)) => Vec::new(),
+        Some(Modal::Flow(_))
+        | Some(Modal::Studio(_))
+        | Some(Modal::Builder(_))
+        | Some(Modal::Settings(_)) => Vec::new(),
+        Some(Modal::Onboarding(_)) => vec![
+            ("Enter".to_string(), "create it"),
+            ("Esc".to_string(), "skip for now"),
+        ],
         None => match app.context() {
             crate::tui::command::Context::SearchEdit => vec![
                 ("Enter".to_string(), "keep"),

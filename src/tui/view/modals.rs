@@ -34,6 +34,12 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         Modal::Builder(builder) => {
             crate::tui::view::builder::render_builder(app, builder, frame, area)
         }
+        Modal::Settings(state) => {
+            crate::tui::view::builder::render_settings(app, state, frame, area)
+        }
+        Modal::Onboarding(state) => {
+            crate::tui::view::builder::render_onboarding(app, state, frame, area)
+        }
         Modal::Message {
             title,
             lines,
@@ -339,6 +345,7 @@ fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: R
         TextThen::AddTag => "add a tag",
         TextThen::Note => "note",
         TextThen::Delete { .. } => "delete",
+        TextThen::RaiseCounter => "ID counter",
     };
     let area = centered_fixed(area, 62, 8);
     frame.render_widget(Clear, area);

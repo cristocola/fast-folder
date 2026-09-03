@@ -51,6 +51,8 @@ pub enum Effect {
     LoadTemplateView {
         slug: String,
     },
+    /// Read every setting the settings screen shows.
+    LoadSettings,
     /// Work out what a flow's answers would do, without touching a disk.
     /// Answered by `Msg::Previewed`, or by `Msg::PreviewFailed` naming the
     /// field that was wrong.
@@ -119,6 +121,20 @@ pub enum Action {
     },
     DeleteTemplate(String),
     TemplateFromFolder(Box<FromFolderRequest>),
+    /// One setting, written by `cli::config::apply` — the same expression
+    /// `fastf config set` uses, so a refusal is the refusal it has always made.
+    SetConfig {
+        key: &'static str,
+        value: String,
+    },
+    /// First run: create the projects folder and record it.
+    InitBaseDir(String),
+    /// Raise the global counter. It never goes down.
+    RaiseCounter(u64),
+    /// Make every mounted base agree on the highest ID seen anywhere.
+    SyncCounters,
+    /// Finish or roll back work a crash left half-done.
+    Reconcile,
     AddTag {
         project: Box<Project>,
         tag: String,
@@ -151,6 +167,9 @@ pub enum Action {
 pub enum ViewKind {
     Metadata,
     Journal,
+    /// Where fastf keeps its things. Reads nothing at the path it is given —
+    /// the one view that is about the installation rather than a project.
+    DataLocations,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,7 +185,6 @@ pub enum SpawnKind {
 /// Something that needs the terminal in cooked mode on the main screen.
 #[derive(Debug, PartialEq)]
 pub enum Suspended {
-    Legacy(LegacyFlow),
     /// Open `$EDITOR` on a scratch file for the selected project's journal,
     /// then come back with what was written.
     Note(Box<Project>),
@@ -178,21 +196,6 @@ pub enum Suspended {
         root: PathBuf,
         template_slug: String,
     },
-}
-
-/// The dialoguer flows that are not native yet. Each phase of the rebuild
-/// removes the variants it makes native; the enum is gone when they all are.
-#[derive(Debug, PartialEq)]
-pub enum LegacyFlow {
-    Settings,
-}
-
-impl LegacyFlow {
-    pub fn title(&self) -> &'static str {
-        match self {
-            LegacyFlow::Settings => "settings",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,6 +253,9 @@ pub struct ActionOutcome {
     pub select: Option<PathBuf>,
     /// Work that needs the main screen; run after the list has been updated.
     pub follow_up: Option<FollowUp>,
+    /// Re-read the settings: this action changed one of them, and the screen
+    /// showing them is a function of what is on disk, not of what was typed.
+    pub reload_settings: bool,
 }
 
 impl ActionOutcome {
@@ -263,7 +269,14 @@ impl ActionOutcome {
             session: None,
             select: None,
             follow_up: None,
+            reload_settings: false,
         }
+    }
+
+    /// The settings screen re-reads itself after this.
+    pub fn settings(mut self) -> Self {
+        self.reload_settings = true;
+        self
     }
 
     pub fn warning(mut self, warning: Option<String>) -> Self {

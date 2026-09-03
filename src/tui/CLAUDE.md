@@ -85,12 +85,12 @@ Keys are normalised into `Key` (`Char` with the Ctrl and Alt flags; shift
 folded into the character; Ctrl-letters lower-cased) by the input thread, which
 also drops `KeyEventKind::Release` — Windows delivers one for every press.
 
-**Naming trap.** Until the CLI's prompts move off dialoguer, `tests/layering.rs`
-greps `src/tui` for `Input::`, `Confirm::`, `Select::`, `Sort::` and
-`MultiSelect::` outside `prompt.rs`. A type called any of those in the app trips
-it, and so does a type whose name *ends* in one — `LineInput::new()` contains
-`Input::`. Hence `LineEdit`, `Order`, `PickState`. `tests/tui_commands.rs` says
-so before CI does.
+**Naming trap, now historical.** While the CLI's prompts were dialoguer's,
+`tests/layering.rs` grepped `src/tui` for `Input::`, `Confirm::`, `Select::`,
+`Sort::` and `MultiSelect::` outside `prompt.rs`, and a type whose name merely
+*ended* in one tripped it — `LineInput::new()` contains `Input::`. That is why
+the types are called `LineEdit`, `Order` and `PickState`. The rule is gone with
+dialoguer; the names stay, because renaming them now would be churn for nothing.
 
 ## The runtime owns the screen
 
@@ -217,7 +217,7 @@ read-only metadata and journal views. The action menu's rows come from the one
 registry, ordered by display (`action_entries`); an entry that cannot run right
 now is listed dimmed with the reason on the key, not hidden — pressing it says
 why. Prompt texts and validators live in `validators.rs`, byte-identical to
-the dialoguer flows they replaced.
+the prompt-at-a-time flows they replaced.
 
 A finished verb patches its row by **id** (`ListChange::Patched`) because a
 rename or a move changed the path; the pty suite traces that the list is not
@@ -266,7 +266,7 @@ the same path, and then committed unasked. Skipping the *build* would skip every
 refusal with it.
 
 Esc at the preview goes back to the answers, and Esc again abandons the flow —
-the app's Esc ladder, one step at a time. (The dialoguer flows cancelled
+the app's Esc ladder, one step at a time. (A run of prompts cancelled
 everything from anywhere; a form has somewhere to go back to.)
 
 **Post-create runs on the main screen.** `git init`, the user's editor and a
@@ -366,27 +366,46 @@ outcome vanish — the row unpatched, the message never shown. The command
 registry's `not_busy` guards the keys; this guards the screens whose rows are
 not commands.
 
-## Every flow is native
+## Every flow is native, and dialoguer is gone
 
 There is no suspend bridge left and no `LegacyFlow`. `Suspended` has two
 variants, and both exist because the *terminal* is needed, not because a flow
 was not rewritten: `Note` (the `$EDITOR` journal flow) and `PostCreate` (`git
 init`, the editor, a template's own commands).
 
-`prompt.rs`, `pickers.rs` and `vars.rs` still name dialoguer, and they serve the
-**command line**: the ambiguity picker `open`/`copy`/`path`/`term` share, and
-the variable prompts a scripted `fastf new` falls back to. Phase 6 reimplements
-them on `Viewport::Inline`.
+**Two modules take the terminal, and `tests/layering.rs` says so.**
+`runtime.rs` owns the alternate screen for the guided app; `inline.rs` owns a
+few rows at the cursor for a command-line prompt. A third owner is two
+unsynchronised writers on one tty, which is how a frame comes back with
+somebody else's line in the middle of it.
 
-**Every prompt goes through `tui::prompt`**, and `tests/layering.rs` fails the
-build if any other module under `src/tui` or `src/cli` names a dialoguer prompt
-type. `Ok(None)` is a cancelled prompt and is never an error. `select`,
-`multi_select` and `sort` reuse dialoguer's `interact_opt` (Esc or `q` cancels
-in one keystroke); `confirm` and `text` are hand-rolled — `text` is the same
-line editor as `widgets::input::LineEdit` (char-index cursor, windowed not
-wrapped) and parks the terminal's caret in the line it is editing. `TextOpts`
-has both `initial` (editable starting text) and `default_value` (`prompt
-[default]:`); they are different gestures.
+`prompt.rs` is now the *contract* — the `require_tty` guard, and `Ok(None)`
+meaning cancelled — over `inline.rs`, which does the drawing. `pickers.rs` and
+`vars.rs` sit on top and serve the command line: the ambiguity picker
+`open`/`copy`/`path`/`term` share, and the variable prompts a scripted `fastf
+new` falls back to.
+
+**The cursor position is never queried.** ratatui's `Viewport::Inline` is the
+obvious way to draw an inline prompt and the wrong one: it asks the terminal
+where the cursor is (`ESC [ 6 n`) and waits up to two seconds for an answer. A
+pty under test never sends one — the suite failed on it the first time — and
+neither does every real terminal. It is the same trap that already cost this
+codebase `Terminal::clear`, and it would be worse here, because a stall in front
+of `fastf copy` is a stall in front of the command that exists to be instant.
+So `inline` reserves its rows by printing newlines, and every repaint is *move
+up n, draw*. Colour is written as SGR from the theme's own `Style`
+(`inline::paint_span`), so `NO_COLOR` and the ANSI palette work exactly as they
+do in the app.
+
+The picker is deliberately **not filterable**. It is the picker a verb
+interrupted — `fastf copy lullaby` matching three projects — and its job is to
+be answered in one or two keystrokes over a list the query already narrowed.
+Fuzzy search lives in the app, where there is a library to search. Esc *and* `q`
+cancel, as they always did.
+
+Every prompt leaves **one line of transcript**: the question and its answer, or
+the question and `cancelled`. A prompt that vanishes makes a run's history read
+as though it was never asked.
 
 `tui::pickers` holds all three pickers; `pick_project` is the **ambiguity**
 picker for `open`/`copy`/`path`/`term` and deliberately not the app.

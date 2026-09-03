@@ -1,7 +1,7 @@
 //! The prompt texts and validation messages for the app's native text prompts,
-//! kept verbatim from the bridged dialoguer flows they replace (`tui::actions`
-//! and `tui::prompt`). Keeping the strings here means a message change is one
-//! edit, and the pty suite's anchors do not drift when a flow moves native.
+//! kept verbatim from the prompt-at-a-time flows they replace. Keeping the
+//! strings here means a message change is one edit, and the pty suite's anchors
+//! do not drift when a flow moves.
 
 use crate::core::validated::ProjectFolderName;
 

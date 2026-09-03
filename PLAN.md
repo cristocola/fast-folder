@@ -1,6 +1,6 @@
 # PLAN.md — v3.0.0: the guided app on ratatui
 
-> **In progress. Phase 5 is done (PR #40); the next phase is Phase 6.** This
+> **In progress. Phase 6 is done (PR #41); the next phase is Phase 7.** This
 > file is worked one phase per session: read it, do phase N, run the gates,
 > tick only the boxes whose named verification actually ran, each phase in its
 > own PR into `main` with `ROADMAP.md` and the matching `docs/` page in the
@@ -526,3 +526,41 @@ the `release` skill.
     first run end to end (the folder is created and recorded), refuses a
     counter below the floor and then raises it, and edits the base list as
     text under a concurrent `config set`.
+- **Phase 6 (2026-09-03).** Decisions taken while building, beyond the plan:
+  - **`Viewport::Inline` is the wrong tool, and the suite said so at once.**
+    ratatui's inline viewport asks the terminal where the cursor is
+    (`ESC [ 6 n`) and waits up to two seconds for an answer. A pty under test
+    never sends one, so `cli_flags` failed on the first run with *the cursor
+    position could not be read within a normal duration* — and a terminal that
+    does not answer would put that stall in front of `fastf copy`, the command
+    that exists to be instant. It is the same trap that already cost this
+    codebase `Terminal::clear`. `inline.rs` reserves its rows by printing
+    newlines and repaints with *move up n, draw*: every movement relative,
+    nothing ever asked of the terminal.
+  - **Colour is written as SGR from the theme's own `Style`**
+    (`inline::paint_span`), so the command line's prompts use the app's palette
+    and `NO_COLOR`, the ANSI sixteen and truecolor all behave identically on
+    both surfaces. Twenty lines, and it is what "unify the design" actually
+    required — a second theme would have drifted by the next phase.
+  - **The picker stays unfilterable.** It is the picker a verb interrupted, over
+    a list a query already narrowed, and its job is to be answered in one or two
+    keystrokes. Typing to filter would take `q` away as a cancel and put a
+    decision where there was a reflex. Fuzzy search lives in the app.
+  - **Every prompt leaves one line of transcript** — the question and its
+    answer, or the question and `cancelled`. dialoguer did this for a `Select`
+    and not for the hand-rolled `confirm`; now it is one function.
+  - **`prompt.rs` kept the contract and gave up the drawing.** It is the
+    `require_tty` guard and `Ok(None)`-is-cancelled, over `inline`. The layering
+    rule that used to grep for dialoguer type names is now
+    `only_the_runtime_touches_the_terminal`: two modules take the terminal, and
+    a third owner is two unsynchronised writers on one tty.
+  - **`ProjectRowTheme` is gone.** It existed to reverse-video a whole row
+    through dialoguer's theme trait; a list widget highlights a row by itself.
+    `rows.rs` measures and pads with `unicode-width` and `view::fit` instead of
+    `console`, and `cli::move_project`'s progress line asks crossterm for the
+    width (the one thing `cli` may still ask a terminal — layering says so).
+  - **`FASTF_SHOT_ARGS`** was added to the screenshot tool so the command
+    line's prompts can be looked at the same way the app's screens are.
+  - Measured on the maintainer's machine, 2026-09-03: the release binary is
+    3.97 MB (4 161 720 bytes) with dialoguer and `console` gone and ratatui
+    doing both surfaces — still under the 4 MB the README claims.

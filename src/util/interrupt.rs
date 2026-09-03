@@ -77,7 +77,7 @@ pub fn reset() {
 
 /// Show the terminal cursor again, on whichever standard stream is a terminal.
 ///
-/// Every `dialoguer` prompt hides the cursor and shows it again on the way out
+/// Every prompt hides the cursor and shows it again on the way out
 /// — but not when it returns an error, and not when a menu unwinds past it.
 /// Left alone, leaving fastf that way hands the shell back an invisible cursor
 /// until the user thinks to run `tput cnorm`.
@@ -110,13 +110,17 @@ pub fn restore_terminal() {
     }
     #[cfg(not(unix))]
     {
-        use dialoguer::console::Term;
-        use std::io::IsTerminal;
+        // Windows has no async-signal-safety rule to keep, so the escape can
+        // simply be written through the ordinary handles.
+        use std::io::{IsTerminal, Write};
+        const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
         if std::io::stdout().is_terminal() {
-            let _ = Term::stdout().show_cursor();
+            let _ = std::io::stdout().write_all(SHOW_CURSOR);
+            let _ = std::io::stdout().flush();
         }
         if std::io::stderr().is_terminal() {
-            let _ = Term::stderr().show_cursor();
+            let _ = std::io::stderr().write_all(SHOW_CURSOR);
+            let _ = std::io::stderr().flush();
         }
     }
 }

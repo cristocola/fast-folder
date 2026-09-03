@@ -58,8 +58,8 @@ impl FlowKind {
         }
     }
 
-    /// What a cancel says. The words are the dialoguer flows' own, so a
-    /// cancelled run reads the same wherever it happened.
+    /// What a cancel says. The words are the old flows' own, so a cancelled
+    /// run reads the same wherever it happened.
     pub fn cancelled(self) -> &'static str {
         match self {
             FlowKind::Create => "Cancelled — nothing was created.",
@@ -248,7 +248,7 @@ impl Flow {
 
 /// The field one variable is answered in: a list for a `select`, a line for
 /// anything else, pre-filled with the template's default — which is what
-/// dialoguer's `[default]` meant, made editable instead of invisible.
+/// a prompt's `[default]` meant, made editable instead of invisible.
 pub fn variable_field(var: &crate::tui::app::data::VarInfo) -> Field {
     let hint = if var.required {
         format!("{} — required", var.slug)

@@ -224,9 +224,11 @@ fn draw(p: &Progress) {
         p.total_files,
         human_bytes(p.copied_bytes, p.total_bytes)
     );
-    let width = dialoguer::console::Term::stdout().size().1 as usize;
+    let width = ratatui::crossterm::terminal::size()
+        .map(|(columns, _rows)| columns as usize)
+        .unwrap_or(0);
     let clamped = if width > 1 {
-        dialoguer::console::truncate_str(&line, width - 1, "…").into_owned()
+        crate::tui::view::fit(&line, width - 1, "…")
     } else {
         line
     };

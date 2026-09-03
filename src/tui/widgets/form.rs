@@ -1,7 +1,7 @@
 //! A form: labelled fields on one screen, moved through with Tab and the
 //! arrows, edited in place, submitted with Enter.
 //!
-//! It replaces a run of dialoguer prompts, and the difference is the point. A
+//! It replaces a run of one-at-a-time prompts, and the difference is the point. A
 //! sequence of prompts can only ask one thing at a time, so an answer given
 //! three questions ago is invisible and unreachable, and a value rejected at
 //! the end takes every earlier answer with it. A form shows every answer at

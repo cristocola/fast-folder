@@ -1,11 +1,11 @@
 //! Is there a terminal to prompt on, and what to say when there is not.
 //!
 //! Every guard in fastf used to probe **stdout**, which is not where a prompt
-//! happens: `dialoguer` draws on stderr and reads from stdin (falling back to
+//! happens: a prompt draws on stderr and reads from stdin (falling back to
 //! `/dev/tty`). The probe therefore answered a different question than the one
 //! being asked. `fastf new t > out.txt` refused although a terminal was right
 //! there, and `fastf new t 2>/dev/null` passed the guard and died on
-//! dialoguer's bare "IO error: not a terminal", which tells a script author
+//! a bare "not a terminal" failure, which tells a script author
 //! nothing about what to do.
 //!
 //! Stdout still decides **output format** — `recent`/`search` print their plain
@@ -26,7 +26,7 @@ static SURFACE_RAN: AtomicBool = AtomicBool::new(false);
 
 /// Can a prompt be drawn and answered right now?
 ///
-/// Stderr is the stream dialoguer writes to, so it is the one that decides.
+/// Stderr is the stream a prompt writes to, so it is the one that decides.
 pub fn prompt_available() -> bool {
     std::io::stderr().is_terminal()
 }
@@ -38,7 +38,7 @@ pub fn prompt_available() -> bool {
 /// flag or setting that avoids the prompt.
 pub fn require_tty(what: &str, how: &str) -> Result<()> {
     if prompt_available() {
-        // One of exactly two choke points — every dialoguer prompt reaches here
+        // One of exactly two choke points — every prompt reaches here
         // through `prompt::ready()`, and every picker through that. The other is
         // `live_select`, which the browser reaches without passing this way.
         mark_interactive_surface();

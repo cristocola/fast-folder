@@ -224,7 +224,7 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
 ///
 /// Print-free and terminal-free, so the CLI's rename confirmation and the
 /// guided app's preview are the same computation. They were not: the app's
-/// bridge asked dialoguer, and the ID in the question came from a different
+/// bridge asked its own prompt, and the ID in the question came from a different
 /// expression than the one the commit used — `..._ID0001` offered,
 /// `..._ID0011` written.
 #[derive(Debug, Clone, PartialEq, Eq)]

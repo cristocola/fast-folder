@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use dialoguer::console::measure_text_width;
+use unicode_width::UnicodeWidthStr;
 
 use crate::core::library::{self, Project};
 use crate::util::human_bytes::human_bytes;
@@ -51,7 +51,7 @@ impl RowWidths {
             name: projects
                 .clone()
                 .into_iter()
-                .map(|p| measure_text_width(&p.name))
+                .map(|p| p.name.width())
                 .max()
                 .unwrap_or(8),
             template: projects
@@ -146,7 +146,7 @@ pub(crate) fn project_row(
 /// name that overflows makes one row ragged, where cutting it would hide the
 /// thing the row exists to show.
 fn pad_to(text: &str, width: usize) -> String {
-    dialoguer::console::pad_str(text, width, dialoguer::console::Alignment::Left, None).into_owned()
+    crate::tui::view::pad(text, width)
 }
 
 /// The Size cell for one row. Its fixed width belongs to the caller's format
@@ -177,88 +177,41 @@ pub fn base_row(base: &Path, is_default: bool) -> String {
     )
 }
 
-/// Clamp a Select item label to the terminal width so dialoguer never has to
-/// redraw a soft-wrapped line (the Windows console miscounts wrapped rows,
-/// leaving ghosted characters as the selection moves). Budget = columns minus
-/// the theme's "> " item prefix minus a last-column safety margin. Labels must
-/// stay ANSI-free — `truncate_str` is unicode-width-aware, but styled labels
-/// would reintroduce the redraw problem this exists to avoid.
+/// Clamp a picker item's label to the terminal width so a row never soft-wraps
+/// (the Windows console miscounts wrapped rows, leaving ghosted characters as
+/// the selection moves). Budget = columns minus the cursor prefix minus a
+/// last-column safety margin. Labels stay ANSI-free: `view::fit` counts display
+/// columns, and a styled label would reintroduce the redraw problem this exists
+/// to avoid.
 pub fn clamp_label(label: &str, columns: usize) -> String {
     const PREFIX: usize = 3;
     let budget = columns.saturating_sub(PREFIX);
     if budget == 0 {
-        // Width unknown (size() reports 0 off-terminal) — leave untouched.
+        // Width unknown (a size query reports 0 off-terminal) — leave untouched.
         return label.to_string();
     }
-    dialoguer::console::truncate_str(label, budget, "…").into_owned()
+    crate::tui::view::fit(label, budget, "…")
 }
 
+/// How wide the terminal is, or 0 where there is none — which `clamp_label`
+/// reads as "do not clamp".
 pub fn terminal_columns() -> usize {
-    let (_rows, columns) = dialoguer::console::Term::stdout().size();
-    columns as usize
-}
-
-/// A project picker has several distant columns, so the default one-character
-/// cursor is not enough to track the selected row across a wide terminal. Keep
-/// the labels themselves ANSI-free (important for clamping/redraw correctness),
-/// then apply one terminal-native reverse-video strip at render time.
-pub struct ProjectRowTheme {
-    content_width: usize,
-}
-
-impl ProjectRowTheme {
-    pub fn new(columns: usize) -> Self {
-        // Same budget as `clamp_label`: two prefix columns plus one last-column
-        // safety margin prevents a highlighted row from soft-wrapping.
-        Self {
-            content_width: columns.saturating_sub(3),
-        }
-    }
-}
-
-impl dialoguer::theme::Theme for ProjectRowTheme {
-    fn format_select_prompt_item(
-        &self,
-        f: &mut dyn std::fmt::Write,
-        text: &str,
-        active: bool,
-    ) -> std::fmt::Result {
-        if !active {
-            return write!(f, "  {text}");
-        }
-
-        let padded = if self.content_width == 0 {
-            std::borrow::Cow::Borrowed(text)
-        } else {
-            dialoguer::console::pad_str(
-                text,
-                self.content_width,
-                dialoguer::console::Alignment::Left,
-                None,
-            )
-        };
-        let row = format!("> {padded}");
-        write!(
-            f,
-            "{}",
-            dialoguer::console::Style::new()
-                .for_stderr()
-                .reverse()
-                .bold()
-                .apply_to(row)
-        )
-    }
+    ratatui::crossterm::terminal::size()
+        .map(|(columns, _rows)| columns as usize)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        PENDING_LABEL, ProjectRowTheme, RowWidths, SizeCell, clamp_label, project_row, size_label,
-    };
+    use super::{PENDING_LABEL, RowWidths, SizeCell, clamp_label, project_row, size_label};
     use crate::core::library::Project;
-    use dialoguer::console::measure_text_width;
-    use dialoguer::theme::Theme;
     use std::path::PathBuf;
+    use unicode_width::UnicodeWidthStr;
+
+    /// Display columns, the way every renderer here counts them.
+    fn measure_text_width(text: &str) -> usize {
+        text.width()
+    }
 
     fn project(id: &str, name: &str) -> Project {
         Project {
@@ -449,25 +402,5 @@ mod tests {
             measure_text_width(&with) - measure_text_width(&without),
             "Size ".len() + super::SIZE_CELL + 2
         );
-    }
-
-    #[test]
-    fn selected_project_row_highlight_spans_the_safe_terminal_width() {
-        let theme = ProjectRowTheme::new(24);
-        let mut rendered = String::new();
-        theme
-            .format_select_prompt_item(&mut rendered, "ID001  Project", true)
-            .unwrap();
-
-        let plain = dialoguer::console::strip_ansi_codes(&rendered);
-        assert!(plain.starts_with("> ID001  Project"));
-        assert_eq!(measure_text_width(&plain), 23);
-        assert!(plain.ends_with(' '), "selected row should fill the row");
-
-        let mut inactive = String::new();
-        theme
-            .format_select_prompt_item(&mut inactive, "ID001  Project", false)
-            .unwrap();
-        assert_eq!(inactive, "  ID001  Project");
     }
 }

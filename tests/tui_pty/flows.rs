@@ -699,3 +699,143 @@ fn the_counter_is_raised_from_the_settings_screen() {
         "the raise should have taken:\n{shown}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The command line's own prompts (Phase 6)
+// ---------------------------------------------------------------------------
+
+/// Run one subcommand under a pty with `script`, and give back the transcript.
+fn run_cli(sb: &Sandbox, args: &[&str], script: Vec<pty::Keystroke>) -> (String, i32) {
+    pty::run(
+        common::FASTF,
+        args,
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &script,
+        DEADLINE,
+    )
+}
+
+/// `q` cancels the ambiguity picker, the same as Esc. Both were dialoguer's
+/// contract and both are kept: the picker interrupted a verb, and getting out
+/// of it must not need a key anyone has to look up.
+#[test]
+fn q_cancels_the_ambiguity_picker_like_esc() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "shared_one", "ID0011");
+    sb.plant_project(&sb.base, "shared_two", "ID0012");
+
+    let script = pty::Script::new().key("q").pause(600).build();
+    let (out, code) = run_cli(&sb, &["path", "shared"], script);
+
+    assert_eq!(code, 0, "cancelling is not a failure:\n{out}");
+    assert!(
+        pty::plain(&out).contains("no path printed"),
+        "cancelling should say what did not happen:\n{}",
+        pty::plain(&out)
+    );
+}
+
+/// A yes/no answers on the keypress, with no Enter. That is what makes
+/// `fastf new`'s confirmation one keystroke, and a trailing `\r` would survive
+/// into whatever asked next.
+#[test]
+fn a_command_line_confirm_answers_a_bare_y() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let script = pty::Script::new()
+        .pause(500)
+        .key("Lullaby")
+        .enter() // the template's one variable
+        .pause(900)
+        .key("y") // "Create this project?" — no Enter
+        .pause(1500)
+        .key("n") // "Open project folder?" — likewise
+        .pause(900)
+        .build();
+    let (out, code) = run_cli(&sb, &["new", "race"], script);
+    let text = pty::plain(&out);
+
+    assert_eq!(code, 0, "the create should have finished:\n{text}");
+    let created = common::project_dirs(&sb.base);
+    assert_eq!(created.len(), 1, "exactly one project:\n{text}");
+    assert!(
+        created[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("Lullaby"),
+        "the answer should be in the folder name:\n{text}"
+    );
+}
+
+/// A command-line text prompt shows where you are typing.
+///
+/// The same guarantee the app's fields have, on the other surface: the caret is
+/// parked in the line being edited, at the cursor's offset *within the visible
+/// window*, not at the start of the prompt.
+#[test]
+fn a_command_line_text_prompt_parks_a_visible_caret_after_the_text() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let script = pty::Script::new()
+        .pause(600)
+        .key("Lulla")
+        .pause(700)
+        .build();
+    let (out, _) = run_cli(&sb, &["new", "race"], script);
+    let screen = app_screen(&out);
+    let (row, column) = app_cursor(&out);
+
+    let (text_row, text_line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("Lulla"))
+        .map(|(index, line)| (index as u16, line.to_string()))
+        .unwrap_or_else(|| panic!("the typed text never drew:\n{screen}"));
+    let at = text_line.find("Lulla").expect("just found");
+    let after_text = (text_line[..at].chars().count() + "Lulla".chars().count()) as u16;
+
+    assert_eq!(
+        row, text_row,
+        "the caret belongs on the line being edited:\n{screen}"
+    );
+    assert_eq!(
+        column, after_text,
+        "the caret belongs after the text, not at the start of the prompt:\n{screen}"
+    );
+}
+
+/// A refused answer says why, under the line, and leaves the prompt where it
+/// was — the difference between "correct this" and "start again".
+#[test]
+fn a_command_line_prompt_refuses_an_empty_required_answer_in_place() {
+    let sb = Sandbox::new();
+    sb.write_template("race"); // its one variable is required
+
+    let script = pty::Script::new()
+        .pause(600)
+        .enter() // submit it empty
+        .pause(700)
+        .key("Lullaby")
+        .pause(500)
+        .build();
+    let (out, _) = run_cli(&sb, &["new", "race"], script);
+    let screen = app_screen(&out);
+
+    assert!(
+        pty::plain(&out).contains("a value is required"),
+        "the refusal belongs under the line:\n{}",
+        pty::plain(&out)
+    );
+    // And typing clears it: the last frame is the prompt with the answer on it,
+    // not a stale complaint about the answer before it.
+    assert!(
+        screen.contains("Lullaby") && !screen.contains("a value is required"),
+        "the prompt is still there to answer, and the refusal is gone:\n{screen}"
+    );
+}

@@ -144,39 +144,3 @@ fn key_normalisation_folds_ctrl_case_and_labels_read_well() {
     assert_eq!(Key::ch('a').typed(), Some('a'));
     assert_eq!(Key::ctrl('a').typed(), None);
 }
-
-/// Until the CLI's prompts move off dialoguer, `tests/layering.rs` greps
-/// `src/tui` for its prompt type names outside `tui/prompt.rs`. A type called
-/// `Input`, `Confirm`, `Select` or `Sort` in the app would trip it in CI; this
-/// says so before that.
-#[test]
-fn the_app_does_not_name_a_dialoguer_prompt_type() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui");
-    let mut stack = vec![root];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().is_none_or(|e| e != "rs") || path.ends_with("tui/prompt.rs") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap();
-            for needle in [
-                "Input::",
-                "Confirm::",
-                "Select::",
-                "Sort::",
-                "MultiSelect::",
-            ] {
-                assert!(
-                    !text.contains(needle),
-                    "{} names `{needle}`, which tests/layering.rs reads as a dialoguer prompt",
-                    path.display()
-                );
-            }
-        }
-    }
-}

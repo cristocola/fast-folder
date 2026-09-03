@@ -56,7 +56,7 @@ After a successful create, fastf asks `Open project folder? [Y/n]` and opens the
 
 ### Prompts and terminals
 
-A prompt is drawn on stderr and read from your keyboard, so redirecting output does not take it away: `fastf new rust-project > plan.txt` still asks before it creates. When there is no terminal at all — a script, a CI job, `2>/dev/null` — fastf refuses instead of failing on a half-drawn prompt, and names the flag that gets the same result without asking:
+Every prompt fastf asks on the command line — this picker, a yes/no, a template variable — is drawn where the cursor is, in the same muted palette the guided app uses, and takes its rows back when it is answered. A prompt is drawn on stderr and read from your keyboard, so redirecting output does not take it away: `fastf new rust-project > plan.txt` still asks before it creates. When there is no terminal at all — a script, a CI job, `2>/dev/null` — fastf refuses instead of failing on a half-drawn prompt, and names the flag that gets the same result without asking:
 
 ```
 $ fastf apply rust-project ./crate --name=x < /dev/null 2>&1
@@ -428,9 +428,11 @@ it never drops into the project action menu; `fastf` and `fastf recent` are how
 you reach that. Esc cancels, says so, and exits 0, because deciding not to act
 is not a failure.
 
-The picker draws on stderr, which is the stream a prompt lives on, so
-`cd "$(fastf path lullaby)"` can still ask which Lullaby you meant while stdout
-carries nothing but the chosen path.
+The picker takes a few rows where the cursor already is — it never clears the
+screen — and gives them back when it is answered, leaving one line saying what
+was chosen. ↑↓ move, Enter picks, Esc or `q` cancels. It draws on **stderr**,
+which is the stream a prompt lives on, so `cd "$(fastf path lullaby)"` can still
+ask which Lullaby you meant while stdout carries nothing but the chosen path.
 
 Without a terminal — a pipe, a redirect of *both* streams, cron, CI — there is
 nobody to answer, so fastf prints the candidate list as an error and exits

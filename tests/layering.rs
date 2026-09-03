@@ -39,21 +39,67 @@ fn sources(layer: &str) -> Vec<PathBuf> {
     found
 }
 
-/// `dialoguer` is the terminal prompt library. Nothing under `core/` may reach
-/// for it: the same functions serve scripted, non-interactive runs, where there
-/// is no terminal to prompt on and no user watching one.
+/// Nothing under `core/` may ask a question. The same functions serve scripted,
+/// non-interactive runs, where there is no terminal to prompt on and no user
+/// watching one — so a prompt there is a hang no caller can avoid.
 #[test]
 fn core_does_not_prompt() {
     let mut offenders = Vec::new();
     for path in sources("core") {
         let text = fs::read_to_string(&path).unwrap();
-        if text.contains("dialoguer") {
+        if text.contains("tui::prompt") || text.contains("tui::inline") {
             offenders.push(path.display().to_string());
         }
     }
     assert!(
         offenders.is_empty(),
-        "core must not import dialoguer — move the interactive part to src/tui/:\n  {}",
+        "core must not prompt — move the interactive part to src/tui/:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// `dialoguer` is gone. Every prompt fastf draws — the app's modals and the
+/// command line's inline ones — is ratatui on crossterm, which is what makes
+/// `fastf copy lullaby`'s picker and the guided app look like one tool.
+///
+/// A scan, because the point is that nothing reintroduces it: a second prompt
+/// library is a second set of cancel semantics, and inconsistent cancelling is
+/// the defect this whole area exists to have fixed.
+#[test]
+fn dialoguer_is_gone() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let declared: Vec<&str> = manifest
+        .lines()
+        .filter(|line| line.trim_start().starts_with("dialoguer"))
+        .collect();
+    assert!(
+        declared.is_empty(),
+        "dialoguer is back in Cargo.toml:\n  {}",
+        declared.join("\n  ")
+    );
+
+    let mut offenders = Vec::new();
+    let mut files: Vec<PathBuf> = ["core", "util", "cli", "tui"]
+        .into_iter()
+        .flat_map(sources)
+        .collect();
+    files.push(root.join("src").join("main.rs"));
+    for path in files {
+        let text = fs::read_to_string(&path).unwrap();
+        for (number, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if line.contains("dialoguer") {
+                offenders.push(format!("{}:{}", path.display(), number + 1));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these still name dialoguer:\n  {}",
         offenders.join("\n  ")
     );
 }
@@ -150,65 +196,73 @@ fn core_and_util_do_not_import_the_surfaces() {
     );
 }
 
-/// Exactly one module may name a `dialoguer` prompt type.
-///
 /// An earlier attempt at a cancel contract moved twenty-nine prompts to
 /// `interact_opt` by hand and missed several, so Esc backed out of some menus
 /// and was swallowed by others. Consistency is the whole feature, and it cannot
-/// be kept by remembering: every prompt goes through `tui::prompt`, and a new
-/// `Select::new()` anywhere else fails here.
+/// be kept by remembering: **two modules take the terminal**, and nothing else
+/// may.
+///
+/// `tui::runtime` owns the alternate screen for the guided app; `tui::inline`
+/// owns the last few rows for a command-line prompt. A third owner is two
+/// unsynchronised writers on one tty, which is how a frame comes back with
+/// somebody else's line in the middle of it.
 #[test]
-fn only_tui_prompt_prompts() {
-    const PROMPT_TYPES: [&str; 6] = [
-        "Select::",
-        "MultiSelect::",
-        "Confirm::",
-        "Input::",
-        "FuzzySelect::",
-        "Sort::",
+fn only_the_runtime_touches_the_terminal() {
+    const TAKING: [&str; 4] = [
+        "enable_raw_mode",
+        "EnterAlternateScreen",
+        "Terminal::with_options",
+        "event::read",
     ];
 
     let mut offenders = Vec::new();
     for layer in ["tui", "cli"] {
         for path in sources(layer) {
-            if path.ends_with("tui/prompt.rs") {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name == "runtime.rs" || name == "inline.rs" {
                 continue;
             }
             let text = fs::read_to_string(&path).unwrap();
             for (number, line) in text.lines().enumerate() {
-                // `dialoguer::console` is a terminal toolkit, not a prompt.
-                if line.contains("console::") {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
                     continue;
                 }
-                if PROMPT_TYPES.iter().any(|t| line.contains(t)) {
-                    offenders.push(format!("{}:{}", path.display(), number + 1));
+                if TAKING.iter().any(|marker| line.contains(marker)) {
+                    offenders.push(format!(
+                        "{}:{}  {}",
+                        path.display(),
+                        number + 1,
+                        line.trim()
+                    ));
                 }
             }
         }
     }
     assert!(
         offenders.is_empty(),
-        "these prompt outside tui::prompt, so Esc will not cancel them:\n  {}",
+        "only tui::runtime and tui::inline may take the terminal:\n  {}",
         offenders.join("\n  ")
     );
 }
 
 /// The same rule one layer down. `util` is under `core`.
+///
+/// `util::live_select` used to be the exception; it went in Phase 0. The one
+/// thing `util` may still do about a terminal is ask whether there *is* one
+/// (`util::tty`) and put the cursor back after a signal (`util::interrupt`).
 #[test]
 fn util_does_not_prompt() {
     let mut offenders = Vec::new();
     for path in sources("util") {
         let text = fs::read_to_string(&path).unwrap();
-        // The row helpers draw with dialoguer's console primitives (width
-        // measurement, truncation, themes). Drawing is not prompting;
-        // `interact` is.
-        if text.contains(".interact()") || text.contains(".interact_text()") {
+        if text.contains("tui::prompt") || text.contains("tui::inline") {
             offenders.push(path.display().to_string());
         }
     }
     assert!(
         offenders.is_empty(),
-        "util must not run a dialoguer prompt:\n  {}",
+        "util must not prompt:\n  {}",
         offenders.join("\n  ")
     );
 }
@@ -235,6 +289,12 @@ fn ratatui_and_crossterm_stay_under_tui() {
         for (number, line) in text.lines().enumerate() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") {
+                continue;
+            }
+            // Asking how wide the terminal is, is not drawing on it. `cli`
+            // prints progress lines that must not soft-wrap, and one width
+            // query is the honest way to know.
+            if line.contains("crossterm::terminal::size") {
                 continue;
             }
             if TERMINAL.iter().any(|marker| line.contains(marker)) {

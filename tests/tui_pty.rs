@@ -6,7 +6,8 @@
 //! the library, a flow that returned to the dashboard instead of ending the
 //! session. The pure state machine is covered without a terminal in
 //! `tui_update.rs`; what is left here is the runtime — the screen, the
-//! threads, the bridged dialoguer flows — which a test backend cannot see.
+//! threads, and the command line's own inline prompts — which a test backend
+//! cannot see.
 //!
 //! Unix only by construction: the harness is `libc::forkpty`.
 //!

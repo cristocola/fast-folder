@@ -9,9 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::core::library::Project;
 use crate::core::template::{self, Template};
-use crate::tui::rows::{
-    ProjectRowTheme, RowWidths, base_row, clamp_label, project_row, terminal_columns,
-};
+use crate::tui::rows::{RowWidths, base_row, clamp_label, project_row, terminal_columns};
 use crate::util::tty;
 
 /// Ask which template to use.
@@ -119,9 +117,10 @@ pub fn pick_project(prompt: &str, candidates: &[Project], how: &str) -> Result<O
         .map(|p| clamp_label(&project_row(p, &widths, None, true), columns))
         .collect();
 
-    let Some(idx) =
-        crate::tui::prompt::select_with_theme(prompt, &labels, 0, &ProjectRowTheme::new(columns))?
-    else {
+    // One picker, one look: the selected row is highlighted whole by the same
+    // list widget the app draws, so the project picker no longer needs a theme
+    // of its own to say "this row".
+    let Some(idx) = crate::tui::prompt::select(prompt, &labels, 0)? else {
         return Ok(None);
     };
     Ok(Some(candidates[idx].clone()))

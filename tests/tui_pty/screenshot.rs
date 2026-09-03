@@ -7,7 +7,13 @@
 //! FASTF_SHOT_KEYS="down down enter" cargo test --test tui_pty screenshot -- --ignored --nocapture
 //! FASTF_SHOT_KEYS="/ type:lulla" FASTF_SHOT_PROJECTS=30 cargo test --test tui_pty screenshot -- --ignored --nocapture
 //! FASTF_SHOT_REAL=1 FASTF_SHOT_KEYS="c type:open" cargo test --test tui_pty screenshot -- --ignored --nocapture
+//! FASTF_SHOT_ARGS="copy shared" FASTF_SHOT_KEYS="down" cargo test --test tui_pty screenshot -- --ignored --nocapture
 //! ```
+//!
+//! `FASTF_SHOT_ARGS` drives a *subcommand* instead of the guided app, which is
+//! how the command line's inline prompts — the ambiguity picker, a confirm, a
+//! text field — are looked at. They draw where the cursor is rather than on the
+//! alternate screen, so the frame includes whatever was printed above them.
 //!
 //! Tokens, whitespace-separated: `enter` `esc` `up` `down` `left` `right`
 //! `pgup` `pgdn` `home` `end` `tab` `space` `ctrl-c` `ctrl-s` `ctrl-k` `ctrl-u`,
@@ -28,6 +34,11 @@ use std::fs;
 #[ignore = "a tool, not a check: run it with --ignored --nocapture and FASTF_SHOT_KEYS"]
 fn screenshot() {
     let keys = std::env::var("FASTF_SHOT_KEYS").unwrap_or_default();
+    let args: Vec<String> = std::env::var("FASTF_SHOT_ARGS")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
     let real = std::env::var("FASTF_SHOT_REAL").is_ok_and(|v| v == "1");
     let projects: usize = std::env::var("FASTF_SHOT_PROJECTS")
         .ok()
@@ -78,7 +89,8 @@ fn screenshot() {
             ("HOME", sb.tmp.path()),
         ]
     };
-    let (chunks, code) = pty::run_chunked(common::FASTF, &[], &env, &script, DEADLINE);
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (chunks, code) = pty::run_chunked(common::FASTF, &argv, &env, &script, DEADLINE);
     let screen = screen_at(&chunks, taken);
 
     println!();

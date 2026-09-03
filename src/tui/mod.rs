@@ -1,10 +1,11 @@
 //! Every interactive terminal surface.
 //!
-//! The guided app (`run`) is the daily one: a full-screen dashboard on
-//! ratatui, and every one of its flows is native. The modules that still name
-//! dialoguer — `prompt`, `pickers`, `vars` — serve the *command line*: the
-//! ambiguity picker `open`/`copy`/`path`/`term` share, and the variable
-//! prompts a scripted `fastf new` falls back to.
+//! The guided app (`run`) is the daily one: a full-screen dashboard on ratatui,
+//! and every one of its flows is native. `inline` is the other surface — a few
+//! rows at the cursor for the command line's own prompts, in the same palette —
+//! and `prompt`, `pickers` and `vars` are what sits on it: the ambiguity picker
+//! `open`/`copy`/`path`/`term` share, and the variable prompts a scripted
+//! `fastf new` falls back to.
 
 pub mod app;
 pub mod command;
@@ -12,6 +13,7 @@ pub mod effect;
 pub mod entry;
 pub mod frame;
 pub mod fuzzy;
+pub mod inline;
 pub mod layout;
 pub mod loaders;
 pub mod msg;

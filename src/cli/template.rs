@@ -193,7 +193,7 @@ pub fn delete(slug: &str, yes: bool) -> Result<()> {
     }
     if !yes {
         // Without this the command is simply unusable from a script: it dies on
-        // dialoguer's bare "IO error: not a terminal" with no way forward.
+        // a bare "not a terminal" failure with no way forward.
         tty::require_tty(
             "confirm",
             &format!("pass --yes to delete template '{slug}' without confirming"),

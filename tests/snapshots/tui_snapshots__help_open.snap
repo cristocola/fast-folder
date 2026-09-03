@@ -27,7 +27,7 @@ expression: frame
 "│       │   F              Clear the template filter     show every template's projects a… │       │"
 "│       │                                                                                  │       │"
 "└───────│ Project                                                                          │───────┘"
-"┌ templa│   Enter          Project actions               open the action menu for the sel… │───────┐"
+"┌ templa│   a / Enter      Project actions               open the action menu for the sel… │───────┐"
 "│  clien│   o              Open project folder           reveal it in the file manager     │ate}_{…│"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 " 12 of 12 projects   ·   ? for help                                                                 "

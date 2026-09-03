@@ -26,7 +26,7 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::crossterm::{cursor, execute};
 
-use crate::tui::actions::ActionLoop;
+use crate::core::assets::{JobStatus, Progress};
 use crate::tui::app::{self, App};
 use crate::tui::effect::{
     Action, ActionOutcome, Effect, Exit, LegacyFlow, ListChange, SpawnKind, Suspended,
@@ -71,6 +71,16 @@ struct Runtime {
     /// The size cells last handed to the app, so a tick reports only news.
     reported: HashMap<PathBuf, Option<u64>>,
     detail: DetailWorker,
+    /// The move job in flight, if any: its progress to snapshot per tick and
+    /// its cancel flag.
+    moving: Option<MovingJob>,
+}
+
+/// The runtime's half of a running move: the progress handle it snapshots and
+/// the cancel flag a Ctrl-C flips.
+struct MovingJob {
+    progress: Arc<Mutex<Progress>>,
+    cancel: Arc<AtomicBool>,
 }
 
 impl Runtime {
@@ -94,6 +104,7 @@ impl Runtime {
             scanner: SizeScanner::new(),
             reported: HashMap::new(),
             detail,
+            moving: None,
         })
     }
 
@@ -101,6 +112,9 @@ impl Runtime {
         diag::clear_sink();
         self.input.stop();
         self.detail.stop();
+        if let Some(moving) = self.moving.take() {
+            moving.cancel.store(true, Ordering::SeqCst);
+        }
         release_screen(&mut self.terminal);
     }
 
@@ -145,6 +159,7 @@ impl Runtime {
                     return None;
                 }
                 self.report_sizes(app);
+                self.report_move_progress();
                 Some(Msg::Tick)
             }
         }
@@ -169,6 +184,24 @@ impl Runtime {
                 self.reported.insert(path.clone(), *size);
             }
             let _ = self.tx.send(Msg::Sizes(news));
+        }
+    }
+
+    /// Hand the app the move job's progress, once per tick, and forgets the
+    /// job once it is no longer running.
+    fn report_move_progress(&mut self) {
+        let Some(moving) = &self.moving else {
+            return;
+        };
+        let snapshot = moving
+            .progress
+            .lock()
+            .map(|progress| progress.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+        let done = !matches!(snapshot.status, JobStatus::Running);
+        let _ = self.tx.send(Msg::MoveProgress(snapshot));
+        if done {
+            self.moving = None;
         }
     }
 
@@ -228,9 +261,18 @@ impl Runtime {
                     }
                 }
                 Effect::Run(id, action) => {
+                    let moving = matches!(*action, Action::Move { .. });
+                    let progress = Arc::new(Mutex::new(Progress::new(&[])));
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    if moving {
+                        self.moving = Some(MovingJob {
+                            progress: Arc::clone(&progress),
+                            cancel: Arc::clone(&cancel),
+                        });
+                    }
                     let tx = self.tx.clone();
                     spawn_worker("fastf-action", move || {
-                        let outcome = run_action(*action)
+                        let outcome = run_action(*action, &progress, &cancel)
                             .map(Box::new)
                             .map_err(|e| format!("{e:#}"));
                         let _ = tx.send(Msg::ActionDone { id, outcome });
@@ -246,8 +288,24 @@ impl Runtime {
                         });
                     });
                 }
+                Effect::LoadView { title, path, kind } => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-view", move || {
+                        let lines = loaders::view(&path, kind);
+                        let _ = tx.send(Msg::ViewLoaded { title, lines });
+                    });
+                }
+                Effect::CancelMove => {
+                    if let Some(moving) = &self.moving {
+                        moving.cancel.store(true, Ordering::SeqCst);
+                    }
+                }
                 Effect::Suspend(Suspended::Legacy(flow)) => {
                     let resumed = self.run_legacy(flow)?;
+                    let _ = self.tx.send(Msg::Resumed(resumed));
+                }
+                Effect::Suspend(Suspended::Note(project)) => {
+                    let resumed = self.run_note_editor(project)?;
                     let _ = self.tx.send(Msg::Resumed(resumed));
                 }
             }
@@ -284,26 +342,6 @@ impl Runtime {
             LegacyFlow::Settings => {
                 crate::tui::menu::menu_settings().map(|()| (ListChange::Reload, false))
             }
-            LegacyFlow::ActionMenu {
-                project,
-                size,
-                known_tags,
-            } => crate::tui::actions::project_action_menu(
-                &project,
-                size,
-                true,
-                &known_tags,
-                "Back to main menu",
-            )
-            .map(|action| match action {
-                ActionLoop::BackToList => (ListChange::None, false),
-                ActionLoop::Patched { project, stale } => {
-                    (ListChange::Patched { project, stale }, false)
-                }
-                ActionLoop::Removed { path } => (ListChange::Removed { path }, false),
-                ActionLoop::Reload => (ListChange::Reload, false),
-                ActionLoop::Quit => (ListChange::None, true),
-            }),
         };
 
         let (change, quit) = match outcome {
@@ -337,6 +375,33 @@ impl Runtime {
             self.input.resume();
         }
         Ok(Resumed::Legacy { change, quit })
+    }
+
+    /// Give the terminal back, run `$EDITOR` on a scratch file for a journal
+    /// note, and take it again. The editor's text is returned; the append
+    /// itself runs as an ordinary `Action` on a worker.
+    fn run_note_editor(&mut self, project: Box<crate::core::library::Project>) -> Result<Resumed> {
+        use crate::core::config::Config;
+
+        self.input.pause();
+        release_screen(&mut self.terminal);
+
+        let editor = Config::load()?.resolve_editor();
+        let text = crate::cli::note::note_from_editor(&editor);
+        if let Err(err) = &text {
+            eprintln!(
+                "{} {:#}",
+                colored::Colorize::bold(colored::Colorize::red("error:")),
+                err
+            );
+        }
+
+        self.terminal = take_screen()?;
+        self.input.resume();
+        Ok(Resumed::Note {
+            project,
+            text: text.ok(),
+        })
     }
 }
 
@@ -415,8 +480,16 @@ fn spawn_worker(name: &'static str, work: impl FnOnce() + Send + 'static) {
     }
 }
 
-/// One mutation through `core::operations`, on a worker.
-fn run_action(action: Action) -> Result<ActionOutcome> {
+/// One mutation through `core::operations`, on a worker. `progress` and
+/// `cancel` are the move job's handles — ignored by every other verb.
+fn run_action(
+    action: Action,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<ActionOutcome> {
+    use crate::core::library::base_label;
+    use crate::util::paths::display_path;
+
     match action {
         Action::Reindex => {
             let (cfg, count) = crate::core::operations::reindex()?;
@@ -430,6 +503,129 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
                 ),
                 warning: None,
                 session: None,
+            })
+        }
+        Action::AddTag { project, tag } => {
+            let tags = crate::core::operations::add_tags(&project, std::slice::from_ref(&tag))?;
+            let mut patched = (*project).clone();
+            let path = patched.path.clone();
+            patched.tags = tags;
+            Ok(ActionOutcome {
+                change: ListChange::Patched {
+                    project: Box::new(patched),
+                    stale: vec![path],
+                },
+                message: format!("Added 1 tag to {}", project.id),
+                warning: None,
+                session: Some(format!("tagged {} {tag}", project.id)),
+            })
+        }
+        Action::RemoveTags { project, tags } => {
+            let count = tags.len();
+            let remaining = crate::core::operations::remove_tags(&project, &tags)?;
+            let mut patched = (*project).clone();
+            let path = patched.path.clone();
+            patched.tags = remaining;
+            Ok(ActionOutcome {
+                change: ListChange::Patched {
+                    project: Box::new(patched),
+                    stale: vec![path],
+                },
+                message: format!(
+                    "Removed {count} tag{} from {}",
+                    if count == 1 { "" } else { "s" },
+                    project.id
+                ),
+                warning: None,
+                session: None,
+            })
+        }
+        Action::ReautoTags(project) => {
+            let derived = crate::core::operations::replace_auto_tags(&project)?;
+            // The free-form tags survive the operation, so the row has to be
+            // re-read rather than patched from the derived list alone.
+            Ok(ActionOutcome {
+                change: ListChange::Reload,
+                message: format!(
+                    "Re-derived {} auto-tag{} for {}",
+                    derived.len(),
+                    if derived.len() == 1 { "" } else { "s" },
+                    project.id
+                ),
+                warning: None,
+                session: None,
+            })
+        }
+        Action::Rename { project, name } => {
+            let renamed = crate::core::operations::rename(&project, &name)?;
+            let stale = vec![project.path.clone(), renamed.path.clone()];
+            Ok(ActionOutcome {
+                change: ListChange::Patched {
+                    project: Box::new(renamed.clone()),
+                    stale,
+                },
+                message: format!("Renamed to {}", renamed.name),
+                warning: None,
+                session: Some(format!("renamed {} → {}", renamed.id, renamed.name)),
+            })
+        }
+        Action::Move { project, target } => {
+            let outcome =
+                crate::core::operations::move_project(&project, &target, progress, cancel)?;
+            let moved = outcome.project;
+            let message = format!("Moved to {}", display_path(&moved.path));
+            let warning = outcome.cleanup_pending.then(|| {
+                format!(
+                    "destination is complete, but cleanup is pending at {}",
+                    display_path(&project.path)
+                )
+            });
+            let session = Some(format!("moved {} → {}", moved.id, base_label(&moved.base)));
+            let stale = vec![project.path.clone(), moved.path.clone()];
+            Ok(ActionOutcome {
+                change: ListChange::Patched {
+                    project: Box::new(moved),
+                    stale,
+                },
+                message,
+                warning,
+                session,
+            })
+        }
+        Action::Unregister(project) => {
+            crate::core::operations::unregister(&project)?;
+            Ok(ActionOutcome {
+                change: ListChange::Removed {
+                    path: project.path.clone(),
+                },
+                message: format!("Unregistered {}", project.name),
+                warning: None,
+                session: Some(format!("unregistered {}", project.id)),
+            })
+        }
+        Action::Delete(project) => {
+            crate::core::operations::delete(&project)?;
+            Ok(ActionOutcome {
+                change: ListChange::Removed {
+                    path: project.path.clone(),
+                },
+                message: format!("Deleted {}", display_path(&project.path)),
+                warning: None,
+                session: Some(format!("deleted {}", project.id)),
+            })
+        }
+        Action::AppendNote { project, text } => {
+            crate::core::operations::append_note(&project, &text)?;
+            let id = project.id.clone();
+            let path = project.path.clone();
+            Ok(ActionOutcome {
+                change: ListChange::Patched {
+                    project,
+                    stale: vec![path],
+                },
+                message: "Journal entry added.".to_string(),
+                warning: None,
+                session: Some(format!("noted {id}")),
             })
         }
     }

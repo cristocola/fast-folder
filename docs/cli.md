@@ -126,7 +126,7 @@ and nothing you type reaches a pipe.
 │  ID0247 2026-08-30_Client_Acme_ID0247  scanning…││music-video · projects       │
 └──────────────────────────────────────────────┘└─────────────────────────────┘
  ✓  Added 1 tag to ID0248
- / search  Enter actions  o open  t terminal  y copy path  n new  c commands  ? help  q quit
+ / search  a actions  o open  t terminal  y copy path  n new  ? help
 ```
 
 What is on screen, top to bottom:
@@ -172,8 +172,12 @@ keys that matter most:
 | `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size |
 | `f` / `F` | show only the selected project's template / show every template again |
 | `i` | show or hide the detail pane |
-| Enter | the selected project's action menu: open, copy path, terminal, metadata, tags, journal, move, rename, unregister, delete |
+| Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
+| `A`, Ctrl-T | add a tag (pick one the library already knows, or type a new one); remove tags |
+| `N`, Ctrl-N | a journal note in your `$EDITOR`; a one-line note typed where you are |
+| `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good |
+| `M`, `J` | the selected project's metadata (its frontmatter); its journal |
 | `n`, `e`, `T`, `,` | create a project, register a folder, manage templates, settings |
 | F5, `R` | reload the library, reindex every base from its folders |
 | `q` | quit |
@@ -218,8 +222,19 @@ Creating a project (`n`), registering a folder (`e`), managing templates (`T`)
 and the settings (`,`) run on the main screen, asking their questions the way
 `fastf new`, `fastf register`, `fastf template …` and `fastf config` do, and
 the dashboard comes back when they return. A flow that prints a result — create,
-register — waits for Enter first, so it can be read. The selected project's
-action menu (Enter) works the same way.
+register — waits for Enter first, so it can be read.
+
+The single-project actions are the other way round: they draw **over** the
+dashboard as dialogs. `Enter` or `a` opens the action menu, and a verb's own
+key (`A`, `r`, `D`, `M`, …) runs straight to its dialog. A tag you pick where
+the library already knows some, or type where it does not; remove-tags lists
+every tag on the project with a space to mark each; a typed confirmation —
+delete asks for the folder's name — keeps your text and says why it was
+refused when it does not match; `y` or `n` answers a yes/no without Enter. A
+move shows its progress (phase and bytes) with Esc or Ctrl-C to cancel. `N`
+drops out of the terminal into your `$EDITOR` and appends whatever you save to
+the journal when you come back; `M` and `J` open the metadata and journal,
+scrollable with the arrow keys.
 
 In these flows **Esc backs out of anything**, one level at a time: every menu,
 every confirmation and every text field takes it, and nothing you have already

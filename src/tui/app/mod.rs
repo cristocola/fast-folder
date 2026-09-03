@@ -6,6 +6,7 @@
 //! effects) and what keeps a slow filesystem out of the key handler: nothing in
 //! here blocks, because nothing in here reads a disk.
 
+pub mod actions;
 pub mod data;
 pub mod library;
 pub mod modal;
@@ -18,16 +19,20 @@ use std::path::PathBuf;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 
+use crate::core::assets::Progress;
 use crate::core::library::Project;
+use crate::tui::app::actions::{Confirm, ConfirmThen, MultiPick, MultiThen, TextPrompt, TextThen};
 use crate::tui::command::{self, Availability, CommandId, Context, Key};
 use crate::tui::effect::{
     Action, ActionId, ActionOutcome, Effect, Exit, LegacyFlow, ListChange, SpawnKind, Suspended,
+    ViewKind,
 };
 use crate::tui::entry::Entry;
 use crate::tui::fuzzy::Fuzzy;
 use crate::tui::layout;
 use crate::tui::msg::{Msg, Resumed};
 use crate::tui::theme::Theme;
+use crate::tui::validators;
 use crate::util::diag::Level;
 use crate::util::size_scan::SizeCell;
 use data::{ProjectDetail, Summary, TemplateCard};
@@ -140,6 +145,9 @@ pub struct App {
     /// What the one running mutation is doing, for the status line.
     pub busy: Option<&'static str>,
     pub busy_id: Option<ActionId>,
+    /// The latest snapshot of the move job that is running, for the progress
+    /// modal; `None` when no move is in flight.
+    pub move_progress: Option<Progress>,
     pub status: Status,
     /// The last few things this session did, oldest first.
     pub session: Vec<String>,
@@ -167,6 +175,7 @@ impl App {
             modals: ModalStack::default(),
             busy: None,
             busy_id: None,
+            move_progress: None,
             status: Status::default(),
             session: crate::tui::frame::recent_actions(),
             ticks: 0,
@@ -473,6 +482,17 @@ impl App {
                 self.recompute();
                 self.after_rows_changed()
             }
+            Msg::MoveProgress(progress) => {
+                if self.move_progress.is_some() {
+                    self.move_progress = Some(progress);
+                }
+                Vec::new()
+            }
+            Msg::ViewLoaded { title, lines } => {
+                self.modals
+                    .push(Modal::message(title, lines.join("\n"), MessageLevel::Info));
+                Vec::new()
+            }
             Msg::ActionDone { id, outcome } => self.on_action_done(id, outcome),
             Msg::Spawned { what, outcome } => self.on_spawned(what, outcome),
             Msg::Resumed(Resumed::Legacy { change, quit }) => {
@@ -485,6 +505,18 @@ impl App {
                     effects.push(Effect::LoadSummary);
                 }
                 effects
+            }
+            Msg::Resumed(Resumed::Note { project, text }) => {
+                self.session = crate::tui::frame::recent_actions();
+                match text {
+                    Some(text) if !text.trim().is_empty() => {
+                        self.run_action("adding a note…", Action::AppendNote { project, text })
+                    }
+                    _ => {
+                        self.info("no note written");
+                        Vec::new()
+                    }
+                }
             }
             Msg::Diag(level, text) => {
                 match level {
@@ -507,6 +539,7 @@ impl App {
         }
         self.busy = None;
         self.busy_id = None;
+        self.move_progress = None;
         match outcome {
             Ok(outcome) => {
                 let outcome = *outcome;
@@ -572,6 +605,11 @@ impl App {
                 pick.rank(&mut self.fuzzy);
                 Vec::new()
             }
+            Some(Modal::TextPrompt(prompt)) => {
+                prompt.input.paste(text);
+                prompt.error = None;
+                Vec::new()
+            }
             Some(_) => Vec::new(),
             None if self.search.editing => {
                 self.search.input.paste(text);
@@ -592,12 +630,20 @@ impl App {
             };
         }
         if key == Key::ctrl('c') {
+            // A move is running: Ctrl-C cancels it rather than quitting under a
+            // worker that is still mutating the filesystem.
+            if self.move_progress.is_some() {
+                return vec![Effect::CancelMove];
+            }
             return if self.modals.pop().is_some() {
                 Vec::new()
             } else {
                 vec![Effect::Quit(Exit::Interrupted)]
             };
         }
+        // A move that is running turns the other quit gestures — `q`, and Esc
+        // once it has closed whatever was open — into cancels too (`run`); see
+        // the Ctrl-C case above.
         if !self.modals.is_empty() {
             return self.on_modal_key(key);
         }
@@ -655,8 +701,242 @@ impl App {
         match self.modals.top() {
             Some(Modal::Palette(_)) => self.on_palette_key(key),
             Some(Modal::Pick(_)) => self.on_pick_key(key),
+            Some(Modal::Actions(_)) => self.on_actions_key(key),
+            Some(Modal::TextPrompt(_)) => self.on_text_prompt_key(key),
+            Some(Modal::Confirm(_)) => self.on_confirm_key(key),
+            Some(Modal::MultiPick(_)) => self.on_multi_pick_key(key),
             Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.on_scroll_modal_key(key),
             None => Vec::new(),
+        }
+    }
+
+    fn on_actions_key(&mut self, key: Key) -> Vec<Effect> {
+        let len = crate::tui::app::actions::action_entries(self).len();
+        match key.code {
+            KeyCode::Esc => {
+                self.modals.pop();
+                Vec::new()
+            }
+            KeyCode::Enter => {
+                let chosen = match self.modals.top() {
+                    Some(Modal::Actions(actions)) => crate::tui::app::actions::action_entries(self)
+                        .get(actions.selected)
+                        .map(|(id, _)| *id),
+                    _ => None,
+                };
+                self.modals.pop();
+                let Some(id) = chosen else {
+                    return Vec::new();
+                };
+                self.run(id)
+            }
+            KeyCode::Up | KeyCode::Char('k') if !key.ctrl => {
+                if let Some(Modal::Actions(actions)) = self.modals.top_mut() {
+                    actions.step(len, -1);
+                    actions.clamp_viewport(len, 12);
+                }
+                Vec::new()
+            }
+            KeyCode::Down | KeyCode::Char('j') if !key.ctrl => {
+                if let Some(Modal::Actions(actions)) = self.modals.top_mut() {
+                    actions.step(len, 1);
+                    actions.clamp_viewport(len, 12);
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn on_text_prompt_key(&mut self, key: Key) -> Vec<Effect> {
+        match key.code {
+            KeyCode::Esc if !key.ctrl => {
+                self.modals.pop();
+                Vec::new()
+            }
+            KeyCode::Enter => self.submit_text_prompt(),
+            _ => {
+                let changed = match self.modals.top_mut() {
+                    Some(Modal::TextPrompt(prompt)) => prompt.input.apply(&key),
+                    _ => false,
+                };
+                if changed && let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                    prompt.error = None;
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    fn submit_text_prompt(&mut self) -> Vec<Effect> {
+        let (text, then) = match self.modals.top() {
+            Some(Modal::TextPrompt(prompt)) => {
+                (prompt.input.text().to_string(), prompt.then.clone())
+            }
+            _ => return Vec::new(),
+        };
+        let project = self.library.selected().cloned();
+        match then {
+            TextThen::Rename => {
+                if let Err(error) = validators::folder_name(&text) {
+                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                        prompt.error = Some(error);
+                    }
+                    return Vec::new();
+                }
+                self.modals.pop();
+                let Some(project) = project else {
+                    return Vec::new();
+                };
+                self.run_action(
+                    "renaming…",
+                    Action::Rename {
+                        project: Box::new(project),
+                        name: text,
+                    },
+                )
+            }
+            TextThen::AddTag => {
+                self.modals.pop();
+                let tag = text.trim().to_string();
+                if tag.is_empty() {
+                    return Vec::new();
+                }
+                let Some(project) = project else {
+                    return Vec::new();
+                };
+                self.run_action(
+                    "tagging…",
+                    Action::AddTag {
+                        project: Box::new(project),
+                        tag,
+                    },
+                )
+            }
+            TextThen::Note => {
+                self.modals.pop();
+                let message = text.trim().to_string();
+                if message.is_empty() {
+                    return Vec::new();
+                }
+                let Some(project) = project else {
+                    return Vec::new();
+                };
+                self.run_action(
+                    "adding a note…",
+                    Action::AppendNote {
+                        project: Box::new(project),
+                        text: message,
+                    },
+                )
+            }
+            TextThen::Delete { expect } => {
+                self.modals.pop();
+                if text.trim() != expect {
+                    self.warn(validators::DELETE_MISMATCH);
+                    return Vec::new();
+                }
+                let Some(project) = project else {
+                    return Vec::new();
+                };
+                self.run_action("deleting…", Action::Delete(Box::new(project)))
+            }
+        }
+    }
+
+    fn on_confirm_key(&mut self, key: Key) -> Vec<Effect> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => self.answer_confirm(true),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.modals.pop();
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn answer_confirm(&mut self, yes: bool) -> Vec<Effect> {
+        let then = match self.modals.top() {
+            Some(Modal::Confirm(confirm)) => confirm.then,
+            _ => return Vec::new(),
+        };
+        self.modals.pop();
+        if !yes {
+            return Vec::new();
+        }
+        match then {
+            ConfirmThen::Unregister => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                self.run_action("unregistering…", Action::Unregister(Box::new(project)))
+            }
+        }
+    }
+
+    fn on_multi_pick_key(&mut self, key: Key) -> Vec<Effect> {
+        match key.code {
+            KeyCode::Esc => {
+                self.modals.pop();
+                Vec::new()
+            }
+            KeyCode::Enter => self.submit_multi_pick(),
+            KeyCode::Char(' ') => {
+                if let Some(Modal::MultiPick(pick)) = self.modals.top_mut()
+                    && let Some(flag) = pick.picked.get_mut(pick.selected)
+                {
+                    *flag = !*flag;
+                }
+                Vec::new()
+            }
+            KeyCode::Up | KeyCode::Char('k') if !key.ctrl => {
+                if let Some(Modal::MultiPick(pick)) = self.modals.top_mut() {
+                    pick.selected = crate::tui::widgets::nav::wrap_step(
+                        Some(pick.selected),
+                        pick.items.len(),
+                        -1,
+                    )
+                    .unwrap_or(0);
+                }
+                Vec::new()
+            }
+            KeyCode::Down | KeyCode::Char('j') if !key.ctrl => {
+                if let Some(Modal::MultiPick(pick)) = self.modals.top_mut() {
+                    pick.selected = crate::tui::widgets::nav::wrap_step(
+                        Some(pick.selected),
+                        pick.items.len(),
+                        1,
+                    )
+                    .unwrap_or(0);
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn submit_multi_pick(&mut self) -> Vec<Effect> {
+        let (chosen, then) = match self.modals.top() {
+            Some(Modal::MultiPick(pick)) => (pick.chosen(), pick.then),
+            _ => return Vec::new(),
+        };
+        self.modals.pop();
+        match then {
+            MultiThen::RemoveTags => {
+                if chosen.is_empty() {
+                    return Vec::new();
+                }
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                self.run_action(
+                    "removing tags…",
+                    Action::RemoveTags {
+                        project: Box::new(project),
+                        tags: chosen,
+                    },
+                )
+            }
         }
     }
 
@@ -786,6 +1066,26 @@ impl App {
                         self.after_rows_changed()
                     }
                     Then::TemplateFilter => self.set_template_filter(Some(item.value.clone())),
+                    Then::AddTag => {
+                        if item.value == crate::tui::app::actions::NEW_TAG {
+                            self.modals.push(Modal::TextPrompt(TextPrompt::new(
+                                validators::ADD_TAG_PROMPT,
+                                TextThen::AddTag,
+                            )));
+                            return Vec::new();
+                        }
+                        let Some(project) = self.library.selected().cloned() else {
+                            return Vec::new();
+                        };
+                        self.run_action(
+                            "tagging…",
+                            Action::AddTag {
+                                project: Box::new(project),
+                                tag: item.value.clone(),
+                            },
+                        )
+                    }
+                    Then::MoveToBase => self.run_move(PathBuf::from(item.value.clone())),
                 }
             }
             KeyCode::Up | KeyCode::Down if !key.ctrl => {
@@ -842,7 +1142,13 @@ impl App {
             Availability::Hidden => return Vec::new(),
         }
         match id {
-            CommandId::Quit => vec![Effect::Quit(Exit::Normal)],
+            CommandId::Quit => {
+                if self.move_progress.is_some() {
+                    // Quitting under a running move would abandon it mid-write.
+                    return vec![Effect::CancelMove];
+                }
+                vec![Effect::Quit(Exit::Normal)]
+            }
             CommandId::Back => {
                 if !self.search.input.is_empty() {
                     self.search.input.clear();
@@ -850,6 +1156,9 @@ impl App {
                 }
                 if self.library.template_filter.is_some() {
                     return self.set_template_filter(None);
+                }
+                if self.move_progress.is_some() {
+                    return vec![Effect::CancelMove];
                 }
                 vec![Effect::Quit(Exit::Normal)]
             }
@@ -951,15 +1260,10 @@ impl App {
             }
             CommandId::ClearTemplateFilter => self.set_template_filter(None),
             CommandId::Actions => {
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
-                };
-                let size = Some(self.size_cell(&project.path));
-                vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::ActionMenu {
-                    project: Box::new(project),
-                    size,
-                    known_tags: self.library.known_tags.clone(),
-                }))]
+                self.modals.push(Modal::Actions(
+                    crate::tui::app::actions::ActionsState::default(),
+                ));
+                Vec::new()
             }
             CommandId::OpenFolder => self.spawn_for_selection(SpawnKind::Reveal),
             CommandId::OpenTerminal => self.spawn_for_selection(SpawnKind::Terminal),
@@ -983,6 +1287,76 @@ impl App {
                 }
                 self.after_selection_change()
             }
+            CommandId::AddTag => self.open_add_tag(),
+            CommandId::RemoveTags => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                if project.tags.is_empty() {
+                    self.warn("no tags to remove");
+                    return Vec::new();
+                }
+                self.modals.push(Modal::MultiPick(MultiPick::new(
+                    "Remove tags",
+                    project.tags.clone(),
+                    MultiThen::RemoveTags,
+                )));
+                Vec::new()
+            }
+            CommandId::ReautoTags => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                self.run_action("re-deriving tags…", Action::ReautoTags(Box::new(project)))
+            }
+            CommandId::AddNote => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                vec![Effect::Suspend(Suspended::Note(Box::new(project)))]
+            }
+            CommandId::NoteInline => {
+                self.modals.push(Modal::TextPrompt(TextPrompt::new(
+                    validators::NOTE_PROMPT,
+                    TextThen::Note,
+                )));
+                Vec::new()
+            }
+            CommandId::Rename => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                let mut prompt = TextPrompt::new(validators::RENAME_PROMPT, TextThen::Rename);
+                prompt.input =
+                    crate::tui::widgets::input::LineEdit::with_text(project.name.clone());
+                self.modals.push(Modal::TextPrompt(prompt));
+                Vec::new()
+            }
+            CommandId::Move => self.open_move_picker(),
+            CommandId::Unregister => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                self.modals.push(Modal::Confirm(Confirm {
+                    prompt: validators::unregister_prompt(&project.name),
+                    then: ConfirmThen::Unregister,
+                }));
+                Vec::new()
+            }
+            CommandId::Delete => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                let prompt = validators::delete_prompt(&project.name);
+                self.modals.push(Modal::TextPrompt(TextPrompt::new(
+                    prompt,
+                    TextThen::Delete {
+                        expect: project.name.clone(),
+                    },
+                )));
+                Vec::new()
+            }
+            CommandId::ShowMetadata | CommandId::ShowJournal => self.open_view(id),
             CommandId::NewProject => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Create))],
             CommandId::Register => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Register))],
             CommandId::Templates => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Templates))],
@@ -1030,6 +1404,109 @@ impl App {
             Some(project) => vec![Effect::Spawn(kind(Box::new(project.clone())))],
             None => Vec::new(),
         }
+    }
+
+    /// `A`: pick a tag the library already uses, or type a new one.
+    fn open_add_tag(&mut self) -> Vec<Effect> {
+        let Some(project) = self.library.selected().cloned() else {
+            return Vec::new();
+        };
+        let available: Vec<String> = self
+            .library
+            .known_tags
+            .iter()
+            .filter(|tag| !project.tags.contains(tag))
+            .cloned()
+            .collect();
+        if available.is_empty() {
+            self.modals.push(Modal::TextPrompt(TextPrompt::new(
+                validators::ADD_TAG_PROMPT,
+                TextThen::AddTag,
+            )));
+            return Vec::new();
+        }
+        let mut items: Vec<PickItem> = available
+            .into_iter()
+            .map(|tag| PickItem {
+                label: tag.clone(),
+                detail: String::new(),
+                value: tag,
+            })
+            .collect();
+        items.push(PickItem {
+            label: crate::tui::app::actions::NEW_TAG.to_string(),
+            detail: String::new(),
+            value: crate::tui::app::actions::NEW_TAG.to_string(),
+        });
+        self.modals.push(Modal::Pick(PickState::new(
+            "Tag to add",
+            items,
+            Then::AddTag,
+        )));
+        Vec::new()
+    }
+
+    /// `m`: pick the mounted base to move into, then move.
+    fn open_move_picker(&mut self) -> Vec<Effect> {
+        let targets = crate::tui::app::actions::move_targets(self);
+        if targets.is_empty() {
+            return Vec::new();
+        }
+        let items: Vec<PickItem> = targets
+            .into_iter()
+            .map(|path| PickItem {
+                label: crate::core::library::base_label(&path),
+                detail: String::new(),
+                value: path.display().to_string(),
+            })
+            .collect();
+        self.modals.push(Modal::Pick(PickState::new(
+            "Move to which base?",
+            items,
+            Then::MoveToBase,
+        )));
+        Vec::new()
+    }
+
+    /// A move as a one-item job, with the progress modal up while it runs.
+    fn run_move(&mut self, target: PathBuf) -> Vec<Effect> {
+        let Some(project) = self.library.selected().cloned() else {
+            return Vec::new();
+        };
+        self.move_progress = Some(Progress::new(&[]));
+        self.run_action(
+            "moving…",
+            Action::Move {
+                project: Box::new(project),
+                target,
+            },
+        )
+    }
+
+    /// `M`/`J`: read the full metadata or journal on a worker, then show it.
+    fn open_view(&mut self, id: CommandId) -> Vec<Effect> {
+        let Some(project) = self.library.selected() else {
+            return Vec::new();
+        };
+        let kind = if id == CommandId::ShowMetadata {
+            ViewKind::Metadata
+        } else {
+            ViewKind::Journal
+        };
+        let title = format!(
+            "{} · {}",
+            project.id,
+            if kind == ViewKind::Metadata {
+                "metadata"
+            } else {
+                "journal"
+            }
+        );
+        vec![Effect::LoadView {
+            title,
+            path: project.path.clone(),
+            kind,
+        }]
     }
 }
 

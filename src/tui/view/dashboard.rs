@@ -229,25 +229,54 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
+    use crate::tui::app::modal::Modal;
+
     let theme = &app.theme;
     let mut spans = vec![Span::raw(" ")];
-    let ctx = app.context();
-    let pairs = match ctx {
-        crate::tui::command::Context::SearchEdit => vec![
-            ("Enter".to_string(), "keep"),
-            ("Esc".to_string(), "clear / leave"),
-            ("↑↓".to_string(), "move"),
-        ],
-        crate::tui::command::Context::Palette => vec![
+    let pairs = match app.modals.top() {
+        Some(Modal::Palette(_)) => vec![
             ("↑↓".to_string(), "move"),
             ("Enter".to_string(), "run"),
             ("Esc".to_string(), "close"),
             ("#".to_string(), "projects only"),
         ],
-        crate::tui::command::Context::Modal => {
+        Some(Modal::Actions(_)) => vec![
+            ("↑↓".to_string(), "choose"),
+            ("Enter".to_string(), "run"),
+            ("Esc".to_string(), "close"),
+        ],
+        Some(Modal::TextPrompt(_)) => {
+            vec![
+                ("Enter".to_string(), "confirm"),
+                ("Esc".to_string(), "cancel"),
+            ]
+        }
+        Some(Modal::Confirm(_)) => vec![
+            ("y".to_string(), "yes"),
+            ("n".to_string(), "no"),
+            ("Esc".to_string(), "cancel"),
+        ],
+        Some(Modal::MultiPick(_)) => vec![
+            ("Space".to_string(), "toggle"),
+            ("Enter".to_string(), "confirm"),
+            ("Esc".to_string(), "cancel"),
+        ],
+        Some(Modal::Pick(_)) => vec![
+            ("↑↓".to_string(), "move"),
+            ("Enter".to_string(), "run"),
+            ("Esc".to_string(), "close"),
+        ],
+        Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => {
             vec![("Esc".to_string(), "close"), ("↑↓".to_string(), "scroll")]
         }
-        other => command::hints(other, app, area.width.saturating_sub(2) as usize),
+        None => match app.context() {
+            crate::tui::command::Context::SearchEdit => vec![
+                ("Enter".to_string(), "keep"),
+                ("Esc".to_string(), "clear / leave"),
+                ("↑↓".to_string(), "move"),
+            ],
+            other => command::hints(other, app, area.width.saturating_sub(2) as usize),
+        },
     };
     for (key, title) in pairs {
         spans.push(Span::styled(key, theme.key()));

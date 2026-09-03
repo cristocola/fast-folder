@@ -9,11 +9,12 @@ use std::collections::{HashMap, HashSet};
 use fastf::tui::command::{COMMANDS, Category, CommandId, Context, Key, find, help_sections};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-const CONTEXTS: [Context; 7] = [
+const CONTEXTS: [Context; 8] = [
     Context::Global,
     Context::Projects,
     Context::Detail,
     Context::Templates,
+    Context::Actions,
     Context::SearchEdit,
     Context::Palette,
     Context::Modal,

@@ -198,12 +198,21 @@ impl LibraryState {
         }
     }
 
-    /// Replace one row after a content mutation. `false` when the row is not
-    /// in the snapshot (it was removed meanwhile).
+    /// Replace one row after a content mutation, matched **by id** — a rename
+    /// or a move changes the path, but the id is the identity the frontmatter
+    /// carries, and it is what survives both. `false` when the row is not in
+    /// the snapshot (it was removed meanwhile).
     pub fn patch(&mut self, project: Project) -> bool {
-        let Some(index) = self.snapshot.iter().position(|p| p.path == project.path) else {
+        let Some(index) = self.snapshot.iter().position(|p| p.id == project.id) else {
             return false;
         };
+        if self.snapshot[index].path != project.path {
+            // The row moved or was renamed: the old path's bookkeeping is no
+            // longer this project's.
+            let old_path = self.snapshot[index].path.clone();
+            self.marks.remove(&old_path);
+            self.meta.remove(&old_path);
+        }
         self.snapshot[index] = project;
         self.rebuild_haystack(index);
         self.known_tags = known_tags(&self.snapshot);
@@ -211,24 +220,6 @@ impl LibraryState {
             self.dirty = true;
         }
         true
-    }
-
-    /// Replace a row whose path changed (a rename, a move): the old row goes,
-    /// the new one takes its place.
-    pub fn replace(&mut self, old_path: &Path, project: Project) {
-        if let Some(index) = self.snapshot.iter().position(|p| p.path == old_path) {
-            self.marks.remove(old_path);
-            self.meta.remove(old_path);
-            self.snapshot[index] = project;
-            self.rebuild_haystack(index);
-        } else {
-            self.snapshot.insert(0, project);
-            self.rebuild_haystacks();
-        }
-        self.known_tags = known_tags(&self.snapshot);
-        if self.inflight.is_some() {
-            self.dirty = true;
-        }
     }
 
     pub fn remove(&mut self, path: &Path) {

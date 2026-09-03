@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 use crate::core::library::Project;
-use crate::util::size_scan::SizeCell;
 
 /// Ties a worker's answer back to the request that started it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -30,6 +29,15 @@ pub enum Effect {
     Run(ActionId, Box<Action>),
     /// Start another program on the user's behalf; answered by `Msg::Spawned`.
     Spawn(SpawnKind),
+    /// Read one project's full metadata or journal for a read-only view;
+    /// answered by `Msg::ViewLoaded`.
+    LoadView {
+        title: String,
+        path: PathBuf,
+        kind: ViewKind,
+    },
+    /// Cancel the move job that is running.
+    CancelMove,
     /// Give the terminal back, run something that needs it, take it again.
     Suspend(Suspended),
     Quit(Exit),
@@ -39,6 +47,38 @@ pub enum Effect {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Reindex,
+    AddTag {
+        project: Box<Project>,
+        tag: String,
+    },
+    RemoveTags {
+        project: Box<Project>,
+        tags: Vec<String>,
+    },
+    ReautoTags(Box<Project>),
+    Rename {
+        project: Box<Project>,
+        name: String,
+    },
+    /// A single move, one item for the one-item job runner. The runtime owns
+    /// the progress and cancel handles.
+    Move {
+        project: Box<Project>,
+        target: PathBuf,
+    },
+    Unregister(Box<Project>),
+    Delete(Box<Project>),
+    AppendNote {
+        project: Box<Project>,
+        text: String,
+    },
+}
+
+/// Which read-only view `LoadView` is asking for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewKind {
+    Metadata,
+    Journal,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +95,9 @@ pub enum SpawnKind {
 #[derive(Debug, PartialEq)]
 pub enum Suspended {
     Legacy(LegacyFlow),
+    /// Open `$EDITOR` on a scratch file for the selected project's journal,
+    /// then come back with what was written.
+    Note(Box<Project>),
 }
 
 /// The dialoguer flows that are not native yet. Each phase of the rebuild
@@ -65,11 +108,6 @@ pub enum LegacyFlow {
     Register,
     Templates,
     Settings,
-    ActionMenu {
-        project: Box<Project>,
-        size: Option<SizeCell>,
-        known_tags: Vec<String>,
-    },
 }
 
 impl LegacyFlow {
@@ -79,7 +117,6 @@ impl LegacyFlow {
             LegacyFlow::Register => "register a folder",
             LegacyFlow::Templates => "templates",
             LegacyFlow::Settings => "settings",
-            LegacyFlow::ActionMenu { .. } => "project actions",
         }
     }
 

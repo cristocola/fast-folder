@@ -4,6 +4,7 @@
 //! pops one. What a picker's answer *means* is data (`Then`), not a closure,
 //! so `update` stays inspectable.
 
+use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, TextPrompt};
 use crate::tui::app::palette::PaletteState;
 use crate::tui::command::Context;
 use crate::tui::fuzzy::Fuzzy;
@@ -22,6 +23,10 @@ pub enum MessageLevel {
 pub enum Then {
     SortPick,
     TemplateFilter,
+    /// The picked value is a tag to add, or `NEW_TAG` to type one.
+    AddTag,
+    /// The picked value is a base path to move into.
+    MoveToBase,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +103,14 @@ pub enum Modal {
         scroll: usize,
     },
     Pick(PickState),
+    /// The selected project's action menu.
+    Actions(ActionsState),
+    /// A single-line prompt (rename, add a tag, a quick note, delete confirm).
+    TextPrompt(TextPrompt),
+    /// A yes/no question; a bare `y`/`n` answers.
+    Confirm(Confirm),
+    /// A list where Space toggles and Enter confirms the picked set.
+    MultiPick(MultiPick),
     Message {
         title: String,
         lines: Vec<String>,
@@ -120,6 +133,7 @@ impl Modal {
     pub fn context(&self) -> Context {
         match self {
             Modal::Palette(_) => Context::Palette,
+            Modal::Actions(_) => Context::Actions,
             _ => Context::Modal,
         }
     }

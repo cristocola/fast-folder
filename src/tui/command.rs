@@ -109,6 +109,8 @@ pub enum Context {
     Detail,
     /// The template strip has focus.
     Templates,
+    /// The selected project's action menu is open.
+    Actions,
     /// The search bar is being edited.
     SearchEdit,
     /// The command palette is open.
@@ -124,6 +126,7 @@ impl Context {
             Context::Projects => "project list",
             Context::Detail => "detail pane",
             Context::Templates => "template strip",
+            Context::Actions => "project actions",
             Context::SearchEdit => "search bar",
             Context::Palette => "command palette",
             Context::Modal => "dialogs",
@@ -209,6 +212,18 @@ pub enum CommandId {
     CopyPath,
     ShowPath,
     ToggleDetail,
+    // Single-project actions, native from Phase 1
+    AddTag,
+    RemoveTags,
+    ReautoTags,
+    AddNote,
+    NoteInline,
+    Rename,
+    Move,
+    Unregister,
+    Delete,
+    ShowMetadata,
+    ShowJournal,
     // Flows that open their own screen
     NewProject,
     Register,
@@ -219,7 +234,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 31] = [
+    pub const ALL: [CommandId; 42] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Help,
@@ -246,6 +261,17 @@ impl CommandId {
         CommandId::CopyPath,
         CommandId::ShowPath,
         CommandId::ToggleDetail,
+        CommandId::AddTag,
+        CommandId::RemoveTags,
+        CommandId::ReautoTags,
+        CommandId::AddNote,
+        CommandId::NoteInline,
+        CommandId::Rename,
+        CommandId::Move,
+        CommandId::Unregister,
+        CommandId::Delete,
+        CommandId::ShowMetadata,
+        CommandId::ShowJournal,
         CommandId::NewProject,
         CommandId::Register,
         CommandId::Templates,
@@ -328,9 +354,29 @@ fn has_strip_selection(app: &App) -> Availability {
     }
 }
 
+/// Move needs a mounted base to move to that is not the one the project is in.
+fn can_move(app: &App) -> Availability {
+    let Some(project) = app.library.selected() else {
+        return Availability::Hidden;
+    };
+    let Some(summary) = &app.summary else {
+        return Availability::Hidden;
+    };
+    if summary
+        .bases
+        .iter()
+        .any(|base| base.probe.usable() && base.path != project.base)
+    {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
+}
+
 const G: &[Context] = &[Context::Global];
 const LISTS: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
 const PD: &[Context] = &[Context::Projects, Context::Detail];
+const ACTIONS: &[Context] = &[Context::Projects, Context::Detail, Context::Actions];
 const T: &[Context] = &[Context::Templates];
 
 macro_rules! cmd {
@@ -580,7 +626,7 @@ pub static COMMANDS: &[Command] = &[
         "Project actions",
         "open the action menu for the selected project",
         PD,
-        [Key::plain(KeyCode::Enter)],
+        [Key::ch('a'), Key::plain(KeyCode::Enter)],
         Project,
         palette = true,
         hint = true,
@@ -590,7 +636,7 @@ pub static COMMANDS: &[Command] = &[
         OpenFolder,
         "Open project folder",
         "reveal it in the file manager",
-        PD,
+        ACTIONS,
         [Key::ch('o')],
         Project,
         palette = true,
@@ -601,7 +647,7 @@ pub static COMMANDS: &[Command] = &[
         OpenTerminal,
         "Open terminal here",
         "a new terminal window in the project folder",
-        PD,
+        ACTIONS,
         [Key::ch('t')],
         Project,
         palette = true,
@@ -612,7 +658,7 @@ pub static COMMANDS: &[Command] = &[
         CopyPath,
         "Copy path",
         "put the project's folder path on the clipboard",
-        PD,
+        ACTIONS,
         [Key::ch('y')],
         Project,
         palette = true,
@@ -623,7 +669,7 @@ pub static COMMANDS: &[Command] = &[
         ShowPath,
         "Show path",
         "print the full path in the status line",
-        PD,
+        ACTIONS,
         [Key::ch('p')],
         Project,
         palette = true,
@@ -640,6 +686,128 @@ pub static COMMANDS: &[Command] = &[
         palette = true,
         hint = false,
         always
+    ),
+    // --- single-project actions -------------------------------------------
+    cmd!(
+        AddTag,
+        "Add a tag",
+        "pick one the library already uses, or type a new one",
+        ACTIONS,
+        [Key::ch('A')],
+        Project,
+        palette = true,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        RemoveTags,
+        "Remove tags",
+        "tick the tags to take off this project",
+        ACTIONS,
+        [Key::ctrl('t')],
+        Project,
+        palette = true,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        ReautoTags,
+        "Re-derive tags",
+        "recompute the template's automatic tags from the variables",
+        ACTIONS,
+        [],
+        Project,
+        palette = true,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        AddNote,
+        "New note",
+        "write a journal note in your editor",
+        ACTIONS,
+        [Key::ch('N')],
+        Project,
+        palette = true,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        NoteInline,
+        "Quick note",
+        "type a one-line journal note",
+        ACTIONS,
+        [Key::ctrl('n')],
+        Project,
+        palette = true,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        Rename,
+        "Rename folder",
+        "change the folder's name on disk",
+        ACTIONS,
+        [Key::ch('r')],
+        Project,
+        palette = true,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        Move,
+        "Move to another base",
+        "move this project into a different mounted base",
+        ACTIONS,
+        [Key::ch('m')],
+        Project,
+        palette = true,
+        hint = false,
+        can_move
+    ),
+    cmd!(
+        Unregister,
+        "Unregister (keep files)",
+        "remove its PROJECT_INFO.md; the files stay on disk",
+        ACTIONS,
+        [Key::ch('u')],
+        Project,
+        palette = true,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        Delete,
+        "Delete folder permanently",
+        "delete the project and everything inside it",
+        ACTIONS,
+        [Key::ch('D')],
+        Project,
+        palette = true,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        ShowMetadata,
+        "Show metadata",
+        "the project's frontmatter and variables, read-only",
+        ACTIONS,
+        [Key::ch('M')],
+        Project,
+        palette = true,
+        hint = false,
+        needs_selection
+    ),
+    cmd!(
+        ShowJournal,
+        "Show journal",
+        "every note ever added to this project",
+        ACTIONS,
+        [Key::ch('J')],
+        Project,
+        palette = true,
+        hint = false,
+        needs_selection
     ),
     // --- flows ------------------------------------------------------------
     cmd!(

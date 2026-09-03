@@ -654,34 +654,57 @@ fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
 #[test]
 fn a_text_prompt_parks_a_visible_caret_after_the_text() {
     let sb = Sandbox::new();
-    plant_dated_project(&sb, "Mut", "ID0001", "2026-01-01T00:00:00Z", 64);
 
+    // `Templates` → create → edit a folder path from the review. That prompt is
+    // the one remaining dialoguer text prompt that opens pre-filled
+    // (`initial`), now that rename is a native modal.
     let script = pty::Script::new()
-        .pause(800)
-        .enter() // the selected project's action menu
+        .key(KEY_TEMPLATES)
         .pause(600)
-        // → Rename folder. One base is configured, so "Move to another base" is
-        // not in the list and Rename is the seventh row.
-        .down(6)
-        .enter()
+        .enter() // → Create new template
+        .line("Demo") // name
+        .line("demo") // slug (suggested)
+        .line("") // description
+        .line("{date}_{id}") // naming pattern
+        .line("D") // prefix
+        .line("4") // digits
+        .key("n") // no variables
+        .line("01_Assets") // one folder
+        .line("") // stop adding folders
+        .key("n") // no files
         .pause(700)
-        .esc() // leave the name alone → the action menu
+        .down(3) // review → Folder structure
+        .enter()
+        .pause(800)
+        .down(1) // → Edit a folder path
+        .enter()
+        .pause(800)
+        .enter() // "Which folder?" — the only one
+        .pause(800)
+        .esc() // leave the path alone → back to the review
         .pause(600)
-        .esc() // → the dashboard
-        .pause(600)
+        .down(6) // → Discard changes (nothing is saved)
+        .enter()
+        .pause(800)
+        .esc() // Templates → the dashboard
+        .pause(500)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
 
-    assert_eq!(code, 0, "the rename prompt should cancel cleanly:\n{out}");
+    assert_eq!(code, 0, "the folder prompt should cancel cleanly:\n{out:?}");
 
-    // `initial` puts the folder name on the line, and the caret goes after it.
-    let label = "New folder name: ";
-    let line = format!("{label}Mut\r\n");
+    // `initial` puts the folder path on the line, and the caret goes after it.
+    let label = "Folder path: ";
     let drawn = out
-        .find(&line)
-        .unwrap_or_else(|| panic!("the rename prompt never drew its line:\n{out:?}"));
-    let after = &out[drawn + line.len()..];
+        .find(label)
+        .unwrap_or_else(|| panic!("the edit prompt never drew its line:\n{out:?}"));
+    let after_label = &out[drawn + label.len()..];
+    let line_end = after_label
+        .find("\r\n")
+        .unwrap_or_else(|| panic!("the drawn line never ends:\n{out:?}"));
+    let text_len = line_end; // ASCII: the drawn text between the label and the newline
+    let after = &after_label[line_end + 2..];
 
     let up = after.strip_prefix("\x1b[1A").unwrap_or_else(|| {
         panic!("the caret must come back up onto the line it is editing, got:\n{after:?}")
@@ -692,7 +715,7 @@ fn a_text_prompt_parks_a_visible_caret_after_the_text() {
         .unwrap_or_else(|| panic!("the caret must be moved along the line, got:\n{up:?}"));
     assert_eq!(
         column.parse::<usize>().unwrap(),
-        label.chars().count() + "Mut".chars().count(),
+        label.chars().count() + text_len,
         "the caret belongs after the text, not at the start of the prompt"
     );
     assert!(

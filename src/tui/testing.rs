@@ -137,6 +137,15 @@ pub fn empty_fixture(width: u16, height: u16) -> App {
     App::new(Entry::Menu, Theme::mono(), (width, height))
 }
 
+/// `sample_summary` with the second base mounted, so `Move` is available: the
+/// `archive` base becomes a target the selected project can move into.
+pub fn sample_summary_moveable(projects: usize) -> Summary {
+    let mut summary = sample_summary(projects);
+    summary.bases[1].probe = Probe::Mounted;
+    summary.bases[1].indexed = Some(0);
+    summary
+}
+
 /// One frame, as the text a terminal would show.
 pub fn render_to_string(app: &App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);

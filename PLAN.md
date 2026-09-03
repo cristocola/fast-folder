@@ -1,6 +1,6 @@
 # PLAN.md — v3.0.0: the guided app on ratatui
 
-> **In progress. Phase 0 is done (PR #35); the next phase is Phase 1.** This
+> **In progress. Phase 1 is done (PR #36); the next phase is Phase 2.** This
 > file is worked one phase per session: read it, do phase N, run the gates,
 > tick only the boxes whose named verification actually ran, each phase in its
 > own PR into `main` with `ROADMAP.md` and the matching `docs/` page in the
@@ -149,14 +149,20 @@ snapshotted per tick); `$EDITOR` under `Suspend`; the sort picker; delete
 `src/tui/actions.rs` and the `ActionMenu` bridge; `validators.rs` for the
 prompt texts and messages, kept verbatim.
 
-- [ ] update tests: each verb → `Action`; `Patched` + `ForgetSizes(stale)`;
+- [x] update tests: each verb → `Action`; `Patched` + `ForgetSizes(stale)`;
   `Removed` clamps; typed-confirm mismatch → `name did not match — nothing
   deleted`; `y`/`n` answer a confirm without Enter
-- [ ] snapshots: `action_menu`, `delete_typed_confirm`, `metadata_view`,
+- [x] snapshots: `action_menu`, `delete_typed_confirm`, `metadata_view`,
   `journal_view`, `move_progress`
-- [ ] pty: the tag and delete tests native (`discover == 1`);
+- [x] pty: the tag and delete tests native (`discover == 1`);
   `a_note_added_in_the_editor_is_appended` with a recorder `EDITOR`
-- [ ] docs/cli.md keys table; ROADMAP
+- [x] docs/cli.md keys table; ROADMAP
+- [x] Gates: fmt, clippy ×3 (debug, release, windows-gnu), `cargo test
+  --all-targets`, `cargo test --release`, MSVC check, MSRV check, docs — all
+  run on 2026-09-03
+- [ ] Manual, needs the maintainer: a real move between two mounted bases with
+  the progress modal, and the `$EDITOR` note flow in a real terminal
+- Measured: see the Phase log.
 
 ## Phase 2 — marks and batch jobs
 
@@ -293,3 +299,43 @@ the `release` skill.
     3.87 MB (4 056 544 bytes; v2.2.1 shipped under 4 MB, so the README's
     claim still holds) and a cold `cargo build --release` — every
     dependency from scratch, LTO, one codegen unit — took 26 s.
+- **Phase 1 (2026-09-03).** Decisions taken while building, beyond the plan:
+  - **The caret test found a new home.** `prompt::text`'s only pre-filled
+    (`initial`) instance reachable from the app was the rename prompt, which
+    Phase 1 made native — so
+    `a_text_prompt_parks_a_visible_caret_after_the_text` now drives the
+    template builder's *Folder path* edit, the remaining dialoguer prompt that
+    opens with editable text. It stays put until Phase 6 rewrites it for
+    `Viewport::Inline` as planned.
+  - **`y`/`n` and the modal keys.** The confirm answers a bare `y` or `n`
+    without Enter, matching the old `confirm` prompt; Esc still cancels. The
+    action menu opens on `Enter` and `a`; the hint bar shows the key that
+    *starts* the gesture (`a actions`), not the older Enter.
+  - **A running move turns every quit gesture into a cancel.** Ctrl-C did, by
+    plan; it turned out `q` and Esc at the root would have quit under the
+    worker mid-write. They now cancel too (`run`, after Esc has closed
+    whatever dialog was open) — the move engine is crash-recoverable, but
+    abandoning a live job on purpose is worse than letting it finish or stop.
+  - **`patch` matches by id and `replace` is gone.** Phase 0 kept two row
+    updaters — `patch` (same path) and `replace` (path changed) — and a verb
+    that guessed wrong silently fell through to a rescan. Phase 1 unified them:
+    `patch` finds the row by the frontmatter `id`, which is the one identity a
+    rename or a move does not change, and clears the old path's bookkeeping
+    (marks, metadata, sizes) when the row moved. `tests/tui_update.rs` pins a
+    rename patching without a reload.
+  - **The action menu title is the project's id**, not its name: the row the
+    verbs act on is the folder *identity* the frontmatter carries, which a
+    rename changes. The screenshot tool showed the name and it read wrong.
+  - **The multi-pick's first row must be selectable.** `MultiPick::new`
+    started `selected` at 1 when items existed, which put the highlight past
+    the last row for a one-tag project and panicked the update test; the
+    initial index is 0 like every other picker.
+  - **The delete confirm keeps its text on a mismatch.** The typed name stays
+    in the prompt and the error line says `name did not match — nothing
+    deleted`, so one Backspace can fix a typo instead of retyping the whole
+    name.
+  - **A move's progress modal shows human bytes** (`1.1 MB of 3.3 MB`), not
+    raw counts — the raw snapshot read like a bug.
+  - Measured on the maintainer's machine, 2026-09-03: the pty tag/delete
+    tests still trace exactly one `discover`, and the editor test's recorder
+    `EDITOR` proves the scratch file is handed to the configured editor.

@@ -6,7 +6,6 @@
 //! inline prompts and the flows the app has not made native yet; each phase of
 //! the rebuild retires some of them.
 
-pub mod actions;
 pub mod app;
 pub mod command;
 pub mod effect;
@@ -24,6 +23,7 @@ pub mod runtime;
 pub mod template_builder;
 pub mod testing;
 pub mod theme;
+pub mod validators;
 pub mod vars;
 pub mod view;
 pub mod widgets;

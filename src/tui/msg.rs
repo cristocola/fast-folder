@@ -40,6 +40,13 @@ pub enum Msg {
     },
     /// Metadata read on demand, for a query that needs template variables.
     MetaLoaded(Vec<(PathBuf, Option<Metadata>)>),
+    /// A running move reported its progress, once per tick.
+    MoveProgress(crate::core::assets::Progress),
+    /// A read-only view's content landed.
+    ViewLoaded {
+        title: String,
+        lines: Vec<String>,
+    },
     ActionDone {
         id: ActionId,
         outcome: Result<Box<ActionOutcome>, String>,
@@ -62,4 +69,10 @@ pub enum Msg {
 pub enum Resumed {
     /// One of the dialoguer flows that is not native yet ran and returned.
     Legacy { change: ListChange, quit: bool },
+    /// The editor closed. `text` is `None` when nothing worth appending was
+    /// written (the editor was cancelled, or left the scratch empty).
+    Note {
+        project: Box<Project>,
+        text: Option<String>,
+    },
 }

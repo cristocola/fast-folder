@@ -8,9 +8,10 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::app::App;
+use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, TextPrompt};
 use crate::tui::app::modal::{MessageLevel, Modal, PickState};
 use crate::tui::app::palette::PaletteState;
-use crate::tui::command;
+use crate::tui::command::{self, Availability};
 use crate::tui::layout::{centered, centered_fixed};
 use crate::tui::view::{fit, highlighted, pad, split_line};
 
@@ -23,6 +24,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             None
         }
         Modal::Pick(pick) => Some(render_pick(app, pick, frame, area)),
+        Modal::Actions(actions) => render_actions(app, actions, frame, area),
+        Modal::TextPrompt(prompt) => Some(render_text_prompt(app, prompt, frame, area)),
+        Modal::Confirm(confirm) => render_confirm(app, confirm, frame, area),
+        Modal::MultiPick(pick) => render_multi_pick(app, pick, frame, area),
         Modal::Message {
             title,
             lines,
@@ -33,6 +38,53 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             None
         }
     }
+}
+
+/// The move job's progress, drawn over the dashboard while one runs. It is not
+/// a modal on the stack — it shares the lifetime of `App::busy` and disappears
+/// when the move answers.
+pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
+    let Some(progress) = &app.move_progress else {
+        return;
+    };
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let area = centered_fixed(area, 52, 9);
+    frame.render_widget(Clear, area);
+    let block = frame_block(app, " moving ".to_string(), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = vec![
+        Line::from(Span::styled(
+            format!(" {} ", progress.phase.as_str()),
+            theme.accent(),
+        )),
+        Line::from(vec![
+            Span::styled(
+                format!(" {} of {} files", progress.done_files, progress.total_files),
+                theme.text(),
+            ),
+            Span::styled(
+                format!(
+                    "   {} of {}",
+                    crate::util::human_bytes::human_bytes(progress.copied_bytes),
+                    crate::util::human_bytes::human_bytes(progress.total_bytes)
+                ),
+                theme.dim(),
+            ),
+        ]),
+        Line::from(Span::styled(
+            format!(
+                " {}",
+                fit(&progress.current_file, inner.width as usize, g.ellipsis)
+            ),
+            theme.dim(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(" Ctrl-C cancels", theme.dim())),
+    ];
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn frame_block<'a>(app: &App, title: String, focused: bool) -> Block<'a> {
@@ -158,6 +210,153 @@ fn render_pick(app: &App, pick: &PickState, frame: &mut Frame, area: Rect) -> Po
         .with_selected(pick.selected);
     frame.render_stateful_widget(list, list_area, &mut state);
     caret
+}
+
+fn render_actions(
+    app: &App,
+    actions: &ActionsState,
+    frame: &mut Frame,
+    area: Rect,
+) -> Option<Position> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let entries = crate::tui::app::actions::action_entries(app);
+    let height = (entries.len() as u16 + 4).clamp(8, 30);
+    let area = centered_fixed(area, 64, height);
+    frame.render_widget(Clear, area);
+    let project = app.library.selected();
+    let title = project
+        .map(|p| format!(" {} · actions ", p.id))
+        .unwrap_or_else(|| " actions ".to_string());
+    let block = frame_block(app, title, true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let width = inner.width as usize;
+
+    let items: Vec<ListItem> = entries
+        .iter()
+        .map(|(id, availability)| {
+            let command = command::find(*id);
+            let key = command.keys.first().map(|k| k.label()).unwrap_or_default();
+            let (title_style, detail) = match availability {
+                Availability::Enabled => (theme.text(), command.description),
+                Availability::Disabled(reason) => (theme.dim(), *reason),
+                Availability::Hidden => (theme.dim(), ""),
+            };
+            let mut left = vec![Span::raw(" ")];
+            left.push(Span::styled(pad(&key, 7), theme.key()));
+            left.push(Span::styled(pad(command.title, 24), title_style));
+            let room = width.saturating_sub(1 + 8 + 24 + 2);
+            left.push(Span::styled(fit(detail, room, g.ellipsis), theme.dim()));
+            ListItem::new(Line::from(left))
+        })
+        .collect();
+    let list = List::new(items).highlight_style(theme.selection);
+    let mut state = ListState::default()
+        .with_offset(actions.offset)
+        .with_selected(Some(actions.selected));
+    frame.render_stateful_widget(list, inner, &mut state);
+    None
+}
+
+fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: Rect) -> Position {
+    use crate::tui::app::actions::TextThen;
+
+    let theme = &app.theme;
+    let verb = match prompt.then {
+        TextThen::Rename => "rename",
+        TextThen::AddTag => "add a tag",
+        TextThen::Note => "note",
+        TextThen::Delete { .. } => "delete",
+    };
+    let area = centered_fixed(area, 62, 8);
+    frame.render_widget(Clear, area);
+    let block = frame_block(app, format!(" {} ", verb), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // The prompt itself, wrapped, above the input line.
+    let prompt_area = Rect::new(inner.x, inner.y, inner.width, 2);
+    frame.render_widget(
+        Paragraph::new(Span::styled(prompt.title.clone(), theme.dim())).wrap(Wrap { trim: false }),
+        prompt_area,
+    );
+
+    let input_area = Rect::new(inner.x, inner.y + 2, inner.width, 1);
+    let caret = prompt
+        .input
+        .render_line(input_area, frame.buffer_mut(), Span::raw(" "), theme.text())
+        .unwrap_or(Position::new(inner.x, inner.y + 2));
+    if let Some(error) = &prompt.error {
+        let error_area = Rect::new(inner.x, inner.y + 3, inner.width, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(format!(" {error}"), theme.warn())),
+            error_area,
+        );
+    }
+    caret
+}
+
+fn render_confirm(app: &App, confirm: &Confirm, frame: &mut Frame, area: Rect) -> Option<Position> {
+    let theme = &app.theme;
+    let area = centered_fixed(area, 64, 8);
+    frame.render_widget(Clear, area);
+    let block = frame_block(app, " confirm ".to_string(), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = vec![
+        Line::from(Span::styled(format!(" {}", confirm.prompt), theme.text())),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("y ", theme.key()),
+            Span::styled("yes   ", theme.dim()),
+            Span::styled("n ", theme.key()),
+            Span::styled("no   ", theme.dim()),
+            Span::styled("Esc ", theme.key()),
+            Span::styled("cancel", theme.dim()),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    None
+}
+
+fn render_multi_pick(
+    app: &App,
+    pick: &MultiPick,
+    frame: &mut Frame,
+    area: Rect,
+) -> Option<Position> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let height = (pick.items.len() as u16 + 4).clamp(5, 16);
+    let area = centered_fixed(area, 44, height);
+    frame.render_widget(Clear, area);
+    let block = frame_block(app, format!(" {} ", pick.title), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let items: Vec<ListItem> = pick
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let mark = if pick.picked[i] { g.mark } else { " " };
+            let style = if i == pick.selected {
+                theme.text()
+            } else {
+                theme.dim()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{mark} "), theme.accent()),
+                Span::styled(item.clone(), style),
+            ]))
+        })
+        .collect();
+    let list = List::new(items).highlight_style(theme.selection);
+    let mut state = ListState::default().with_selected(Some(pick.selected));
+    frame.render_stateful_widget(list, inner, &mut state);
+    None
 }
 
 fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Frame, area: Rect) {

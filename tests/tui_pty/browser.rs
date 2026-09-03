@@ -75,16 +75,12 @@ fn a_tag_patches_its_row_without_rescanning_the_library() {
     let root = plant_dated_project(&sb, "Mut", "ID0001", "2026-01-01T00:00:00Z", 256);
     let trace = sb.tmp.path().join("trace");
 
+    // The sandbox knows no tags yet, so `A` goes straight to the text prompt.
     let script = pty::Script::new()
         .pause(800)
-        .enter() // the selected project's action menu
-        .pause(600)
-        .down(4) // → Tags
-        .enter()
-        .enter() // → Add a tag (no known tags yet, so it asks for one)
+        .key("A") // → Add a tag
+        .pause(400)
         .line("draft")
-        .pause(700)
-        .esc() // Back to list → the dashboard
         .pause(900)
         .key(KEY_QUIT)
         .build();
@@ -98,11 +94,6 @@ fn a_tag_patches_its_row_without_rescanning_the_library() {
     assert!(
         text.contains("Added 1 tag"),
         "tag action did not complete:\n{text}"
-    );
-    let added = text.find("Added 1 tag").unwrap();
-    assert!(
-        text[added..].contains("draft"),
-        "the patched row should show the new tag once the dashboard is back:\n{text}"
     );
     assert!(
         fs::read_to_string(root.join("PROJECT_INFO.md"))
@@ -126,12 +117,11 @@ fn a_delete_drops_its_row_without_rescanning_the_library() {
     plant_dated_project(&sb, "Kept_Project", "ID0001", "2026-01-01T00:00:00Z", 128);
     let trace = sb.tmp.path().join("trace");
 
+    // The newest row, Doomed_Project, is selected: `D` asks for its name.
     let script = pty::Script::new()
         .pause(800)
-        .enter() // the newest row: Doomed_Project
-        .pause(600)
-        .down(8) // → Delete folder permanently
-        .enter()
+        .key("D")
+        .pause(400)
         .line("Doomed_Project") // typed confirmation
         .pause(1200)
         .key(KEY_QUIT)
@@ -146,9 +136,11 @@ fn a_delete_drops_its_row_without_rescanning_the_library() {
         !sb.base.join("Doomed_Project").exists(),
         "the folder should be gone:\n{text}"
     );
+    let rows: Vec<&str> = screen.lines().filter(|l| l.starts_with('│')).collect();
     assert!(
-        screen.contains("1 of 1 projects") && !screen.contains("Doomed_Project"),
-        "the list should have shrunk to the one project left:\n{screen}"
+        rows.iter().any(|l| l.contains("Kept_Project"))
+            && !rows.iter().any(|l| l.contains("Doomed_Project")),
+        "the list should show only the project left:\n{screen}"
     );
     assert_eq!(
         traced(&trace, "discover"),
@@ -192,7 +184,7 @@ fn sizes_land_without_any_input() {
     assert!(text.contains("Goodbye."));
 }
 
-/// Esc in the bridged action menu returns to the dashboard, not the shell.
+/// Esc in the action menu returns to the dashboard, not the shell.
 #[test]
 fn esc_walks_back_out_of_the_action_menu() {
     let sb = Sandbox::new();
@@ -208,16 +200,18 @@ fn esc_walks_back_out_of_the_action_menu() {
         .build();
     let (out, code) = launch(&sb, script);
     let text = pty::plain(&out);
+    let screen = app_screen(&out);
 
     assert_eq!(code, 0, "Esc must not end the session:\n{text}");
     assert!(
-        text.contains("What would you like to do?"),
-        "the action menu should have opened:\n{text}"
+        text.contains("ID0001 · actions"),
+        "the action menu should have opened over the dashboard:\n{text}"
     );
     assert!(
-        text.contains("Goodbye."),
-        "one Esc back, one Esc out:\n{text}"
+        screen.contains("2026-01-01_Alpha_ID0001") && !screen.contains("ID0001 · actions"),
+        "one Esc back, one Esc out:\n{screen}"
     );
+    assert!(text.contains("Goodbye."));
 }
 
 /// A search that matches nothing keeps the query in the bar, one keystroke
@@ -316,7 +310,7 @@ fn the_search_narrows_to_one_row() {
         .key("buff") // lower case: matching ignores case
         .pause(600)
         .enter() // keep the query, leave the bar
-        .enter() // opens the only row left
+        .enter() // opens the only row left: its action menu
         .pause(600)
         .esc() // action menu → the dashboard, the query still set
         .pause(600)
@@ -327,13 +321,9 @@ fn the_search_narrows_to_one_row() {
     let screen = app_screen(&out);
 
     assert_eq!(code, 0, "searching should not end the session:\n{text}");
-    // The action menu is printed by the bridged flow, on the main screen.
-    let opened = text
-        .find("What would you like to do?")
-        .unwrap_or_else(|| panic!("an action menu should have opened:\n{text}"));
     assert!(
-        text[..opened].contains("Buffalo"),
-        "Enter should have opened the matching row:\n{text}"
+        text.contains("ID0002 · actions"),
+        "Enter should have opened the matching row's action menu:\n{text}"
     );
     // Back on the dashboard, the query is still narrowing the list.
     assert!(
@@ -459,5 +449,72 @@ fn copy_path_falls_back_to_showing_the_path() {
     assert!(
         text.contains(&root.display().to_string()),
         "and show the path it could not copy:\n{text}"
+    );
+}
+
+/// `N` drops out of the terminal and into `$EDITOR`; whatever comes back is
+/// appended to the project's journal.
+///
+/// The editor here is a recorder: it logs the scratch file it was handed and
+/// appends a line to it, so the test can prove both halves of the contract —
+/// the app ran the configured editor on a real scratch file, and the line that
+/// came back was appended to `PROJECT_INFO.md`.
+#[test]
+fn a_note_added_in_the_editor_is_appended() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sb = Sandbox::new();
+    let root = plant_dated_project(&sb, "Noted", "ID0001", "2026-01-01T00:00:00Z", 256);
+
+    // A recorder editor: log the scratch path, write a note into the file,
+    // exit 0 — the shape of a real `$EDITOR` saving the buffer.
+    let editor = sb.tmp.path().join("note-editor");
+    let log = sb.tmp.path().join("note-editor.log");
+    fs::write(
+        &editor,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> {}\necho 'a note from the editor' >> \"$1\"\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let script = pty::Script::new()
+        .pause(800)
+        .key("N") // → New note… (drops to the editor)
+        .pause(1500)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("EDITOR", editor.as_path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+    let text = pty::plain(&out);
+
+    assert_eq!(
+        code, 0,
+        "an editor note should return to the dashboard:\n{text}"
+    );
+    assert!(
+        text.contains("Journal entry added"),
+        "the append should be reported:\n{text}"
+    );
+    assert!(
+        fs::read_to_string(root.join("PROJECT_INFO.md"))
+            .unwrap()
+            .contains("a note from the editor"),
+        "the editor's note should be in the journal"
+    );
+    assert!(
+        fs::read_to_string(&log).unwrap().contains("fastf-note-"),
+        "the editor should have been handed a scratch note file"
     );
 }

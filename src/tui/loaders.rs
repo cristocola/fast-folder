@@ -99,6 +99,92 @@ const JOURNAL_LIMIT: usize = 5;
 /// How many lines of the notes section the pane keeps.
 const NOTES_LIMIT: usize = 8;
 
+/// A read-only view's content, as lines for a scrollable dialog.
+pub fn view(path: &Path, kind: crate::tui::effect::ViewKind) -> Vec<String> {
+    match kind {
+        crate::tui::effect::ViewKind::Metadata => metadata_view(path),
+        crate::tui::effect::ViewKind::Journal => journal_view(path),
+    }
+}
+
+/// The full frontmatter, aligned `key  value` lines — the whole metadata, not
+/// the detail pane's truncated summary.
+fn metadata_view(path: &Path) -> Vec<String> {
+    let mut lines = Vec::new();
+    match project_info::read_metadata(path) {
+        Ok(Some(meta)) => {
+            let base = path
+                .parent()
+                .map(|b| b.display().to_string())
+                .unwrap_or_default();
+            let scalars: [(&str, &str); 7] = [
+                ("id", &meta.id),
+                ("template", &meta.template),
+                ("template_name", &meta.template_name),
+                ("created", &meta.created),
+                ("folder", &meta.folder),
+                ("base", &base),
+                ("path", &meta.path),
+            ];
+            let scalar_w = scalars
+                .iter()
+                .map(|(k, _)| k.len())
+                .chain(std::iter::once("variables".len()))
+                .chain(std::iter::once("tags".len()))
+                .max()
+                .unwrap_or(8);
+            for (key, value) in scalars {
+                lines.push(format!("{key:<scalar_w$}  {value}"));
+            }
+            if !meta.tags.is_empty() {
+                lines.push(String::new());
+                lines.push("tags:".to_string());
+                for tag in &meta.tags {
+                    lines.push(format!("  • {tag}"));
+                }
+            }
+            if !meta.variables.is_empty() {
+                lines.push(String::new());
+                lines.push("variables:".to_string());
+                let var_w = meta.variables.keys().map(|k| k.len()).max().unwrap_or(8);
+                for (key, value) in &meta.variables {
+                    let shown = if value.is_empty() {
+                        "(empty)"
+                    } else {
+                        value.as_str()
+                    };
+                    lines.push(format!("  {key:<var_w$}  {shown}"));
+                }
+            }
+        }
+        Ok(None) => match project_info::read(path) {
+            Ok(raw) => {
+                lines.push("(no YAML frontmatter — showing raw file contents)".to_string());
+                lines.push(String::new());
+                lines.extend(raw.lines().map(str::to_string));
+            }
+            Err(err) => lines.push(format!("{err:#}")),
+        },
+        Err(err) => lines.push(format!("{err:#}")),
+    }
+    lines
+}
+
+/// Every journal entry, oldest first, `date  message`.
+fn journal_view(path: &Path) -> Vec<String> {
+    match project_info::read_journal_entries(path) {
+        Ok(entries) if entries.is_empty() => vec!["(no journal entries yet)".to_string()],
+        Ok(entries) => entries
+            .into_iter()
+            .map(|entry| {
+                let date = entry.timestamp.get(..10).unwrap_or(&entry.timestamp);
+                format!("{date}  {}", entry.message)
+            })
+            .collect(),
+        Err(err) => vec![format!("{err:#}")],
+    }
+}
+
 /// The detail pane's reads for one project.
 pub fn detail(path: &Path) -> ProjectDetail {
     let mut detail = ProjectDetail::default();

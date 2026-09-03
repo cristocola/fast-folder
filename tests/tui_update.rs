@@ -4,15 +4,18 @@
 //! answers to an app built from fixtures and assert on what it asks the runtime
 //! to do. Nothing here touches a disk or a screen.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fastf::core::library::Project;
+use fastf::tui::app::modal::Modal;
 use fastf::tui::app::{App, Focus, update};
 use fastf::tui::command::Key;
-use fastf::tui::effect::{Action, Effect, Exit, LegacyFlow, ListChange, SpawnKind, Suspended};
+use fastf::tui::effect::{Action, Effect, Exit, ListChange, SpawnKind, Suspended};
 use fastf::tui::entry::{Entry, Preset};
 use fastf::tui::msg::{Msg, Resumed};
-use fastf::tui::testing::{empty_fixture, fixture, sample_projects, sample_summary};
+use fastf::tui::testing::{
+    empty_fixture, fixture, sample_projects, sample_summary, sample_summary_moveable,
+};
 use fastf::tui::theme::Theme;
 use ratatui::crossterm::event::KeyCode;
 
@@ -344,16 +347,15 @@ fn the_palette_jumps_to_a_project() {
 }
 
 #[test]
-fn enter_bridges_to_the_action_menu_for_the_selected_project() {
+fn enter_opens_the_native_action_menu() {
     let mut app = fixture(12, 80, 24);
-    let selected = app.library.selected().unwrap().clone();
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
-    match effects.as_slice() {
-        [Effect::Suspend(Suspended::Legacy(LegacyFlow::ActionMenu { project, .. }))] => {
-            assert_eq!(**project, selected);
-        }
-        other => panic!("expected the action menu bridge, got {other:?}"),
-    }
+    assert!(effects.is_empty());
+    assert!(matches!(app.modals.top(), Some(Modal::Actions(_))));
+    // Esc closes it back to the list.
+    let effects = press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(effects.is_empty());
+    assert!(app.modals.is_empty());
 }
 
 #[test]
@@ -627,4 +629,241 @@ fn a_summary_that_names_a_template_no_project_uses_still_gets_a_card() {
         .collect();
     assert!(slugs.contains(&"orphan"), "{slugs:?}");
     assert_eq!(app.templates.count("orphan"), 1);
+}
+
+// --- Phase 1: single-project actions -------------------------------------
+
+/// The single `Effect::Run` an action key produces.
+fn action_of(effects: &[Effect]) -> &Action {
+    match effects {
+        [Effect::Run(_, action)] => action,
+        other => panic!("expected one action, got {other:?}"),
+    }
+}
+
+#[test]
+fn rederive_rename_and_move_each_run_their_action() {
+    use fastf::tui::command::CommandId;
+
+    // Re-derive tags: no prompt, straight to the worker.
+    let mut app = fixture(12, 80, 24);
+    let selected = app.library.selected().unwrap().clone();
+    let effects = app.run(CommandId::ReautoTags);
+    assert!(matches!(
+        action_of(&effects),
+        Action::ReautoTags(p) if **p == selected
+    ));
+
+    // Rename: a text prompt pre-filled with the current name.
+    let mut app = fixture(12, 80, 24);
+    let selected = app.library.selected().unwrap().clone();
+    press(&mut app, Key::ch('r'));
+    assert!(matches!(app.modals.top(), Some(Modal::TextPrompt(_))));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "New_Name");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        action_of(&effects),
+        Action::Rename { project, name } if **project == selected && name == "New_Name"
+    ));
+}
+
+#[test]
+fn add_and_remove_tags_run_their_actions() {
+    // Add: the library already knows `client/Acme`, which the selected project
+    // lacks, so `A` offers it in a picker.
+    let mut app = fixture(12, 80, 24);
+    let selected = app.library.selected().unwrap().clone();
+    press(&mut app, Key::ch('A'));
+    assert!(matches!(app.modals.top(), Some(Modal::Pick(_))));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        action_of(&effects),
+        Action::AddTag { project, tag } if **project == selected && tag == "client/Acme"
+    ));
+
+    // Remove: a multi-pick of the project's own tags, Space toggles.
+    let mut app = fixture(12, 80, 24);
+    let selected = app.library.selected().unwrap().clone();
+    press(&mut app, Key::ctrl('t'));
+    assert!(matches!(app.modals.top(), Some(Modal::MultiPick(_))));
+    press(&mut app, Key::ch(' '));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        action_of(&effects),
+        Action::RemoveTags { project, tags } if **project == selected && tags == &vec!["draft".to_string()]
+    ));
+}
+
+#[test]
+fn move_picks_a_target_and_runs_a_move_action() {
+    let mut app = fixture(12, 80, 24);
+    app.summary = Some(sample_summary_moveable(12));
+    let selected = app.library.selected().unwrap().clone();
+    press(&mut app, Key::ch('m'));
+    assert!(matches!(app.modals.top(), Some(Modal::Pick(_))));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        action_of(&effects),
+        Action::Move { project, target } if **project == selected
+            && target == Path::new("/media/usb/archive")
+    ));
+    assert!(app.move_progress.is_some(), "the progress modal is up");
+}
+
+#[test]
+fn notes_run_their_actions_and_the_editor_suspends() {
+    // The quick note types inline and appends.
+    let mut app = fixture(12, 80, 24);
+    let selected = app.library.selected().unwrap().clone();
+    press(&mut app, Key::ctrl('n'));
+    assert!(matches!(app.modals.top(), Some(Modal::TextPrompt(_))));
+    type_text(&mut app, "mixing started");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        action_of(&effects),
+        Action::AppendNote { project, text } if **project == selected && text == "mixing started"
+    ));
+
+    // `N` opens $EDITOR, which runs while the screen is suspended.
+    let mut app = fixture(12, 80, 24);
+    let selected = app.library.selected().unwrap().clone();
+    let effects = press(&mut app, Key::ch('N'));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::Suspend(Suspended::Note(project))] if **project == selected
+    ));
+}
+
+#[test]
+fn an_action_done_patch_forgets_the_stale_sizes() {
+    use fastf::tui::effect::ActionOutcome;
+
+    let mut app = fixture(12, 80, 24);
+    let selected_path = app.library.selected().unwrap().path.clone();
+    app.library.sizes.insert(selected_path.clone(), Some(10));
+
+    // Start an add-tag action to get a busy id.
+    press(&mut app, Key::ch('A'));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    let id = match effects.as_slice() {
+        [Effect::Run(id, _)] => *id,
+        other => panic!("{other:?}"),
+    };
+    assert!(app.busy.is_some());
+
+    let mut patched = app.library.selected().unwrap().clone();
+    patched.tags.push("client/Acme".to_string());
+    let effects = update(
+        &mut app,
+        Msg::ActionDone {
+            id,
+            outcome: Ok(Box::new(ActionOutcome {
+                change: ListChange::Patched {
+                    project: Box::new(patched),
+                    stale: vec![selected_path.clone()],
+                },
+                message: "Added 1 tag".to_string(),
+                warning: None,
+                session: None,
+            })),
+        },
+    );
+    assert!(effects.contains(&Effect::ForgetSizes(vec![selected_path])));
+    assert!(app.busy.is_none());
+    assert!(app.move_progress.is_none());
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Discover { .. })),
+        "a tag patch must not rescan: {effects:?}"
+    );
+}
+
+#[test]
+fn an_action_done_removal_clamps_the_selection() {
+    use fastf::tui::effect::ActionOutcome;
+
+    let mut app = fixture(3, 80, 24);
+    press(&mut app, Key::ch('G'));
+    let doomed = app.library.selected().unwrap().path.clone();
+    let name = app.library.selected().unwrap().name.clone();
+
+    // Delete with the exact name to confirm.
+    press(&mut app, Key::ch('D'));
+    type_text(&mut app, &name);
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    let id = match effects.as_slice() {
+        [Effect::Run(id, _)] => *id,
+        other => panic!("{other:?}"),
+    };
+
+    let effects = update(
+        &mut app,
+        Msg::ActionDone {
+            id,
+            outcome: Ok(Box::new(ActionOutcome {
+                change: ListChange::Removed {
+                    path: doomed.clone(),
+                },
+                message: "Deleted".to_string(),
+                warning: None,
+                session: None,
+            })),
+        },
+    );
+    assert!(effects.contains(&Effect::ForgetSizes(vec![doomed])));
+    assert_eq!(app.library.len(), 2);
+    assert_eq!(app.library.selected, Some(1));
+}
+
+#[test]
+fn a_typed_confirm_mismatch_deletes_nothing() {
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch('D'));
+    type_text(&mut app, "not the name");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(effects.is_empty(), "nothing runs: {effects:?}");
+    assert!(app.modals.is_empty());
+    assert!(
+        app.status
+            .text
+            .contains("name did not match — nothing deleted"),
+        "{}",
+        app.status.text
+    );
+}
+
+#[test]
+fn y_and_n_answer_a_confirm_without_enter() {
+    let mut app = fixture(12, 80, 24);
+    let selected = app.library.selected().unwrap().clone();
+
+    press(&mut app, Key::ch('u'));
+    assert!(matches!(app.modals.top(), Some(Modal::Confirm(_))));
+    // `n` answers without Enter and runs nothing.
+    let effects = press(&mut app, Key::ch('n'));
+    assert!(effects.is_empty());
+    assert!(app.modals.is_empty());
+
+    // `y` runs the unregister action.
+    press(&mut app, Key::ch('u'));
+    let effects = press(&mut app, Key::ch('y'));
+    assert!(matches!(
+        action_of(&effects),
+        Action::Unregister(project) if **project == selected
+    ));
+}
+
+#[test]
+fn quit_keys_cancel_a_running_move() {
+    use fastf::core::assets::Progress;
+
+    let mut app = fixture(12, 80, 24);
+    app.move_progress = Some(Progress::new(&[]));
+    // Every quit gesture cancels the job instead of abandoning it mid-write.
+    assert_eq!(press(&mut app, Key::ctrl('c')), vec![Effect::CancelMove]);
+    assert_eq!(
+        press(&mut app, Key::plain(KeyCode::Esc)),
+        vec![Effect::CancelMove]
+    );
+    assert_eq!(press(&mut app, Key::ch('q')), vec![Effect::CancelMove]);
 }

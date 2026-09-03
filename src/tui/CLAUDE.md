@@ -143,7 +143,7 @@ worker; a pty test asserts opening the app over a fresh index performs one
 `discover` and zero `scan_base`.
 
 **A content mutation patches its row; only a structural change reloads.**
-`ListChange` (`effect.rs`) is `ActionLoop` under its new name: `Patched {
+`ListChange` (`effect.rs`) is how a finished action reaches the list: `Patched {
 project, stale }` replaces the row **by id** (a rename or a move changes the
 path), drops the size snapshots in `stale`, and lets `recompute` decide whether
 the row still satisfies the query; `Removed { path }` drops it; `Reload`
@@ -206,11 +206,35 @@ description hit — `open` is *Open project folder* before it is "open the
 action menu" — and Enter dispatches exactly the `CommandId` a key would.
 `#`/`@` restricts it to projects.
 
+## The single-project actions
+
+Since Phase 1 the verbs on a selected project are native modals, not bridges.
+`app/actions.rs` holds their states (`ActionsState`, `TextPrompt`, `Confirm`,
+`MultiPick`); `command.rs` binds `Enter` and `a` to the action menu, `A` /
+`Ctrl-T` to add / remove tags, `N` / `Ctrl-N` to the editor and inline notes,
+`r m u D` to rename / move / unregister / delete, and `M` / `J` to the
+read-only metadata and journal views. The action menu's rows come from the one
+registry, ordered by display (`action_entries`); an entry that cannot run right
+now is listed dimmed with the reason on the key, not hidden — pressing it says
+why. Prompt texts and validators live in `validators.rs`, byte-identical to
+the dialoguer flows they replaced.
+
+A finished verb patches its row by **id** (`ListChange::Patched`) because a
+rename or a move changed the path; the pty suite traces that the list is not
+rescanned. A typed confirmation that does not match keeps the text in the
+prompt and says `name did not match — nothing deleted`. A move is a one-item
+job on a worker (`spawn_worker`) with a `Progress` shared with the runtime and
+a cancel flag: Ctrl-C during a move cancels the job instead of quitting. The
+`$EDITOR` note flow suspends the screen (`Suspended::Note`) into the same
+scratch-file flow as the CLI (`cli::note::note_from_editor`, made public for
+it). Metadata and journal views load on a worker (`loaders.rs`) and render
+read-only, the journal in the order the file holds it.
+
 ## The bridged flows
 
-Create, register, templates, settings and the selected project's action menu
-are still the dialoguer flows in `menu.rs`, `actions.rs` and
-`template_builder.rs`, reached through `Effect::Suspend(Suspended::Legacy(..))`:
+Create, register, templates and settings are still the dialoguer flows in
+`menu.rs`, `template_builder.rs`, `pickers.rs` and `vars.rs`, reached through
+`Effect::Suspend(Suspended::Legacy(..))`:
 the input thread is parked (a `Condvar` handshake — two readers on one tty is
 how keys go missing), the screen is released, the flow runs on the main screen
 in cooked mode, a flow that prints a result waits for `press Enter to return to

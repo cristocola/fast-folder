@@ -38,6 +38,7 @@ pub fn view(app: &App, frame: &mut Frame) {
     dashboard::hints(app, frame, regions.hints);
 
     let modal_caret = modals::render(app, frame, area);
+    modals::render_move_progress(app, frame, area);
 
     if let Some(caret) = modal_caret {
         frame.set_cursor_position(caret);

@@ -76,6 +76,12 @@ responsibility of the filesystem and backups.
   open/terminal/copy/path actions, and the old dialoguer flows reachable
   through a suspend bridge until each is made native. The gates gained
   `tui_update`, `tui_commands`, `tui_snapshots` and a `vt100`-backed pty suite.
+  Phase 1 (single-project actions, metadata, journal) landed next: the action
+  menu and every verb are native modals over the dashboard — tags (`A` /
+  Ctrl-T), notes (`N` in `$EDITOR`, Ctrl-N inline), rename, move as a one-item
+  job with a progress modal and cancel, unregister, delete, and the read-only
+  `M`/`J` views — with the dialoguer action menu (`actions.rs`) deleted.
+  Create, register, templates and settings are the flows still bridged.
 - Released: **v2.2.1, published 2026-09-03** — the text prompts show where you
   are typing. `prompt::text` draws its line with `write_line`, which ends the
   block a row *below* the text, and it hid the caret for the repaint and never

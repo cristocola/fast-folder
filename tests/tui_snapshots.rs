@@ -98,3 +98,89 @@ fn narrow_keeps_the_folder_name() {
     assert!(!frame.contains("TAGS"), "tags are the first column to go");
     let _ = KeyCode::Null;
 }
+
+// --- Phase 1: single-project actions -------------------------------------
+
+#[test]
+fn action_menu_open() {
+    let mut app = fixture(12, 100, 30);
+    let _ = update(&mut app, Msg::Key(Key::ch('a')));
+    snap("action_menu", render_to_string(&app, 100, 30));
+}
+
+#[test]
+fn delete_typed_confirm() {
+    let mut app = fixture(12, 100, 30);
+    let _ = update(&mut app, Msg::Key(Key::ch('D')));
+    for c in "2026-08-28_Lullaby_Remix_ID0248".chars() {
+        let _ = update(&mut app, Msg::Key(Key::ch(c)));
+    }
+    snap("delete_typed_confirm", render_to_string(&app, 100, 30));
+}
+
+#[test]
+fn metadata_view_open() {
+    let mut app = fixture(12, 100, 30);
+    let _ = update(&mut app, Msg::Key(Key::ch('M')));
+    let lines = vec![
+        "id               ID0248".to_string(),
+        "template         music-video".to_string(),
+        "template_name    Music video".to_string(),
+        "created          2026-08-28T10:00:00Z".to_string(),
+        "folder           2026-08-28_Lullaby_Remix_ID0248".to_string(),
+        "base             /mnt/projects".to_string(),
+        "path             2026-08-28_Lullaby_Remix_ID0248".to_string(),
+        String::new(),
+        "tags:".to_string(),
+        "  • draft".to_string(),
+    ];
+    let _ = update(
+        &mut app,
+        Msg::ViewLoaded {
+            title: "ID0248 · metadata".to_string(),
+            lines,
+        },
+    );
+    snap("metadata_view", render_to_string(&app, 100, 30));
+}
+
+#[test]
+fn journal_view_open() {
+    let mut app = fixture(12, 100, 30);
+    let _ = update(&mut app, Msg::Key(Key::ch('J')));
+    let lines = vec![
+        "2026-08-28  first cut sent to the label".to_string(),
+        "2026-08-29  revision two uploaded".to_string(),
+        "2026-08-30  final mix approved".to_string(),
+    ];
+    let _ = update(
+        &mut app,
+        Msg::ViewLoaded {
+            title: "ID0248 · journal".to_string(),
+            lines,
+        },
+    );
+    snap("journal_view", render_to_string(&app, 100, 30));
+}
+
+#[test]
+fn move_progress_modal() {
+    use fastf::core::assets::{JobPhase, JobStatus, Progress};
+
+    let mut app = fixture(12, 100, 30);
+    app.move_progress = Some(Progress {
+        total_bytes: 3_500_000,
+        copied_bytes: 1_200_000,
+        total_files: 34,
+        done_files: 12,
+        current_file: "03_Assets/raw/footage_A001.mov".to_string(),
+        status: JobStatus::Running,
+        phase: JobPhase::Copying,
+        error: None,
+        cleanup_pending: false,
+        warning: None,
+        last_progress_at: 0,
+    });
+    app.busy = Some("moving…");
+    snap("move_progress", render_to_string(&app, 100, 30));
+}

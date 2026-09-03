@@ -29,7 +29,9 @@ const TAGS_MIN: usize = 12;
 /// **The folder name is never cut.** It is the one column that tells projects
 /// apart, and a row is eaten from the right — so the optional columns are added
 /// only while the widest name still fits whole, in the order a person misses
-/// them: the date, the size, the base, the template, the tags.
+/// them: the size, the date, the base, the template, the tags. The size comes
+/// first because it is the one thing the row knows that the name does not —
+/// every bundled naming pattern already carries the date.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Columns {
     pub created: bool,
@@ -51,8 +53,8 @@ pub fn choose_columns(room: usize, name_w: usize, base_w: usize, template_w: usi
             *flag = true;
         }
     };
-    take(DATE_CELL, &mut columns.created);
     take(SIZE_CELL, &mut columns.size);
+    take(DATE_CELL, &mut columns.created);
     take(base_w, &mut columns.base);
     take(template_w, &mut columns.template);
     take(TAGS_MIN, &mut columns.tags);
@@ -104,13 +106,13 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
         Constraint::Length(id_w as u16),
         Constraint::Fill(2),
     ];
-    if columns.created {
-        header.push(Cell::from("CREATED"));
-        constraints.push(Constraint::Length(DATE_CELL as u16));
-    }
     if columns.size {
         header.push(Cell::from("SIZE"));
         constraints.push(Constraint::Length(SIZE_CELL as u16));
+    }
+    if columns.created {
+        header.push(Cell::from("CREATED"));
+        constraints.push(Constraint::Length(DATE_CELL as u16));
     }
     if columns.base {
         header.push(Cell::from("BASE"));
@@ -158,12 +160,6 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
                     theme.hit(),
                 ))),
             ];
-            if columns.created {
-                cells.push(Cell::from(Span::styled(
-                    date_cell(&p.created).to_string(),
-                    theme.dim(),
-                )));
-            }
             if columns.size {
                 let (label, style) = match app.size_cell(&p.path) {
                     SizeCell::Pending => (g.pending.to_string(), theme.dim()),
@@ -173,6 +169,12 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
                     format!("{label:>width$}", width = SIZE_CELL),
                     style,
                 ))));
+            }
+            if columns.created {
+                cells.push(Cell::from(Span::styled(
+                    date_cell(&p.created).to_string(),
+                    theme.dim(),
+                )));
             }
             if columns.base {
                 cells.push(Cell::from(Span::styled(
@@ -418,7 +420,7 @@ mod tests {
     #[test]
     fn columns_are_added_only_while_the_name_still_fits() {
         // 80 columns: 78 inside the borders, minus the cursor cell, a six-char
-        // id and their spaces. A forty-char name keeps the date and the size.
+        // id and their spaces. A forty-char name keeps the size and the date.
         let columns = choose_columns(78 - 2 - 7, 40, 8, 11);
         assert_eq!(
             columns,
@@ -430,6 +432,10 @@ mod tests {
                 tags: false
             }
         );
+        // Beside the detail pane there is room for one more cell: the size,
+        // not the date — the name carries the date already.
+        let beside_pane = choose_columns(70 - 2 - 7, 40, 8, 11);
+        assert!(beside_pane.size && !beside_pane.created, "{beside_pane:?}");
         // No room for anything but the name.
         assert_eq!(choose_columns(20, 40, 8, 11), Columns::default());
         // Wide: everything.

@@ -138,10 +138,11 @@ What is on screen, top to bottom:
   the last few things this session did). The first frame's counts come from
   each base's index and are labelled `(from index)` until discovery answers.
 - **The search bar** — see below.
-- **The project table** — ID, folder name, then the date, the size, the base,
+- **The project table** — ID, folder name, then the size, the date, the base,
   the template and the tags, as many as fit. The folder name is never cut: a
   narrow window drops the other columns first, tags before the template, the
-  template before the base.
+  template before the base, the base before the date; the size goes last,
+  because it is the one thing the row knows that the name does not.
 - **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
   selected project's template, base and date, its size and journal count, its
   tags, its template variables, the top of its folder and the first lines of

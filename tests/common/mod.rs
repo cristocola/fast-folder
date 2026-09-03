@@ -461,6 +461,12 @@ pub mod pty {
         pub fn build(self) -> Vec<Keystroke> {
             self.steps
         }
+
+        /// When the next keystroke would be sent — the moment a screenshot of
+        /// "the state after everything so far" belongs to.
+        pub fn elapsed(&self) -> Duration {
+            Duration::from_millis(self.at_ms)
+        }
     }
 
     /// Run `program` with `args` and `env` overrides under a pty, feeding
@@ -473,7 +479,38 @@ pub mod pty {
         script: &[Keystroke],
         deadline: Duration,
     ) -> (String, i32) {
+        let (chunks, code) = run_with_stdout(program, args, env, script, deadline, None);
+        (join(&chunks), code)
+    }
+
+    /// `run`, keeping every read as its own chunk with the moment it arrived,
+    /// so a screen can be reconstructed as it was at any point of the script.
+    pub fn run_chunked(
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        deadline: Duration,
+    ) -> (Vec<(Duration, Vec<u8>)>, i32) {
         run_with_stdout(program, args, env, script, deadline, None)
+    }
+
+    /// The chunks that arrived before `until`, joined; what the screen was at
+    /// that moment once replayed.
+    pub fn until(chunks: &[(Duration, Vec<u8>)], until: Duration) -> Vec<u8> {
+        chunks
+            .iter()
+            .filter(|(at, _)| *at < until)
+            .flat_map(|(_, bytes)| bytes.iter().copied())
+            .collect()
+    }
+
+    fn join(chunks: &[(Duration, Vec<u8>)]) -> String {
+        let bytes: Vec<u8> = chunks
+            .iter()
+            .flat_map(|(_, bytes)| bytes.iter().copied())
+            .collect();
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     /// `run`, but with the child's **stdout** pointed at `stdout_file` while
@@ -492,7 +529,9 @@ pub mod pty {
         deadline: Duration,
         stdout_file: &std::path::Path,
     ) -> (String, i32) {
-        run_with_stdout(program, args, env, script, deadline, Some(stdout_file))
+        let (chunks, code) =
+            run_with_stdout(program, args, env, script, deadline, Some(stdout_file));
+        (join(&chunks), code)
     }
 
     fn run_with_stdout(
@@ -502,7 +541,7 @@ pub mod pty {
         script: &[Keystroke],
         deadline: Duration,
         stdout_file: Option<&std::path::Path>,
-    ) -> (String, i32) {
+    ) -> (Vec<(Duration, Vec<u8>)>, i32) {
         // Everything the child needs is built *before* the fork: after it, only
         // async-signal-safe calls are legal, and `execve` is one — `setenv` is not.
         let prog = CString::new(program).unwrap();
@@ -597,7 +636,7 @@ pub mod pty {
         }
 
         let start = Instant::now();
-        let mut out: Vec<u8> = Vec::new();
+        let mut out: Vec<(Duration, Vec<u8>)> = Vec::new();
         let mut sent = 0usize;
         let mut status: libc::c_int = 0;
         let code = loop {
@@ -611,7 +650,7 @@ pub mod pty {
             // SAFETY: reading into a buffer we own, from a descriptor we own.
             let n = unsafe { libc::read(master, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
             if n > 0 {
-                out.extend_from_slice(&buf[..n as usize]);
+                out.push((start.elapsed(), buf[..n as usize].to_vec()));
             }
             // SAFETY: reaping our own child, non-blocking.
             let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
@@ -635,7 +674,7 @@ pub mod pty {
                 libc::close(redirect);
             }
         };
-        (String::from_utf8_lossy(&out).into_owned(), code)
+        (out, code)
     }
 }
 

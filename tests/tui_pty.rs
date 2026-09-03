@@ -25,3 +25,5 @@ mod browser;
 mod flows;
 #[path = "tui_pty/menu.rs"]
 mod menu;
+#[path = "tui_pty/screenshot.rs"]
+mod screenshot;

@@ -24,7 +24,13 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
     } else {
         app.summary.as_ref().map(|s| s.projects).unwrap_or(0)
     };
-    let mut left = vec![Span::styled(" fastf", theme.accent()), Span::raw(gap)];
+    let mut left = vec![
+        Span::styled(
+            " fastf",
+            theme.accent().add_modifier(ratatui::style::Modifier::BOLD),
+        ),
+        Span::raw(gap),
+    ];
     left.push(Span::styled(format!("{projects} projects"), theme.text()));
     if !app.library.loaded {
         left.push(Span::styled(

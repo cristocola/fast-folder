@@ -6,7 +6,7 @@ expression: frame
 " probing bases…                                                                 "
 " ⌕ / to search                                                     0/0 · newest "
 "┌ projects ────────────────────────────────────────────────────────────────────┐"
-"│  ID   PROJECT                CREATED    SIZE        BASE TEMPLATE TAGS       │"
+"│  ID   PROJECT                SIZE        CREATED    BASE TEMPLATE TAGS       │"
 "│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"

@@ -10,6 +10,30 @@ The root `CLAUDE.md` has the layering rule and the module list; `src/core/CLAUDE
 has the engine underneath. `PLAN.md` is the phase-by-phase record of the
 ratatui rebuild; what follows is the design as it stands.
 
+# The look
+
+A command centre, not a demo. **Muted and cool, minimal and sophisticated,
+robust as a rock.** The rules, in the order they matter:
+
+- The terminal's own text colour carries the content. Slate grey recedes. One
+  steel-blue accent says what has focus. Green, amber and red appear only where
+  they *mean* success, a warning, a failure — never as decoration. In truecolor
+  (`Theme::rich`) every colour is desaturated; in ANSI the same roles map to
+  the plain sixteen, used sparingly. No magenta, no rainbow tags.
+- Bold is rare — the app's name, the selected row — so it keeps its weight.
+- Glyphs are few and each has one job (`▸` the cursor, `✓` a mark, `●` a tag,
+  `⚠` a warning, `⌕` search). No decorative symbols in titles or counters.
+- Whitespace and alignment do the structuring: three spaces between facts on
+  a line, right-aligned figures, plain-word panel titles.
+- Every state is visible and quiet: loading (`(from index)` and a spinner),
+  empty (one sentence saying what to do), an error (one line, or a dialog when
+  it has more to say), disabled (dimmed, with the reason on the key).
+- Depth is in what it can do, not in what it shows at once. A screen shows what
+  is needed to act; the palette and help hold the rest.
+
+Look at every screen you build with the screenshot tool
+(`tests/tui_pty/screenshot.rs`) before you write its snapshot.
+
 # The guided app
 
 `tui::run(Entry)` is the door: `fastf` (`Entry::Menu`), `fastf recent`
@@ -137,10 +161,10 @@ re-filter, a re-sort and a reload by **path**; snapshot indices do not.
 **The folder name is never cut.** It is the one column that tells projects
 apart, and a row is eaten from the right. `view::projects::choose_columns`
 measures the widest name and adds the optional columns only while it still fits
-whole, in the order a person misses them: the date, the size, the base, the
+whole, in the order a person misses them: the size, the date, the base, the
 template, the tags. (The old row put base and template before the date; in a
-table with a detail pane beside it the size and the date are what the row is
-for, and the pane shows the rest.) Widths are measured from the rows, never
+table with a detail pane beside it the size is what the row is for — the name
+carries the date already — and the pane shows the rest.) Widths are measured from the rows, never
 from the sizes, so a landing snapshot cannot reflow the table; the size cell is
 `rows::SIZE_CELL` wide and right-aligned.
 

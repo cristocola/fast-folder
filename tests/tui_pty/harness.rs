@@ -140,6 +140,15 @@ pub(crate) fn app_screen(transcript: &str) -> String {
     parser.screen().contents()
 }
 
+/// The frame the app showed at `until` into a chunked run: the transcript up
+/// to that moment, replayed. For a screenshot of a state the script then
+/// leaves — a dialog it closes on the way out.
+pub(crate) fn screen_at(chunks: &[(Duration, Vec<u8>)], until: Duration) -> String {
+    let mut parser = vt100::Parser::new(pty::PTY_ROWS, pty::PTY_COLS, 0);
+    parser.process(&pty::until(chunks, until));
+    parser.screen().contents()
+}
+
 /// How many times `name` was traced.
 #[cfg(debug_assertions)]
 #[allow(dead_code)]

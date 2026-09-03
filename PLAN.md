@@ -1,11 +1,46 @@
 # PLAN.md — v3.0.0: the guided app on ratatui
 
-> **In progress.** Phase 0 landed on `ratatui/phase-0-foundation`. This file
-> is worked one phase per session: read it, do phase N, run the gates, tick
-> only the boxes whose named verification actually ran, each phase in its own
-> PR into `main` with `ROADMAP.md` and the matching `docs/` page in the same
-> commit, and findings outside the phase sent to the Parking lot rather than
-> fixed in passing. The **Phase log** at the bottom says what differed and why.
+> **In progress. Phase 0 is done (PR #35); the next phase is Phase 1.** This
+> file is worked one phase per session: read it, do phase N, run the gates,
+> tick only the boxes whose named verification actually ran, each phase in its
+> own PR into `main` with `ROADMAP.md` and the matching `docs/` page in the
+> same commit, and findings outside the phase sent to the Parking lot rather
+> than fixed in passing. The **Phase log** at the bottom says what differed and
+> why.
+
+## How to work a phase — read this first
+
+1. `git checkout main && git pull`, then a branch `ratatui/phase-N-<slug>`.
+   The phase's section below is the scope; its checkboxes are the exit
+   criteria. Do not widen it — a finding outside it goes to the Parking lot.
+2. Read `src/tui/CLAUDE.md`: the architecture (`App` + `Msg` + `update` with
+   no I/O; `view(&App)`; one command registry; the runtime owns the screen)
+   and **the look** (muted, minimal, robust). `tests/CLAUDE.md` has the
+   harness rules.
+3. Build the screen, then **look at it yourself** the way a person will:
+   `FASTF_SHOT_KEYS="down enter" cargo test --test tui_pty screenshot --
+   --ignored --nocapture` drives the real binary with those keys in a planted
+   sandbox and prints the frame (`FASTF_SHOT_PROJECTS=n` for more rows,
+   `FASTF_SHOT_REAL=1` for the maintainer's own library, read-only keys only).
+   Do it for every new screen and every state of it — empty, loading, error,
+   too small — and read what it shows. Only then write its snapshot.
+4. Tests in all three layers for what the phase adds: `tests/tui_update.rs`
+   (the state machine, no terminal), `tests/tui_snapshots.rs` (the frames,
+   reviewed by eye, `INSTA_UPDATE=always` then commit), `tests/tui_pty/`
+   (the runtime; assert on `app_screen`, never the raw transcript). Keep the
+   traced guarantees: a mutation patches its row, opening does not rescan.
+5. The gates below, `docs/cli.md` for anything a user sees, `ROADMAP.md`'s
+   current-phase bullet, the checkboxes, a Phase-log entry for what differed,
+   then the PR into `main`.
+
+**Dependencies.** Widget crates are welcome when they earn their place — a
+multi-line editor (`tui-textarea`) for notes and template files, a tree
+(`tui-tree-widget`) for template structure — with two conditions: the crate
+must build against the `ratatui` version in `Cargo.toml` (a widget from a
+different ratatui does not implement our `Widget` trait at all; if it lags,
+write the piece ourselves), and the version is pinned and named in the Phase
+log. Do not add a crate for what is a few lines on top of ratatui: spinners,
+popups, a line editor (`widgets::input::LineEdit` exists and is tested).
 
 ## Why this plan exists
 
@@ -50,8 +85,10 @@ rest of the repo.
 7. **The screen is stderr**; unix builds enable crossterm's `use-dev-tty`.
    `require_tty` runs before the screen is taken; `Runtime::init` is the
    `mark_interactive_surface` choke point that replaced `live_select`'s.
-8. **Theme** from the environment: `NO_COLOR`/dumb → mono, truecolor →
-   rich, else ANSI-16; ASCII glyphs on conhost or `FASTF_ASCII=1`.
+8. **The look:** a command centre — muted and cool, minimal and sophisticated
+   (`src/tui/CLAUDE.md`, "The look"). The theme comes from the environment:
+   `NO_COLOR`/dumb → mono, truecolor → the muted RGB palette, else ANSI-16
+   used sparingly; ASCII glyphs on conhost or `FASTF_ASCII=1`.
 9. **Tests:** pure `update` tests, `TestBackend`+`insta` snapshots, registry
    invariants, layering additions, the pty suite on a `vt100` replay.
 10. **Delivery:** eight phases, one per session, each its own PR into `main`.
@@ -216,7 +253,7 @@ the `release` skill.
     terminal. `pty::run` now gives the child a real window size — a sizeless
     pty reports 0×0 and ratatui draws nothing.
   - **Column priority changed.** The old row put base and template before the
-    date; the table adds date, size, base, template, tags in that order and
+    date; the table adds size, date, base, template, tags in that order and
     never cuts the folder name (`view::projects::choose_columns`). With a
     detail pane beside the list, size and date are what the row is for.
   - **Names that trip `only_tui_prompt_prompts`.** `Sort::` and `LineInput::`
@@ -244,6 +281,14 @@ the `release` skill.
     went. Two lines now — name and counts with the highest id on the right;
     the bases with `⚠ n needs attention` or the session ring on the right —
     and the table, strip and detail titles are plain words.
+  - **The palette went muted** (review feedback: "a robust command center,
+    not fancy tech colors"): steel blue for focus, slate grey for what
+    recedes, amber/green/red only where they mean something, desaturated
+    tag colours, bold kept for the name and the selected row. Recorded as
+    "The look" in `src/tui/CLAUDE.md`.
+  - **A screenshot tool** for the next phases: `tests/tui_pty/screenshot.rs`
+    drives the real binary with `FASTF_SHOT_KEYS` and prints the frame, via
+    a timestamped pty transcript (`pty::run_chunked`, `harness::screen_at`).
   - Measured on the maintainer's machine, 2026-09-03: the release binary is
     3.87 MB (4 056 544 bytes; v2.2.1 shipped under 4 MB, so the README's
     claim still holds) and a cold `cargo build --release` — every

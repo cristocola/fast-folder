@@ -40,6 +40,12 @@ The suites, and what each guards — the intent, not the case list:
   rules that keep these from being flaky — above all that ratatui redraws only
   the cells that changed, so a frame is read back through `app_screen` (a
   `vt100` replay of the transcript), never matched in the raw stream.
+  `tests/tui_pty/screenshot.rs` is the suite's one tool rather than test:
+  `FASTF_SHOT_KEYS="down enter" cargo test --test tui_pty screenshot --
+  --ignored --nocapture` drives the real binary with those keys in a planted
+  sandbox (or your own library with `FASTF_SHOT_REAL=1`) and prints the frame
+  it left on screen. **Look at every screen you build this way** before
+  writing its snapshot — it is what a person will see.
 - `relaunch.rs` (unix) — when fastf opens a terminal for itself and, mostly, when
   it must not: a pipe, a redirect, an ssh session, a missing display, either off
   switch, and the loop guard all keep today's behaviour exactly.

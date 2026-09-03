@@ -1,13 +1,18 @@
 //! Colours and glyphs, chosen once from the environment.
 //!
-//! The prototype hard-coded one truecolor selection blue and a handful of
-//! Unicode glyphs; on a 16-colour terminal the blue rendered as nothing and on
-//! a legacy Windows console the glyphs rendered as boxes. Here the palette is
-//! semantic — *accent*, *dim*, *good*, *bad* — and the environment decides what
-//! each one is: `NO_COLOR` or a dumb terminal gets none, a terminal that
-//! announces truecolor gets the rich version, everything else gets the sixteen
-//! ANSI colours. Snapshot tests use `Theme::mono` so their frames never depend
-//! on the machine that rendered them.
+//! The look is a command centre, not a demo: muted and cool, minimal and
+//! sophisticated. The terminal's own text colour carries the content, slate
+//! grey recedes, one steel-blue accent says what has focus, and the three
+//! meaning colours — good, warning, bad — appear only where they mean
+//! something. Bold is rare (the app's name, the selected row) so it keeps its
+//! weight; glyphs are few and each has one job.
+//!
+//! The palette is semantic — *accent*, *dim*, *good*, *bad* — and the
+//! environment decides what each one is: `NO_COLOR` or a dumb terminal gets
+//! none, a terminal that announces truecolor gets the muted RGB version,
+//! everything else gets the sixteen ANSI colours used sparingly. Snapshot
+//! tests use `Theme::mono` so their frames never depend on the machine that
+//! rendered them.
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -143,43 +148,61 @@ impl Theme {
         }
     }
 
-    /// The sixteen ANSI colours.
+    /// The sixteen ANSI colours, used sparingly: the terminal's own text
+    /// colour for text, dark grey for what recedes, one accent for what has
+    /// focus, and the three meaning colours only where they mean something.
     pub fn ansi() -> Self {
         Self {
             kind: ThemeKind::Ansi,
             glyphs: Glyphs::unicode(),
-            accent: Color::Cyan,
-            accent_alt: Color::Magenta,
+            accent: Color::Blue,
+            accent_alt: Color::Cyan,
             text: Color::Reset,
             dim: Color::DarkGray,
             good: Color::Green,
             bad: Color::Red,
             warn: Color::Yellow,
             border: Color::DarkGray,
-            border_focus: Color::Cyan,
+            border_focus: Color::Blue,
             mark: Color::Yellow,
-            selection: Style::default()
-                .add_modifier(Modifier::REVERSED)
-                .add_modifier(Modifier::BOLD),
+            selection: Style::default().add_modifier(Modifier::REVERSED),
             tags: [
-                Color::Green,
-                Color::Yellow,
-                Color::Magenta,
-                Color::Cyan,
                 Color::Blue,
-                Color::LightRed,
+                Color::Cyan,
+                Color::Green,
+                Color::Magenta,
+                Color::Yellow,
+                Color::White,
             ],
         }
     }
 
-    /// Truecolor accents on top of the ANSI palette — the prototype's look.
+    /// Truecolor: the same restraint with a muted, cool palette. Slate greys
+    /// for what recedes, steel blue for focus, amber for a warning, and a set
+    /// of desaturated tag colours that sit beside each other without shouting.
     pub fn rich() -> Self {
         Self {
             kind: ThemeKind::Rich,
+            accent: Color::Rgb(122, 162, 196),
+            accent_alt: Color::Rgb(150, 172, 192),
+            dim: Color::Rgb(118, 126, 136),
+            good: Color::Rgb(128, 168, 140),
+            bad: Color::Rgb(196, 118, 110),
+            warn: Color::Rgb(204, 168, 108),
+            border: Color::Rgb(70, 76, 84),
+            border_focus: Color::Rgb(122, 162, 196),
+            mark: Color::Rgb(204, 168, 108),
             selection: Style::default()
-                .bg(Color::Rgb(24, 52, 88))
-                .fg(Color::White)
+                .bg(Color::Rgb(44, 52, 62))
                 .add_modifier(Modifier::BOLD),
+            tags: [
+                Color::Rgb(122, 162, 196),
+                Color::Rgb(120, 162, 152),
+                Color::Rgb(160, 160, 122),
+                Color::Rgb(160, 140, 162),
+                Color::Rgb(182, 160, 130),
+                Color::Rgb(140, 150, 170),
+            ],
             ..Self::ansi()
         }
     }
@@ -234,11 +257,12 @@ impl Theme {
         })
     }
 
-    /// The fuzzy-match highlight inside a row.
+    /// The characters a search word hit, inside a row: underlined, in the
+    /// secondary accent — visible, not loud.
     pub fn hit(&self) -> Style {
         Style::default()
             .fg(self.accent_alt)
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            .add_modifier(Modifier::UNDERLINED)
     }
 
     /// A stable colour for a tag, so `draft` is the same colour on every row.

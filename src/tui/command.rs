@@ -224,6 +224,10 @@ pub enum CommandId {
     Delete,
     ShowMetadata,
     ShowJournal,
+    // Marks, batch targets from Phase 2
+    MarkToggle,
+    MarkAll,
+    MarkNone,
     // Flows that open their own screen
     NewProject,
     Register,
@@ -234,7 +238,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 42] = [
+    pub const ALL: [CommandId; 45] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Help,
@@ -272,6 +276,9 @@ impl CommandId {
         CommandId::Delete,
         CommandId::ShowMetadata,
         CommandId::ShowJournal,
+        CommandId::MarkToggle,
+        CommandId::MarkAll,
+        CommandId::MarkNone,
         CommandId::NewProject,
         CommandId::Register,
         CommandId::Templates,
@@ -354,6 +361,22 @@ fn has_strip_selection(app: &App) -> Availability {
     }
 }
 
+fn has_any_rows(app: &App) -> Availability {
+    if app.library.is_empty() {
+        Availability::Disabled("no projects")
+    } else {
+        Availability::Enabled
+    }
+}
+
+fn has_marks(app: &App) -> Availability {
+    if app.library.marks.is_empty() {
+        Availability::Hidden
+    } else {
+        Availability::Enabled
+    }
+}
+
 /// Move needs a mounted base to move to that is not the one the project is in.
 fn can_move(app: &App) -> Availability {
     let Some(project) = app.library.selected() else {
@@ -423,7 +446,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Back,
         "Back",
-        "close the dialog, leave the search, clear the filter — then quit",
+        "close the dialog, leave the search, clear the filter and the marks — then quit",
         G,
         [Key::plain(KeyCode::Esc)],
         Navigate,
@@ -808,6 +831,40 @@ pub static COMMANDS: &[Command] = &[
         palette = true,
         hint = false,
         needs_selection
+    ),
+    // --- marks (what a batch verb will act on) ----------------------------
+    cmd!(
+        MarkToggle,
+        "Mark / unmark",
+        "mark the selected project as a batch target; Space moves to the next row",
+        PD,
+        [Key::ch(' ')],
+        Project,
+        palette = false,
+        hint = false,
+        needs_selection
+    ),
+    cmd!(
+        MarkAll,
+        "Mark all",
+        "mark every project the current view shows",
+        PD,
+        [Key::ch('*')],
+        Project,
+        palette = false,
+        hint = false,
+        has_any_rows
+    ),
+    cmd!(
+        MarkNone,
+        "Clear marks",
+        "unmark every project",
+        PD,
+        [Key::ch('-')],
+        Project,
+        palette = false,
+        hint = false,
+        has_marks
     ),
     // --- flows ------------------------------------------------------------
     cmd!(

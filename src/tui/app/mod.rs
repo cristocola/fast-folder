@@ -1157,6 +1157,13 @@ impl App {
                 if self.library.template_filter.is_some() {
                     return self.set_template_filter(None);
                 }
+                if !self.library.marks.is_empty() {
+                    // Marks can hide nothing, but clearing them first matches
+                    // the Esc ladder: one keystroke at a time, nothing lost.
+                    self.library.marks.clear();
+                    self.info("marks cleared");
+                    return Vec::new();
+                }
                 if self.move_progress.is_some() {
                     return vec![Effect::CancelMove];
                 }
@@ -1286,6 +1293,39 @@ impl App {
                     self.focus = Focus::Projects;
                 }
                 self.after_selection_change()
+            }
+            CommandId::MarkToggle => {
+                // Toggle the selected row and move on: marking a run is one
+                // keystroke per row, the same shape every mark-and-act list has.
+                let Some(path) = self.library.selected().map(|p| p.path.clone()) else {
+                    return Vec::new();
+                };
+                if !self.library.marks.remove(&path) {
+                    self.library.marks.insert(path);
+                }
+                self.library.step(1);
+                Vec::new()
+            }
+            CommandId::MarkAll => {
+                let before = self.library.marks.len();
+                for row in 0..self.library.len() {
+                    if let Some(project) = self.library.row(row) {
+                        self.library.marks.insert(project.path.clone());
+                    }
+                }
+                let now = self.library.marks.len();
+                if now == before && before > 0 {
+                    self.info(format!("{before} already marked"));
+                } else {
+                    self.info(format!("{now} marked"));
+                }
+                Vec::new()
+            }
+            CommandId::MarkNone => {
+                let cleared = self.library.marks.len();
+                self.library.marks.clear();
+                self.info(format!("{cleared} marks cleared"));
+                Vec::new()
             }
             CommandId::AddTag => self.open_add_tag(),
             CommandId::RemoveTags => {

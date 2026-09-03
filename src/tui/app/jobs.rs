@@ -58,9 +58,10 @@ impl JobKind {
 
 /// A running batch.
 ///
-/// `pending` shrinks as items are sent; `done` and `failed` record what came
-/// back. The items run in the order `targets()` handed them over — display
-/// order, which is the order the user read them in.
+/// `pending` shrinks as items begin; `inflight` is the one running now (so a
+/// failure can name it and the progress modal can show it); `done` and
+/// `failed` record what came back. The items run in the order `targets()`
+/// handed them over — display order, which is the order the user read them in.
 #[derive(Debug)]
 pub struct Job {
     pub kind: JobKind,
@@ -68,10 +69,15 @@ pub struct Job {
     pub target: Option<PathBuf>,
     /// Items that have not run yet.
     pub pending: Vec<Project>,
+    /// The item a worker is running right now.
+    pub inflight: Option<Project>,
     /// How many items finished cleanly.
     pub done: usize,
     /// Items that failed, in order: id, error.
     pub failed: Vec<(String, String)>,
+    /// Clean items that came back with a warning (e.g. a move whose source
+    /// cleanup is pending).
+    pub warnings: Vec<String>,
     /// The user asked to stop: the current item finishes, the rest stay marked.
     pub cancelled: bool,
 }
@@ -82,14 +88,16 @@ impl Job {
             kind,
             target,
             pending: targets,
+            inflight: None,
             done: 0,
             failed: Vec::new(),
+            warnings: Vec::new(),
             cancelled: false,
         }
     }
 
     pub fn total(&self) -> usize {
-        self.pending.len() + self.done + self.failed.len()
+        self.pending.len() + usize::from(self.inflight.is_some()) + self.done + self.failed.len()
     }
 
     /// How many items have run to an outcome.
@@ -97,22 +105,30 @@ impl Job {
         self.done + self.failed.len()
     }
 
-    /// The next item to run, taken from the front. `None` when the job was
-    /// cancelled or ran out.
-    pub fn take_next(&mut self) -> Option<Project> {
+    /// Begin the next item, moving it from `pending` to `inflight`. `None`
+    /// when the job was cancelled or ran out.
+    pub fn begin_next(&mut self) -> Option<&Project> {
         if self.cancelled || self.pending.is_empty() {
             return None;
         }
-        Some(self.pending.remove(0))
+        let project = self.pending.remove(0);
+        self.inflight = Some(project);
+        self.inflight.as_ref()
+    }
+
+    /// The item that just finished leaves `inflight`; its id is returned for
+    /// the failure records.
+    pub fn clear_inflight(&mut self) -> Option<String> {
+        self.inflight.take().map(|p| p.id)
     }
 
     /// The `Action` one item of this job is.
-    pub fn action_for(&self, project: Project) -> Action {
+    pub fn action_for(&self, project: &Project) -> Action {
         match self.kind {
-            JobKind::Delete => Action::Delete(Box::new(project)),
-            JobKind::Unregister => Action::Unregister(Box::new(project)),
+            JobKind::Delete => Action::Delete(Box::new(project.clone())),
+            JobKind::Unregister => Action::Unregister(Box::new(project.clone())),
             JobKind::Move => Action::Move {
-                project: Box::new(project),
+                project: Box::new(project.clone()),
                 target: self.target.clone().expect("a move job carries its target"),
             },
         }
@@ -132,8 +148,8 @@ impl Job {
         line
     }
 
-    /// The report modal's body when the job ended with failures or a cancel.
-    /// `None` when everything ran clean — the status line is enough.
+    /// The report modal's body when the job ended with failures, warnings or
+    /// a cancel. `None` when everything ran clean — the status line is enough.
     pub fn report(&self) -> Option<(String, String)> {
         let mut lines: Vec<String> = Vec::new();
         if !self.failed.is_empty() {
@@ -141,6 +157,9 @@ impl Job {
             for (id, error) in &self.failed {
                 lines.push(format!("  {id}: {error}"));
             }
+        }
+        for warning in &self.warnings {
+            lines.push(format!("  warning: {warning}"));
         }
         if self.cancelled {
             let left = self.pending.len();
@@ -174,22 +193,23 @@ mod tests {
         let projects = sample_projects(3);
         let mut job = Job::new(JobKind::Delete, projects.clone(), None);
         let mut order: Vec<String> = Vec::new();
-        while let Some(item) = job.take_next() {
-            order.push(item.id);
+        while let Some(item) = job.begin_next() {
+            order.push(item.id.clone());
+            job.clear_inflight();
         }
         let expected: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
         assert_eq!(order, expected, "the job runs in the order it was given");
         assert!(job.pending.is_empty());
-        assert!(job.take_next().is_none());
         assert_eq!(job.finished(), 0, "records fill as outcomes land");
     }
 
     #[test]
-    fn a_cancelled_job_stops_taking_items() {
+    fn a_cancelled_job_stops_beginning_items() {
         let mut job = Job::new(JobKind::Delete, sample_projects(3), None);
-        assert!(job.take_next().is_some());
+        assert!(job.begin_next().is_some());
+        job.clear_inflight();
         job.cancelled = true;
-        assert!(job.take_next().is_none(), "cancel stops the run");
+        assert!(job.begin_next().is_none(), "cancel stops the run");
         assert_eq!(job.pending.len(), 2, "the rest stay marked, not run");
     }
 
@@ -198,15 +218,15 @@ mod tests {
         let projects = sample_projects(1);
         let item = projects[0].clone();
         assert!(matches!(
-            Job::new(JobKind::Delete, projects.clone(), None).action_for(item.clone()),
+            Job::new(JobKind::Delete, projects.clone(), None).action_for(&item),
             Action::Delete(_)
         ));
         assert!(matches!(
-            Job::new(JobKind::Unregister, projects.clone(), None).action_for(item.clone()),
+            Job::new(JobKind::Unregister, projects.clone(), None).action_for(&item),
             Action::Unregister(_)
         ));
         let target = PathBuf::from("/mnt/archive");
-        match Job::new(JobKind::Move, projects, Some(target.clone())).action_for(item.clone()) {
+        match Job::new(JobKind::Move, projects, Some(target.clone())).action_for(&item) {
             Action::Move {
                 project,
                 target: got,
@@ -220,18 +240,27 @@ mod tests {
 
     #[test]
     fn the_report_names_failures_and_leftover_marks() {
-        let projects = sample_projects(3);
-        let mut job = Job::new(JobKind::Move, projects.clone(), Some("/mnt/archive".into()));
+        let mut job = Job::new(
+            JobKind::Move,
+            sample_projects(3),
+            Some("/mnt/archive".into()),
+        );
         // One clean, one failed, one never run (cancelled).
-        let first = job.take_next().unwrap();
+        job.begin_next();
+        job.clear_inflight();
         job.done += 1;
-        let _ = first;
-        let second = job.take_next().unwrap();
+        job.begin_next();
+        let second = job
+            .inflight
+            .as_ref()
+            .expect("second item in flight")
+            .clone();
         let second_id = second.id.clone();
+        job.clear_inflight();
         job.failed
             .push((second.id, "injected fault at 'move:after-staging'".into()));
         job.cancelled = true;
-        assert!(job.take_next().is_none());
+        assert!(job.begin_next().is_none());
 
         let (title, body) = job.report().expect("a report is due");
         assert_eq!(title, "move report");
@@ -244,7 +273,8 @@ mod tests {
     #[test]
     fn a_clean_job_needs_no_report() {
         let mut job = Job::new(JobKind::Delete, sample_projects(2), None);
-        while job.take_next().is_some() {
+        while job.begin_next().is_some() {
+            job.clear_inflight();
             job.done += 1;
         }
         assert_eq!(job.finished(), 2);

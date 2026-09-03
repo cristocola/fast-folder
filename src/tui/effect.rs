@@ -53,6 +53,10 @@ pub enum Effect {
     },
     /// Read every setting the settings screen shows.
     LoadSettings,
+    /// The `theme` setting was read back: pick the palette again with it,
+    /// answered by `Msg::Themed`. `update` cannot read the environment, so the
+    /// choice is the runtime's.
+    Retheme(String),
     /// Work out what a flow's answers would do, without touching a disk.
     /// Answered by `Msg::Previewed`, or by `Msg::PreviewFailed` naming the
     /// field that was wrong.

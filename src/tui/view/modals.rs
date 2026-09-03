@@ -219,7 +219,7 @@ fn render_palette(app: &App, palette: &PaletteState, frame: &mut Frame, area: Re
             let room = width.saturating_sub(left_width + entry.key.width() + 3);
             left.push(Span::styled(fit(&detail, room, g.ellipsis), theme.dim()));
             let right = vec![Span::styled(entry.key.clone(), theme.key()), Span::raw(" ")];
-            ListItem::new(split_line(left, right, width))
+            ListItem::new(split_line(left, right, width, g.ellipsis))
         })
         .collect();
     if items.is_empty() {

@@ -183,14 +183,14 @@ pub fn base_row(base: &Path, is_default: bool) -> String {
 /// last-column safety margin. Labels stay ANSI-free: `view::fit` counts display
 /// columns, and a styled label would reintroduce the redraw problem this exists
 /// to avoid.
-pub fn clamp_label(label: &str, columns: usize) -> String {
+pub fn clamp_label(label: &str, columns: usize, ellipsis: &str) -> String {
     const PREFIX: usize = 3;
     let budget = columns.saturating_sub(PREFIX);
     if budget == 0 {
         // Width unknown (a size query reports 0 off-terminal) — leave untouched.
         return label.to_string();
     }
-    crate::tui::view::fit(label, budget, "…")
+    crate::tui::view::fit(label, budget, ellipsis)
 }
 
 /// How wide the terminal is, or 0 where there is none — which `clamp_label`
@@ -232,14 +232,16 @@ mod tests {
         projects
             .iter()
             .enumerate()
-            .map(|(idx, p)| clamp_label(&project_row(p, &widths, Some(sizes[idx]), false), 200))
+            .map(|(idx, p)| {
+                clamp_label(&project_row(p, &widths, Some(sizes[idx]), false), 200, "…")
+            })
             .collect()
     }
 
     #[test]
     fn clamp_leaves_short_labels_unchanged() {
         assert_eq!(
-            clamp_label("ID0001  general  proj", 80),
+            clamp_label("ID0001  general  proj", 80, "…"),
             "ID0001  general  proj"
         );
     }
@@ -247,7 +249,7 @@ mod tests {
     #[test]
     fn clamp_elides_long_labels_within_budget() {
         let label = "x".repeat(200);
-        let out = clamp_label(&label, 40);
+        let out = clamp_label(&label, 40, "…");
         assert!(out.ends_with('…'));
         assert!(measure_text_width(&out) <= 37);
     }
@@ -257,7 +259,7 @@ mod tests {
         // CJK chars are double-width; the clamp must count display columns,
         // not chars, and never split a wide char in half.
         let label = "プロジェクト".repeat(20);
-        let out = clamp_label(&label, 30);
+        let out = clamp_label(&label, 30, "…");
         assert!(out.ends_with('…'));
         assert!(measure_text_width(&out) <= 27);
     }
@@ -265,7 +267,7 @@ mod tests {
     #[test]
     fn clamp_passes_through_when_width_unknown() {
         let label = "y".repeat(200);
-        assert_eq!(clamp_label(&label, 0), label);
+        assert_eq!(clamp_label(&label, 0, "…"), label);
     }
 
     #[test]
@@ -335,7 +337,7 @@ mod tests {
         let widths = RowWidths::measure(projects.iter());
 
         for p in &projects {
-            let row = clamp_label(&project_row(p, &widths, None, true), 80);
+            let row = clamp_label(&project_row(p, &widths, None, true), 80, "…");
             assert!(
                 row.contains(&p.name),
                 "the folder name must survive an 80-column window:\n{row}"

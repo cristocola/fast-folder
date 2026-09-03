@@ -51,6 +51,22 @@ const MAX_ROWS: usize = 12;
 /// One drawn row: styled runs, left to right.
 type Row = Vec<(String, Style)>;
 
+/// The configured `theme`, if the config can be read. A prompt is a cosmetic
+/// surface and the command that opened it has already loaded — and would
+/// already have stopped on — a config that cannot be parsed, so nothing is
+/// masked by falling back to the environment alone here.
+fn theme_preference() -> Option<String> {
+    crate::core::config::Config::load()
+        .ok()
+        .map(|config| config.theme)
+}
+
+/// The alphabet the command line's prompts draw with — the app's own choice,
+/// so `FASTF_ASCII=1` reaches the pickers too.
+pub fn glyphs() -> crate::tui::theme::Glyphs {
+    Theme::detect_with(theme_preference().as_deref()).glyphs
+}
+
 /// The terminal, for as long as one prompt lasts.
 ///
 /// Raw mode and the reserved rows are taken on the way in and given back on the
@@ -74,11 +90,12 @@ impl Inline {
             .unwrap_or(80)
             .max(20);
         let inline = Self {
-            theme: Theme::detect(),
+            theme: Theme::detect_with(theme_preference().as_deref()),
             height,
             columns,
             open: true,
         };
+
         // Reserve the rows by scrolling them into existence, then come back to
         // the top of the block. Nothing is asked of the terminal.
         let mut out = String::from("\x1b[?25l");

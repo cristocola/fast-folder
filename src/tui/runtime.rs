@@ -53,11 +53,13 @@ static SCREEN_OWNED: AtomicBool = AtomicBool::new(false);
 static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Open the app and run it to its exit. `onboarding` is the projects folder to
-/// suggest on a first run, and `None` on every other one.
-pub fn run(entry: Entry, onboarding: Option<String>) -> Result<Exit> {
+/// suggest on a first run, and `None` on every other one; `theme` is what the
+/// caller chose from the environment and the config before the screen was
+/// taken.
+pub fn run(entry: Entry, onboarding: Option<String>, theme: Theme) -> Result<Exit> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut runtime = Runtime::init(tx, rx)?;
-    let outcome = runtime.main_loop(entry, onboarding);
+    let outcome = runtime.main_loop(entry, onboarding, theme);
     runtime.shutdown();
     outcome
 }
@@ -127,8 +129,13 @@ impl Runtime {
             .unwrap_or((80, 24))
     }
 
-    fn main_loop(&mut self, entry: Entry, onboarding: Option<String>) -> Result<Exit> {
-        let mut app = App::new(entry, Theme::detect(), self.size());
+    fn main_loop(
+        &mut self,
+        entry: Entry,
+        onboarding: Option<String>,
+        theme: Theme,
+    ) -> Result<Exit> {
+        let mut app = App::new(entry, theme, self.size());
         if let Some(suggested) = onboarding {
             app.request_onboarding(suggested);
         }
@@ -317,6 +324,10 @@ impl Runtime {
                             .map_err(|err| format!("{err:#}"));
                         let _ = tx.send(Msg::TemplateSourceLoaded { slug, result });
                     });
+                }
+                Effect::Retheme(preference) => {
+                    let theme = Theme::detect_with(Some(&preference));
+                    let _ = self.tx.send(Msg::Themed(Box::new(theme)));
                 }
                 Effect::LoadSettings => {
                     let tx = self.tx.clone();

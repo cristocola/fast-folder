@@ -136,7 +136,12 @@ pub fn highlighted<'a>(text: &'a str, hits: &[usize], base: Style, hit: Style) -
 
 /// A line with `left` at the start and `right` at the end, `right` winning
 /// the space when both cannot fit.
-pub fn split_line<'a>(left: Vec<Span<'a>>, right: Vec<Span<'a>>, width: usize) -> Line<'a> {
+pub fn split_line<'a>(
+    left: Vec<Span<'a>>,
+    right: Vec<Span<'a>>,
+    width: usize,
+    ellipsis: &str,
+) -> Line<'a> {
     let left_width: usize = left.iter().map(|s| s.width()).sum();
     let right_width: usize = right.iter().map(|s| s.width()).sum();
     let mut spans = Vec::new();
@@ -148,7 +153,8 @@ pub fn split_line<'a>(left: Vec<Span<'a>>, right: Vec<Span<'a>>, width: usize) -
         let room = width - right_width - 1;
         let left_text: String = left.iter().map(|s| s.content.as_ref()).collect();
         let style = left.first().map(|s| s.style).unwrap_or_default();
-        spans.push(Span::styled(fit(&left_text, room, "…"), style));
+        spans.push(Span::styled(fit(&left_text, room, ellipsis), style));
+
         spans.push(Span::raw(" "));
         spans.extend(right);
     } else {

@@ -250,6 +250,7 @@ pub fn raw_value(settings: &Settings, key: &str) -> String {
         "base-dir" => settings.base_dir.clone(),
         "editor" => settings.editor.clone(),
         "terminal" => settings.terminal.clone(),
+        "theme" => or(&settings.theme, "auto"),
         "default-template" => settings.default_template.clone(),
         "date-format" => settings.date_format.clone(),
         "register-naming-pattern" => settings.register_naming_pattern.clone(),
@@ -315,6 +316,7 @@ fn run(label: &'static str, job: Job, value: String, hint: &'static str) -> Row 
 }
 
 const COLLISION: &[&str] = &["suffix", "error"];
+const THEMES: &[&str] = &crate::tui::theme::ThemeChoice::NAMES;
 
 /// Every setting fastf has, grouped, with what it is set to now.
 pub fn rows(s: &Settings) -> Vec<Row> {
@@ -381,9 +383,17 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             hint: "suffix gives a taken folder name _2, _3, …; error refuses it",
             kind: Kind::Choice("on-name-collision", COLLISION),
         },
+        heading("Appearance"),
+        Row {
+            label: "Theme",
+            value: or(&s.theme, "auto (follows the terminal)"),
+            hint: "auto follows what the terminal announces; mono, ansi or rich force a palette — FASTF_THEME overrides for one run",
+            kind: Kind::Choice("theme", THEMES),
+        },
         heading("Library bases"),
         Row {
             label: "Bases",
+
             value: match s.bases.len() {
                 0 => "(only the base directory)".to_string(),
                 n => format!("{n} extra"),

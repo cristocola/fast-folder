@@ -25,6 +25,7 @@ pub fn pick_template(prompt: &str, how: &str) -> Result<Option<Template>> {
     tty::require_tty("pick a template", how)?;
 
     let columns = terminal_columns();
+    let ellipsis = crate::tui::inline::glyphs().ellipsis;
     let labels: Vec<String> = templates
         .iter()
         .map(|t| {
@@ -37,7 +38,7 @@ pub fn pick_template(prompt: &str, how: &str) -> Result<Option<Template>> {
                 format!("{head} — {}", t.description)
             }
         })
-        .map(|label| clamp_label(&label, columns))
+        .map(|label| clamp_label(&label, columns, ellipsis))
         .collect();
 
     let Some(idx) = crate::tui::prompt::select(prompt, &labels, 0)? else {
@@ -68,11 +69,12 @@ pub fn pick_base(
     tty::require_tty("pick a base", how)?;
 
     let columns = terminal_columns();
+    let ellipsis = crate::tui::inline::glyphs().ellipsis;
     let mut labels: Vec<String> = bases
         .iter()
         .map(|base| {
             let is_default = default_base.is_some_and(|d| d == base.as_path());
-            clamp_label(&base_row(base, is_default), columns)
+            clamp_label(&base_row(base, is_default), columns, ellipsis)
         })
         .collect();
     if offer_cancel {
@@ -111,10 +113,11 @@ pub fn pick_project(prompt: &str, candidates: &[Project], how: &str) -> Result<O
     tty::require_tty("pick a project", how)?;
 
     let columns = terminal_columns();
+    let ellipsis = crate::tui::inline::glyphs().ellipsis;
     let widths = RowWidths::measure(candidates);
     let labels: Vec<String> = candidates
         .iter()
-        .map(|p| clamp_label(&project_row(p, &widths, None, true), columns))
+        .map(|p| clamp_label(&project_row(p, &widths, None, true), columns, ellipsis))
         .collect();
 
     // One picker, one look: the selected row is highlighted whole by the same

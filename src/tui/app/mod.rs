@@ -581,6 +581,7 @@ impl App {
                 Vec::new()
             }
             Msg::SettingsLoaded(loaded) => {
+                let theme = loaded.theme.clone();
                 match self.modals.top_mut() {
                     Some(Modal::Settings(state)) => state.refresh(*loaded),
                     // The first read is what decides whether a brand-new
@@ -589,8 +590,15 @@ impl App {
                         .modals
                         .push(Modal::Settings(Box::new(SettingsState::new(*loaded)))),
                 }
+                // A theme written on this screen takes effect on the frame
+                // that shows it was written.
+                vec![Effect::Retheme(theme)]
+            }
+            Msg::Themed(theme) => {
+                self.theme = *theme;
                 Vec::new()
             }
+
             Msg::SettingsFailed(error) => {
                 if let Some(Modal::Settings(state)) = self.modals.top_mut() {
                     state.pending = false;

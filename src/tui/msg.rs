@@ -62,6 +62,8 @@ pub enum Msg {
     },
     /// The settings, read back.
     SettingsLoaded(Box<crate::tui::app::data::Settings>),
+    /// The palette chosen for the `theme` setting just read back.
+    Themed(Box<crate::tui::theme::Theme>),
     SettingsFailed(String),
     /// A flow's preview is ready.
     Previewed(Box<Preview>),

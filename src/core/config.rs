@@ -87,7 +87,16 @@ pub struct Config {
     #[serde(default)]
     pub terminal: String,
 
+    /// The guided app's palette: `auto` (follow what the terminal announces),
+    /// `mono`, `ansi` or `rich`. Empty = `auto`. `FASTF_THEME` overrides it
+    /// for one session; `NO_COLOR` still wins over it. Parsed leniently — an
+    /// unknown word here reads as `auto`, because a typo sitting in a config
+    /// file must not stop every command — while `config set theme` refuses it.
+    #[serde(default)]
+    pub theme: String,
+
     /// What to do when the resolved folder name is already taken:
+
     /// `"suffix"` (default) appends `_2`, `_3`… , `"error"` refuses.
     ///
     /// Rarely reached with the bundled patterns, which end in a unique
@@ -164,6 +173,7 @@ impl Default for Config {
             bases: Vec::new(),
             editor: String::new(),
             terminal: String::new(),
+            theme: String::new(),
             default_template: String::new(),
             date_format: default_date_format(),
             preview_lines: default_preview_lines(),

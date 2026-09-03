@@ -1,5 +1,6 @@
 ---
 source: tests/tui_snapshots.rs
+assertion_line: 23
 expression: frame
 ---
 " fastf   12 projects   3 templates   2 bases                                         highest ID0248 "
@@ -18,7 +19,7 @@ expression: frame
 "│  ID024│   Preview lines               20                                                 │       │"
 "│  ID024│   Name collision              suffix                                             │       │"
 "│  ID023│ Appearance                                                                       │       │"
-"│  ID023│▸  Theme                       auto (follows the terminal)                        │       │"
+"│  ID023│   Theme                       auto (follows the terminal)                        │       │"
 "│  ID023│ Library bases                                                                    │       │"
 "│       │   Bases                       2 extra                                            │       │"
 "│       │   Recent limit                20                                                 │       │"
@@ -26,8 +27,8 @@ expression: frame
 "│       │   git init                    yes                                                │       │"
 "│       │   Reveal the folder           no                                                 │       │"
 "│       │   Open in the editor          no                                                 │       │"
-"└───────│   Print the path              no                                                 │───────┘"
-"┌ templa│ auto follows what the terminal announces; mono, ansi or rich force a palette — F…│───────┐"
+"└───────│▸  Print the path              no                                                 │───────┘"
+"┌ templa│ print the absolute path on its own line, for `cd \"$(fastf new …)\"`             │───────┐"
 "│  clien│ ↑↓ choose   Enter change / run   Esc close                                       │ate}_{…│"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 " | saving…                                                                                          "

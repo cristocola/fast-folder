@@ -1,12 +1,13 @@
 ---
 source: tests/tui_snapshots.rs
+assertion_line: 23
 expression: frame
 ---
 " fastf   12 projects   3 templates   2 bases                                         highest ID0248 "
 " → projects 12   archive not mounted                                            ⚠ 1 needs attention "
 "        ┌ settings ────────────────────────────────────────────────────────────────────────┐        "
 " ⌕ / to │ Project basics                                                                   │ newest "
-"┌ projec│   Base directory              /mnt/projects                                      │───────┐"
+"┌ projec│▸  Base directory              /mnt/projects                                      │───────┐"
 "│  ID   │   Default template            music-video                                        │       │"
 "│▸ ID024│   Date format                 %Y-%m-%d   (today: 2026-09-03)                     │d      │"
 "│  ID024│   Editor                      nvim                                               │       │"
@@ -18,7 +19,7 @@ expression: frame
 "│  ID024│   Preview lines               20                                                 │       │"
 "│  ID024│   Name collision              suffix                                             │       │"
 "│  ID023│ Appearance                                                                       │       │"
-"│  ID023│▸  Theme                       auto (follows the terminal)                        │       │"
+"│  ID023│   Theme                       auto (follows the terminal)                        │       │"
 "│  ID023│ Library bases                                                                    │       │"
 "│       │   Bases                       2 extra                                            │       │"
 "│       │   Recent limit                20                                                 │       │"
@@ -27,8 +28,8 @@ expression: frame
 "│       │   Reveal the folder           no                                                 │       │"
 "│       │   Open in the editor          no                                                 │       │"
 "└───────│   Print the path              no                                                 │───────┘"
-"┌ templa│ auto follows what the terminal announces; mono, ansi or rich force a palette — F…│───────┐"
+"┌ templa│ where new projects are created — empty falls back to your home directory, never …│───────┐"
 "│  clien│ ↑↓ choose   Enter change / run   Esc close                                       │ate}_{…│"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
-" | saving…                                                                                          "
+" 12 of 12 projects   ·   ? for help                                                                 "
 "                                                                                                    "

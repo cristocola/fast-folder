@@ -110,15 +110,23 @@ that often does not, so fastf switches its own alphabet to plain ASCII there
 automatically: `>` `*` `*` `/` `!`. Box-drawing borders stay, because the
 console has always had those.
 
-The detection is "no `WT_SESSION` in the environment". Force it either way:
+The detection is "a Windows host that announces no emulator": no `WT_SESSION`
+(Windows Terminal), no `TERM_PROGRAM`, no `TERM`, and none of the variables
+Alacritty, WezTerm and ConEmu set. Those all draw Unicode and keep it. Force
+it either way:
 
 ```powershell
 $env:FASTF_ASCII = "1"    # plain ASCII, wherever you are
+$env:FASTF_ASCII = "0"    # the Unicode alphabet, even in the old console
 ```
 
 Colour follows the same rule the app uses everywhere: `NO_COLOR` turns it off,
-a terminal that announces `COLORTERM=truecolor` gets the muted RGB palette, and
-anything else gets the sixteen ANSI colours used sparingly.
+a terminal that announces truecolor (`COLORTERM=truecolor`, Windows Terminal,
+a `TERM` or `TERM_PROGRAM` that names a truecolor emulator) gets the muted RGB
+palette, and anything else gets the sixteen ANSI colours used sparingly.
+`fastf config set theme mono|ansi|rich` pins one, and `FASTF_THEME` pins one
+for a single run.
+
 
 ## The mouse
 

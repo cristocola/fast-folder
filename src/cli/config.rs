@@ -73,6 +73,15 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
+        "theme:".green(),
+        match crate::tui::theme::ThemeChoice::parse(&config.theme) {
+            Some(crate::tui::theme::ThemeChoice::Auto) | None =>
+                "auto (follows the terminal; FASTF_THEME overrides)".to_string(),
+            Some(choice) => choice.name().to_string(),
+        }
+    );
+    println!(
+        "  {:<26} {}",
         "default_template:".green(),
         if config.default_template.is_empty() {
             "(always prompt)".to_string()
@@ -80,6 +89,7 @@ pub fn show() -> Result<()> {
             config.default_template.clone()
         }
     );
+
     println!("  {:<26} {}", "date_format:".green(), config.date_format);
     println!(
         "  {:<26} {}",
@@ -252,6 +262,33 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                 config.terminal = value.to_string();
                 format!("Set terminal = {}", value)
             }
+            "theme" => {
+                let Some(choice) = crate::tui::theme::ThemeChoice::parse(value) else {
+                    bail!(
+                        "expected {}; got '{}'",
+                        crate::tui::theme::ThemeChoice::NAMES.join(", "),
+                        value.trim()
+                    );
+                };
+                config.theme = choice.name().to_string();
+                format!(
+                    "Set theme = {}  ({})",
+                    choice.name(),
+                    match choice {
+                        crate::tui::theme::ThemeChoice::Auto =>
+                            "follows what the terminal announces",
+                        crate::tui::theme::ThemeChoice::Kind(
+                            crate::tui::theme::ThemeKind::Mono,
+                        ) => "no colour, bold and reverse video only",
+                        crate::tui::theme::ThemeChoice::Kind(
+                            crate::tui::theme::ThemeKind::Ansi,
+                        ) => "the terminal's sixteen colours",
+                        crate::tui::theme::ThemeChoice::Kind(
+                            crate::tui::theme::ThemeKind::Rich,
+                        ) => "24-bit colour",
+                    }
+                )
+            }
             "default_template" => {
                 config.default_template = value.to_string();
                 format!("Set default_template = {}", value)
@@ -375,7 +412,7 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                 )
             }
             other => bail!(
-                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, default-template, date-format, \
+                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, default-template, date-format, \
              preview-lines, prompt-open-after-create, confirm-create, \
              recent-limit, register-naming-pattern, on-name-collision, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",

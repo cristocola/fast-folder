@@ -56,7 +56,7 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         ],
         None => Vec::new(),
     };
-    let mut lines = vec![split_line(left, right, width)];
+    let mut lines = vec![split_line(left, right, width, g.ellipsis)];
 
     // Line 2: the bases, and on the right whatever needs attention — else
     // what this session did.
@@ -92,7 +92,7 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         ],
         _ => Vec::new(),
     };
-    lines.push(split_line(bases, right, width));
+    lines.push(split_line(bases, right, width, g.ellipsis));
 
     frame.render_widget(Paragraph::new(lines), area);
 }

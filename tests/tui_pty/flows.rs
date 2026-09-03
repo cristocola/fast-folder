@@ -252,8 +252,8 @@ fn maintenance_runs_reindex_recover_and_data_locations() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(900)
-        // The settings list has 21 selectable rows; Reindex is the nineteenth.
-        .down(18) // → Reindex
+        // The settings list has 22 selectable rows; Reindex is the twentieth.
+        .down(19) // → Reindex
         .enter()
         .pause(1200)
         .down(1) // → Check and recover
@@ -666,7 +666,7 @@ fn the_counter_is_raised_from_the_settings_screen() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(900)
-        .down(16) // → Counter
+        .down(17) // → Counter
         .enter() // → the number
         .pause(500)
         .key("\x15")

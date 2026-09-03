@@ -64,7 +64,10 @@ pub struct Settings {
     pub bases: Vec<String>,
     pub editor: String,
     pub terminal: String,
+    /// `auto`, `mono`, `ansi` or `rich` — empty reads as `auto`.
+    pub theme: String,
     pub default_template: String,
+
     pub date_format: String,
     /// Today, as `date_format` renders it.
     pub date_preview: String,

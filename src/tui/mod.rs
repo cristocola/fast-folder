@@ -53,7 +53,11 @@ pub fn run(entry: Entry) -> Result<()> {
             .map(|path| path.display().to_string())
             .unwrap_or_default()
     });
-    match runtime::run(entry, onboarding)? {
+    match runtime::run(
+        entry,
+        onboarding,
+        theme::Theme::detect_with(Some(&cfg.theme)),
+    )? {
         effect::Exit::Normal => {
             if is_menu {
                 println!("Goodbye.");

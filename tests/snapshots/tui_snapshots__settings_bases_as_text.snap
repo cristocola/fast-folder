@@ -28,7 +28,7 @@ expression: frame
 "│       │   Open in the editor          no                                                 │       │"
 "└───────│   Print the path              no                                                 │───────┘"
 "┌ templa│ auto follows what the terminal announces; mono, ansi or rich force a palette — F…│───────┐"
-"│  clien│ ↑↓ choose   Enter change / run   Esc close                                       │ate}_{…│"
+"│  clien│ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │ate}_{…│"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 " | saving…                                                                                          "
 "                                                                                                    "

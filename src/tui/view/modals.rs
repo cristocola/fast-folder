@@ -829,7 +829,7 @@ fn field_line<'a>(theme: &crate::tui::theme::Theme, key: &'a str, value: &'a str
 fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let g = theme.glyphs;
-    let area = centered(area, 84, 84);
+    let area = crate::tui::layout::help_box(area);
     frame.render_widget(Clear, area);
     let block = frame_block(app, format!(" help {} {} ", g.sep, ctx.label()), true);
     let inner = block.inner(area);
@@ -890,7 +890,7 @@ fn render_message(
     area: Rect,
 ) {
     let theme = &app.theme;
-    let area = centered(area, 70, 50);
+    let area = crate::tui::layout::message_box(area);
     frame.render_widget(Clear, area);
     let style = match level {
         MessageLevel::Info => theme.accent(),
@@ -912,8 +912,9 @@ fn render_message(
             ))
         })
         .collect();
+    let max_scroll = lines.len().saturating_sub(inner.height as usize);
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: false })
-        .scroll((scroll as u16, 0));
+        .scroll((scroll.min(max_scroll) as u16, 0));
     frame.render_widget(paragraph, inner);
 }

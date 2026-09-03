@@ -28,7 +28,7 @@ expression: frame
 "│       │ Maintenance                                                                      │       │"
 "└───────│▸  Reindex                                                                        │───────┘"
 "┌ templa│ rescan every base from its folders and rebuild the caches                        │───────┐"
-"│  clien│ ↑↓ choose   Enter change / run   Esc close                                       │ate}_{…│"
+"│  clien│ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │ate}_{…│"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 " ✓  Reconciled: 1 resumed, 0 committed, 1 rolled back  —  warning: 1 project(s) were never finished…"
 "                                                                                                    "

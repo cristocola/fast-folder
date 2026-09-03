@@ -146,11 +146,22 @@ impl Modal {
         }
     }
 
-    /// Which key context this modal answers in.
+    /// Which key context this modal answers in. A screen with a text field
+    /// or a form open is `Modal` — the widget has the keys — and its own
+    /// context only while a list has them.
     pub fn context(&self) -> Context {
+        use crate::tui::app::studio::Open;
         match self {
             Modal::Palette(_) => Context::Palette,
             Modal::Actions(_) => Context::Actions,
+            Modal::Studio(_) => Context::Studio,
+            Modal::Builder(builder) if !builder.pending => match &builder.open {
+                None => Context::Builder,
+                Some(Open::Variables(list)) if list.editing.is_none() => Context::Builder,
+                Some(Open::Files(list)) if list.editing.is_none() => Context::Builder,
+                Some(_) => Context::Modal,
+            },
+            Modal::Settings(state) if state.editing.is_none() => Context::Settings,
             _ => Context::Modal,
         }
     }

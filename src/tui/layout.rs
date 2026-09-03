@@ -95,6 +95,17 @@ pub fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
         .split(vertical)[1]
 }
 
+/// Where the help overlay is drawn. The app clamps its scroll with the same
+/// box the view draws it in.
+pub fn help_box(area: Rect) -> Rect {
+    centered(area, 84, 84)
+}
+
+/// Where a read-only message (metadata, a journal, a report) is drawn.
+pub fn message_box(area: Rect) -> Rect {
+    centered(area, 70, 50)
+}
+
 /// A rectangle of at most `width` × `height` cells, centred, never larger than
 /// `area`.
 pub fn centered_fixed(area: Rect, width: u16, height: u16) -> Rect {

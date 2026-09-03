@@ -1046,42 +1046,30 @@ impl App {
         }
     }
 
-    fn on_actions_key(&mut self, key: Key) -> Vec<Effect> {
-        let len = crate::tui::app::actions::action_entries(self).len();
-        match key.code {
-            KeyCode::Esc => {
-                self.modals.pop();
-                Vec::new()
-            }
-            KeyCode::Enter => {
-                let chosen = match self.modals.top() {
-                    Some(Modal::Actions(actions)) => crate::tui::app::actions::action_entries(self)
-                        .get(actions.selected)
-                        .map(|(id, _)| *id),
-                    _ => None,
-                };
-                self.modals.pop();
-                let Some(id) = chosen else {
-                    return Vec::new();
-                };
-                self.run(id)
-            }
-            KeyCode::Up | KeyCode::Char('k') if !key.ctrl => {
-                if let Some(Modal::Actions(actions)) = self.modals.top_mut() {
-                    actions.step(len, -1);
-                    actions.clamp_viewport(len, 12);
-                }
-                Vec::new()
-            }
-            KeyCode::Down | KeyCode::Char('j') if !key.ctrl => {
-                if let Some(Modal::Actions(actions)) = self.modals.top_mut() {
-                    actions.step(len, 1);
-                    actions.clamp_viewport(len, 12);
-                }
-                Vec::new()
-            }
-            _ => Vec::new(),
+    /// The key a dialog did not take itself: whatever the registry binds in
+    /// the dialog's context, or nothing. This is how every list on a dialog
+    /// answers the same keys the help overlay lists for it.
+    fn lookup_and_run(&mut self, key: Key) -> Vec<Effect> {
+        match command::lookup(self.context(), key, self) {
+            Some(id) => self.run(id),
+            None => Vec::new(),
         }
+    }
+
+    /// The action menu: a verb's own key runs it and closes the menu, exactly
+    /// as Enter on its row would; anything else — help, the palette, the
+    /// arrows — runs over the menu and leaves it open.
+    fn on_actions_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(id) = command::lookup(self.context(), key, self) else {
+            return Vec::new();
+        };
+        let is_verb = crate::tui::app::actions::action_entries(self)
+            .iter()
+            .any(|(entry, _)| *entry == id);
+        if is_verb {
+            self.modals.pop();
+        }
+        self.run(id)
     }
 
     fn on_text_prompt_key(&mut self, key: Key) -> Vec<Effect> {
@@ -1195,12 +1183,12 @@ impl App {
 
     fn on_confirm_key(&mut self, key: Key) -> Vec<Effect> {
         match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => self.answer_confirm(true),
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            KeyCode::Char('y') | KeyCode::Char('Y') if !key.ctrl => self.answer_confirm(true),
+            KeyCode::Char('n') | KeyCode::Char('N') if !key.ctrl => {
                 self.modals.pop();
                 Vec::new()
             }
-            _ => Vec::new(),
+            _ => self.lookup_and_run(key),
         }
     }
 
@@ -1230,10 +1218,6 @@ impl App {
 
     fn on_multi_pick_key(&mut self, key: Key) -> Vec<Effect> {
         match key.code {
-            KeyCode::Esc => {
-                self.modals.pop();
-                Vec::new()
-            }
             KeyCode::Enter => self.submit_multi_pick(),
             KeyCode::Char(' ') => {
                 if let Some(Modal::MultiPick(pick)) = self.modals.top_mut()
@@ -1243,29 +1227,7 @@ impl App {
                 }
                 Vec::new()
             }
-            KeyCode::Up | KeyCode::Char('k') if !key.ctrl => {
-                if let Some(Modal::MultiPick(pick)) = self.modals.top_mut() {
-                    pick.selected = crate::tui::widgets::nav::wrap_step(
-                        Some(pick.selected),
-                        pick.items.len(),
-                        -1,
-                    )
-                    .unwrap_or(0);
-                }
-                Vec::new()
-            }
-            KeyCode::Down | KeyCode::Char('j') if !key.ctrl => {
-                if let Some(Modal::MultiPick(pick)) = self.modals.top_mut() {
-                    pick.selected = crate::tui::widgets::nav::wrap_step(
-                        Some(pick.selected),
-                        pick.items.len(),
-                        1,
-                    )
-                    .unwrap_or(0);
-                }
-                Vec::new()
-            }
-            _ => Vec::new(),
+            _ => self.lookup_and_run(key),
         }
     }
 
@@ -1485,26 +1447,52 @@ impl App {
         }
     }
 
+    /// Help and a message: a pager. Enter and `?` close it too — `?` because
+    /// the key that opened it should put it away, and it must not open a
+    /// second help over the first.
     fn on_scroll_modal_key(&mut self, key: Key) -> Vec<Effect> {
-        let delta: isize = match key.code {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('?') => {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('?') if !key.ctrl => {
                 self.modals.pop();
+                Vec::new()
+            }
+            KeyCode::Char(' ') if !key.ctrl => self.scroll_top_modal(self.page_rows() as isize),
+            _ => self.lookup_and_run(key),
+        }
+    }
+
+    /// Scroll whatever dialog is on top by `delta` rows, clamped to its
+    /// content. `isize::MIN` and `isize::MAX` are the ends.
+    fn scroll_top_modal(&mut self, delta: isize) -> Vec<Effect> {
+        let area = self.area();
+        let Some(top) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        let (scroll, lines, rows) = match top {
+            Modal::Help { ctx, scroll } => (
+                scroll,
+                command::help_line_count(*ctx),
+                layout::help_box(area).height.saturating_sub(2) as usize,
+            ),
+            Modal::Message { lines, scroll, .. } => (
+                scroll,
+                lines.len(),
+                layout::message_box(area).height.saturating_sub(2) as usize,
+            ),
+            Modal::Studio(studio) => {
+                studio.scroll = studio.scroll.saturating_add_signed(delta);
                 return Vec::new();
             }
-            KeyCode::Down | KeyCode::Char('j') => 1,
-            KeyCode::Up | KeyCode::Char('k') => -1,
-            KeyCode::PageDown | KeyCode::Char(' ') => 10,
-            KeyCode::PageUp => -10,
-            KeyCode::Home => isize::MIN / 2,
             _ => return Vec::new(),
         };
-        match self.modals.top_mut() {
-            Some(Modal::Help { scroll, .. }) | Some(Modal::Message { scroll, .. }) => {
-                *scroll = (*scroll as isize + delta).max(0) as usize;
-            }
-            _ => {}
-        }
+        let max = lines.saturating_sub(rows);
+        *scroll = scroll.saturating_add_signed(delta).min(max);
         Vec::new()
+    }
+
+    /// A screenful, for the pagers: the height of the list on screen.
+    fn page_rows(&self) -> usize {
+        self.rows_on_screen().max(1)
     }
 
     // --- commands ---------------------------------------------------------
@@ -1552,10 +1540,65 @@ impl App {
                 vec![Effect::Quit(Exit::Normal)]
             }
             CommandId::Help => {
-                let ctx = self.focus_context();
+                // The help for where the keys go right now — a dialog's own
+                // context when one is open, else the focused pane's.
+                let ctx = self.context();
                 self.modals.push(Modal::Help { ctx, scroll: 0 });
                 Vec::new()
             }
+            CommandId::Close => self.close_top(),
+            CommandId::ActionsRun => {
+                let chosen = match self.modals.top() {
+                    Some(Modal::Actions(actions)) => crate::tui::app::actions::action_entries(self)
+                        .get(actions.selected)
+                        .map(|(id, _)| *id),
+                    _ => None,
+                };
+                let Some(id) = chosen else {
+                    return Vec::new();
+                };
+                self.modals.pop();
+                self.run(id)
+            }
+            CommandId::StudioNew => self.open_builder(None),
+            CommandId::StudioEdit => {
+                let slug = match self.modals.top() {
+                    Some(Modal::Studio(studio)) => studio.selected_slug(),
+                    _ => None,
+                };
+                match slug {
+                    Some(slug) => self.open_builder(Some(slug)),
+                    None => Vec::new(),
+                }
+            }
+            CommandId::StudioFromFolder => {
+                self.modals.push(Modal::Flow(Box::new(Flow::new(
+                    FlowKind::FromFolder,
+                    wizard::from_folder_form(),
+                ))));
+                Vec::new()
+            }
+            CommandId::StudioDelete => {
+                let slug = match self.modals.top() {
+                    Some(Modal::Studio(studio)) => studio.selected_slug(),
+                    _ => None,
+                };
+                let Some(slug) = slug else {
+                    return Vec::new();
+                };
+                self.modals.push(Modal::Confirm(Confirm {
+                    prompt: format!("Delete template '{slug}' and its bundled files?"),
+                    then: ConfirmThen::DeleteTemplate(slug),
+                }));
+                Vec::new()
+            }
+            CommandId::BuilderOpen => self.builder_open(),
+            CommandId::BuilderAdd => self.builder_add(),
+            CommandId::BuilderRemove => self.builder_remove(),
+            CommandId::BuilderMoveUp | CommandId::BuilderMoveDown => {
+                self.builder_move(id == CommandId::BuilderMoveUp)
+            }
+            CommandId::SettingsChange => self.settings_change(),
             CommandId::Palette => {
                 self.open_palette();
                 Vec::new()
@@ -1569,13 +1612,16 @@ impl App {
             }
             CommandId::Down | CommandId::Up => {
                 let delta = if id == CommandId::Down { 1 } else { -1 };
+                if !self.modals.is_empty() {
+                    return self.step_top_modal(delta);
+                }
                 match self.focus {
                     Focus::Projects => {
                         self.library.step(delta);
                         self.after_selection_change()
                     }
                     Focus::Detail => {
-                        self.detail_scroll = (self.detail_scroll as isize + delta).max(0) as usize;
+                        self.detail_scroll = self.detail_scroll.saturating_add_signed(delta);
                         Vec::new()
                     }
                     Focus::Templates => {
@@ -1585,15 +1631,18 @@ impl App {
                 }
             }
             CommandId::PageDown | CommandId::PageUp => {
-                let rows = self.rows_on_screen() as isize;
+                let rows = self.page_rows() as isize;
                 let delta = if id == CommandId::PageDown {
                     rows
                 } else {
                     -rows
                 };
+                if !self.modals.is_empty() {
+                    return self.page_top_modal(delta);
+                }
                 match self.focus {
                     Focus::Detail => {
-                        self.detail_scroll = (self.detail_scroll as isize + delta).max(0) as usize;
+                        self.detail_scroll = self.detail_scroll.saturating_add_signed(delta);
                         Vec::new()
                     }
                     _ => {
@@ -1602,14 +1651,35 @@ impl App {
                     }
                 }
             }
-            CommandId::First => {
-                self.library.select_first();
-                self.after_selection_change()
+            CommandId::First | CommandId::Last => {
+                let first = id == CommandId::First;
+                if !self.modals.is_empty() {
+                    return self.page_top_modal(if first { isize::MIN } else { isize::MAX });
+                }
+                match self.focus {
+                    Focus::Detail => {
+                        self.detail_scroll = if first { 0 } else { usize::MAX / 2 };
+                        Vec::new()
+                    }
+                    Focus::Templates => {
+                        self.templates.selected = if first {
+                            0
+                        } else {
+                            self.templates.cards.len().saturating_sub(1)
+                        };
+                        Vec::new()
+                    }
+                    Focus::Projects => {
+                        if first {
+                            self.library.select_first();
+                        } else {
+                            self.library.select_last();
+                        }
+                        self.after_selection_change()
+                    }
+                }
             }
-            CommandId::Last => {
-                self.library.select_last();
-                self.after_selection_change()
-            }
+
             CommandId::Search => {
                 self.search.editing = true;
                 self.focus = Focus::Projects;
@@ -2188,59 +2258,256 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// The studio is a list: every key it answers is declared in the
+    /// registry under `Context::Studio`.
     fn on_studio_key(&mut self, key: Key) -> Vec<Effect> {
-        let Some(Modal::Studio(studio)) = self.modals.top_mut() else {
-            return Vec::new();
-        };
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
+        self.lookup_and_run(key)
+    }
+
+    /// Esc on a dialog: one level at a time. A builder section goes back to
+    /// the section list; the section list discards the template; everything
+    /// else simply closes.
+    fn close_top(&mut self) -> Vec<Effect> {
+        match self.modals.top_mut() {
+            Some(Modal::Builder(builder)) => {
+                if builder.open.is_some() {
+                    builder.open = None;
+                } else {
+                    self.modals.pop();
+                    self.info("Discarded — the template was not written.");
+                }
+            }
+            Some(_) => {
                 self.modals.pop();
+            }
+            None => {}
+        }
+        Vec::new()
+    }
+
+    /// The arrows on whatever dialog is on top.
+    fn step_top_modal(&mut self, delta: isize) -> Vec<Effect> {
+        let actions_len = crate::tui::app::actions::action_entries(self).len();
+        match self.modals.top_mut() {
+            Some(Modal::Actions(actions)) => {
+                actions.step(actions_len, delta);
+                actions.clamp_viewport(actions_len, 12);
                 Vec::new()
             }
-            KeyCode::Up | KeyCode::Char('k') | KeyCode::Down | KeyCode::Char('j') => {
-                let down = matches!(key.code, KeyCode::Down | KeyCode::Char('j'));
-                studio.step(if down { 1 } else { -1 });
+            Some(Modal::MultiPick(pick)) => {
+                pick.selected = crate::tui::widgets::nav::wrap_step(
+                    Some(pick.selected),
+                    pick.items.len(),
+                    delta,
+                )
+                .unwrap_or(0);
+                Vec::new()
+            }
+            Some(Modal::Studio(studio)) => {
+                studio.step(delta);
                 studio.clamp_viewport(12);
                 studio
                     .selected_slug()
                     .map(|slug| vec![Effect::LoadTemplateView { slug }])
                     .unwrap_or_default()
             }
-            KeyCode::PageDown => {
-                studio.scroll += 10;
-                Vec::new()
-            }
-            KeyCode::PageUp => {
-                studio.scroll = studio.scroll.saturating_sub(10);
-                Vec::new()
-            }
-            KeyCode::Char('n') => self.open_builder(None),
-            KeyCode::Char('e') | KeyCode::Enter => {
-                let slug = studio.selected_slug();
-                match slug {
-                    Some(slug) => self.open_builder(Some(slug)),
-                    None => Vec::new(),
+            Some(Modal::Builder(builder)) => {
+                match &mut builder.open {
+                    None => builder.step(delta),
+                    Some(Open::Variables(list)) => {
+                        let count = builder.template.variables.len();
+                        list.selected = list
+                            .selected
+                            .saturating_add_signed(delta)
+                            .min(count.saturating_sub(1));
+                    }
+                    Some(Open::Files(list)) => {
+                        let count = builder.template.files.len();
+                        list.selected = list
+                            .selected
+                            .saturating_add_signed(delta)
+                            .min(count.saturating_sub(1));
+                    }
+                    Some(_) => {}
                 }
-            }
-            KeyCode::Char('g') => {
-                self.modals.push(Modal::Flow(Box::new(Flow::new(
-                    FlowKind::FromFolder,
-                    wizard::from_folder_form(),
-                ))));
                 Vec::new()
             }
-            KeyCode::Char('D') => {
-                let Some(slug) = studio.selected_slug() else {
-                    return Vec::new();
-                };
-                self.modals.push(Modal::Confirm(Confirm {
-                    prompt: format!("Delete template '{slug}' and its bundled files?"),
-                    then: ConfirmThen::DeleteTemplate(slug),
-                }));
+            Some(Modal::Settings(state)) => {
+                state.step(delta);
+                state.clamp_viewport(SETTINGS_ROWS);
                 Vec::new()
+            }
+            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.scroll_top_modal(delta),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A page, or the ends (`isize::MIN`/`isize::MAX`), on whatever dialog
+    /// is on top.
+    fn page_top_modal(&mut self, delta: isize) -> Vec<Effect> {
+        let actions_len = crate::tui::app::actions::action_entries(self).len();
+        let jump = |selected: usize, len: usize| -> usize {
+            crate::tui::widgets::nav::clamp_jump(Some(selected), len, delta).unwrap_or(0)
+        };
+        match self.modals.top_mut() {
+            Some(Modal::Actions(actions)) => {
+                actions.selected = jump(actions.selected, actions_len);
+                actions.clamp_viewport(actions_len, 12);
+                Vec::new()
+            }
+            Some(Modal::MultiPick(pick)) => {
+                pick.selected = jump(pick.selected, pick.items.len());
+                Vec::new()
+            }
+            Some(Modal::Settings(state)) => {
+                state.jump(delta);
+                state.clamp_viewport(SETTINGS_ROWS);
+                Vec::new()
+            }
+            Some(Modal::Studio(_)) | Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => {
+                self.scroll_top_modal(delta)
             }
             _ => Vec::new(),
         }
+    }
+
+    /// Enter on the builder: open the highlighted section (or save, or
+    /// discard) from the section list; edit the highlighted entry on the
+    /// variables and files lists.
+    fn builder_open(&mut self) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        match &mut builder.open {
+            None => match builder.row() {
+                Row::Section(section) => {
+                    builder.open_section(section);
+                    Vec::new()
+                }
+                Row::Save => self.save_template(),
+                Row::Discard => {
+                    self.modals.pop();
+                    self.info("Discarded — the template was not written.");
+                    Vec::new()
+                }
+            },
+            Some(Open::Variables(list)) => {
+                if let Some(variable) = builder.template.variables.get(list.selected) {
+                    list.editing = Some((list.selected, studio::variable_form(Some(variable))));
+                }
+                Vec::new()
+            }
+            Some(Open::Files(list)) => {
+                if let Some(file) = builder.template.files.get(list.selected) {
+                    let body = if file.template.is_empty() {
+                        file.content.clone()
+                    } else {
+                        file.template.clone()
+                    };
+                    list.editing = Some(studio::FileEdit {
+                        index: list.selected,
+                        path: crate::tui::widgets::input::LineEdit::with_text(file.path.clone()),
+                        body: crate::tui::widgets::text_area::TextArea::with_text(&body),
+                        in_body: false,
+                        error: None,
+                    });
+                }
+                Vec::new()
+            }
+            Some(_) => Vec::new(),
+        }
+    }
+
+    /// `a` on the variables or files list: a new entry at the end.
+    fn builder_add(&mut self) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        match &mut builder.open {
+            Some(Open::Variables(list)) => {
+                let count = builder.template.variables.len();
+                list.editing = Some((count, studio::variable_form(None)));
+            }
+            Some(Open::Files(list)) => {
+                list.editing = Some(studio::FileEdit {
+                    index: builder.template.files.len(),
+                    path: crate::tui::widgets::input::LineEdit::new(),
+                    body: crate::tui::widgets::text_area::TextArea::new(),
+                    in_body: false,
+                    error: None,
+                });
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    /// `d` on the variables or files list: the highlighted entry goes.
+    fn builder_remove(&mut self) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        match &mut builder.open {
+            Some(Open::Variables(list)) => {
+                let count = builder.template.variables.len();
+                if list.selected < count {
+                    builder.template.variables.remove(list.selected);
+                    list.selected = list.selected.min(count.saturating_sub(2));
+                    builder.error = None;
+                }
+            }
+            Some(Open::Files(list)) => {
+                let count = builder.template.files.len();
+                if list.selected < count {
+                    builder.template.files.remove(list.selected);
+                    list.selected = list.selected.min(count.saturating_sub(2));
+                    builder.error = None;
+                }
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    /// `K`/`J` on the variables list: reorder in place, which is what
+    /// `prompt::sort` was for. Moving a row is one keystroke and shows the
+    /// result immediately.
+    fn builder_move(&mut self, up: bool) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        let count = builder.template.variables.len();
+        if let Some(Open::Variables(list)) = &mut builder.open {
+            let at = list.selected;
+            let other = if up {
+                at.checked_sub(1)
+            } else {
+                (at + 1 < count).then_some(at + 1)
+            };
+            if let Some(other) = other {
+                builder.template.variables.swap(at, other);
+                list.selected = other;
+            }
+        }
+        Vec::new()
+    }
+
+    /// Enter on the settings list. A yes/no and a two-way choice are written
+    /// where they stand: opening a dialog to answer a question with two
+    /// answers is a keystroke spent on nothing. A maintenance row runs;
+    /// anything else opens on its own line.
+    fn settings_change(&mut self) -> Vec<Effect> {
+        let Some(Modal::Settings(state)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if let Some((key, value)) = state.immediate_write() {
+            return self.write_setting(key, value);
+        }
+        if let Some(Kind::Run(job)) = state.row().map(|row| row.kind.clone()) {
+            return self.run_job(job);
+        }
+        state.begin_edit();
+        Vec::new()
     }
 
     /// New (`slug` is `None`) or edit: the builder over a scratch template.
@@ -2281,39 +2548,10 @@ impl App {
         }
     }
 
-    /// The section list: enter a section, save, or discard.
+    /// The section list: enter a section, save, or discard — every key of it
+    /// declared under `Context::Builder`.
     fn on_builder_list_key(&mut self, key: Key) -> Vec<Effect> {
-        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
-            return Vec::new();
-        };
-        match key.code {
-            KeyCode::Esc => {
-                self.modals.pop();
-                self.info("Discarded — the template was not written.");
-                Vec::new()
-            }
-            KeyCode::Up | KeyCode::Char('k') if !key.ctrl => {
-                builder.step(-1);
-                Vec::new()
-            }
-            KeyCode::Down | KeyCode::Char('j') if !key.ctrl => {
-                builder.step(1);
-                Vec::new()
-            }
-            KeyCode::Enter => match builder.row() {
-                Row::Section(section) => {
-                    builder.open_section(section);
-                    Vec::new()
-                }
-                Row::Save => self.save_template(),
-                Row::Discard => {
-                    self.modals.pop();
-                    self.info("Discarded — the template was not written.");
-                    Vec::new()
-                }
-            },
-            _ => Vec::new(),
-        }
+        self.lookup_and_run(key)
     }
 
     /// Save, or say what `Template::validate` refused — the check that used to
@@ -2406,47 +2644,8 @@ impl App {
             }
             return Vec::new();
         }
-        match key.code {
-            KeyCode::Esc => builder.open = None,
-            KeyCode::Up | KeyCode::Char('k') => {
-                list.selected = list.selected.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                list.selected = (list.selected + 1).min(count.saturating_sub(1));
-            }
-            KeyCode::Char('a') => {
-                list.editing = Some((count, studio::variable_form(None)));
-            }
-            KeyCode::Enter => {
-                if let Some(variable) = builder.template.variables.get(list.selected) {
-                    list.editing = Some((list.selected, studio::variable_form(Some(variable))));
-                }
-            }
-            KeyCode::Char('d') => {
-                if list.selected < count {
-                    builder.template.variables.remove(list.selected);
-                    list.selected = list.selected.min(count.saturating_sub(2));
-                    builder.error = None;
-                }
-            }
-            // Reorder in place, which is what `prompt::sort` was for. Moving a
-            // row is one keystroke and shows the result immediately.
-            KeyCode::Char('K') | KeyCode::Char('J') => {
-                let up = key.code == KeyCode::Char('K');
-                let at = list.selected;
-                let other = if up {
-                    at.checked_sub(1)
-                } else {
-                    (at + 1 < count).then_some(at + 1)
-                };
-                if let Some(other) = other {
-                    builder.template.variables.swap(at, other);
-                    list.selected = other;
-                }
-            }
-            _ => {}
-        }
-        Vec::new()
+        // The list itself: every key it answers is in the registry.
+        self.lookup_and_run(key)
     }
 
     /// The structure section: one folder path per line, the tree drawn beside
@@ -2510,47 +2709,8 @@ impl App {
             }
             return Vec::new();
         }
-        match key.code {
-            KeyCode::Esc => builder.open = None,
-            KeyCode::Up | KeyCode::Char('k') => {
-                list.selected = list.selected.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                list.selected = (list.selected + 1).min(count.saturating_sub(1));
-            }
-            KeyCode::Char('a') => {
-                list.editing = Some(studio::FileEdit {
-                    index: count,
-                    path: crate::tui::widgets::input::LineEdit::new(),
-                    body: crate::tui::widgets::text_area::TextArea::new(),
-                    in_body: false,
-                    error: None,
-                });
-            }
-            KeyCode::Enter => {
-                if let Some(file) = builder.template.files.get(list.selected) {
-                    let body = if file.template.is_empty() {
-                        file.content.clone()
-                    } else {
-                        file.template.clone()
-                    };
-                    list.editing = Some(studio::FileEdit {
-                        index: list.selected,
-                        path: crate::tui::widgets::input::LineEdit::with_text(file.path.clone()),
-                        body: crate::tui::widgets::text_area::TextArea::with_text(&body),
-                        in_body: false,
-                        error: None,
-                    });
-                }
-            }
-            KeyCode::Char('d') if list.selected < count => {
-                builder.template.files.remove(list.selected);
-                list.selected = list.selected.min(count.saturating_sub(2));
-                builder.error = None;
-            }
-            _ => {}
-        }
-        Vec::new()
+        // The list itself: every key it answers is in the registry.
+        self.lookup_and_run(key)
     }
 
     // --- settings, the counter, maintenance ------------------------------
@@ -2568,36 +2728,8 @@ impl App {
         if state.editing.is_some() {
             return self.on_settings_edit_key(key);
         }
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.modals.pop();
-                Vec::new()
-            }
-            KeyCode::Up | KeyCode::Char('k') if !key.ctrl => {
-                state.step(-1);
-                state.clamp_viewport(SETTINGS_ROWS);
-                Vec::new()
-            }
-            KeyCode::Down | KeyCode::Char('j') if !key.ctrl => {
-                state.step(1);
-                state.clamp_viewport(SETTINGS_ROWS);
-                Vec::new()
-            }
-            KeyCode::Enter => {
-                // A yes/no and a two-way choice are written where they stand:
-                // opening a dialog to answer a question with two answers is a
-                // keystroke spent on nothing.
-                if let Some((key, value)) = state.immediate_write() {
-                    return self.write_setting(key, value);
-                }
-                if let Some(Kind::Run(job)) = state.row().map(|row| row.kind.clone()) {
-                    return self.run_job(job);
-                }
-                state.begin_edit();
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
+        // The list itself: every key it answers is in the registry.
+        self.lookup_and_run(key)
     }
 
     fn on_settings_edit_key(&mut self, key: Key) -> Vec<Effect> {

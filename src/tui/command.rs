@@ -449,7 +449,10 @@ fn builder_list_open(app: &App) -> Availability {
     use crate::tui::app::studio::Open;
     match app.modals.top() {
         Some(crate::tui::app::modal::Modal::Builder(builder))
-            if matches!(builder.open, Some(Open::Variables(_)) | Some(Open::Files(_))) =>
+            if matches!(
+                builder.open,
+                Some(Open::Variables(_)) | Some(Open::Files(_))
+            ) =>
         {
             Availability::Enabled
         }
@@ -504,12 +507,19 @@ const SCROLLERS: &[Context] = &[
     Context::Settings,
     Context::Modal,
 ];
-/// The pages and the jumps: the project list, and the dialogs with a body to
-/// scroll.
+/// The pages: the project list, and the dialogs with a body to scroll.
 const PAGERS: &[Context] = &[
     Context::Projects,
     Context::Detail,
     Context::Studio,
+    Context::Settings,
+    Context::Modal,
+];
+/// The jumps to the ends. Not the studio: `g` is its "from a folder" there,
+/// and its list is a handful of rows.
+const JUMPERS: &[Context] = &[
+    Context::Projects,
+    Context::Detail,
     Context::Settings,
     Context::Modal,
 ];
@@ -567,33 +577,11 @@ pub static COMMANDS: &[Command] = &[
         always
     ),
     cmd!(
-        Back,
-        "Back",
-        "one step back: cancel a running job, clear the search, the filter, the marks — then quit",
-        LISTS,
-        [Key::plain(KeyCode::Esc)],
-        Navigate,
-        palette = false,
-        hint = false,
-        always
-    ),
-    cmd!(
-        Quit,
-        "Quit",
-        "leave fastf",
-        LISTS,
-        [Key::ch('q')],
-        Navigate,
-        palette = true,
-        hint = true,
-        always
-    ),
-    cmd!(
-        Close,
-        "Close",
-        "close this dialog — one level at a time, nothing already answered is lost",
-        DIALOGS,
-        [Key::plain(KeyCode::Esc), Key::ch('q')],
+        ActionsRun,
+        "Run the highlighted action",
+        "the verb under the cursor — or press its own key",
+        &[Context::Actions],
+        [Key::plain(KeyCode::Enter)],
         Navigate,
         palette = false,
         hint = true,
@@ -692,7 +680,7 @@ pub static COMMANDS: &[Command] = &[
         First,
         "First row",
         "jump to the top",
-        PAGERS,
+        JUMPERS,
         [Key::plain(KeyCode::Home), Key::ch('g')],
         Navigate,
         palette = false,
@@ -703,7 +691,7 @@ pub static COMMANDS: &[Command] = &[
         Last,
         "Last row",
         "jump to the bottom",
-        PAGERS,
+        JUMPERS,
         [Key::plain(KeyCode::End), Key::ch('G')],
         Navigate,
         palette = false,
@@ -1079,18 +1067,6 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         has_strip_selection
     ),
-    // --- the action menu ---------------------------------------------------
-    cmd!(
-        ActionsRun,
-        "Run the highlighted action",
-        "the verb under the cursor — or press its own key",
-        &[Context::Actions],
-        [Key::plain(KeyCode::Enter)],
-        Navigate,
-        palette = false,
-        hint = true,
-        always
-    ),
     // --- the template studio ----------------------------------------------
     cmd!(
         StudioEdit,
@@ -1204,6 +1180,41 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         always
     ),
+    // --- leaving: declared last so their hints come last --------------------
+    cmd!(
+        Quit,
+        "Quit",
+        "leave fastf",
+        LISTS,
+        [Key::ch('q')],
+        Navigate,
+        palette = true,
+        hint = false,
+        always
+    ),
+    cmd!(
+        Back,
+        "Back",
+        "one step back: cancel a running job, clear the search, the filter, the marks — then quit",
+        LISTS,
+        [Key::plain(KeyCode::Esc)],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    // --- closing a dialog ---------------------------------------------------
+    cmd!(
+        Close,
+        "Close",
+        "close this dialog — one level at a time, nothing already answered is lost",
+        DIALOGS,
+        [Key::plain(KeyCode::Esc), Key::ch('q')],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
+    ),
 ];
 
 /// The command declared for `id`.
@@ -1253,12 +1264,13 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
             continue;
         };
         let label = key.label();
-        let cost = label.chars().count() + 1 + c.title.chars().count() + 2;
+        let title = hint_title(c.id, c.title);
+        let cost = label.chars().count() + 1 + title.chars().count() + 2;
         if used + cost > width && !out.is_empty() {
             break;
         }
         used += cost;
-        out.push((label, hint_title(c.id, c.title)));
+        out.push((label, title));
     }
     out
 }
@@ -1282,7 +1294,7 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::StudioNew => "new",
         CommandId::StudioFromFolder => "from a folder",
         CommandId::StudioDelete => "delete",
-        CommandId::BuilderOpen => "open / save",
+        CommandId::BuilderOpen => "open",
         CommandId::BuilderAdd => "add",
         CommandId::BuilderRemove => "remove",
         CommandId::BuilderMoveUp => "up",
@@ -1291,7 +1303,6 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         _ => title,
     }
 }
-
 
 /// The help overlay: every command that fires in `ctx` (plus the global ones),
 /// grouped by category in `Category::ALL` order.
@@ -1308,6 +1319,17 @@ pub fn help_sections(ctx: Context) -> Vec<(Category, Vec<&'static Command>)> {
         })
         .filter(|(_, commands)| !commands.is_empty())
         .collect()
+}
+
+/// How many lines the help overlay draws for `ctx`: a heading and a blank
+/// per category, a line per command, and the three-line footer. The view
+/// draws exactly this, and `update` clamps the scroll with it.
+pub fn help_line_count(ctx: Context) -> usize {
+    help_sections(ctx)
+        .iter()
+        .map(|(_, commands)| commands.len() + 2)
+        .sum::<usize>()
+        + 3
 }
 
 /// The palette's command entries: everything listed and not hidden, the

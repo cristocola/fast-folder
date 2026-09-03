@@ -20,7 +20,7 @@ expression: frame
 "│  ID023│  Save        write the template                                                  │       │"
 "│  ID023│  Discard     leave without writing                                               │       │"
 "│  ID023│                                                                                  │       │"
-"│       │ ↑↓ choose   Enter open / save   Esc discard                                      │       │"
+"│       │ ↑↓ choose   Enter open   Esc discard   ? help   c commands                       │       │"
 "│       └──────────────────────────────────────────────────────────────────────────────────┘       │"
 "│                                                          ││                                      │"
 "│                                                          ││                                      │"

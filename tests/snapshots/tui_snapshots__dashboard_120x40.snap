@@ -41,4 +41,4 @@ expression: frame
 "│  client-project 4  general 4  music-video 4                            ││ Client project · 2 vars · {date}_{client}_…│"
 "└────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────┘"
 " 12 of 12 projects   ·   ? for help                                                                                     "
-" / search  a actions  o open  t terminal  y copy path  n new  ? help                                                    "
+" / search  a actions  o open  t terminal  y copy path  n new  ? help  c commands                                        "

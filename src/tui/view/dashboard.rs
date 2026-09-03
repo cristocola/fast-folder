@@ -240,11 +240,14 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
             ("Esc".to_string(), "close"),
             ("#".to_string(), "projects only"),
         ],
-        Some(Modal::Actions(_)) => vec![
-            ("↑↓".to_string(), "choose"),
-            ("Enter".to_string(), "run"),
-            ("Esc".to_string(), "close"),
-        ],
+        // The menu's own keys, from the registry: the verbs' letters work
+        // here exactly as they do on the list.
+        Some(Modal::Actions(_)) => command::hints(
+            crate::tui::command::Context::Actions,
+            app,
+            area.width.saturating_sub(2) as usize,
+        ),
+
         Some(Modal::TextPrompt(_)) => {
             vec![
                 ("Enter".to_string(), "confirm"),

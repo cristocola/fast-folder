@@ -175,6 +175,27 @@ impl SettingsState {
         self.selected = selectable[next];
     }
 
+    /// A page or an end: `delta` rows among the selectable ones, clamped —
+    /// `isize::MIN` is the first, `isize::MAX` the last.
+    pub fn jump(&mut self, delta: isize) {
+        let selectable: Vec<usize> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.selectable())
+            .map(|(index, _)| index)
+            .collect();
+        if selectable.is_empty() {
+            return;
+        }
+        let at = selectable
+            .iter()
+            .position(|index| *index >= self.selected)
+            .unwrap_or(0);
+        let next = nav::clamp_jump(Some(at), selectable.len(), delta).unwrap_or(0);
+        self.selected = selectable[next];
+    }
+
     pub fn clamp_viewport(&mut self, rows: usize) {
         self.offset = nav::viewport_offset(self.offset, Some(self.selected), self.rows.len(), rows);
     }

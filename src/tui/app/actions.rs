@@ -123,14 +123,18 @@ impl MultiPick {
     }
 }
 
-/// The commands the action menu lists: every command that fires in the
+/// The commands the action menu lists: every project verb that fires in the
 /// `Actions` context and is not hidden, with its availability, in registry
 /// order. Hidden means the verb makes no sense here (Move with no other
-/// mounted base), so it is not listed at all.
+/// mounted base), so it is not listed at all. The menu's own navigation —
+/// Enter, the arrows, Esc — fires there too and is not a row.
 pub fn action_entries(app: &App) -> Vec<(CommandId, Availability)> {
     crate::tui::command::COMMANDS
         .iter()
-        .filter(|command| command.contexts.contains(&Context::Actions))
+        .filter(|command| {
+            command.contexts.contains(&Context::Actions)
+                && command.category == crate::tui::command::Category::Project
+        })
         .map(|command| (command.id, (command.available)(app)))
         .filter(|(_, availability)| *availability != Availability::Hidden)
         .collect()

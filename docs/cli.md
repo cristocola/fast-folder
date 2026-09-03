@@ -164,7 +164,8 @@ the file to start fresh; a file that cannot be read is skipped with a note.
 
 #### Keys
 
-`?` shows every key for where you are. `c` (or `:`, or Ctrl-P) opens the
+`?` (or F1) shows every key for where you are — on the list, and inside any
+dialog, where it lists that dialog's own keys. `c` (or `:`, or Ctrl-P) opens the
 **command palette**, which lists every command with its key and filters as you
 type — `open` finds *Open project folder*, `#lull` jumps to the project. The
 keys that matter most:
@@ -190,8 +191,8 @@ keys that matter most:
 | `T`, `,` | the template studio, the settings |
 | `!` | check and recover — what `⚠ n needs attention` means |
 | F5, `R` | reload the library, reindex every base from its folders |
-| `q` | quit |
-| Esc | close a dialog, leave the search bar, clear the query, clear the template filter — and only then quit |
+| `q` | quit; in a dialog, close it |
+| Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the search bar, clear the query, clear the template filter, clear the marks — and only then quit |
 | Ctrl-C | leave at once (exit 130, `aborted.`) |
 
 #### Searching
@@ -294,7 +295,8 @@ records it; Esc skips and the question comes back next launch.
 
 The single-project actions are the other way round: they draw **over** the
 dashboard as dialogs. `Enter` or `a` opens the action menu, and a verb's own
-key (`A`, `r`, `D`, `M`, …) runs straight to its dialog. A tag you pick where
+key (`A`, `r`, `D`, `M`, …) runs straight to its dialog — from the list, and
+from inside the menu, which lists every key beside its verb. A tag you pick where
 the library already knows some, or type where it does not; remove-tags lists
 every tag on the project with a space to mark each; a typed confirmation —
 delete asks for the folder's name — keeps your text and says why it was

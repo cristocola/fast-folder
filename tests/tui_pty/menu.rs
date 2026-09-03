@@ -83,7 +83,7 @@ fn an_invalid_setting_is_corrected_in_place() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(800)
-        .down(11) // → Recent limit
+        .down(12) // → Recent limit
         .enter() // → the field, pre-filled
         .key("\x15") // Ctrl-U clears it
         .key("0") // refused: must be at least 1
@@ -182,7 +182,7 @@ fn adding_a_base_does_not_revert_a_concurrent_edit() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(800)
-        .down(10) // → Bases
+        .down(11) // → Bases
         .enter() // → the list, open from here
         .pause(2500)
         .key(&typed.display().to_string())
@@ -274,7 +274,7 @@ fn removing_a_base_leaves_the_rest_of_a_concurrent_edit_alone() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(800)
-        .down(10) // → Bases
+        .down(11) // → Bases
         .enter() // the list, as text
         .pause(500)
         .key("\x1b[A") // up, onto the first base
@@ -434,7 +434,7 @@ fn esc_in_a_settings_field_leaves_the_value_unchanged() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(800)
-        .down(11) // → Recent limit
+        .down(12) // → Recent limit
         .enter()
         .pause(400)
         .key("\x15") // clear it, so an accepted write would be visible

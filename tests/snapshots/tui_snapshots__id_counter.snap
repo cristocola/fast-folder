@@ -28,7 +28,7 @@ expression: frame
 "│       │   Open in the editor          no                                                 │       │"
 "└───────│▸  Print the path              no                                                 │───────┘"
 "┌ templa│ print the absolute path on its own line, for `cd \"$(fastf new …)\"`             │───────┐"
-"│  clien│ ↑↓ choose   Enter change / run   Esc close                                       │ate}_{…│"
+"│  clien│ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │ate}_{…│"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 " | saving…                                                                                          "
 "                                                                                                    "

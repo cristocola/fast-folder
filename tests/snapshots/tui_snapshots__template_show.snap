@@ -22,7 +22,7 @@ expression: frame
 "│  ID023│                             Folder structure:                                    │       │"
 "│       │                             └── 00_Inbox/                                        │       │"
 "│       │ 3 templates                                                                      │       │"
-"│       │ ↑↓ choose   Enter edit   n new   g from a folder   D delete   Esc close          │       │"
+"│       │ ↑↓ choose   Enter edit   n new   g from a folder   D delete   Esc close   ? help │       │"
 "│       └──────────────────────────────────────────────────────────────────────────────────┘       │"
 "│                                                          ││                                      │"
 "│                                                          ││                                      │"

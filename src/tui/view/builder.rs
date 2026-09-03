@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use crate::tui::app::App;
 use crate::tui::app::settings::{Editing, SettingsState};
 use crate::tui::app::studio::{Builder, FileEdit, FileList, Open, Row, Section, Studio, VarList};
+use crate::tui::command::{self, Context};
 use crate::tui::layout::centered;
 use crate::tui::theme::Theme;
 use crate::tui::view::{fit, pad};
@@ -84,13 +85,35 @@ fn footer_line(frame: &mut Frame, area: Rect, text: &str, style: ratatui::style:
     frame.render_widget(Paragraph::new(Span::styled(text.to_string(), style)), area);
 }
 
-fn key_line<'a>(theme: &Theme, pairs: &[(&'a str, &'a str)]) -> Line<'a> {
+fn key_line<K: AsRef<str>, V: AsRef<str>>(theme: &Theme, pairs: &[(K, V)]) -> Line<'static> {
     let mut spans = Vec::new();
     for (key, what) in pairs {
-        spans.push(Span::styled(format!(" {key} "), theme.key()));
-        spans.push(Span::styled(format!("{what}  "), theme.dim()));
+        spans.push(Span::styled(format!(" {} ", key.as_ref()), theme.key()));
+        spans.push(Span::styled(format!("{}  ", what.as_ref()), theme.dim()));
     }
     Line::from(spans)
+}
+
+/// Owned pairs, for the key lines a widget writes itself — a form, a text
+/// area — whose keys the widget consumes and the registry does not see.
+fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    list.iter()
+        .map(|(key, what)| ((*key).to_string(), (*what).to_string()))
+        .collect()
+}
+
+/// The key line a list draws from the registry: the arrows first, then every
+/// hinted command that fires in `ctx`, as many as fit in `width`. This is the
+/// same list the help overlay and the palette read, so a key the line shows
+/// is a key the list answers.
+fn registry_keys(app: &App, ctx: Context, width: usize) -> Vec<(String, String)> {
+    let mut out = vec![("↑↓".to_string(), "choose".to_string())];
+    out.extend(
+        command::hints(ctx, app, width.saturating_sub(12))
+            .into_iter()
+            .map(|(key, what)| (key, what.to_string())),
+    );
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +127,6 @@ pub fn render_studio(
     area: Rect,
 ) -> Option<Position> {
     let theme = &app.theme;
-    let g = theme.glyphs;
     let body = studio.cards.len().max(studio.lines.len()).max(4) as u16;
     let area = sized(area, body);
     let (body, footer, keys) = frame_parts(app, " templates ".to_string(), frame, area)?;
@@ -166,18 +188,10 @@ pub fn render_studio(
     frame.render_widget(
         Paragraph::new(key_line(
             theme,
-            &[
-                ("↑↓", "choose"),
-                ("Enter", "edit"),
-                ("n", "new"),
-                ("g", "from a folder"),
-                ("D", "delete"),
-                ("Esc", "close"),
-            ],
+            &registry_keys(app, Context::Studio, keys.width as usize),
         )),
         keys,
     );
-    let _ = g;
     None
 }
 
@@ -209,38 +223,46 @@ pub fn render_builder(
         return None;
     }
 
+    let width = keys.width as usize;
     let (caret, hint, key_pairs) = match &builder.open {
         None => (
             render_sections(app, builder, frame, body),
             builder.error.clone(),
-            vec![
-                ("↑↓", "choose"),
-                ("Enter", "open / save"),
-                ("Esc", "discard"),
-            ],
+            // On the section list Esc discards the template; the registry's
+            // word for the key is "close", and here that is what closing does.
+            registry_keys(app, Context::Builder, width)
+                .into_iter()
+                .map(|(key, what)| {
+                    if key == "Esc" {
+                        (key, "discard".to_string())
+                    } else {
+                        (key, what)
+                    }
+                })
+                .collect(),
         ),
         Some(Open::Metadata(form)) | Some(Open::Id(form)) => (
             render_form(app, form, frame, body),
             form.error()
                 .map(str::to_string)
                 .or_else(|| form.focused().map(|field| field.hint.clone())),
-            vec![("Tab", "next field"), ("Enter", "keep"), ("Esc", "back")],
+            pairs(&[("Tab", "next field"), ("Enter", "keep"), ("Esc", "back")]),
         ),
-        Some(Open::Variables(list)) => render_variables(app, builder, list, frame, body),
+        Some(Open::Variables(list)) => render_variables(app, builder, list, frame, body, width),
         Some(Open::Structure(area_state)) => {
             let caret = render_structure(app, builder, area_state, frame, body);
             (
                 caret,
                 Some("one folder path per line — use / to nest on every platform".to_string()),
-                vec![
+                pairs(&[
                     ("Ctrl-S", "keep"),
                     ("Enter", "new line"),
                     ("Ctrl-K", "drop the line"),
                     ("Esc", "back"),
-                ],
+                ]),
             )
         }
-        Some(Open::Files(list)) => render_files(app, builder, list, frame, body),
+        Some(Open::Files(list)) => render_files(app, builder, list, frame, body, width),
     };
 
     let style = if builder.error.is_some() {
@@ -325,15 +347,16 @@ fn render_form(app: &App, form: &Form, frame: &mut Frame, area: Rect) -> Option<
     form.render(area, frame.buffer_mut(), &app.theme, LABEL)
 }
 
-type Face<'a> = (Option<Position>, Option<String>, Vec<(&'a str, &'a str)>);
+type Face = (Option<Position>, Option<String>, Vec<(String, String)>);
 
-fn render_variables<'a>(
+fn render_variables(
     app: &App,
     builder: &Builder,
     list: &VarList,
     frame: &mut Frame,
     area: Rect,
-) -> Face<'a> {
+    width: usize,
+) -> Face {
     let theme = &app.theme;
     if let Some((_, form)) = &list.editing {
         return (
@@ -341,7 +364,7 @@ fn render_variables<'a>(
             form.error()
                 .map(str::to_string)
                 .or_else(|| form.focused().map(|field| field.hint.clone())),
-            vec![("Tab", "next field"), ("Enter", "keep"), ("Esc", "back")],
+            pairs(&[("Tab", "next field"), ("Enter", "keep"), ("Esc", "back")]),
         );
     }
     let items: Vec<ListItem> = builder
@@ -377,13 +400,7 @@ fn render_variables<'a>(
     (
         None,
         Some("a variable's slug is its token: {artist}".to_string()),
-        vec![
-            ("a", "add"),
-            ("Enter", "edit"),
-            ("d", "remove"),
-            ("K J", "reorder"),
-            ("Esc", "back"),
-        ],
+        registry_keys(app, Context::Builder, width),
     )
 }
 
@@ -423,13 +440,14 @@ fn render_structure(
     caret
 }
 
-fn render_files<'a>(
+fn render_files(
     app: &App,
     builder: &Builder,
     list: &FileList,
     frame: &mut Frame,
     area: Rect,
-) -> Face<'a> {
+    width: usize,
+) -> Face {
     let theme = &app.theme;
     if let Some(edit) = &list.editing {
         return render_file_edit(app, builder, edit, frame, area);
@@ -470,22 +488,17 @@ fn render_files<'a>(
     (
         None,
         Some("a file's text is interpolated at create time".to_string()),
-        vec![
-            ("a", "add"),
-            ("Enter", "edit"),
-            ("d", "remove"),
-            ("Esc", "back"),
-        ],
+        registry_keys(app, Context::Builder, width),
     )
 }
 
-fn render_file_edit<'a>(
+fn render_file_edit(
     app: &App,
     builder: &Builder,
     edit: &FileEdit,
     frame: &mut Frame,
     area: Rect,
-) -> Face<'a> {
+) -> Face {
     let theme = &app.theme;
     let path_area = Rect::new(area.x, area.y, area.width, 1);
     let tokens_area = Rect::new(area.x, area.y + 1, area.width, 1);
@@ -532,7 +545,7 @@ fn render_file_edit<'a>(
         edit.error.clone().or_else(|| {
             Some("Tab moves between the path and the text; an empty text is a marker file".into())
         }),
-        vec![("Ctrl-S", "keep"), ("Tab", "path / text"), ("Esc", "back")],
+        pairs(&[("Ctrl-S", "keep"), ("Tab", "path / text"), ("Esc", "back")]),
     )
 }
 
@@ -612,22 +625,16 @@ pub fn render_settings(
         &fit(&text, footer.width as usize, g.ellipsis),
         style,
     );
-    let pairs: Vec<(&str, &str)> = match &state.editing {
-        Some(Editing::Bases { .. }) => vec![
+    let key_pairs: Vec<(String, String)> = match &state.editing {
+        Some(Editing::Bases { .. }) => pairs(&[
             ("Ctrl-S", "keep"),
             ("Enter", "new line"),
             ("Esc", "leave it unchanged"),
-        ],
-        Some(Editing::Value { .. }) => {
-            vec![("Enter", "keep"), ("Esc", "leave it unchanged")]
-        }
-        None => vec![
-            ("↑↓", "choose"),
-            ("Enter", "change / run"),
-            ("Esc", "close"),
-        ],
+        ]),
+        Some(Editing::Value { .. }) => pairs(&[("Enter", "keep"), ("Esc", "leave it unchanged")]),
+        None => registry_keys(app, Context::Settings, keys.width as usize),
     };
-    frame.render_widget(Paragraph::new(key_line(theme, &pairs)), keys);
+    frame.render_widget(Paragraph::new(key_line(theme, &key_pairs)), keys);
     caret
 }
 

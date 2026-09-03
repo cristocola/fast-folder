@@ -38,7 +38,7 @@ pub fn run(entry: Entry) -> Result<()> {
     // Checked before the screen is taken: an app that cannot be driven must
     // not switch a terminal nobody is holding to the alternate screen.
     crate::util::tty::require_tty(
-        "show the menu",
+        "open the guided app",
         "run a subcommand instead — see `fastf --help`",
     )?;
     // Loaded here, before the screen: a configuration that cannot be parsed

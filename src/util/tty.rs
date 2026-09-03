@@ -38,16 +38,17 @@ pub fn prompt_available() -> bool {
 /// flag or setting that avoids the prompt.
 pub fn require_tty(what: &str, how: &str) -> Result<()> {
     if prompt_available() {
-        // One of exactly two choke points — every prompt reaches here
-        // through `prompt::ready()`, and every picker through that. The other is
-        // `live_select`, which the browser reaches without passing this way.
+        // One of exactly two choke points — every prompt reaches here through
+        // `prompt::ready()`, and every picker through that. The other is
+        // `tui::runtime::Runtime::init`, which the guided app reaches after its
+        // own `require_tty` and before it takes the screen.
         mark_interactive_surface();
         return Ok(());
     }
     bail!("no terminal to {what} on — {how}")
 }
 
-/// Record that a prompt, picker or menu was drawn and waited on.
+/// Record that a prompt, a picker or the app was drawn and waited on.
 pub fn mark_interactive_surface() {
     SURFACE_RAN.store(true, Ordering::Relaxed);
 }

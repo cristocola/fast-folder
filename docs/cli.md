@@ -8,7 +8,7 @@ On the very first launch fastf asks where your projects should live and suggests
 
 | Command | Description |
 |---|---|
-| `fastf` | Launch the interactive TUI menu |
+| `fastf` | Open the guided app |
 | `fastf new [slug]` | Create a project from a template |
 | `fastf recent` | Interactive project picker with inline tags |
 | `fastf open <query>` | Reveal a project folder by ID or name |

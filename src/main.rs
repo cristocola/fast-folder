@@ -19,7 +19,7 @@ counters live in one data folder: next to the binary when a config.toml sits the
 (portable mode), otherwise in your user config directory. See `fastf paths`.\n\
 \n\
 Getting started:\n\
-  fastf                        # interactive menu\n\
+  fastf                        # the guided app: your whole library, on one screen\n\
   fastf new                    # pick a template and fill in variables\n\
   fastf template list          # see available templates\n\
   fastf template new           # create a new template interactively\n\
@@ -667,7 +667,7 @@ fn main() {
         // 130 (the shell convention for SIGINT) so scripts can tell them apart.
         //
         // Deliberately says nothing about a partial project: this fires wherever
-        // Ctrl-C lands, including the main menu with nothing in flight. The
+        // Ctrl-C lands, including the dashboard with nothing in flight. The
         // create path prints its own notice when it actually rolls a folder back.
         if fastf::util::interrupt::is_set() {
             eprintln!("{}", colored::Colorize::yellow("aborted."));
@@ -692,7 +692,7 @@ fn main() {
 /// Only ever reached inside a window fastf opened for itself
 /// (`util::relaunch`): closing on the last line of output would make the whole
 /// mechanism pointless, since the text would flash past exactly as it does in
-/// the journal. A window that ran a picker or a menu already had the user's
+/// the journal. A window that ran a picker or the app already had the user's
 /// attention and closes at once — the alternative is a keypress demanded of
 /// somebody who just pressed a key.
 ///
@@ -751,9 +751,9 @@ fn run() -> Result<()> {
     match cli.command {
         // No subcommand → interactive TUI
         None => {
-            // A launcher's `fastf` has no terminal to draw a menu on, and the
-            // menu's own refusal would be written to the journal. Open a window
-            // and run the menu in it; anywhere else this is false.
+            // A launcher's `fastf` has no terminal to draw on, and the app's
+            // own refusal would be written to the journal. Open a window
+            // and run the app in it; anywhere else this is false.
             let cfg = fastf::core::config::Config::load()?;
             if cli::terminal::hand_off_to_a_terminal(&cfg, false) {
                 return Ok(());

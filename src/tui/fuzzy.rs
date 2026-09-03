@@ -10,6 +10,17 @@
 //! query must match, each on its own, inside the one text it is matched
 //! against; the callers keep fields apart so a word cannot match half in the
 //! id and half in a tag.
+//!
+//! **Two kinds of word are never fuzzy at all** ([`Word::is_literal`]):
+//!
+//! - A word of **digits**. Every folder name carries a date, and a date is a
+//!   pile of digits in order: `45` found `2026-04-15` as a fuzzy hit — the `4`
+//!   of the month and the `5` of the day — which is not what anyone typing a
+//!   number means. A number means an ID, so `45` is a substring and finds
+//!   `ID0045` and `ID0450` and nothing else.
+//! - A word containing a **path separator**, which is what a hierarchical tag
+//!   looks like (`client/Acme`). Fuzzed, `c/A` reaches every tag with a slash
+//!   in it; as a substring it reaches the one that was typed.
 
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32String};
@@ -26,7 +37,9 @@ pub struct Hit {
 #[derive(Debug, Clone)]
 pub struct Word {
     substring: Pattern,
-    fuzzy: Pattern,
+    /// `None` for a word that is matched literally and never fuzzily — see the
+    /// module docs.
+    fuzzy: Option<Pattern>,
     chars: usize,
 }
 
@@ -37,6 +50,27 @@ impl Word {
     fn max_span(&self) -> usize {
         self.chars + (self.chars / 3).max(1)
     }
+
+    /// Whether this word is matched as a substring and never fuzzily.
+    pub fn is_literal(&self) -> bool {
+        self.fuzzy.is_none()
+    }
+}
+
+/// A word nothing is guessed about: all digits (a number means an ID, not the
+/// digits scattered through a date), or carrying a path separator (a
+/// hierarchical tag).
+fn matched_literally(word: &str) -> bool {
+    let mut digits = 0usize;
+    for c in word.chars() {
+        if c == '/' || c == '\\' {
+            return true;
+        }
+        if c.is_ascii_digit() {
+            digits += 1;
+        }
+    }
+    digits > 0 && digits == word.chars().count()
 }
 
 pub struct Fuzzy {
@@ -71,12 +105,14 @@ impl Fuzzy {
                     Normalization::Smart,
                     AtomKind::Substring,
                 ),
-                fuzzy: Pattern::new(
-                    word,
-                    CaseMatching::Ignore,
-                    Normalization::Smart,
-                    AtomKind::Fuzzy,
-                ),
+                fuzzy: (!matched_literally(word)).then(|| {
+                    Pattern::new(
+                        word,
+                        CaseMatching::Ignore,
+                        Normalization::Smart,
+                        AtomKind::Fuzzy,
+                    )
+                }),
                 chars: word.chars().count(),
             })
             .collect()
@@ -97,7 +133,7 @@ impl Fuzzy {
                 indices: hit.indices,
             });
         }
-        let hit = self.indices(&word.fuzzy, haystack)?;
+        let hit = self.indices(word.fuzzy.as_ref()?, haystack)?;
         let span = match (hit.indices.first(), hit.indices.last()) {
             (Some(first), Some(last)) => (*last - *first + 1) as usize,
             _ => 0,
@@ -188,6 +224,30 @@ mod tests {
         assert!(!matches("lulrmx", "Lullaby_Remix"));
         assert!(!matches("cacme", "Client_Onboarding_Acme"));
         assert!(!matches("lulla", "Client_Onboarding_Acme"));
+    }
+
+    #[test]
+    fn a_number_finds_an_id_and_never_a_date() {
+        // The ID it names, and any longer ID that contains it.
+        assert!(matches("45", "ID0045"));
+        assert!(matches("45", "ID0450"));
+        assert!(matches("248", "2026-09-01_Lullaby_Remix_ID0248"));
+        // Not the 4 of a month and the 5 of a day, which is what fuzzing a
+        // number over a dated folder name used to find.
+        assert!(!matches("45", "2026-04-15_Spring_Campaign_ID0107"));
+        assert!(!matches("45", "2026-04-05_Old_Shoot_ID0107"));
+        assert!(Fuzzy::words("45")[0].is_literal());
+        assert!(!Fuzzy::words("id45")[0].is_literal());
+    }
+
+    #[test]
+    fn a_hierarchical_tag_is_matched_literally() {
+        assert!(matches("client/Acme", "client/Acme"));
+        assert!(matches("client/", "client/Acme"));
+        // Fuzzed, this reached every slashed tag there is.
+        assert!(!matches("c/A", "client/Acme"));
+        assert!(!matches("client/acm", "client-work/acme"));
+        assert!(Fuzzy::words("client/Acme")[0].is_literal());
     }
 
     #[test]

@@ -5,7 +5,6 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthStr;
 
 use crate::tui::app::{App, StatusLevel};
 use crate::tui::command;
@@ -17,18 +16,16 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let g = theme.glyphs;
     let width = area.width as usize;
+    let gap = "   ";
 
-    // Line 1: the counts.
-    let mut left = vec![Span::styled(" fastf ", theme.accent())];
+    // Line 1: the name, the counts, the highest id.
     let projects = if app.library.loaded {
         app.library.snapshot.len()
     } else {
         app.summary.as_ref().map(|s| s.projects).unwrap_or(0)
     };
-    left.push(Span::styled(
-        format!(" {} {projects} projects", g.projects),
-        theme.bold(),
-    ));
+    let mut left = vec![Span::styled(" fastf", theme.accent()), Span::raw(gap)];
+    left.push(Span::styled(format!("{projects} projects"), theme.text()));
     if !app.library.loaded {
         left.push(Span::styled(
             format!(" (from index) {}", SPINNER[(app.ticks % 4) as usize]),
@@ -36,110 +33,61 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         ));
     }
     left.push(Span::styled(
-        format!(
-            " {} {} {} templates",
-            g.sep,
-            g.templates,
-            app.templates.cards.len()
-        ),
+        format!("{gap}{} templates", app.templates.cards.len()),
         theme.text(),
     ));
     if let Some(summary) = &app.summary {
         left.push(Span::styled(
-            format!(" {} {} {} bases", g.sep, g.bases, summary.bases.len()),
+            format!("{gap}{} bases", summary.bases.len()),
             theme.text(),
         ));
-        if let Some(id) = &summary.max_id {
-            left.push(Span::styled(
-                format!(" {} {} {id}", g.sep, g.highest),
-                theme.dim(),
-            ));
-        }
-        if summary.attention > 0 {
-            left.push(Span::styled(
-                format!(
-                    " {} {} {} needs attention",
-                    g.sep, g.warn, summary.attention
-                ),
-                theme.warn(),
-            ));
-        }
     }
-    let right = if app.session.is_empty() {
-        Vec::new()
-    } else {
-        vec![
-            Span::styled("this session: ", theme.dim()),
-            Span::styled(app.session.join(&format!("  {}  ", g.sep)), theme.dim()),
+    let right = match app.summary.as_ref().and_then(|s| s.max_id.as_ref()) {
+        Some(id) => vec![
+            Span::styled("highest ", theme.dim()),
+            Span::styled(id.clone(), theme.text()),
             Span::raw(" "),
-        ]
+        ],
+        None => Vec::new(),
     };
     let mut lines = vec![split_line(left, right, width)];
 
-    // Line 2: bases on a tall header, the pulse on a compact one.
-    let bases_line = |app: &App| -> Line<'static> {
-        let mut spans = vec![Span::styled(" bases  ", theme.dim())];
-        match &app.summary {
-            Some(summary) => {
-                for (i, base) in summary.bases.iter().enumerate() {
-                    if i > 0 {
-                        spans.push(Span::styled(format!("  {}  ", g.sep), theme.dim()));
-                    }
-                    if base.is_default {
-                        spans.push(Span::styled(format!("{} ", g.arrow), theme.dim()));
-                    }
-                    spans.push(Span::styled(base.label.clone(), theme.accent()));
-                    spans.push(Span::styled(format!(" ({})", base.note()), theme.dim()));
+    // Line 2: the bases, and on the right whatever needs attention — else
+    // what this session did.
+    let mut bases = vec![Span::raw(" ")];
+    match &app.summary {
+        Some(summary) => {
+            for (i, base) in summary.bases.iter().enumerate() {
+                if i > 0 {
+                    bases.push(Span::raw(gap));
                 }
+                if base.is_default {
+                    bases.push(Span::styled(format!("{} ", g.arrow), theme.dim()));
+                }
+                bases.push(Span::styled(base.label.clone(), theme.accent()));
+                bases.push(Span::styled(format!(" {}", base.note()), theme.dim()));
             }
-            None => spans.push(Span::styled("probing…", theme.dim())),
         }
-        Line::from(spans)
-    };
-    let pulse_line = |app: &App, room: usize| -> Line<'static> {
-        let mut spans = vec![Span::styled(
-            format!(" {}{} pulse {}{} ", g.rule, g.rule, g.rule, g.rule),
-            theme.dim(),
-        )];
-        let pulse = app.templates.pulse(4);
-        let max = pulse.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
-        let mut used = spans[0].width();
-        for (slug, count) in pulse {
-            let bar = g.bar.repeat(((count * 8) / max).max(1));
-            let cell = format!(" {slug} {bar} {count}  ");
-            if used + cell.width() > room {
-                break;
-            }
-            used += cell.width();
-            spans.push(Span::styled(format!(" {slug} "), theme.dim()));
-            spans.push(Span::styled(
-                bar,
-                ratatui::style::Style::default().fg(theme.tag_color(slug)),
-            ));
-            spans.push(Span::styled(format!(" {count}  "), theme.text()));
-        }
-        Line::from(spans)
-    };
-
-    if area.height >= 4 {
-        lines.push(bases_line(app));
-        lines.push(pulse_line(app, width));
-        let newest = app
-            .summary
-            .as_ref()
-            .and_then(|s| s.newest.as_ref())
-            .map(|(id, name)| format!("{id} {name}"))
-            .unwrap_or_else(|| "—".to_string());
-        lines.push(Line::from(vec![
-            Span::styled(" newest ", theme.dim()),
-            Span::styled(
-                fit(&newest, width.saturating_sub(9), g.ellipsis),
-                theme.text(),
-            ),
-        ]));
-    } else {
-        lines.push(pulse_line(app, width));
+        None => bases.push(Span::styled("probing bases…", theme.dim())),
     }
+    let right = match app.summary.as_ref().map(|s| s.attention) {
+        Some(n) if n > 0 => vec![Span::styled(
+            format!(
+                "{} {n} need{} attention ",
+                g.warn,
+                if n == 1 { "s" } else { "" }
+            ),
+            theme.warn(),
+        )],
+        _ if !app.session.is_empty() => vec![
+            Span::styled("this session: ", theme.dim()),
+            Span::styled(app.session.join(&format!("  {}  ", g.sep)), theme.dim()),
+            Span::raw(" "),
+        ],
+        _ => Vec::new(),
+    };
+    lines.push(split_line(bases, right, width));
+
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -197,7 +145,7 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
             .input
             .render_line(text_area, frame.buffer_mut(), prefix_span, theme.text())
     } else {
-        let placeholder = "/ to search  ·  words match a name, id, template or tag; tag:x  template=y  created>date match exactly";
+        let placeholder = "/ to search";
         let line = Line::from(vec![
             prefix_span,
             Span::styled(
@@ -263,7 +211,7 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
             "no matches — loosen the query, or press F to clear the template filter".to_string()
         } else {
             format!(
-                "{} of {} projects  {}  ? for help",
+                "{} of {} projects   {}   ? for help",
                 app.library.len(),
                 app.library.snapshot.len(),
                 g.sep

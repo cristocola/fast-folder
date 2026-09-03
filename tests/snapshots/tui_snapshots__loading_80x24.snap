@@ -2,10 +2,10 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fastf  ◈ 0 projects (from index) | · ⬡ 0 templates                             "
-" ── pulse ──                                                                    "
-" ⌕ / to search  ·  words match a name, id, template or tag; tag…   0/0 · newest "
-"┌ ◈ projects ──────────────────────────────────────────────────────────────────┐"
+" fastf   0 projects (from index) |   0 templates                                "
+" probing bases…                                                                 "
+" ⌕ / to search                                                     0/0 · newest "
+"┌ projects ────────────────────────────────────────────────────────────────────┐"
 "│  ID   PROJECT                CREATED    SIZE        BASE TEMPLATE TAGS       │"
 "│                                                                              │"
 "│                                                                              │"

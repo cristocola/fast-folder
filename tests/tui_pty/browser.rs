@@ -287,11 +287,11 @@ fn the_header_reports_the_library_from_the_index_without_scanning() {
         "the header should report the count:\n{screen}"
     );
     assert!(
-        screen.contains("▲ ID0002"),
+        screen.contains("highest ID0002"),
         "the header should report the highest ID:\n{screen}"
     );
     assert!(
-        screen.contains("(not mounted)"),
+        screen.contains("not mounted"),
         "a configured base that is gone should be named:\n{screen}"
     );
     assert_eq!(

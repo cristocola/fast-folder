@@ -239,6 +239,11 @@ the `release` skill.
     file clock made `cache_is_stale` read the base as newer every so often and
     the next discovery rescan for nothing — which the new pty test caught as a
     flake. `write_cache` now re-stamps the index after the rename.
+  - **The header was too busy** (review feedback): the pulse chart, the
+    `◈ ⬡ ⌂ ▲` counters, the `newest` line and the long search placeholder
+    went. Two lines now — name and counts with the highest id on the right;
+    the bases with `⚠ n needs attention` or the session ring on the right —
+    and the table, strip and detail titles are plain words.
   - Measured on the maintainer's machine, 2026-09-03: the release binary is
     3.87 MB (4 056 544 bytes; v2.2.1 shipped under 4 MB, so the README's
     claim still holds) and a cold `cargo build --release` — every

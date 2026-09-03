@@ -22,7 +22,7 @@ pub fn strip(app: &App, frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
-            format!(" {} templates  (Tab · ←/→ · Enter filters) ", g.templates),
+            " templates ",
             if focused { theme.accent() } else { theme.dim() },
         ))
         .border_style(theme.border(focused));
@@ -35,22 +35,21 @@ pub fn strip(app: &App, frame: &mut Frame, area: Rect) {
     for (i, card) in app.templates.cards.iter().enumerate() {
         let active = app.library.template_filter.as_deref() == Some(card.slug.as_str());
         let selected = focused && i == app.templates.selected;
-        let text = format!(
-            "{} {} ×{}",
-            if active { g.dot } else { g.ring },
-            card.slug,
-            app.templates.count(&card.slug)
-        );
+        let text = format!("{} {}", card.slug, app.templates.count(&card.slug));
         let cell = format!(" {text} ");
         if used + cell.len() > room && i > 0 {
             spans.push(Span::styled(g.ellipsis, theme.dim()));
             break;
         }
         used += cell.len();
+        // The filter that is on is underlined; the card the cursor is on is
+        // highlighted like a row.
         let style = if selected {
             theme.selection
         } else if active {
-            theme.accent_alt()
+            theme
+                .accent()
+                .add_modifier(ratatui::style::Modifier::UNDERLINED)
         } else {
             theme.text()
         };

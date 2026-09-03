@@ -2,10 +2,10 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fastf  ◈ 12 projects · ⬡ 3 templates · ⌂ 2 bases · ▲ ID0248 · ⚠ 1 needs atten… "
-" ── pulse ──  client-project ████████ 4   general ████████ 4                    "
-" ⌕ / to search  ·  words match a name, id, template or tag; t…   12/12 · newest "
-"┌ ◈ projects ──────────────────────────────────────────────────────────────────┐"
+" fastf   12 projects   3 templates   2 bases                     highest ID0248 "
+" → projects 12   archive not mounted                        ⚠ 1 needs attention "
+" ⌕ / to search                                                   12/12 · newest "
+"┌ projects ────────────────────────────────────────────────────────────────────┐"
 "│  ID     PROJECT                                        CREATED    SIZE       │"
 "│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248                2026-08-28   scanning…│"
 "│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247       2026-08-27   scanning…│"
@@ -24,5 +24,5 @@ expression: frame
 "│                                                                              │"
 "│                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────┘"
-" 12 of 12 projects  ·  ? for help                                               "
+" 12 of 12 projects   ·   ? for help                                             "
 " / search  Enter actions  o open  t terminal                                    "

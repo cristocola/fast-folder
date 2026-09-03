@@ -64,7 +64,7 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     let g = theme.glyphs;
     let focused = app.focus == Focus::Projects && app.modals.is_empty() && !app.search.editing;
 
-    let title = format!(" {} projects ", g.projects);
+    let title = " projects ".to_string();
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
@@ -294,11 +294,15 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
     };
     let journal = detail.map(|d| d.journal_count).unwrap_or(0);
     lines.push(Line::from(vec![
+        Span::styled(size, theme.text()),
         Span::styled(
-            format!("{} {journal} journal entries", g.journal),
+            format!(
+                "   {}   {journal} journal entr{}",
+                g.sep,
+                if journal == 1 { "y" } else { "ies" }
+            ),
             theme.dim(),
         ),
-        Span::styled(format!(" {} {size}", g.sep), theme.dim()),
     ]));
 
     if !project.tags.is_empty() {

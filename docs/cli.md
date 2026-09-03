@@ -117,11 +117,11 @@ one question at a time. It is drawn on stderr, so `fastf > log` still opens it
 and nothing you type reaches a pipe.
 
 ```
- fastf  ◈ 12 projects · ⬡ 3 templates · ⌂ 2 bases · ▲ ID0248 · ⚠ 1 needs attention
- bases  → projects (9)  ·  archive (3)  ·  usb (not mounted)
- ── pulse ──  general ████████ 7   music-video ████ 4
- ⌕ tag:draft lulla                                          4/12 · relevance
-┌ ◈ projects ──────────────────────────────────┐┌ ID0248 ─────────────────────┐
+ fastf   12 projects   3 templates   2 bases                          highest ID0248
+ → projects 9   archive 3   usb not mounted                       ⚠ 1 needs attention
+
+ ⌕ tag:draft lulla                                              4/12 · relevance
+┌ projects ────────────────────────────────────┐┌ ID0248 ─────────────────────┐
 │▸ ID0248 2026-09-01_Lullaby_Remix_ID0248 3.2 MB││2026-09-01_Lullaby_Remix_ID… │
 │  ID0247 2026-08-30_Client_Acme_ID0247  scanning…││music-video · projects       │
 └──────────────────────────────────────────────┘└─────────────────────────────┘
@@ -131,23 +131,24 @@ and nothing you type reaches a pipe.
 
 What is on screen, top to bottom:
 
-- **The header** — how many projects, templates and bases there are, the
-  highest ID, and `⚠ n needs attention` when an interrupted create or move is
-  waiting for `fastf reconcile`. On a tall terminal it also lists each base
-  with whether it is mounted, the busiest templates, the newest project, and
-  the last few things this session did. The first frame's counts come from each
-  base's index and are labelled `(from index)` until discovery answers.
+- **The header** — two lines. How many projects, templates and bases there
+  are and the highest ID; then each base with how many projects its index
+  holds or that it is not mounted, and on the right `⚠ n needs attention`
+  when an interrupted create or move is waiting for `fastf reconcile` (else
+  the last few things this session did). The first frame's counts come from
+  each base's index and are labelled `(from index)` until discovery answers.
 - **The search bar** — see below.
 - **The project table** — ID, folder name, then the date, the size, the base,
   the template and the tags, as many as fit. The folder name is never cut: a
   narrow window drops the other columns first, tags before the template, the
   template before the base.
 - **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
-  selected project's template, base and date, its journal, its tags, its
-  template variables, the top of its folder and the first lines of its notes.
+  selected project's template, base and date, its size and journal count, its
+  tags, its template variables, the top of its folder and the first lines of
+  its notes.
 - **The template strip** (terminals 30 rows or taller) — one card per
   template with how many projects use it. Tab reaches it; Enter filters the
-  list by the card.
+  list by the card, and the card that is filtering is underlined.
 - **The status line and the hint bar** — what the last action did, and the
   keys that matter where you are.
 

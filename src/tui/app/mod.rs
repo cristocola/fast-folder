@@ -95,16 +95,6 @@ impl TemplatesState {
         self.counts.get(slug).copied().unwrap_or(0)
     }
 
-    /// The busiest templates, for the header's pulse chart.
-    pub fn pulse(&self, n: usize) -> Vec<(&str, usize)> {
-        self.cards
-            .iter()
-            .map(|c| (c.slug.as_str(), self.count(&c.slug)))
-            .filter(|(_, count)| *count > 0)
-            .take(n)
-            .collect()
-    }
-
     pub fn step(&mut self, delta: isize) {
         if let Some(next) =
             crate::tui::widgets::nav::wrap_step(Some(self.selected), self.cards.len(), delta)

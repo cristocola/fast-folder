@@ -35,16 +35,12 @@ impl Regions {
     pub fn table_rows(&self) -> usize {
         self.table.height.saturating_sub(3) as usize
     }
-
-    /// Whether the header has room for the pulse chart on its own lines.
-    pub fn tall(&self) -> bool {
-        self.header.height >= 4
-    }
 }
 
 pub fn regions(area: Rect, detail_open: bool) -> Regions {
     let tall = area.height >= TALL_MIN_HEIGHT;
-    let header_height = if tall { 4 } else { 2 };
+    // Two lines, and a blank one under them where there is room to breathe.
+    let header_height = if tall { 3 } else { 2 };
     let strip_height = if tall { 3 } else { 0 };
     let bands = Layout::default()
         .direction(Direction::Vertical)
@@ -129,7 +125,7 @@ mod tests {
     #[test]
     fn a_large_terminal_gets_the_pane_and_the_strip() {
         let r = regions(Rect::new(0, 0, 120, 40), true);
-        assert_eq!(r.header.height, 4);
+        assert_eq!(r.header.height, 3);
         assert!(r.detail.is_some());
         assert!(r.strip.is_some());
         let r = regions(Rect::new(0, 0, 120, 40), false);

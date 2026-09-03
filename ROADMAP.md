@@ -82,6 +82,12 @@ responsibility of the filesystem and backups.
   job with a progress modal and cancel, unregister, delete, and the read-only
   `M`/`J` views — with the dialoguer action menu (`actions.rs`) deleted.
   Create, register, templates and settings are the flows still bridged.
+  Phase 2 (marks and batch jobs) landed next: `Space`/`*`/`-` mark rows, and
+  every destructive or relocating verb over the marks runs as a one-item-at-a-
+  time job in display order with its own progress modal, per-item patching,
+  and a failure/cancel report that leaves the unrun rows marked.
+  `FASTF_FAULT` takes a comma list and `move:force-staged` reaches the staged
+  path on one volume.
 - Released: **v2.2.1, published 2026-09-03** — the text prompts show where you
   are typing. `prompt::text` draws its line with `write_line`, which ends the
   block a row *below* the text, and it hid the caret for the repaint and never

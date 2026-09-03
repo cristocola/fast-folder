@@ -178,6 +178,7 @@ keys that matter most:
 | `N`, Ctrl-N | a journal note in your `$EDITOR`; a one-line note typed where you are |
 | `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good |
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
+| Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — a verb then runs over **every mark** |
 | `n`, `e`, `T`, `,` | create a project, register a folder, manage templates, settings |
 | F5, `R` | reload the library, reindex every base from its folders |
 | `q` | quit |
@@ -231,10 +232,23 @@ the library already knows some, or type where it does not; remove-tags lists
 every tag on the project with a space to mark each; a typed confirmation —
 delete asks for the folder's name — keeps your text and says why it was
 refused when it does not match; `y` or `n` answers a yes/no without Enter. A
-move shows its progress (phase and bytes) with Esc or Ctrl-C to cancel. `N`
+move shows its progress (phase and bytes) while it runs, cancelled with Esc
+or Ctrl-C. `N`
 drops out of the terminal into your `$EDITOR` and appends whatever you save to
 the journal when you come back; `M` and `J` open the metadata and journal,
 scrollable with the arrow keys.
+
+**Marks make a verb a batch.** Space marks the row and steps on, so a run of
+marks is one keystroke per row; `*` marks everything the current view shows
+(what a search leaves behind stays unmarked); `-` clears; the search bar
+counts the marks. Once anything is marked, `m` moves every mark to the base
+you pick, and `D` and `u` confirm once — with the count — before running over
+every mark. The batch runs one item at a time in the order the rows are
+shown: each row is patched as its item lands, the modal names the project
+being acted on, and Esc, `q` or Ctrl-C stop after the current item. A row
+whose item failed keeps its mark, and the report that follows names the
+failures and how many are left marked — close it and the list is exactly the
+state on disk.
 
 In these flows **Esc backs out of anything**, one level at a time: every menu,
 every confirmation and every text field takes it, and nothing you have already

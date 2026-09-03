@@ -1,6 +1,6 @@
 # PLAN.md — v3.0.0: the guided app on ratatui
 
-> **In progress. Phase 1 is done (PR #36); the next phase is Phase 2.** This
+> **In progress. Phase 2 is done (PR #37); the next phase is Phase 3.** This
 > file is worked one phase per session: read it, do phase N, run the gates,
 > tick only the boxes whose named verification actually ran, each phase in its
 > own PR into `main` with `ROADMAP.md` and the matching `docs/` page in the
@@ -164,18 +164,25 @@ prompt texts and messages, kept verbatim.
   the progress modal, and the `$EDITOR` note flow in a real terminal
 - Measured: see the Phase log.
 
-## Phase 2 — marks and batch jobs
+## Phase 2 — marks and batch jobs ✔ (this branch)
 
 `app/jobs.rs`, the job runner, `Space * -`, `targets()`, batch
 confirm/progress/report modals, cancel mid-move, the debug-only
 `move:force-staged` failpoint and `FASTF_FAULT` as a comma list.
 
-- [ ] update tests: marks, job construction in display order, per-item
+- [x] update tests: marks, job construction in display order, per-item
   patching, cancel keeps failed items marked
-- [ ] snapshots: `batch_delete_confirm`, `job_progress`, `job_report_with_failures`
-- [ ] pty: `a_batch_move_reports_each_item`;
+- [x] snapshots: `batch_delete_confirm`, `job_progress`, `job_report_with_failures`
+- [x] pty: `a_batch_move_reports_each_item`;
   `a_failed_move_surfaces_in_the_ui_and_leaves_the_list_consistent`
   (`FASTF_FAULT=move:force-staged,move:after-staging`)
+- [x] docs/cli.md marks and batch paragraph; ROADMAP
+- [x] Gates: fmt, clippy ×3 (debug, release, windows-gnu), `cargo test
+  --all-targets`, `cargo test --release`, MSVC check, MSRV check, docs — all
+  run on 2026-09-03
+- [ ] Manual, needs the maintainer: a marked batch over a real library, and a
+  cancel mid-batch-move on a real second volume
+- Measured: see the Phase log.
 
 ## Phase 3 — new-project wizard, register, apply
 
@@ -339,3 +346,40 @@ the `release` skill.
   - Measured on the maintainer's machine, 2026-09-03: the pty tag/delete
     tests still trace exactly one `discover`, and the editor test's recorder
     `EDITOR` proves the scratch file is handed to the configured editor.
+- **Phase 2 (2026-09-03).** Decisions taken while building, beyond the plan:
+  - **Marks and row bookkeeping were already seeded.** Phase 0 drew the mark
+    glyph and the search bar's mark count, and `LibraryState` carried
+    `marks` + `targets()` — there were simply no commands behind them.
+    Phase 2 added `Space`/`*`/`-`, then found that a verb's "act on the
+    marks" contract was already the natural reading of `targets()`: the
+    single-project flows became the one-target case of the batch flows, and
+    delete/unregister/move are the verbs that batch. Rename does not —
+    every row would need its own name.
+  - **A job is app-side sequencing over the single-action machinery.** The
+    runtime already ran one `Action` per worker with a `busy`/`ActionDone`
+    handshake, so a batch is just "send the next item when the last one's
+    outcome lands", with per-item `ListChange` application. No new runtime
+    path, no job worker — which is why `cancel mid-move` stayed the same
+    `Effect::CancelMove` for the item in flight.
+  - **A stale progress modal can trap the app.** The job's final advance
+    armed `move_progress` for an item that never began, so after the job
+    finished every quit gesture read "a move is running" and cancelled
+    instead of quitting — the pty suite's deadline caught it as a hang.
+    The modal is armed only when an item actually starts, and `job_finish`
+    clears it defensively. This is the second trap of that shape (Phase 1's
+    quit-keys fix); the two belong together under "quitting is a decision
+    the running state can veto".
+  - **The failure report doubles as the retry list.** Failed and unrun rows
+    keep their marks because success drops a mark through the ordinary
+    row-change path (delete removes the row, a move patches its path away).
+    Closing the report therefore lands on exactly the rows that still need
+    the verb, which the pty test asserts on disk and on screen.
+  - **`move:force-staged` is a decision, not a crash** — the first failpoint
+    answered by `is_armed` rather than `check`, and the invariant test now
+    collects `is_armed` call sites too. A same-volume test reaches the
+    staged path by arming it together with `move:after-staging`, one comma
+    list, one run.
+  - Measured on the maintainer's machine, 2026-09-03: the two new pty tests
+    move real folders between sandbox bases — the batch one traces a single
+    `discover`, and the forced-failure one leaves the source folder and the
+    row's mark exactly where they started.

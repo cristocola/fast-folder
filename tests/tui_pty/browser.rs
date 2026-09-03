@@ -7,7 +7,6 @@
 use super::common::{self, Sandbox, pty};
 use super::harness::*;
 use std::fs;
-use std::path::Path;
 
 /// The list is drawn newest first, before a single folder has been walked, and
 /// the sizes fill in afterwards.
@@ -597,6 +596,7 @@ fn a_failed_move_surfaces_in_the_ui_and_leaves_the_list_consistent() {
         .pause(300)
         .key(KEY_QUIT) // leave
         .build();
+    let fault = std::path::Path::new("move:force-staged,move:after-staging");
     let (out, code) = pty::run(
         common::FASTF,
         &[],
@@ -604,10 +604,7 @@ fn a_failed_move_surfaces_in_the_ui_and_leaves_the_list_consistent() {
             ("FASTF_INSTALL_DIR", sb.install.as_path()),
             ("HOME", sb.tmp.path()),
             ("FASTF_TRACE_FILE", trace.as_path()),
-            (
-                "FASTF_FAULT",
-                Path::new("move:force-staged,move:after-staging"),
-            ),
+            ("FASTF_FAULT", fault),
         ],
         &script,
         DEADLINE,

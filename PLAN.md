@@ -1,6 +1,6 @@
 # PLAN.md — v3.0.0: the guided app on ratatui
 
-> **In progress. Phase 2 is done (PR #37); the next phase is Phase 3.** This
+> **In progress. Phase 3 is done (PR #38); the next phase is Phase 4.** This
 > file is worked one phase per session: read it, do phase N, run the gates,
 > tick only the boxes whose named verification actually ran, each phase in its
 > own PR into `main` with `ROADMAP.md` and the matching `docs/` page in the
@@ -184,18 +184,28 @@ confirm/progress/report modals, cancel mid-move, the debug-only
   cancel mid-batch-move on a real second volume
 - Measured: see the Phase log.
 
-## Phase 3 — new-project wizard, register, apply
+## Phase 3 — new-project wizard, register, apply ✔ (this branch)
 
 `app/wizard.rs`, `app/register.rs`, `widgets/{form,tree}.rs`; preview from
 `project::plan_report`; post-create under `Suspend`; print-free
-`cli::register::{preview_rename, recursive_targets}` extracted; delete
+`cli::register::{plan_rename, recursive_targets}` extracted; delete
 `menu_create/menu_register*/menu_apply` and their bridge variants.
 
-- [ ] update tests: step transitions; Esc at every step → `Cancelled —
-  nothing was created.`; `confirm_create=false` skips; validator messages
-- [ ] snapshots: `wizard_variables`, `wizard_preview`, `register_form`,
+- [x] update tests: step transitions; Esc at the answers → `Cancelled —
+  nothing was created.` (Esc at the preview steps back — see the Phase log);
+  `confirm_create=false` skips; validator messages on their own field
+- [x] snapshots: `wizard_variables`, `wizard_preview`, `register_form`,
   `register_recursive_preview`, `apply_preview`
-- [ ] pty: the create/register/apply tests native
+- [x] pty: the create/register/apply tests native, plus a create end to end
+  and a real apply
+- [x] docs/cli.md "The flows that build something" and the keys table;
+  ROADMAP; `src/tui/CLAUDE.md`
+- [x] Gates: fmt, clippy ×3 (debug, release, windows-gnu), `cargo test
+  --all-targets`, `cargo test --release`, MSVC check, MSRV check, docs — all
+  run on 2026-09-03
+- [ ] Manual, needs the maintainer: a real create with post-create actions
+  (`git init` / `$EDITOR`) on a real template, and a register of a folder that
+  already holds a `PROJECT_INFO.md`
 
 ## Phase 4 — template studio, builder, from-folder
 
@@ -383,3 +393,52 @@ the `release` skill.
     move real folders between sandbox bases — the batch one traces a single
     `discover`, and the forced-failure one leaves the source folder and the
     row's mark exactly where they started.
+- **Phase 3 (2026-09-03).** Decisions taken while building, beyond the plan:
+  - **One shape, not three.** Create, apply and register are the same thing —
+    answer a few questions, look at what that would do, say yes — so they are
+    one `Flow` with a `Step`, one `Modal::Flow`, one `Effect::Preview` and one
+    `Request` shared by the preview and the commit. `wizard.rs` holds the
+    shape and the create/apply halves; `register.rs` holds the questions only
+    register asks.
+  - **The template is a field, not a picker that runs first.** `pick_template`
+    then `pick_base` then the variables was three screens deep before anything
+    was visible; the form opens on the configured default template (or the
+    first) with every question already on it, and changing the template
+    rebuilds the variable fields while keeping any answer whose variable the
+    new template also has. The base is a field too, present only when more
+    than one base is mounted — which is the early return
+    `pick_base_interactively` used to make.
+  - **Esc at the preview goes back to the answers**, not out of the flow.
+    The plan's exit criterion said Esc at every step cancels, which is what a
+    sequence of prompts had to do because there was nothing to go back *to*.
+    A form has: one Esc returns to it with everything still typed, the second
+    abandons the flow and says `Cancelled — nothing was created.` Nothing is
+    created either way, which is what the criterion was protecting.
+  - **A refusal is a message on a field.** `update` performs no I/O, so a path
+    that must exist cannot be checked there. The preview worker refuses with
+    `PreviewRefusal { field, error }`, `Form::fail` puts it on that field and
+    moves the cursor to it, and the typed text stays. `apply` got register's
+    wording for a missing folder (`no such folder: …`) rather than
+    `require_real_directory`'s error chain ending in `os error 2`.
+  - **`confirm_create = false` still builds the plan.** It commits without
+    showing it (`Flow::auto_commit`), because skipping the build would skip
+    every refusal the build produces.
+  - **`ActionOutcome` gained `select` and `follow_up`**, and a builder, so
+    adding a field stops touching every verb that never sets it. `select` is
+    what puts the cursor on a project that did not exist when the action
+    started; `follow_up` is how a finished create asks for its post-create
+    actions on the main screen, since they run `git init`, the editor and the
+    template's own commands.
+  - **`E` applies a template to a folder.** It was a row in the bridged
+    templates menu, which Phase 3 deletes; it is a command in the registry now,
+    with the same fuzzy palette entry as everything else.
+  - **Search stopped guessing at numbers and paths** (asked for alongside the
+    phase): a word of digits is matched literally, because every folder name
+    carries a date and `45` was finding the `4` and the `5` of `2026-04-15`; a
+    word containing `/` is matched literally, because `c/A` fuzzed its way to
+    every hierarchical tag. `fastf search` already matched bare terms as
+    substrings, so the two surfaces now agree.
+  - Measured on the maintainer's machine, 2026-09-03: the new pty cases create
+    a real project from the wizard (and find it selected in the list it comes
+    back to), register a whole base after previewing it, and apply a template
+    to an existing folder.

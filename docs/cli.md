@@ -179,7 +179,8 @@ keys that matter most:
 | `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good |
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
 | Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — a verb then runs over **every mark** |
-| `n`, `e`, `T`, `,` | create a project, register a folder, manage templates, settings |
+| `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
+| `T`, `,` | manage templates, settings |
 | F5, `R` | reload the library, reindex every base from its folders |
 | `q` | quit |
 | Esc | close a dialog, leave the search bar, clear the query, clear the template filter — and only then quit |
@@ -196,6 +197,12 @@ doubled letter still finds the name (`lulaby` finds `Lullaby_Remix`) while
 letters picked from across it do not (`lrmx` finds nothing). Every word must
 match on its own: `lulla remix` needs both. While the query has bare words the
 list is sorted by how well each row matched; `s` overrides that.
+
+**Two kinds of word are never fuzzy.** A word of digits is a number, and a
+number means an ID: `45` finds `ID0045` and `ID0450`, and not the `4` and the
+`5` that any dated folder name has lying around. A word containing `/` is a
+hierarchical tag: `client/Acme` finds that tag, and nothing else with a slash
+in it.
 
 Anything with an operator is the [`fastf search` grammar](#search), evaluated
 exactly: `tag:draft`, `template=music-video`, `artist=Aria*`,
@@ -217,13 +224,43 @@ result arrives, then updates in place — you do not have to press anything. The
 snapshots last for the session; acting on a project (a tag, a rename, a move)
 drops that project's snapshot so it is measured again.
 
-#### The flows that open their own screen
+#### The flows that build something
 
-Creating a project (`n`), registering a folder (`e`), managing templates (`T`)
-and the settings (`,`) run on the main screen, asking their questions the way
-`fastf new`, `fastf register`, `fastf template …` and `fastf config` do, and
-the dashboard comes back when they return. A flow that prints a result — create,
-register — waits for Enter first, so it can be read.
+Creating a project (`n`), registering a folder (`e`) and applying a template to
+a folder (`E`) are one shape: **a form, then a preview, then Enter**.
+
+The form puts every question on one screen. Tab and the arrows move between the
+fields, typing edits the one that has the cursor, `←`/`→` change a choice and
+Space opens a fuzzy picker over its options — which is how you find one
+template among twenty. Enter submits the whole form; Esc abandons it and says
+so (`Cancelled — nothing was created.`), with no folder written and the ID
+counter untouched.
+
+The preview is built by the same code the commit runs, so what it promises is
+what happens: a create shows the folder tree, the files, every resolved
+variable, the ID with the counter move it implies and the full path; an apply
+shows every item it would create and every one already there; a register shows
+the ID (and whether it was recovered from an `ID####` in the folder name), the
+date, the rename it would perform, and a warning when a `PROJECT_INFO.md` is
+about to be overwritten. Enter commits. Esc goes back to the answers — all of
+them still there — and Esc again abandons the flow.
+
+Nothing is thrown away by a refusal. A folder that does not exist, a required
+variable left empty, a template that will not load: the message appears under
+the form and the cursor moves to the field that caused it, with the text
+exactly as it was typed. Register asks about the scope first, and choosing
+"every unregistered folder in a base" removes the questions bulk registration
+cannot answer — it never renames and never fills in a template.
+
+`config set confirm-create false` skips the preview for a create: the plan is
+still built the same way, so every refusal still lands on its field, and then
+it commits. A template's post-create actions (`git init`, your editor, its own
+commands) run on the main screen after the folder exists, and the dashboard
+comes back when you press Enter.
+
+Managing templates (`T`) and the settings (`,`) still run on the main screen,
+asking their questions the way `fastf template …` and `fastf config` do, and
+the dashboard comes back when they return.
 
 The single-project actions are the other way round: they draw **over** the
 dashboard as dialogs. `Enter` or `a` opens the action menu, and a verb's own
@@ -255,10 +292,7 @@ every confirmation and every text field takes it, and nothing you have already
 answered is thrown away by leaving one. A value a prompt rejects — a folder that
 does not exist, a page size of 0, a slug with a space in it — stays on the line
 to be corrected rather than being cleared for you to type again, and the reason
-appears under it. Register checks the path before it asks about templates or
-renaming; applying a template checks the target folder before the dry-run
-question and before a single variable. Anywhere in the create wizard, Esc means
-`Cancelled — nothing was created`: no folder, and the ID counter is untouched.
+appears under it.
 
 The `show-banner` and `show-frame` settings belonged to the old menu and are
 now ignored; they still parse.

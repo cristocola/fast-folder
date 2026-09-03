@@ -88,6 +88,17 @@ responsibility of the filesystem and backups.
   and a failure/cancel report that leaves the unrun rows marked.
   `FASTF_FAULT` takes a comma list and `move:force-staged` reaches the staged
   path on one volume.
+  Phase 3 (the wizard, register and apply) landed next: creating a project
+  (`n`), registering a folder or a whole base (`e`) and applying a template to
+  a folder (`E`) are native — one form with every question on screen, then a
+  preview built by the code that commits it, then Enter. A refusal names the
+  field that caused it and keeps the text; Esc at the preview goes back to the
+  answers and Esc again abandons the flow. Post-create actions run on the main
+  screen after the folder exists. `menu_create`, `menu_register*` and
+  `menu_apply` are deleted; templates and settings are the last bridged flows.
+  Search stopped guessing at two kinds of word: a number matches an ID rather
+  than the digits scattered through a date, and a word with `/` in it is a
+  literal tag path.
 - Released: **v2.2.1, published 2026-09-03** — the text prompts show where you
   are typing. `prompt::text` draws its line with `write_line`, which ends the
   block a row *below* the text, and it hid the caret for the repaint and never

@@ -317,8 +317,20 @@ does not exist, a page size of 0, a slug with a space in it — stays on the lin
 to be corrected rather than being cleared for you to type again, and the reason
 appears under it.
 
-The `show-banner` and `show-frame` settings belonged to the old menu and are
-now ignored; they still parse.
+#### The mouse
+
+Clicking a row selects it; clicking the detail pane, the template strip or the
+search bar moves focus there; clicking a command-palette entry runs it. The
+wheel is `↑`/`↓`, three at a time, wherever the arrow keys already go — the
+list, the detail pane, a dialog that scrolls. Mouse reporting is on while the
+app is open, so hold **Shift** while dragging to select text, as in every other
+full-screen terminal program.
+
+The `show-banner` and `show-frame` settings belonged to the old menu and were
+retired at v3.0.0. `fastf config set` still accepts them and says they are
+ignored, so a script that sets one does not start failing, and a `config.toml`
+that names them still parses. `recent-default-limit` was renamed
+`recent-limit`; the old key still works.
 
 ## Browsing projects
 
@@ -341,12 +353,13 @@ fastf open 47                        # the ID number, however it is padded
 fastf open my-crate                  # substring match on project name
 ```
 
-`recent-default-limit` is retained as the configuration key and is the default
-`--limit` for `fastf recent`. The app itself is not paged — it scrolls — so the
-key no longer sizes a page.
+`recent-limit` is the default `--limit` for `fastf recent`. It used to be called
+`recent-default-limit`, when it also sized a page of the old menu; the app
+scrolls, so that half of the name stopped meaning anything. The old key still
+parses.
 
 ```bash
-fastf config set recent-default-limit 20
+fastf config set recent-limit 20
 ```
 
 ### How a query resolves
@@ -638,8 +651,7 @@ fastf config set bases ""                        # clear the list
 # Prompts and UX
 fastf config set prompt-open-after-create false
 fastf config set confirm-create false            # skip "Create this project?" like a permanent --yes
-fastf config set show-banner false
-fastf config set recent-default-limit 50
+fastf config set recent-limit 50
 fastf config set register-naming-pattern "{id}_{name}"
 fastf config set on-name-collision error          # refuse a duplicate folder name instead of adding _2
 

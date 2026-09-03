@@ -1,12 +1,14 @@
 # PLAN.md — v3.0.0: the guided app on ratatui
 
-> **In progress. Phase 6 is done (PR #41); the next phase is Phase 7.** This
-> file is worked one phase per session: read it, do phase N, run the gates,
-> tick only the boxes whose named verification actually ran, each phase in its
-> own PR into `main` with `ROADMAP.md` and the matching `docs/` page in the
-> same commit, and findings outside the phase sent to the Parking lot rather
-> than fixed in passing. The **Phase log** at the bottom says what differed and
-> why.
+> **Complete. All eight phases are done (PRs #35–#42), and v3.0.0 is prepared:
+> the version is bumped and the release row is written, so the tag is the one
+> step left and it belongs on `main`.** This file was worked one phase per
+> session: read it, do phase N, run the gates, tick only the boxes whose named
+> verification actually ran, each phase in its own PR into `main` with
+> `ROADMAP.md` and the matching `docs/` page in the same commit, and findings
+> outside the phase sent to the Parking lot rather than fixed in passing. The
+> **Phase log** at the bottom says what differed and why, phase by phase — read
+> it before changing anything it explains.
 
 ## How to work a phase — read this first
 
@@ -253,11 +255,29 @@ rules, add `only_the_runtime_touches_the_terminal` and `dialoguer_is_gone`.
 - [ ] pty: `a_text_prompt_parks_a_visible_caret_after_the_text` rewritten;
   the ambiguity-picker and relaunch tests still green
 
-## Phase 7 — polish and release
+## Phase 7 — polish and release ✔ (this branch)
 
-Mouse (click row, wheel, click a palette entry); ASCII glyphs checked on
-conhost; `docs/windows.md`, README hero, `ROADMAP.md` release row; v3.0.0 via
-the `release` skill.
+Mouse (click row, wheel, click a palette entry); the ASCII alphabet pinned by a
+snapshot; the two parking-lot settings retired; `docs/windows.md`, README hero,
+`ROADMAP.md` release row; `Cargo.toml` at 3.0.0.
+
+- [x] update tests: a click selects the row under it and moves focus to the
+  pane it landed in; the wheel is `↑`/`↓` wherever they go; a click in the
+  palette runs the entry under it; a click on nothing does nothing
+- [x] snapshot: `dashboard_ascii_80x24`, asserting no decorative glyph survives
+- [x] `show-banner`/`show-frame` retired (accepted and ignored);
+  `recent-default-limit` renamed `recent-limit`, the old key still parsing
+- [x] README hero, `docs/windows.md` (the old console, the mouse),
+  `docs/cli.md`, root `CLAUDE.md`, `ROADMAP.md` release row and train
+- [x] Gates: fmt, clippy ×3 (debug, release, windows-gnu), `cargo test
+  --all-targets`, `cargo test --release`, MSVC check, MSRV check, docs — all
+  run on 2026-09-03
+- [ ] **The maintainer's**: merge the stack into `main`, then tag `v3.0.0`
+  there (the Release workflow runs the whole of `ci.yml` before it builds), and
+  bump both AUR packages on an Arch machine with the AUR key — see the
+  `release` skill.
+- [ ] Manual, needs the maintainer: the legacy Windows console pass for the
+  ASCII alphabet, and the mouse in a terminal that reports it.
 
 ---
 
@@ -265,12 +285,12 @@ the `release` skill.
 
 - `reveal_folder` on unix blocks on `.status()` (already in ROADMAP); it runs
   on a worker now, so the app does not freeze, but the spawn still waits.
-- `show-banner`/`show-frame` are inert; remove at v3.0.0.
-- `recent-default-limit` no longer sizes a page; rename to `recent-limit` at
-  the next major, keeping the old key parsing.
 - The header's `newest` comes from the first base with any projects, as the
   old frame did; with the live snapshot it could be the true newest.
-- Mouse events are read and dropped until Phase 7.
+- ~~Mouse events are read and dropped until Phase 7.~~ Done in Phase 7.
+- ~~`show-banner`/`show-frame` are inert; remove at v3.0.0.~~ Done in Phase 7.
+- ~~`recent-default-limit` no longer sizes a page; rename to `recent-limit` at
+  the next major, keeping the old key parsing.~~ Done in Phase 7.
 
 ## Phase log
 
@@ -564,3 +584,33 @@ the `release` skill.
   - Measured on the maintainer's machine, 2026-09-03: the release binary is
     3.97 MB (4 161 720 bytes) with dialoguer and `console` gone and ratatui
     doing both surfaces — still under the 4 MB the README claims.
+- **Phase 7 (2026-09-03).** Decisions taken while building, beyond the plan:
+  - **The wheel needs no geometry.** It is `↑`/`↓`, three at a time, wherever
+    the keys already go, so it is right in every list, every scrollable dialog
+    and the detail pane without a second copy of the layout to drift from the
+    first. A *click* does need to know what is under it, so it is answered only
+    where `layout` already owns the geometry — the dashboard's regions, and the
+    palette's centred box, which `palette_rows` computes either way. Anywhere
+    else a click does nothing, which is better than a click that guesses.
+  - **Mouse capture takes plain drag-to-select away**, which is the cost of the
+    wheel working. Shift-drag still selects in every terminal that matters, and
+    both `docs/cli.md` and `docs/windows.md` say so.
+  - **The ASCII snapshot pins the alphabet, not the borders.** Box-drawing
+    characters are ratatui's and are the one non-ASCII set the legacy console
+    has always had; what has to go there is the decorative alphabet, and the
+    test asserts each of those glyphs is absent rather than that the frame is
+    ASCII.
+  - **`show-banner`/`show-frame` are accepted and ignored** rather than
+    refused. A config file or a script that still sets one must not start
+    failing at a major version; `Config` has no `deny_unknown_fields`, so the
+    file already parses, and `config set` now says the key is no longer used.
+  - **`recent-default-limit` → `recent-limit`,** with the old key still
+    parsing, as the Parking lot asked. The field on disk keeps its name: it is
+    a serialized document, and renaming it would break every config that has
+    one for no gain the user can see.
+  - The Parking-lot items that stay: `reveal_folder` still blocks on `.status()`
+    (on a worker, so nothing freezes); the header's `newest` still comes from
+    the first base with any projects.
+  - Measured on the maintainer's machine, 2026-09-03: the release binary is
+    3.97 MB with dialoguer gone and both surfaces on ratatui, and the whole
+    suite — 54 pty cases among them — is green in debug and release.

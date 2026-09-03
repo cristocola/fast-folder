@@ -133,9 +133,9 @@ fn concurrent_config_writes_do_not_lose_updates() {
 
     let writes: Vec<(&str, &str)> = vec![
         ("date-format", "%Y%m%d"),
-        ("recent-default-limit", "42"),
+        ("recent-limit", "42"),
         ("preview-lines", "3"),
-        ("show-banner", "false"),
+        ("register-naming-pattern", "{name}_{id}"),
         ("confirm-create", "false"),
     ];
     let children: Vec<Child> = writes
@@ -148,7 +148,12 @@ fn concurrent_config_writes_do_not_lose_updates() {
 
     let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
     for (key, value) in &writes {
-        let field = key.replace('-', "_");
+        // The stored field is `recent_default_limit`; `recent-limit` is what
+        // the key was renamed to at v3.0.0.
+        let field = match *key {
+            "recent-limit" => "recent_default_limit".to_string(),
+            other => other.replace('-', "_"),
+        };
         let expected_present = config
             .lines()
             .any(|l| l.starts_with(&field) && l.contains(value));

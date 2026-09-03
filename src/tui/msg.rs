@@ -18,6 +18,8 @@ use crate::util::diag::Level;
 pub enum Msg {
     /// A key press (or repeat — never a release).
     Key(Key),
+    /// A mouse click or a wheel turn, in terminal cells.
+    Mouse(Mouse),
     /// Bracketed paste, straight into whichever text field has the caret.
     Paste(String),
     Resize(u16, u16),
@@ -90,6 +92,22 @@ pub enum Msg {
     Diag(Level, String),
     /// An external SIGINT/SIGTERM was observed.
     Interrupted,
+}
+
+/// What the mouse did, and where. Only the three gestures a terminal reports
+/// reliably: the wheel, and the left button going down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mouse {
+    pub kind: MouseKind,
+    pub column: u16,
+    pub row: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseKind {
+    Click,
+    ScrollUp,
+    ScrollDown,
 }
 
 /// What a suspended flow left behind.

@@ -55,18 +55,6 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub confirm_create: bool,
 
-    /// Show the ASCII banner at the top of the TUI main menu.
-    #[serde(default = "default_true")]
-    pub show_banner: bool,
-
-    /// Show the library summary under the TUI main menu.
-    ///
-    /// Separate from `show_banner` on purpose: the banner is decoration and the
-    /// frame is information, so somebody who turns off the first usually still
-    /// wants the second.
-    #[serde(default = "default_true")]
-    pub show_frame: bool,
-
     /// Memoized `effective_bases()`, with the inputs it was computed from.
     ///
     /// The key is checked on every read, so a `Config` whose `base_dir` was
@@ -183,8 +171,6 @@ impl Default for Config {
             prompt_open_after_create: true,
             recent_default_limit: default_recent_limit(),
             confirm_create: true,
-            show_banner: true,
-            show_frame: true,
             bases_cache: std::sync::OnceLock::new(),
             register_naming_pattern: default_register_naming_pattern(),
             on_name_collision: NameCollision::default(),

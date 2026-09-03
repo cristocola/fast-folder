@@ -99,17 +99,7 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
-        "show_banner:".green(),
-        bool_label(config.show_banner)
-    );
-    println!(
-        "  {:<26} {}",
-        "show_frame:".green(),
-        bool_label(config.show_frame)
-    );
-    println!(
-        "  {:<26} {}",
-        "recent_default_limit:".green(),
+        "recent_limit:".green(),
         config.recent_default_limit
     );
     println!(
@@ -292,14 +282,12 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                 config.confirm_create = parse_bool(value)?;
                 format!("Set confirm_create = {}", config.confirm_create)
             }
-            "show_banner" => {
-                config.show_banner = parse_bool(value)?;
-                format!("Set show_banner = {}", config.show_banner)
-            }
-            "show_frame" => {
-                config.show_frame = parse_bool(value)?;
-                format!("Set show_frame = {}", config.show_frame)
-            }
+            // Retired at v3.0.0 with the menu they drew. Accepted and ignored
+            // rather than refused: a config file or a script that still sets
+            // one must not start failing.
+            "show_banner" | "show_frame" => format!(
+                "{normalized} is no longer used — the guided app has no banner and no frame"
+            ),
             "bases" => {
                 // Comma-separated list of extra base directories to index. Empty
                 // value clears the list.
@@ -314,13 +302,17 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                     format!("Set bases = {}", config.bases.join(", "))
                 }
             }
-            "recent_default_limit" => {
+            // `recent-default-limit` was the name while it also sized a menu
+            // page; the app scrolls, so it is only the `recent` default now.
+            // The old key keeps parsing — a config file that names it must not
+            // start failing at a major version.
+            "recent_limit" | "recent_default_limit" => {
                 let n = parse_usize(value)?;
                 if n == 0 {
-                    bail!("recent_default_limit must be at least 1");
+                    bail!("recent_limit must be at least 1");
                 }
                 config.recent_default_limit = n;
-                format!("Set recent_default_limit = {}", config.recent_default_limit)
+                format!("Set recent_limit = {}", config.recent_default_limit)
             }
             "register_naming_pattern" => {
                 let trimmed = value.trim();
@@ -384,8 +376,8 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
             }
             other => bail!(
                 "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, default-template, date-format, \
-             preview-lines, prompt-open-after-create, confirm-create, show-banner, show-frame, \
-             recent-default-limit, register-naming-pattern, on-name-collision, \
+             preview-lines, prompt-open-after-create, confirm-create, \
+             recent-limit, register-naming-pattern, on-name-collision, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
                 other
             ),

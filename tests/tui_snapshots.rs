@@ -39,6 +39,42 @@ fn dashboard_120x40() {
     snap("dashboard_120x40", render_to_string(&app, 120, 40));
 }
 
+/// The ASCII alphabet, which is what the legacy Windows console gets (and
+/// anyone who sets `FASTF_ASCII=1`). Every glyph has a plain-text stand-in, so
+/// a frame there is the same frame with different characters — not a frame with
+/// holes in it.
+///
+/// The **box-drawing borders stay**: they are ratatui's, not ours, and they are
+/// the one non-ASCII set the legacy console has always had (they are in its own
+/// code page). What has to go is the decorative alphabet — the cursor, the
+/// mark, the tag dot, the search glyph, the warning, the ellipsis.
+#[test]
+fn dashboard_ascii_80x24() {
+    use fastf::tui::theme::{Glyphs, Theme};
+    let mut app = fixture(12, 80, 24);
+    app.theme = Theme::mono().with_glyphs(Glyphs::ascii());
+    let frame = render_to_string(&app, 80, 24);
+    let unicode = Glyphs::unicode();
+    for glyph in [
+        unicode.cursor,
+        unicode.mark,
+        unicode.dot,
+        unicode.search,
+        unicode.warn,
+        unicode.ellipsis,
+        unicode.sep,
+        unicode.arrow,
+        unicode.check,
+        unicode.cross,
+    ] {
+        assert!(
+            !frame.contains(glyph),
+            "the ASCII theme still drew {glyph:?}:\n{frame}"
+        );
+    }
+    snap("dashboard_ascii_80x24", frame);
+}
+
 #[test]
 fn too_small_40x10() {
     let app = fixture(3, 40, 10);

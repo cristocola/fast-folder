@@ -254,7 +254,7 @@ pub fn raw_value(settings: &Settings, key: &str) -> String {
         "date-format" => settings.date_format.clone(),
         "register-naming-pattern" => settings.register_naming_pattern.clone(),
         "preview-lines" => settings.preview_lines.to_string(),
-        "recent-default-limit" => settings.recent_default_limit.to_string(),
+        "recent-limit" => settings.recent_default_limit.to_string(),
         "prompt-open-after-create" => settings.prompt_open_after_create.to_string(),
         "confirm-create" => settings.confirm_create.to_string(),
         "on-name-collision" => settings.on_name_collision.clone(),
@@ -393,7 +393,7 @@ pub fn rows(s: &Settings) -> Vec<Row> {
         },
         text(
             "Recent limit",
-            "recent-default-limit",
+            "recent-limit",
             s.recent_default_limit.to_string(),
             "the default --limit for `fastf recent`",
         ),
@@ -566,7 +566,7 @@ mod tests {
         );
         assert_eq!(
             state.pending_write(),
-            Some(("recent-default-limit", "20".to_string())),
+            Some(("recent-limit", "20".to_string())),
             "the value is still there to be corrected"
         );
     }

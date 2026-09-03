@@ -110,7 +110,7 @@ enum Commands {
             fastf recent --tag draft               # only projects with this tag"
     )]
     Recent {
-        /// Max number of projects to show (default: from config recent_default_limit, or 20)
+        /// Max number of projects to show (default: from config recent-limit, or 20)
         #[arg(long)]
         limit: Option<usize>,
 
@@ -536,9 +536,7 @@ enum ConfigAction {
             preview-lines               Lines per file in dry-run preview (default: 8, 0 = none)\n  \
             prompt-open-after-create    Ask 'Open project folder?' after `fastf new` (default: true)\n  \
             confirm-create              Ask 'Create this project?' in `fastf new` (default: true)\n  \
-            show-banner                 Show ASCII banner in TUI menu (default: true)\n  \
-            show-frame                  Show the library summary under the TUI menu (default: true)\n  \
-            recent-default-limit        TUI Projects page size and default `fastf recent --limit` (default: 20)\n  \
+            recent-limit                Default `fastf recent --limit` (default: 20)\n  \
             register-naming-pattern     Pattern for `fastf register --rename` w/o a template (default: \"{date}_{name}_{id}\")\n  \
             on-name-collision           What to do when the folder name is taken: suffix (add _2, _3…) or error (default: suffix)\n  \
             post_create.git_init        Run `git init` automatically (default: false)\n  \

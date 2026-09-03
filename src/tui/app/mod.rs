@@ -35,7 +35,7 @@ use crate::tui::effect::{
 use crate::tui::entry::Entry;
 use crate::tui::fuzzy::Fuzzy;
 use crate::tui::layout;
-use crate::tui::msg::{Msg, Resumed};
+use crate::tui::msg::{Mouse, MouseKind, Msg, Resumed};
 use crate::tui::theme::Theme;
 use crate::tui::validators;
 use crate::tui::widgets::form::FormEvent;
@@ -441,6 +441,7 @@ impl App {
     fn handle(&mut self, msg: Msg) -> Vec<Effect> {
         match msg {
             Msg::Key(key) => self.on_key(key),
+            Msg::Mouse(mouse) => self.on_mouse(mouse),
             Msg::Paste(text) => self.on_paste(&text),
             Msg::Resize(width, height) => {
                 self.size = (width, height);
@@ -805,6 +806,110 @@ impl App {
             }
             None => Vec::new(),
         }
+    }
+
+    // --- the mouse --------------------------------------------------------
+
+    /// What a click and a wheel turn mean.
+    ///
+    /// **The wheel needs no geometry at all**: it is `↑`/`↓`, three at a time,
+    /// wherever the keys already go — so it is right in every list, every
+    /// scrollable dialog and the detail pane without a second copy of the
+    /// layout to drift from the first.
+    ///
+    /// A click needs to know what is under it, so it is answered only where
+    /// `layout` already owns the geometry: the dashboard's regions, and the
+    /// palette's centred box (`palette_rows` computes it either way). Anywhere
+    /// else a click does nothing, which is better than a click that guesses.
+    fn on_mouse(&mut self, mouse: Mouse) -> Vec<Effect> {
+        if layout::too_small(self.area()) {
+            return Vec::new();
+        }
+        match mouse.kind {
+            MouseKind::ScrollUp | MouseKind::ScrollDown => {
+                let key = if mouse.kind == MouseKind::ScrollUp {
+                    Key::plain(KeyCode::Up)
+                } else {
+                    Key::plain(KeyCode::Down)
+                };
+                let mut effects = Vec::new();
+                for _ in 0..3 {
+                    effects.extend(self.on_key(key));
+                }
+                effects
+            }
+            MouseKind::Click => self.on_click(mouse.column, mouse.row),
+        }
+    }
+
+    fn on_click(&mut self, column: u16, row: u16) -> Vec<Effect> {
+        if matches!(self.modals.top(), Some(Modal::Palette(_))) {
+            return self.click_palette(column, row);
+        }
+        if !self.modals.is_empty() {
+            return Vec::new();
+        }
+        let regions = self.regions();
+        if inside(regions.search, column, row) {
+            self.search.editing = true;
+            self.focus = Focus::Projects;
+            return Vec::new();
+        }
+        if let Some(detail) = regions.detail
+            && inside(detail, column, row)
+        {
+            self.focus = Focus::Detail;
+            return Vec::new();
+        }
+        if let Some(strip) = regions.strip
+            && inside(strip, column, row)
+        {
+            self.focus = Focus::Templates;
+            return Vec::new();
+        }
+        if !inside(regions.table, column, row) {
+            return Vec::new();
+        }
+        self.focus = Focus::Projects;
+        // The table's border and its header row: the first project sits two
+        // rows below the top of the region.
+        let Some(offset_row) = row.checked_sub(regions.table.y + 2) else {
+            return Vec::new();
+        };
+        let at = self.library.offset + offset_row as usize;
+        if at >= self.library.len() {
+            return Vec::new();
+        }
+        self.library.selected = Some(at);
+        self.after_selection_change()
+    }
+
+    /// A click in the palette picks the entry under it and runs it, the way a
+    /// click in a menu does.
+    fn click_palette(&mut self, column: u16, row: u16) -> Vec<Effect> {
+        let box_area = layout::centered(self.area(), 70, 70);
+        if !inside(box_area, column, row) {
+            return Vec::new();
+        }
+        // One border row, the query line, then a blank one.
+        let Some(offset_row) = row.checked_sub(box_area.y + 3) else {
+            return Vec::new();
+        };
+        let at = match self.modals.top() {
+            Some(Modal::Palette(palette)) => palette.offset + offset_row as usize,
+            _ => return Vec::new(),
+        };
+        let picked = match self.modals.top_mut() {
+            Some(Modal::Palette(palette)) if at < palette.entries.len() => {
+                palette.selected = Some(at);
+                true
+            }
+            _ => false,
+        };
+        if !picked {
+            return Vec::new();
+        }
+        self.on_palette_key(Key::plain(KeyCode::Enter))
     }
 
     // --- keys -------------------------------------------------------------
@@ -2850,6 +2955,11 @@ impl App {
             kind,
         }]
     }
+}
+
+/// Whether `(column, row)` lands inside `area`.
+fn inside(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x && column < area.x + area.width && row >= area.y && row < area.y + area.height
 }
 
 /// The state machine: the app and one message in, the effects out.

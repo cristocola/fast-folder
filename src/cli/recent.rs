@@ -7,7 +7,7 @@ use crate::core::library::{self, Project};
 use crate::tui::rows::{RowWidths, date_cell};
 
 pub struct RecentArgs {
-    /// None = use Config::recent_default_limit.
+    /// None = use the configured `recent-limit`.
     pub limit: Option<usize>,
     pub template: Option<String>,
     pub since: Option<String>,

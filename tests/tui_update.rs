@@ -1926,13 +1926,10 @@ mod settings {
             &mut app,
             Msg::ActionDone {
                 id,
-                outcome: Err("recent_default_limit must be at least 1".to_string()),
+                outcome: Err("recent_limit must be at least 1".to_string()),
             },
         );
-        assert_eq!(
-            state(&app).error(),
-            Some("recent_default_limit must be at least 1")
-        );
+        assert_eq!(state(&app).error(), Some("recent_limit must be at least 1"));
         assert!(
             state(&app).editing.is_some(),
             "the field stays open with the text in it"
@@ -2058,5 +2055,124 @@ mod settings {
         press(&mut app, Key::plain(KeyCode::Esc));
         assert!(app.modals.is_empty());
         assert!(app.status.text.contains("Skipped"), "{}", app.status.text);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The mouse (Phase 7)
+// ---------------------------------------------------------------------------
+
+mod mouse {
+    use super::*;
+    use fastf::tui::app::Focus;
+    use fastf::tui::msg::{Mouse, MouseKind};
+
+    fn click(app: &mut App, column: u16, row: u16) -> Vec<Effect> {
+        update(
+            app,
+            Msg::Mouse(Mouse {
+                kind: MouseKind::Click,
+                column,
+                row,
+            }),
+        )
+    }
+
+    fn wheel(app: &mut App, down: bool) -> Vec<Effect> {
+        update(
+            app,
+            Msg::Mouse(Mouse {
+                kind: if down {
+                    MouseKind::ScrollDown
+                } else {
+                    MouseKind::ScrollUp
+                },
+                column: 1,
+                row: 8,
+            }),
+        )
+    }
+
+    #[test]
+    fn a_click_in_the_table_selects_the_row_under_it() {
+        let mut app = fixture(12, 120, 40);
+        let table = app.regions().table;
+        // Two rows in: the border and the header sit above the first project.
+        click(&mut app, table.x + 4, table.y + 2 + 3);
+        assert_eq!(app.library.selected, Some(3));
+        assert_eq!(app.focus, Focus::Projects);
+    }
+
+    #[test]
+    fn a_click_past_the_last_row_changes_nothing() {
+        let mut app = fixture(3, 120, 40);
+        let table = app.regions().table;
+        click(&mut app, table.x + 4, table.y + 2 + 9);
+        assert_eq!(
+            app.library.selected,
+            Some(0),
+            "nothing to select down there"
+        );
+    }
+
+    #[test]
+    fn a_click_moves_focus_to_the_pane_it_landed_in() {
+        let mut app = fixture(12, 120, 40);
+        let regions = app.regions();
+        let detail = regions.detail.expect("120 columns has the pane");
+        click(&mut app, detail.x + 2, detail.y + 2);
+        assert_eq!(app.focus, Focus::Detail);
+
+        let strip = regions.strip.expect("40 rows has the strip");
+        click(&mut app, strip.x + 2, strip.y + 1);
+        assert_eq!(app.focus, Focus::Templates);
+
+        click(&mut app, regions.search.x + 2, regions.search.y);
+        assert!(app.search.editing, "the bar is where you type");
+    }
+
+    /// The wheel is `↑`/`↓`, three at a time, wherever the keys already go — so
+    /// it needs no geometry and cannot drift from the layout.
+    #[test]
+    fn the_wheel_moves_whatever_the_arrows_would() {
+        let mut app = fixture(12, 120, 40);
+        wheel(&mut app, true);
+        assert_eq!(app.library.selected, Some(3));
+        wheel(&mut app, false);
+        assert_eq!(app.library.selected, Some(0));
+
+        // In the detail pane it scrolls the pane, because that is what ↓ does
+        // there.
+        press(&mut app, Key::plain(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Detail);
+        wheel(&mut app, true);
+        assert_eq!(app.detail_scroll, 3);
+        assert_eq!(app.library.selected, Some(0), "the list did not move");
+    }
+
+    #[test]
+    fn a_click_in_the_palette_runs_the_entry_under_it() {
+        let mut app = fixture(12, 120, 40);
+        press(&mut app, Key::ch('c'));
+        type_text(&mut app, "open");
+        let box_area = fastf::tui::layout::centered(app.area(), 70, 70);
+        // The border, the query line, then a blank one: the first entry is
+        // three rows down.
+        let effects = click(&mut app, box_area.x + 4, box_area.y + 3);
+        assert!(
+            matches!(&effects[..], [Effect::Spawn(SpawnKind::Reveal(_))]),
+            "the first `open` entry is Open project folder: {effects:?}"
+        );
+        assert!(app.modals.is_empty(), "and the palette closed");
+    }
+
+    #[test]
+    fn a_click_outside_anything_is_ignored() {
+        let mut app = fixture(12, 120, 40);
+        let before = app.library.selected;
+        // The header, which nothing answers for.
+        let effects = click(&mut app, 2, 0);
+        assert!(effects.is_empty(), "{effects:?}");
+        assert_eq!(app.library.selected, before);
     }
 }

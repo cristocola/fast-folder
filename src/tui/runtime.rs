@@ -19,7 +19,8 @@ use anyhow::{Context as _, Result, anyhow};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyEventKind, MouseButton, MouseEventKind,
 };
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -33,7 +34,7 @@ use crate::tui::effect::{
 };
 use crate::tui::entry::Entry;
 use crate::tui::loaders;
-use crate::tui::msg::{Msg, Resumed};
+use crate::tui::msg::{Mouse, MouseKind, Msg, Resumed};
 use crate::tui::theme::Theme;
 use crate::tui::view;
 use crate::util::size_scan::{SizeCell, SizeScanner};
@@ -443,6 +444,10 @@ fn take_screen() -> Result<Screen> {
         stderr,
         EnterAlternateScreen,
         EnableBracketedPaste,
+        // The wheel and a click on a row. Text selection still works with the
+        // modifier every terminal keeps for it (Shift, or Option on macOS),
+        // which is why capture is worth having at all.
+        EnableMouseCapture,
         cursor::Hide
     ) {
         let _ = disable_raw_mode();
@@ -465,6 +470,7 @@ fn release_screen(terminal: &mut Screen) {
     let _ = execute!(
         terminal.backend_mut(),
         DisableBracketedPaste,
+        DisableMouseCapture,
         LeaveAlternateScreen,
         cursor::Show
     );
@@ -487,6 +493,7 @@ fn install_panic_hook() {
             let _ = execute!(
                 io::stderr(),
                 DisableBracketedPaste,
+                DisableMouseCapture,
                 LeaveAlternateScreen,
                 cursor::Show
             );
@@ -1040,6 +1047,21 @@ fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
             }
             Ok(Event::Paste(text)) => Msg::Paste(text),
             Ok(Event::Resize(width, height)) => Msg::Resize(width, height),
+            Ok(Event::Mouse(mouse)) => {
+                let kind = match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => MouseKind::Click,
+                    MouseEventKind::ScrollUp => MouseKind::ScrollUp,
+                    MouseEventKind::ScrollDown => MouseKind::ScrollDown,
+                    // Drag, release, and the other buttons: a terminal reports
+                    // them inconsistently and none of them mean anything here.
+                    _ => continue,
+                };
+                Msg::Mouse(Mouse {
+                    kind,
+                    column: mouse.column,
+                    row: mouse.row,
+                })
+            }
             Ok(_) => continue,
             Err(_) => return,
         };

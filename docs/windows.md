@@ -100,6 +100,33 @@ exists.
 `fastf term <query>` works here too: it opens Windows Terminal (`wt`) at the
 project's folder when it is installed, and a new `cmd` console there otherwise.
 
+## The guided app in the old console
+
+The app draws with box-drawing characters and a small alphabet of its own —
+`▸` the cursor, `✓` a mark, `●` a tag, `⌕` search, `⚠` a warning. Windows
+Terminal shows all of it. The **legacy console host** (the black window a
+double-click on `fastf.exe` opens on Windows 10, or `conhost.exe`) has a font
+that often does not, so fastf switches its own alphabet to plain ASCII there
+automatically: `>` `*` `*` `/` `!`. Box-drawing borders stay, because the
+console has always had those.
+
+The detection is "no `WT_SESSION` in the environment". Force it either way:
+
+```powershell
+$env:FASTF_ASCII = "1"    # plain ASCII, wherever you are
+```
+
+Colour follows the same rule the app uses everywhere: `NO_COLOR` turns it off,
+a terminal that announces `COLORTERM=truecolor` gets the muted RGB palette, and
+anything else gets the sixteen ANSI colours used sparingly.
+
+## The mouse
+
+Clicking a row selects it, clicking a pane focuses it, and the wheel scrolls
+whatever the arrow keys would. Mouse reporting is on while the app is open,
+which means a plain drag no longer selects text — hold **Shift** while dragging
+to select, as in every other full-screen terminal program.
+
 ## "VCRUNTIME140.dll was not found"
 
 Releases up to and including v2.0.0 linked the Microsoft C runtime dynamically, so `fastf.exe` needed the Visual C++ Redistributable. Most developer machines already have it and most clean installs do not, and where it was missing Windows refused to start the program and named that DLL.

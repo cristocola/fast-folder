@@ -122,7 +122,9 @@ impl Theme {
         }
     }
 
-    fn with_glyphs(mut self, glyphs: Glyphs) -> Self {
+    /// The same palette with a different alphabet — what the conhost check and
+    /// the ASCII snapshot both go through.
+    pub fn with_glyphs(mut self, glyphs: Glyphs) -> Self {
         self.glyphs = glyphs;
         self
     }

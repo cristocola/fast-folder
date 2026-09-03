@@ -67,46 +67,31 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- In progress: **v3.0.0 — the guided app on ratatui.** One full-screen
-  dashboard replaces the menu-of-prompts: the library on screen and acted on,
-  fuzzy search and a command palette, sizes filling in without input, every
-  mutation patching its row. Delivered in phases, one per PR, in `PLAN.md`.
-  Phase 0 (the foundation) landed with this branch: the runtime, the command
-  registry, the dashboard, search, sort and filters, the native
-  open/terminal/copy/path actions, and the old dialoguer flows reachable
-  through a suspend bridge until each is made native. The gates gained
-  `tui_update`, `tui_commands`, `tui_snapshots` and a `vt100`-backed pty suite.
-  Phase 1 (single-project actions, metadata, journal) landed next: the action
-  menu and every verb are native modals over the dashboard — tags (`A` /
-  Ctrl-T), notes (`N` in `$EDITOR`, Ctrl-N inline), rename, move as a one-item
-  job with a progress modal and cancel, unregister, delete, and the read-only
-  `M`/`J` views — with the dialoguer action menu (`actions.rs`) deleted.
-  Create, register, templates and settings are the flows still bridged.
-  Phase 2 (marks and batch jobs) landed next: `Space`/`*`/`-` mark rows, and
-  every destructive or relocating verb over the marks runs as a one-item-at-a-
-  time job in display order with its own progress modal, per-item patching,
-  and a failure/cancel report that leaves the unrun rows marked.
-  `FASTF_FAULT` takes a comma list and `move:force-staged` reaches the staged
-  path on one volume.
-  Phase 3 (the wizard, register and apply) landed next: creating a project
-  (`n`), registering a folder or a whole base (`e`) and applying a template to
-  a folder (`E`) are native — one form with every question on screen, then a
-  preview built by the code that commits it, then Enter. A refusal names the
-  field that caused it and keeps the text; Esc at the preview goes back to the
-  answers and Esc again abandons the flow. Post-create actions run on the main
-  screen after the folder exists. `menu_create`, `menu_register*` and
-  `menu_apply` are deleted; templates and settings are the last bridged flows.
-  Search stopped guessing at two kinds of word: a number matches an ID rather
-  than the digits scattered through a date, and a word with `/` in it is a
-  literal tag path.
-  Phase 4 (the template studio) landed next: `T` opens every template with the
-  selected one's details beside it, and the builder behind it is one list of a
-  template's five parts, entered in any order, with a live folder tree beside
-  the paths that make it and a multi-line editor for a file's contents.
-  `fastf template new` and `edit` open the same builder, so there is one
-  template editor rather than two. Generating a template from a folder is a
-  form and a preview like every other flow. `template_builder.rs` and
-  `menu_templates` are deleted; the settings menu is the last bridged flow.
+- Released: **v3.0.0 — the guided app on ratatui.** One full-screen dashboard
+  replaced the menu-of-prompts: the library on screen and acted on, fuzzy
+  search and a command palette, sizes filling in without input, every mutation
+  patching its row rather than rescanning. Delivered in eight phases, one PR
+  each, recorded in `PLAN.md`.
+
+  What it added, phase by phase: the runtime, the one command registry, the
+  dashboard, search, sort and filters (0); the action menu and every
+  single-project verb as a native modal, with a move as a cancellable job (1);
+  marks, and every destructive or relocating verb over them as a
+  one-item-at-a-time job with a failure report that leaves the unrun rows
+  marked (2); the create, register and apply flows as a form, a preview built
+  by the code that commits it, and Enter (3); the template studio and a builder
+  that is a list of a template's parts, with a live folder tree beside the
+  paths that make it (4); every setting on one screen, the ID counter, the
+  maintenance verbs and a first-run dialog (5); the command line's own prompts
+  drawn by the same ratatui, and `dialoguer` removed (6); the mouse, the ASCII
+  alphabet for the legacy Windows console, and the two settings the old menu
+  drew retired (7).
+
+  **Breaking:** `show-banner` and `show-frame` are gone (accepted and ignored,
+  so nothing that sets them starts failing); `recent-default-limit` is now
+  `recent-limit`, with the old key still parsing. Search stopped guessing at
+  two kinds of word: a number means an ID, not the digits scattered through a
+  date, and a word containing `/` is a literal tag path.
 - Released: **v2.2.1, published 2026-09-03** — the text prompts show where you
   are typing. `prompt::text` draws its line with `write_line`, which ends the
   block a row *below* the text, and it hid the caret for the repaint and never
@@ -122,9 +107,11 @@ responsibility of the filesystem and backups.
   `PLAN.md`; the current design is `CLAUDE.md`.
 - Verified by hand, 2026-08-31: the launcher smoke test (`PLAN.md` Phase 4) on
   a desktop session, plus a Windows pass. Neither is reachable from CI.
-- Outstanding, and needing the maintainer: a TUI screenshot or asciinema for the
-  README hero.
-- Last reviewed: **2026-09-03** (Phase 0 of the ratatui rebuild)
+- Outstanding, and needing the maintainer: the manual passes each phase of
+  `PLAN.md` lists — a real move between mounted bases, a create with post-create
+  actions, a first run on a machine with no config, and a Windows console pass
+  for the ASCII alphabet.
+- Last reviewed: **2026-09-03** (v3.0.0, the ratatui rebuild complete)
 
 ## Release train
 
@@ -143,6 +130,7 @@ responsibility of the filesystem and backups.
 | v2.1.1 | the folder name leads the project row, so the column that tells two projects apart survives a narrow relaunched window | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.1.1) |
 | v2.2.0 | `fastf term` opens a terminal at a project's folder | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.2.0) |
 | v2.2.1 | a text prompt shows its caret in the line being edited, so a rename has a visible insertion point | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.2.1) |
+| v3.0.0 | the guided app on ratatui: one dashboard over the whole library, every flow native, the command line's prompts in the same palette, and dialoguer gone | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.0.0) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find

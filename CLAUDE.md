@@ -87,17 +87,18 @@ tell you.
   read `Config`). `move_project.rs` is named that way because `move` is a
   keyword, and `path_cmd.rs`/`paths_cmd.rs` because both would otherwise read
   like `std::path` at their call sites.
-- `src/tui/` — every interactive terminal surface. The guided app: `runtime.rs`
-  (the one module that owns the screen, the threads and the loop), `app/`
-  (`App`, `update`, the library state, the search query, the modal stack, the
-  palette), `view/` (renderers only, `&App` in), `command.rs` (**the one
-  registry** every key, palette entry, help line and hint comes from),
-  `msg.rs`/`effect.rs`, `theme.rs`, `fuzzy.rs`, `layout.rs`, `loaders.rs` (the
-  workers' reads), `widgets/`, `testing.rs` (fixtures for the suites). The
-  dialoguer flows the app still bridges to: `menu.rs` (create, register,
-  templates, settings), `actions.rs` (the project action menu),
-  `template_builder.rs`, `pickers.rs`, `vars.rs`, `rows.rs`, and `prompt.rs`
-  (**the only module that may name a dialoguer prompt**).
+- `src/tui/` — every interactive terminal surface, all of it ratatui. The
+  guided app: `runtime.rs` (the one module that owns the alternate screen, the
+  threads and the loop), `app/` (`App`, `update`, and one module per flow —
+  `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
+  `settings`, `palette`, `modal`), `view/` (renderers only, `&App` in),
+  `command.rs` (**the one registry** every key, palette entry, help line and
+  hint comes from), `msg.rs`/`effect.rs`, `theme.rs`, `fuzzy.rs`, `layout.rs`,
+  `loaders.rs` (the workers' reads), `widgets/` (`input`, `text_area`, `form`,
+  `tree`, `nav`), `testing.rs` (fixtures for the suites).
+  The command line's own prompts: `inline.rs` (**the other module that may take
+  the terminal** — a few rows at the cursor, never the alternate screen),
+  `prompt.rs` (the contract over it), `pickers.rs`, `vars.rs`, `rows.rs`.
 - `docs/` — the user-facing reference. **When behaviour changes, update the
   matching `docs/` file, not the README.**
 - `packaging/` + `.github/workflows/` — release machinery; see the `release`
@@ -163,7 +164,7 @@ var within one process.
 
 A bare binary copied without its data lands in the user config dir *by design*;
 the first-run banner names the mode. Surfaced by `fastf paths`, a mode line in
-`config show`, and `dir_mode` in `/api/state`. Bootstrap is skipped for
+`config show`, and the settings screen's Data locations row. Bootstrap is skipped for
 `completions`/`mangen` so packaging steps never write to `$HOME`.
 
 **An unconfigured `base_dir` falls back to HOME, not the cwd.** The cwd fallback
@@ -196,9 +197,12 @@ does not exist.
 memo can save work but cannot answer the wrong question.
 
 Old keys that no longer exist (`project_info_enabled`, `project_info_filename`,
-`pinfo_*`) keep parsing because `Config` has no `deny_unknown_fields`. Do not
-re-add a metadata-filename knob: the reservation and discovery both assume the
-fixed name.
+`pinfo_*`, and `show_banner`/`show_frame`, which went with the menu they drew)
+keep parsing because `Config` has no `deny_unknown_fields`; `config set` accepts
+the two retired ones and says they are ignored, because a script that still sets
+one must not start failing. `recent-default-limit` was renamed `recent-limit` at
+v3.0.0 and the old key still parses. Do not re-add a metadata-filename knob: the
+reservation and discovery both assume the fixed name.
 
 ## Filesystem as truth
 

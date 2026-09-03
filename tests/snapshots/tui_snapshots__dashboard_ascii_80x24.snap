@@ -1,0 +1,28 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fastf   12 projects   3 templates   2 bases                     highest ID0248 "
+" -> projects 12   archive not mounted                       ! 1 needs attention "
+" / / to search                                                   12/12 - newest "
+"┌ projects ────────────────────────────────────────────────────────────────────┐"
+"│  ID     PROJECT                                        SIZE        CREATED   │"
+"│> ID0248 2026-08-28_Lullaby_Remix_ID0248                scanning... 2026-08-28│"
+"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247       scanning... 2026-08-27│"
+"│  ID0246 2026-08-26_Old_Shoot_ID0246                    scanning... 2026-08-26│"
+"│  ID0245 2026-08-25_Test_Run_ID0245                     scanning... 2026-08-25│"
+"│  ID0244 2026-08-24_Spring_Campaign_ID0244              scanning... 2026-08-24│"
+"│  ID0243 2026-08-23_Live_Session_ID0243                 scanning... 2026-08-23│"
+"│  ID0242 2026-08-22_Lullaby_Remix_ID0242                scanning... 2026-08-22│"
+"│  ID0241 2026-08-21_Client_Onboarding_Acme_ID0241       scanning... 2026-08-21│"
+"│  ID0240 2026-08-20_Old_Shoot_ID0240                    scanning... 2026-08-20│"
+"│  ID0239 2026-08-19_Test_Run_ID0239                     scanning... 2026-08-19│"
+"│  ID0238 2026-08-18_Spring_Campaign_ID0238              scanning... 2026-08-18│"
+"│  ID0237 2026-08-17_Live_Session_ID0237                 scanning... 2026-08-17│"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" 12 of 12 projects   -   ? for help                                             "
+" / search  a actions  o open  t terminal                                        "

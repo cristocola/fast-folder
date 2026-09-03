@@ -29,7 +29,7 @@ It is the same tool for very different people:
 One engine drives two interfaces, so you can work whichever way fits the moment:
 
 ```bash
-fastf                       # guided terminal menu: pick, answer, done
+fastf                       # the guided app: your whole library, on one screen
 fastf new general --name="spring campaign"    # -> 2026-07-16_Spring_Campaign_ID0048/
 ```
 
@@ -37,18 +37,26 @@ fastf new general --name="spring campaign"    # -> 2026-07-16_Spring_Campaign_ID
 
 Running `fastf` with no arguments opens the guided app, which is how most work
 gets done: one full-screen dashboard that shows the whole library — every base,
-every template, folder sizes filling in as they are measured — and acts on it. Type to search (a word matches a name, ID, template or tag, a
-typo forgiven; `tag:draft template=music-video created>2026-01-01` match
-exactly), press a key
-to open a project's folder, a terminal in it, or its action menu, and `c` for a
-command palette that finds any command or project by name. Creating a project
-with a live preview of the folder tree, registering folders, building templates
-step by step and editing every setting are one keystroke away. Esc always goes
-back, a rejected answer comes back editable rather than lost, and a network
-share that has gone away is reported rather than left as a frozen screen.
+every template, folder sizes filling in as they are measured — and acts on it.
+Type to search (a word matches a name, ID, template or tag, a typo forgiven; a
+number means an ID; `tag:draft template=music-video created>2026-01-01` match
+exactly), press a key to open a project's folder, a terminal in it, or its
+action menu, and `c` for a command palette that finds any command or project by
+name. Mark a run of rows with Space and the next verb runs over all of them.
 
-Nothing it does is menu-only: every action has a scriptable `fastf <command>`
-equivalent, and the rest of this README speaks fluent shell.
+Everything else is a screen rather than a detour. Creating a project, adopting
+an existing folder, applying a template to one: a form with every question on
+it, then a preview built by the code that commits it, then Enter. Templates get
+a studio with a builder — the folder tree drawn beside the paths as you type
+them. Every setting fastf has is on one screen with its current value beside it.
+Esc always goes back one step, a rejected answer comes back editable rather
+than lost, and a network share that has gone away is reported rather than left
+as a frozen screen.
+
+Nothing it does is app-only: every action has a scriptable `fastf <command>`
+equivalent, and the rest of this README speaks fluent shell. The command line
+asks its own questions in the same palette, a few rows at the cursor — never
+taking the screen away from what it just printed.
 
 The whole tool is a single self-contained Rust binary (under 4 MB) with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
 
@@ -62,7 +70,7 @@ paru -S fast-folder-bin
 cargo install --git https://github.com/cristocola/fast-folder
 
 # First project
-fastf                        # pick a bundled template, answer the prompts, done
+fastf                        # pick a bundled template, fill the form, done
 ```
 
 Two universal templates are bundled on first run. `general` is the zero-setup starting point: a dated, numbered folder (`2026-07-16_Spring_Campaign_ID0048`) with an inbox subfolder, ready for any kind of work. `client-project` adds working and delivery folders plus a brief that fills itself in with the client's name and project details.

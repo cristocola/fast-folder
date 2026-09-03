@@ -831,17 +831,21 @@ project_info_filename = ".fastf-info.md"
 fn config_defaults_are_backwards_compatible() {
     // An old config.toml that predates the new fields must still parse,
     // and the new fields must take their defaults.
+    // `show_banner` and `show_frame` were retired at v3.0.0 with the menu they
+    // drew: `Config` has no `deny_unknown_fields`, so a file that still names
+    // them parses and they are ignored.
     let raw = r#"
 base_dir = ""
 editor = ""
 default_template = ""
 date_format = "%Y-%m-%d"
+show_banner = true
+show_frame = false
 "#;
     let cfg: Config = toml::from_str(raw).expect("old config should still parse");
     assert!(cfg.prompt_open_after_create, "default should be true");
     assert_eq!(cfg.recent_default_limit, 20);
     assert!(cfg.confirm_create);
-    assert!(cfg.show_banner);
     assert!(cfg.bases.is_empty());
 }
 

@@ -14,7 +14,9 @@
 use fastf::tui::app::update;
 use fastf::tui::command::Key;
 use fastf::tui::msg::Msg;
-use fastf::tui::testing::{empty_fixture, fixture, render_to_string, sample_projects};
+use fastf::tui::testing::{
+    empty_fixture, fixture, render_to_string, sample_projects, sample_summary_moveable,
+};
 use ratatui::crossterm::event::KeyCode;
 
 fn snap(name: &str, frame: String) {
@@ -183,4 +185,110 @@ fn move_progress_modal() {
     });
     app.busy = Some("moving…");
     snap("move_progress", render_to_string(&app, 100, 30));
+}
+
+// --- Phase 2: marks and batch jobs ---------------------------------------
+
+use fastf::tui::effect::{ActionOutcome, ListChange};
+
+#[test]
+fn batch_delete_confirm() {
+    let mut app = fixture(12, 100, 30);
+    for _ in 0..3 {
+        let _ = update(&mut app, Msg::Key(Key::ch(' ')));
+    }
+    let _ = update(&mut app, Msg::Key(Key::ch('D')));
+    snap("batch_delete_confirm", render_to_string(&app, 100, 30));
+}
+
+/// A running delete job over three marks, one item in flight.
+#[test]
+fn job_progress_modal() {
+    let mut app = fixture(12, 100, 30);
+    for _ in 0..3 {
+        let _ = update(&mut app, Msg::Key(Key::ch(' ')));
+    }
+    let _ = update(&mut app, Msg::Key(Key::ch('D')));
+    let _ = update(&mut app, Msg::Key(Key::ch('y')));
+    let job = app.job.as_ref().expect("the job is running");
+    assert_eq!(job.pending.len(), 2);
+    assert!(job.inflight.is_some());
+    snap("job_progress", render_to_string(&app, 100, 30));
+}
+
+/// A moving job with a real byte count under it.
+#[test]
+fn job_progress_with_bytes_modal() {
+    use fastf::core::assets::{JobPhase, JobStatus, Progress};
+
+    let mut app = fixture(12, 100, 30);
+    app.summary = Some(sample_summary_moveable(12));
+    let _ = update(&mut app, Msg::Key(Key::ch(' ')));
+    let _ = update(&mut app, Msg::Key(Key::ch(' ')));
+    let _ = update(&mut app, Msg::Key(Key::ch('m')));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+    assert!(app.job.is_some(), "the marks started a move job");
+    app.move_progress = Some(Progress {
+        total_bytes: 3_500_000,
+        copied_bytes: 1_200_000,
+        total_files: 34,
+        done_files: 12,
+        current_file: "03_Assets/raw/footage_A001.mov".to_string(),
+        status: JobStatus::Running,
+        phase: JobPhase::Copying,
+        error: None,
+        cleanup_pending: false,
+        warning: None,
+        last_progress_at: 0,
+    });
+    snap("job_progress_move", render_to_string(&app, 100, 30));
+}
+
+/// The report after a two-item delete job where one item failed: the failed
+/// row is named, the clean one is not the story.
+#[test]
+fn job_report_with_failures() {
+    let mut app = fixture(12, 100, 30);
+    for _ in 0..2 {
+        let _ = update(&mut app, Msg::Key(Key::ch(' ')));
+    }
+    let _ = update(&mut app, Msg::Key(Key::ch('D')));
+    let effects = update(&mut app, Msg::Key(Key::ch('y')));
+    let id1 = match effects.as_slice() {
+        [fastf::tui::effect::Effect::Run(id, _)] => *id,
+        other => panic!("expected one run, got {other:?}"),
+    };
+    // Item 1 fails; the job moves on to item 2.
+    let effects = update(
+        &mut app,
+        Msg::ActionDone {
+            id: id1,
+            outcome: Err("injected fault at 'delete:mid-copy'".to_string()),
+        },
+    );
+    let id2 = match effects.as_slice() {
+        [fastf::tui::effect::Effect::Run(id, _)] => *id,
+        other => panic!("expected one run, got {other:?}"),
+    };
+    // Item 2 succeeds; the job finishes with a failure report.
+    let second_path = app.library.row(1).unwrap().path.clone();
+    let _ = update(
+        &mut app,
+        Msg::ActionDone {
+            id: id2,
+            outcome: Ok(Box::new(ActionOutcome {
+                change: ListChange::Removed {
+                    path: second_path.clone(),
+                },
+                message: "done".to_string(),
+                warning: None,
+                session: None,
+            })),
+        },
+    );
+    assert!(app.job.is_none());
+    snap("job_report_with_failures", render_to_string(&app, 100, 30));
+    // The failed row keeps its mark for a retry.
+    let failed_path = app.library.row(0).unwrap().path.clone();
+    assert!(app.library.marks.contains(&failed_path));
 }

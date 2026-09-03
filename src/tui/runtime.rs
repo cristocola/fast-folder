@@ -29,7 +29,7 @@ use ratatui::crossterm::{cursor, execute};
 use crate::core::assets::{JobStatus, Progress};
 use crate::tui::app::{self, App};
 use crate::tui::effect::{
-    Action, ActionOutcome, Effect, Exit, LegacyFlow, ListChange, SpawnKind, Suspended,
+    Action, ActionOutcome, Effect, Exit, FollowUp, LegacyFlow, ListChange, SpawnKind, Suspended,
 };
 use crate::tui::entry::Entry;
 use crate::tui::loaders;
@@ -295,6 +295,28 @@ impl Runtime {
                         let _ = tx.send(Msg::ViewLoaded { title, lines });
                     });
                 }
+                Effect::LoadTemplate { slug } => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-template", move || {
+                        let result = loaders::template_info(&slug)
+                            .map(Box::new)
+                            .map_err(|err| format!("{err:#}"));
+                        let _ = tx.send(Msg::TemplateLoaded { slug, result });
+                    });
+                }
+                Effect::Preview(request) => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-preview", move || {
+                        let msg = match loaders::preview(&request) {
+                            Ok(preview) => Msg::Previewed(Box::new(preview)),
+                            Err(refusal) => Msg::PreviewFailed {
+                                field: refusal.field.map(str::to_string),
+                                error: refusal.error,
+                            },
+                        };
+                        let _ = tx.send(msg);
+                    });
+                }
                 Effect::CancelMove => {
                     if let Some(moving) = &self.moving {
                         moving.cancel.store(true, Ordering::SeqCst);
@@ -307,6 +329,13 @@ impl Runtime {
                 Effect::Suspend(Suspended::Note(project)) => {
                     let resumed = self.run_note_editor(project)?;
                     let _ = self.tx.send(Msg::Resumed(resumed));
+                }
+                Effect::Suspend(Suspended::PostCreate {
+                    root,
+                    template_slug,
+                }) => {
+                    self.run_post_create(&root, &template_slug)?;
+                    let _ = self.tx.send(Msg::Resumed(Resumed::PostCreate));
                 }
             }
         }
@@ -328,14 +357,7 @@ impl Runtime {
         );
         eprintln!();
 
-        let pauses = flow.pauses();
         let outcome: Result<(ListChange, bool)> = match flow {
-            LegacyFlow::Create => {
-                crate::tui::menu::menu_create().map(|()| (ListChange::Reload, false))
-            }
-            LegacyFlow::Register => {
-                crate::tui::menu::menu_register().map(|()| (ListChange::Reload, false))
-            }
             LegacyFlow::Templates => {
                 crate::tui::menu::menu_templates().map(|()| (ListChange::Reload, false))
             }
@@ -360,21 +382,50 @@ impl Runtime {
             }
         };
 
-        if pauses && !quit && !interrupt::is_set() {
-            eprint!(
-                "\n{}",
-                colored::Colorize::dimmed("press Enter to return to fastf…")
-            );
-            let _ = io::stderr().flush();
-            let mut discard = String::new();
-            let _ = io::stdin().read_line(&mut discard);
-        }
-
         if !quit {
             self.terminal = take_screen()?;
             self.input.resume();
         }
         Ok(Resumed::Legacy { change, quit })
+    }
+
+    /// Give the terminal back and run a new project's post-create actions.
+    ///
+    /// They are `git init`, the user's editor, and the template's own shell
+    /// commands: all of them want a terminal and print to it, and none of them
+    /// may run under the data lock — `operations::create` released it before
+    /// the action even answered. Notes are printed with the CLI's own
+    /// renderer, so the app and `fastf new` say the same words.
+    fn run_post_create(&mut self, root: &std::path::Path, template_slug: &str) -> Result<()> {
+        use crate::core::config::Config;
+
+        self.input.pause();
+        release_screen(&mut self.terminal);
+        eprintln!();
+        match (
+            Config::load(),
+            crate::core::template::find_by_slug(template_slug),
+        ) {
+            (Ok(config), Ok(template)) => {
+                let notes = crate::core::project::run_post_create(root, &template, &config);
+                crate::cli::render::print_post_create_notes(&notes);
+            }
+            (Err(err), _) | (_, Err(err)) => eprintln!(
+                "{} post-create actions were skipped: {err:#}",
+                colored::Colorize::bold(colored::Colorize::yellow("warning:"))
+            ),
+        }
+        eprint!(
+            "\n{}",
+            colored::Colorize::dimmed("press Enter to return to fastf…")
+        );
+        let _ = io::stderr().flush();
+        let mut discard = String::new();
+        let _ = io::stdin().read_line(&mut discard);
+
+        self.terminal = take_screen()?;
+        self.input.resume();
+        Ok(())
     }
 
     /// Give the terminal back, run `$EDITOR` on a scratch file for a journal
@@ -494,31 +545,28 @@ fn run_action(
         Action::Reindex => {
             let (cfg, count) = crate::core::operations::reindex()?;
             let bases = cfg.effective_bases().len();
-            Ok(ActionOutcome {
-                change: ListChange::Reload,
-                message: format!(
+            Ok(ActionOutcome::new(
+                ListChange::Reload,
+                format!(
                     "✓  Reindexed {count} project{} across {bases} base{}.",
                     if count == 1 { "" } else { "s" },
                     if bases == 1 { "" } else { "s" }
                 ),
-                warning: None,
-                session: None,
-            })
+            ))
         }
         Action::AddTag { project, tag } => {
             let tags = crate::core::operations::add_tags(&project, std::slice::from_ref(&tag))?;
             let mut patched = (*project).clone();
             let path = patched.path.clone();
             patched.tags = tags;
-            Ok(ActionOutcome {
-                change: ListChange::Patched {
+            Ok(ActionOutcome::new(
+                ListChange::Patched {
                     project: Box::new(patched),
                     stale: vec![path],
                 },
-                message: format!("Added 1 tag to {}", project.id),
-                warning: None,
-                session: Some(format!("tagged {} {tag}", project.id)),
-            })
+                format!("Added 1 tag to {}", project.id),
+            )
+            .session(format!("tagged {} {tag}", project.id)))
         }
         Action::RemoveTags { project, tags } => {
             let count = tags.len();
@@ -526,48 +574,43 @@ fn run_action(
             let mut patched = (*project).clone();
             let path = patched.path.clone();
             patched.tags = remaining;
-            Ok(ActionOutcome {
-                change: ListChange::Patched {
+            Ok(ActionOutcome::new(
+                ListChange::Patched {
                     project: Box::new(patched),
                     stale: vec![path],
                 },
-                message: format!(
+                format!(
                     "Removed {count} tag{} from {}",
                     if count == 1 { "" } else { "s" },
                     project.id
                 ),
-                warning: None,
-                session: None,
-            })
+            ))
         }
         Action::ReautoTags(project) => {
             let derived = crate::core::operations::replace_auto_tags(&project)?;
             // The free-form tags survive the operation, so the row has to be
             // re-read rather than patched from the derived list alone.
-            Ok(ActionOutcome {
-                change: ListChange::Reload,
-                message: format!(
+            Ok(ActionOutcome::new(
+                ListChange::Reload,
+                format!(
                     "Re-derived {} auto-tag{} for {}",
                     derived.len(),
                     if derived.len() == 1 { "" } else { "s" },
                     project.id
                 ),
-                warning: None,
-                session: None,
-            })
+            ))
         }
         Action::Rename { project, name } => {
             let renamed = crate::core::operations::rename(&project, &name)?;
             let stale = vec![project.path.clone(), renamed.path.clone()];
-            Ok(ActionOutcome {
-                change: ListChange::Patched {
+            Ok(ActionOutcome::new(
+                ListChange::Patched {
                     project: Box::new(renamed.clone()),
                     stale,
                 },
-                message: format!("Renamed to {}", renamed.name),
-                warning: None,
-                session: Some(format!("renamed {} → {}", renamed.id, renamed.name)),
-            })
+                format!("Renamed to {}", renamed.name),
+            )
+            .session(format!("renamed {} → {}", renamed.id, renamed.name)))
         }
         Action::Move { project, target } => {
             let outcome =
@@ -580,55 +623,180 @@ fn run_action(
                     display_path(&project.path)
                 )
             });
-            let session = Some(format!("moved {} → {}", moved.id, base_label(&moved.base)));
+            let session = format!("moved {} → {}", moved.id, base_label(&moved.base));
             let stale = vec![project.path.clone(), moved.path.clone()];
-            Ok(ActionOutcome {
-                change: ListChange::Patched {
+            Ok(ActionOutcome::new(
+                ListChange::Patched {
                     project: Box::new(moved),
                     stale,
                 },
                 message,
-                warning,
-                session,
+            )
+            .warning(warning)
+            .session(session))
+        }
+        Action::Create(request) => {
+            // The plan is recomputed under the data lock inside `create`: the
+            // ID the preview showed is advisory, and reusing it is exactly how
+            // duplicate IDs were minted.
+            let mut created =
+                crate::core::operations::create(crate::core::operations::CreateOptions {
+                    template_slug: request.template_slug.clone(),
+                    variables: request.vars.clone(),
+                    base_dir_override: request.base_dir_override.clone(),
+                })?;
+            drop(created.take_mutation_lock());
+            let root = created
+                .plan
+                .root_path
+                .canonicalize()
+                .unwrap_or_else(|_| created.plan.root_path.clone());
+            let id = created.plan.id_str.clone();
+            let outcome = ActionOutcome::new(
+                ListChange::Reload,
+                format!("✓  Created {id}  {}", created.plan.folder_name),
+            )
+            .session(format!("created {id}"))
+            .select(root.clone());
+            // Post-create actions want the main screen, and they must not run
+            // under the lock that was just dropped.
+            let actions =
+                crate::core::project::resolve_post_create(&created.template, &created.config);
+            Ok(if actions.is_empty() {
+                outcome
+            } else {
+                outcome.follow_up(FollowUp::PostCreate {
+                    root,
+                    template_slug: created.template.slug.clone(),
+                })
             })
+        }
+        Action::Apply(request) => {
+            let outcome = crate::core::operations::apply(
+                &request.template_slug,
+                &request.target,
+                &request.vars,
+            )?;
+            let created = outcome
+                .actions
+                .iter()
+                .filter(|action| {
+                    use crate::core::project::ApplyAction::*;
+                    matches!(action, CreateFolder(_) | CreateFile(_))
+                })
+                .count();
+            Ok(ActionOutcome::new(
+                // An apply can turn a folder into a project only if it already
+                // was one, but it can add files to a project the list is
+                // showing, so the row is re-read rather than guessed at.
+                ListChange::Reload,
+                format!(
+                    "✓  Applied {} — {created} item{} created",
+                    request.template_slug,
+                    if created == 1 { "" } else { "s" }
+                ),
+            )
+            .session(format!(
+                "applied {} → {}",
+                request.template_slug,
+                display_path(&request.target)
+            )))
+        }
+        Action::Register(request) if request.recursive => {
+            let targets = crate::cli::register::recursive_targets(&request.path)?;
+            let mut registered = 0usize;
+            let mut failures = Vec::new();
+            for path in targets {
+                match register_one(&request, &path) {
+                    Ok(_) => registered += 1,
+                    Err(error) => {
+                        failures.push(format!("{}: {error:#}", display_path(&path)));
+                    }
+                }
+            }
+            let outcome = ActionOutcome::new(
+                ListChange::Reload,
+                format!(
+                    "✓  Registered {registered} folder{}",
+                    if registered == 1 { "" } else { "s" }
+                ),
+            )
+            .session(format!("registered {registered} folders"));
+            Ok(if failures.is_empty() {
+                outcome
+            } else {
+                outcome.warning(Some(failures.join("; ")))
+            })
+        }
+        Action::Register(request) => {
+            let outcome = register_one(&request, &request.path.clone())?;
+            let project = outcome.project;
+            let path = project.path.clone();
+            Ok(ActionOutcome::new(
+                ListChange::Reload,
+                format!("✓  Registered {}  {}", project.id, project.name),
+            )
+            .session(format!("registered {}", project.id))
+            .select(path))
         }
         Action::Unregister(project) => {
             crate::core::operations::unregister(&project)?;
-            Ok(ActionOutcome {
-                change: ListChange::Removed {
+            Ok(ActionOutcome::new(
+                ListChange::Removed {
                     path: project.path.clone(),
                 },
-                message: format!("Unregistered {}", project.name),
-                warning: None,
-                session: Some(format!("unregistered {}", project.id)),
-            })
+                format!("Unregistered {}", project.name),
+            )
+            .session(format!("unregistered {}", project.id)))
         }
         Action::Delete(project) => {
             crate::core::operations::delete(&project)?;
-            Ok(ActionOutcome {
-                change: ListChange::Removed {
+            Ok(ActionOutcome::new(
+                ListChange::Removed {
                     path: project.path.clone(),
                 },
-                message: format!("Deleted {}", display_path(&project.path)),
-                warning: None,
-                session: Some(format!("deleted {}", project.id)),
-            })
+                format!("Deleted {}", display_path(&project.path)),
+            )
+            .session(format!("deleted {}", project.id)))
         }
         Action::AppendNote { project, text } => {
             crate::core::operations::append_note(&project, &text)?;
             let id = project.id.clone();
             let path = project.path.clone();
-            Ok(ActionOutcome {
-                change: ListChange::Patched {
+            Ok(ActionOutcome::new(
+                ListChange::Patched {
                     project,
                     stale: vec![path],
                 },
-                message: "Journal entry added.".to_string(),
-                warning: None,
-                session: Some(format!("noted {id}")),
-            })
+                "Journal entry added.",
+            )
+            .session(format!("noted {id}")))
         }
     }
+}
+
+/// One folder, registered. Shared by the single and the recursive arms so
+/// both go through the same policy: the preview already said whether a
+/// `PROJECT_INFO.md` would be overwritten, and Enter on it was the answer —
+/// except in bulk, which never overwrites anything.
+fn register_one(
+    request: &crate::tui::app::register::Request,
+    path: &std::path::Path,
+) -> Result<crate::cli::register::RegisterOutcome> {
+    crate::cli::register::register_core(crate::cli::register::RegisterOptions {
+        path: path.to_path_buf(),
+        template_slug: request.template_slug.clone(),
+        vars: request.vars.clone(),
+        apply_structure: request.apply_structure && !request.recursive,
+        rename: request.rename && !request.recursive,
+        use_today: request.use_today,
+        created_override: None,
+        on_pinfo_conflict: if request.recursive {
+            crate::cli::register::PinfoConflict::Skip
+        } else {
+            crate::cli::register::PinfoConflict::Overwrite
+        },
+    })
 }
 
 /// Start another program for the user. Every path handed to one is checked

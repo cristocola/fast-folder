@@ -10,7 +10,11 @@ use crate::core::config::Config;
 use crate::core::library::{self, Project};
 use crate::core::project_info::{self, Metadata};
 use crate::core::{provisioning, template};
-use crate::tui::app::data::{BaseInfo, Entry, ProjectDetail, Summary, TemplateCard};
+use crate::tui::app::data::{
+    BaseInfo, Entry, Prefs, ProjectDetail, Summary, TemplateCard, TemplateInfo, VarInfo,
+};
+use crate::tui::app::wizard::{ApplyPreview, Preview, RecursivePreview, RegisterPreview};
+use crate::tui::effect::{ApplyRequest, CreateRequest, Request};
 use crate::util::paths;
 
 /// The header, from the indexes: no base is scanned to draw it. Each base is
@@ -58,7 +62,250 @@ pub fn summary() -> Result<Summary> {
         }
     };
     summary.attention = provisioning::list_incomplete(&cfg).len();
+    summary.prefs = Prefs {
+        default_template: cfg.default_template.clone(),
+        confirm_create: cfg.confirm_create,
+        register_naming_pattern: cfg.register_naming_pattern.clone(),
+    };
     Ok(summary)
+}
+
+/// One template read in full, for the form that asks for its variables.
+pub fn template_info(slug: &str) -> Result<TemplateInfo> {
+    let template = template::find_by_slug(slug)?;
+    Ok(TemplateInfo {
+        slug: template.slug.clone(),
+        name: template.name.clone(),
+        naming_pattern: template.naming_pattern.clone(),
+        variables: template
+            .variables
+            .iter()
+            .map(|var| VarInfo {
+                slug: var.slug.clone(),
+                label: var.label.clone(),
+                required: var.required,
+                options: match var.var_type {
+                    template::VarType::Select => var.options.clone(),
+                    template::VarType::Text => Vec::new(),
+                },
+                default: var.default.clone(),
+            })
+            .collect(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Previews — what a flow's answers would do
+// ---------------------------------------------------------------------------
+
+/// A refusal that belongs to one answer. `field` is the form key, so the
+/// message lands on the line that caused it instead of under the whole form.
+pub struct PreviewRefusal {
+    pub field: Option<&'static str>,
+    pub error: String,
+}
+
+impl PreviewRefusal {
+    fn on(field: &'static str, error: impl std::fmt::Display) -> Self {
+        Self {
+            field: Some(field),
+            error: error.to_string(),
+        }
+    }
+
+    fn anywhere(error: impl std::fmt::Display) -> Self {
+        Self {
+            field: None,
+            error: error.to_string(),
+        }
+    }
+}
+
+/// Build what a flow would do. Writes nothing: `project::plan` is read-only by
+/// contract (its counter floor goes through `library::max_id`), `apply_plan`
+/// only probes for occupancy, and register's preview is `plan_rename`.
+pub fn preview(request: &Request) -> Result<Preview, PreviewRefusal> {
+    match request {
+        Request::Create(create) => preview_create(create),
+        Request::Apply(apply) => preview_apply(apply),
+        Request::Register(register) if register.recursive => preview_recursive(register),
+        Request::Register(register) => preview_register(register),
+    }
+}
+
+fn preview_create(request: &CreateRequest) -> Result<Preview, PreviewRefusal> {
+    let mut config = Config::load().map_err(PreviewRefusal::anywhere)?;
+    if let Some(raw) = request
+        .base_dir_override
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let resolved = crate::core::config::resolve_base_dir_input(raw)
+            .and_then(|path| paths::storable(&path, "the base directory"))
+            .map_err(|error| {
+                PreviewRefusal::on(crate::tui::app::wizard::FIELD_BASE, format!("{error:#}"))
+            })?;
+        config.base_dir = resolved;
+    }
+    let template = template::find_by_slug(&request.template_slug).map_err(|error| {
+        PreviewRefusal::on(
+            crate::tui::app::wizard::FIELD_TEMPLATE,
+            format!("{error:#}"),
+        )
+    })?;
+    let raw_vars = crate::core::vars::validated_raw_values(&template, &request.vars)
+        .map_err(|error| PreviewRefusal::anywhere(format!("{error:#}")))?;
+    let counters = crate::core::counter::Counters::load().map_err(PreviewRefusal::anywhere)?;
+    let plan = crate::core::project::plan(&template, &raw_vars, &config, &counters)
+        .map_err(|error| PreviewRefusal::anywhere(format!("{error:#}")))?;
+    Ok(Preview::Create(Box::new(
+        crate::core::project::plan_report(&plan, &template, &config),
+    )))
+}
+
+fn preview_apply(request: &ApplyRequest) -> Result<Preview, PreviewRefusal> {
+    // Checked here, and with the same words register uses, rather than left to
+    // `require_real_directory` deep inside the plan: the answer has to name the
+    // field it belongs to, and a person reads "no such folder" faster than an
+    // error chain ending in `os error 2`.
+    let target = &existing_directory(&request.target, crate::tui::app::wizard::FIELD_TARGET)?;
+    let outcome =
+        crate::core::operations::preview_apply(&request.template_slug, target, &request.vars)
+            .map_err(|error| {
+                PreviewRefusal::on(crate::tui::app::wizard::FIELD_TARGET, format!("{error:#}"))
+            })?;
+    let mut creates = 0;
+    let mut skips = 0;
+    let rows = outcome
+        .actions
+        .iter()
+        .map(|action| {
+            use crate::core::project::ApplyAction::*;
+            let (new, path) = match action {
+                CreateFolder(path) => (true, path),
+                CreateFile(path) => (true, path),
+                SkipFolder(path) => (false, path),
+                SkipFile(path) => (false, path),
+            };
+            if new {
+                creates += 1;
+            } else {
+                skips += 1;
+            }
+            let shown = path
+                .strip_prefix(target)
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            (new, shown)
+        })
+        .collect();
+    Ok(Preview::Apply(ApplyPreview {
+        target: target.clone(),
+        rows,
+        creates,
+        skips,
+    }))
+}
+
+fn preview_register(
+    request: &crate::tui::app::register::Request,
+) -> Result<Preview, PreviewRefusal> {
+    use crate::cli::register as reg;
+
+    let canonical = existing_directory(&request.path, REGISTER_PATH)?;
+    let cfg = Config::load().map_err(PreviewRefusal::anywhere)?;
+    let (template, has_template) = match &request.template_slug {
+        Some(slug) => (
+            template::find_by_slug(slug).map_err(|error| {
+                PreviewRefusal::on(
+                    crate::tui::app::wizard::FIELD_TEMPLATE,
+                    format!("{error:#}"),
+                )
+            })?,
+            true,
+        ),
+        None => (reg::stub_template(), false),
+    };
+    if has_template {
+        crate::core::vars::validated_raw_values(&template, &request.vars)
+            .map_err(|error| PreviewRefusal::anywhere(format!("{error:#}")))?;
+    }
+    let plan = reg::plan_rename(&canonical, &template, has_template, &request.vars, &cfg)
+        .map_err(|error| PreviewRefusal::anywhere(format!("{error:#}")))?;
+    let created = reg::resolve_created(&canonical, request.use_today, None)
+        .map_err(|error| PreviewRefusal::anywhere(format!("{error:#}")))?;
+    Ok(Preview::Register(Box::new(RegisterPreview {
+        template: if has_template {
+            template.name.clone()
+        } else {
+            reg::REGISTERED_SLUG.to_string()
+        },
+        id: plan.id.clone(),
+        id_note: if plan.recovered {
+            "recovered from the folder name"
+        } else {
+            "minted from the counter"
+        },
+        created: created.get(..10).unwrap_or(&created).to_string(),
+        rename: (request.rename && plan.renames())
+            .then(|| (plan.current_name.clone(), plan.desired.clone())),
+        pinfo_exists: crate::core::project_info::pinfo_path(&canonical).is_file(),
+        apply_structure: request.apply_structure && has_template,
+        path: canonical,
+    })))
+}
+
+fn preview_recursive(
+    request: &crate::tui::app::register::Request,
+) -> Result<Preview, PreviewRefusal> {
+    use crate::cli::register as reg;
+
+    let base = existing_directory(&request.path, REGISTER_PATH)?;
+    let targets = reg::recursive_targets(&base)
+        .map_err(|error| PreviewRefusal::on(REGISTER_PATH, format!("{error:#}")))?;
+    let prefix = reg::recursive_prefix(request.template_slug.as_deref());
+    let rows = targets
+        .iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let note = reg::recursive_id_note(&name, &prefix);
+            (name, note)
+        })
+        .collect();
+    Ok(Preview::Recursive(RecursivePreview { base, rows }))
+}
+
+/// The register form's path field, named once so a refusal can point at it.
+const REGISTER_PATH: &str = crate::tui::app::register::FIELD_PATH;
+
+/// A folder an answer names, checked where it was typed. This is the check
+/// that used to happen after three more questions had been answered, taking
+/// all four answers with it — and the wording is the one those prompts used.
+fn existing_directory(
+    path: &std::path::Path,
+    field: &'static str,
+) -> Result<PathBuf, PreviewRefusal> {
+    if path.as_os_str().is_empty() {
+        return Err(PreviewRefusal::on(field, "enter a folder path"));
+    }
+    if !path.exists() {
+        return Err(PreviewRefusal::on(
+            field,
+            format!("no such folder: {}", paths::display_path(path)),
+        ));
+    }
+    if !path.is_dir() {
+        return Err(PreviewRefusal::on(
+            field,
+            format!("not a folder: {}", paths::display_path(path)),
+        ));
+    }
+    path.canonicalize()
+        .map_err(|error| PreviewRefusal::on(field, format!("{error}")))
 }
 
 fn template_card(t: &template::Template) -> TemplateCard {

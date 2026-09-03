@@ -1,13 +1,9 @@
 use anyhow::Result;
 use colored::Colorize;
-use std::collections::HashMap;
 
-use crate::cli::new::{self, NewArgs};
-use crate::cli::register::{self, RegisterArgs};
-use crate::cli::{apply, config, id, template};
+use crate::cli::{config, id, template};
 use crate::core::config::Config;
-use crate::core::template as core_template;
-use crate::tui::pickers::{pick_base, pick_template};
+use crate::tui::pickers::pick_template;
 use crate::tui::prompt::{self, TextOpts};
 
 /// Should this error end the session, or just be reported?
@@ -27,22 +23,6 @@ use crate::tui::prompt::{self, TextOpts};
 /// propagate the very case this exists to catch.
 pub(crate) fn is_fatal(err: &anyhow::Error) -> bool {
     crate::util::interrupt::is_set() || err.downcast_ref::<dialoguer::Error>().is_some()
-}
-
-/// Say which configured bases are not available, and why, once per list.
-///
-/// A base that is not mounted is ordinary — an external drive that is not
-/// plugged in. One that does not answer is worth naming, because the alternative
-/// is a menu that appears to hang.
-fn report_unusable_bases(unusable: &[(std::path::PathBuf, crate::util::paths::Probe)]) {
-    for (path, probe) in unusable {
-        println!(
-            "  {} {}{}",
-            "·".dimmed(),
-            crate::util::paths::display_path(path).dimmed(),
-            probe.note().dimmed()
-        );
-    }
 }
 
 /// A folder that must already exist, checked at the prompt that asks for it.
@@ -146,300 +126,6 @@ pub(crate) fn onboard_first_run(cfg: &Config) -> Result<()> {
     }
 }
 
-pub(crate) fn menu_create() -> Result<()> {
-    let Some(tmpl) = pick_template("Select template", "name it instead: `fastf new <slug>`")?
-    else {
-        prompt::report_cancelled("nothing was created");
-        println!();
-        return Ok(());
-    };
-    let Some(base_dir_override) = pick_base_interactively()? else {
-        prompt::report_cancelled("nothing was created");
-        println!();
-        return Ok(());
-    };
-    let args = NewArgs {
-        template_slug: Some(tmpl.slug.clone()),
-        vars: HashMap::new(),
-        dry_run: false,
-        base_dir_override,
-        no_preview: false,
-        no_post: false,
-        yes: false,
-    };
-    new::run(args)?;
-    println!();
-    Ok(())
-}
-
-/// When more than one base is configured, ask which one the new project should
-/// be created in. Returns `None` (= config default) when there's only one base
-/// or the default entry is chosen.
-/// The outer `Option` is the cancel: `None` means Esc, and the create is
-/// abandoned. The inner one is the answer, where `None` means "the default base"
-/// and lets `config.base_dir` resolution do its thing.
-fn pick_base_interactively() -> Result<Option<Option<String>>> {
-    let cfg = Config::load()?;
-    let (bases, unusable) = crate::util::paths::mounted_bases(&cfg.effective_bases());
-    report_unusable_bases(&unusable);
-    if bases.len() <= 1 {
-        return Ok(Some(None));
-    }
-    let default_base = bases.first().cloned();
-    let picked = pick_base(
-        "Create the project in which base?",
-        &bases,
-        default_base.as_deref(),
-        "name it instead: `fastf new <slug> --base-dir=<path>`",
-        false,
-    )?;
-    match picked {
-        Some(base) if Some(&base) == default_base.as_ref() => Ok(Some(None)),
-        Some(base) => Ok(Some(Some(base.display().to_string()))),
-        None => Ok(None),
-    }
-}
-
-fn menu_apply() -> Result<()> {
-    let Some(slug) = prompt_template_slug("Template to apply")? else {
-        return Ok(());
-    };
-    // Before the dry-run question and before every variable: `apply` used to
-    // reject the target only after all of them had been answered.
-    let Some(target) = prompt::text(
-        "Target folder",
-        TextOpts::new().validate(existing_directory),
-    )?
-    else {
-        return Ok(());
-    };
-    let Some(dry_run) = prompt::confirm("Dry run first (preview only)?", true)? else {
-        return Ok(());
-    };
-
-    // Collect the variables once and reuse them for both passes. Running apply
-    // twice with an empty map meant answering every prompt again just to confirm
-    // the preview you had already approved.
-    let tmpl = core_template::find_by_slug(&slug)?;
-    let Some(vars) = apply::collect_if_needed(&tmpl, &HashMap::new())? else {
-        prompt::report_cancelled("nothing was applied");
-        return Ok(());
-    };
-
-    apply::run(apply::ApplyArgs {
-        template_slug: slug.clone(),
-        target: target.clone(),
-        dry_run,
-        yes: false,
-        vars: vars.clone(),
-    })?;
-
-    if dry_run {
-        let proceed = prompt::confirm("Apply for real now?", false)?.unwrap_or(false);
-        if proceed {
-            apply::run(apply::ApplyArgs {
-                template_slug: slug,
-                target,
-                dry_run: false,
-                // Same answers — `collect_vars` finds them all and prompts for none.
-                yes: true,
-                vars,
-            })?;
-        }
-    }
-    println!();
-    Ok(())
-}
-
-pub(crate) fn menu_register() -> Result<()> {
-    let Some(scope) = menu(
-        "Register what?",
-        &["One folder", "Every unregistered folder in a base", "Back"],
-        0,
-    )?
-    else {
-        return Ok(());
-    };
-    match scope.as_str() {
-        "One folder" => menu_register_one(),
-        "Every unregistered folder in a base" => menu_register_recursive(),
-        _ => Ok(()),
-    }
-}
-
-/// Bulk onboarding: preview first, then commit. The preview is the same
-/// renderer `fastf register --recursive --dry-run` uses.
-fn menu_register_recursive() -> Result<()> {
-    let Some(base) = prompt::text(
-        "Base folder whose children to register",
-        TextOpts::new().validate(existing_directory),
-    )?
-    else {
-        return Ok(());
-    };
-    let Some(template_slug) = ask_optional_template()? else {
-        return Ok(());
-    };
-    let Some(use_today) = ask_created_is_today()? else {
-        return Ok(());
-    };
-
-    register::run_recursive(register::RecursiveArgs {
-        base: std::path::PathBuf::from(base.trim()),
-        template_slug: template_slug.clone(),
-        vars: HashMap::new(),
-        use_today,
-        dry_run: true,
-    })?;
-
-    let Some(true) = prompt::confirm("Register these folders now?", false)? else {
-        prompt::report_cancelled("nothing was registered");
-        println!();
-        return Ok(());
-    };
-
-    register::run_recursive(register::RecursiveArgs {
-        base: std::path::PathBuf::from(base.trim()),
-        template_slug,
-        vars: HashMap::new(),
-        use_today,
-        dry_run: false,
-    })?;
-    println!();
-    Ok(())
-}
-
-/// "Attach a template?" then the picker. The outer `Option` is the cancel.
-fn ask_optional_template() -> Result<Option<Option<String>>> {
-    let Some(use_template) = prompt::confirm(
-        "Attach a template (enables tags + variable capture)?",
-        false,
-    )?
-    else {
-        return Ok(None);
-    };
-    if !use_template {
-        return Ok(Some(None));
-    }
-    match core_template::load_all() {
-        Ok(ts) if !ts.is_empty() => Ok(prompt_template_slug("Template to attach")?.map(Some)),
-        Ok(_) => {
-            println!(
-                "  {} no templates available — continuing without one.",
-                "·".dimmed()
-            );
-            Ok(Some(None))
-        }
-        Err(e) => {
-            println!(
-                "  {} could not load templates ({e}) — continuing without one.",
-                "warning:".yellow().bold()
-            );
-            Ok(Some(None))
-        }
-    }
-}
-
-/// Which date a registered project should claim as its creation date.
-///
-/// `register` defaults to the folder's own timestamp, which is almost always
-/// what a folder that predates fastf should keep. The menu could not say
-/// otherwise at all before.
-fn ask_created_is_today() -> Result<Option<bool>> {
-    let Some(choice) = menu(
-        "Created date for these projects",
-        &["The folder's own date", "Today"],
-        0,
-    )?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(choice == "Today"))
-}
-
-fn menu_register_one() -> Result<()> {
-    // 1. Folder path.
-    // Validated here, before the three questions that follow it.
-    let Some(path) = prompt::text(
-        "Existing folder to register",
-        TextOpts::new().validate(existing_directory),
-    )?
-    else {
-        return Ok(());
-    };
-    let path = path.trim();
-
-    // 2. Optional template — first ask, then pick if Yes. Skipping is fully
-    //    supported: register writes a minimal record with template "(registered)".
-    let Some(use_template) = prompt::confirm(
-        "Attach a template (enables tags + variable capture)?",
-        false,
-    )?
-    else {
-        return Ok(());
-    };
-
-    let template_slug = if use_template {
-        match core_template::load_all() {
-            Ok(ts) if !ts.is_empty() => match prompt_template_slug("Template to attach")? {
-                Some(slug) => Some(slug),
-                None => return Ok(()),
-            },
-            Ok(_) => {
-                println!(
-                    "  {} no templates available — continuing without one.",
-                    "·".dimmed()
-                );
-                None
-            }
-            Err(e) => {
-                println!(
-                    "  {} could not load templates ({e}) — continuing without one.",
-                    "warning:".yellow().bold()
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // 3. Standardize folder name. Default Yes; the actual fs::rename inside
-    //    register::run() prompts again before moving, so the user has a second
-    //    chance to back out once they see the proposed new name.
-    let Some(rename) = prompt::confirm("Standardize folder name (rename to match pattern)?", true)?
-    else {
-        return Ok(());
-    };
-
-    let Some(use_today) = ask_created_is_today()? else {
-        return Ok(());
-    };
-
-    // 4. Optional --apply (only meaningful with a template).
-    let apply_structure = if template_slug.is_some() {
-        match prompt::confirm("Fill in missing template folders/files?", false)? {
-            Some(answer) => answer,
-            None => return Ok(()),
-        }
-    } else {
-        false
-    };
-
-    register::run(RegisterArgs {
-        path: std::path::PathBuf::from(path),
-        template_slug,
-        vars: HashMap::new(),
-        apply_structure,
-        rename,
-        use_today,
-        created_override: None,
-        yes: false,
-    })?;
-    println!();
-    Ok(())
-}
-
 pub(crate) fn menu_templates() -> Result<()> {
     loop {
         let Some(choice) = menu(
@@ -448,7 +134,6 @@ pub(crate) fn menu_templates() -> Result<()> {
                 "Create new template",
                 "Generate template from existing folder",
                 "Edit a template",
-                "Apply template to existing folder",
                 "List templates",
                 "Show template details",
                 "Delete a template",
@@ -467,7 +152,6 @@ pub(crate) fn menu_templates() -> Result<()> {
             "Create new template" => template::new_interactive(),
             "Generate template from existing folder" => template_from_folder_flow(),
             "Edit a template" => on_template("Edit template", template::edit),
-            "Apply template to existing folder" => menu_apply(),
             "List templates" => template::list(),
             "Show template details" => on_template("Show template", template::show),
             "Delete a template" => on_template("Delete template", |s| template::delete(s, false)),

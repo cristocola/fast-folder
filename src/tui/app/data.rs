@@ -38,6 +38,40 @@ pub struct TemplateCard {
     pub naming_pattern: String,
 }
 
+/// The configuration the app itself needs to decide what to ask.
+///
+/// Not a copy of `Config`: only the fields a *screen* is a function of, read
+/// once with the summary. `core::config` stays the authority — every commit
+/// re-reads it on the worker — but the wizard has to know whether to offer a
+/// preview before it can draw one.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Prefs {
+    pub default_template: String,
+    /// Whether a create shows its plan and waits for a yes.
+    pub confirm_create: bool,
+    pub register_naming_pattern: String,
+}
+
+/// One template read in full: what a form needs to ask for its variables.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct TemplateInfo {
+    pub slug: String,
+    pub name: String,
+    pub naming_pattern: String,
+    pub variables: Vec<VarInfo>,
+}
+
+/// One template variable, as a form field asks for it.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct VarInfo {
+    pub slug: String,
+    pub label: String,
+    pub required: bool,
+    /// Non-empty for a `select` variable: the only answers it takes.
+    pub options: Vec<String>,
+    pub default: String,
+}
+
 /// The header's numbers. Counts come from each base's index and nothing else:
 /// no directory is scanned to draw the first frame, so opening the app does not
 /// get slower as the library grows. The live count replaces them once discovery
@@ -51,6 +85,7 @@ pub struct Summary {
     pub templates: Vec<TemplateCard>,
     /// Interrupted creates and moves that `fastf reconcile` would deal with.
     pub attention: usize,
+    pub prefs: Prefs,
 }
 
 /// One entry of a project folder's top level.

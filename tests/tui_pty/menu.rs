@@ -28,8 +28,9 @@ fn the_app_opens_and_quits_cleanly() {
 
 /// The headline regression, now closed from the other side. Register used to ask
 /// for the path *first* and reject it *last*, so a typo cost three more answered
-/// prompts and the whole session. The path is checked at the prompt that
-/// collected it, and the text it rejected stays on the line to be corrected.
+/// prompts and the whole session. Every answer is on one screen now, the path is
+/// checked when the form is submitted, and the text it rejected stays on the
+/// line to be corrected.
 #[test]
 fn a_bad_register_path_is_corrected_in_place() {
     let sb = Sandbox::new();
@@ -41,28 +42,24 @@ fn a_bad_register_path_is_corrected_in_place() {
     let script = pty::Script::new()
         .key(KEY_REGISTER)
         .pause(600)
-        .enter() // Register what? → One folder
-        .key(&typo) // typed, not submitted
-        .enter() // refused inline
-        .pause(500)
+        .tab() // → Folder
+        .key(&typo)
+        .enter() // refused, in place
+        .pause(700)
         .backspace(2) // correct it without retyping the path
-        .enter()
-        .pause(500)
-        .key("n") // attach a template?    (Confirm → keypress only)
-        .key("n") // standardize the name? (Confirm → keypress only)
-        .pause(500)
-        .enter() // created date → the folder's own date
+        .enter() // → the preview
         .pause(900)
-        .enter() // press Enter to return to fastf
-        .pause(600)
+        .enter() // → commit
+        .pause(1200)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
     let text = pty::plain(&out);
 
     assert_eq!(
         code, 0,
-        "a mistyped path must not end the session (it exited {code}):\n{text}"
+        "a mistyped path must not end the session (it exited {code}):\n{screen}"
     );
     assert!(
         text.contains("no such folder"),
@@ -70,7 +67,7 @@ fn a_bad_register_path_is_corrected_in_place() {
     );
     assert!(
         good.join("PROJECT_INFO.md").exists(),
-        "the corrected path should have been registered:\n{text}"
+        "the corrected path should have been registered:\n{screen}"
     );
     assert!(
         text.contains("Goodbye."),
@@ -373,8 +370,8 @@ fn esc_backs_out_one_level_at_a_time() {
     );
 }
 
-/// Esc anywhere in the create wizard cancels the whole create. Nothing on disk,
-/// and the ID counter is exactly where it was.
+/// Esc in the create wizard cancels the whole create. Nothing on disk, and the
+/// ID counter is exactly where it was.
 #[test]
 fn esc_in_the_create_wizard_creates_nothing() {
     let sb = Sandbox::new();
@@ -383,20 +380,19 @@ fn esc_in_the_create_wizard_creates_nothing() {
 
     let script = pty::Script::new()
         .key(KEY_CREATE)
+        .pause(800)
+        .esc() // cancel at the answers
         .pause(600)
-        .esc() // cancel at the template picker
-        .pause(500)
-        .enter() // press Enter to return to fastf
-        .pause(500)
         .esc() // quit
         .build();
     let (out, code) = launch(&sb, script);
-    let text = pty::plain(&out);
+    let screen = app_screen(&out);
 
-    assert_eq!(code, 0, "a cancelled create is not a failure:\n{text}");
+    assert_eq!(code, 0, "a cancelled create is not a failure:\n{screen}");
     assert!(
-        text.contains("Cancelled"),
-        "the cancel should say so, not fail silently:\n{text}"
+        pty::plain(&out).contains("Cancelled"),
+        "the cancel should say so, not fail silently:\n{}",
+        pty::plain(&out)
     );
     assert!(
         common::project_dirs(&sb.base).is_empty(),
@@ -409,35 +405,43 @@ fn esc_in_the_create_wizard_creates_nothing() {
     );
 }
 
-/// The same, one prompt deeper: Esc at a required variable. This is the dead end
-/// the old build had no exit from at all — an empty answer re-prompted forever
-/// and Esc did nothing.
+/// A required variable left empty is named where it was asked for, and Esc from
+/// there still creates nothing. This is the dead end the old build had no exit
+/// from at all — an empty answer re-prompted forever and Esc did nothing.
 #[test]
-fn esc_at_a_required_variable_creates_nothing() {
+fn a_required_variable_is_named_and_esc_still_creates_nothing() {
     let sb = Sandbox::new();
     sb.write_template("race");
+    sb.ok(&["config", "set", "default-template", "race"]);
     let before = sb.local_counter();
 
     let script = pty::Script::new()
         .key(KEY_CREATE)
+        .pause(800)
+        .enter() // submit with the required variable empty
         .pause(600)
-        .enter() // pick the first template
-        .pause(400)
-        .esc() // at its first required variable
-        .pause(500)
-        .enter() // press Enter to return to fastf
+        .esc()
         .pause(500)
         .esc() // quit
         .build();
     let (out, code) = launch(&sb, script);
-    let text = pty::plain(&out);
+    let screen = app_screen(&out);
 
-    assert_eq!(code, 0, "a cancelled create is not a failure:\n{text}");
+    assert_eq!(code, 0, "a cancelled create is not a failure:\n{screen}");
+    assert!(
+        pty::plain(&out).contains("Name is required"),
+        "the empty variable should be named:\n{}",
+        pty::plain(&out)
+    );
     assert!(
         common::project_dirs(&sb.base).is_empty(),
-        "a cancelled create must leave no folder behind:\n{text}"
+        "a cancelled create must leave no folder behind:\n{screen}"
     );
-    assert_eq!(sb.local_counter(), before, "no ID may be consumed:\n{text}");
+    assert_eq!(
+        sb.local_counter(),
+        before,
+        "no ID may be consumed:\n{screen}"
+    );
 }
 
 /// Esc in a settings field leaves the value alone and returns to the submenu.
@@ -513,45 +517,6 @@ fn a_bad_template_slug_is_refused_at_its_own_prompt() {
             .join("templates/not-a-slug/template.yaml")
             .exists(),
         "the corrected slug should have produced the template:\n{text}"
-    );
-}
-
-/// Apply asked template, target, dry-run and every variable, then rejected the
-/// target. The target now comes second, and is checked there.
-#[test]
-fn apply_refuses_a_missing_target_before_asking_anything_else() {
-    let sb = Sandbox::new();
-    sb.write_template("race");
-
-    let script = pty::Script::new()
-        .key(KEY_TEMPLATES)
-        .pause(600)
-        .down(3) // → Apply template to existing folder
-        .enter()
-        .enter() // pick the first template
-        .pause(400)
-        .line("/nope/does/not/exist")
-        .pause(600)
-        .esc() // give up on the target
-        .pause(400)
-        .esc() // Templates → the dashboard
-        .pause(500)
-        .key(KEY_QUIT)
-        .build();
-    let (out, code) = launch(&sb, script);
-    let text = pty::plain(&out);
-
-    assert_eq!(
-        code, 0,
-        "a missing target must not end the session:\n{text}"
-    );
-    assert!(
-        text.contains("no such folder"),
-        "the target should be refused at its own prompt:\n{text}"
-    );
-    assert!(
-        !text.contains("Dry run first"),
-        "nothing that depends on the target may be asked before it is valid:\n{text}"
     );
 }
 

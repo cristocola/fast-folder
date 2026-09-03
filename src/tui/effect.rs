@@ -1,8 +1,10 @@
 //! What `update` asks the runtime to do. `update` itself does no I/O.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::core::library::Project;
+use crate::tui::app::register;
 
 /// Ties a worker's answer back to the request that started it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -36,6 +38,14 @@ pub enum Effect {
         path: PathBuf,
         kind: ViewKind,
     },
+    /// Read one template in full — its variables — for the flow that asked.
+    LoadTemplate {
+        slug: String,
+    },
+    /// Work out what a flow's answers would do, without touching a disk.
+    /// Answered by `Msg::Previewed`, or by `Msg::PreviewFailed` naming the
+    /// field that was wrong.
+    Preview(Box<Request>),
     /// Cancel the move job that is running.
     CancelMove,
     /// Give the terminal back, run something that needs it, take it again.
@@ -43,10 +53,43 @@ pub enum Effect {
     Quit(Exit),
 }
 
+/// What a flow wants previewed, and then committed. The same value serves
+/// both, so the screen cannot show a plan built one way and commit one built
+/// another — which is exactly how a rename prompt came to offer `ID0001` and
+/// write `ID0011`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Request {
+    Create(CreateRequest),
+    Apply(ApplyRequest),
+    Register(register::Request),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreateRequest {
+    pub template_slug: String,
+    pub vars: HashMap<String, String>,
+    /// `None` uses the configured base.
+    pub base_dir_override: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApplyRequest {
+    pub template_slug: String,
+    pub target: PathBuf,
+    pub vars: HashMap<String, String>,
+}
+
 /// A mutation the runtime performs through `core::operations`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Reindex,
+    /// Create a project. Post-create actions are **not** run here: they spawn
+    /// the user's editor and shell commands, which need the main screen — see
+    /// `Suspended::PostCreate`.
+    Create(Box<CreateRequest>),
+    Apply(Box<ApplyRequest>),
+    /// Register one folder, or every unregistered child of a base.
+    Register(Box<register::Request>),
     AddTag {
         project: Box<Project>,
         tag: String,
@@ -98,14 +141,20 @@ pub enum Suspended {
     /// Open `$EDITOR` on a scratch file for the selected project's journal,
     /// then come back with what was written.
     Note(Box<Project>),
+    /// Run a finished create's post-create actions. They run `git init`, open
+    /// the user's editor and execute the template's own shell commands, all of
+    /// which want a terminal and print to it — so the screen goes back before
+    /// they start, exactly as the note editor's does.
+    PostCreate {
+        root: PathBuf,
+        template_slug: String,
+    },
 }
 
 /// The dialoguer flows that are not native yet. Each phase of the rebuild
 /// removes the variants it makes native; the enum is gone when they all are.
 #[derive(Debug, PartialEq)]
 pub enum LegacyFlow {
-    Create,
-    Register,
     Templates,
     Settings,
 }
@@ -113,18 +162,9 @@ pub enum LegacyFlow {
 impl LegacyFlow {
     pub fn title(&self) -> &'static str {
         match self {
-            LegacyFlow::Create => "create a project",
-            LegacyFlow::Register => "register a folder",
             LegacyFlow::Templates => "templates",
             LegacyFlow::Settings => "settings",
         }
-    }
-
-    /// Whether the flow's last output deserves a pause before the app redraws.
-    /// The menus loop until Back, so the user has already read their output;
-    /// create and register print a result and return.
-    pub fn pauses(&self) -> bool {
-        matches!(self, LegacyFlow::Create | LegacyFlow::Register)
     }
 }
 
@@ -154,6 +194,15 @@ pub enum ListChange {
     None,
 }
 
+/// What still has to happen on the main screen once an action has committed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FollowUp {
+    PostCreate {
+        root: PathBuf,
+        template_slug: String,
+    },
+}
+
 /// What a worker reports back from one action.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ActionOutcome {
@@ -163,4 +212,45 @@ pub struct ActionOutcome {
     pub warning: Option<String>,
     /// The header's session ring, e.g. `tagged ID0248 draft`.
     pub session: Option<String>,
+    /// A row to put the cursor on once the list has caught up: what a create
+    /// or a register just made, which is never in the list the action started
+    /// from.
+    pub select: Option<PathBuf>,
+    /// Work that needs the main screen; run after the list has been updated.
+    pub follow_up: Option<FollowUp>,
+}
+
+impl ActionOutcome {
+    /// The two things every outcome has. The rest are chained on, so adding a
+    /// field does not touch every verb that never sets it.
+    pub fn new(change: ListChange, message: impl Into<String>) -> Self {
+        Self {
+            change,
+            message: message.into(),
+            warning: None,
+            session: None,
+            select: None,
+            follow_up: None,
+        }
+    }
+
+    pub fn warning(mut self, warning: Option<String>) -> Self {
+        self.warning = warning;
+        self
+    }
+
+    pub fn session(mut self, session: impl Into<String>) -> Self {
+        self.session = Some(session.into());
+        self
+    }
+
+    pub fn select(mut self, path: PathBuf) -> Self {
+        self.select = Some(path);
+        self
+    }
+
+    pub fn follow_up(mut self, follow_up: FollowUp) -> Self {
+        self.follow_up = Some(follow_up);
+        self
+    }
 }

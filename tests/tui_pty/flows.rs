@@ -8,12 +8,12 @@ use super::common::{self, Sandbox, pty};
 use super::harness::*;
 use std::fs;
 
-/// Bulk register: the preview first, then the commit, both from the menu.
+/// Bulk register: the preview first, then the commit, both in the app.
 ///
 /// `--recursive` was command-line only, so onboarding a folder of legacy
 /// projects meant leaving the tool the whole flow was designed for.
 #[test]
-fn the_menu_can_register_a_whole_base_after_previewing_it() {
+fn the_app_can_register_a_whole_base_after_previewing_it() {
     let sb = Sandbox::new();
     // Inside the configured base: registration refuses a folder that is not a
     // direct child of one, which is what keeps a registered project findable.
@@ -25,40 +25,37 @@ fn the_menu_can_register_a_whole_base_after_previewing_it() {
     let script = pty::Script::new()
         .key(KEY_REGISTER)
         .pause(600)
-        .down(1) // → Every unregistered folder in a base
-        .enter()
-        .line(&legacy.display().to_string())
-        .pause(400)
-        .key("n") // attach a template?
-        .pause(400)
-        .enter() // created date → the folder's own date
+        .right(1) // Register → every unregistered folder in a base
+        .tab()
+        .key(&legacy.display().to_string())
+        .enter() // → the preview
         .pause(900)
-        .key("y") // register these folders now?
-        .pause(1200)
-        .enter() // press Enter to return to fastf
-        .pause(500)
+        .enter() // → commit
+        .pause(1500)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
-    let out = pty::plain(&out);
+    let screen = app_screen(&out);
 
     assert_eq!(
         code, 0,
-        "bulk register should return to the dashboard:\n{out}"
-    );
-    assert!(
-        out.contains("dry run") || out.contains("Preview"),
-        "the preview should be shown before anything is written:\n{out}"
+        "bulk register should return to the dashboard:\n{screen}"
     );
     assert!(
         legacy.join("One/PROJECT_INFO.md").exists() && legacy.join("Two/PROJECT_INFO.md").exists(),
-        "both folders should have been registered:\n{out}"
+        "both folders should have been registered:\n{screen}"
+    );
+    assert!(
+        pty::plain(&out).contains("would be registered"),
+        "the preview should have been shown before anything was written:\n{}",
+        pty::plain(&out)
     );
 }
 
-/// Answering no to the preview writes nothing.
+/// Esc at the preview goes back to the answers, and Esc again abandons the
+/// whole thing — the app's Esc ladder, one step at a time, nothing typed lost.
 #[test]
-fn declining_the_bulk_register_preview_writes_nothing() {
+fn escaping_the_bulk_register_preview_writes_nothing() {
     let sb = Sandbox::new();
     let legacy = sb.base.clone();
     fs::create_dir_all(legacy.join("One")).unwrap();
@@ -66,33 +63,39 @@ fn declining_the_bulk_register_preview_writes_nothing() {
     let script = pty::Script::new()
         .key(KEY_REGISTER)
         .pause(600)
-        .down(1)
-        .enter()
-        .line(&legacy.display().to_string())
-        .pause(400)
-        .key("n") // attach a template?
-        .pause(400)
-        .enter() // created date
+        .right(1)
+        .tab()
+        .key(&legacy.display().to_string())
+        .enter() // → the preview
         .pause(900)
-        .key("n") // register these folders now? → no
-        .pause(700)
-        .enter() // press Enter to return to fastf
+        .esc() // → back to the answers, with the path still typed
+        .pause(400)
+        .esc() // → cancelled
         .pause(500)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
-    let out = pty::plain(&out);
+    let screen = app_screen(&out);
 
-    assert_eq!(code, 0, "declining should return to the dashboard:\n{out}");
+    assert_eq!(
+        code, 0,
+        "escaping should return to the dashboard:\n{screen}"
+    );
     assert!(
         !legacy.join("One/PROJECT_INFO.md").exists(),
-        "a declined preview must write nothing:\n{out}"
+        "an abandoned preview must write nothing:\n{screen}"
+    );
+    assert!(
+        pty::plain(&out).contains("nothing was registered"),
+        "the cancel should say so:\n{}",
+        pty::plain(&out)
     );
 }
 
-/// Registering with "Today" as the created date, which the menu could not say.
+/// Registering with "today" as the created date, which the old menu could not
+/// say at all.
 #[test]
-fn the_menu_can_register_with_todays_date() {
+fn the_app_can_register_with_todays_date() {
     let sb = Sandbox::new();
     let folder = sb.base.join("Legacy");
     fs::create_dir_all(&folder).unwrap();
@@ -100,23 +103,25 @@ fn the_menu_can_register_with_todays_date() {
     let script = pty::Script::new()
         .key(KEY_REGISTER)
         .pause(600)
-        .enter() // One folder
-        .line(&folder.display().to_string())
-        .pause(400)
-        .key("n") // attach a template?
-        .key("n") // standardize the name?
-        .pause(400)
-        .down(1) // created date → Today
-        .enter()
+        .tab() // → Folder
+        .key(&folder.display().to_string())
+        .tab() // → Template
+        .tab() // → Standardize name
+        .tab() // → Created
+        .right(1) // → today
+        .enter() // → the preview
         .pause(900)
-        .enter() // press Enter to return to fastf
-        .pause(500)
+        .enter() // → commit
+        .pause(1200)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
-    let out = pty::plain(&out);
+    let screen = app_screen(&out);
 
-    assert_eq!(code, 0, "register should return to the dashboard:\n{out}");
+    assert_eq!(
+        code, 0,
+        "register should return to the dashboard:\n{screen}"
+    );
     let meta = fs::read_to_string(folder.join("PROJECT_INFO.md")).expect("registered");
     // Not the folder's own timestamp: the current year, from `now`.
     let year = meta
@@ -127,6 +132,113 @@ fn the_menu_can_register_with_todays_date() {
     assert!(
         year.starts_with("20"),
         "expected an ISO created date, got {year}:\n{meta}"
+    );
+}
+
+/// The create wizard end to end: the answers, the plan, the folder — and the
+/// new project selected in the list it comes back to.
+#[test]
+fn the_wizard_creates_a_project_and_selects_it() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["config", "set", "default-template", "race"]);
+
+    let script = pty::Script::new()
+        .key(KEY_CREATE)
+        .pause(800)
+        .tab() // → the template's first variable
+        .key("Lullaby")
+        .enter() // → the preview
+        .pause(1000)
+        .enter() // → create
+        .pause(1800)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "the wizard should return cleanly:\n{screen}");
+    let created = common::project_dirs(&sb.base);
+    assert_eq!(created.len(), 1, "exactly one project:\n{screen}");
+    let name = created[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    assert!(
+        name.contains("Lullaby"),
+        "the answer should be in the folder name, got {name}"
+    );
+    assert!(
+        screen.contains("Created"),
+        "the app should say what it made:\n{screen}"
+    );
+    assert!(
+        screen.contains(&name),
+        "the new project should be in the list:\n{screen}"
+    );
+}
+
+/// Apply asked template, target, dry-run and every variable, then rejected the
+/// target. The target is a field now, and it is checked where it was typed.
+#[test]
+fn apply_refuses_a_missing_target_where_it_was_typed() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["config", "set", "default-template", "race"]);
+
+    let script = pty::Script::new()
+        .key("E")
+        .pause(700)
+        .tab() // → Target folder
+        .key("/nope/does/not/exist")
+        .tab() // → the template's own variable, answered so it is not what refuses
+        .key("Anything")
+        .enter()
+        .pause(900)
+        .build();
+    let (out, _) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert!(
+        screen.contains("/nope/does/not/exist"),
+        "the text must stay on the line to be corrected:\n{screen}"
+    );
+    assert!(
+        screen.contains("no such folder"),
+        "the target should be refused at its own field:\n{screen}"
+    );
+}
+
+/// Apply, for real: an existing folder gains the template's missing folders.
+#[test]
+fn apply_fills_in_a_folder_from_the_preview() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["config", "set", "default-template", "race"]);
+    let target = sb.base.join("Existing");
+    fs::create_dir_all(&target).unwrap();
+
+    let script = pty::Script::new()
+        .key("E")
+        .pause(700)
+        .tab()
+        .key(&target.display().to_string())
+        .tab()
+        .key("Anything")
+        .enter() // → the preview
+        .pause(1000)
+        .enter() // → apply
+        .pause(1200)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "apply should return to the dashboard:\n{screen}");
+    assert!(
+        target.join("README.md").is_file(),
+        "the template's file should have been created:\n{screen}"
     );
 }
 

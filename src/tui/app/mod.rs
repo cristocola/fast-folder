@@ -12,7 +12,9 @@ pub mod jobs;
 pub mod library;
 pub mod modal;
 pub mod palette;
+pub mod register;
 pub mod search;
+pub mod wizard;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,8 +27,8 @@ use crate::core::library::Project;
 use crate::tui::app::actions::{Confirm, ConfirmThen, MultiPick, MultiThen, TextPrompt, TextThen};
 use crate::tui::command::{self, Availability, CommandId, Context, Key};
 use crate::tui::effect::{
-    Action, ActionId, ActionOutcome, Effect, Exit, LegacyFlow, ListChange, SpawnKind, Suspended,
-    ViewKind,
+    Action, ActionId, ActionOutcome, ApplyRequest, CreateRequest, Effect, Exit, FollowUp,
+    LegacyFlow, ListChange, Request, SpawnKind, Suspended, ViewKind,
 };
 use crate::tui::entry::Entry;
 use crate::tui::fuzzy::Fuzzy;
@@ -34,13 +36,15 @@ use crate::tui::layout;
 use crate::tui::msg::{Msg, Resumed};
 use crate::tui::theme::Theme;
 use crate::tui::validators;
+use crate::tui::widgets::form::FormEvent;
 use crate::util::diag::Level;
 use crate::util::size_scan::SizeCell;
-use data::{ProjectDetail, Summary, TemplateCard};
+use data::{Prefs, ProjectDetail, Summary, TemplateCard};
 use library::{LibraryState, Order};
 use modal::{MessageLevel, Modal, ModalStack, PickItem, PickState, Then};
 use palette::{PaletteState, PaletteTarget};
 use search::SearchState;
+use wizard::{Flow, FlowKind, Step};
 
 /// How long a status message stays, in ticks of 200 ms.
 const STATUS_TICKS: u64 = 30;
@@ -154,6 +158,10 @@ pub struct App {
     pub status: Status,
     /// The last few things this session did, oldest first.
     pub session: Vec<String>,
+    /// A row to select once the list has caught up with what was just made.
+    /// A create or a register produces a project no snapshot holds yet, so the
+    /// selection is asked for by path and applied when discovery answers.
+    pub select_when_found: Option<PathBuf>,
     pub ticks: u64,
     pub fuzzy: Fuzzy,
     next_action: u64,
@@ -182,6 +190,7 @@ impl App {
             job: None,
             status: Status::default(),
             session: crate::tui::frame::recent_actions(),
+            select_when_found: None,
             ticks: 0,
             fuzzy: Fuzzy::new(),
             next_action: 0,
@@ -454,6 +463,13 @@ impl App {
                 self.recompute();
                 self.templates
                     .rebuild(self.summary.as_ref(), self.library.per_template());
+                // A create or a register asked for its new project to be
+                // selected; it exists only once discovery has seen it.
+                if let Some(path) = self.select_when_found.clone()
+                    && self.library.select_path(&path)
+                {
+                    self.select_when_found = None;
+                }
                 let mut effects = self.after_rows_changed();
                 if self.library.dirty {
                     self.library.dirty = false;
@@ -492,6 +508,17 @@ impl App {
                 }
                 Vec::new()
             }
+            Msg::TemplateLoaded { slug, result } => self.on_template_loaded(&slug, result),
+            Msg::Previewed(preview) => self.on_previewed(*preview),
+            Msg::PreviewFailed { field, error } => {
+                let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+                    return Vec::new();
+                };
+                flow.pending = false;
+                flow.step = Step::Form;
+                flow.form.fail(field.as_deref(), error);
+                Vec::new()
+            }
             Msg::ViewLoaded { title, lines } => {
                 self.modals
                     .push(Modal::message(title, lines.join("\n"), MessageLevel::Info));
@@ -509,6 +536,10 @@ impl App {
                     effects.push(Effect::LoadSummary);
                 }
                 effects
+            }
+            Msg::Resumed(Resumed::PostCreate) => {
+                self.session = crate::tui::frame::recent_actions();
+                Vec::new()
             }
             Msg::Resumed(Resumed::Note { project, text }) => {
                 self.session = crate::tui::frame::recent_actions();
@@ -560,7 +591,21 @@ impl App {
                     }
                     None => self.good(outcome.message),
                 }
-                self.apply_change(outcome.change)
+                if let Some(path) = outcome.select {
+                    self.select_when_found = Some(path);
+                }
+                let mut effects = self.apply_change(outcome.change);
+                if let Some(FollowUp::PostCreate {
+                    root,
+                    template_slug,
+                }) = outcome.follow_up
+                {
+                    effects.push(Effect::Suspend(Suspended::PostCreate {
+                        root,
+                        template_slug,
+                    }));
+                }
+                effects
             }
             Err(error) => {
                 self.error(format!("error: {error}"));
@@ -615,6 +660,12 @@ impl App {
             Some(Modal::TextPrompt(prompt)) => {
                 prompt.input.paste(text);
                 prompt.error = None;
+                Vec::new()
+            }
+            Some(Modal::Flow(flow)) => {
+                if let Some(field) = flow.form.focused_mut() {
+                    field.paste(text);
+                }
                 Vec::new()
             }
             Some(_) => Vec::new(),
@@ -712,6 +763,7 @@ impl App {
             Some(Modal::TextPrompt(_)) => self.on_text_prompt_key(key),
             Some(Modal::Confirm(_)) => self.on_confirm_key(key),
             Some(Modal::MultiPick(_)) => self.on_multi_pick_key(key),
+            Some(Modal::Flow(_)) => self.on_flow_key(key),
             Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.on_scroll_modal_key(key),
             None => Vec::new(),
         }
@@ -1062,7 +1114,7 @@ impl App {
                 let Some(Modal::Pick(pick)) = self.modals.pop() else {
                     return Vec::new();
                 };
-                let Some(item) = pick.chosen() else {
+                let Some(item) = pick.chosen().cloned() else {
                     return Vec::new();
                 };
                 match pick.then {
@@ -1101,6 +1153,24 @@ impl App {
                         } else {
                             self.run_move(target)
                         }
+                    }
+                    Then::FormField(key) => {
+                        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+                            return Vec::new();
+                        };
+                        let Some(field) = flow.form.field_mut(&key) else {
+                            return Vec::new();
+                        };
+                        if !field.select(&item.value) {
+                            return Vec::new();
+                        }
+                        flow.form.selected = flow
+                            .form
+                            .fields
+                            .iter()
+                            .position(|field| field.key == key)
+                            .unwrap_or(flow.form.selected);
+                        self.on_form_changed()
                     }
                 }
             }
@@ -1442,8 +1512,9 @@ impl App {
                 Vec::new()
             }
             CommandId::ShowMetadata | CommandId::ShowJournal => self.open_view(id),
-            CommandId::NewProject => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Create))],
-            CommandId::Register => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Register))],
+            CommandId::NewProject => self.open_create(),
+            CommandId::Register => self.open_register(),
+            CommandId::ApplyTemplate => self.open_apply(),
             CommandId::Templates => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Templates))],
             CommandId::Settings => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Settings))],
             CommandId::StripFilter => {
@@ -1454,6 +1525,343 @@ impl App {
                     slug
                 };
                 self.set_template_filter(next)
+            }
+        }
+    }
+
+    // --- the flows: create, apply, register -------------------------------
+
+    /// The templates on disk, by slug. Deliberately not `templates.cards`,
+    /// which also carries a bare card for every slug the projects mention that
+    /// no template answers to — `(registered)` is a slug, not a template.
+    fn template_slugs(&self) -> Vec<String> {
+        self.summary
+            .as_ref()
+            .map(|summary| {
+                summary
+                    .templates
+                    .iter()
+                    .map(|card| card.slug.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn prefs(&self) -> Prefs {
+        self.summary
+            .as_ref()
+            .map(|summary| summary.prefs.clone())
+            .unwrap_or_default()
+    }
+
+    /// The bases a new project could go in, the configured default first —
+    /// which is what makes a plain Enter mean exactly what it always meant.
+    fn base_options(&self) -> Vec<String> {
+        let Some(summary) = &self.summary else {
+            return Vec::new();
+        };
+        let mut bases: Vec<&data::BaseInfo> = summary
+            .bases
+            .iter()
+            .filter(|base| base.probe.usable())
+            .collect();
+        bases.sort_by_key(|base| !base.is_default);
+        bases
+            .iter()
+            .map(|base| crate::util::paths::display_path(&base.path))
+            .collect()
+    }
+
+    /// `n`: the new-project wizard.
+    fn open_create(&mut self) -> Vec<Effect> {
+        let slugs = self.template_slugs();
+        if slugs.is_empty() {
+            self.warn("no templates yet — press T to make one");
+            return Vec::new();
+        }
+        let default = self.prefs().default_template;
+        let at = slugs.iter().position(|slug| *slug == default).unwrap_or(0);
+        let mut flow = Flow::new(
+            FlowKind::Create,
+            wizard::create_form(&slugs, at, &self.base_options()),
+        );
+        flow.auto_commit = !self.prefs().confirm_create;
+        flow.pending = true;
+        let slug = slugs[at].clone();
+        self.modals.push(Modal::Flow(Box::new(flow)));
+        vec![Effect::LoadTemplate { slug }]
+    }
+
+    /// The apply flow: a template over a folder that already exists.
+    fn open_apply(&mut self) -> Vec<Effect> {
+        let slugs = self.template_slugs();
+        if slugs.is_empty() {
+            self.warn("no templates yet — press T to make one");
+            return Vec::new();
+        }
+        let default = self.prefs().default_template;
+        let at = slugs.iter().position(|slug| *slug == default).unwrap_or(0);
+        let mut flow = Flow::new(FlowKind::Apply, wizard::apply_form(&slugs, at));
+        flow.pending = true;
+        let slug = slugs[at].clone();
+        self.modals.push(Modal::Flow(Box::new(flow)));
+        vec![Effect::LoadTemplate { slug }]
+    }
+
+    /// `e`: register a folder fastf did not create, or a whole base of them.
+    fn open_register(&mut self) -> Vec<Effect> {
+        let mut options = vec![wizard::NO_TEMPLATE.to_string()];
+        options.extend(self.template_slugs());
+        let mut flow = Flow::new(FlowKind::Register, register::register_form(&options));
+        register::sync_visibility(&mut flow);
+        self.modals.push(Modal::Flow(Box::new(flow)));
+        Vec::new()
+    }
+
+    fn on_flow_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top() else {
+            return Vec::new();
+        };
+        if flow.step == Step::Preview {
+            return self.on_preview_key(key);
+        }
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        let event = flow.form.apply(&key);
+        let rows = flow.form.rows();
+        flow.form.clamp_viewport(rows.min(12));
+        match event {
+            FormEvent::Cancel => {
+                let kind = flow.kind;
+                self.modals.pop();
+                self.info(kind.cancelled());
+                Vec::new()
+            }
+            FormEvent::Submit => self.submit_flow(),
+            FormEvent::Pick => self.open_field_picker(),
+            FormEvent::Changed => self.on_form_changed(),
+            FormEvent::Moved | FormEvent::Ignored => Vec::new(),
+        }
+    }
+
+    /// Keys on the preview half: Esc goes back to the answers (the app's Esc
+    /// ladder — one step at a time, nothing typed is lost), Enter commits.
+    fn on_preview_key(&mut self, key: Key) -> Vec<Effect> {
+        let delta: isize = match key.code {
+            KeyCode::Esc => {
+                if let Some(Modal::Flow(flow)) = self.modals.top_mut() {
+                    flow.step = Step::Form;
+                    flow.scroll = 0;
+                }
+                return Vec::new();
+            }
+            KeyCode::Enter => return self.commit_flow(),
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::PageDown | KeyCode::Char(' ') => 10,
+            KeyCode::PageUp => -10,
+            KeyCode::Home => isize::MIN / 2,
+            _ => return Vec::new(),
+        };
+        if let Some(Modal::Flow(flow)) = self.modals.top_mut() {
+            flow.scroll = (flow.scroll as isize + delta).max(0) as usize;
+        }
+        Vec::new()
+    }
+
+    /// A value changed: the template field decides which variables are asked
+    /// for, and register's scope decides which questions apply at all.
+    fn on_form_changed(&mut self) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if flow.kind == FlowKind::Register {
+            register::sync_visibility(flow);
+        }
+        let focused = flow.form.focused().map(|field| field.key.clone());
+        if focused.as_deref() != Some(wizard::FIELD_TEMPLATE) {
+            return Vec::new();
+        }
+        self.load_flow_template()
+    }
+
+    /// Read the template the form now names, and rebuild its variable fields.
+    fn load_flow_template(&mut self) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        match flow.template_slug() {
+            Some(slug) => {
+                flow.pending = true;
+                vec![Effect::LoadTemplate { slug }]
+            }
+            None => {
+                flow.pending = false;
+                flow.set_template(None);
+                Vec::new()
+            }
+        }
+    }
+
+    fn on_template_loaded(
+        &mut self,
+        slug: &str,
+        result: Result<Box<data::TemplateInfo>, String>,
+    ) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        // A slower read for a template the form has already moved off is an
+        // answer to a question nobody is asking any more.
+        if flow.template_slug().as_deref() != Some(slug) {
+            return Vec::new();
+        }
+        flow.pending = false;
+        match result {
+            Ok(info) => {
+                flow.set_template(Some(*info));
+                if flow.kind == FlowKind::Register {
+                    register::sync_visibility(flow);
+                }
+            }
+            Err(error) => {
+                flow.set_template(None);
+                flow.form.fail(Some(wizard::FIELD_TEMPLATE), error);
+            }
+        }
+        Vec::new()
+    }
+
+    fn on_previewed(&mut self, preview: wizard::Preview) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        flow.pending = false;
+        flow.preview = Some(preview);
+        // `confirm_create = false` is a standing answer to the question the
+        // preview asks, so it is not asked: the plan was still built, by the
+        // same code path, and every refusal it can produce still lands on the
+        // field that caused it.
+        if flow.auto_commit {
+            return self.commit_flow();
+        }
+        flow.step = Step::Preview;
+        flow.scroll = 0;
+        Vec::new()
+    }
+
+    /// Space on a choice: the same options as a fuzzy-filtered picker.
+    fn open_field_picker(&mut self) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top() else {
+            return Vec::new();
+        };
+        let Some(field) = flow.form.focused() else {
+            return Vec::new();
+        };
+        let crate::tui::widgets::form::FieldKind::Choice { options, .. } = &field.kind else {
+            return Vec::new();
+        };
+        let describe = field.key == wizard::FIELD_TEMPLATE;
+        let cards = self.summary.as_ref().map(|s| s.templates.clone());
+        let items: Vec<PickItem> = options
+            .iter()
+            .map(|option| PickItem {
+                label: option.clone(),
+                detail: if describe {
+                    cards
+                        .as_ref()
+                        .and_then(|cards| cards.iter().find(|card| &card.slug == option))
+                        .map(|card| card.description.clone())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                value: option.clone(),
+            })
+            .collect();
+        let title = field.label.clone();
+        let key = field.key.clone();
+        self.modals.push(Modal::Pick(PickState::new(
+            title,
+            items,
+            Then::FormField(key),
+        )));
+        Vec::new()
+    }
+
+    /// Enter on the form: check what `update` can check, then ask a worker for
+    /// the preview — which is where a path that does not exist is refused,
+    /// because looking is I/O and `update` does none.
+    fn submit_flow(&mut self) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if flow.pending {
+            return Vec::new();
+        }
+        if let Some((key, message)) = flow.missing_required() {
+            flow.form.fail(Some(&key), message);
+            return Vec::new();
+        }
+        let Some(request) = self.flow_request() else {
+            return Vec::new();
+        };
+        if let Some(Modal::Flow(flow)) = self.modals.top_mut() {
+            flow.pending = true;
+            flow.form.clear_errors();
+        }
+        vec![Effect::Preview(Box::new(request))]
+    }
+
+    /// The open flow's answers, as the request both the preview and the commit
+    /// are built from.
+    fn flow_request(&self) -> Option<Request> {
+        let Some(Modal::Flow(flow)) = self.modals.top() else {
+            return None;
+        };
+        match flow.kind {
+            FlowKind::Create => Some(Request::Create(CreateRequest {
+                template_slug: flow.template_slug()?,
+                vars: flow.variables(),
+                base_dir_override: self.chosen_base(flow),
+            })),
+            FlowKind::Apply => Some(Request::Apply(ApplyRequest {
+                template_slug: flow.template_slug()?,
+                target: PathBuf::from(flow.form.value(wizard::FIELD_TARGET).trim()),
+                vars: flow.variables(),
+            })),
+            FlowKind::Register => Some(Request::Register(register::request(flow))),
+        }
+    }
+
+    /// The base the create form names, or `None` for the configured default —
+    /// the same distinction `pick_base_interactively` drew by returning early
+    /// when there was only one base to offer.
+    fn chosen_base(&self, flow: &Flow) -> Option<String> {
+        let chosen = flow.form.value(wizard::FIELD_BASE);
+        if chosen.is_empty() {
+            return None;
+        }
+        let default = self.base_options().into_iter().next();
+        (Some(&chosen) != default.as_ref()).then_some(chosen)
+    }
+
+    /// Enter on the preview: run it.
+    fn commit_flow(&mut self) -> Vec<Effect> {
+        let Some(request) = self.flow_request() else {
+            return Vec::new();
+        };
+        self.modals.pop();
+        match request {
+            Request::Create(request) => {
+                self.run_action("creating…", Action::Create(Box::new(request)))
+            }
+            Request::Apply(request) => {
+                self.run_action("applying…", Action::Apply(Box::new(request)))
+            }
+            Request::Register(request) => {
+                self.run_action("registering…", Action::Register(Box::new(request)))
             }
         }
     }

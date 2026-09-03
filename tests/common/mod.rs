@@ -425,6 +425,26 @@ pub mod pty {
             self
         }
 
+        /// Tab — the next field of a form.
+        pub fn tab(self) -> Self {
+            self.push(b"\t", 300)
+        }
+
+        /// The arrows that change a form's choice in place.
+        pub fn right(mut self, n: usize) -> Self {
+            for _ in 0..n {
+                self = self.push(b"\x1b[C", 250);
+            }
+            self
+        }
+
+        pub fn left(mut self, n: usize) -> Self {
+            for _ in 0..n {
+                self = self.push(b"\x1b[D", 250);
+            }
+            self
+        }
+
         /// PageDown / PageUp — one viewport of the list.
         pub fn page_down(self) -> Self {
             self.push(b"\x1b[6~", 400)

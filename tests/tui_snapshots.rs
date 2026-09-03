@@ -276,14 +276,12 @@ fn job_report_with_failures() {
         &mut app,
         Msg::ActionDone {
             id: id2,
-            outcome: Ok(Box::new(ActionOutcome {
-                change: ListChange::Removed {
+            outcome: Ok(Box::new(ActionOutcome::new(
+                ListChange::Removed {
                     path: second_path.clone(),
                 },
-                message: "done".to_string(),
-                warning: None,
-                session: None,
-            })),
+                "done",
+            ))),
         },
     );
     assert!(app.job.is_none());
@@ -291,4 +289,167 @@ fn job_report_with_failures() {
     // The failed row keeps its mark for a retry.
     let failed_path = app.library.row(0).unwrap().path.clone();
     assert!(app.library.marks.contains(&failed_path));
+}
+
+// ---------------------------------------------------------------------------
+// The flows: create, apply, register (Phase 3)
+// ---------------------------------------------------------------------------
+
+mod flows {
+    use super::*;
+    use fastf::core::project::{DryRunReport, ResolvedValue};
+    use fastf::core::template::FolderNode;
+    use fastf::tui::app::data::{TemplateInfo, VarInfo};
+    use fastf::tui::app::wizard::{ApplyPreview, Preview, RecursivePreview};
+    use std::path::PathBuf;
+
+    fn press(app: &mut fastf::tui::app::App, key: Key) {
+        let _ = update(app, Msg::Key(key));
+    }
+
+    fn typed(app: &mut fastf::tui::app::App, text: &str) {
+        for c in text.chars() {
+            press(app, Key::ch(c));
+        }
+    }
+
+    fn land_template(app: &mut fastf::tui::app::App, slug: &str, vars: &[(&str, &str, bool)]) {
+        let _ = update(
+            app,
+            Msg::TemplateLoaded {
+                slug: slug.to_string(),
+                result: Ok(Box::new(TemplateInfo {
+                    slug: slug.to_string(),
+                    name: slug.to_string(),
+                    naming_pattern: "{date}_{artist}_{title}_{id}".to_string(),
+                    variables: vars
+                        .iter()
+                        .map(|(slug, label, required)| VarInfo {
+                            slug: (*slug).to_string(),
+                            label: (*label).to_string(),
+                            required: *required,
+                            options: Vec::new(),
+                            default: String::new(),
+                        })
+                        .collect(),
+                })),
+            },
+        );
+    }
+
+    #[test]
+    fn wizard_variables() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('n'));
+        land_template(
+            &mut app,
+            "general",
+            &[("artist", "Artist", true), ("title", "Title", true)],
+        );
+        press(&mut app, Key::plain(KeyCode::Tab));
+        typed(&mut app, "Aria");
+        snap("wizard_variables", render_to_string(&app, 100, 30));
+    }
+
+    #[test]
+    fn wizard_preview() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('n'));
+        land_template(&mut app, "general", &[("artist", "Artist", true)]);
+        press(&mut app, Key::plain(KeyCode::Tab));
+        typed(&mut app, "Aria");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        let _ = update(
+            &mut app,
+            Msg::Previewed(Box::new(Preview::Create(Box::new(DryRunReport {
+                folder_name: "2026-09-03_Aria_ID0249".to_string(),
+                root_path: PathBuf::from("/mnt/projects/2026-09-03_Aria_ID0249"),
+                structure: vec![
+                    FolderNode {
+                        name: "00_Inbox".to_string(),
+                        children: vec![FolderNode {
+                            name: "raw".to_string(),
+                            children: Vec::new(),
+                        }],
+                    },
+                    FolderNode {
+                        name: "01_Working".to_string(),
+                        children: Vec::new(),
+                    },
+                ],
+                files: vec!["BRIEF.md".to_string()],
+                values: vec![ResolvedValue {
+                    slug: "artist".to_string(),
+                    value: "Aria".to_string(),
+                    transform: None,
+                }],
+                id: "ID0249".to_string(),
+                counter: (248, 249),
+                date: "2026-09-03".to_string(),
+                date_parts: ("2026".to_string(), "09".to_string(), "03".to_string()),
+                previews: Vec::new(),
+            })))),
+        );
+        snap("wizard_preview", render_to_string(&app, 100, 30));
+    }
+
+    #[test]
+    fn register_form() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('e'));
+        press(&mut app, Key::plain(KeyCode::Tab));
+        typed(&mut app, "/mnt/projects/Legacy_Shoot");
+        snap("register_form", render_to_string(&app, 100, 30));
+    }
+
+    #[test]
+    fn register_recursive_preview() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('e'));
+        press(&mut app, Key::plain(KeyCode::Right)); // scope → a whole base
+        press(&mut app, Key::plain(KeyCode::Tab));
+        typed(&mut app, "/mnt/archive");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        let _ = update(
+            &mut app,
+            Msg::Previewed(Box::new(Preview::Recursive(RecursivePreview {
+                base: PathBuf::from("/mnt/archive"),
+                rows: vec![
+                    ("Old_Shoot".to_string(), "mint new ID".to_string()),
+                    (
+                        "2024-02-02_Wedding_ID0042".to_string(),
+                        "recover ID0042".to_string(),
+                    ),
+                ],
+            }))),
+        );
+        snap(
+            "register_recursive_preview",
+            render_to_string(&app, 100, 30),
+        );
+    }
+
+    #[test]
+    fn apply_preview() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('E'));
+        land_template(&mut app, "general", &[]);
+        press(&mut app, Key::plain(KeyCode::Tab));
+        typed(&mut app, "/mnt/projects/Existing_Folder");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        let _ = update(
+            &mut app,
+            Msg::Previewed(Box::new(Preview::Apply(ApplyPreview {
+                target: PathBuf::from("/mnt/projects/Existing_Folder"),
+                rows: vec![
+                    (true, "00_Inbox".to_string()),
+                    (false, "01_Working".to_string()),
+                    (true, "BRIEF.md".to_string()),
+                ],
+                creates: 2,
+                skips: 1,
+            }))),
+        );
+        snap("apply_preview", render_to_string(&app, 100, 30));
+    }
 }

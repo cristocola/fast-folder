@@ -6,6 +6,7 @@
 
 use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, TextPrompt};
 use crate::tui::app::palette::PaletteState;
+use crate::tui::app::wizard::Flow;
 use crate::tui::command::Context;
 use crate::tui::fuzzy::Fuzzy;
 use crate::tui::widgets::input::LineEdit;
@@ -19,7 +20,7 @@ pub enum MessageLevel {
 }
 
 /// What choosing a `Pick` item does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Then {
     SortPick,
     TemplateFilter,
@@ -27,6 +28,10 @@ pub enum Then {
     AddTag,
     /// The picked value is a base path to move into.
     MoveToBase,
+    /// The picked value answers the named field of the open flow's form —
+    /// what Space on a choice opens, so a twenty-template list is one fuzzy
+    /// search rather than twenty presses of `→`.
+    FormField(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +116,8 @@ pub enum Modal {
     Confirm(Confirm),
     /// A list where Space toggles and Enter confirms the picked set.
     MultiPick(MultiPick),
+    /// A flow that builds something: create, apply, register.
+    Flow(Box<Flow>),
     Message {
         title: String,
         lines: Vec<String>,

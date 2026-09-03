@@ -230,10 +230,63 @@ scratch-file flow as the CLI (`cli::note::note_from_editor`, made public for
 it). Metadata and journal views load on a worker (`loaders.rs`) and render
 read-only, the journal in the order the file holds it.
 
+## The flows that build something
+
+Create (`n`), apply (`E`) and register (`e`) are one shape, and `app/wizard.rs`
+holds it: **a form, then a preview, then Enter**. All three answer a few
+questions, show what answering them would do, and commit — so they are one
+`Modal::Flow(Flow)` with a `Step`, not three screens.
+
+**Every question is on screen at once.** `widgets/form.rs` is the form: Tab and
+the arrows move, typing edits the field with the cursor, `←`/`→` change a
+choice, Space opens a fuzzy picker over that choice's options (`Then::FormField`
+— which is what makes twenty templates usable), Enter submits the whole form and
+Esc abandons it. A sequence of prompts could only ask one thing at a time, so an
+answer given three questions ago was invisible and a rejection at the end took
+every earlier answer with it. Both defects are structurally gone.
+
+**A refusal names its field.** `update` performs no I/O, so a path that must
+exist cannot be checked there: the worker that builds the preview refuses with
+`loaders::PreviewRefusal { field, error }`, and `Form::fail` puts the message on
+that field and moves the cursor to it, with the typed text untouched. What
+`update` *can* answer — a required variable left empty — it answers before any
+worker is asked (`Flow::missing_required`).
+
+**The preview is built by the code that commits.** `Effect::Preview(Request)`
+and `Action::{Create,Apply,Register}` take the *same* `Request`, so the screen
+cannot promise one thing and do another — which happened twice in this
+codebase's history (a rename prompt offering `ID0001` while the commit wrote
+`ID0011`; a preview header saying nothing would be created immediately before
+creating it). The ID a create preview shows is still advisory: `operations::create`
+recomputes the plan under the data lock, because reusing a previewed value is
+how duplicate IDs were minted.
+
+`confirm_create = false` sets `Flow::auto_commit`: the plan is still built, by
+the same path, and then committed unasked. Skipping the *build* would skip every
+refusal with it.
+
+Esc at the preview goes back to the answers, and Esc again abandons the flow —
+the app's Esc ladder, one step at a time. (The dialoguer flows cancelled
+everything from anywhere; a form has somewhere to go back to.)
+
+**Post-create runs on the main screen.** `git init`, the user's editor and a
+template's own `commands` all want a terminal and print to it, so a finished
+create asks for `Suspended::PostCreate` through `ActionOutcome::follow_up`
+rather than running them on the worker. `ActionOutcome::select` then puts the
+cursor on the new project once discovery has seen it — a create makes a row no
+snapshot holds yet, so the selection is asked for by path and applied in
+`Msg::Discovered`.
+
+Register's shape is its own (`app/register.rs`) only in which questions apply:
+the scope field hides the three that bulk registration cannot answer, because
+`RegisterFlags::validate` refuses them on the command line for the same reason.
+`cli::register::{plan_rename, recursive_targets, recursive_id_note}` are the
+print-free halves both surfaces preview from.
+
 ## The bridged flows
 
-Create, register, templates and settings are still the dialoguer flows in
-`menu.rs`, `template_builder.rs`, `pickers.rs` and `vars.rs`, reached through
+Templates and settings are still the dialoguer flows in `menu.rs`,
+`template_builder.rs`, `pickers.rs` and `vars.rs`, reached through
 `Effect::Suspend(Suspended::Legacy(..))`:
 the input thread is parked (a `Condvar` handshake — two readers on one tty is
 how keys go missing), the screen is released, the flow runs on the main screen

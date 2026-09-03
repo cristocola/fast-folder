@@ -108,6 +108,11 @@ pub fn sample_summary(projects: usize) -> Summary {
             },
         ],
         attention: 1,
+        prefs: crate::tui::app::data::Prefs {
+            default_template: String::new(),
+            confirm_create: true,
+            register_naming_pattern: "{date}_{name}_{id}".to_string(),
+        },
     }
 }
 

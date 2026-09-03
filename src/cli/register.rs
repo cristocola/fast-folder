@@ -217,6 +217,113 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
 }
 
 // ---------------------------------------------------------------------------
+// Print-free previews — what register *would* do
+// ---------------------------------------------------------------------------
+
+/// What registering one folder would name it, and where its ID comes from.
+///
+/// Print-free and terminal-free, so the CLI's rename confirmation and the
+/// guided app's preview are the same computation. They were not: the app's
+/// bridge asked dialoguer, and the ID in the question came from a different
+/// expression than the one the commit used — `..._ID0001` offered,
+/// `..._ID0011` written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenamePlan {
+    /// The ID this registration would carry.
+    pub id: String,
+    /// Whether that ID came out of an `ID####` token in the folder name rather
+    /// than from the counter.
+    pub recovered: bool,
+    pub current_name: String,
+    /// The name the pattern renders, whether or not it differs.
+    pub desired: String,
+}
+
+impl RenamePlan {
+    /// Whether committing would actually move the folder.
+    pub fn renames(&self) -> bool {
+        self.desired != self.current_name
+    }
+}
+
+/// Compute [`RenamePlan`] for `path`. `tmpl` is the attached template, or the
+/// registered stub when there is none (`has_template` says which).
+pub fn plan_rename(
+    path: &Path,
+    tmpl: &Template,
+    has_template: bool,
+    collected_vars: &HashMap<String, String>,
+    cfg: &Config,
+) -> Result<RenamePlan> {
+    let current_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // MUST be the same expression `register_core` commits with.
+    let counters = Counters::load().unwrap_or_default();
+    let recovered_value = parse_id_token(&current_name, &tmpl.id.prefix);
+    let id_value = match recovered_value {
+        Some(recovered) => recovered,
+        None => Counters::next_value(cfg, &counters)?,
+    };
+    let id = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
+    let mut preview_vars = if has_template {
+        build_plan_vars(tmpl, collected_vars, &id)?
+    } else {
+        HashMap::from([("id".to_string(), id.clone())])
+    };
+    if !has_template {
+        preview_vars
+            .entry("name".to_string())
+            .or_insert_with(|| slugify_folder_name(&current_name));
+    }
+    let desired = desired_rename(tmpl, has_template, &preview_vars, cfg)?.unwrap_or_default();
+    Ok(RenamePlan {
+        id,
+        recovered: recovered_value.is_some(),
+        current_name,
+        desired,
+    })
+}
+
+/// The direct children of `base` that have no `PROJECT_INFO.md`, sorted — the
+/// exact set `--recursive` would write into.
+pub fn recursive_targets(base: &Path) -> Result<Vec<PathBuf>> {
+    let mut targets: Vec<PathBuf> = fs::read_dir(base)
+        .with_context(|| format!("reading {}", base.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && !project_info::pinfo_path(p).exists())
+        .collect();
+    targets.sort();
+    Ok(targets)
+}
+
+/// What would happen to one bulk-registered folder's ID: recovered from its
+/// name, or minted.
+pub fn recursive_id_note(name: &str, prefix: &str) -> String {
+    match parse_id_token(name, prefix) {
+        Some(v) => format!("recover {}", Counters::format_id(prefix, 4, v)),
+        None => "mint new ID".to_string(),
+    }
+}
+
+/// The ID prefix a bulk registration would use: the template's, else the
+/// default.
+pub fn recursive_prefix(template_slug: Option<&str>) -> String {
+    template_slug
+        .and_then(|s| template::find_by_slug(s).ok())
+        .map(|t| t.id.prefix)
+        .unwrap_or_else(|| IdConfig::default().prefix)
+}
+
+/// The stub template a register without one uses. Public so the guided app can
+/// preview the same name the commit will produce.
+pub fn stub_template() -> Template {
+    registered_stub_template()
+}
+
+// ---------------------------------------------------------------------------
 // Interactive CLI shell
 // ---------------------------------------------------------------------------
 
@@ -263,37 +370,17 @@ pub fn run(args: RegisterArgs) -> Result<()> {
             "confirm the rename",
             "pass --yes to rename without confirming",
         )?;
-        let current_name = canonical
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        // Preview ID: recover from the folder name if present, else next floor.
-        // This MUST use the same expression `register_core` commits with — when
-        // it read the data-dir counter alone, the prompt offered
-        // `..._ID0001` and the folder came out `..._ID0011`.
-        let counters = Counters::load().unwrap_or_default();
-        let id_value = match parse_id_token(&current_name, &tmpl.id.prefix) {
-            Some(recovered) => recovered,
-            None => Counters::next_value(&cfg, &counters)?,
-        };
-        let id_str = Counters::format_id(&tmpl.id.prefix, tmpl.id.digits, id_value);
-        let mut preview_vars = if args.template_slug.is_some() {
-            build_plan_vars(&tmpl, &collected_vars, &id_str)?
-        } else {
-            HashMap::from([("id".to_string(), id_str)])
-        };
-        if args.template_slug.is_none() {
-            preview_vars
-                .entry("name".to_string())
-                .or_insert_with(|| slugify_folder_name(&current_name));
-        }
-        if let Some(desired) =
-            desired_rename(&tmpl, args.template_slug.is_some(), &preview_vars, &cfg)?
-            && desired != current_name
-        {
+        let plan = plan_rename(
+            &canonical,
+            &tmpl,
+            args.template_slug.is_some(),
+            &collected_vars,
+            &cfg,
+        )?;
+        if plan.renames() {
             println!();
             rename = crate::tui::prompt::confirm(
-                &format!("Rename '{current_name}' → '{desired}'?"),
+                &format!("Rename '{}' → '{}'?", plan.current_name, plan.desired),
                 true,
             )?
             .unwrap_or(false);
@@ -402,13 +489,7 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
     }
 
     // Direct children that are directories without a PROJECT_INFO.md.
-    let mut targets: Vec<PathBuf> = fs::read_dir(&base)
-        .with_context(|| format!("reading {}", base.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && !project_info::pinfo_path(p).exists())
-        .collect();
-    targets.sort();
+    let targets = recursive_targets(&base)?;
 
     if targets.is_empty() {
         println!(
@@ -426,21 +507,13 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
                 .bold()
         );
         println!();
-        let prefix = args
-            .template_slug
-            .as_deref()
-            .and_then(|s| template::find_by_slug(s).ok())
-            .map(|t| t.id.prefix)
-            .unwrap_or_else(|| IdConfig::default().prefix);
+        let prefix = recursive_prefix(args.template_slug.as_deref());
         for path in &targets {
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let id_note = match parse_id_token(&name, &prefix) {
-                Some(v) => format!("recover {}", Counters::format_id(&prefix, 4, v)),
-                None => "mint new ID".to_string(),
-            };
+            let id_note = recursive_id_note(&name, &prefix);
             println!("  {} {}  {}", "+".green().bold(), name, id_note.dimmed());
         }
         println!();

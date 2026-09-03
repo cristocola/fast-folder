@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use crate::core::library::Project;
 use crate::core::project_info::Metadata;
-use crate::tui::app::data::{ProjectDetail, Summary};
+use crate::tui::app::data::{ProjectDetail, Summary, TemplateInfo};
+use crate::tui::app::wizard::Preview;
 use crate::tui::command::Key;
 use crate::tui::effect::{ActionId, ActionOutcome, ListChange, SpawnKind};
 use crate::util::diag::Level;
@@ -42,6 +43,20 @@ pub enum Msg {
     MetaLoaded(Vec<(PathBuf, Option<Metadata>)>),
     /// A running move reported its progress, once per tick.
     MoveProgress(crate::core::assets::Progress),
+    /// One template was read in full for the open flow.
+    TemplateLoaded {
+        slug: String,
+        result: Result<Box<TemplateInfo>, String>,
+    },
+    /// A flow's preview is ready.
+    Previewed(Box<Preview>),
+    /// A flow's preview could not be built. `field` names the answer that was
+    /// wrong, so the refusal lands on the line that caused it and the rest of
+    /// the form stays exactly as it was typed.
+    PreviewFailed {
+        field: Option<String>,
+        error: String,
+    },
     /// A read-only view's content landed.
     ViewLoaded {
         title: String,
@@ -75,4 +90,6 @@ pub enum Resumed {
         project: Box<Project>,
         text: Option<String>,
     },
+    /// A new project's post-create actions ran on the main screen.
+    PostCreate,
 }

@@ -11,6 +11,7 @@ use crate::tui::app::App;
 use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, TextPrompt};
 use crate::tui::app::modal::{MessageLevel, Modal, PickState};
 use crate::tui::app::palette::PaletteState;
+use crate::tui::app::wizard::{Flow, Preview, Step};
 use crate::tui::command::{self, Availability};
 use crate::tui::layout::{centered, centered_fixed};
 use crate::tui::view::{fit, highlighted, pad, split_line};
@@ -28,6 +29,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         Modal::TextPrompt(prompt) => Some(render_text_prompt(app, prompt, frame, area)),
         Modal::Confirm(confirm) => render_confirm(app, confirm, frame, area),
         Modal::MultiPick(pick) => render_multi_pick(app, pick, frame, area),
+        Modal::Flow(flow) => render_flow(app, flow, frame, area),
         Modal::Message {
             title,
             lines,
@@ -424,6 +426,323 @@ fn render_multi_pick(
     None
 }
 
+// ---------------------------------------------------------------------------
+// The flows: create, apply, register
+// ---------------------------------------------------------------------------
+
+/// A flow is one dialog with two faces: the questions, and what answering them
+/// would do. Both are drawn in the same frame at the same size, so committing
+/// and going back do not move the box under the reader.
+fn render_flow(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<Position> {
+    let theme = &app.theme;
+    // Sized to what it holds, so the footer sits under the last answer rather
+    // than at the bottom of a mostly-empty box. The preview takes the room it
+    // needs and scrolls past that.
+    let width = (area.width * 76 / 100).clamp(46.min(area.width), 96);
+    let body = match flow.step {
+        Step::Form => flow.form.rows() as u16,
+        Step::Preview => preview_height(flow),
+    };
+    let height = (body + 4).clamp(8.min(area.height), area.height * 88 / 100);
+    let area = centered_fixed(area, width, height);
+    frame.render_widget(Clear, area);
+    let title = match flow.step {
+        Step::Form => format!(" {} ", flow.kind.title()),
+        Step::Preview => format!(" {} {} preview ", flow.kind.title(), theme.glyphs.sep),
+    };
+    let block = frame_block(app, title, true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height < 4 {
+        return None;
+    }
+
+    // Two rows are reserved at the bottom: the footer's hint or refusal, and
+    // the keys. Every state has both, so nothing below the fold is a surprise.
+    let body = Rect::new(inner.x, inner.y, inner.width, inner.height - 2);
+    let footer = Rect::new(inner.x, inner.y + body.height, inner.width, 1);
+    let keys = Rect::new(inner.x, inner.y + body.height + 1, inner.width, 1);
+
+    let caret = match flow.step {
+        Step::Form => render_flow_form(app, flow, frame, body),
+        Step::Preview => {
+            render_flow_preview(app, flow, frame, body);
+            None
+        }
+    };
+
+    let (footer_text, footer_style) = match (flow.form.error(), flow.pending) {
+        (Some(error), _) => (format!(" {} {error}", theme.glyphs.warn), theme.warn()),
+        (None, true) => (" working…".to_string(), theme.dim()),
+        (None, false) => match flow.step {
+            Step::Form => (
+                format!(
+                    " {}",
+                    flow.form
+                        .focused()
+                        .map(|field| field.hint.clone())
+                        .unwrap_or_default()
+                ),
+                theme.dim(),
+            ),
+            Step::Preview => (String::new(), theme.dim()),
+        },
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            fit(&footer_text, inner.width as usize, theme.glyphs.ellipsis),
+            footer_style,
+        )),
+        footer,
+    );
+
+    let key_line = match flow.step {
+        Step::Form => vec![
+            Span::styled(" Tab ", theme.key()),
+            Span::styled("next field   ", theme.dim()),
+            Span::styled("Enter ", theme.key()),
+            Span::styled("preview   ", theme.dim()),
+            Span::styled("Esc ", theme.key()),
+            Span::styled("cancel", theme.dim()),
+        ],
+        Step::Preview => vec![
+            Span::styled(" Enter ", theme.key()),
+            Span::styled(
+                format!("{}   ", flow.kind.commit().trim_start_matches("Enter ")),
+                theme.dim(),
+            ),
+            Span::styled("Esc ", theme.key()),
+            Span::styled("back to the answers   ", theme.dim()),
+            Span::styled("↑ ↓ ", theme.key()),
+            Span::styled("scroll", theme.dim()),
+        ],
+    };
+    frame.render_widget(Paragraph::new(Line::from(key_line)), keys);
+    caret
+}
+
+/// How many lines the preview wants, so a short one gets a short box.
+fn preview_height(flow: &Flow) -> u16 {
+    match &flow.preview {
+        Some(Preview::Create(report)) => {
+            (report.structure.len() + report.files.len() + report.values.len() + 10) as u16
+        }
+        Some(Preview::Apply(apply)) => (apply.rows.len() + 5) as u16,
+        Some(Preview::Register(register)) => 6 + u16::from(register.pinfo_exists) * 2,
+        Some(Preview::Recursive(recursive)) => (recursive.rows.len() + 5) as u16,
+        None => 3,
+    }
+}
+
+fn render_flow_form(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<Position> {
+    let label_width = flow
+        .form
+        .visible()
+        .map(|(_, field)| field.label.width())
+        .max()
+        .unwrap_or(8)
+        .min(24);
+    flow.form
+        .render(area, frame.buffer_mut(), &app.theme, label_width)
+}
+
+fn render_flow_preview(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) {
+    let theme = &app.theme;
+    let lines = match &flow.preview {
+        Some(preview) => preview_lines(app, preview),
+        None => vec![Line::from(Span::styled(" nothing to show", theme.dim()))],
+    };
+    let max_scroll = lines.len().saturating_sub(area.height as usize);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((flow.scroll.min(max_scroll) as u16, 0)),
+        area,
+    );
+}
+
+fn preview_lines<'a>(app: &App, preview: &'a Preview) -> Vec<Line<'a>> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let mut lines: Vec<Line> = Vec::new();
+    match preview {
+        Preview::Create(report) => {
+            lines.push(Line::from(vec![
+                Span::styled(" ", theme.dim()),
+                Span::styled(report.folder_name.clone(), theme.bold()),
+            ]));
+            for line in crate::tui::widgets::tree::lines(&report.structure, g.rule == "-") {
+                lines.push(Line::from(Span::styled(format!(" {line}"), theme.dim())));
+            }
+            if !report.files.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(" Files", theme.accent())));
+                for file in &report.files {
+                    lines.push(Line::from(Span::styled(
+                        format!("   {} {file}", g.sep),
+                        theme.dim(),
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(" Resolved", theme.accent())));
+            for value in &report.values {
+                lines.push(field_line(
+                    theme,
+                    &value.slug,
+                    if value.value.is_empty() {
+                        "(empty)"
+                    } else {
+                        &value.value
+                    },
+                ));
+            }
+            let (from, to) = report.counter;
+            lines.push(Line::from(vec![
+                Span::styled(format!("   {:<14} ", "{id}"), theme.dim()),
+                Span::styled(report.id.clone(), theme.text()),
+                Span::styled(format!("   counter {from} {} {to}", g.arrow), theme.dim()),
+            ]));
+            lines.push(field_line(theme, "{date}", &report.date));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", g.arrow), theme.accent()),
+                Span::styled(
+                    crate::util::paths::display_path(&report.root_path),
+                    theme.text(),
+                ),
+            ]));
+            for preview in &report.previews {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!(" {}", preview.path),
+                    theme.accent(),
+                )));
+                for line in &preview.lines {
+                    lines.push(Line::from(Span::styled(format!("   {line}"), theme.dim())));
+                }
+                if preview.hidden > 0 {
+                    lines.push(Line::from(Span::styled(
+                        format!("   {} {} more lines", g.ellipsis, preview.hidden),
+                        theme.dim(),
+                    )));
+                }
+            }
+        }
+        Preview::Apply(apply) => {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", g.arrow), theme.accent()),
+                Span::styled(
+                    crate::util::paths::display_path(&apply.target),
+                    theme.text(),
+                ),
+            ]));
+            lines.push(Line::from(""));
+            for (create, path) in &apply.rows {
+                let (tag, style) = if *create {
+                    ("create", theme.good())
+                } else {
+                    ("skip  ", theme.dim())
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {tag} "), style),
+                    Span::styled(
+                        path.clone(),
+                        if *create { theme.text() } else { theme.dim() },
+                    ),
+                ]));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} to create", apply.creates), theme.good()),
+                Span::styled(format!("   {} already there", apply.skips), theme.dim()),
+            ]));
+        }
+        Preview::Register(register) => {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", g.arrow), theme.accent()),
+                Span::styled(
+                    crate::util::paths::display_path(&register.path),
+                    theme.text(),
+                ),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(field_line(theme, "template", &register.template));
+            lines.push(Line::from(vec![
+                Span::styled(format!("   {:<14} ", "id"), theme.dim()),
+                Span::styled(register.id.clone(), theme.text()),
+                Span::styled(format!("   {}", register.id_note), theme.dim()),
+            ]));
+            lines.push(field_line(theme, "created", &register.created));
+            match &register.rename {
+                Some((from, to)) => lines.push(Line::from(vec![
+                    Span::styled(format!("   {:<14} ", "rename"), theme.dim()),
+                    Span::styled(from.clone(), theme.dim()),
+                    Span::styled(format!(" {} ", g.arrow), theme.accent()),
+                    Span::styled(to.clone(), theme.text()),
+                ])),
+                None => lines.push(field_line(theme, "rename", "no")),
+            }
+            if register.apply_structure {
+                lines.push(field_line(
+                    theme,
+                    "fill in",
+                    "the template's missing folders",
+                ));
+            }
+            if register.pinfo_exists {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        " {} PROJECT_INFO.md already exists — it will be overwritten",
+                        g.warn
+                    ),
+                    theme.warn(),
+                )));
+            }
+        }
+        Preview::Recursive(recursive) => {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", g.arrow), theme.accent()),
+                Span::styled(
+                    crate::util::paths::display_path(&recursive.base),
+                    theme.text(),
+                ),
+            ]));
+            lines.push(Line::from(""));
+            if recursive.rows.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    " every direct child already has a PROJECT_INFO.md — nothing to register",
+                    theme.dim(),
+                )));
+                return lines;
+            }
+            for (name, note) in &recursive.rows {
+                lines.push(Line::from(vec![
+                    Span::styled(" + ", theme.good()),
+                    Span::styled(name.clone(), theme.text()),
+                    Span::styled(format!("   {note}"), theme.dim()),
+                ]));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    " {} folder{} would be registered",
+                    recursive.rows.len(),
+                    if recursive.rows.len() == 1 { "" } else { "s" }
+                ),
+                theme.good(),
+            )));
+        }
+    }
+    lines
+}
+
+fn field_line<'a>(theme: &crate::tui::theme::Theme, key: &'a str, value: &'a str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(format!("   {key:<14} "), theme.dim()),
+        Span::styled(value, theme.text()),
+    ])
+}
+
 fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let g = theme.glyphs;
@@ -466,7 +785,11 @@ fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Fram
         theme.dim(),
     )));
     lines.push(Line::from(Span::styled(
-        " Search: a word matches inside a name, id, template or tag (a typo is forgiven); tag:x  template=y  created>date match exactly.",
+        " Search: a word matches inside a name, id, template or tag (a typo is forgiven; a number means an id, and a/b is literal);",
+        theme.dim(),
+    )));
+    lines.push(Line::from(Span::styled(
+        " tag:x  template=y  created>date match exactly, and combine with the words.",
         theme.dim(),
     )));
     let max_scroll = lines.len().saturating_sub(inner.height as usize);

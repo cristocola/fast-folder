@@ -231,6 +231,7 @@ pub enum CommandId {
     // Flows that open their own screen
     NewProject,
     Register,
+    ApplyTemplate,
     Templates,
     Settings,
     // The template strip
@@ -238,7 +239,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 45] = [
+    pub const ALL: [CommandId; 46] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Help,
@@ -281,6 +282,7 @@ impl CommandId {
         CommandId::MarkNone,
         CommandId::NewProject,
         CommandId::Register,
+        CommandId::ApplyTemplate,
         CommandId::Templates,
         CommandId::Settings,
         CommandId::StripFilter,
@@ -879,10 +881,21 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Register,
         "Register existing folder",
-        "adopt a folder fastf did not create — one, or a whole base",
+        "adopt a folder fastf did not create — one, or every unregistered folder in a base",
         LISTS,
         [Key::ch('e')],
         Library,
+        palette = true,
+        hint = false,
+        not_busy
+    ),
+    cmd!(
+        ApplyTemplate,
+        "Apply a template to a folder",
+        "fill in a folder's missing folders and files from a template — never overwrites",
+        LISTS,
+        [Key::ch('E')],
+        Templates,
         palette = true,
         hint = false,
         not_busy

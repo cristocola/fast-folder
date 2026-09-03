@@ -164,25 +164,34 @@ fn move_project_unlocked(
     // Deliberately NOT `fs_retry::rename`: this call is *expected* to fail on a
     // cross-device move, and that failure is the signal to take the staged path.
     // Retrying would add the full backoff to every cross-drive move for nothing.
-    let outcome = match fs::rename(&project.path, &new_path) {
-        Ok(()) => {
-            let moved = finish_move_bookkeeping(project, &old_base, &new_base, &new_path);
-            MoveOutcome {
-                project: moved,
-                cleanup_pending: false,
+    //
+    // `FASTF_FAULT=move:force-staged` skips the rename entirely: the staged
+    // path is what a test is about, and a same-volume rename would succeed and
+    // never reach it. The arm is a decision, not a failure to propagate, which
+    // is why the engine asks `is_armed` rather than letting `check` trip.
+    let outcome = if crate::util::faults::is_armed("move:force-staged") {
+        staged_copy_verify_commit(project, &new_base, &new_path, progress, cancel)?
+    } else {
+        match fs::rename(&project.path, &new_path) {
+            Ok(()) => {
+                let moved = finish_move_bookkeeping(project, &old_base, &new_base, &new_path);
+                MoveOutcome {
+                    project: moved,
+                    cleanup_pending: false,
+                }
             }
-        }
-        Err(error) if is_cross_device_error(&error) => {
-            return staged_copy_verify_commit(project, &new_base, &new_path, progress, cancel);
-        }
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "renaming project {} to {}",
-                    project.path.display(),
-                    new_path.display()
-                )
-            });
+            Err(error) if is_cross_device_error(&error) => {
+                return staged_copy_verify_commit(project, &new_base, &new_path, progress, cancel);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "renaming project {} to {}",
+                        project.path.display(),
+                        new_path.display()
+                    )
+                });
+            }
         }
     };
     Ok(outcome)

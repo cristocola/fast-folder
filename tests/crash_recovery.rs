@@ -667,8 +667,11 @@ fn every_failpoint_in_the_source_is_declared_and_vice_versa() {
                 continue;
             }
             let text = fs::read_to_string(&path).unwrap();
+            // A failpoint is armed at the boundary it guards with `check`, or —
+            // `move:force-staged` — asked about as a decision with `is_armed`.
             for (_, rest) in text
                 .match_indices("faults::check(\"")
+                .chain(text.match_indices("faults::is_armed(\""))
                 .map(|(i, m)| (i, &text[i + m.len()..]))
             {
                 if let Some(name) = rest.split('"').next() {
@@ -697,4 +700,82 @@ fn every_failpoint_in_the_source_is_declared_and_vice_versa() {
         found, declared,
         "ALL_FAULT_POINTS and the `faults::check` call sites have drifted apart"
     );
+}
+
+/// `FASTF_FAULT=move:force-staged` puts a same-volume move onto the staged
+/// copy path — the code a same-filesystem rename would never reach.
+///
+/// Proving it on one volume: arm `move:after-staging` alone and the move
+/// succeeds, because the rename path never passes that boundary; arm
+/// `move:force-staged` alongside it and the move fails *after staging* — the
+/// injected error lands, the transaction is rolled back, and the source is
+/// untouched.
+#[cfg(debug_assertions)]
+#[test]
+fn force_staged_reaches_the_staged_path_on_one_volume() {
+    fn create_one(cfg: &Config) -> std::path::PathBuf {
+        let tmpl = template::find_by_slug("crash").unwrap();
+        let mut counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &HashMap::new(), cfg, &counters).unwrap();
+        project::create(&plan, &tmpl, &mut counters, cfg, false).unwrap();
+        plan.root_path
+    }
+    fn find_project(cfg: &Config, root: &std::path::Path) -> library::Project {
+        library::discover(cfg)
+            .into_iter()
+            .find(|p| p.path == root)
+            .unwrap_or_else(|| panic!("no project at {}", root.display()))
+    }
+    let folder = |root: &std::path::Path| root.file_name().unwrap().to_os_string();
+
+    sandbox(|sb, guard| {
+        write_crash_template(&sb.install, "crash");
+        let target = sb.install.parent().unwrap().join("target");
+        fs::create_dir_all(&target).unwrap();
+        let mut cfg = config_for(&sb.base);
+        cfg.bases = vec![target.display().to_string()];
+        cfg.save().unwrap();
+
+        // Control: an after-staging arm does not stop a same-volume move,
+        // because the rename path never reaches the staged boundary.
+        let first_root = create_one(&cfg);
+        arm(guard, "move:after-staging");
+        let first = find_project(&cfg, &first_root);
+        let moved = library::move_project(&first, &target);
+        disarm(guard);
+        assert!(
+            moved.is_ok(),
+            "a rename move must not pass move:after-staging: {moved:?}"
+        );
+        assert!(
+            !first_root.exists() && target.join(folder(&first_root)).is_dir(),
+            "the control move should have landed in the target base"
+        );
+
+        // Forced: the same arm plus move:force-staged reaches the staged path
+        // and fails there, source intact, no transaction left behind.
+        let second_root = create_one(&cfg);
+        arm(guard, "move:force-staged,move:after-staging");
+        let second = find_project(&cfg, &second_root);
+        let forced = library::move_project(&second, &target);
+        disarm(guard);
+        let message = format!("{forced:?}");
+        assert!(
+            forced.is_err() && message.contains("move:after-staging"),
+            "the forced move should fail at the staged boundary: {message}"
+        );
+        assert!(
+            second_root.is_dir(),
+            "the failed move must leave the source untouched"
+        );
+        assert!(
+            !target.join(folder(&second_root)).exists(),
+            "the failed move must not publish a destination"
+        );
+        assert_eq!(
+            transaction_count(&target),
+            0,
+            "the rolled-back transaction must be removed"
+        );
+    });
 }

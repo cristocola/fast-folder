@@ -8,6 +8,7 @@
 
 pub mod actions;
 pub mod data;
+pub mod jobs;
 pub mod library;
 pub mod modal;
 pub mod palette;

@@ -2,6 +2,7 @@
 //! frame shows is exactly what `update` left behind, and a snapshot test can
 //! render any state it can construct.
 
+pub mod builder;
 pub mod dashboard;
 pub mod modals;
 pub mod projects;

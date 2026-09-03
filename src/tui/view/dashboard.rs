@@ -269,9 +269,10 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
         Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => {
             vec![("Esc".to_string(), "close"), ("↑↓".to_string(), "scroll")]
         }
-        // A flow draws its own key line inside its frame, beside the answers
-        // the keys act on; repeating it down here would say it twice.
-        Some(Modal::Flow(_)) => Vec::new(),
+        // A flow, the studio and the builder draw their own key line inside
+        // their frame, beside what the keys act on; repeating it down here
+        // would say it twice.
+        Some(Modal::Flow(_)) | Some(Modal::Studio(_)) | Some(Modal::Builder(_)) => Vec::new(),
         None => match app.context() {
             crate::tui::command::Context::SearchEdit => vec![
                 ("Enter".to_string(), "keep"),

@@ -42,6 +42,15 @@ pub enum Effect {
     LoadTemplate {
         slug: String,
     },
+    /// Read one template as the builder needs it: the whole document, with the
+    /// text under `files/` buffered so the editor can show it.
+    LoadTemplateSource {
+        slug: String,
+    },
+    /// Read one template as the studio shows it: `template show`'s lines.
+    LoadTemplateView {
+        slug: String,
+    },
     /// Work out what a flow's answers would do, without touching a disk.
     /// Answered by `Msg::Previewed`, or by `Msg::PreviewFailed` naming the
     /// field that was wrong.
@@ -62,6 +71,18 @@ pub enum Request {
     Create(CreateRequest),
     Apply(ApplyRequest),
     Register(register::Request),
+    FromFolder(FromFolderRequest),
+}
+
+/// Generate a template from a folder that already has the shape you want.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FromFolderRequest {
+    pub source: PathBuf,
+    pub slug: String,
+    /// Overwrite a template that already answers to this slug.
+    pub force: bool,
+    /// Copy binary and oversized files into the template byte for byte.
+    pub bundle_assets: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +111,14 @@ pub enum Action {
     Apply(Box<ApplyRequest>),
     /// Register one folder, or every unregistered child of a base.
     Register(Box<register::Request>),
+    /// Write the template the builder assembled. `original_slug` is what it
+    /// was loaded under, so a renamed template moves rather than forking.
+    SaveTemplate {
+        template: Box<crate::core::template::Template>,
+        original_slug: Option<String>,
+    },
+    DeleteTemplate(String),
+    TemplateFromFolder(Box<FromFolderRequest>),
     AddTag {
         project: Box<Project>,
         tag: String,
@@ -155,14 +184,12 @@ pub enum Suspended {
 /// removes the variants it makes native; the enum is gone when they all are.
 #[derive(Debug, PartialEq)]
 pub enum LegacyFlow {
-    Templates,
     Settings,
 }
 
 impl LegacyFlow {
     pub fn title(&self) -> &'static str {
         match self {
-            LegacyFlow::Templates => "templates",
             LegacyFlow::Settings => "settings",
         }
     }
@@ -191,6 +218,11 @@ pub enum ListChange {
         path: PathBuf,
     },
     Reload,
+    /// The projects did not move, but what the header and the template strip
+    /// say about the library did — a template was written, renamed or deleted.
+    /// Re-reading every base for that would be a walk to answer a question
+    /// none of the folders were asked.
+    SummaryOnly,
     None,
 }
 

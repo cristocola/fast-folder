@@ -479,7 +479,10 @@ fn esc_in_a_settings_field_leaves_the_value_unchanged() {
     );
 }
 
-/// `template from-folder` asked path, slug and force, then rejected the slug.
+/// `template from-folder` asked path, slug and force, then rejected the slug —
+/// last. It is a form now: the slug is refused on its own line, corrected
+/// there, and the preview shows what the scan picked up before anything is
+/// written.
 #[test]
 fn a_bad_template_slug_is_refused_at_its_own_prompt() {
     let sb = Sandbox::new();
@@ -488,35 +491,39 @@ fn a_bad_template_slug_is_refused_at_its_own_prompt() {
 
     let script = pty::Script::new()
         .key(KEY_TEMPLATES)
-        .pause(600)
-        .down(1) // → Generate template from existing folder
-        .enter()
-        .line(&source.display().to_string())
+        .pause(700)
+        .key("g") // → generate from a folder
         .pause(400)
+        .key(&source.display().to_string())
+        .tab()
         .key("not a slug") // spaces are not allowed in a slug
         .enter()
-        .pause(500)
+        .pause(700)
         // Correct it in place: drop " a slug", leaving "not".
         .backspace(7)
         .key("-a-slug")
-        .enter()
-        .pause(500)
-        .key("n") // overwrite if it exists?
-        .key("n") // bundle binary/large files?
+        .enter() // → the preview
         .pause(900)
-        .esc() // Templates → the dashboard
-        .pause(500)
+        .enter() // → generate
+        .pause(1200)
+        .esc() // the studio → the dashboard
+        .pause(400)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
     let text = pty::plain(&out);
 
-    assert_eq!(code, 0, "a bad slug must not end the session:\n{text}");
+    assert_eq!(code, 0, "a bad slug must not end the session:\n{screen}");
+    assert!(
+        text.contains("slug"),
+        "the slug should be refused where it was typed:\n{text}"
+    );
     assert!(
         sb.install
             .join("templates/not-a-slug/template.yaml")
             .exists(),
-        "the corrected slug should have produced the template:\n{text}"
+        "the corrected slug should have produced the template:\n{screen}"
     );
 }
 
@@ -606,85 +613,46 @@ fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
 
 /// The caret is visible, and it sits in the line being edited.
 ///
-/// `prompt::text` draws its line with `write_line`, so the block ends a row
-/// *below* the text, and the editor hid the caret for the repaint. Together
-/// those left a rename — or any other text prompt — with no insertion point at
-/// all: the text moved as you typed and nothing said where the next character
-/// would land.
-///
-/// This is the one assertion in the pty suite that names cursor escapes, because
-/// here the cursor *is* the behaviour. Everything it matches is derived from the
-/// prompt strings rather than hard-coded, so a reworded prompt moves the numbers
-/// with it.
+/// The regression this pins cost a release: `prompt::text` drew its line with
+/// `write_line`, which ends the block a row *below* the text, and the editor
+/// hid the caret for the repaint — so a rename, or any other text field, had
+/// no insertion point at all. Every text field in the app is native now, so
+/// this reads the caret out of the frame a person saw rather than out of the
+/// escape sequence that put it there.
 #[test]
-fn a_text_prompt_parks_a_visible_caret_after_the_text() {
+fn a_text_field_parks_a_visible_caret_after_the_text() {
     let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["config", "set", "default-template", "race"]);
 
-    // `Templates` → create → edit a folder path from the review. That prompt is
-    // the one remaining dialoguer text prompt that opens pre-filled
-    // (`initial`), now that rename is a native modal.
     let script = pty::Script::new()
-        .key(KEY_TEMPLATES)
-        .pause(600)
-        .enter() // → Create new template
-        .line("Demo") // name
-        .line("demo") // slug (suggested)
-        .line("") // description
-        .line("{date}_{id}") // naming pattern
-        .line("D") // prefix
-        .line("4") // digits
-        .key("n") // no variables
-        .line("01_Assets") // one folder
-        .line("") // stop adding folders
-        .key("n") // no files
+        .key(KEY_CREATE)
+        .pause(800)
+        .tab() // → the template's own variable
+        .key("Lulla")
         .pause(700)
-        .down(3) // review → Folder structure
-        .enter()
-        .pause(800)
-        .down(1) // → Edit a folder path
-        .enter()
-        .pause(800)
-        .enter() // "Which folder?" — the only one
-        .pause(800)
-        .esc() // leave the path alone → back to the review
-        .pause(600)
-        .down(6) // → Discard changes (nothing is saved)
-        .enter()
-        .pause(800)
-        .esc() // Templates → the dashboard
-        .pause(500)
-        .key(KEY_QUIT)
         .build();
-    let (out, code) = launch(&sb, script);
+    let (out, _) = launch(&sb, script);
+    let screen = app_screen(&out);
+    let (row, column) = app_cursor(&out);
 
-    assert_eq!(code, 0, "the folder prompt should cancel cleanly:\n{out:?}");
+    let (text_row, text_line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("Lulla"))
+        .map(|(index, line)| (index as u16, line.to_string()))
+        .unwrap_or_else(|| panic!("the typed text never drew:\n{screen}"));
+    // Char offsets, not byte offsets: the frame is full of box-drawing
+    // characters, and `str::find` counts bytes while a terminal counts cells.
+    let at = text_line.find("Lulla").expect("just found");
+    let after_text = (text_line[..at].chars().count() + "Lulla".chars().count()) as u16;
 
-    // `initial` puts the folder path on the line, and the caret goes after it.
-    let label = "Folder path: ";
-    let drawn = out
-        .find(label)
-        .unwrap_or_else(|| panic!("the edit prompt never drew its line:\n{out:?}"));
-    let after_label = &out[drawn + label.len()..];
-    let line_end = after_label
-        .find("\r\n")
-        .unwrap_or_else(|| panic!("the drawn line never ends:\n{out:?}"));
-    let text_len = line_end; // ASCII: the drawn text between the label and the newline
-    let after = &after_label[line_end + 2..];
-
-    let up = after.strip_prefix("\x1b[1A").unwrap_or_else(|| {
-        panic!("the caret must come back up onto the line it is editing, got:\n{after:?}")
-    });
-    let (column, rest) = up
-        .strip_prefix("\x1b[")
-        .and_then(|s| s.split_once('C'))
-        .unwrap_or_else(|| panic!("the caret must be moved along the line, got:\n{up:?}"));
     assert_eq!(
-        column.parse::<usize>().unwrap(),
-        label.chars().count() + text_len,
-        "the caret belongs after the text, not at the start of the prompt"
+        row, text_row,
+        "the caret belongs on the line being edited:\n{screen}"
     );
-    assert!(
-        rest.starts_with("\x1b[?25h"),
-        "the caret must be shown once it is in place, got:\n{rest:?}"
+    assert_eq!(
+        column, after_text,
+        "the caret belongs after the text, not at the start of the field:\n{screen}"
     );
 }

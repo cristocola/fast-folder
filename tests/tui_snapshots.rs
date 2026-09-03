@@ -453,3 +453,143 @@ mod flows {
         snap("apply_preview", render_to_string(&app, 100, 30));
     }
 }
+
+// ---------------------------------------------------------------------------
+// The template studio and the builder (Phase 4)
+// ---------------------------------------------------------------------------
+
+mod studio {
+    use super::*;
+    use fastf::tui::app::App;
+
+    fn press(app: &mut App, key: Key) {
+        let _ = update(app, Msg::Key(key));
+    }
+
+    fn typed(app: &mut App, text: &str) {
+        for c in text.chars() {
+            press(app, Key::ch(c));
+        }
+    }
+
+    /// The studio, with the selected template's details read.
+    #[test]
+    fn template_show() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('T'));
+        let _ = update(
+            &mut app,
+            Msg::TemplateViewLoaded {
+                slug: "general".to_string(),
+                lines: vec![
+                    "General".to_string(),
+                    "  Slug:    general".to_string(),
+                    "  Pattern: {date}_{name}_{id}".to_string(),
+                    "  ID:      ID0000".to_string(),
+                    String::new(),
+                    "Variables:".to_string(),
+                    "  • name (required)".to_string(),
+                    "    Label:     Project name".to_string(),
+                    String::new(),
+                    "Folder structure:".to_string(),
+                    "└── 00_Inbox/".to_string(),
+                ],
+            },
+        );
+        snap("template_show", render_to_string(&app, 100, 30));
+    }
+
+    /// The builder's home: the five sections with what each holds.
+    #[test]
+    fn builder_review() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('n'));
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Metadata
+        typed(&mut app, "Music video");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        for _ in 0..3 {
+            press(&mut app, Key::plain(KeyCode::Down)); // → Structure
+        }
+        press(&mut app, Key::plain(KeyCode::Enter));
+        typed(&mut app, "01_Assets");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        typed(&mut app, "01_Assets/raw");
+        press(&mut app, Key::ctrl('s'));
+        snap("builder_review", render_to_string(&app, 100, 30));
+    }
+
+    /// One variable's form, with the options line a select needs.
+    #[test]
+    fn builder_variable_form() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('n'));
+        press(&mut app, Key::plain(KeyCode::Down));
+        press(&mut app, Key::plain(KeyCode::Down)); // → Variables
+        press(&mut app, Key::plain(KeyCode::Enter));
+        press(&mut app, Key::ch('a'));
+        typed(&mut app, "tier");
+        press(&mut app, Key::plain(KeyCode::Tab));
+        typed(&mut app, "Engagement type");
+        press(&mut app, Key::plain(KeyCode::Tab));
+        press(&mut app, Key::plain(KeyCode::Right)); // text → select
+        press(&mut app, Key::plain(KeyCode::Tab));
+        typed(&mut app, "Client, Internal");
+        snap("builder_variable_form", render_to_string(&app, 100, 30));
+    }
+
+    /// The structure editor: the paths on the left, the tree they make on the
+    /// right, redrawn as they are typed.
+    #[test]
+    fn builder_structure_tree() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('n'));
+        for _ in 0..3 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        press(&mut app, Key::plain(KeyCode::Enter));
+        typed(&mut app, "01_Assets");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        typed(&mut app, "01_Assets/raw");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        typed(&mut app, "02_Edit");
+        snap("builder_structure_tree", render_to_string(&app, 100, 30));
+    }
+
+    /// What generating a template from a folder picked up.
+    #[test]
+    fn from_folder_preview() {
+        use fastf::core::template::FolderNode;
+        use fastf::tui::app::wizard::{FromFolderPreview, Preview};
+
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('g'));
+        typed(&mut app, "/mnt/projects/Reference_Shoot");
+        press(&mut app, Key::plain(KeyCode::Tab));
+        typed(&mut app, "reference");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        let _ = update(
+            &mut app,
+            Msg::Previewed(Box::new(Preview::FromFolder(Box::new(FromFolderPreview {
+                slug: "reference".to_string(),
+                structure: vec![FolderNode {
+                    name: "01_Assets".to_string(),
+                    children: vec![FolderNode {
+                        name: "raw".to_string(),
+                        children: Vec::new(),
+                    }],
+                }],
+                files: vec!["README.md".to_string()],
+                assets: vec![("01_Assets/logo.png".to_string(), 24_576)],
+                folders: 2,
+                skipped: 0,
+                bundle_bytes: 24_576,
+                bundle: true,
+            })))),
+        );
+        snap("from_folder_preview", render_to_string(&app, 100, 30));
+    }
+}

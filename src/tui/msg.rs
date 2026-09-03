@@ -48,6 +48,16 @@ pub enum Msg {
         slug: String,
         result: Result<Box<TemplateInfo>, String>,
     },
+    /// One template's whole document, for the builder to edit.
+    TemplateSourceLoaded {
+        slug: String,
+        result: Result<Box<crate::core::template::Template>, String>,
+    },
+    /// One template's details, for the studio to show.
+    TemplateViewLoaded {
+        slug: String,
+        lines: Vec<String>,
+    },
     /// A flow's preview is ready.
     Previewed(Box<Preview>),
     /// A flow's preview could not be built. `field` names the answer that was

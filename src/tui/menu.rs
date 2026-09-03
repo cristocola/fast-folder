@@ -1,9 +1,8 @@
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::cli::{config, id, template};
+use crate::cli::{config, id};
 use crate::core::config::Config;
-use crate::tui::pickers::pick_template;
 use crate::tui::prompt::{self, TextOpts};
 
 /// Should this error end the session, or just be reported?
@@ -23,26 +22,6 @@ use crate::tui::prompt::{self, TextOpts};
 /// propagate the very case this exists to catch.
 pub(crate) fn is_fatal(err: &anyhow::Error) -> bool {
     crate::util::interrupt::is_set() || err.downcast_ref::<dialoguer::Error>().is_some()
-}
-
-/// A folder that must already exist, checked at the prompt that asks for it.
-///
-/// **Validate at the prompt, not at the operation.** A path typed wrong used to
-/// be rejected by the core operation *after* three more questions had been
-/// answered, and all four answers went with it. Rejecting it here keeps the
-/// text on the line to be corrected.
-fn existing_directory(raw: &str) -> std::result::Result<(), String> {
-    let path = std::path::Path::new(raw.trim());
-    if raw.trim().is_empty() {
-        return Err("enter a folder path".to_string());
-    }
-    if !path.exists() {
-        return Err(format!("no such folder: {}", path.display()));
-    }
-    if !path.is_dir() {
-        return Err(format!("not a folder: {}", path.display()));
-    }
-    Ok(())
 }
 
 /// Draw one menu and return the **label** that was chosen.
@@ -124,98 +103,6 @@ pub(crate) fn onboard_first_run(cfg: &Config) -> Result<()> {
             Err(error) => println!("{} {}", "error:".red().bold(), error),
         }
     }
-}
-
-pub(crate) fn menu_templates() -> Result<()> {
-    loop {
-        let Some(choice) = menu(
-            "Templates",
-            &[
-                "Create new template",
-                "Generate template from existing folder",
-                "Edit a template",
-                "List templates",
-                "Show template details",
-                "Delete a template",
-                "Back",
-            ],
-            0,
-        )?
-        else {
-            break;
-        };
-
-        // Each arm yields a Result rather than using `?` inline, so one
-        // contained failure (an unreadable template, a missing source folder)
-        // returns to this menu instead of unwinding out of the TUI.
-        let outcome = match choice.as_str() {
-            "Create new template" => template::new_interactive(),
-            "Generate template from existing folder" => template_from_folder_flow(),
-            "Edit a template" => on_template("Edit template", template::edit),
-            "List templates" => template::list(),
-            "Show template details" => on_template("Show template", template::show),
-            "Delete a template" => on_template("Delete template", |s| template::delete(s, false)),
-            "Back" => break,
-            other => anyhow::bail!("unhandled menu item '{other}'"),
-        };
-        contain(outcome)?;
-        println!();
-    }
-    Ok(())
-}
-
-/// Ask which template, then run `action` on its slug. `None` from the picker is
-/// a cancel, which is an answer, not a failure.
-fn on_template(prompt: &str, action: impl FnOnce(&str) -> Result<()>) -> Result<()> {
-    match prompt_template_slug(prompt)? {
-        Some(slug) => action(&slug),
-        None => Ok(()),
-    }
-}
-
-fn template_from_folder_flow() -> Result<()> {
-    let Some(path) = prompt::text(
-        "Source folder to scan",
-        TextOpts::new().validate(existing_directory),
-    )?
-    else {
-        return Ok(());
-    };
-    let Some(slug) = prompt::text(
-        "Slug for the new template",
-        TextOpts::new().validate(|raw| {
-            crate::core::validated::TemplateSlug::parse(raw.trim())
-                .map(|_| ())
-                .map_err(|e| format!("{e:#}"))
-        }),
-    )?
-    else {
-        return Ok(());
-    };
-    let Some(force) = prompt::confirm("Overwrite if a template with this slug exists?", false)?
-    else {
-        return Ok(());
-    };
-    // The menu used to hard-code `bundle_assets: false`, so binary files in the
-    // source folder were silently left out of the template and there was no way
-    // to ask for them without dropping to the command line. `run_from_folder`
-    // does its own size confirmation, so answering yes here does not commit to
-    // anything: `yes: false` leaves that second question in place.
-    let Some(bundle_assets) = prompt::confirm(
-        "Bundle binary and large files into the template (copied byte-for-byte)?",
-        false,
-    )?
-    else {
-        return Ok(());
-    };
-    template::run_from_folder(template::FromFolderArgs {
-        path,
-        slug,
-        force,
-        bundle_assets,
-        yes: false,
-        dry_run: false,
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -849,16 +736,6 @@ fn toggle_setting(key: &str, current: bool) -> Result<()> {
     let new_val = !current;
     config::set(key, if new_val { "true" } else { "false" })?;
     Ok(())
-}
-
-/// The guided menu addresses templates by slug; the picker itself is shared with
-/// `fastf new`.
-fn prompt_template_slug(prompt: &str) -> Result<Option<String>> {
-    Ok(pick_template(
-        prompt,
-        "run the command directly: `fastf template show <slug>`",
-    )?
-    .map(|tmpl| tmpl.slug))
 }
 
 #[cfg(test)]

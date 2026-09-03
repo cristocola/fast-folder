@@ -6,6 +6,7 @@
 
 use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, TextPrompt};
 use crate::tui::app::palette::PaletteState;
+use crate::tui::app::studio::{Builder, Studio};
 use crate::tui::app::wizard::Flow;
 use crate::tui::command::Context;
 use crate::tui::fuzzy::Fuzzy;
@@ -116,8 +117,12 @@ pub enum Modal {
     Confirm(Confirm),
     /// A list where Space toggles and Enter confirms the picked set.
     MultiPick(MultiPick),
-    /// A flow that builds something: create, apply, register.
+    /// A flow that builds something: create, apply, register, from-folder.
     Flow(Box<Flow>),
+    /// Every template, with the selected one's details.
+    Studio(Studio),
+    /// A template being written.
+    Builder(Box<Builder>),
     Message {
         title: String,
         lines: Vec<String>,

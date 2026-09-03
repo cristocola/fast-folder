@@ -99,6 +99,14 @@ responsibility of the filesystem and backups.
   Search stopped guessing at two kinds of word: a number matches an ID rather
   than the digits scattered through a date, and a word with `/` in it is a
   literal tag path.
+  Phase 4 (the template studio) landed next: `T` opens every template with the
+  selected one's details beside it, and the builder behind it is one list of a
+  template's five parts, entered in any order, with a live folder tree beside
+  the paths that make it and a multi-line editor for a file's contents.
+  `fastf template new` and `edit` open the same builder, so there is one
+  template editor rather than two. Generating a template from a folder is a
+  form and a preview like every other flow. `template_builder.rs` and
+  `menu_templates` are deleted; the settings menu is the last bridged flow.
 - Released: **v2.2.1, published 2026-09-03** — the text prompts show where you
   are typing. `prompt::text` draws its line with `write_line`, which ends the
   block a row *below* the text, and it hid the caret for the repaint and never

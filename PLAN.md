@@ -1,6 +1,6 @@
 # PLAN.md — v3.0.0: the guided app on ratatui
 
-> **In progress. Phase 3 is done (PR #38); the next phase is Phase 4.** This
+> **In progress. Phase 4 is done (PR #39); the next phase is Phase 5.** This
 > file is worked one phase per session: read it, do phase N, run the gates,
 > tick only the boxes whose named verification actually ran, each phase in its
 > own PR into `main` with `ROADMAP.md` and the matching `docs/` page in the
@@ -207,17 +207,26 @@ confirm/progress/report modals, cancel mid-move, the debug-only
   (`git init` / `$EDITOR`) on a real template, and a register of a folder that
   already holds a `PROJECT_INFO.md`
 
-## Phase 4 — template studio, builder, from-folder
+## Phase 4 — template studio, builder, from-folder ✔ (this branch)
 
-`app/studio.rs`, `view/{templates,builder}.rs`; the builder as sections with
-a live tree; `cli::template::scan_source` `pub(crate)`; delete
+`app/studio.rs`, `view/builder.rs`; the builder as sections with a live tree;
+`cli::template::scan_for_preview` and `describe` extracted print-free; delete
 `template_builder.rs`, `menu_templates`, `template_from_folder_flow`.
 
-- [ ] update tests: section state; `Cannot save:` on an invalid template;
-  bundle confirm gating
-- [ ] snapshots: `builder_review`, `builder_variable_form`, `template_show`,
-  `from_folder_preview`
-- [ ] pty: the builder tests native; `deleting_a_template_asks_first`
+- [x] update tests: section state; `Cannot save:` on an invalid template; the
+  studio's stale-read guard; from-folder previews before it writes
+- [x] snapshots: `builder_review`, `builder_variable_form`,
+  `builder_structure_tree`, `template_show`, `from_folder_preview`
+- [x] pty: the builder tests native; `deleting_a_template_asks_first`; the
+  from-folder slug refused on its own line; the caret test reads the app's own
+  caret out of the frame
+- [x] docs/templates.md "The builder"; docs/cli.md; ROADMAP;
+  `src/tui/CLAUDE.md`
+- [x] Gates: fmt, clippy ×3 (debug, release, windows-gnu), `cargo test
+  --all-targets`, `cargo test --release`, MSVC check, MSRV check, docs — all
+  run on 2026-09-03
+- [ ] Manual, needs the maintainer: build a real template end to end and create
+  a project from it; edit one of the gallery templates
 
 ## Phase 5 — settings, ID counter, maintenance, onboarding, needs-attention
 
@@ -442,3 +451,43 @@ the `release` skill.
     a real project from the wizard (and find it selected in the list it comes
     back to), register a whole base after previewing it, and apply a template
     to an existing folder.
+- **Phase 4 (2026-09-03).** Decisions taken while building, beyond the plan:
+  - **`tui-textarea` did not earn its place, and could not.** Its current
+    release (0.7.0) requires `ratatui 0.29`; adding it does not merely pull a
+    second ratatui into the tree, it fails to resolve at all against ours.
+    That is exactly the condition the plan set for a widget crate, so
+    `widgets/text_area.rs` is ours: `LineEdit` with a second dimension, the
+    cursor a char index on both axes, ~250 lines with its own tests.
+  - **The builder is a list of parts, not a sequence of steps.** The old one
+    walked six steps and then offered a review menu to go back into any of
+    them — which is to say the review menu was the real interface and the
+    walk was a tax. The list *is* the summary: every row says what that part
+    holds, Enter opens it, Esc comes back, and Save says `Cannot save:` with
+    `Template::validate`'s own words when the template is not yet loadable.
+  - **`fastf template new`/`edit` open the app.** Deleting `template_builder.rs`
+    would have left those two commands without an implementation. They open
+    `Entry::Studio` instead, so the command line and `T` are the same editor.
+  - **The structure section is where the text area earns itself**: one folder
+    path per line with the tree drawn beside it, redrawn on every keystroke.
+    Enter is a newline there, so Ctrl-S commits and the key line says so.
+  - **A select's options are one comma-separated line**, not the old
+    one-option-per-line loop. On a form the whole answer has to be visible and
+    correctable, and three words are a line.
+  - **`ListChange::SummaryOnly`.** Writing or deleting a template changes what
+    the header and the strip say and moves no folder at all; `Reload` would
+    have walked every base to answer a question none of the folders were
+    asked. The studio's own list is refreshed from the landing summary, keeping
+    its selection by slug.
+  - **The caret test reads the caret, not the escape that moved it.** Phase 1
+    left `a_text_prompt_parks_a_visible_caret_after_the_text` driving the
+    dialoguer builder's *Folder path* edit, which this phase deletes. It now
+    types into the wizard's own field and asserts the terminal's cursor
+    position out of the `vt100` replay (`harness::app_cursor`) — the same
+    guarantee, read the way a person reads it.
+  - **A form field remembers whether it was touched**, which is how the slug
+    keeps following the name until somebody types a slug of their own. The old
+    builder could only offer the suggestion once, as a prompt default.
+  - Measured on the maintainer's machine, 2026-09-03: the pty suite builds and
+    saves a real template section by section, declares an empty `.gitkeep`,
+    refuses an invalid one, deletes one after asking, and generates one from a
+    folder after correcting its slug in place.

@@ -2,9 +2,9 @@
 //!
 //! The guided app (`run`) is the daily one: a full-screen dashboard on
 //! ratatui. The modules that still name dialoguer — `prompt`, `pickers`,
-//! `vars`, `menu`, `actions`, `template_builder` — serve the command line's
-//! inline prompts and the flows the app has not made native yet; each phase of
-//! the rebuild retires some of them.
+//! `vars`, `menu` — serve the command line's inline prompts and the settings
+//! flow the app has not made native yet; each phase of the rebuild retires
+//! some of them.
 
 pub mod app;
 pub mod command;
@@ -20,7 +20,6 @@ pub mod pickers;
 pub mod prompt;
 pub mod rows;
 pub mod runtime;
-pub mod template_builder;
 pub mod testing;
 pub mod theme;
 pub mod validators;
@@ -30,7 +29,7 @@ pub mod widgets;
 
 use anyhow::Result;
 
-pub use entry::{Entry, Preset};
+pub use entry::{Entry, Preset, StudioEntry};
 
 /// Open the guided app. `Ok(())` on quit; `Err` after Ctrl-C at the root, so
 /// `main` says `aborted.` and exits 130 exactly as it does for a signal.

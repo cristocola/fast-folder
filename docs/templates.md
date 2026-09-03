@@ -140,19 +140,34 @@ Two interpolation rules are worth knowing:
 
 Templates always use `/` as the path separator, on every platform. fastf translates to `\` on Windows at runtime. Path escape guards reject empty and dot components, `..`, absolute paths, and drive letters when a template loads, after tokens are interpolated, and again at the write boundary. That means a safe-looking declaration cannot escape through a variable or custom date format that renders as `..`.
 
-## The interactive builder
+## The builder
 
-`fastf template new`, or `T` then **Create new template** in the guided app,
-walks through metadata, ID format, variables, folder structure and
-placeholder files, and then lands in a **review menu**: every section with its
-current contents, plus Save and Discard. Pick any section to go back into it.
-Editing an existing template opens the same menu straight away.
+`fastf template new`, `fastf template edit <slug>`, or `T` in the guided app and
+then `n` (new) or Enter (edit): all three open the same builder, which is **one
+list of the template's five parts** — metadata, the ID format, variables, the
+folder structure, files — with Save and Discard under them. Each row shows what
+that part currently holds, so the list is the summary. Enter opens a part;
+Esc closes it and comes back. There is no order to follow and no step to get
+past.
 
-Nothing throws work away. Esc inside a section returns to the review menu with
-that section unchanged, not with the template gone. Variables, folders and files
-each have Add / Edit / Remove, so correcting one typo does not mean retyping the
-rest — and a file can be declared empty, which is what `.gitkeep` and other
-marker files need.
+Nothing throws work away. Esc inside a part returns to the list with that part
+unchanged, not with the template gone, and nothing is written until Save. Save
+says `Cannot save:` and the reason when the template is not yet one fastf could
+load, and stays where it is.
+
+- **Metadata** and **ID** are forms; the slug follows the name until you type a
+  slug of your own, and every rule is checked on the field that broke it.
+- **Variables** is a list: `a` adds, Enter edits, `d` removes, `K`/`J` move one
+  up or down. A `select` variable's options are one comma-separated line.
+- **Structure** is a text area — one folder path per line, `/` to nest — with
+  the tree it makes drawn beside it as you type. `Ctrl-S` keeps it, Esc
+  abandons it, `Ctrl-K` drops the line under the cursor.
+- **Files** is a list of the same shape. Editing one gives you the path on top
+  and the contents underneath (Tab moves between them, `Ctrl-S` keeps), with the
+  `{tokens}` this template understands above the text and the ones the text
+  actually uses named as you type — which is what catches `{clientname}` typed
+  for a variable called `client_name`. Leave the contents empty and you have
+  declared a marker file such as `.gitkeep`.
 
 A template may declare **no files at all**. Two gallery templates
 (`photography`, `video-production`) are structure-only: they scaffold a shoot's
@@ -168,7 +183,7 @@ fastf template from-folder ./my-project my-template
 fastf template from-folder ./delivery-kit client-kit --bundle-assets
 ```
 
-From the guided app (`T`, then **Generate template from existing folder**) the same flow asks whether to bundle. Text files become editable template files. With `--bundle-assets`, binary and large files are copied into the template byte for byte (fastf confirms the total size first). The project's own `PROJECT_INFO.md` is skipped, since fastf owns that file.
+From the guided app it is `T` then `g`: a form for the source folder, the slug and the two decisions, and then a preview of the scan — the folders, the files, and every asset with its size and the total — before anything is written. Text files become editable template files. With `--bundle-assets`, binary and large files are copied into the template byte for byte (fastf confirms the total size first). The project's own `PROJECT_INFO.md` is skipped, since fastf owns that file.
 
 ## Reserved filename
 

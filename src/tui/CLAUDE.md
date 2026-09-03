@@ -283,11 +283,49 @@ the scope field hides the three that bulk registration cannot answer, because
 `cli::register::{plan_rename, recursive_targets, recursive_id_note}` are the
 print-free halves both surfaces preview from.
 
-## The bridged flows
+## The template studio and the builder
 
-Templates and settings are still the dialoguer flows in `menu.rs`,
-`template_builder.rs`, `pickers.rs` and `vars.rs`, reached through
-`Effect::Suspend(Suspended::Legacy(..))`:
+`T` opens `Modal::Studio`: every template on disk with the selected one's
+details beside it, read on a worker (`loaders::template_view`, which renders
+`cli::template::describe` — the same lines `template show` prints, so the two
+cannot drift). Its verbs are `n`, Enter, `g` and `D`.
+
+**The builder is a list of a template's five parts, not a sequence of steps.**
+The old one walked six steps and *then* offered a review menu to go back into
+any of them, which is to say the review menu was the interface and the walk was
+a tax. `app/studio.rs` holds the scratch `Template` and the section the list has
+open; every row says what that part currently holds, so the list is the summary
+the old builder printed after each step. Nothing is written until Save, and Save
+says `Cannot save:` with `Template::validate`'s own words rather than writing
+something that will not load.
+
+`fastf template new` and `fastf template edit <slug>` open the app at
+`Entry::Studio`, so the command line and `T` are one editor.
+
+Two sections are more than a form. **Structure** is `widgets::text_area::TextArea`
+— one folder path per line, with the tree they make drawn beside them and
+redrawn on every keystroke; Enter is a newline there, so **Ctrl-S commits** and
+the key line says so. **Files** is a path line over a text area, with the
+`{tokens}` the template understands above it and the ones the text actually uses
+named as they are typed — the check that catches `{clientname}` typed for a
+variable called `client_name`. An empty body is a marker file (`.gitkeep`),
+which the old content loop could not declare at all.
+
+**`widgets/text_area.rs` is ours on purpose.** `tui-textarea`'s current release
+pins `ratatui 0.29`: it does not merely pull a second ratatui into the tree, it
+fails to resolve against ours. That is the plan's own condition for a widget
+crate. It is `LineEdit` with a second dimension and the same rule — the cursor
+is a char index, never a byte offset, on both axes.
+
+**`ListChange::SummaryOnly`** is what a template action reports: the header and
+the strip change, and not one folder moved, so re-reading every base would be a
+walk to answer a question none of them were asked. The landing summary also
+refreshes an open studio's list, keeping its selection by slug.
+
+## The bridged flow
+
+Settings is still the dialoguer flow in `menu.rs`, with `pickers.rs` and
+`vars.rs` behind it, reached through `Effect::Suspend(Suspended::Legacy(..))`:
 the input thread is parked (a `Condvar` handshake — two readers on one tty is
 how keys go missing), the screen is released, the flow runs on the main screen
 in cooked mode, a flow that prints a result waits for `press Enter to return to
@@ -296,7 +334,7 @@ fastf…`, and the screen is taken again. A recoverable error is reported the wa
 interrupt) ends the app. Each phase of `PLAN.md` makes flows native and deletes
 their bridge variant.
 
-While those flows exist, the rules below still hold for them.
+While it exists, the rules below still hold for it.
 
 **Every prompt goes through `tui::prompt`**, and `tests/layering.rs` fails the
 build if any other module under `src/tui` or `src/cli` names a dialoguer prompt
@@ -312,10 +350,9 @@ they are different gestures.
 **Menus match on labels, not indices.** Vocabulary: **Back** to a parent menu,
 **Cancel** to abandon an action. **A value with a local validity rule is
 checked at the prompt that collected it**, and dependent questions come after
-the value they depend on. The template builder's sections return
-`Result<bool>`: `false` is a cancel and leaves the scratch `Template` untouched.
-`tui::pickers` holds all three pickers; `pick_project` is the **ambiguity**
-picker for `open`/`copy`/`path`/`term` and deliberately not the app.
+the value they depend on. `tui::pickers` holds all three pickers; `pick_project`
+is the **ambiguity** picker for `open`/`copy`/`path`/`term` and deliberately not
+the app.
 
 The session ring (`frame.rs`) is a `Mutex<Vec<String>>`, three entries, per
 process; the header reads it after every bridged flow. Anything durable belongs

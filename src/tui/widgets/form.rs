@@ -55,6 +55,9 @@ pub struct Field {
     /// renames) is absent rather than greyed, because there is nothing to say
     /// about it.
     pub hidden: bool,
+    /// Whether a person has changed this field. A value the form suggests from
+    /// another answer keeps following it until then, and never afterwards.
+    pub touched: bool,
 }
 
 impl Field {
@@ -66,6 +69,7 @@ impl Field {
             kind: FieldKind::Text(LineEdit::with_text(initial.into())),
             error: None,
             hidden: false,
+            touched: false,
         }
     }
 
@@ -77,6 +81,7 @@ impl Field {
             kind: FieldKind::Toggle(value),
             error: None,
             hidden: false,
+            touched: false,
         }
     }
 
@@ -89,6 +94,7 @@ impl Field {
             kind: FieldKind::Choice { options, selected },
             error: None,
             hidden: false,
+            touched: false,
         }
     }
 
@@ -372,6 +378,9 @@ impl Form {
         // caret moved inside a text field has not answered anything yet.
         if event == FormEvent::Changed || (is_text && event == FormEvent::Moved) {
             self.fields[self.selected].error = None;
+        }
+        if event == FormEvent::Changed {
+            self.fields[self.selected].touched = true;
         }
         event
     }

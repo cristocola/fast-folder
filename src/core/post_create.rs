@@ -12,7 +12,7 @@ use crate::core::config::Config;
 ///   1. If the template defines a `post_create` block, it is used verbatim.
 ///   2. Otherwise, the global `config.toml` `post_create` block is used.
 ///   3. If neither is set, nothing happens (current behavior).
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PostCreate {
     /// Run `git init` inside the new project folder.
     #[serde(default)]

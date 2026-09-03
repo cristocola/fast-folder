@@ -180,7 +180,7 @@ keys that matter most:
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
 | Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — a verb then runs over **every mark** |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
-| `T`, `,` | manage templates, settings |
+| `T`, `,` | the template studio, settings |
 | F5, `R` | reload the library, reindex every base from its folders |
 | `q` | quit |
 | Esc | close a dialog, leave the search bar, clear the query, clear the template filter — and only then quit |
@@ -258,9 +258,14 @@ it commits. A template's post-create actions (`git init`, your editor, its own
 commands) run on the main screen after the folder exists, and the dashboard
 comes back when you press Enter.
 
-Managing templates (`T`) and the settings (`,`) still run on the main screen,
-asking their questions the way `fastf template …` and `fastf config` do, and
-the dashboard comes back when they return.
+`T` opens the **template studio**: every template on the left, the selected
+one's details on the right, and the verbs on it — `n` a new one, Enter to edit,
+`g` to generate one from a folder that already has the shape you want, `D` to
+delete (it asks first). The builder is described in
+[templates.md](templates.md#the-builder).
+
+The settings (`,`) still run on the main screen, asking their questions the way
+`fastf config` does, and the dashboard comes back when they return.
 
 The single-project actions are the other way round: they draw **over** the
 dashboard as dialogs. `Enter` or `a` opens the action menu, and a verb's own
@@ -573,7 +578,7 @@ copy is authoritative.
 ```bash
 fastf template list
 fastf template show <slug>
-fastf template new                              # interactive builder
+fastf template new                              # the builder, in the guided app
 fastf template edit <slug>
 fastf template delete <slug>                    # removes the whole templates/<slug>/ folder
 fastf template delete <slug> --yes              # no confirmation (for scripts)
@@ -582,6 +587,10 @@ fastf template from-folder ./delivery-kit client-kit --bundle-assets
 fastf template from-folder ./delivery-kit client-kit --dry-run   # show the scan, write nothing
 fastf template from-folder ./delivery-kit client-kit --force     # replace an existing template
 ```
+
+`fastf template new` and `fastf template edit` open the guided app straight into
+its builder, so there is one template editor rather than two that drift. See
+[templates.md](templates.md#the-builder) for what it holds.
 
 `from-folder` reproduces every text file up to 64 KB and skips binary and larger files unless `--bundle-assets` is given, which confirms the total size first — pass `--yes` to accept it without asking. `--dry-run` prints the same scan (folders, files, assets with sizes) and writes nothing. `--force` replaces an existing template's whole `files/` tree rather than merging into it.
 

@@ -28,6 +28,12 @@ pub const FIELD_BASE: &str = "base";
 pub const FIELD_TARGET: &str = "target";
 /// A variable field's key is this plus the variable's slug.
 pub const VAR_PREFIX: &str = "var:";
+/// The folder a template is generated from.
+pub const FIELD_SOURCE: &str = "source";
+/// What to call the generated template.
+pub const FIELD_SLUG: &str = "slug";
+pub const FIELD_FORCE: &str = "force";
+pub const FIELD_BUNDLE: &str = "bundle";
 
 /// The template choice's "no template at all" entry — register's own answer,
 /// which writes a minimal record with the `(registered)` slug.
@@ -38,6 +44,8 @@ pub enum FlowKind {
     Create,
     Apply,
     Register,
+    /// Generate a template from a folder that already has the shape wanted.
+    FromFolder,
 }
 
 impl FlowKind {
@@ -46,6 +54,7 @@ impl FlowKind {
             FlowKind::Create => "new project",
             FlowKind::Apply => "apply a template",
             FlowKind::Register => "register a folder",
+            FlowKind::FromFolder => "template from a folder",
         }
     }
 
@@ -56,6 +65,7 @@ impl FlowKind {
             FlowKind::Create => "Cancelled — nothing was created.",
             FlowKind::Apply => "Cancelled — nothing was applied.",
             FlowKind::Register => "Cancelled — nothing was registered.",
+            FlowKind::FromFolder => "Cancelled — no template was generated.",
         }
     }
 
@@ -65,6 +75,7 @@ impl FlowKind {
             FlowKind::Create => "Enter creates it",
             FlowKind::Apply => "Enter applies it",
             FlowKind::Register => "Enter registers it",
+            FlowKind::FromFolder => "Enter generates it",
         }
     }
 }
@@ -107,6 +118,22 @@ pub struct RegisterPreview {
     pub apply_structure: bool,
 }
 
+/// What generating a template from a folder would pick up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FromFolderPreview {
+    pub slug: String,
+    pub structure: Vec<crate::core::template::FolderNode>,
+    /// The text files reproduced as editable entries.
+    pub files: Vec<String>,
+    /// `(path, bytes)` for what would be copied byte for byte.
+    pub assets: Vec<(String, u64)>,
+    pub folders: usize,
+    /// Binary or oversized files left out because bundling was not asked for.
+    pub skipped: usize,
+    pub bundle_bytes: u64,
+    pub bundle: bool,
+}
+
 /// What registering every unregistered child of a base would do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecursivePreview {
@@ -122,6 +149,7 @@ pub enum Preview {
     Apply(ApplyPreview),
     Register(Box<RegisterPreview>),
     Recursive(RecursivePreview),
+    FromFolder(Box<FromFolderPreview>),
 }
 
 /// One flow: the questions, the answer to them, and which is on screen.
@@ -265,6 +293,37 @@ pub fn create_form(templates: &[String], template_at: usize, bases: &[String]) -
         .hidden(bases.len() < 2),
     );
     Form::new(fields)
+}
+
+/// The from-folder form: which folder to read, what to call the template, and
+/// the two decisions that change what lands in it.
+pub fn from_folder_form() -> Form {
+    Form::new(vec![
+        Field::text(
+            FIELD_SOURCE,
+            "Source folder",
+            "an existing folder whose shape becomes the template",
+            String::new(),
+        ),
+        Field::text(
+            FIELD_SLUG,
+            "Slug",
+            "what the new template is called on the command line",
+            String::new(),
+        ),
+        Field::toggle(
+            FIELD_FORCE,
+            "Overwrite",
+            "replace a template that already answers to this slug",
+            false,
+        ),
+        Field::toggle(
+            FIELD_BUNDLE,
+            "Bundle assets",
+            "copy binary and oversized files in byte for byte — the preview totals them",
+            false,
+        ),
+    ])
 }
 
 /// The apply form: which template, which folder, and the variables its files

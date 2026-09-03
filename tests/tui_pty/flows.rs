@@ -288,122 +288,165 @@ fn the_maintenance_menu_runs_reindex_recover_and_paths() {
 ///
 /// New mode used to end at a bare "Save template?" — noticing anything wrong
 /// meant answering no and starting the six steps again. This is also the first
-/// coverage `template_builder.rs` has ever had.
+/// The builder is one list of sections, entered in any order, and Save says
+/// what `Template::validate` refuses. The six-step linear pass is gone: it
+/// made noticing a wrong folder name on the summary mean starting again.
 #[test]
-fn the_builder_new_mode_ends_in_the_review_menu() {
+fn the_builder_saves_a_template_built_section_by_section() {
     let sb = Sandbox::new();
 
     let script = pty::Script::new()
         .key(KEY_TEMPLATES)
-        .pause(600)
-        .enter() // → Create new template
-        // Step 1: metadata
-        .line("Demo") // name
-        .line("demo") // slug (suggested)
-        .line("") // description
-        .line("{date}_{id}") // naming pattern
-        // Step 2: ID
-        .line("D") // prefix
-        .line("4") // digits
-        // Step 3: variables — none
-        .key("n")
-        // Step 4: folder structure
-        .line("01_Assetz") // deliberately wrong
-        .line("")
-        // Step 5: files — none
-        .key("n")
         .pause(700)
-        // Review menu: Folder structure
-        .down(3)
+        .key("n") // → a new template
+        .pause(400)
+        .enter() // → Metadata
+        .pause(300)
+        .key("Demo") // the name, and the slug follows it
+        .enter() // → back to the sections
+        .pause(300)
+        .down(3) // → Structure
         .enter()
-        .pause(800)
-        // Add / Edit a folder path / Remove / Replace all / Done
-        .down(1)
-        .enter()
-        .pause(800)
-        .enter() // "Which folder?" — the only one
-        .pause(800)
+        .pause(300)
+        .key("01_Assetz") // deliberately wrong
         .backspace(1)
-        .key("s")
+        .key("s") // corrected in place, before it is ever written
+        .key("\x13") // Ctrl-S → keep
+        .pause(300)
+        .down(2) // → Save
         .enter()
-        .pause(800)
-        .down(4) // → Done
-        .enter()
-        .pause(900)
-        // Save
-        .down(5)
-        .enter()
-        .pause(900)
-        .esc() // Templates → the dashboard
-        .pause(500)
+        .pause(1200)
+        .esc() // the studio → the dashboard
+        .pause(400)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
-    let out = pty::plain(&out);
+    let screen = app_screen(&out);
 
-    assert_eq!(
-        code, 0,
-        "the builder should return to the dashboard:\n{out}"
-    );
+    assert_eq!(code, 0, "the builder should return cleanly:\n{screen}");
     let manifest = sb.install.join("templates/demo/template.yaml");
-    let text = fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("no manifest: {e}\n{out}"));
+    let text =
+        fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("no manifest: {e}\n{screen}"));
     assert!(
-        text.contains("01_Assets"),
-        "the folder corrected in the review menu should be what was saved:\n{text}"
+        text.contains("01_Assets") && !text.contains("01_Assetz"),
+        "the corrected folder is what was saved:\n{text}"
+    );
+    assert!(text.contains("Demo"), "the name is what was typed:\n{text}");
+}
+
+/// Save refuses an incomplete template and says so where the reader is, rather
+/// than writing something `Template::validate` would reject on load.
+#[test]
+fn the_builder_refuses_to_save_a_template_that_would_not_load() {
+    let sb = Sandbox::new();
+
+    let script = pty::Script::new()
+        .key(KEY_TEMPLATES)
+        .pause(700)
+        .key("n")
+        .pause(400)
+        .down(5) // → Save, with nothing filled in
+        .enter()
+        .pause(600)
+        .build();
+    let (out, _) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert!(
+        screen.contains("Cannot save:"),
+        "an invalid template must be refused, not written:\n{screen}"
     );
     assert!(
-        !text.contains("01_Assetz"),
-        "the wrong name should be gone, not kept alongside:\n{text}"
+        !sb.install.join("templates/template.yaml").exists(),
+        "nothing was written"
     );
 }
 
-/// A template file with no contents. `.gitkeep` and every other marker file was
-/// unreachable: the content loop only ended on an empty line once at least one
-/// line had been typed.
+/// A marker file: a path and no contents at all. The old builder could not
+/// declare one — its content loop only ended once a line had been typed.
 #[test]
 fn the_builder_can_declare_an_empty_file() {
     let sb = Sandbox::new();
 
     let script = pty::Script::new()
         .key(KEY_TEMPLATES)
-        .pause(600)
-        .enter() // → Create new template
-        .line("Marker")
-        .line("marker")
-        .line("")
-        .line("{date}_{id}")
-        .line("M")
-        .line("4")
-        .key("n") // no variables
-        .line("") // no folders
-        .key("y") // add a placeholder file
-        .line(".gitkeep")
-        .pause(500)
-        .down(1) // → Empty file
-        .enter()
-        .pause(500)
-        .key("n") // no more files
         .pause(700)
-        .down(5) // review → Save
+        .key("n")
+        .pause(400)
+        .enter() // → Metadata
+        .pause(300)
+        .key("Marker")
         .enter()
-        .pause(900)
-        .esc() // Templates → the dashboard
-        .pause(500)
+        .pause(300)
+        .down(4) // → Files
+        .enter()
+        .pause(300)
+        .key("a") // → a new file
+        .pause(300)
+        .key(".gitkeep")
+        .key("\x13") // Ctrl-S → keep, with no contents
+        .pause(400)
+        .esc() // → the sections, back on Files
+        .pause(300)
+        .down(1) // → Save
+        .enter()
+        .pause(1200)
+        .esc()
+        .pause(400)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
-    let out = pty::plain(&out);
+    let screen = app_screen(&out);
 
-    assert_eq!(
-        code, 0,
-        "the builder should return to the dashboard:\n{out}"
-    );
+    assert_eq!(code, 0, "the builder should return cleanly:\n{screen}");
     let file = sb.install.join("templates/marker/files/.gitkeep");
-    assert!(file.exists(), "the empty file should exist:\n{out}");
+    assert!(file.exists(), "the empty file should exist:\n{screen}");
     assert_eq!(
         fs::read_to_string(&file).unwrap(),
         "",
         "and it should be empty"
+    );
+}
+
+/// The studio deletes a template, and asks first.
+#[test]
+fn deleting_a_template_asks_first() {
+    let sb = Sandbox::new();
+    sb.write_template("doomed");
+
+    let script = pty::Script::new()
+        .key(KEY_TEMPLATES)
+        .pause(700)
+        .key("D") // → the confirmation
+        .pause(500)
+        .key("n") // → no
+        .pause(500)
+        .key("D")
+        .pause(500)
+        .key("y") // → yes
+        .pause(900)
+        .esc()
+        .pause(400)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+    let text = pty::plain(&out);
+
+    assert_eq!(code, 0, "deleting should return cleanly:\n{screen}");
+    assert!(
+        text.contains("Deleted template"),
+        "the second answer should have deleted one:\n{text}"
+    );
+    // `n` answered the first confirmation, so the first `D` deleted nothing:
+    // three templates went in and exactly one came out.
+    let left = fs::read_dir(sb.install.join("templates"))
+        .unwrap()
+        .flatten()
+        .count();
+    assert_eq!(
+        left, 2,
+        "the refused delete must not have run as well:\n{screen}"
     );
 }
 

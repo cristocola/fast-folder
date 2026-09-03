@@ -14,6 +14,7 @@ pub mod modal;
 pub mod palette;
 pub mod register;
 pub mod search;
+pub mod studio;
 pub mod wizard;
 
 use std::collections::HashMap;
@@ -44,6 +45,7 @@ use library::{LibraryState, Order};
 use modal::{MessageLevel, Modal, ModalStack, PickItem, PickState, Then};
 use palette::{PaletteState, PaletteTarget};
 use search::SearchState;
+use studio::{Builder, Open, Row, Studio};
 use wizard::{Flow, FlowKind, Step};
 
 /// How long a status message stays, in ticks of 200 ms.
@@ -158,6 +160,9 @@ pub struct App {
     pub status: Status,
     /// The last few things this session did, oldest first.
     pub session: Vec<String>,
+    /// `fastf template new` / `edit`: the studio or the builder to open as
+    /// soon as the app starts, since that is what the command asked for.
+    pub studio_entry: Option<crate::tui::entry::StudioEntry>,
     /// A row to select once the list has caught up with what was just made.
     /// A create or a register produces a project no snapshot holds yet, so the
     /// selection is asked for by path and applied when discovery answers.
@@ -190,6 +195,7 @@ impl App {
             job: None,
             status: Status::default(),
             session: crate::tui::frame::recent_actions(),
+            studio_entry: None,
             select_when_found: None,
             ticks: 0,
             fuzzy: Fuzzy::new(),
@@ -208,6 +214,7 @@ impl App {
                 app.search = SearchState::with_text(&terms.join(" "));
                 app.library.install_initial(initial);
             }
+            Entry::Studio { open } => app.studio_entry = Some(open),
         }
         app.recompute();
         app
@@ -217,6 +224,16 @@ impl App {
     /// rows were handed in.
     pub fn start(&mut self) -> Vec<Effect> {
         let mut effects = vec![Effect::LoadSummary];
+        // `fastf template new`/`edit` opened the app for one screen; put it up
+        // before the first frame so the command lands where it was aimed.
+        match self.studio_entry.take() {
+            Some(crate::tui::entry::StudioEntry::List) => effects.extend(self.open_studio()),
+            Some(crate::tui::entry::StudioEntry::New) => effects.extend(self.open_builder(None)),
+            Some(crate::tui::entry::StudioEntry::Edit(slug)) => {
+                effects.extend(self.open_builder(Some(slug)))
+            }
+            None => {}
+        }
         if self.library.loaded {
             self.templates
                 .rebuild(self.summary.as_ref(), self.library.per_template());
@@ -404,6 +421,7 @@ impl App {
                 effects.push(self.discover());
                 effects.push(Effect::LoadSummary);
             }
+            ListChange::SummaryOnly => effects.push(Effect::LoadSummary),
             ListChange::None => {}
         }
         self.recompute();
@@ -446,6 +464,29 @@ impl App {
                 self.summary_error = None;
                 self.templates
                     .rebuild(self.summary.as_ref(), self.library.per_template());
+                // A template written or deleted while the studio is open is a
+                // change to the list it is showing.
+                if let Some(Modal::Studio(studio)) = self.modals.top_mut() {
+                    let cards = self
+                        .summary
+                        .as_ref()
+                        .map(|summary| summary.templates.clone())
+                        .unwrap_or_default();
+                    let keep = studio.selected_slug();
+                    studio.cards = cards;
+                    studio.selected = keep
+                        .and_then(|slug| studio.cards.iter().position(|card| card.slug == slug))
+                        .unwrap_or(0)
+                        .min(studio.cards.len().saturating_sub(1));
+                    if studio.shown.as_deref() != studio.selected_slug().as_deref() {
+                        studio.lines.clear();
+                        studio.shown = None;
+                    }
+                    return studio
+                        .selected_slug()
+                        .map(|slug| vec![Effect::LoadTemplateView { slug }])
+                        .unwrap_or_default();
+                }
                 Vec::new()
             }
             Msg::SummaryFailed(error) => {
@@ -509,6 +550,30 @@ impl App {
                 Vec::new()
             }
             Msg::TemplateLoaded { slug, result } => self.on_template_loaded(&slug, result),
+            Msg::TemplateSourceLoaded { slug, result } => {
+                let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+                    return Vec::new();
+                };
+                builder.pending = false;
+                match result {
+                    Ok(template) => **builder = Builder::new(Some(*template)),
+                    Err(error) => {
+                        self.modals.pop();
+                        self.error(format!("template '{slug}' could not be read: {error}"));
+                    }
+                }
+                Vec::new()
+            }
+            Msg::TemplateViewLoaded { slug, lines } => {
+                if let Some(Modal::Studio(studio)) = self.modals.top_mut()
+                    && studio.selected_slug().as_deref() == Some(slug.as_str())
+                {
+                    studio.shown = Some(slug);
+                    studio.lines = lines;
+                    studio.scroll = 0;
+                }
+                Vec::new()
+            }
             Msg::Previewed(preview) => self.on_previewed(*preview),
             Msg::PreviewFailed { field, error } => {
                 let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
@@ -668,6 +733,34 @@ impl App {
                 }
                 Vec::new()
             }
+            Some(Modal::Builder(builder)) => {
+                match &mut builder.open {
+                    Some(Open::Metadata(form)) | Some(Open::Id(form)) => {
+                        if let Some(field) = form.focused_mut() {
+                            field.paste(text);
+                        }
+                    }
+                    Some(Open::Variables(list)) => {
+                        if let Some((_, form)) = &mut list.editing
+                            && let Some(field) = form.focused_mut()
+                        {
+                            field.paste(text);
+                        }
+                    }
+                    Some(Open::Structure(area)) => area.paste(text),
+                    Some(Open::Files(list)) => {
+                        if let Some(edit) = &mut list.editing {
+                            if edit.in_body {
+                                edit.body.paste(text);
+                            } else {
+                                edit.path.paste(text);
+                            }
+                        }
+                    }
+                    None => {}
+                }
+                Vec::new()
+            }
             Some(_) => Vec::new(),
             None if self.search.editing => {
                 self.search.input.paste(text);
@@ -764,6 +857,8 @@ impl App {
             Some(Modal::Confirm(_)) => self.on_confirm_key(key),
             Some(Modal::MultiPick(_)) => self.on_multi_pick_key(key),
             Some(Modal::Flow(_)) => self.on_flow_key(key),
+            Some(Modal::Studio(_)) => self.on_studio_key(key),
+            Some(Modal::Builder(_)) => self.on_builder_key(key),
             Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.on_scroll_modal_key(key),
             None => Vec::new(),
         }
@@ -916,7 +1011,7 @@ impl App {
 
     fn answer_confirm(&mut self, yes: bool) -> Vec<Effect> {
         let then = match self.modals.top() {
-            Some(Modal::Confirm(confirm)) => confirm.then,
+            Some(Modal::Confirm(confirm)) => confirm.then.clone(),
             _ => return Vec::new(),
         };
         self.modals.pop();
@@ -929,6 +1024,9 @@ impl App {
                     return Vec::new();
                 };
                 self.run_action("unregistering…", Action::Unregister(Box::new(project)))
+            }
+            ConfirmThen::DeleteTemplate(slug) => {
+                self.run_action("deleting the template…", Action::DeleteTemplate(slug))
             }
             ConfirmThen::DeleteBatch => self.start_job(jobs::JobKind::Delete, None),
             ConfirmThen::UnregisterBatch => self.start_job(jobs::JobKind::Unregister, None),
@@ -1515,7 +1613,7 @@ impl App {
             CommandId::NewProject => self.open_create(),
             CommandId::Register => self.open_register(),
             CommandId::ApplyTemplate => self.open_apply(),
-            CommandId::Templates => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Templates))],
+            CommandId::Templates => self.open_studio(),
             CommandId::Settings => vec![Effect::Suspend(Suspended::Legacy(LegacyFlow::Settings))],
             CommandId::StripFilter => {
                 let slug = self.templates.selected_card().map(|c| c.slug.clone());
@@ -1832,6 +1930,14 @@ impl App {
                 vars: flow.variables(),
             })),
             FlowKind::Register => Some(Request::Register(register::request(flow))),
+            FlowKind::FromFolder => {
+                Some(Request::FromFolder(crate::tui::effect::FromFolderRequest {
+                    source: PathBuf::from(flow.form.value(wizard::FIELD_SOURCE).trim()),
+                    slug: flow.form.value(wizard::FIELD_SLUG).trim().to_string(),
+                    force: flow.form.is_on(wizard::FIELD_FORCE),
+                    bundle_assets: flow.form.is_on(wizard::FIELD_BUNDLE),
+                }))
+            }
         }
     }
 
@@ -1863,7 +1969,392 @@ impl App {
             Request::Register(request) => {
                 self.run_action("registering…", Action::Register(Box::new(request)))
             }
+            Request::FromFolder(request) => self.run_action(
+                "generating the template…",
+                Action::TemplateFromFolder(Box::new(request)),
+            ),
         }
+    }
+
+    // --- the template studio ----------------------------------------------
+
+    /// `T`: every template, with the selected one's details beside it.
+    fn open_studio(&mut self) -> Vec<Effect> {
+        let cards = self
+            .summary
+            .as_ref()
+            .map(|summary| summary.templates.clone())
+            .unwrap_or_default();
+        let studio = Studio::new(cards);
+        let slug = studio.selected_slug();
+        self.modals.push(Modal::Studio(studio));
+        slug.map(|slug| vec![Effect::LoadTemplateView { slug }])
+            .unwrap_or_default()
+    }
+
+    fn on_studio_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Studio(studio)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.modals.pop();
+                Vec::new()
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Down | KeyCode::Char('j') => {
+                let down = matches!(key.code, KeyCode::Down | KeyCode::Char('j'));
+                studio.step(if down { 1 } else { -1 });
+                studio.clamp_viewport(12);
+                studio
+                    .selected_slug()
+                    .map(|slug| vec![Effect::LoadTemplateView { slug }])
+                    .unwrap_or_default()
+            }
+            KeyCode::PageDown => {
+                studio.scroll += 10;
+                Vec::new()
+            }
+            KeyCode::PageUp => {
+                studio.scroll = studio.scroll.saturating_sub(10);
+                Vec::new()
+            }
+            KeyCode::Char('n') => self.open_builder(None),
+            KeyCode::Char('e') | KeyCode::Enter => {
+                let slug = studio.selected_slug();
+                match slug {
+                    Some(slug) => self.open_builder(Some(slug)),
+                    None => Vec::new(),
+                }
+            }
+            KeyCode::Char('g') => {
+                self.modals.push(Modal::Flow(Box::new(Flow::new(
+                    FlowKind::FromFolder,
+                    wizard::from_folder_form(),
+                ))));
+                Vec::new()
+            }
+            KeyCode::Char('D') => {
+                let Some(slug) = studio.selected_slug() else {
+                    return Vec::new();
+                };
+                self.modals.push(Modal::Confirm(Confirm {
+                    prompt: format!("Delete template '{slug}' and its bundled files?"),
+                    then: ConfirmThen::DeleteTemplate(slug),
+                }));
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// New (`slug` is `None`) or edit: the builder over a scratch template.
+    fn open_builder(&mut self, slug: Option<String>) -> Vec<Effect> {
+        match slug {
+            Some(slug) => {
+                let mut builder = Builder::new(None);
+                builder.pending = true;
+                self.modals.push(Modal::Builder(Box::new(builder)));
+                vec![Effect::LoadTemplateSource { slug }]
+            }
+            None => {
+                self.modals
+                    .push(Modal::Builder(Box::new(Builder::new(None))));
+                Vec::new()
+            }
+        }
+    }
+
+    // --- the builder ------------------------------------------------------
+
+    fn on_builder_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if builder.pending {
+            if key.code == KeyCode::Esc {
+                self.modals.pop();
+            }
+            return Vec::new();
+        }
+        match &mut builder.open {
+            None => self.on_builder_list_key(key),
+            Some(Open::Metadata(_)) | Some(Open::Id(_)) => self.on_builder_form_key(key),
+            Some(Open::Variables(_)) => self.on_variables_key(key),
+            Some(Open::Structure(_)) => self.on_structure_key(key),
+            Some(Open::Files(_)) => self.on_files_key(key),
+        }
+    }
+
+    /// The section list: enter a section, save, or discard.
+    fn on_builder_list_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.modals.pop();
+                self.info("Discarded — the template was not written.");
+                Vec::new()
+            }
+            KeyCode::Up | KeyCode::Char('k') if !key.ctrl => {
+                builder.step(-1);
+                Vec::new()
+            }
+            KeyCode::Down | KeyCode::Char('j') if !key.ctrl => {
+                builder.step(1);
+                Vec::new()
+            }
+            KeyCode::Enter => match builder.row() {
+                Row::Section(section) => {
+                    builder.open_section(section);
+                    Vec::new()
+                }
+                Row::Save => self.save_template(),
+                Row::Discard => {
+                    self.modals.pop();
+                    self.info("Discarded — the template was not written.");
+                    Vec::new()
+                }
+            },
+            _ => Vec::new(),
+        }
+    }
+
+    /// Save, or say what `Template::validate` refused — the check that used to
+    /// print `Cannot save:` and drop back into the same menu.
+    fn save_template(&mut self) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if let Err(error) = builder.template.validate() {
+            builder.error = Some(format!("Cannot save: {error:#}"));
+            return Vec::new();
+        }
+        let Some(Modal::Builder(builder)) = self.modals.pop() else {
+            return Vec::new();
+        };
+        self.run_action(
+            "saving the template…",
+            Action::SaveTemplate {
+                template: Box::new(builder.template),
+                original_slug: builder.original_slug,
+            },
+        )
+    }
+
+    /// The metadata and ID sections: a form, checked here because every rule
+    /// they enforce is a rule about the text and not about a disk.
+    fn on_builder_form_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        let is_metadata = matches!(builder.open, Some(Open::Metadata(_)));
+        let (Some(Open::Metadata(form)) | Some(Open::Id(form))) = &mut builder.open else {
+            return Vec::new();
+        };
+        match form.apply(&key) {
+            FormEvent::Cancel => builder.open = None,
+            FormEvent::Submit => {
+                let refusal = if is_metadata {
+                    studio::check_metadata(form)
+                } else {
+                    studio::check_id(form)
+                };
+                if let Some((field, message)) = refusal {
+                    form.fail(Some(field), message);
+                    return Vec::new();
+                }
+                let form = form.clone();
+                if is_metadata {
+                    builder.commit_metadata(&form);
+                } else {
+                    builder.commit_id(&form);
+                }
+                builder.open = None;
+                builder.error = None;
+            }
+            FormEvent::Changed if is_metadata => studio::suggest_slug(form),
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn on_variables_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        let count = builder.template.variables.len();
+        let Some(Open::Variables(list)) = &mut builder.open else {
+            return Vec::new();
+        };
+        // Editing one variable: the form owns every key until it answers.
+        if let Some((index, form)) = &mut list.editing {
+            match form.apply(&key) {
+                FormEvent::Cancel => list.editing = None,
+                FormEvent::Changed => studio::sync_variable_form(form),
+                FormEvent::Submit => match studio::variable_from(form) {
+                    Ok(variable) => {
+                        let index = *index;
+                        list.editing = None;
+                        if index < count {
+                            builder.template.variables[index] = variable;
+                        } else {
+                            builder.template.variables.push(variable);
+                            list.selected = count;
+                        }
+                        builder.error = None;
+                    }
+                    Err((field, message)) => form.fail(Some(field), message),
+                },
+                _ => {}
+            }
+            return Vec::new();
+        }
+        match key.code {
+            KeyCode::Esc => builder.open = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                list.selected = list.selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                list.selected = (list.selected + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Char('a') => {
+                list.editing = Some((count, studio::variable_form(None)));
+            }
+            KeyCode::Enter => {
+                if let Some(variable) = builder.template.variables.get(list.selected) {
+                    list.editing = Some((list.selected, studio::variable_form(Some(variable))));
+                }
+            }
+            KeyCode::Char('d') => {
+                if list.selected < count {
+                    builder.template.variables.remove(list.selected);
+                    list.selected = list.selected.min(count.saturating_sub(2));
+                    builder.error = None;
+                }
+            }
+            // Reorder in place, which is what `prompt::sort` was for. Moving a
+            // row is one keystroke and shows the result immediately.
+            KeyCode::Char('K') | KeyCode::Char('J') => {
+                let up = key.code == KeyCode::Char('K');
+                let at = list.selected;
+                let other = if up {
+                    at.checked_sub(1)
+                } else {
+                    (at + 1 < count).then_some(at + 1)
+                };
+                if let Some(other) = other {
+                    builder.template.variables.swap(at, other);
+                    list.selected = other;
+                }
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    /// The structure section: one folder path per line, the tree drawn beside
+    /// it as it is typed. Enter is a newline here, so Ctrl-S commits.
+    fn on_structure_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        let Some(Open::Structure(area)) = &mut builder.open else {
+            return Vec::new();
+        };
+        match (key.code, key.ctrl) {
+            (KeyCode::Esc, false) => builder.open = None,
+            (KeyCode::Char('s'), true) => {
+                let area = area.clone();
+                builder.commit_structure(&area);
+                builder.open = None;
+                builder.error = None;
+            }
+            _ => {
+                area.apply(&key);
+            }
+        }
+        Vec::new()
+    }
+
+    fn on_files_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        let count = builder.template.files.len();
+        let Some(Open::Files(list)) = &mut builder.open else {
+            return Vec::new();
+        };
+        if let Some(edit) = &mut list.editing {
+            match (key.code, key.ctrl) {
+                (KeyCode::Esc, false) => list.editing = None,
+                (KeyCode::Tab, false) | (KeyCode::BackTab, false) => edit.in_body = !edit.in_body,
+                (KeyCode::Char('s'), true) => match studio::file_from(edit) {
+                    Ok(entry) => {
+                        let index = edit.index;
+                        list.editing = None;
+                        if index < count {
+                            builder.template.files[index] = entry;
+                        } else {
+                            builder.template.files.push(entry);
+                            list.selected = count;
+                        }
+                        builder.error = None;
+                    }
+                    Err(message) => edit.error = Some(message),
+                },
+                _ => {
+                    if edit.in_body {
+                        edit.body.apply(&key);
+                    } else {
+                        edit.path.apply(&key);
+                    }
+                    edit.error = None;
+                }
+            }
+            return Vec::new();
+        }
+        match key.code {
+            KeyCode::Esc => builder.open = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                list.selected = list.selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                list.selected = (list.selected + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Char('a') => {
+                list.editing = Some(studio::FileEdit {
+                    index: count,
+                    path: crate::tui::widgets::input::LineEdit::new(),
+                    body: crate::tui::widgets::text_area::TextArea::new(),
+                    in_body: false,
+                    error: None,
+                });
+            }
+            KeyCode::Enter => {
+                if let Some(file) = builder.template.files.get(list.selected) {
+                    let body = if file.template.is_empty() {
+                        file.content.clone()
+                    } else {
+                        file.template.clone()
+                    };
+                    list.editing = Some(studio::FileEdit {
+                        index: list.selected,
+                        path: crate::tui::widgets::input::LineEdit::with_text(file.path.clone()),
+                        body: crate::tui::widgets::text_area::TextArea::with_text(&body),
+                        in_body: false,
+                        error: None,
+                    });
+                }
+            }
+            KeyCode::Char('d') if list.selected < count => {
+                builder.template.files.remove(list.selected);
+                list.selected = list.selected.min(count.saturating_sub(2));
+                builder.error = None;
+            }
+            _ => {}
+        }
+        Vec::new()
     }
 
     fn next_focus(&self, forward: bool) -> Focus {

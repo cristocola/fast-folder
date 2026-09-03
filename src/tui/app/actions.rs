@@ -67,9 +67,11 @@ impl TextPrompt {
 }
 
 /// What a yes/no confirm answers. A bare `y`/`n` answers without Enter.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfirmThen {
     Unregister,
+    /// Delete the named template and everything bundled with it.
+    DeleteTemplate(String),
     /// Delete every marked project (the marks are the batch).
     DeleteBatch,
     /// Unregister every marked project (the marks are the batch).

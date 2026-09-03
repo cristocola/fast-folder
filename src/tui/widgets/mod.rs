@@ -4,4 +4,5 @@
 pub mod form;
 pub mod input;
 pub mod nav;
+pub mod text_area;
 pub mod tree;

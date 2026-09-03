@@ -58,7 +58,15 @@ impl Preset {
     }
 }
 
-/// The three doors into the one app.
+/// Where the studio opens: the list, a new template, or one to edit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StudioEntry {
+    List,
+    New,
+    Edit(String),
+}
+
+/// The doors into the one app.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Entry {
     /// `fastf` with no arguments.
@@ -73,6 +81,9 @@ pub enum Entry {
         terms: Vec<String>,
         initial: Vec<Project>,
     },
+    /// `fastf template new` / `fastf template edit <slug>`: the app, opened
+    /// straight into the studio or the builder, so there is one editor.
+    Studio { open: StudioEntry },
 }
 
 impl Entry {

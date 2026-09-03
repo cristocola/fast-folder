@@ -30,6 +30,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         Modal::Confirm(confirm) => render_confirm(app, confirm, frame, area),
         Modal::MultiPick(pick) => render_multi_pick(app, pick, frame, area),
         Modal::Flow(flow) => render_flow(app, flow, frame, area),
+        Modal::Studio(studio) => crate::tui::view::builder::render_studio(app, studio, frame, area),
+        Modal::Builder(builder) => {
+            crate::tui::view::builder::render_builder(app, builder, frame, area)
+        }
         Modal::Message {
             title,
             lines,
@@ -530,6 +534,9 @@ fn preview_height(flow: &Flow) -> u16 {
         Some(Preview::Apply(apply)) => (apply.rows.len() + 5) as u16,
         Some(Preview::Register(register)) => 6 + u16::from(register.pinfo_exists) * 2,
         Some(Preview::Recursive(recursive)) => (recursive.rows.len() + 5) as u16,
+        Some(Preview::FromFolder(scan)) => {
+            (scan.structure.len() + scan.files.len() + scan.assets.len() + 8) as u16
+        }
         None => 3,
     }
 }
@@ -698,6 +705,75 @@ fn preview_lines<'a>(app: &App, preview: &'a Preview) -> Vec<Line<'a>> {
                     theme.warn(),
                 )));
             }
+        }
+        Preview::FromFolder(scan) => {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", g.arrow), theme.accent()),
+                Span::styled(scan.slug.clone(), theme.bold()),
+            ]));
+            if !scan.structure.is_empty() {
+                lines.push(Line::from(""));
+                for line in crate::tui::widgets::tree::lines(&scan.structure, g.rule == "-") {
+                    lines.push(Line::from(Span::styled(format!(" {line}"), theme.dim())));
+                }
+            }
+            if !scan.files.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(" Files", theme.accent())));
+                for file in &scan.files {
+                    lines.push(Line::from(Span::styled(
+                        format!("   {} {file}", g.sep),
+                        theme.dim(),
+                    )));
+                }
+            }
+            if !scan.assets.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    " Bundled byte for byte",
+                    theme.accent(),
+                )));
+                for (path, size) in &scan.assets {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("   {} {path}", g.sep), theme.dim()),
+                        Span::styled(
+                            format!("   {}", crate::util::human_bytes::human_bytes(*size)),
+                            theme.dim(),
+                        ),
+                    ]));
+                }
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(
+                        " {} folder{}, {} text file{}",
+                        scan.folders,
+                        if scan.folders == 1 { "" } else { "s" },
+                        scan.files.len(),
+                        if scan.files.len() == 1 { "" } else { "s" }
+                    ),
+                    theme.good(),
+                ),
+                Span::styled(
+                    if scan.bundle {
+                        format!(
+                            "   {} bundled ({})",
+                            scan.assets.len(),
+                            crate::util::human_bytes::human_bytes(scan.bundle_bytes)
+                        )
+                    } else if scan.skipped > 0 {
+                        format!("   {} skipped — turn on Bundle assets", scan.skipped)
+                    } else {
+                        String::new()
+                    },
+                    if scan.bundle {
+                        theme.dim()
+                    } else {
+                        theme.warn()
+                    },
+                ),
+            ]));
         }
         Preview::Recursive(recursive) => {
             lines.push(Line::from(vec![

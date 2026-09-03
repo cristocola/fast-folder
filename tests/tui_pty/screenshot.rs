@@ -10,7 +10,8 @@
 //! ```
 //!
 //! Tokens, whitespace-separated: `enter` `esc` `up` `down` `left` `right`
-//! `pgup` `pgdn` `home` `end` `tab` `space` `ctrl-c`, `wait:<ms>`,
+//! `pgup` `pgdn` `home` `end` `tab` `space` `ctrl-c` `ctrl-s` `ctrl-k`,
+//! `wait:<ms>`,
 //! `type:<text>` (typed as-is, no Enter), and any other token is sent as the
 //! keys it spells (`q`, `/`, `?`, `c`). The frame is taken after the last
 //! token, before the script ends the app.
@@ -49,6 +50,8 @@ fn screenshot() {
             "tab" => script.key("\t"),
             "space" => script.key(" "),
             "ctrl-c" => script.ctrl_c(),
+            "ctrl-s" => script.key("\x13"),
+            "ctrl-k" => script.key("\x0b"),
             other => match other.split_once(':') {
                 Some(("wait", ms)) => script.pause(ms.parse().unwrap_or(500)),
                 Some(("type", text)) => script.key(text),

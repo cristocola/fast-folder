@@ -304,6 +304,22 @@ impl Runtime {
                         let _ = tx.send(Msg::TemplateLoaded { slug, result });
                     });
                 }
+                Effect::LoadTemplateSource { slug } => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-template", move || {
+                        let result = crate::core::template::find_by_slug(&slug)
+                            .map(Box::new)
+                            .map_err(|err| format!("{err:#}"));
+                        let _ = tx.send(Msg::TemplateSourceLoaded { slug, result });
+                    });
+                }
+                Effect::LoadTemplateView { slug } => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-template", move || {
+                        let lines = loaders::template_view(&slug);
+                        let _ = tx.send(Msg::TemplateViewLoaded { slug, lines });
+                    });
+                }
                 Effect::Preview(request) => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-preview", move || {
@@ -358,9 +374,6 @@ impl Runtime {
         eprintln!();
 
         let outcome: Result<(ListChange, bool)> = match flow {
-            LegacyFlow::Templates => {
-                crate::tui::menu::menu_templates().map(|()| (ListChange::Reload, false))
-            }
             LegacyFlow::Settings => {
                 crate::tui::menu::menu_settings().map(|()| (ListChange::Reload, false))
             }
@@ -738,6 +751,62 @@ fn run_action(
             )
             .session(format!("registered {}", project.id))
             .select(path))
+        }
+        Action::SaveTemplate {
+            template,
+            original_slug,
+        } => {
+            let slug = template.slug.clone();
+            let manifest =
+                crate::core::operations::save_template(&template, original_slug.as_deref())?;
+            Ok(ActionOutcome::new(
+                // A template's counts are on the header and the strip, so the
+                // summary is re-read; not a folder moved, so the list is not.
+                ListChange::SummaryOnly,
+                format!("✓  Saved template {slug} to {}", display_path(&manifest)),
+            )
+            .session(format!("saved template {slug}")))
+        }
+        Action::DeleteTemplate(slug) => {
+            crate::core::operations::delete_template(&slug)?;
+            Ok(
+                ActionOutcome::new(ListChange::SummaryOnly, format!("Deleted template {slug}"))
+                    .session(format!("deleted template {slug}")),
+            )
+        }
+        Action::TemplateFromFolder(request) => {
+            let report = crate::core::operations::template_from_folder(
+                &request.source,
+                &request.slug,
+                request.force,
+                request.bundle_assets,
+            )?;
+            let mut message = format!(
+                "✓  Generated template {} — {} folder{}, {} text file{}",
+                request.slug,
+                report.folders,
+                if report.folders == 1 { "" } else { "s" },
+                report.text_files,
+                if report.text_files == 1 { "" } else { "s" }
+            );
+            if report.bundled > 0 {
+                message.push_str(&format!(
+                    ", {} bundled ({})",
+                    report.bundled,
+                    crate::util::human_bytes::human_bytes(report.bundled_bytes)
+                ));
+            }
+            let outcome = ActionOutcome::new(ListChange::SummaryOnly, message)
+                .session(format!("generated template {}", request.slug));
+            Ok(if report.skipped > 0 {
+                outcome.warning(Some(format!(
+                    "{} binary or oversized file{} skipped — turn on Bundle assets to include them",
+                    report.skipped,
+                    if report.skipped == 1 { "" } else { "s" }
+                )))
+            } else {
+                outcome
+            })
         }
         Action::Unregister(project) => {
             crate::core::operations::unregister(&project)?;

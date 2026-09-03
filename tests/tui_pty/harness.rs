@@ -140,6 +140,19 @@ pub(crate) fn app_screen(transcript: &str) -> String {
     parser.screen().contents()
 }
 
+/// Where the terminal's own caret was left, as `(row, column)` — the thing a
+/// person looks for to know where their typing will land. Read from the same
+/// `vt100` replay as `app_screen`, because ratatui parks the caret with a
+/// cursor-position escape that means nothing outside a terminal.
+#[allow(dead_code)]
+pub(crate) fn app_cursor(transcript: &str) -> (u16, u16) {
+    const LEAVE: &str = "\x1b[?1049l";
+    let end = transcript.rfind(LEAVE).unwrap_or(transcript.len());
+    let mut parser = vt100::Parser::new(pty::PTY_ROWS, pty::PTY_COLS, 0);
+    parser.process(&transcript.as_bytes()[..end]);
+    parser.screen().cursor_position()
+}
+
 /// The frame the app showed at `until` into a chunked run: the transcript up
 /// to that moment, replayed. For a screenshot of a state the script then
 /// leaves — a dialog it closes on the way out.

@@ -1518,3 +1518,305 @@ mod flows {
         }))
     }
 }
+
+// ---------------------------------------------------------------------------
+// The template studio and the builder (Phase 4)
+// ---------------------------------------------------------------------------
+
+mod studio {
+    use super::*;
+    use fastf::core::template::Template;
+    use fastf::tui::app::studio::{Open, Row, Section};
+    use fastf::tui::effect::Request;
+
+    fn builder(app: &App) -> &fastf::tui::app::studio::Builder {
+        match app.modals.top() {
+            Some(Modal::Builder(builder)) => builder,
+            other => panic!("expected the builder, got {other:?}"),
+        }
+    }
+
+    /// `T` → `n`: a new template, on the section list.
+    fn open_new(app: &mut App) {
+        press(app, Key::ch('T'));
+        press(app, Key::ch('n'));
+    }
+
+    #[test]
+    fn the_studio_lists_the_templates_and_reads_the_selected_one() {
+        let mut app = fixture(6, 120, 40);
+        let effects = press(&mut app, Key::ch('T'));
+        match app.modals.top() {
+            Some(Modal::Studio(studio)) => assert_eq!(studio.cards.len(), 3),
+            other => panic!("expected the studio, got {other:?}"),
+        }
+        assert!(
+            matches!(&effects[..], [Effect::LoadTemplateView { slug }] if slug == "general"),
+            "{effects:?}"
+        );
+        let effects = press(&mut app, Key::plain(KeyCode::Down));
+        assert!(
+            matches!(&effects[..], [Effect::LoadTemplateView { slug }] if slug == "music-video"),
+            "moving reads the next one: {effects:?}"
+        );
+    }
+
+    #[test]
+    fn a_late_read_for_a_row_that_moved_on_is_dropped() {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('T'));
+        let _ = update(
+            &mut app,
+            Msg::TemplateViewLoaded {
+                slug: "music-video".to_string(),
+                lines: vec!["stale".to_string()],
+            },
+        );
+        match app.modals.top() {
+            Some(Modal::Studio(studio)) => assert!(studio.lines.is_empty()),
+            other => panic!("{other:?}"),
+        }
+        let _ = update(
+            &mut app,
+            Msg::TemplateViewLoaded {
+                slug: "general".to_string(),
+                lines: vec!["General".to_string()],
+            },
+        );
+        match app.modals.top() {
+            Some(Modal::Studio(studio)) => assert_eq!(studio.lines, vec!["General".to_string()]),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_section_opens_commits_and_closes_without_writing_anything() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        assert!(builder(&app).open.is_none(), "the section list first");
+
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Metadata
+        assert!(matches!(builder(&app).open, Some(Open::Metadata(_))));
+        type_text(&mut app, "Music video");
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(effects.is_empty(), "a section writes nothing: {effects:?}");
+        assert!(builder(&app).open.is_none(), "back on the section list");
+        assert_eq!(builder(&app).template.name, "Music video");
+        assert_eq!(
+            builder(&app).template.slug,
+            "music-video",
+            "the slug follows the name until one is typed"
+        );
+    }
+
+    #[test]
+    fn save_refuses_an_invalid_template_and_says_so() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        // Straight to Save with nothing filled in.
+        for _ in 0..5 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        assert_eq!(builder(&app).row(), Row::Save);
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(effects.is_empty(), "nothing was written: {effects:?}");
+        let error = builder(&app).error.clone().expect("a refusal");
+        assert!(error.starts_with("Cannot save:"), "{error}");
+        assert!(!app.modals.is_empty(), "the builder is still open");
+    }
+
+    #[test]
+    fn a_valid_template_is_handed_to_the_runtime_to_write() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Metadata
+        type_text(&mut app, "Demo");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        for _ in 0..5 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        match action_of(&effects) {
+            Action::SaveTemplate {
+                template,
+                original_slug,
+            } => {
+                assert_eq!(template.slug, "demo");
+                assert_eq!(*original_slug, None, "a new template renames nothing");
+            }
+            other => panic!("expected a save, got {other:?}"),
+        }
+        assert!(
+            matches!(app.modals.top(), Some(Modal::Studio(_))),
+            "the builder closed onto the studio it came from"
+        );
+    }
+
+    #[test]
+    fn editing_reads_the_template_and_remembers_what_it_was_called() {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('T'));
+        let effects = press(&mut app, Key::ch('e'));
+        assert!(
+            matches!(&effects[..], [Effect::LoadTemplateSource { slug }] if slug == "general"),
+            "{effects:?}"
+        );
+        assert!(builder(&app).pending, "the screen says it is reading");
+
+        let template = Template {
+            name: "General".to_string(),
+            slug: "general".to_string(),
+            ..Template::default()
+        };
+        let _ = update(
+            &mut app,
+            Msg::TemplateSourceLoaded {
+                slug: "general".to_string(),
+                result: Ok(Box::new(template)),
+            },
+        );
+        assert!(!builder(&app).pending);
+        assert_eq!(builder(&app).original_slug.as_deref(), Some("general"));
+    }
+
+    #[test]
+    fn the_variables_section_adds_edits_reorders_and_removes() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Down)); // ID
+        press(&mut app, Key::plain(KeyCode::Down)); // Variables
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(matches!(builder(&app).open, Some(Open::Variables(_))));
+
+        for slug in ["artist", "title"] {
+            press(&mut app, Key::ch('a'));
+            type_text(&mut app, slug);
+            press(&mut app, Key::plain(KeyCode::Enter));
+        }
+        let slugs: Vec<String> = builder(&app)
+            .template
+            .variables
+            .iter()
+            .map(|v| v.slug.clone())
+            .collect();
+        assert_eq!(slugs, vec!["artist".to_string(), "title".to_string()]);
+
+        // `K` moves the selected row up — what the sort prompt used to be.
+        press(&mut app, Key::ch('K'));
+        let slugs: Vec<String> = builder(&app)
+            .template
+            .variables
+            .iter()
+            .map(|v| v.slug.clone())
+            .collect();
+        assert_eq!(slugs, vec!["title".to_string(), "artist".to_string()]);
+
+        press(&mut app, Key::ch('d'));
+        assert_eq!(builder(&app).template.variables.len(), 1);
+        assert_eq!(builder(&app).summary(Section::Variables), "1  (artist)");
+    }
+
+    #[test]
+    fn the_structure_section_keeps_a_tree_and_enter_is_a_newline() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        for _ in 0..3 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "01_Assets");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(
+            matches!(builder(&app).open, Some(Open::Structure(_))),
+            "Enter is a newline in a document, not a submit"
+        );
+        type_text(&mut app, "01_Assets/raw");
+        press(&mut app, Key::ctrl('s'));
+        assert!(builder(&app).open.is_none());
+        assert_eq!(builder(&app).summary(Section::Structure), "2 folders");
+        assert_eq!(builder(&app).template.structure.len(), 1, "raw nests");
+    }
+
+    #[test]
+    fn a_reserved_filename_is_refused_where_it_was_typed() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        for _ in 0..4 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Files
+        press(&mut app, Key::ch('a'));
+        type_text(&mut app, "PROJECT_INFO.md");
+        press(&mut app, Key::ctrl('s'));
+        match &builder(&app).open {
+            Some(Open::Files(list)) => {
+                let edit = list.editing.as_ref().expect("still open");
+                assert!(edit.error.as_deref().unwrap_or("").contains("reserved"));
+                assert_eq!(edit.path.text(), "PROJECT_INFO.md", "the text stays");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(builder(&app).template.files.is_empty());
+    }
+
+    #[test]
+    fn deleting_a_template_asks_and_then_runs() {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('D'));
+        match app.modals.top() {
+            Some(Modal::Confirm(confirm)) => {
+                assert!(confirm.prompt.contains("general"), "{}", confirm.prompt)
+            }
+            other => panic!("expected a confirm, got {other:?}"),
+        }
+        let effects = press(&mut app, Key::ch('n'));
+        assert!(effects.is_empty(), "no is no: {effects:?}");
+
+        press(&mut app, Key::ch('D'));
+        let effects = press(&mut app, Key::ch('y'));
+        assert!(matches!(action_of(&effects), Action::DeleteTemplate(slug) if slug == "general"));
+    }
+
+    #[test]
+    fn from_folder_previews_before_it_writes() {
+        use fastf::tui::app::wizard::{FIELD_SLUG, FIELD_SOURCE, FlowKind};
+
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('g'));
+        match app.modals.top() {
+            Some(Modal::Flow(flow)) => assert_eq!(flow.kind, FlowKind::FromFolder),
+            other => panic!("expected the from-folder flow, got {other:?}"),
+        }
+        type_text(&mut app, "/mnt/projects/Source");
+        press(&mut app, Key::plain(KeyCode::Tab));
+        type_text(&mut app, "from-a-folder");
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        match &effects[..] {
+            [Effect::Preview(request)] => match &**request {
+                Request::FromFolder(from) => {
+                    assert_eq!(from.slug, "from-a-folder");
+                    assert!(!from.bundle_assets, "assets are opt-in");
+                }
+                other => panic!("{other:?}"),
+            },
+            other => panic!("expected a preview, got {other:?}"),
+        }
+        // Its refusal lands on the field that caused it, like every other flow.
+        let _ = update(
+            &mut app,
+            Msg::PreviewFailed {
+                field: Some(FIELD_SOURCE.to_string()),
+                error: "no such folder: /mnt/projects/Source".to_string(),
+            },
+        );
+        match app.modals.top() {
+            Some(Modal::Flow(flow)) => {
+                assert_eq!(flow.form.focused().unwrap().key, FIELD_SOURCE);
+                assert_eq!(flow.form.value(FIELD_SLUG), "from-a-folder");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}

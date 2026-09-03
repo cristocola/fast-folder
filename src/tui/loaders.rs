@@ -13,7 +13,9 @@ use crate::core::{provisioning, template};
 use crate::tui::app::data::{
     BaseInfo, Entry, Prefs, ProjectDetail, Summary, TemplateCard, TemplateInfo, VarInfo,
 };
-use crate::tui::app::wizard::{ApplyPreview, Preview, RecursivePreview, RegisterPreview};
+use crate::tui::app::wizard::{
+    ApplyPreview, FromFolderPreview, Preview, RecursivePreview, RegisterPreview,
+};
 use crate::tui::effect::{ApplyRequest, CreateRequest, Request};
 use crate::util::paths;
 
@@ -68,6 +70,14 @@ pub fn summary() -> Result<Summary> {
         register_naming_pattern: cfg.register_naming_pattern.clone(),
     };
     Ok(summary)
+}
+
+/// One template's details as `fastf template show` prints them, as lines.
+pub fn template_view(slug: &str) -> Vec<String> {
+    match template::find_by_slug(slug) {
+        Ok(template) => crate::cli::template::describe(&template),
+        Err(err) => vec![format!("{err:#}")],
+    }
 }
 
 /// One template read in full, for the form that asks for its variables.
@@ -130,7 +140,36 @@ pub fn preview(request: &Request) -> Result<Preview, PreviewRefusal> {
         Request::Apply(apply) => preview_apply(apply),
         Request::Register(register) if register.recursive => preview_recursive(register),
         Request::Register(register) => preview_register(register),
+        Request::FromFolder(request) => preview_from_folder(request),
     }
+}
+
+fn preview_from_folder(
+    request: &crate::tui::effect::FromFolderRequest,
+) -> Result<Preview, PreviewRefusal> {
+    use crate::cli::template as tpl;
+    use crate::tui::app::wizard::{FIELD_SLUG, FIELD_SOURCE};
+
+    let root = existing_directory(&request.source, FIELD_SOURCE)?;
+    crate::core::validated::TemplateSlug::parse(request.slug.trim())
+        .map_err(|error| PreviewRefusal::on(FIELD_SLUG, format!("{error:#}")))?;
+    // The same refusal the real run makes: a preview that stays silent about
+    // the overwrite it needs is not a preview of anything.
+    tpl::ensure_slug_available(&request.slug, request.force).map_err(|error| {
+        PreviewRefusal::on(crate::tui::app::wizard::FIELD_FORCE, format!("{error:#}"))
+    })?;
+    let scan = tpl::scan_for_preview(&root, request.bundle_assets)
+        .map_err(|error| PreviewRefusal::on(FIELD_SOURCE, format!("{error:#}")))?;
+    Ok(Preview::FromFolder(Box::new(FromFolderPreview {
+        slug: request.slug.clone(),
+        structure: scan.structure,
+        files: scan.text_files,
+        assets: scan.assets,
+        folders: scan.folders,
+        skipped: scan.skipped,
+        bundle_bytes: scan.bundle_bytes,
+        bundle: request.bundle_assets,
+    })))
 }
 
 fn preview_create(request: &CreateRequest) -> Result<Preview, PreviewRefusal> {

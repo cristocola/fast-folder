@@ -180,11 +180,15 @@ keys that matter most:
 
 #### Searching
 
-Bare words match **fuzzily**: `lulrmx` finds `Lullaby_Remix`, case and accents
-ignored, and the characters that matched are highlighted in the row. Every word
-must hit somewhere in the ID, the folder name, the template or the tags. While
-the query has bare words the list is sorted by how well each row matched; `s`
-overrides that.
+A bare word matches **inside one thing** — the folder name, the ID, the
+template's slug or name, a tag, or a template variable's value — case and
+accents ignored, and the characters that matched are highlighted in the row.
+A word is matched as a substring first (`lulla`, `remix`, `248`, `acme`), and
+failing that as a fuzzy hit whose letters sit close together, so a dropped or
+doubled letter still finds the name (`lulaby` finds `Lullaby_Remix`) while
+letters picked from across it do not (`lrmx` finds nothing). Every word must
+match on its own: `lulla remix` needs both. While the query has bare words the
+list is sorted by how well each row matched; `s` overrides that.
 
 Anything with an operator is the [`fastf search` grammar](#search), evaluated
 exactly: `tag:draft`, `template=music-video`, `artist=Aria*`,

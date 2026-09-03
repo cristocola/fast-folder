@@ -6,7 +6,7 @@ expression: frame
 " bases  → projects (12)  ·  archive (not mounted)                                                                       "
 " ── pulse ──  client-project ████████ 4   general ████████ 4   music-video ████████ 4                                   "
 " newest ID0248 2026-08-28_Lullaby_Remix_ID0248                                                                          "
-" ⌕ / to search  ·  words match fuzzily, tag:x  template=y  created>date match exactly                    12/12 · newest "
+" ⌕ / to search  ·  words match a name, id, template or tag; tag:x  template=y  created>date match exa…   12/12 · newest "
 "┌ ◈ projects ──────────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────────────────┐"
 "│  ID     PROJECT                                   CREATED    BASE    ││2026-08-28_Lullaby_Remix_ID0248               │"
 "│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248           2026-08-28 projects││music-video · projects · created 2026-08-28   │"

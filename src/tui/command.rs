@@ -511,7 +511,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Search,
         "Search",
-        "type a query: words match fuzzily, tag:x template=y created>date match exactly",
+        "type a query: words match a name, id, template or tag; tag:x template=y created>date match exactly",
         LISTS,
         [Key::ch('/')],
         Search,

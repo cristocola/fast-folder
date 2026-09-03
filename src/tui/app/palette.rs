@@ -91,20 +91,19 @@ pub fn build(
     let mut candidates: Vec<Candidate> = Vec::new();
 
     if !projects_only {
-        let pattern = (!empty).then(|| Fuzzy::pattern(query));
+        let words = Fuzzy::words(query);
         for (i, (command, availability)) in commands.iter().enumerate() {
             // A hit in the title outranks any hit in the description: `open`
             // is Open project folder before it is "open the action menu".
-            let (score, hits) = match &pattern {
-                None => (0, Vec::new()),
-                Some(pattern) => {
-                    let title = fuzzy.hit(pattern, &Fuzzy::haystack(command.title));
-                    let description = fuzzy.score(pattern, &Fuzzy::haystack(command.description));
-                    match (title, description) {
-                        (Some(hit), _) => (1_000_000 + hit.score, hit.indices),
-                        (None, Some(score)) => (score, Vec::new()),
-                        (None, None) => continue,
-                    }
+            let (score, hits) = if words.is_empty() {
+                (0, Vec::new())
+            } else {
+                let title = fuzzy.match_all(&words, &Fuzzy::haystack(command.title));
+                let description = fuzzy.match_all(&words, &Fuzzy::haystack(command.description));
+                match (title, description) {
+                    (Some(hit), _) => (1_000_000 + hit.score, hit.indices),
+                    (None, Some(hit)) => (hit.score, Vec::new()),
+                    (None, None) => continue,
                 }
             };
             candidates.push(Candidate {

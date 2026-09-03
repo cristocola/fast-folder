@@ -202,7 +202,7 @@ fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Fram
         theme.dim(),
     )));
     lines.push(Line::from(Span::styled(
-        " Search: bare words match fuzzily; tag:x  template=y  artist=Aria*  created>2026-01-01 match exactly.",
+        " Search: a word matches inside a name, id, template or tag (a typo is forgiven); tag:x  template=y  created>date match exactly.",
         theme.dim(),
     )));
     let max_scroll = lines.len().saturating_sub(inner.height as usize);

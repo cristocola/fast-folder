@@ -228,6 +228,17 @@ the `release` skill.
     with the context's own commands.
   - `validators.rs` was deferred to Phase 1: the app has no native text
     prompt yet.
+  - **Fuzzy was too fuzzy** (review feedback on the first build): a word was
+    matched as a subsequence of one string made of id, name, template, template
+    name and tags, so `lrmx` found most rows. Now a word matches inside one
+    field, substring first, and a fuzzy hit is accepted only when its
+    characters span at most the word's length plus a third
+    (`fuzzy.rs`, `library::match_fields`). Docs, help and placeholder reworded.
+  - **The index could be a clock tick older than its base.** `write_cache`
+    publishes by rename, which stamps the directory after the file; the coarse
+    file clock made `cache_is_stale` read the base as newer every so often and
+    the next discovery rescan for nothing — which the new pty test caught as a
+    flake. `write_cache` now re-stamps the index after the rename.
   - Measured on the maintainer's machine, 2026-09-03: the release binary is
     3.87 MB (4 056 544 bytes; v2.2.1 shipped under 4 MB, so the README's
     claim still holds) and a cold `cargo build --release` — every

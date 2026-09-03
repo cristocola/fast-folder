@@ -38,8 +38,9 @@ fastf new general --name="spring campaign"    # -> 2026-07-16_Spring_Campaign_ID
 Running `fastf` with no arguments opens the guided app, which is how most work
 gets done: one full-screen dashboard that shows the whole library — every base,
 the newest project, the busiest templates, folder sizes filling in as they are
-measured — and acts on it. Type to search (bare words match fuzzily,
-`tag:draft template=music-video created>2026-01-01` match exactly), press a key
+measured — and acts on it. Type to search (a word matches a name, ID, template or tag, a
+typo forgiven; `tag:draft template=music-video created>2026-01-01` match
+exactly), press a key
 to open a project's folder, a terminal in it, or its action menu, and `c` for a
 command palette that finds any command or project by name. Creating a project
 with a live preview of the folder tree, registering folders, building templates

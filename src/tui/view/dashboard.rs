@@ -197,8 +197,7 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
             .input
             .render_line(text_area, frame.buffer_mut(), prefix_span, theme.text())
     } else {
-        let placeholder =
-            "/ to search  ·  words match fuzzily, tag:x  template=y  created>date match exactly";
+        let placeholder = "/ to search  ·  words match a name, id, template or tag; tag:x  template=y  created>date match exactly";
         let line = Line::from(vec![
             prefix_span,
             Span::styled(

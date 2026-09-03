@@ -175,7 +175,15 @@ pub(crate) fn write_cache(base: &Path, projects: &[Project]) -> Result<()> {
             .map(|p| CacheEntry::from_project(p, base))
             .collect(),
     };
-    crate::util::atomic::write_json(&cache_path(base), &cache)
+    crate::util::atomic::write_json(&cache_path(base), &cache)?;
+    // The atomic write stamps the file when its bytes are written and the base
+    // directory when the rename publishes it — two instants, and the kernel's
+    // file clock is coarse enough (a few milliseconds) that they straddle a
+    // tick every so often. Then `cache_is_stale` reads the base as newer than
+    // its own index and the next discovery rescans it for nothing. Re-stamping
+    // the file after the rename puts it at or after the directory, always.
+    super::touch_cache(base);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -242,4 +250,25 @@ pub(crate) fn cache_remove(base: &Path, dir: &str) {
         .filter_map(|e| e.into_project(base))
         .collect();
     let _ = write_cache(base, &projects);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_cache;
+    use crate::core::library::discovery::{cache_is_stale, dir_mtime};
+    use crate::core::library::model::CACHE_FILENAME;
+
+    /// The rename that publishes the index bumps the base directory; the file
+    /// must never be left older than the directory it sits in.
+    #[test]
+    fn a_freshly_written_index_is_never_older_than_its_base() {
+        let base = tempfile::tempdir().unwrap();
+        for _ in 0..20 {
+            write_cache(base.path(), &[]).unwrap();
+            let file = dir_mtime(&base.path().join(CACHE_FILENAME)).unwrap();
+            let dir = dir_mtime(base.path()).unwrap();
+            assert!(file >= dir, "index {file:?} older than base {dir:?}");
+            assert!(!cache_is_stale(base.path()));
+        }
+    }
 }

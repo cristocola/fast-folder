@@ -163,15 +163,15 @@ fn sizes_landing_leave_the_selection_alone() {
 }
 
 #[test]
-fn the_search_bar_matches_fuzzily_and_esc_clears_then_leaves() {
+fn the_search_bar_matches_inside_a_name_and_esc_clears_then_leaves() {
     let mut app = fixture(12, 80, 24);
     press(&mut app, Key::ch('/'));
     assert!(app.search.editing);
-    type_text(&mut app, "lulrmx");
+    type_text(&mut app, "lulaby");
     assert!(!app.library.is_empty());
     assert!(
         names(&app).iter().all(|n| n.contains("Lullaby_Remix")),
-        "a fuzzy term keeps only the rows it hits: {:?}",
+        "a word with a dropped letter still finds the name, and nothing else: {:?}",
         names(&app)
     );
     assert!(
@@ -179,6 +179,26 @@ fn the_search_bar_matches_fuzzily_and_esc_clears_then_leaves() {
             .match_info(0)
             .is_some_and(|i| !i.name_hits.is_empty()),
         "the hit characters are known, for highlighting"
+    );
+
+    // Letters picked from across the name — and across the id, the template
+    // and the tags — are not a match. This is what "too fuzzy" looked like.
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "lulrmx");
+    assert!(app.library.is_empty(), "{:?}", names(&app));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "cdraft");
+    assert!(
+        app.library.is_empty(),
+        "a word cannot match half in one field and half in another: {:?}",
+        names(&app)
+    );
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "lulla");
+    assert!(
+        names(&app).iter().all(|n| n.contains("Lullaby_Remix")),
+        "a substring finds the name: {:?}",
+        names(&app)
     );
 
     press(&mut app, Key::plain(KeyCode::Esc));

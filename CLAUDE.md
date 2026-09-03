@@ -213,7 +213,11 @@ with the projects so it travels with them; entries store a base-relative `dir`,
 valid across `/mnt/…` and `D:\…`. It is never authority: `discover_base`
 self-heals (rescan when the base mtime is newer, existence-check every cached
 entry otherwise), all writes are best-effort and atomic, and a rejected cache
-version costs one rescan rather than hiding projects. **No manual prune, ever** —
+version costs one rescan rather than hiding projects. `write_cache` re-stamps
+the index after the rename that publishes it: the rename bumps the base
+directory *after* the file was written, and on the kernel's coarse file clock
+that left the base a tick newer than its own index every so often, so the next
+discovery rescanned for nothing. **No manual prune, ever** —
 "missing" is a transient state. `fastf reindex` forces a full rescan for external
 edits fastf cannot observe.
 

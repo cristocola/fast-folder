@@ -16,8 +16,21 @@ use crate::core::project_info::Metadata;
 use crate::core::query;
 use crate::tui::app::search::{Query, row_meta};
 use crate::tui::entry::Preset;
-use crate::tui::fuzzy::{Fuzzy, Hit};
+use crate::tui::fuzzy::{Fuzzy, Word};
 use crate::tui::widgets::nav;
+
+/// Which text of a row a word was matched against. Only the two the table
+/// draws keep their hit characters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Field {
+    Name,
+    Id,
+    Other,
+}
+
+/// A row's searchable texts, each on its own: a word matches inside one of
+/// them, never across two.
+type Fields = Vec<(Field, Utf32String)>;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Order {
@@ -78,8 +91,9 @@ pub struct MatchInfo {
 pub struct LibraryState {
     /// Discovery order: newest first.
     pub snapshot: Vec<Project>,
-    /// What the fuzzy query is matched against, one per snapshot row.
-    haystacks: Vec<Utf32String>,
+    /// What the free words are matched against, one row of fields per
+    /// snapshot row.
+    haystacks: Vec<Fields>,
     pub generation: u64,
     /// A discovery that has not answered yet.
     pub inflight: Option<u64>,
@@ -174,13 +188,13 @@ impl LibraryState {
         self.haystacks = self
             .snapshot
             .iter()
-            .map(|p| Fuzzy::haystack(&haystack_text(p, self.meta.get(&p.path))))
+            .map(|p| row_fields(p, self.meta.get(&p.path)))
             .collect();
     }
 
     fn rebuild_haystack(&mut self, index: usize) {
         if let Some(p) = self.snapshot.get(index) {
-            self.haystacks[index] = Fuzzy::haystack(&haystack_text(p, self.meta.get(&p.path)));
+            self.haystacks[index] = row_fields(p, self.meta.get(&p.path));
         }
     }
 
@@ -263,7 +277,7 @@ impl LibraryState {
     /// kept, clamped.
     pub fn recompute(&mut self, query: &Query, fuzzy: &mut Fuzzy) {
         let keep_path = self.selected().map(|p| p.path.clone());
-        let pattern = (!query.free.is_empty()).then(|| Fuzzy::pattern(&query.free_text()));
+        let words = Fuzzy::words(&query.free_text());
 
         let mut rows: Vec<(usize, Option<MatchInfo>)> = Vec::new();
         for (index, project) in self.snapshot.iter().enumerate() {
@@ -286,12 +300,13 @@ impl LibraryState {
                     continue;
                 }
             }
-            let info = match &pattern {
-                Some(pattern) => match fuzzy.hit(pattern, &self.haystacks[index]) {
-                    Some(hit) => Some(split_hits(project, hit)),
+            let info = if words.is_empty() {
+                None
+            } else {
+                match match_fields(fuzzy, &words, &self.haystacks[index]) {
+                    Some(info) => Some(info),
                     None => continue,
-                },
-                None => None,
+                }
             };
             rows.push((index, info));
         }
@@ -473,42 +488,56 @@ impl LibraryState {
     }
 }
 
-/// The text a fuzzy query is matched against. Field order is load-bearing:
-/// `split_hits` maps the leading id and name back to their columns.
-fn haystack_text(project: &Project, meta: Option<&Option<Metadata>>) -> String {
-    let mut text = format!(
-        "{} {} {} {}",
-        project.id, project.name, project.template, project.template_name
-    );
+/// A row's texts, each its own haystack: the name and the id first, because
+/// they are what the table shows and what a hit is highlighted in; then the
+/// template slug and name, every tag, and the variable values once metadata
+/// is loaded.
+fn row_fields(project: &Project, meta: Option<&Option<Metadata>>) -> Fields {
+    let mut fields: Fields = vec![
+        (Field::Name, Fuzzy::haystack(&project.name)),
+        (Field::Id, Fuzzy::haystack(&project.id)),
+        (Field::Other, Fuzzy::haystack(&project.template)),
+        (Field::Other, Fuzzy::haystack(&project.template_name)),
+    ];
     for tag in &project.tags {
-        text.push(' ');
-        text.push_str(tag);
+        fields.push((Field::Other, Fuzzy::haystack(tag)));
     }
     if let Some(Some(meta)) = meta {
         for value in meta.variables.values() {
-            text.push(' ');
-            text.push_str(value);
+            fields.push((Field::Other, Fuzzy::haystack(value)));
         }
     }
-    text
+    fields
 }
 
-fn split_hits(project: &Project, hit: Hit) -> MatchInfo {
-    let id_len = project.id.chars().count();
-    let name_start = id_len + 1;
-    let name_end = name_start + project.name.chars().count();
-    let mut info = MatchInfo {
-        score: hit.score,
-        ..Default::default()
-    };
-    for index in hit.indices.into_iter().map(|i| i as usize) {
-        if index < id_len {
-            info.id_hits.push(index);
-        } else if (name_start..name_end).contains(&index) {
-            info.name_hits.push(index - name_start);
+/// Every word must match one of the row's fields — any field, but the whole
+/// word inside it. The best field per word counts, and its hit characters are
+/// kept when they land in a column the table draws.
+fn match_fields(fuzzy: &mut Fuzzy, words: &[Word], fields: &Fields) -> Option<MatchInfo> {
+    let mut info = MatchInfo::default();
+    for word in words {
+        let mut best: Option<(Field, crate::tui::fuzzy::Hit)> = None;
+        for (field, haystack) in fields {
+            if let Some(hit) = fuzzy.match_word(word, haystack)
+                && best.as_ref().is_none_or(|(_, held)| hit.score > held.score)
+            {
+                best = Some((*field, hit));
+            }
+        }
+        let (field, hit) = best?;
+        info.score += hit.score;
+        let hits = hit.indices.into_iter().map(|i| i as usize);
+        match field {
+            Field::Name => info.name_hits.extend(hits),
+            Field::Id => info.id_hits.extend(hits),
+            Field::Other => {}
         }
     }
-    info
+    info.name_hits.sort_unstable();
+    info.name_hits.dedup();
+    info.id_hits.sort_unstable();
+    info.id_hits.dedup();
+    Some(info)
 }
 
 /// The distinct tags across a loaded list, sorted for a stable picker.

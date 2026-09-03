@@ -157,13 +157,22 @@ system's timeout.
 
 `app::search::Query` splits the bar: anything `core::query` parses with an
 operator is `structured` and evaluated by `core::query::evaluate` exactly as
-`fastf search` would; the bare words are `free` and matched fuzzily
-(`nucleo-matcher`, one pattern, every word must hit) against `id name template
-template_name tags…` plus the variable values once metadata is loaded. A row
-answers `tag:`, `template=`, `created>` from a `Metadata` synthesised from the
-`Project` (`row_meta`); a predicate on a template variable emits `LoadMeta` for
-the rows that lack it and they fill in as chunks land. Relevance is the sort
-while there are bare words, unless `s` chose one.
+`fastf search` would; the bare words are `free`. A row answers `tag:`,
+`template=`, `created>` from a `Metadata` synthesised from the `Project`
+(`row_meta`); a predicate on a template variable emits `LoadMeta` for the rows
+that lack it and they fill in as chunks land. Relevance is the sort while there
+are bare words, unless `s` chose one.
+
+**Fuzzy is deliberately not very fuzzy.** The first build matched a word as a
+subsequence of one string made of id, name, template, template name and tags
+joined together, and that says yes to almost everything — `lrmx` found a dozen
+rows. Two rules fixed it, both in `fuzzy.rs` and `library::match_fields`: a
+word matches **inside one field** (name, id, template slug, template name, a
+tag, a variable value), never across two; and it is a **substring first**, with
+a fuzzy hit accepted only when its characters span at most the word's length
+plus a third — a dropped or doubled letter, not letters picked from across the
+name. Substring hits outscore fuzzy ones. The same `Fuzzy::match_all` ranks the
+palette and the pickers.
 
 ## Modals and the palette
 

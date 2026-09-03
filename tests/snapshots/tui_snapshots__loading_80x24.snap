@@ -4,7 +4,7 @@ expression: frame
 ---
 " fastf  ◈ 0 projects (from index) | · ⬡ 0 templates                             "
 " ── pulse ──                                                                    "
-" ⌕ / to search  ·  words match fuzzily, tag:x  template=y  crea…   0/0 · newest "
+" ⌕ / to search  ·  words match a name, id, template or tag; tag…   0/0 · newest "
 "┌ ◈ projects ──────────────────────────────────────────────────────────────────┐"
 "│  ID   PROJECT                CREATED    SIZE        BASE TEMPLATE TAGS       │"
 "│                                                                              │"

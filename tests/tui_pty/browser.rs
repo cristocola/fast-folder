@@ -7,6 +7,7 @@
 use super::common::{self, Sandbox, pty};
 use super::harness::*;
 use std::fs;
+use std::path::Path;
 
 /// The list is drawn newest first, before a single folder has been walked, and
 /// the sizes fill in afterwards.
@@ -516,5 +517,128 @@ fn a_note_added_in_the_editor_is_appended() {
     assert!(
         fs::read_to_string(&log).unwrap().contains("fastf-note-"),
         "the editor should have been handed a scratch note file"
+    );
+}
+
+/// Moving two marked projects reports the batch on the status line, and both
+/// rows land in the target base without a rescan.
+#[cfg(debug_assertions)]
+#[test]
+fn a_batch_move_reports_each_item_and_patches_its_rows() {
+    let sb = Sandbox::new();
+    let alt = sb.with_bases(&["alt"])[0].clone();
+    plant_dated_project(&sb, "Batch_B", "ID0002", "2026-02-02T00:00:00Z", 64);
+    plant_dated_project(&sb, "Batch_A", "ID0001", "2026-01-01T00:00:00Z", 64);
+    let trace = sb.tmp.path().join("trace");
+
+    let script = pty::Script::new()
+        .pause(800)
+        .key(" ") // mark Batch_B (newest, selected)
+        .key(" ") // mark Batch_A, the selection steps on
+        .pause(300)
+        .key("m")
+        .pause(400)
+        .enter() // → the one other mounted base
+        .pause(2000) // two renames and their row patches
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch_traced(&sb, script, &trace);
+    let text = pty::plain(&out);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "a batch move should end at the dashboard:\n{text}");
+    assert!(text.contains("2 moved"), "the batch should report:\n{text}");
+    assert!(
+        !sb.base.join("Batch_B").exists() && !sb.base.join("Batch_A").exists(),
+        "the source folders should be gone:\n{text}"
+    );
+    assert!(
+        alt.join("Batch_B").exists() && alt.join("Batch_A").exists(),
+        "both folders should have landed in the target base:\n{text}"
+    );
+    let rows: Vec<&str> = screen.lines().filter(|l| l.starts_with('│')).collect();
+    assert!(
+        rows.iter()
+            .any(|l| l.contains("Batch_B") && l.contains("alt"))
+            && rows
+                .iter()
+                .any(|l| l.contains("Batch_A") && l.contains("alt")),
+        "both rows should show the new base:\n{screen}"
+    );
+    assert_eq!(
+        traced(&trace, "discover"),
+        1,
+        "a batch move must not rescan the library"
+    );
+}
+
+/// A move that fails mid-job surfaces in the UI — a report naming the row —
+/// and the list stays consistent: the folder never left its source base and
+/// the row keeps its mark for a retry.
+#[cfg(debug_assertions)]
+#[test]
+fn a_failed_move_surfaces_in_the_ui_and_leaves_the_list_consistent() {
+    let sb = Sandbox::new();
+    let alt = sb.with_bases(&["alt"])[0].clone();
+    plant_dated_project(&sb, "Solo", "ID0001", "2026-01-01T00:00:00Z", 64);
+    let trace = sb.tmp.path().join("trace");
+
+    // `move:force-staged` sends a same-volume move down the staged copy path;
+    // `move:after-staging` fails it there, after the copy and before publish.
+    let script = pty::Script::new()
+        .pause(800)
+        .key(" ")
+        .pause(300)
+        .key("m")
+        .pause(400)
+        .enter() // → the one other mounted base
+        .pause(2000) // the staged copy runs, then the injected failure lands
+        .key(KEY_QUIT) // close the report
+        .pause(300)
+        .key(KEY_QUIT) // leave
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_TRACE_FILE", trace.as_path()),
+            (
+                "FASTF_FAULT",
+                Path::new("move:force-staged,move:after-staging"),
+            ),
+        ],
+        &script,
+        DEADLINE,
+    );
+    let text = pty::plain(&out);
+    let screen = app_screen(&out);
+
+    assert_eq!(
+        code, 0,
+        "a failed move should return to the dashboard:\n{text}"
+    );
+    assert!(
+        text.contains("move report") && text.contains("failed") && text.contains("after-staging"),
+        "the report should name the failure:\n{text}"
+    );
+    assert!(
+        sb.base.join("Solo").is_dir(),
+        "the source folder must be untouched:\n{text}"
+    );
+    assert!(
+        !alt.join("Solo").exists(),
+        "nothing may land in the target base:\n{text}"
+    );
+    let rows: Vec<&str> = screen.lines().filter(|l| l.starts_with('│')).collect();
+    assert!(
+        rows.iter()
+            .any(|l| l.contains("Solo") && l.contains("base")),
+        "the row should still be listed under its source base:\n{screen}"
+    );
+    assert!(
+        text.contains("1 ✓") || text.contains("· 1 "),
+        "the failed row keeps its mark:\n{text}"
     );
 }

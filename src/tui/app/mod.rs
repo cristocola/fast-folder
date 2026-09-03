@@ -1587,12 +1587,16 @@ impl App {
             Some(job) => job.kind,
             None => return Vec::new(),
         };
-        if kind == jobs::JobKind::Move {
-            self.move_progress = Some(Progress::new(&[]));
-        }
         let Some(project) = self.job.as_mut().and_then(|job| job.begin_next().cloned()) else {
             return self.job_finish();
         };
+        // The progress modal is for a move that is actually running: arming it
+        // here — after an item began — means the final advance, which only
+        // finishes the job, cannot leave a stale modal behind for every later
+        // quit gesture to read as "a move is running".
+        if kind == jobs::JobKind::Move {
+            self.move_progress = Some(Progress::new(&[]));
+        }
         let action = {
             let job = self.job.as_ref().expect("the job is running");
             job.action_for(&project)
@@ -1642,6 +1646,7 @@ impl App {
         let Some(job) = self.job.take() else {
             return Vec::new();
         };
+        self.move_progress = None;
         let mut headline = job.kind.done(job.done);
         if !job.failed.is_empty() {
             headline.push_str(&format!(", {} failed", job.failed.len()));

@@ -76,12 +76,15 @@ fn a_tag_patches_its_row_without_rescanning_the_library() {
     let trace = sb.tmp.path().join("trace");
 
     // The sandbox knows no tags yet, so `A` goes straight to the text prompt.
+    // A generous first pause: on a slow runner `A` pressed before discovery
+    // has answered has no row to act on, and the letters typed after it land
+    // on the dashboard as keys.
     let script = pty::Script::new()
-        .pause(800)
+        .pause(1500)
         .key("A") // → Add a tag
-        .pause(400)
+        .pause(500)
         .line("draft")
-        .pause(900)
+        .pause(1200)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch_traced(&sb, script, &trace);

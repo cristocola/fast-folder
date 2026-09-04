@@ -12,6 +12,20 @@ mod common;
 
 use common::{Sandbox, recorder, shown_path};
 
+/// `fastf term …` with a display present: a terminal window needs a desktop
+/// session, and a CI runner has none — the recorder stands in for the
+/// emulator, the variable for the desktop.
+fn term_ok(sb: &Sandbox, args: &[&str]) -> String {
+    let out = sb
+        .command()
+        .args(args)
+        .env("DISPLAY", ":99")
+        .output()
+        .expect("running fastf");
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 /// A known emulator gets its own directory flag — and the spawn's working
 /// directory is the project too, the belt under the braces.
 #[test]
@@ -27,7 +41,7 @@ fn a_known_emulator_gets_its_directory_flag_and_the_cwd() {
     let dir = sb.plant_project(&sb.base, "proj", "ID0001");
     let expected = shown_path(&dir);
 
-    sb.ok(&["term", "ID0001"]);
+    term_ok(&sb, &["term", "ID0001"]);
 
     let argv = rec.argv().expect("the terminal should have been started");
     assert_eq!(
@@ -57,7 +71,7 @@ fn an_unknown_emulator_gets_no_flag_but_still_starts_in_the_project() {
     let dir = sb.plant_project(&sb.base, "proj", "ID0001");
     let expected = shown_path(&dir);
 
-    sb.ok(&["term", "ID0001"]);
+    term_ok(&sb, &["term", "ID0001"]);
 
     // `printf '%s\n' "$@"` with no arguments still prints one empty line, so a
     // flagless call reads back as a single empty argument.
@@ -88,6 +102,7 @@ fn terminal_none_does_not_disable_an_explicit_term() {
         .command()
         .args(["term", "ID0001"])
         .env("PATH", &bin)
+        .env("DISPLAY", ":99")
         .output()
         .expect("running fastf");
     assert!(out.status.success(), "{out:?}");

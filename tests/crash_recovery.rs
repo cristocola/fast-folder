@@ -721,9 +721,12 @@ fn force_staged_reaches_the_staged_path_on_one_volume() {
         plan.root_path
     }
     fn find_project(cfg: &Config, root: &std::path::Path) -> library::Project {
+        // Canonical on both sides: on Windows the temp dir arrives as an 8.3
+        // short name (`RUNNER~1`) while discovery answers with the long one.
+        let wanted = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         library::discover(cfg)
             .into_iter()
-            .find(|p| p.path == root)
+            .find(|p| p.path.canonicalize().unwrap_or_else(|_| p.path.clone()) == wanted)
             .unwrap_or_else(|| panic!("no project at {}", root.display()))
     }
     let folder = |root: &std::path::Path| root.file_name().unwrap().to_os_string();

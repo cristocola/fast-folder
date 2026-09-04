@@ -4,7 +4,7 @@
 //! private staging, the same exact path/type/size verification, the same atomic
 //! publish — and then nothing, because the source was never the thing being
 //! given up. `move_engine` and this module share
-//! [`transactions`](crate::core::transactions) rather than each other, so the
+//! [`transactions`] rather than each other, so the
 //! one invariant they both live by is stated in one place: **a destination is
 //! published only after it has been copied and verified in full.**
 //!

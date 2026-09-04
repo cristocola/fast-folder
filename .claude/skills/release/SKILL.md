@@ -60,6 +60,14 @@ is the third; anything mentioning a display is the fourth. Fixed instances are
 `33ff114`, `551418d` and `87f2a9f` — read those diffs before writing a new fix
 for the same shape.
 
+There is a sixth that is not platform-specific and is missed for a duller
+reason: **`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked`** is a gate
+and is not part of `cargo test`, so it is the one nobody runs by hand.
+`rustdoc::redundant_explicit_links` and a `pub` item's docs linking to a
+`pub(crate)` one are its two usual causes. Mind the quoting — `RUSTDOCFLAGS=-D
+warnings cargo doc` runs `warnings` as a command and reports nothing, which
+looks exactly like a pass.
+
 **The step that avoids all of it**: push the work as a branch, open the PR, and
 let the full matrix run there. `fail-fast: false` on both matrices means one run
 reports the Linux and the Windows failures together rather than serially. Tag

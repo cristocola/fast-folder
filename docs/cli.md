@@ -121,7 +121,7 @@ one question at a time. It is drawn on stderr, so `fastf > log` still opens it
 and nothing you type reaches a pipe.
 
 ```
- fastf   12 projects   3 templates   2 bases                          highest ID0248
+ fast-folder   library │ templates   3 bases                          highest ID0248
  → projects 9   archive 3   usb not mounted                       ⚠ 1 needs attention
 
  ⌕ tag:draft lulla                                              4/12 · relevance
@@ -129,39 +129,36 @@ and nothing you type reaches a pipe.
 │▸ ID0248 2026-09-01_Lullaby_Remix_ID0248 3.2 MB││2026-09-01_Lullaby_Remix_ID… │
 │  ID0247 2026-08-30_Client_Acme_ID0247  scanning…││music-video · projects       │
 └──────────────────────────────────────────────┘└─────────────────────────────┘
- ✓  Added 1 tag to ID0248
- / search  a actions  o open  t terminal  y copy path  n new  ? help
+ 2 marked · a verb acts on them instead of the row under the cursor
+ / search  a actions  o open  t terminal  y copy path  Space mark  n new  ? help
 ```
 
 What is on screen, top to bottom:
 
-- **The header** — two lines. How many projects, templates (on disk — a slug
-  a project still names whose template has gone is not one) and bases there
-  are and the highest ID; then each base with how many projects its index
-  holds or that it is not mounted, and on the right `⚠ n needs attention`
-  when an interrupted create or move is waiting for `fastf reconcile` (else
-  the last few things this session did). The first frame's counts come from
-  each base's index and are labelled `(from index)` until discovery answers.
-- **The search bar** — see below.
+- **The header** — two lines. The two tabs, `library` and `templates`, with
+  the one you are on underlined, then how many bases there are and the
+  highest ID; then each base with how many projects its index holds or that
+  it is not mounted, and on the right `⚠ n needs attention` when an
+  interrupted create or move is waiting for `fastf reconcile` (else the last
+  few things this session did).
+- **The search bar** — the query, and on the right the one place the list
+  reports itself: how many rows matched out of how many there are, the sort
+  order, the template and base filters, and how many rows are marked. The
+  first frame's counts come from each base's index and are labelled
+  `(from index)` until discovery answers. See below.
 - **The project table** — ID, folder name, then the size, the date, the base,
-  the template and the tags, as many as fit. The folder name is never cut: a
-  narrow window drops the other columns first, tags before the template, the
-  template before the base, the base before the date; the size goes last,
-  because it is the one thing the row knows that the name does not. When the
-  table is empty it says so inside the box.
+  the template and the tags, as many as fit; see
+  [Columns](#columns). The folder name is never cut. When the table is empty
+  it says so inside the box.
 - **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
   selected project's template, base and date, its size and journal count, its
   tags, its template variables, the top of its folder and the first lines of
   its notes. The split favours the table: long folder names take the room
   they need with the size beside them, the pane takes the rest, and closes —
   as `i` would — when the rest would be a sliver.
-- **The template strip** (terminals 30 rows or taller) — one card per
-  template with how many projects use it, the templates on disk first and,
-  dimmed after them, any slug projects still name that no template answers
-  to (`registered`, a template since deleted). Tab reaches it; Enter filters
-  the list by the card, and the card that is filtering is underlined.
-- **The status line and the hint bar** — what the last action did, and the
-  keys that matter where you are.
+- **The status line and the hint bar** — what the last action did (or, when
+  rows are marked, that a verb will act on them rather than on the cursor),
+  and the keys that matter where you are.
 
 Below 60×16 the app says so and waits for a bigger window or `q`.
 
@@ -397,8 +394,8 @@ second, none of them drawing.
 
 #### The mouse
 
-Clicking a row selects it; clicking the detail pane, the template strip or the
-search bar moves focus there; clicking a command-palette entry runs it. The
+Clicking a row selects it; clicking the detail pane or the search bar moves
+focus there; clicking a command-palette entry runs it. The
 wheel is `↑`/`↓`, three at a time, wherever the arrow keys already go — the
 list, the detail pane, a dialog that scrolls. Mouse reporting is on while the
 app is open, so hold **Shift** while dragging to select text, as in every other

@@ -26,14 +26,25 @@ case "$(uname -m)" in
   *) die "the published Linux binaries are x86_64; on $(uname -m) build from source with cargo" ;;
 esac
 
-for tool in curl tar sha256sum; do
+for tool in tar sha256sum install; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
 done
+
+# curl for the people who pasted the one line above, wget for everyone else.
+if command -v curl >/dev/null 2>&1; then
+  fetch() { curl -fsSL -o "$1" "$2"; }
+  read_url() { curl -fsSL "$1"; }
+elif command -v wget >/dev/null 2>&1; then
+  fetch() { wget -qO "$1" "$2"; }
+  read_url() { wget -qO - "$1"; }
+else
+  die "curl or wget is required"
+fi
 
 version="${FASTF_VERSION:-}"
 if [ -z "$version" ]; then
   say "Looking up the latest release..."
-  version=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
+  version=$(read_url "https://api.github.com/repos/$repo/releases/latest" \
     | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)
   [ -n "$version" ] || die "could not read the latest release tag; set FASTF_VERSION=vX.Y.Z"
 fi
@@ -46,8 +57,8 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 cd "$tmp"
 
 say "Downloading $archive ($version)..."
-curl -fsSL -o "$archive" "$base/$archive" || die "could not download $archive"
-curl -fsSL -o SHA256SUMS "$base/SHA256SUMS" || die "could not download SHA256SUMS"
+fetch "$archive" "$base/$archive" || die "could not download $archive"
+fetch SHA256SUMS "$base/SHA256SUMS" || die "could not download SHA256SUMS"
 
 say "Checking the download against SHA256SUMS..."
 grep " $archive\$" SHA256SUMS > expected.txt || die "$archive is missing from SHA256SUMS"
@@ -70,6 +81,11 @@ for size in 48 128 256; do
   install -Dm644 "icons/fastf-$size.png" \
     "$prefix/share/icons/hicolor/${size}x${size}/apps/fastf.png"
 done
+
+# Desktop environments pick the new entry up sooner when the database knows.
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$prefix/share/applications" >/dev/null 2>&1 || true
+fi
 
 say ""
 say "Installed $("$prefix/bin/fastf" --version) at $prefix/bin/fastf"

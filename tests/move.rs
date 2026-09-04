@@ -181,8 +181,16 @@ fn a_copy_lands_verified_and_leaves_the_original_alone() {
         let outcome =
             fastf::core::operations::copy_project(&project, &backup, &progress, &cancel).unwrap();
 
-        let landed = backup.join(project.path.file_name().unwrap());
-        assert_eq!(outcome.path, landed);
+        // **Both sides canonicalized.** `outcome.path` is derived from a
+        // canonicalized destination, and on a Windows runner the tempdir the
+        // test holds is the 8.3 short name (`RUNNER~1`) of the long one the
+        // engine returns — the exact comparison that has broken this suite on
+        // that platform before.
+        let landed = backup
+            .canonicalize()
+            .unwrap()
+            .join(project.path.file_name().unwrap());
+        assert_eq!(outcome.path.canonicalize().unwrap(), landed);
         assert!(project.path.is_dir(), "the original is untouched");
         assert!(landed.join("README.md").is_file(), "the template file came");
         assert_eq!(

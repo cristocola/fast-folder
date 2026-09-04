@@ -1,0 +1,28 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fastf  ┌ settings ────────────────────────────────────────────────────────────────────────┐ ID0248 "
+" → proje│   Ask to open after creating  no                                                 │tention "
+" ⌕ / to │   Preview lines               8                                                  │ newest "
+"┌ projec│   Name collision              suffix                                             │───────┐"
+"│  ID   │ Appearance                                                                       │248    │"
+"│▸ ID024│   Theme                       auto (follows the terminal)                        │ated   │"
+"│  ID024│ Library bases                                                                    │       │"
+"│  ID024│   Bases                       (only the base directory)                          │tries  │"
+"│  ID024│   Recent limit                20                                                 │       │"
+"│  ID024│ After a project is created                                                       │       │"
+"│  ID024│   git init                    no                                                 │       │"
+"│  ID024│   Reveal the folder           no                                                 │       │"
+"│  ID024│   Open in the editor          no                                                 │       │"
+"│  ID024│   Print the path              no                                                 │       │"
+"│  ID023│ ID counter                                                                       │       │"
+"│  ID023│   Counter                     248   next: ID0249                                 │       │"
+"│  ID023│   Sync every base                                                                │       │"
+"│       │ Maintenance                                                                      │       │"
+"│       │   Reindex                                                                        │       │"
+"│       │   Check and recover                                                              │       │"
+"│       │▸  Data locations              /home/user/.config/fastf                           │       │"
+"└───────│ where the config, the counter and the templates live, and how that was decided   │───────┘"
+" 12 of 1│ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │        "
+"        └──────────────────────────────────────────────────────────────────────────────────┘        "

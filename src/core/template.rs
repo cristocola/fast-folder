@@ -10,7 +10,10 @@ use crate::util::paths;
 // Template structs
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+// `PartialEq`/`Eq` because the guided app's builder holds a scratch template
+// and the runtime is handed one to save: an `Effect` is compared in the update
+// tests, so everything an effect can carry has to be.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct Template {
     pub name: String,
     pub slug: String,
@@ -76,7 +79,7 @@ fn default_version() -> String {
     "1".to_string()
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct IdConfig {
     #[serde(default = "default_id_prefix")]
     pub prefix: String,
@@ -107,7 +110,7 @@ impl Default for IdConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Variable {
     pub slug: String,
     pub label: String,
@@ -127,14 +130,14 @@ fn default_var_type() -> VarType {
     VarType::Text
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum VarType {
     Text,
     Select,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Transform {
     #[default]
@@ -165,7 +168,7 @@ pub enum FileBuffer {
     Skip,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct FileEntry {
     pub path: String,
     /// Inline template content with {token} interpolation.

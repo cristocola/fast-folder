@@ -12,7 +12,7 @@ use crate::core::config::Config;
 ///   1. If the template defines a `post_create` block, it is used verbatim.
 ///   2. Otherwise, the global `config.toml` `post_create` block is used.
 ///   3. If neither is set, nothing happens (current behavior).
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PostCreate {
     /// Run `git init` inside the new project folder.
     #[serde(default)]
@@ -194,13 +194,42 @@ pub fn reveal_folder(path: &Path) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 pub fn reveal_folder(path: &Path) -> Result<()> {
-    Command::new("open").arg(path).status()?;
+    use anyhow::Context as _;
+    let status = Command::new("open")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("starting `open`")?;
+    anyhow::ensure!(status.success(), "`open` exited with {status}");
     Ok(())
 }
 
+/// `xdg-open`, with three things a headless host taught: no display means
+/// no file manager, so say so before trying; the handler gets no terminal
+/// of its own, so a text-mode handler cannot draw into ours; and its exit
+/// status is the answer — exit 3 or 4 is "no application could open it",
+/// which was once reported as a success.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub fn reveal_folder(path: &Path) -> Result<()> {
-    Command::new("xdg-open").arg(path).status()?;
+    use anyhow::Context as _;
+    if !crate::util::tty::has_display() {
+        anyhow::bail!(
+            "no display — opening a file manager needs a desktop session (DISPLAY or WAYLAND_DISPLAY)"
+        );
+    }
+    let status = Command::new("xdg-open")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("starting xdg-open (is it installed?)")?;
+    anyhow::ensure!(
+        status.success(),
+        "xdg-open exited with {status} — no application could open the folder"
+    );
     Ok(())
 }
 

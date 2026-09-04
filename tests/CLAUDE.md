@@ -10,7 +10,8 @@ runs test *binaries* sequentially, so splitting is free for fast suites and
 expensive for slow ones: making the pty tests three targets added nineteen
 seconds of wall time, because their fixed keystroke schedules stopped
 overlapping. `tui_pty.rs` is therefore one binary with three modules under
-`tests/tui_pty/`. Everything else is a target per subject.
+`tests/tui_pty/` (`app`, `list`, `flows`), plus the screenshot tool and its
+SVG renderer. Everything else is a target per subject.
 
 The suites, and what each guards — the intent, not the case list:
 - `create.rs`, `metadata.rs`, `search.rs`, `template_engine.rs`, `register.rs`,
@@ -25,10 +26,30 @@ The suites, and what each guards — the intent, not the case list:
   of release).
 - `concurrency.rs` — races real **processes**, not threads: a thread test passes
   against an in-process `Mutex` while production stays broken.
-- `tui_pty.rs` (unix; modules `menu`, `browser`, `flows`) — the interactive menu
-  through a real terminal, which is the only place its worst defect was visible:
-  any recoverable error ended the session. `tests/tui_pty/harness.rs` states the
-  rules that keep these from being flaky.
+- `tui_update.rs` — the guided app's state machine without a terminal: an
+  `App` from `tui::testing`'s fixtures, messages in, effects out.
+  `tui_commands.rs` — the command registry's invariants (one key means one
+  thing per context, every command has a title and a help entry).
+  `tui_snapshots.rs` — the frames, through ratatui's `TestBackend` in the mono
+  theme at fixed sizes, against `tests/snapshots/*.snap` (`insta`; review a
+  deliberate change with `INSTA_UPDATE=always cargo test --test tui_snapshots`
+  and commit the file).
+- `tui_pty.rs` (unix; modules `app`, `list`, `flows`) — the guided app and
+  the command line's own prompts through a real terminal: the runtime, the
+  threads, the inline blocks, which a test backend cannot see. `tests/tui_pty/harness.rs` states the
+  rules that keep these from being flaky — above all that ratatui redraws only
+  the cells that changed, so a frame is read back through `app_screen` (a
+  `vt100` replay of the transcript), never matched in the raw stream.
+  `tests/tui_pty/screenshot.rs` is the suite's one tool rather than test:
+  `FASTF_SHOT_KEYS="down enter" cargo test --test tui_pty screenshot --
+  --ignored --nocapture` drives the real binary with those keys in a planted
+  sandbox (or your own library with `FASTF_SHOT_REAL=1`) and prints the frame
+  it left on screen; `FASTF_SHOT_ARGS="copy shared"` drives a subcommand
+  instead, which is how the command line's inline prompts are looked at;
+  `FASTF_SHOT_SIZE=80x24` picks the window; `FASTF_SHOT_SVG=<path>` writes
+  the frame as the SVG the README embeds (sandbox only — the repo is public).
+  **Look at every screen you build this way** before writing its snapshot — it
+  is what a person will see.
 - `relaunch.rs` (unix) — when fastf opens a terminal for itself and, mostly, when
   it must not: a pipe, a redirect, an ssh session, a missing display, either off
   switch, and the loop guard all keep today's behaviour exactly.
@@ -43,9 +64,10 @@ The suites, and what each guards — the intent, not the case list:
   what journald gives a launcher's children and a socket is precisely what a pipe
   is not.
 - `layering.rs` — reads the source rather than running it: `core` and `util` may
-  not reach for a `dialoguer` prompt, because the same functions serve scripted
-  runs, where there is no terminal to answer one. An import is not something a runtime
-  test can see.
+  not prompt, because the same functions serve scripted runs where there is no
+  terminal to answer one; only `tui::runtime` and `tui::inline` may take the
+  terminal; and `dialoguer` may not come back. An import is not something a
+  runtime test can see.
 - `windows_semantics.rs` — reserved names, trailing dots, control chars, unicode,
   >MAX_PATH, case-only rename, read-only files, a real sharing violation, junctions.
 - `hostile_fs.rs` — corrupt caches/markers/metadata, absent bases, vanishing paths:
@@ -63,13 +85,14 @@ The suites, and what each guards — the intent, not the case list:
 
 `tests/common/mod.rs` is the shared process-driving harness: a `Sandbox` that
 owns its `FASTF_INSTALL_DIR`, redirects `HOME` into itself, and runs the built
-binary (`run`/`ok`/`fails`/`spawn`), plus `with_bases` for multi-base fixtures
-and `plant_project` for "this base already holds ID0082". It also carries
-`pty::run` (unix, `libc::forkpty`) — `dialoguer` refuses to prompt without a
-TTY, so confirmations and pickers are invisible to a pipe-based test, which is
-exactly where the rename prompt once spent a release offering one folder name
-and committing another. `#![allow(dead_code)]` because each binary uses a
-different subset.
+binary (`run`/`ok`/`fails`/`spawn`), plus `with_bases` for multi-base fixtures,
+`plant_project` for "this base already holds ID0082", and `unconfigured` for a
+brand-new install with no base at all. It also carries `pty::run` (unix,
+`libc::forkpty`, a 120×40 window) — neither the app nor a prompt draws without a
+TTY, so the dashboard, confirmations and pickers are invisible to a pipe-based
+test, which is exactly where the
+rename prompt once spent a release offering one folder name and committing
+another. `#![allow(dead_code)]` because each binary uses a different subset.
 
 **Write a test against the broken build first.** Several have passed pre-fix and
 were relabelled as design guards rather than left looking like regressions they

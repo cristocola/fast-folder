@@ -1,4 +1,5 @@
-//! The guided flows: bulk register, maintenance, and the template builder.
+//! The flows that build something — create, register, apply, the template
+//! builder — and the command line's own prompts, driven through the runtime.
 //!
 //! Driven through a real terminal — `harness.rs` states why, and the rules
 //! every suite in this binary follows.
@@ -7,12 +8,12 @@ use super::common::{self, Sandbox, pty};
 use super::harness::*;
 use std::fs;
 
-/// Bulk register: the preview first, then the commit, both from the menu.
+/// Bulk register: the preview first, then the commit, both in the app.
 ///
 /// `--recursive` was command-line only, so onboarding a folder of legacy
 /// projects meant leaving the tool the whole flow was designed for.
 #[test]
-fn the_menu_can_register_a_whole_base_after_previewing_it() {
+fn the_app_can_register_a_whole_base_after_previewing_it() {
     let sb = Sandbox::new();
     // Inside the configured base: registration refuses a folder that is not a
     // direct child of one, which is what keeps a registered project findable.
@@ -22,88 +23,105 @@ fn the_menu_can_register_a_whole_base_after_previewing_it() {
     }
 
     let script = pty::Script::new()
-        .down(MENU_REGISTER)
-        .enter()
-        .down(1) // → Every unregistered folder in a base
-        .enter()
-        .line(&legacy.display().to_string())
-        .pause(400)
-        .key("n") // attach a template?
-        .pause(400)
-        .enter() // created date → the folder's own date
+        .key(KEY_REGISTER)
+        .pause(600)
+        .right(1) // Register → every unregistered folder in a base
+        .tab()
+        .key(&legacy.display().to_string())
+        .enter() // → the preview
         .pause(900)
-        .key("y") // register these folders now?
-        .pause(1200)
-        .esc()
+        .enter() // → commit
+        .pause(1500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
 
-    assert_eq!(code, 0, "bulk register should return to the menu:\n{out}");
-    assert!(
-        out.contains("dry run") || out.contains("Preview"),
-        "the preview should be shown before anything is written:\n{out}"
+    assert_eq!(
+        code, 0,
+        "bulk register should return to the dashboard:\n{screen}"
     );
     assert!(
         legacy.join("One/PROJECT_INFO.md").exists() && legacy.join("Two/PROJECT_INFO.md").exists(),
-        "both folders should have been registered:\n{out}"
+        "both folders should have been registered:\n{screen}"
+    );
+    assert!(
+        pty::plain(&out).contains("would be registered"),
+        "the preview should have been shown before anything was written:\n{}",
+        pty::plain(&out)
     );
 }
 
-/// Answering no to the preview writes nothing.
+/// Esc at the preview goes back to the answers, and Esc again abandons the
+/// whole thing — the app's Esc ladder, one step at a time, nothing typed lost.
 #[test]
-fn declining_the_bulk_register_preview_writes_nothing() {
+fn escaping_the_bulk_register_preview_writes_nothing() {
     let sb = Sandbox::new();
     let legacy = sb.base.clone();
     fs::create_dir_all(legacy.join("One")).unwrap();
 
     let script = pty::Script::new()
-        .down(MENU_REGISTER)
-        .enter()
-        .down(1)
-        .enter()
-        .line(&legacy.display().to_string())
-        .pause(400)
-        .key("n") // attach a template?
-        .pause(400)
-        .enter() // created date
+        .key(KEY_REGISTER)
+        .pause(600)
+        .right(1)
+        .tab()
+        .key(&legacy.display().to_string())
+        .enter() // → the preview
         .pause(900)
-        .key("n") // register these folders now? → no
-        .pause(700)
-        .esc()
+        .esc() // → back to the answers, with the path still typed
+        .pause(400)
+        .esc() // → cancelled
+        .pause(500)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
 
-    assert_eq!(code, 0, "declining should return to the menu:\n{out}");
+    assert_eq!(
+        code, 0,
+        "escaping should return to the dashboard:\n{screen}"
+    );
     assert!(
         !legacy.join("One/PROJECT_INFO.md").exists(),
-        "a declined preview must write nothing:\n{out}"
+        "an abandoned preview must write nothing:\n{screen}"
+    );
+    assert!(
+        pty::plain(&out).contains("nothing was registered"),
+        "the cancel should say so:\n{}",
+        pty::plain(&out)
     );
 }
 
-/// Registering with "Today" as the created date, which the menu could not say.
+/// Registering with "today" as the created date, which the old menu could not
+/// say at all.
 #[test]
-fn the_menu_can_register_with_todays_date() {
+fn the_app_can_register_with_todays_date() {
     let sb = Sandbox::new();
     let folder = sb.base.join("Legacy");
     fs::create_dir_all(&folder).unwrap();
 
     let script = pty::Script::new()
-        .down(MENU_REGISTER)
-        .enter()
-        .enter() // One folder
-        .line(&folder.display().to_string())
-        .pause(400)
-        .key("n") // attach a template?
-        .key("n") // standardize the name?
-        .pause(400)
-        .down(1) // created date → Today
-        .enter()
+        .key(KEY_REGISTER)
+        .pause(600)
+        .tab() // → Folder
+        .key(&folder.display().to_string())
+        .tab() // → Template
+        .tab() // → Standardize name
+        .tab() // → Created
+        .right(1) // → today
+        .enter() // → the preview
         .pause(900)
-        .esc()
+        .enter() // → commit
+        .pause(1200)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
 
-    assert_eq!(code, 0, "register should return to the menu:\n{out}");
+    assert_eq!(
+        code, 0,
+        "register should return to the dashboard:\n{screen}"
+    );
     let meta = fs::read_to_string(folder.join("PROJECT_INFO.md")).expect("registered");
     // Not the folder's own timestamp: the current year, from `now`.
     let year = meta
@@ -117,39 +135,149 @@ fn the_menu_can_register_with_todays_date() {
     );
 }
 
-/// Maintenance: the three commands that were command-line only.
+/// The create wizard end to end: the answers, the plan, the folder — and the
+/// new project selected in the list it comes back to.
 #[test]
-fn the_maintenance_menu_runs_reindex_recover_and_paths() {
+fn the_wizard_creates_a_project_and_selects_it() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["config", "set", "default-template", "race"]);
+
+    let script = pty::Script::new()
+        .key(KEY_CREATE)
+        .pause(800)
+        .tab() // → the template's first variable
+        .key("Lullaby")
+        .enter() // → the preview
+        .pause(1000)
+        .enter() // → create
+        .pause(1800)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "the wizard should return cleanly:\n{screen}");
+    let created = common::project_dirs(&sb.base);
+    assert_eq!(created.len(), 1, "exactly one project:\n{screen}");
+    let name = created[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    assert!(
+        name.contains("Lullaby"),
+        "the answer should be in the folder name, got {name}"
+    );
+    assert!(
+        screen.contains("Created"),
+        "the app should say what it made:\n{screen}"
+    );
+    assert!(
+        screen.contains(&name),
+        "the new project should be in the list:\n{screen}"
+    );
+}
+
+/// Apply asked template, target, dry-run and every variable, then rejected the
+/// target. The target is a field now, and it is checked where it was typed.
+#[test]
+fn apply_refuses_a_missing_target_where_it_was_typed() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["config", "set", "default-template", "race"]);
+
+    let script = pty::Script::new()
+        .key("E")
+        .pause(700)
+        .tab() // → Target folder
+        .key("/nope/does/not/exist")
+        .tab() // → the template's own variable, answered so it is not what refuses
+        .key("Anything")
+        .enter()
+        .pause(900)
+        .build();
+    let (out, _) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert!(
+        screen.contains("/nope/does/not/exist"),
+        "the text must stay on the line to be corrected:\n{screen}"
+    );
+    assert!(
+        screen.contains("no such folder"),
+        "the target should be refused at its own field:\n{screen}"
+    );
+}
+
+/// Apply, for real: an existing folder gains the template's missing folders.
+#[test]
+fn apply_fills_in_a_folder_from_the_preview() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["config", "set", "default-template", "race"]);
+    let target = sb.base.join("Existing");
+    fs::create_dir_all(&target).unwrap();
+
+    let script = pty::Script::new()
+        .key("E")
+        .pause(700)
+        .tab()
+        .key(&target.display().to_string())
+        .tab()
+        .key("Anything")
+        .enter() // → the preview
+        .pause(1000)
+        .enter() // → apply
+        .pause(1200)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "apply should return to the dashboard:\n{screen}");
+    assert!(
+        target.join("README.md").is_file(),
+        "the template's file should have been created:\n{screen}"
+    );
+}
+
+/// Maintenance: the three commands the menu could only reach by leaving it —
+/// reindex, check and recover, and where fastf keeps its things.
+#[test]
+fn maintenance_runs_reindex_recover_and_data_locations() {
     let sb = Sandbox::new();
     sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
 
     let script = pty::Script::new()
-        .down(MENU_SETTINGS)
-        .enter()
-        .down(6) // → Maintenance
-        .enter()
-        .enter() // → Reindex
+        .key(KEY_SETTINGS)
         .pause(900)
+        // The settings list has 22 selectable rows; Reindex is the twentieth.
+        .down(19) // → Reindex
+        .enter()
+        .pause(1200)
         .down(1) // → Check and recover
         .enter()
-        .pause(900)
-        .down(2) // → Show data locations
+        .pause(1200)
+        .down(1) // → Data locations
         .enter()
-        .pause(900)
-        .esc() // Maintenance → Settings
-        .esc() // → main menu
-        .esc()
+        .pause(1000)
         .build();
-    let (out, code) = launch(&sb, script);
+    let (out, _) = launch(&sb, script);
+    let screen = app_screen(&out);
+    let text = pty::plain(&out);
 
-    assert_eq!(code, 0, "maintenance should return to the menu:\n{out}");
     assert!(
-        out.contains("Reindexed") || out.contains("project"),
-        "reindex should report what it found:\n{out}"
+        text.contains("Reindexed"),
+        "reindex should report what it found:\n{text}"
     );
     assert!(
-        out.contains("data dir") || out.contains("templates"),
-        "the data locations should be printed:\n{out}"
+        text.contains("Nothing to reconcile") || text.contains("Reconciled"),
+        "recovery should say what it did:\n{text}"
+    );
+    assert!(
+        screen.contains("Templates") && screen.contains("Data dir"),
+        "the data locations should be on screen:\n{screen}"
     );
 }
 
@@ -158,112 +286,165 @@ fn the_maintenance_menu_runs_reindex_recover_and_paths() {
 ///
 /// New mode used to end at a bare "Save template?" — noticing anything wrong
 /// meant answering no and starting the six steps again. This is also the first
-/// coverage `template_builder.rs` has ever had.
+/// The builder is one list of sections, entered in any order, and Save says
+/// what `Template::validate` refuses. The six-step linear pass is gone: it
+/// made noticing a wrong folder name on the summary mean starting again.
 #[test]
-fn the_builder_new_mode_ends_in_the_review_menu() {
+fn the_builder_saves_a_template_built_section_by_section() {
     let sb = Sandbox::new();
 
     let script = pty::Script::new()
-        .down(MENU_TEMPLATES)
-        .enter()
-        .enter() // → Create new template
-        // Step 1: metadata
-        .line("Demo") // name
-        .line("demo") // slug (suggested)
-        .line("") // description
-        .line("{date}_{id}") // naming pattern
-        // Step 2: ID
-        .line("D") // prefix
-        .line("4") // digits
-        // Step 3: variables — none
-        .key("n")
-        // Step 4: folder structure
-        .line("01_Assetz") // deliberately wrong
-        .line("")
-        // Step 5: files — none
-        .key("n")
+        .key(KEY_TEMPLATES)
         .pause(700)
-        // Review menu: Folder structure
-        .down(3)
+        .key("n") // → a new template
+        .pause(400)
+        .enter() // → Metadata
+        .pause(300)
+        .key("Demo") // the name, and the slug follows it
+        .enter() // → back to the sections
+        .pause(300)
+        .down(3) // → Structure
         .enter()
-        .pause(800)
-        // Add / Edit a folder path / Remove / Replace all / Done
-        .down(1)
-        .enter()
-        .pause(800)
-        .enter() // "Which folder?" — the only one
-        .pause(800)
+        .pause(300)
+        .key("01_Assetz") // deliberately wrong
         .backspace(1)
-        .key("s")
+        .key("s") // corrected in place, before it is ever written
+        .key("\x13") // Ctrl-S → keep
+        .pause(300)
+        .down(2) // → Save
         .enter()
-        .pause(800)
-        .down(4) // → Done
-        .enter()
-        .pause(900)
-        // Save
-        .down(5)
-        .enter()
-        .pause(900)
-        .esc()
-        .esc()
+        .pause(1200)
+        .esc() // the studio → the dashboard
+        .pause(400)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
 
-    assert_eq!(code, 0, "the builder should return to the menu:\n{out}");
+    assert_eq!(code, 0, "the builder should return cleanly:\n{screen}");
     let manifest = sb.install.join("templates/demo/template.yaml");
-    let text = fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("no manifest: {e}\n{out}"));
+    let text =
+        fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("no manifest: {e}\n{screen}"));
     assert!(
-        text.contains("01_Assets"),
-        "the folder corrected in the review menu should be what was saved:\n{text}"
+        text.contains("01_Assets") && !text.contains("01_Assetz"),
+        "the corrected folder is what was saved:\n{text}"
+    );
+    assert!(text.contains("Demo"), "the name is what was typed:\n{text}");
+}
+
+/// Save refuses an incomplete template and says so where the reader is, rather
+/// than writing something `Template::validate` would reject on load.
+#[test]
+fn the_builder_refuses_to_save_a_template_that_would_not_load() {
+    let sb = Sandbox::new();
+
+    let script = pty::Script::new()
+        .key(KEY_TEMPLATES)
+        .pause(700)
+        .key("n")
+        .pause(400)
+        .down(5) // → Save, with nothing filled in
+        .enter()
+        .pause(600)
+        .build();
+    let (out, _) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert!(
+        screen.contains("Cannot save:"),
+        "an invalid template must be refused, not written:\n{screen}"
     );
     assert!(
-        !text.contains("01_Assetz"),
-        "the wrong name should be gone, not kept alongside:\n{text}"
+        !sb.install.join("templates/template.yaml").exists(),
+        "nothing was written"
     );
 }
 
-/// A template file with no contents. `.gitkeep` and every other marker file was
-/// unreachable: the content loop only ended on an empty line once at least one
-/// line had been typed.
+/// A marker file: a path and no contents at all. The old builder could not
+/// declare one — its content loop only ended once a line had been typed.
 #[test]
 fn the_builder_can_declare_an_empty_file() {
     let sb = Sandbox::new();
 
     let script = pty::Script::new()
-        .down(MENU_TEMPLATES)
-        .enter()
-        .enter() // → Create new template
-        .line("Marker")
-        .line("marker")
-        .line("")
-        .line("{date}_{id}")
-        .line("M")
-        .line("4")
-        .key("n") // no variables
-        .line("") // no folders
-        .key("y") // add a placeholder file
-        .line(".gitkeep")
-        .pause(500)
-        .down(1) // → Empty file
-        .enter()
-        .pause(500)
-        .key("n") // no more files
+        .key(KEY_TEMPLATES)
         .pause(700)
-        .down(5) // review → Save
+        .key("n")
+        .pause(400)
+        .enter() // → Metadata
+        .pause(300)
+        .key("Marker")
         .enter()
-        .pause(900)
+        .pause(300)
+        .down(4) // → Files
+        .enter()
+        .pause(300)
+        .key("a") // → a new file
+        .pause(300)
+        .key(".gitkeep")
+        .key("\x13") // Ctrl-S → keep, with no contents
+        .pause(400)
+        .esc() // → the sections, back on Files
+        .pause(300)
+        .down(1) // → Save
+        .enter()
+        .pause(1200)
         .esc()
-        .esc()
+        .pause(400)
+        .key(KEY_QUIT)
         .build();
     let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
 
-    assert_eq!(code, 0, "the builder should return to the menu:\n{out}");
+    assert_eq!(code, 0, "the builder should return cleanly:\n{screen}");
     let file = sb.install.join("templates/marker/files/.gitkeep");
-    assert!(file.exists(), "the empty file should exist:\n{out}");
+    assert!(file.exists(), "the empty file should exist:\n{screen}");
     assert_eq!(
         fs::read_to_string(&file).unwrap(),
         "",
         "and it should be empty"
+    );
+}
+
+/// The studio deletes a template, and asks first.
+#[test]
+fn deleting_a_template_asks_first() {
+    let sb = Sandbox::new();
+    sb.write_template("doomed");
+
+    let script = pty::Script::new()
+        .key(KEY_TEMPLATES)
+        .pause(700)
+        .key("D") // → the confirmation
+        .pause(500)
+        .key("n") // → no
+        .pause(500)
+        .key("D")
+        .pause(500)
+        .key("y") // → yes
+        .pause(900)
+        .esc()
+        .pause(400)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+    let text = pty::plain(&out);
+
+    assert_eq!(code, 0, "deleting should return cleanly:\n{screen}");
+    assert!(
+        text.contains("Deleted template"),
+        "the second answer should have deleted one:\n{text}"
+    );
+    // `n` answered the first confirmation, so the first `D` deleted nothing:
+    // three templates went in and exactly one came out.
+    let left = fs::read_dir(sb.install.join("templates"))
+        .unwrap()
+        .flatten()
+        .count();
+    assert_eq!(
+        left, 2,
+        "the refused delete must not have run as well:\n{screen}"
     );
 }
 
@@ -401,9 +582,9 @@ fn a_relaunched_run_that_showed_a_picker_does_not_wait() {
     let sb = Sandbox::new();
     sb.plant_project(&sb.base, "proj", "ID0001");
 
-    // With a project to show, `recent` opens the browser — an interactive
+    // With a project to show, `recent` opens the dashboard — an interactive
     // surface. Esc leaves it, and that must be the end of the process.
-    let script = pty::Script::new().pause(600).esc().pause(600).build();
+    let script = pty::Script::new().pause(1200).esc().pause(600).build();
     let (out, code) = pty::run(
         common::FASTF,
         &["recent"],
@@ -420,5 +601,241 @@ fn a_relaunched_run_that_showed_a_picker_does_not_wait() {
     assert!(
         !out.contains("press Enter to close"),
         "a window that already waited for the user must not wait again:\n{out}"
+    );
+}
+
+/// First run: the app asks where projects should live, creates the folder and
+/// records it — before it draws anything else, because there is nothing else
+/// to draw.
+#[test]
+fn first_run_asks_for_a_base_and_creates_it() {
+    let sb = Sandbox::unconfigured();
+    let wanted = sb.tmp.path().join("Projects");
+
+    let script = pty::Script::new()
+        .pause(700)
+        .key("\x15") // clear the suggestion
+        .key(&wanted.display().to_string())
+        .enter()
+        .pause(1500)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "the first run should end cleanly:\n{screen}");
+    assert!(
+        wanted.is_dir(),
+        "the folder should have been created:\n{screen}"
+    );
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    assert!(
+        config.contains(&wanted.display().to_string()),
+        "the base should have been recorded:\n{config}"
+    );
+}
+
+/// Skipping leaves the configuration alone, and the question comes back.
+#[test]
+fn first_run_can_be_skipped_and_writes_nothing() {
+    let sb = Sandbox::unconfigured();
+
+    let script = pty::Script::new()
+        .pause(700)
+        .esc() // skip
+        .pause(600)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "skipping is not a failure:\n{screen}");
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap_or_default();
+    assert!(
+        !config.contains("base_dir = \"/"),
+        "skipping must write no base:\n{config}"
+    );
+}
+
+/// The ID counter is raised from the settings screen, and never lowered.
+#[test]
+fn the_counter_is_raised_from_the_settings_screen() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0007", "ID0007");
+
+    let script = pty::Script::new()
+        .key(KEY_SETTINGS)
+        .pause(900)
+        .down(17) // → Counter
+        .enter() // → the number
+        .pause(500)
+        .key("\x15")
+        .key("3") // below the floor: refused
+        .enter()
+        .pause(900)
+        // The cursor never left the Counter row, so the second try is one key.
+        .enter()
+        .pause(400)
+        .key("\x15")
+        .key("40")
+        .enter()
+        .pause(1200)
+        .esc()
+        .pause(400)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+    let text = pty::plain(&out);
+
+    assert_eq!(code, 0, "a refused number is not a failure:\n{screen}");
+    assert!(
+        text.contains("cannot") || text.contains("below"),
+        "lowering the counter must be refused and say why:\n{text}"
+    );
+    let shown = sb.ok(&["id", "show"]);
+    assert!(
+        shown.contains("40"),
+        "the raise should have taken:\n{shown}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The command line's own prompts, on the same ratatui
+// ---------------------------------------------------------------------------
+
+/// Run one subcommand under a pty with `script`, and give back the transcript.
+fn run_cli(sb: &Sandbox, args: &[&str], script: Vec<pty::Keystroke>) -> (String, i32) {
+    pty::run(
+        common::FASTF,
+        args,
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &script,
+        DEADLINE,
+    )
+}
+
+/// `q` cancels the ambiguity picker, the same as Esc. Both were dialoguer's
+/// contract and both are kept: the picker interrupted a verb, and getting out
+/// of it must not need a key anyone has to look up.
+#[test]
+fn q_cancels_the_ambiguity_picker_like_esc() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "shared_one", "ID0011");
+    sb.plant_project(&sb.base, "shared_two", "ID0012");
+
+    let script = pty::Script::new().key("q").pause(600).build();
+    let (out, code) = run_cli(&sb, &["path", "shared"], script);
+
+    assert_eq!(code, 0, "cancelling is not a failure:\n{out}");
+    assert!(
+        pty::plain(&out).contains("no path printed"),
+        "cancelling should say what did not happen:\n{}",
+        pty::plain(&out)
+    );
+}
+
+/// A yes/no answers on the keypress, with no Enter. That is what makes
+/// `fastf new`'s confirmation one keystroke, and a trailing `\r` would survive
+/// into whatever asked next.
+#[test]
+fn a_command_line_confirm_answers_a_bare_y() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let script = pty::Script::new()
+        .pause(500)
+        .key("Lullaby")
+        .enter() // the template's one variable
+        .pause(900)
+        .key("y") // "Create this project?" — no Enter
+        .pause(1500)
+        .key("n") // "Open project folder?" — likewise
+        .pause(900)
+        .build();
+    let (out, code) = run_cli(&sb, &["new", "race"], script);
+    let text = pty::plain(&out);
+
+    assert_eq!(code, 0, "the create should have finished:\n{text}");
+    let created = common::project_dirs(&sb.base);
+    assert_eq!(created.len(), 1, "exactly one project:\n{text}");
+    assert!(
+        created[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("Lullaby"),
+        "the answer should be in the folder name:\n{text}"
+    );
+}
+
+/// A command-line text prompt shows where you are typing.
+///
+/// The same guarantee the app's fields have, on the other surface: the caret is
+/// parked in the line being edited, at the cursor's offset *within the visible
+/// window*, not at the start of the prompt.
+#[test]
+fn a_command_line_text_prompt_parks_a_visible_caret_after_the_text() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+
+    let script = pty::Script::new()
+        .pause(600)
+        .key("Lulla")
+        .pause(700)
+        .build();
+    let (out, _) = run_cli(&sb, &["new", "race"], script);
+    let screen = app_screen(&out);
+    let (row, column) = app_cursor(&out);
+
+    let (text_row, text_line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("Lulla"))
+        .map(|(index, line)| (index as u16, line.to_string()))
+        .unwrap_or_else(|| panic!("the typed text never drew:\n{screen}"));
+    let at = text_line.find("Lulla").expect("just found");
+    let after_text = (text_line[..at].chars().count() + "Lulla".chars().count()) as u16;
+
+    assert_eq!(
+        row, text_row,
+        "the caret belongs on the line being edited:\n{screen}"
+    );
+    assert_eq!(
+        column, after_text,
+        "the caret belongs after the text, not at the start of the prompt:\n{screen}"
+    );
+}
+
+/// A refused answer says why, under the line, and leaves the prompt where it
+/// was — the difference between "correct this" and "start again".
+#[test]
+fn a_command_line_prompt_refuses_an_empty_required_answer_in_place() {
+    let sb = Sandbox::new();
+    sb.write_template("race"); // its one variable is required
+
+    let script = pty::Script::new()
+        .pause(600)
+        .enter() // submit it empty
+        .pause(700)
+        .key("Lullaby")
+        .pause(500)
+        .build();
+    let (out, _) = run_cli(&sb, &["new", "race"], script);
+    let screen = app_screen(&out);
+
+    assert!(
+        pty::plain(&out).contains("a value is required"),
+        "the refusal belongs under the line:\n{}",
+        pty::plain(&out)
+    );
+    // And typing clears it: the last frame is the prompt with the answer on it,
+    // not a stale complaint about the answer before it.
+    assert!(
+        screen.contains("Lullaby") && !screen.contains("a value is required"),
+        "the prompt is still there to answer, and the refusal is gone:\n{screen}"
     );
 }

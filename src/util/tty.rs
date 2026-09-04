@@ -1,11 +1,11 @@
 //! Is there a terminal to prompt on, and what to say when there is not.
 //!
 //! Every guard in fastf used to probe **stdout**, which is not where a prompt
-//! happens: `dialoguer` draws on stderr and reads from stdin (falling back to
+//! happens: a prompt draws on stderr and reads from stdin (falling back to
 //! `/dev/tty`). The probe therefore answered a different question than the one
 //! being asked. `fastf new t > out.txt` refused although a terminal was right
 //! there, and `fastf new t 2>/dev/null` passed the guard and died on
-//! dialoguer's bare "IO error: not a terminal", which tells a script author
+//! a bare "not a terminal" failure, which tells a script author
 //! nothing about what to do.
 //!
 //! Stdout still decides **output format** — `recent`/`search` print their plain
@@ -26,7 +26,7 @@ static SURFACE_RAN: AtomicBool = AtomicBool::new(false);
 
 /// Can a prompt be drawn and answered right now?
 ///
-/// Stderr is the stream dialoguer writes to, so it is the one that decides.
+/// Stderr is the stream a prompt writes to, so it is the one that decides.
 pub fn prompt_available() -> bool {
     std::io::stderr().is_terminal()
 }
@@ -38,16 +38,83 @@ pub fn prompt_available() -> bool {
 /// flag or setting that avoids the prompt.
 pub fn require_tty(what: &str, how: &str) -> Result<()> {
     if prompt_available() {
-        // One of exactly two choke points — every dialoguer prompt reaches here
-        // through `prompt::ready()`, and every picker through that. The other is
-        // `live_select`, which the browser reaches without passing this way.
+        // One of exactly two choke points — every prompt reaches here through
+        // `prompt::ready()`, and every picker through that. The other is
+        // `tui::runtime::Runtime::init`, which the guided app reaches after its
+        // own `require_tty` and before it takes the screen.
         mark_interactive_surface();
         return Ok(());
     }
     bail!("no terminal to {what} on — {how}")
 }
 
-/// Record that a prompt, picker or menu was drawn and waited on.
+/// Record that a prompt, a picker or the app was drawn and waited on.
+/// The terminal's settings before raw mode was switched on, kept so a signal
+/// handler can put them back without going through crossterm — whose
+/// `disable_raw_mode` takes a lock, which a handler may not.
+#[cfg(unix)]
+static COOKED: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
+
+/// Remember the terminal's current settings, once — called before the first
+/// `enable_raw_mode`, so what is remembered is the shell's own mode.
+#[cfg(unix)]
+pub fn remember_cooked_mode() {
+    COOKED.get_or_init(|| {
+        // SAFETY: a zeroed termios is a valid value for tcgetattr to fill.
+        let mut termios: libc::termios = unsafe { std::mem::zeroed() };
+        // SAFETY: stderr is a descriptor this process owns; a failure leaves
+        // the zeroed value, and `restore_cooked_mode` checks it was filled.
+        let ok = unsafe { libc::tcgetattr(libc::STDERR_FILENO, &mut termios) } == 0;
+        if !ok {
+            termios.c_lflag = 0;
+        }
+        termios
+    });
+}
+
+/// Put the remembered settings back. Async-signal-safe: one `tcsetattr`.
+#[cfg(unix)]
+pub fn restore_cooked_mode() {
+    if let Some(termios) = COOKED.get()
+        && termios.c_lflag != 0
+    {
+        // SAFETY: a termios `tcgetattr` filled, applied to the same descriptor.
+        unsafe {
+            libc::tcsetattr(libc::STDERR_FILENO, libc::TCSANOW, termios);
+        }
+    }
+}
+
+/// Write bytes to stderr without a lock or an allocation — what a signal
+/// handler may do.
+#[cfg(unix)]
+pub fn write_raw(bytes: &[u8]) {
+    // SAFETY: `write` is async-signal-safe and the descriptor is ours.
+    unsafe {
+        let _ = libc::write(libc::STDERR_FILENO, bytes.as_ptr().cast(), bytes.len());
+    }
+}
+
+/// `write_raw` where there is no signal-safety rule to keep.
+#[cfg(not(unix))]
+pub fn write_raw(bytes: &[u8]) {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(bytes);
+    let _ = std::io::stderr().flush();
+}
+
+/// Whether a person could see what a program started from here would draw: a
+/// desktop session on unix (`DISPLAY` or `WAYLAND_DISPLAY`); always, on
+/// Windows and macOS, where a window needs no variable.
+pub fn has_display() -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        return true;
+    }
+    ["WAYLAND_DISPLAY", "DISPLAY"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+}
+
 pub fn mark_interactive_surface() {
     SURFACE_RAN.store(true, Ordering::Relaxed);
 }

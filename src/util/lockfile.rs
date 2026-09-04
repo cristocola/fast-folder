@@ -58,7 +58,18 @@ impl DataLock {
         }
 
         let deadline = Instant::now() + timeout;
+        let started = Instant::now();
+        let mut said = false;
         loop {
+            // A second of silence is long enough to wonder; say what is
+            // being waited for, once, through the one sink every surface
+            // shows — the app's status line, the command line's stderr.
+            if !said && started.elapsed() >= Duration::from_secs(1) {
+                said = true;
+                crate::util::diag::note(
+                    "waiting for another fastf process to finish (it holds the data lock)",
+                );
+            }
             match try_lock(path) {
                 Ok(Some(file)) => {
                     return Ok(Self {

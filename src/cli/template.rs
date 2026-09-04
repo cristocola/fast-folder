@@ -51,95 +51,101 @@ pub fn list() -> Result<()> {
 pub fn show(slug: &str) -> Result<()> {
     let t = template::find_by_slug(slug)?;
     println!("{} {}", "Template:".bold(), t.name.green().bold());
-    println!("  Slug:    {}", t.slug);
-    println!("  Pattern: {}", t.naming_pattern);
-    if !t.description.is_empty() {
-        println!("  Desc:    {}", t.description);
+    for line in describe(&t).into_iter().skip(1) {
+        println!("{line}");
     }
+    Ok(())
+}
+
+/// Everything `show` says about a template, as lines — so the guided app's
+/// studio shows the same thing without a second renderer to drift from this
+/// one. The first line is the template's name.
+pub fn describe(t: &Template) -> Vec<String> {
+    let mut lines = vec![t.name.clone()];
+    lines.push(format!("  Slug:    {}", t.slug));
+    lines.push(format!("  Pattern: {}", t.naming_pattern));
+    if !t.description.is_empty() {
+        lines.push(format!("  Desc:    {}", t.description));
+    }
+    lines.push(format!(
+        "  ID:      {}{}  ({} digits)",
+        t.id.prefix,
+        "0".repeat(t.id.digits),
+        t.id.digits
+    ));
 
     if !t.variables.is_empty() {
-        println!("\n{}", "Variables:".bold());
+        lines.push(String::new());
+        lines.push("Variables:".to_string());
         for v in &t.variables {
             let req = if v.required { " (required)" } else { "" };
-            println!("  {} {}{}", "•".cyan(), v.slug.green(), req.dimmed());
-            println!("    Label:     {}", v.label);
+            lines.push(format!("  • {}{req}", v.slug));
+            lines.push(format!("    Label:     {}", v.label));
             if !v.options.is_empty() {
-                println!("    Options:   {}", v.options.join(", "));
+                // One option list can be long; wrapped under its label so a
+                // dialog does not cut it.
+                let mut options =
+                    crate::tui::command::wrap_words(&v.options.join(", "), 56).into_iter();
+                if let Some(first) = options.next() {
+                    lines.push(format!("    Options:   {first}"));
+                }
+                lines.extend(options.map(|rest| format!("               {rest}")));
             }
             if !v.default.is_empty() {
-                println!("    Default:   {}", v.default);
+                lines.push(format!("    Default:   {}", v.default));
             }
         }
     }
 
     if !t.structure.is_empty() {
-        println!("\n{}", "Folder structure:".bold());
-        render::print_tree(&t.structure, "");
+        lines.push(String::new());
+        lines.push("Folder structure:".to_string());
+        lines.extend(crate::tui::widgets::tree::lines(&t.structure, false));
     }
 
     if !t.files.is_empty() {
-        println!("\n{}", "Files:".bold());
+        lines.push(String::new());
+        lines.push("Files:".to_string());
         for f in &t.files {
-            println!("  {} {}", "•".cyan(), f.path.green());
+            lines.push(format!("  • {}", f.path));
         }
     }
 
     // `t.files` is a load-time scan of *text* files only, so bundled binary
-    // assets in `files/` were invisible here even though every new project gets
+    // assets in `files/` are invisible there even though every new project gets
     // them. List what is actually on disk that the scan skipped.
-    let bundled = bundled_assets(&t);
+    let bundled = bundled_assets(t);
     if !bundled.is_empty() {
-        println!("\n{}", "Bundled assets (copied byte-for-byte):".bold());
+        lines.push(String::new());
+        lines.push("Bundled assets (copied byte-for-byte):".to_string());
         for rel in &bundled {
-            println!("  {} {}", "•".cyan(), rel.dimmed());
+            lines.push(format!("  • {rel}"));
         }
     }
 
     if !t.verbatim.is_empty() {
-        println!("\n{}", "Verbatim globs (never interpolated):".bold());
-        for g in &t.verbatim {
-            println!("  {} {}", "•".cyan(), g);
-        }
+        lines.push(String::new());
+        lines.push("Verbatim globs (never interpolated):".to_string());
+        lines.extend(t.verbatim.iter().map(|g| format!("  • {g}")));
     }
     if !t.exclude.is_empty() {
-        println!("\n{}", "Excluded globs (never copied):".bold());
-        for g in &t.exclude {
-            println!("  {} {}", "•".cyan(), g);
-        }
+        lines.push(String::new());
+        lines.push("Excluded globs (never copied):".to_string());
+        lines.extend(t.exclude.iter().map(|g| format!("  • {g}")));
     }
     if !t.tags.is_empty() || !t.tag_from.is_empty() {
-        println!("\n{}", "Tags:".bold());
-        for tag in &t.tags {
-            println!("  {} {}", "•".cyan(), tag.yellow());
-        }
-        for slug in &t.tag_from {
-            println!(
-                "  {} {}",
-                "•".cyan(),
-                format!("{slug}/<value of {slug}>").yellow()
-            );
-        }
-    }
-    if let Some(pc) = &t.post_create {
-        println!(
-            "\n{}",
-            "Post-create (overrides the global settings):".bold()
+        lines.push(String::new());
+        lines.push("Tags:".to_string());
+        lines.extend(t.tags.iter().map(|tag| format!("  • {tag}")));
+        lines.extend(
+            t.tag_from
+                .iter()
+                .map(|slug| format!("  • {slug}/<value of {slug}>")),
         );
-        println!("  git_init        {}", pc.git_init);
-        println!("  reveal          {}", pc.reveal);
-        println!("  open_in_editor  {}", pc.open_in_editor);
-        println!("  print_path      {}", pc.print_path);
-        if !pc.commands.is_empty() {
-            println!("  commands        {}", pc.commands.len());
-        }
     }
-
-    Ok(())
+    lines
 }
 
-/// Files present in the template's `files/` subtree that the load-time text scan
-/// did not pick up — binaries and anything over the text cap. These are copied
-/// into every new project, so `show` has to name them.
 fn bundled_assets(t: &Template) -> Vec<String> {
     let root = paths::template_files_dir(&t.slug);
     let known: std::collections::HashSet<&str> = t.files.iter().map(|f| f.path.as_str()).collect();
@@ -164,28 +170,27 @@ fn collect_relative(root: &Path, dir: &Path, out: &mut Vec<String>) {
     }
 }
 
-/// Create a new template using the interactive builder.
+/// Create a new template: the guided app, opened straight into the builder.
+///
+/// The builder is one screen with the template's five parts on it, so `fastf
+/// template new` and `T` in the app are the same editor rather than two that
+/// drift.
 pub fn new_interactive() -> Result<()> {
-    tty::require_tty(
-        "build a template",
-        "generate one instead: `fastf template from-folder <dir> <slug>`",
-    )?;
-    crate::tui::template_builder::build_template(None)
+    crate::tui::run(crate::tui::Entry::Studio {
+        open: crate::tui::entry::StudioEntry::New,
+    })
 }
 
-/// Edit an existing template using the interactive builder.
+/// Edit an existing template in the same builder.
 pub fn edit(slug: &str) -> Result<()> {
-    tty::require_tty(
-        "edit a template",
-        "edit templates/<slug>/template.yaml directly",
-    )?;
     validate_slug(slug)?;
     let path = paths::template_manifest(slug);
     if !path.exists() {
         bail!("template '{}' not found", slug);
     }
-    let existing = Template::load_from_file(&path)?;
-    crate::tui::template_builder::build_template(Some(existing))
+    crate::tui::run(crate::tui::Entry::Studio {
+        open: crate::tui::entry::StudioEntry::Edit(slug.to_string()),
+    })
 }
 
 pub fn delete(slug: &str, yes: bool) -> Result<()> {
@@ -196,7 +201,7 @@ pub fn delete(slug: &str, yes: bool) -> Result<()> {
     }
     if !yes {
         // Without this the command is simply unusable from a script: it dies on
-        // dialoguer's bare "IO error: not a terminal" with no way forward.
+        // a bare "not a terminal" failure with no way forward.
         tty::require_tty(
             "confirm",
             &format!("pass --yes to delete template '{slug}' without confirming"),
@@ -385,6 +390,36 @@ fn print_from_folder_preview(slug: &str, scan: &ScanResult, bundle_assets: bool)
     }
 }
 
+/// A folder scan, print-free: what the generated template would hold.
+pub struct ScanSummary {
+    pub structure: Vec<FolderNode>,
+    pub text_files: Vec<String>,
+    /// `(path relative to the source, bytes)`.
+    pub assets: Vec<(String, u64)>,
+    pub folders: usize,
+    /// Binary or oversized files left out because bundling was not asked for.
+    pub skipped: usize,
+    pub bundle_bytes: u64,
+}
+
+/// `scan_source` as data. The guided app previews with this, so the app and
+/// `--dry-run` report the same scan.
+pub fn scan_for_preview(root: &Path, bundle_assets: bool) -> Result<ScanSummary> {
+    let scan = scan_source(root, bundle_assets)?;
+    Ok(ScanSummary {
+        bundle_bytes: scan.bundle_bytes(),
+        text_files: scan.text_files.iter().map(|f| f.path.clone()).collect(),
+        assets: scan
+            .assets
+            .iter()
+            .map(|asset| (asset.rel.clone(), asset.size))
+            .collect(),
+        folders: scan.folders,
+        skipped: scan.skipped,
+        structure: scan.structure,
+    })
+}
+
 fn validate_source(source: &str) -> Result<PathBuf> {
     let root = PathBuf::from(source);
     if !root.exists() {
@@ -396,7 +431,7 @@ fn validate_source(source: &str) -> Result<PathBuf> {
     Ok(root)
 }
 
-fn ensure_slug_available(slug: &str, force: bool) -> Result<()> {
+pub fn ensure_slug_available(slug: &str, force: bool) -> Result<()> {
     if paths::template_dir(slug).exists() && !force {
         bail!(
             "template '{}' already exists — re-run with --force to overwrite",

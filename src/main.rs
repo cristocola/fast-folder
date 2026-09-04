@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "fastf",
-    about = "Fast Folder Creator — template-driven project folder generator",
+    about = "Fast Folder Creator — a full-screen app and a command line for template-driven project folders",
     long_about = "fastf creates structured project folders from YAML templates.\n\
 \n\
 Templates define a folder structure, placeholder files, and variables (text inputs\n\
@@ -19,7 +19,7 @@ counters live in one data folder: next to the binary when a config.toml sits the
 (portable mode), otherwise in your user config directory. See `fastf paths`.\n\
 \n\
 Getting started:\n\
-  fastf                        # interactive menu\n\
+  fastf                        # the guided app: your whole library, on one screen\n\
   fastf new                    # pick a template and fill in variables\n\
   fastf template list          # see available templates\n\
   fastf template new           # create a new template interactively\n\
@@ -95,14 +95,13 @@ enum Commands {
         action: IdAction,
     },
 
-    /// List recent projects — opens an interactive picker by default
+    /// List recent projects — opens the guided app on them by default
     #[command(
-        after_help = "By default, `fastf recent` opens an interactive picker so you can\n\
-        select a project and choose between opening its folder, viewing metadata,\n\
-        adding tags, or appending a journal note. Pass --plain (or pipe stdout)\n\
-        to get the non-interactive list output for scripts.\n\n\
+        after_help = "By default, `fastf recent` opens the guided app with these projects on\n\
+        screen (the flags shown as a filter chip Esc takes off), where every verb is a\n\
+        key away. Pass --plain (or pipe stdout) to get the plain list for scripts.\n\n\
         Examples:\n  \
-            fastf recent                           # interactive picker\n  \
+            fastf recent                           # the app, on the recent projects\n  \
             fastf recent --plain                   # non-interactive list (script-friendly)\n  \
             fastf recent --plain --limit 5\n  \
             fastf recent --template music-video\n  \
@@ -110,7 +109,7 @@ enum Commands {
             fastf recent --tag draft               # only projects with this tag"
     )]
     Recent {
-        /// Max number of projects to show (default: from config recent_default_limit, or 20)
+        /// Max number of projects to show (default: from config recent-limit, or 20)
         #[arg(long)]
         limit: Option<usize>,
 
@@ -220,6 +219,61 @@ enum Commands {
         base: Option<String>,
 
         /// Skip the confirmation prompt (for scripts).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Rename a project's folder on disk
+    #[command(
+        after_help = "The folder is renamed in place and the library's index updated; the project's\n\
+        ID and metadata do not change. Without a name, the current one is offered to edit.\n\n\
+        Examples:\n  \
+            fastf rename ID0047 2026-07-16_Spring_Campaign_v2_ID0047\n  \
+            fastf rename lullaby                    # edit the current name in a prompt\n  \
+            fastf rename ID0047 New_Name --yes      # no confirmation (for scripts)"
+    )]
+    Rename {
+        /// Project ID (e.g. ID0047), ID prefix, or name substring
+        query: String,
+
+        /// The new folder name. Omit to edit the current one interactively.
+        name: Option<String>,
+
+        /// Skip the confirmation prompt (for scripts).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Forget a project: remove its PROJECT_INFO.md and leave the files
+    #[command(
+        after_help = "Only PROJECT_INFO.md is removed — the folder and everything else in it stay\n\
+        exactly where they are. `fastf register` brings it back.\n\n\
+        Examples:\n  \
+            fastf unregister ID0047\n  \
+            fastf unregister ID0047 --yes           # no confirmation (for scripts)"
+    )]
+    Unregister {
+        /// Project ID (e.g. ID0047), ID prefix, or name substring
+        query: String,
+
+        /// Skip the confirmation prompt (for scripts).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Delete a project's folder and everything inside it
+    #[command(
+        after_help = "Permanent: there is no trash. Without --yes it names the folder and asks you\n\
+        to type the word `delete`, exactly as the guided app does.\n\n\
+        Examples:\n  \
+            fastf delete ID0047\n  \
+            fastf delete ID0047 --yes               # no confirmation (for scripts)"
+    )]
+    Delete {
+        /// Project ID (e.g. ID0047), ID prefix, or name substring
+        query: String,
+
+        /// Skip the confirmation (for scripts).
         #[arg(short = 'y', long)]
         yes: bool,
     },
@@ -465,7 +519,7 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum TemplateAction {
-    /// Create a new template step-by-step with an interactive builder
+    /// Create a new template in the guided app's builder
     New,
     /// List all available templates with their slugs and descriptions
     List,
@@ -474,7 +528,7 @@ enum TemplateAction {
         /// Template slug (see 'fastf template list')
         slug: String,
     },
-    /// Edit an existing template interactively — existing values are pre-filled, press Enter to keep them
+    /// Edit an existing template in the guided app's builder: every part of it on one list
     Edit {
         /// Template slug (see 'fastf template list')
         slug: String,
@@ -531,14 +585,13 @@ enum ConfigAction {
             bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             terminal                    Terminal emulator to open when launched without one\n                              (default: $TERMINAL, else probe; \"none\" disables)\n  \
+            theme                       The app's palette: auto, mono, ansi or rich (default: auto — follow the terminal)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \
             date-format                 strftime format for the {date} token (default: %Y-%m-%d)\n  \
             preview-lines               Lines per file in dry-run preview (default: 8, 0 = none)\n  \
             prompt-open-after-create    Ask 'Open project folder?' after `fastf new` (default: true)\n  \
             confirm-create              Ask 'Create this project?' in `fastf new` (default: true)\n  \
-            show-banner                 Show ASCII banner in TUI menu (default: true)\n  \
-            show-frame                  Show the library summary under the TUI menu (default: true)\n  \
-            recent-default-limit        TUI Projects page size and default `fastf recent --limit` (default: 20)\n  \
+            recent-limit                Default `fastf recent --limit` (default: 20)\n  \
             register-naming-pattern     Pattern for `fastf register --rename` w/o a template (default: \"{date}_{name}_{id}\")\n  \
             on-name-collision           What to do when the folder name is taken: suffix (add _2, _3…) or error (default: suffix)\n  \
             post_create.git_init        Run `git init` automatically (default: false)\n  \
@@ -669,7 +722,7 @@ fn main() {
         // 130 (the shell convention for SIGINT) so scripts can tell them apart.
         //
         // Deliberately says nothing about a partial project: this fires wherever
-        // Ctrl-C lands, including the main menu with nothing in flight. The
+        // Ctrl-C lands, including the dashboard with nothing in flight. The
         // create path prints its own notice when it actually rolls a folder back.
         if fastf::util::interrupt::is_set() {
             eprintln!("{}", colored::Colorize::yellow("aborted."));
@@ -681,6 +734,15 @@ fn main() {
             // The only command that could repair the file also refuses to run
             // until it is repaired, so say what actually gets the user moving.
             eprintln!("  hint: fix the file, or delete it to start over with defaults");
+        }
+        // `fastf 2>/dev/null`: the refusal just went nowhere. When stdout is
+        // still a terminal, say it there too — an exit code with no words is
+        // the one thing worse than an error.
+        {
+            use std::io::IsTerminal;
+            if !std::io::stderr().is_terminal() && std::io::stdout().is_terminal() {
+                println!("error: {rendered}");
+            }
         }
         pause_before_the_window_closes();
         std::process::exit(1);
@@ -694,7 +756,7 @@ fn main() {
 /// Only ever reached inside a window fastf opened for itself
 /// (`util::relaunch`): closing on the last line of output would make the whole
 /// mechanism pointless, since the text would flash past exactly as it does in
-/// the journal. A window that ran a picker or a menu already had the user's
+/// the journal. A window that ran a picker or the app already had the user's
 /// attention and closes at once — the alternative is a keypress demanded of
 /// somebody who just pressed a key.
 ///
@@ -753,14 +815,29 @@ fn run() -> Result<()> {
     match cli.command {
         // No subcommand → interactive TUI
         None => {
-            // A launcher's `fastf` has no terminal to draw a menu on, and the
-            // menu's own refusal would be written to the journal. Open a window
-            // and run the menu in it; anywhere else this is false.
-            let cfg = fastf::core::config::Config::load()?;
+            // A launcher's `fastf` has no terminal to draw on, and the app's
+            // own refusal would be written to the journal. Open a window
+            // and run the app in it; anywhere else this is false.
+            //
+            // A config that cannot be parsed is handed off too, with the
+            // default terminal probe: the window is where the error can be
+            // read, and the copy of fastf inside it prints it and waits.
+            let cfg = match fastf::core::config::Config::load() {
+                Ok(cfg) => cfg,
+                Err(err) => {
+                    if cli::terminal::hand_off_to_a_terminal(
+                        &fastf::core::config::Config::default(),
+                        false,
+                    ) {
+                        return Ok(());
+                    }
+                    return Err(err);
+                }
+            };
             if cli::terminal::hand_off_to_a_terminal(&cfg, false) {
                 return Ok(());
             }
-            tui::menu::run()
+            tui::run(tui::Entry::Menu)
         }
 
         Some(Commands::New {
@@ -842,6 +919,9 @@ fn run() -> Result<()> {
         Some(Commands::Move { query, base, yes }) => {
             cli::move_project::run(cli::move_project::MoveArgs { query, base, yes })
         }
+        Some(Commands::Rename { query, name, yes }) => cli::folder_verbs::rename(&query, name, yes),
+        Some(Commands::Unregister { query, yes }) => cli::folder_verbs::unregister(&query, yes),
+        Some(Commands::Delete { query, yes }) => cli::folder_verbs::delete(&query, yes),
 
         Some(Commands::Reindex) => cli::reindex::run(),
         Some(Commands::Reconcile) => cli::reconcile::run(),

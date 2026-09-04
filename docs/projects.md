@@ -50,7 +50,7 @@ fastf config set bases "/mnt/projects/clients,/srv/archive"
 
 Discovery scans the direct children of each base and treats every folder holding a `PROJECT_INFO.md` as a project. A base that is not mounted is skipped quietly, which makes external drives and network shares practical.
 
-A base that is mounted but does not *answer* — a network share whose host has gone away — is a different case, and fastf names it. Every list of bases is probed with a short timeout, so a dead mount is reported as `(unresponsive)` and left out of that session's move targets, instead of blocking the menu for however long the operating system takes to give up on it. `(not mounted)` means the ordinary thing: nothing is there.
+A base that is mounted but does not *answer* — a network share whose host has gone away — is a different case, and fastf names it. Every list of bases is probed with a short timeout, so a dead mount is reported as `(unresponsive)` and left out of that session's move targets, instead of blocking the app for however long the operating system takes to give up on it. `(not mounted)` means the ordinary thing: nothing is there.
 
 Each base carries a small `.fastf-index.json` cache at its root, next to the projects. The cache stores base-relative paths, so it stays valid when a drive is mounted at a different letter or path on another machine. It is a disposable accelerator, never an authority:
 
@@ -63,7 +63,7 @@ Each base carries a small `.fastf-index.json` cache at its root, next to the pro
   naming anything but a plain folder name inside the base is rejected, the whole
   cache is abandoned, and the base is rescanned from the folders.
 - Handing a project's path to another program — `fastf open`, `fastf copy`,
-  `fastf path`, or Open project folder in the menu — checks that the folder
+  `fastf path`, or Open project folder in the app — checks that the folder
   really is a direct child of its base and really does hold a `PROJECT_INFO.md`
   first. A cached row is a hint until it has been looked at.
 
@@ -91,8 +91,8 @@ the size of anything reached through a link.
 Sizes are deliberately absent from `PROJECT_INFO.md`, the disposable
 `.fastf-index.json` cache, and the in-memory `Project` model. Project contents
 can change outside fastf at any time, so a persisted value would immediately
-become stale. Re-enter the TUI Projects browser to obtain a new snapshot. Acting
-on a project in the guided browser drops that project's snapshot. Tag it, rename it, or move it, and
+become stale. Reopen the guided app to obtain a new snapshot. Acting
+on a project in the guided app drops that project's snapshot. Tag it, rename it, or move it, and
 the row is measured again when you return to the list.
 
 ## The ID counter self-heals

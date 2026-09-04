@@ -340,3 +340,61 @@ fn both_lists_of_config_keys_agree() {
         );
     }
 }
+
+// --- rename, unregister, delete: the app's verbs, from the command line ------
+
+#[test]
+fn rename_unregister_and_delete_act_on_disk_with_yes() {
+    let sb = Sandbox::new();
+    let alpha = sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+    sb.plant_project(&sb.base, "2026-01-02_Beta_ID0002", "ID0002");
+    sb.plant_project(&sb.base, "2026-01-03_Gamma_ID0003", "ID0003");
+
+    let out = sb.ok(&["rename", "ID0001", "2026-01-01_Alpha_v2_ID0001", "--yes"]);
+    assert!(out.contains("Renamed ID0001"), "{out}");
+    assert!(!alpha.exists() && sb.base.join("2026-01-01_Alpha_v2_ID0001").is_dir());
+    let shown = sb.ok(&["path", "ID0001"]);
+    assert!(
+        shown.contains("Alpha_v2"),
+        "the library follows the rename:\n{shown}"
+    );
+
+    let out = sb.ok(&["unregister", "ID0002", "--yes"]);
+    assert!(out.contains("Unregistered ID0002"), "{out}");
+    let beta = sb.base.join("2026-01-02_Beta_ID0002");
+    assert!(beta.is_dir(), "the files stay");
+    assert!(
+        !beta.join("PROJECT_INFO.md").exists(),
+        "only the record goes"
+    );
+    let err = sb.fails(&["path", "ID0002"]);
+    assert!(
+        err.contains("ID0002") || err.contains("no project"),
+        "{err}"
+    );
+
+    let out = sb.ok(&["delete", "ID0003", "--yes"]);
+    assert!(out.contains("Deleted ID0003"), "{out}");
+    assert!(!sb.base.join("2026-01-03_Gamma_ID0003").exists());
+}
+
+#[test]
+fn the_destructive_verbs_refuse_to_guess_without_a_terminal() {
+    let sb = Sandbox::new();
+    let gamma = sb.plant_project(&sb.base, "2026-01-03_Gamma_ID0003", "ID0003");
+    // No --yes and no terminal to ask on: refused, nothing touched.
+    let err = sb.fails(&["delete", "ID0003"]);
+    assert!(err.contains("--yes"), "the refusal names the flag:\n{err}");
+    assert!(gamma.is_dir(), "nothing was deleted");
+    let err = sb.fails(&["unregister", "ID0003"]);
+    assert!(err.contains("--yes"), "{err}");
+    assert!(gamma.join("PROJECT_INFO.md").exists());
+    let err = sb.fails(&["rename", "ID0003"]);
+    assert!(err.contains("fastf rename <query> <name>"), "{err}");
+    let err = sb.fails(&["rename", "ID0003", "....", "--yes"]);
+    assert!(
+        !err.is_empty(),
+        "an unusable name is refused before anything moves"
+    );
+    assert!(gamma.is_dir());
+}

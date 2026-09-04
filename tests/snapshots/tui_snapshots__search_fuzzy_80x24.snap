@@ -1,0 +1,28 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fastf   12 projects   3 templates   2 bases                     highest ID0248 "
+" → projects 12   archive not mounted                        ⚠ 1 needs attention "
+" ⌕ tag:draft lulla                                             2/12 · relevance "
+"┌ projects ────────────────────────────────────────────────────────────────────┐"
+"│  ID     PROJECT                               SIZE        CREATED    BASE    │"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248         scanning… 2026-08-28 projects│"
+"│  ID0242 2026-08-22_Lullaby_Remix_ID0242         scanning… 2026-08-22 projects│"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" 2 of 12 projects   ·   Space marks a row for a batch   ·   ? for help          "
+" Enter keep  Esc clear / leave  ↑↓ move                                         "

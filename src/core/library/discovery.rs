@@ -123,9 +123,19 @@ pub fn scan_base(base: &Path) -> Vec<Project> {
     crate::util::trace::hit("scan_base");
     debug_assert_eq!(SCAN_DEPTH, 1, "only depth-1 scanning is implemented");
     let mut out = Vec::new();
-    let Ok(read_dir) = fs::read_dir(base) else {
-        return out;
+    let read_dir = match fs::read_dir(base) {
+        Ok(read_dir) => read_dir,
+        Err(err) => {
+            // A base that cannot be listed is not an empty base: say so
+            // rather than showing it as mounted with nothing in it.
+            crate::util::diag::warn(format!(
+                "{} could not be listed: {err}",
+                crate::util::paths::display_path(base)
+            ));
+            return out;
+        }
     };
+
     for entry in read_dir.flatten() {
         let path = entry.path();
         if !path.is_dir() {

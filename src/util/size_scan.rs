@@ -7,7 +7,7 @@
 //! filesystem costs a filling-in column instead of a frozen interface.
 //!
 //! Nothing is persisted: snapshots live in the scanner and die with it. What a
-//! size does and does not mean is [`crate::util::tree_size`]'s business.
+//! size does and does not mean is `util::tree_size`'s business.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ const WORKERS: usize = 2;
 
 /// What the browser knows about one project's size at this instant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SizeCell {
+pub enum SizeCell {
     /// Not measured yet. The scanner may not even have started this one.
     Pending,
     /// Measured: `Some(bytes)`, or `None` when the tree could not be read.
@@ -42,7 +42,7 @@ struct State {
 }
 
 /// A pool of workers that measures project folders in the background.
-pub(crate) struct SizeScanner {
+pub struct SizeScanner {
     state: Arc<Mutex<State>>,
     wake: Arc<Condvar>,
     /// Read from inside a walk, so it deliberately does not live behind the
@@ -51,8 +51,14 @@ pub(crate) struct SizeScanner {
     workers: Vec<JoinHandle<()>>,
 }
 
+impl Default for SizeScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SizeScanner {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let state = Arc::new(Mutex::new(State {
             queue: VecDeque::new(),
             in_flight: HashSet::new(),
@@ -84,7 +90,7 @@ impl SizeScanner {
     /// rather than after everything they have left behind. Walks already in
     /// flight are left to finish, since abandoning them would throw away work
     /// that is nearly always still wanted.
-    pub(crate) fn request(&self, wanted: &[PathBuf]) {
+    pub fn request(&self, wanted: &[PathBuf]) {
         let mut state = self.lock();
         state.queue.clear();
         for path in wanted {
@@ -104,7 +110,7 @@ impl SizeScanner {
     }
 
     /// One lock, one cell per requested path, in the order given.
-    pub(crate) fn cells_for(&self, paths: &[PathBuf]) -> Vec<SizeCell> {
+    pub fn cells_for(&self, paths: &[PathBuf]) -> Vec<SizeCell> {
         let state = self.lock();
         paths
             .iter()
@@ -117,7 +123,7 @@ impl SizeScanner {
 
     /// Drop a snapshot so a later request measures the tree again. Called after a
     /// mutation (a tag written, a rename, a move) changed what is in the folder.
-    pub(crate) fn forget(&self, path: &Path) {
+    pub fn forget(&self, path: &Path) {
         self.lock().done.remove(path);
     }
 

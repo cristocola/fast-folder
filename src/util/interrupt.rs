@@ -14,10 +14,14 @@
 //! A second Ctrl-C restores the default behaviour, so a genuinely stuck process
 //! can always still be killed from the keyboard.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
+/// What the second signal undoes before it exits: the guided app's alternate
+/// screen and raw mode, or an inline prompt's rows. A `fn()` stored as its
+/// address, so the handler can load it without a lock.
+static RESTORE: AtomicUsize = AtomicUsize::new(0);
 
 /// True once the user has asked us to stop.
 pub fn is_set() -> bool {
@@ -50,14 +54,23 @@ pub fn check() -> anyhow::Result<()> {
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Raise the flag without a real signal, so the interrupt-handling path can be
-/// tested deterministically. Sending an actual console control event on Windows
-/// reaches the whole process group — including the test runner — so simulating
-/// the flag is both safer and more precise: it drives exactly the code a real
-/// Ctrl-C reaches. Hold [`TEST_LOCK`] across the raise-and-reset.
+/// Raise the flag without a real signal.
+///
+/// The guided app runs the terminal in raw mode, where Ctrl-C arrives as a key
+/// rather than as SIGINT; when the user presses it at the root the app raises
+/// the flag itself so that `main`'s exit path says `aborted.` and exits 130
+/// exactly as a signal would have.
+pub fn raise() {
+    INTERRUPTED.store(true, Ordering::Relaxed);
+}
+
+/// [`raise`] for tests, which hold [`TEST_LOCK`] across the raise-and-reset.
+/// Sending an actual console control event on Windows reaches the whole process
+/// group — including the test runner — so simulating the flag is both safer and
+/// more precise: it drives exactly the code a real Ctrl-C reaches.
 #[cfg(test)]
 pub fn raise_for_test() {
-    INTERRUPTED.store(true, Ordering::Relaxed);
+    raise();
 }
 
 /// Reset the flag. Only for tests, which run many creates in one process.
@@ -68,7 +81,7 @@ pub fn reset() {
 
 /// Show the terminal cursor again, on whichever standard stream is a terminal.
 ///
-/// Every `dialoguer` prompt hides the cursor and shows it again on the way out
+/// Every prompt hides the cursor and shows it again on the way out
 /// — but not when it returns an error, and not when a menu unwinds past it.
 /// Left alone, leaving fastf that way hands the shell back an invisible cursor
 /// until the user thinks to run `tput cnorm`.
@@ -101,26 +114,60 @@ pub fn restore_terminal() {
     }
     #[cfg(not(unix))]
     {
-        use dialoguer::console::Term;
-        use std::io::IsTerminal;
+        // Windows has no async-signal-safety rule to keep, so the escape can
+        // simply be written through the ordinary handles.
+        use std::io::{IsTerminal, Write};
+        const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
         if std::io::stdout().is_terminal() {
-            let _ = Term::stdout().show_cursor();
+            let _ = std::io::stdout().write_all(SHOW_CURSOR);
+            let _ = std::io::stdout().flush();
         }
         if std::io::stderr().is_terminal() {
-            let _ = Term::stderr().show_cursor();
+            let _ = std::io::stderr().write_all(SHOW_CURSOR);
+            let _ = std::io::stderr().flush();
         }
     }
 }
 
+/// Register what the second signal must undo before the process exits. The
+/// guided app registers its screen (raw mode, the alternate screen, the mouse
+/// and paste reports); an inline prompt registers its rows. Whatever it is,
+/// it runs from a signal handler and must be async-signal-safe: `write`,
+/// `tcsetattr`, an atomic — never a lock or an allocation.
+pub fn set_restore(restore: fn()) {
+    RESTORE.store(restore as usize, Ordering::SeqCst);
+}
+
+/// The surface has been given back the ordinary way; the second signal has
+/// nothing of it to undo.
+pub fn clear_restore() {
+    RESTORE.store(0, Ordering::SeqCst);
+}
+
+/// What runs on the second signal before `exit`: the registered surface
+/// restore, then the cursor. Separate from `flag` so it can be tested — the
+/// exit cannot be.
+pub(crate) fn on_second_signal() {
+    let restore = RESTORE.load(Ordering::SeqCst);
+    if restore != 0 {
+        // SAFETY: the only writer is `set_restore`, which stores the address
+        // of a `fn()`; a non-zero value is one of those.
+        let restore: fn() = unsafe { std::mem::transmute::<usize, fn()>(restore) };
+        restore();
+    }
+    restore_terminal();
+}
+
 /// Record the interrupt. Async-signal-safe: a single relaxed atomic store, and
-/// on the second signal the cursor restore, which is written for this context.
+/// on the second signal the surface and cursor restore, which are written for
+/// this context.
 fn flag() {
     // On the second interrupt, stop being polite. If the first one did not get
     // us out promptly the user should not have to reach for Task Manager.
     if INTERRUPTED.swap(true, Ordering::Relaxed) {
-        // `main`'s error path never runs from here, so the cursor has to be
-        // restored before leaving or the shell is left blind.
-        restore_terminal();
+        // `main`'s error path never runs from here, so the screen has to be
+        // given back before leaving or the shell is left in raw mode, blind.
+        on_second_signal();
         std::process::exit(130); // 128 + SIGINT, the conventional shell code
     }
 }
@@ -178,9 +225,14 @@ fn install_platform() {
     let handler_ptr = handler as extern "C" fn(i32) as libc::sighandler_t;
     // SAFETY: `handler` only performs an atomic store (and `exit` on the second
     // signal), both of which are safe from a signal context.
+    //
+    // SIGHUP too: a closed terminal window or a dropped ssh session must
+    // unwind a create the same cooperative way, so the partial folder is
+    // rolled back rather than left behind.
     unsafe {
         libc::signal(libc::SIGINT, handler_ptr);
         libc::signal(libc::SIGTERM, handler_ptr);
+        libc::signal(libc::SIGHUP, handler_ptr);
     }
 }
 
@@ -196,6 +248,23 @@ mod tests {
         install();
         assert!(!is_set(), "no interrupt has been raised");
         assert!(check().is_ok());
+    }
+
+    static RESTORED: AtomicBool = AtomicBool::new(false);
+
+    #[test]
+    fn the_second_signal_runs_the_registered_restore_first() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        fn restore() {
+            RESTORED.store(true, Ordering::SeqCst);
+        }
+        set_restore(restore);
+        on_second_signal();
+        assert!(RESTORED.load(Ordering::SeqCst), "the surface is given back");
+        clear_restore();
+        RESTORED.store(false, Ordering::SeqCst);
+        on_second_signal();
+        assert!(!RESTORED.load(Ordering::SeqCst), "cleared: nothing to undo");
     }
 
     #[test]

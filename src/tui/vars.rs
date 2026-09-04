@@ -1,7 +1,7 @@
 //! The interactive half of variable collection.
 //!
-//! It lived in `core::vars`, which meant `core` imported `dialoguer` and printed
-//! to the terminal. The noninteractive boundary (`core::vars::validated_raw_values`)
+//! It lived in `core::vars`, which meant `core` owned a terminal and printed to
+//! it. The noninteractive boundary (`core::vars::validated_raw_values`)
 //! stayed where it was: it is what create, apply and register all validate
 //! against.
 
@@ -27,11 +27,10 @@ pub fn collect_vars(
             continue;
         }
 
-        // Without a terminal the prompt below fails with dialoguer's bare
-        // "IO error: not a terminal", which tells a script author nothing about
-        // what to do. Name the variable that is missing and the flag that
-        // supplies it. (Optional variables need `--slug=` too — the prompt runs
-        // for them as well.)
+        // Without a terminal the prompt below can only fail, and a bare "not a
+        // terminal" tells a script author nothing about what to do. Name the
+        // variable that is missing and the flag that supplies it. (Optional
+        // variables need `--slug=` too — the prompt runs for them as well.)
         if !crate::util::tty::prompt_available() {
             anyhow::bail!(
                 "no terminal to prompt on, and '{}' was not supplied.\n  \
@@ -46,9 +45,9 @@ pub fn collect_vars(
 
         let value = match var.var_type {
             VarType::Text => {
-                // The template's default keeps `dialoguer`'s `[default]`
-                // contract: shown in the prompt, taken by a bare Enter, replaced
-                // by whatever is typed instead.
+                // The template's default keeps the `[default]` contract: shown
+                // in the prompt, taken by a bare Enter, replaced by whatever is
+                // typed instead.
                 let mut opts = TextOpts::new();
                 if !var.default.is_empty() {
                     opts = opts.default_value(var.default.clone());

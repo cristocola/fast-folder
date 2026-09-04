@@ -135,7 +135,7 @@ storage.
 Every recursive walk stops at `paths::MAX_WALK_DEPTH` (**64**) and reports
 through `paths::too_deep`; `tree_size` turns it into `None` like any other read
 failure. 64 rather than 256 because a Windows *thread* gets a 1 MiB stack and the
-TUI browser's size scan runs on worker threads — 256 frames of `read_dir`
+app's size scan runs on worker threads — 256 frames of `read_dir`
 iterator overflowed one, which is the exact failure the limit exists to prevent.
 
 ## `PROJECT_INFO.md`
@@ -330,9 +330,10 @@ on process death, so there is no stale lock to recover.
 `cli::new` re-plans inside the lock and runs post-create outside it for exactly
 that reason.
 
-**Prompt first, then lock, then reload.** `edit_postcreate_commands` and
-`menu_settings_bases` collect the answer, *then* call `operations::update_config`,
-which takes the lock and re-reads. Holding a loaded `Config` across a human prompt
+**Prompt first, then lock, then reload.** The settings screen collects the
+answer, *then* `Action::SetConfig` calls `operations::update_config`, which
+takes the lock and re-reads (`post_create.commands` is read-only from both
+surfaces — a template's own `commands` is where that list is edited). Holding a loaded `Config` across a human prompt
 and saving it afterwards reverted whatever another `config set` had written
 meanwhile. Both remove by **text**, not by the index the user saw.
 

@@ -1,6 +1,6 @@
 [package]
 name = "fastf"
-version = "2.2.1"
+version = "3.0.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Fast Folder Creator — template-driven project folder generator with a guided TUI and CLI"
@@ -9,7 +9,7 @@ repository = "https://github.com/cristocola/fast-folder"
 homepage = "https://github.com/cristocola/fast-folder"
 authors = ["Cristo Cola"]
 readme = "README.md"
-keywords = ["cli", "template", "scaffolding", "folders", "productivity"]
+keywords = ["cli", "tui", "template", "scaffolding", "folders"]
 categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
@@ -20,7 +20,6 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 clap_mangen = "0.2"
-dialoguer = "0.11"
 serde = { version = "1", features = ["derive"] }
 # `serde_yaml 0.9` is archived upstream. `serde_yaml_ng` is the maintained
 # drop-in fork; `util::yaml` is the only module that names either of them, and
@@ -33,12 +32,28 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 anyhow = "1"
 colored = "3"
 serde_json = "1"
+# The guided app. Default features off: no calendar widget, no `time`, no
+# macros — the crossterm backend, the layout cache and underline colours are
+# all it uses. crossterm itself is reached as `ratatui::crossterm`, so there is
+# exactly one version of it in the tree.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache", "underline-color"] }
+# helix's fuzzy matcher: the command palette, jump-to-project and the free
+# terms of the search bar.
+nucleo-matcher = "0.3"
+# Display-column measurement for the line editor and the table cells. Already in
+# the tree through ratatui; named here so `tui` does not reach through it.
+unicode-width = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Feature unification only: fastf imports crossterm through `ratatui::crossterm`.
+# `use-dev-tty` makes the event reader open `/dev/tty` rather than stdin, which
+# is what makes `fastf </dev/null` in a terminal still read keys — the app and
+# the inline prompts both depend on it.
+crossterm = { version = "0.29", default-features = false, features = ["events", "use-dev-tty"] }
 
 # Also a dev-dependency so integration tests (separate crates) can drive fastf
-# through a real pty — `dialoguer` refuses to prompt without a TTY, so the
+# through a real pty — a prompt refuses to draw without a TTY, so the
 # confirmations and pickers are otherwise untestable. Already vendored for unix
 # builds, so this adds no new supply-chain surface.
 [target.'cfg(unix)'.dev-dependencies]
@@ -46,10 +61,17 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# Snapshot tests for the guided app's frames (`tests/tui_snapshots.rs`), rendered
+# through ratatui's `TestBackend`. Snapshots live under `tests/snapshots/`.
+insta = "1"
 # Property tests for the pure logic (naming, globs, the query parser). Exhaustive
 # generated input finds the cases handwritten tests miss — the "sanitize_name
 # output is always a creatable filename" property is the one that matters most.
 proptest = { version = "1", default-features = false, features = ["std"] }
+# A terminal emulator for the pty suite: ratatui redraws only the cells that
+# changed, so the raw transcript is fragments; `harness::app_screen` replays it
+# into a virtual screen and the assertions read the frame a person would see.
+vt100 = "0.16.2"
 
 # Do not add `panic = "abort"`. The TUI restores the terminal while unwinding;
 # aborting would leave it in raw mode with the cursor hidden.

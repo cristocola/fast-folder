@@ -65,7 +65,7 @@ pub fn one_project(cfg: &Config, query: &str, prompt: &str, how: &str) -> Result
 /// `recent` and `search` gate on both because there stdout chooses the output
 /// *format* — a pipe gets the plain list instead of the browser. This is a
 /// different question: "can I ask?", which is what `util::tty` exists to answer,
-/// and the answer is stderr, because that is where dialoguer draws and stdin is
+/// and the answer is stderr, because that is where a prompt draws and stdin is
 /// where it reads.
 ///
 /// Gating on stdout would make the picker unreachable in the one place `path`

@@ -1,6 +1,6 @@
 <h1 align="center">fastf</h1>
 
-<p align="center"><b>Fast Folder: a template-driven project scaffolder for any kind of structured work.</b></p>
+<p align="center"><b>Fast Folder: a full-screen terminal app and a command line for template-driven project folders.</b></p>
 
 <p align="center">
   <a href="https://github.com/cristocola/fast-folder/actions/workflows/ci.yml"><img src="https://github.com/cristocola/fast-folder/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -10,7 +10,9 @@
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-dea584.svg" alt="Built with Rust"></a>
 </p>
 
-Everyone who works in projects has a folder convention: how a new project should be named, which subfolders it needs, which starter files belong inside. In practice the convention lives in someone's head or a wiki page, and every rushed deadline erodes it a little more. fastf makes the convention executable. You describe the structure once as a template. From then on, creating a project means answering a few questions, and the result is always right: consistent name, complete folder skeleton, starter files pre-filled with your answers, a unique project ID, and metadata that lets you find the project again months later.
+Everyone who works in projects has a folder convention: how a new project should be named, which subfolders it needs, which starter files belong inside. In practice the convention lives in someone's head or a wiki page, and every rushed deadline erodes it a little more. fastf makes the convention executable. You describe the structure once as a template. From then on, creating a project means answering a few questions, and the result is always right: consistent name, complete folder skeleton, starter files pre-filled with your answers, a unique project ID, and metadata that lets you find the project again months later. The daily surface is a full-screen terminal app — your whole library on one screen, every verb a key away — and everything it does has a scriptable subcommand.
+
+<p align="center"><img src="docs/img/dashboard.svg" alt="fastf's dashboard: the header with the counts, the search bar, the project table with sizes filling in, the detail pane, and the template strip" width="960"></p>
 
 fastf is a **single-user** tool for self-contained project trees made from
 ordinary files and directories. Both its surfaces share the same state on one
@@ -29,24 +31,39 @@ It is the same tool for very different people:
 One engine drives two interfaces, so you can work whichever way fits the moment:
 
 ```bash
-fastf                       # guided terminal menu: pick, answer, done
+fastf                       # the guided app: your whole library, on one screen
 fastf new general --name="spring campaign"    # -> 2026-07-16_Spring_Campaign_ID0048/
 ```
 
-## The guided menu
+## The guided app
 
-Running `fastf` with no arguments opens the terminal menu, which is how most work
-gets done. It creates projects with a live preview of the folder tree, browses
-the library with folder sizes and tags filling in as they are measured, moves
-projects between drives with a progress bar you can cancel, builds templates step
-by step, and edits every setting in place. Esc always goes back, a rejected
-answer comes back editable rather than lost, and a network share that has gone
-away is reported rather than left as a frozen screen.
+Running `fastf` with no arguments opens the guided app, which is how most work
+gets done: one full-screen dashboard that shows the whole library — every base,
+every template, folder sizes filling in as they are measured — and acts on it.
+Type to search (a word matches a name, ID, template or tag, a typo forgiven; a
+number means an ID; `tag:draft template=music-video created>2026-01-01` match
+exactly), press a key to open a project's folder, a terminal in it, or its
+action menu, and `c` for a command palette that finds any command or project by
+name. Mark a run of rows with Space and the next verb runs over all of them.
 
-Nothing it does is menu-only: every action has a scriptable `fastf <command>`
-equivalent, and the rest of this README speaks fluent shell.
+Everything else is a screen rather than a detour. Creating a project, adopting
+an existing folder, applying a template to one: a form with every question on
+it, then a preview built by the code that commits it, then Enter. Templates get
+a studio with a builder — the folder tree drawn beside the paths as you type
+them. Every setting fastf has is on one screen with its current value beside it.
+Esc always goes back one step, a rejected answer comes back editable rather
+than lost, and a network share that has gone away is reported rather than left
+as a frozen screen.
+
+Nothing it does is app-only: every action has a scriptable `fastf <command>`
+equivalent (`rename`, `unregister` and `delete` included), and the rest of this
+README speaks fluent shell. The command line
+asks its own questions in the same palette, a few rows at the cursor — never
+taking the screen away from what it just printed.
 
 The whole tool is a single self-contained Rust binary (under 4 MB) with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
+
+The app needs a terminal of at least 60×16 (the detail pane appears from 100 columns, the template strip from 30 rows), draws in the sixteen colours where truecolor is not announced (`fastf config set theme` pins a palette) and in plain ASCII where the alphabet is not there (`FASTF_ASCII=1`); over ssh, on a console, or in the legacy Windows console it says what it cannot do rather than pretending. Details in [docs/cli.md](docs/cli.md#the-guided-app).
 
 ## Quick start
 
@@ -58,7 +75,7 @@ paru -S fast-folder-bin
 cargo install --git https://github.com/cristocola/fast-folder
 
 # First project
-fastf                        # pick a bundled template, answer the prompts, done
+fastf                        # pick a bundled template, fill the form, done
 ```
 
 Two universal templates are bundled on first run. `general` is the zero-setup starting point: a dated, numbered folder (`2026-07-16_Spring_Campaign_ID0048`) with an inbox subfolder, ready for any kind of work. `client-project` adds working and delivery folders plus a brief that fills itself in with the client's name and project details.
@@ -69,7 +86,7 @@ Domain-specific templates live in the [`examples/templates/`](examples/templates
 
 - **Fills in file contents, not just folder names.** Your answers land inside the files themselves: a client brief with the client's name already written in, a shot list titled for the artist, a report header with the right month, a code project's config ready to build. Text files get placeholders substituted, and binary files (a logo, a video asset) are copied exactly as they are.
 - **A template is just a folder.** One small settings file plus a folder tree that gets reproduced into every project. Share a template by copying its folder. Or point fastf at a finished project and it generates a template from it (`fastf template from-folder`).
-- **Two ways to work, one engine.** A guided menu in the terminal and a scriptable command line for automation. Both read the same templates and settings, so nothing gets out of sync.
+- **Two ways to work, one engine.** A guided app in the terminal and a scriptable command line for automation. Both read the same templates and settings, so nothing gets out of sync.
 - **No hidden database.** A folder is a project because it contains a small `PROJECT_INFO.md` metadata file inside it. Delete the folder and the project is simply gone. Nothing to maintain, nothing to drift out of sync.
 - **Every project is findable again.** Unique IDs, creation dates, tags, and searchable metadata. Jump to any project with `fastf open ID0047` — or just `fastf open 47` — browse recent work, or keep timestamped journal notes per project.
 - **Works from your app launcher, not only a shell.** Bind fastf to a hotkey and `fastf copy lullaby` puts that project's folder on the clipboard with a notification; ask it something that needs a list or a question and it opens a terminal for itself instead of answering into the void. Pipes, redirects, cron and CI are untouched.
@@ -95,7 +112,7 @@ paru -S fast-folder-bin    # prebuilt static binary
 paru -S fast-folder        # build from source
 ```
 
-Both install the `fastf` command, shell completions, man pages, and a "Fast Folder" app-menu entry that opens the guided menu in your terminal.
+Both install the `fastf` command, shell completions, man pages, and a "Fast Folder" app-menu entry that opens the guided app in your terminal.
 
 ### Linux (release archive)
 
@@ -168,7 +185,7 @@ Tests are hermetic: they redirect all state through `FASTF_INSTALL_DIR` (and `HO
 | [`windows_semantics.rs`](tests/windows_semantics.rs) | reserved names, long paths, links, read-only files |
 | [`hostile_fs.rs`](tests/hostile_fs.rs) | corrupt caches, markers and metadata |
 | [`properties.rs`](tests/properties.rs) | generated-input properties (proptest) |
-| [`tui_pty.rs`](tests/tui_pty.rs) | the interactive menu through a real terminal (unix) |
+| [`tui_pty.rs`](tests/tui_pty.rs) | the guided app and the command line's prompts through a real terminal (unix) |
 | [`repo_hygiene.rs`](tests/repo_hygiene.rs) | no tracked file describes the machine it was written on |
 | [`layering.rs`](tests/layering.rs) | `core` and `util` never render, prompt, or reach for a surface |
 
@@ -179,7 +196,7 @@ Two things worth knowing before you change the copy or move paths:
   error there) or `FASTF_FAULT=create:mid-copy:abort` (kills the process there).
   See `util::faults::ALL_FAULT_POINTS`. Compiled out of release builds.
 - **Work counting.** Operations that cost real I/O name themselves, so a claim
-  like "the project browser no longer rescans the library" can be asserted rather
+  like "a tag patches its row and never rescans the library" can be asserted rather
   than believed. `FASTF_TRACE_FILE=/tmp/counts fastf` appends one line per traced
   operation. Also compiled out of release builds.
 - **Lint the other platform too.** `#[cfg(unix)]` code does not compile on a

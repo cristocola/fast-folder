@@ -12,14 +12,14 @@ Both are self-contained. `fastf.exe` is a single file that uses nothing beyond W
 ## Option 1: MSI installer (recommended)
 
 1. Download the `.msi` from the releases page and run it. A standard setup wizard walks you through the license and the install folder.
-2. Launch **Fast Folder** from the Start Menu. It opens the guided menu in a console window. On the first launch it asks where your projects should live, suggesting `C:\Users\<you>\Projects`, and creates that folder for you.
+2. Launch **Fast Folder** from the Start Menu. It opens the guided app in a console window. On the first launch it asks where your projects should live, suggesting `C:\Users\<you>\Projects`, and creates that folder for you.
 3. For the CLI, open a **new** terminal (PowerShell or cmd). PATH changes only apply to terminals started after the install. Verify:
 
 ```powershell
 fastf --version
 ```
 
-The installer places `fastf.exe` — the CLI and the guided menu, one program — under `Program Files\fastf` and adds that directory to the PATH. The Start Menu shortcut runs it.
+The installer places `fastf.exe` — the CLI and the guided app, one program — under `Program Files\fastf` and adds that directory to the PATH. The Start Menu shortcut runs it.
 
 Upgrading is just running a newer MSI. Uninstall from Windows Settings > Apps like any other program. Uninstalling removes the shortcut and the PATH entry.
 
@@ -99,6 +99,41 @@ exists.
 
 `fastf term <query>` works here too: it opens Windows Terminal (`wt`) at the
 project's folder when it is installed, and a new `cmd` console there otherwise.
+
+## The guided app in the old console
+
+The app draws with box-drawing characters and a small alphabet of its own —
+`▸` the cursor, `✓` a mark, `●` a tag, `⌕` search, `⚠` a warning. Windows
+Terminal shows all of it. The **legacy console host** (the black window a
+double-click on `fastf.exe` opens on Windows 10, or `conhost.exe`) has a font
+that often does not, so fastf switches its own alphabet to plain ASCII there
+automatically: `>` `*` `*` `/` `!`. Box-drawing borders stay, because the
+console has always had those.
+
+The detection is "a Windows host that announces no emulator": no `WT_SESSION`
+(Windows Terminal), no `TERM_PROGRAM`, no `TERM`, and none of the variables
+Alacritty, WezTerm and ConEmu set. Those all draw Unicode and keep it. Force
+it either way:
+
+```powershell
+$env:FASTF_ASCII = "1"    # plain ASCII, wherever you are
+$env:FASTF_ASCII = "0"    # the Unicode alphabet, even in the old console
+```
+
+Colour follows the same rule the app uses everywhere: `NO_COLOR` turns it off,
+a terminal that announces truecolor (`COLORTERM=truecolor`, Windows Terminal,
+a `TERM` or `TERM_PROGRAM` that names a truecolor emulator) gets the muted RGB
+palette, and anything else gets the sixteen ANSI colours used sparingly.
+`fastf config set theme mono|ansi|rich` pins one, and `FASTF_THEME` pins one
+for a single run.
+
+
+## The mouse
+
+Clicking a row selects it, clicking a pane focuses it, and the wheel scrolls
+whatever the arrow keys would. Mouse reporting is on while the app is open,
+which means a plain drag no longer selects text — hold **Shift** while dragging
+to select, as in every other full-screen terminal program.
 
 ## "VCRUNTIME140.dll was not found"
 

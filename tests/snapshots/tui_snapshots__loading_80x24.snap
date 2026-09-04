@@ -1,0 +1,28 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fastf   0 projects (from index) |   0 templates                                "
+" probing bases…                                                                 "
+" ⌕ / to search                                                     0/0 · newest "
+"┌ projects ────────────────────────────────────────────────────────────────────┐"
+"│  ID   PROJECT                SIZE        CREATED    BASE TEMPLATE TAGS       │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" reading the library…                                                           "
+" / search  a actions  o open  t terminal  y copy path  n new  ? help            "

@@ -18,6 +18,20 @@
 //!   cleaned up. This models hard process termination such as `taskkill /F` and
 //!   proves that *recovery* works rather than only testing unwind cleanup.
 //!
+//! Several failpoints can be armed at once as a **comma list**, which trips
+//! every named point on the way:
+//!
+//! ```text
+//! FASTF_FAULT=move:force-staged,move:after-staging
+//! ```
+//!
+//! This is how a pty test walks a whole failure shape in one run — the first
+//! point switches the engine onto the staged path, the second fails it there.
+//! `move:force-staged` is the one failpoint whose injected error is *handled*:
+//! the move engine reads it as the signal to take the staged-copy path, exactly
+//! as a cross-device `EXDEV` would, because a same-volume rename would never
+//! reach the code the test is about.
+//!
 //! Compiled out entirely in release builds: `check` becomes an inlined `Ok(())`
 //! and the environment is never consulted, so a stray `FASTF_FAULT` in a user's
 //! shell cannot affect a shipped binary.
@@ -42,7 +56,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Trip point `name` if it is the one currently armed.
+/// Trip point `name` if it is one of the currently armed failpoints.
 ///
 /// Call at a boundary where a crash must be survivable, e.g.
 /// `faults::check("move:before-commit-rename")?;`
@@ -58,21 +72,55 @@ pub fn check(name: &str) -> Result<()> {
             Err(_) => return Ok(()),
         },
     };
+    trip(name, &armed)
+}
 
-    // `point[:mode]` — split from the right, since point names contain colons.
-    let (point, mode) = match armed.rsplit_once(':') {
-        Some((point, mode @ ("abort" | "error"))) => (point, mode),
-        _ => (armed.as_str(), "error"),
+/// The armed value split into `(point, mode)` pairs — a comma list, each entry
+/// `point[:mode]`. The mode suffix is split from the **right** of each entry,
+/// since point names contain colons.
+#[cfg(debug_assertions)]
+fn specs(armed: &str) -> Vec<(&str, &str)> {
+    armed
+        .split(',')
+        .map(|spec| match spec.rsplit_once(':') {
+            Some((point, mode @ ("abort" | "error"))) => (point, mode),
+            _ => (spec, "error"),
+        })
+        .collect()
+}
+
+#[cfg(debug_assertions)]
+fn trip(name: &str, armed: &str) -> Result<()> {
+    for (point, mode) in specs(armed) {
+        if point == name {
+            if mode == "abort" {
+                // No unwinding, no destructors, no cleanup: a hard process stop.
+                crate::util::diag::fatal(format!("fault injection aborting at '{name}'"));
+                std::process::abort();
+            }
+            anyhow::bail!("injected fault at '{name}'");
+        }
+    }
+    Ok(())
+}
+
+/// Whether the armed failpoints include `name`.
+///
+/// One failpoint — `move:force-staged` — is a *decision*, not a crash: the move
+/// engine asks it before trying the rename, and an arm means "take the staged
+/// path" (see the module docs). `check` cannot express that, because an
+/// injected `Err` there is the signal, not a failure to propagate.
+#[cfg(debug_assertions)]
+pub fn is_armed(name: &str) -> bool {
+    let armed = THREAD_FAULT.with(|f| f.borrow().clone());
+    let armed = match armed {
+        Some(value) => value,
+        None => match std::env::var(FAULT_ENV) {
+            Ok(value) => value,
+            Err(_) => return false,
+        },
     };
-    if point != name {
-        return Ok(());
-    }
-    if mode == "abort" {
-        // No unwinding, no destructors, no cleanup: a hard process stop.
-        crate::util::diag::fatal(format!("fault injection aborting at '{name}'"));
-        std::process::abort();
-    }
-    anyhow::bail!("injected fault at '{name}'")
+    specs(&armed).iter().any(|(point, _)| *point == name)
 }
 
 /// Arm a failpoint for the current thread only, for the duration of `body`.
@@ -94,6 +142,13 @@ pub fn check(_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Release builds have no failpoints at all.
+#[cfg(not(debug_assertions))]
+#[inline(always)]
+pub fn is_armed(_name: &str) -> bool {
+    false
+}
+
 /// Every failpoint the codebase defines.
 ///
 /// Kept as a list so the invariant test can iterate them: a new boundary added
@@ -106,6 +161,7 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "create:before-counter-save",
     "move:before-marker-write",
     "move:after-transaction-create",
+    "move:force-staged",
     "move:mid-copy",
     "move:after-staging",
     "move:after-verify",
@@ -159,5 +215,45 @@ mod tests {
             assert!(check("move").is_ok(), "must not match the bare prefix");
             assert!(check("move:after-verify").is_err());
         });
+    }
+
+    /// A comma list arms every named point: the pty suites trip a whole
+    /// failure shape in one run (`move:force-staged,move:after-staging`).
+    #[test]
+    fn comma_list_trips_every_named_point() {
+        with_fault("move:force-staged,move:after-staging", || {
+            assert!(check("move:force-staged").is_err());
+            assert!(check("move:after-staging").is_err());
+            assert!(check("move:mid-copy").is_ok(), "an unlisted point passes");
+        });
+    }
+
+    /// Each comma entry keeps its own mode suffix.
+    #[test]
+    fn comma_list_entries_keep_their_modes() {
+        with_fault("move:mid-copy:abort,move:after-verify", || {
+            assert!(check("move:after-verify").is_err());
+        });
+        // The abort entry is exercised by the existing process tests; here it
+        // is enough that it parses without swallowing the second entry.
+        with_fault("create:mid-copy:error,move:after-staging", || {
+            assert!(check("move:after-staging").is_err());
+        });
+    }
+
+    /// `is_armed` answers the decision failpoints that `check` cannot: an arm
+    /// means "take the staged path", not "fail here" — so the engine asks it
+    /// and never trips `check` on the same name.
+    #[test]
+    fn is_armed_sees_the_list_without_tripping() {
+        with_fault("move:force-staged,move:after-staging", || {
+            assert!(is_armed("move:force-staged"));
+            assert!(is_armed("move:after-staging"), "a check point is armed too");
+            assert!(!is_armed("move:mid-copy"));
+            // The decision arm does not disturb the ordinary points.
+            assert!(check("move:after-staging").is_err());
+            assert!(check("move:mid-copy").is_ok());
+        });
+        assert!(!is_armed("move:force-staged"), "unarmed point is not armed");
     }
 }

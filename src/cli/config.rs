@@ -73,6 +73,15 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
+        "theme:".green(),
+        match crate::tui::theme::ThemeChoice::parse(&config.theme) {
+            Some(crate::tui::theme::ThemeChoice::Auto) | None =>
+                "auto (follows the terminal; FASTF_THEME overrides)".to_string(),
+            Some(choice) => choice.name().to_string(),
+        }
+    );
+    println!(
+        "  {:<26} {}",
         "default_template:".green(),
         if config.default_template.is_empty() {
             "(always prompt)".to_string()
@@ -80,6 +89,7 @@ pub fn show() -> Result<()> {
             config.default_template.clone()
         }
     );
+
     println!("  {:<26} {}", "date_format:".green(), config.date_format);
     println!(
         "  {:<26} {}",
@@ -99,17 +109,7 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
-        "show_banner:".green(),
-        bool_label(config.show_banner)
-    );
-    println!(
-        "  {:<26} {}",
-        "show_frame:".green(),
-        bool_label(config.show_frame)
-    );
-    println!(
-        "  {:<26} {}",
-        "recent_default_limit:".green(),
+        "recent_limit:".green(),
         config.recent_default_limit
     );
     println!(
@@ -205,23 +205,42 @@ fn parse_usize(value: &str) -> Result<usize> {
 pub fn normalize_base_entry(raw: &str) -> Result<String> {
     let expanded = crate::core::config::expand_base_path(raw)?;
     if !expanded.is_dir() {
-        eprintln!(
-            "{} {} is not mounted right now — keeping it; it will be indexed when it appears",
-            "note:".yellow(),
+        // Through `diag`, not `eprintln!`: the guided app owns the screen when
+        // it changes a setting, and a stray line from here would land in the
+        // middle of a frame.
+        crate::util::diag::note(format!(
+            "{} is not mounted right now — keeping it; it will be indexed when it appears",
             crate::util::paths::display_path(&expanded)
-        );
+        ));
     }
     crate::util::paths::storable(&expanded, "the base directory")
 }
 
+/// `fastf config set <key> <value>` — the same write the guided app performs,
+/// with its answer printed.
 pub fn set(key: &str, value: &str) -> Result<()> {
     // Load-mutate-save is a read-modify-write, so it needs the same
     // cross-process lock as ID allocation. Without it, two concurrent
     // `config set` calls each write back their own copy of the whole file and
     // one update is silently lost. A release-mode test caught this; the debug
     // build happened to be slow enough to serialize the processes by luck.
-    let normalized = key.replace('-', "_");
+    let mut said = String::new();
     crate::core::operations::update_config(|config| {
+        said = apply(config, key, value)?;
+        Ok(())
+    })?;
+    println!("{said}");
+    Ok(())
+}
+
+/// Apply one setting to a `Config` already in hand, and say what happened.
+///
+/// Print-free, so the guided app — which owns the screen and cannot let a
+/// `println!` through — writes settings by the same expression the command line
+/// does. Every refusal here is the refusal `config set` has always made.
+pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
+    let normalized = key.replace('-', "_");
+    let said = {
         match normalized.as_str() {
             "base_dir" => {
                 // Same validation as first-run onboarding — see
@@ -230,22 +249,49 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                 // relative path scatter projects wherever the command ran.
                 let resolved = crate::core::config::resolve_base_dir_input(value)?;
                 config.base_dir = crate::util::paths::storable(&resolved, "the base directory")?;
-                println!(
+                format!(
                     "Set base_dir = {}",
                     crate::util::paths::display_path(&resolved)
-                );
+                )
             }
             "editor" => {
                 config.editor = value.to_string();
-                println!("Set editor = {}", value);
+                format!("Set editor = {}", value)
             }
             "terminal" => {
                 config.terminal = value.to_string();
-                println!("Set terminal = {}", value);
+                format!("Set terminal = {}", value)
+            }
+            "theme" => {
+                let Some(choice) = crate::tui::theme::ThemeChoice::parse(value) else {
+                    bail!(
+                        "expected {}; got '{}'",
+                        crate::tui::theme::ThemeChoice::NAMES.join(", "),
+                        value.trim()
+                    );
+                };
+                config.theme = choice.name().to_string();
+                format!(
+                    "Set theme = {}  ({})",
+                    choice.name(),
+                    match choice {
+                        crate::tui::theme::ThemeChoice::Auto =>
+                            "follows what the terminal announces",
+                        crate::tui::theme::ThemeChoice::Kind(
+                            crate::tui::theme::ThemeKind::Mono,
+                        ) => "no colour, bold and reverse video only",
+                        crate::tui::theme::ThemeChoice::Kind(
+                            crate::tui::theme::ThemeKind::Ansi,
+                        ) => "the terminal's sixteen colours",
+                        crate::tui::theme::ThemeChoice::Kind(
+                            crate::tui::theme::ThemeKind::Rich,
+                        ) => "24-bit colour",
+                    }
+                )
             }
             "default_template" => {
                 config.default_template = value.to_string();
-                println!("Set default_template = {}", value);
+                format!("Set default_template = {}", value)
             }
             "date_format" => {
                 let preview = Local::now().format(value).to_string();
@@ -256,31 +302,29 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                     );
                 }
                 config.date_format = value.to_string();
-                println!("Set date_format = {}  (today: {})", value, preview);
+                format!("Set date_format = {}  (today: {})", value, preview)
             }
             "preview_lines" => {
                 config.preview_lines = parse_usize(value)?;
-                println!("Set preview_lines = {}", config.preview_lines);
+                format!("Set preview_lines = {}", config.preview_lines)
             }
             "prompt_open_after_create" => {
                 config.prompt_open_after_create = parse_bool(value)?;
-                println!(
+                format!(
                     "Set prompt_open_after_create = {}",
                     config.prompt_open_after_create
-                );
+                )
             }
             "confirm_create" => {
                 config.confirm_create = parse_bool(value)?;
-                println!("Set confirm_create = {}", config.confirm_create);
+                format!("Set confirm_create = {}", config.confirm_create)
             }
-            "show_banner" => {
-                config.show_banner = parse_bool(value)?;
-                println!("Set show_banner = {}", config.show_banner);
-            }
-            "show_frame" => {
-                config.show_frame = parse_bool(value)?;
-                println!("Set show_frame = {}", config.show_frame);
-            }
+            // Retired at v3.0.0 with the menu they drew. Accepted and ignored
+            // rather than refused: a config file or a script that still sets
+            // one must not start failing.
+            "show_banner" | "show_frame" => format!(
+                "{normalized} is no longer used — the guided app has no banner and no frame"
+            ),
             "bases" => {
                 // Comma-separated list of extra base directories to index. Empty
                 // value clears the list.
@@ -290,18 +334,22 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                 }
                 config.bases = resolved;
                 if config.bases.is_empty() {
-                    println!("Cleared bases");
+                    "Cleared bases".to_string()
                 } else {
-                    println!("Set bases = {}", config.bases.join(", "));
+                    format!("Set bases = {}", config.bases.join(", "))
                 }
             }
-            "recent_default_limit" => {
+            // `recent-default-limit` was the name while it also sized a menu
+            // page; the app scrolls, so it is only the `recent` default now.
+            // The old key keeps parsing — a config file that names it must not
+            // start failing at a major version.
+            "recent_limit" | "recent_default_limit" => {
                 let n = parse_usize(value)?;
                 if n == 0 {
-                    bail!("recent_default_limit must be at least 1");
+                    bail!("recent_limit must be at least 1");
                 }
                 config.recent_default_limit = n;
-                println!("Set recent_default_limit = {}", config.recent_default_limit);
+                format!("Set recent_limit = {}", config.recent_default_limit)
             }
             "register_naming_pattern" => {
                 let trimmed = value.trim();
@@ -317,10 +365,10 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                     );
                 }
                 config.register_naming_pattern = trimmed.to_string();
-                println!(
+                format!(
                     "Set register_naming_pattern = {}",
                     config.register_naming_pattern
-                );
+                )
             }
             "on_name_collision" => {
                 config.on_name_collision = match value.trim().to_lowercase().as_str() {
@@ -331,7 +379,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                     // in a config file must not stop every command.
                     other => bail!("expected 'suffix' or 'error'; got '{other}'"),
                 };
-                println!(
+                format!(
                     "Set on_name_collision = {}  ({})",
                     config.on_name_collision,
                     if config.suffix_on_name_collision() {
@@ -339,39 +387,38 @@ pub fn set(key: &str, value: &str) -> Result<()> {
                     } else {
                         "a taken folder name is refused"
                     }
-                );
+                )
             }
             "post_create.git_init" => {
                 config.post_create.git_init = parse_bool(value)?;
-                println!("Set post_create.git_init = {}", config.post_create.git_init);
+                format!("Set post_create.git_init = {}", config.post_create.git_init)
             }
             "post_create.reveal" => {
                 config.post_create.reveal = parse_bool(value)?;
-                println!("Set post_create.reveal = {}", config.post_create.reveal);
+                format!("Set post_create.reveal = {}", config.post_create.reveal)
             }
             "post_create.open_in_editor" => {
                 config.post_create.open_in_editor = parse_bool(value)?;
-                println!(
+                format!(
                     "Set post_create.open_in_editor = {}",
                     config.post_create.open_in_editor
-                );
+                )
             }
             "post_create.print_path" => {
                 config.post_create.print_path = parse_bool(value)?;
-                println!(
+                format!(
                     "Set post_create.print_path = {}",
                     config.post_create.print_path
-                );
+                )
             }
             other => bail!(
-                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, default-template, date-format, \
-             preview-lines, prompt-open-after-create, confirm-create, show-banner, show-frame, \
-             recent-default-limit, register-naming-pattern, on-name-collision, \
+                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, default-template, date-format, \
+             preview-lines, prompt-open-after-create, confirm-create, \
+             recent-limit, register-naming-pattern, on-name-collision, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
                 other
             ),
         }
-        Ok(())
-    })?;
-    Ok(())
+    };
+    Ok(said)
 }

@@ -443,8 +443,10 @@ pub fn template_files_dir(slug: &str) -> PathBuf {
 pub enum Probe {
     /// A directory, right now.
     Mounted,
-    /// Not there, or not a directory. Ordinary: a drive that is not plugged in.
+    /// Not there. Ordinary: a drive that is not plugged in.
     Absent,
+    /// There, but a file — a base was configured with the wrong path.
+    NotAFolder,
     /// Did not answer within the timeout. A dead SMB or NFS mount looks exactly
     /// like this, and `is_dir()` on one blocks for the operating system's own
     /// timeout — tens of seconds — with nothing on screen to say why.
@@ -462,6 +464,7 @@ impl Probe {
         match self {
             Probe::Mounted => "",
             Probe::Absent => "  (not mounted)",
+            Probe::NotAFolder => "  (not a folder)",
             Probe::Unresponsive => "  (unresponsive)",
         }
     }
@@ -481,8 +484,18 @@ pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(
 pub fn probe_dirs(paths: &[PathBuf], timeout: std::time::Duration) -> Vec<(PathBuf, Probe)> {
     paths
         .iter()
-        .map(|path| (path.clone(), probe_with(path, timeout, |p| p.is_dir())))
+        .map(|path| (path.clone(), probe_with(path, timeout, look)))
         .collect()
+}
+
+/// The blocking look itself: a directory, a file where a folder was
+/// expected, or nothing.
+fn look(path: &Path) -> Probe {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Probe::Mounted,
+        Ok(_) => Probe::NotAFolder,
+        Err(_) => Probe::Absent,
+    }
 }
 
 /// The subset of `paths` that answered and is a directory, reporting the rest.
@@ -508,18 +521,17 @@ pub fn mounted_bases(paths: &[PathBuf]) -> (Vec<PathBuf>, Vec<(PathBuf, Probe)>)
 ///
 /// A real unresponsive mount cannot be created portably in a test, so the test
 /// supplies a prober that sleeps instead.
-pub(crate) fn probe_with<F>(path: &Path, timeout: std::time::Duration, is_dir: F) -> Probe
+pub(crate) fn probe_with<F>(path: &Path, timeout: std::time::Duration, look: F) -> Probe
 where
-    F: FnOnce(&Path) -> bool + Send + 'static,
+    F: FnOnce(&Path) -> Probe + Send + 'static,
 {
     let (tx, rx) = std::sync::mpsc::channel();
     let owned = path.to_path_buf();
     std::thread::spawn(move || {
-        let _ = tx.send(is_dir(&owned));
+        let _ = tx.send(look(&owned));
     });
     match rx.recv_timeout(timeout) {
-        Ok(true) => Probe::Mounted,
-        Ok(false) => Probe::Absent,
+        Ok(probe) => probe,
         // Disconnected means the prober panicked; a base fastf cannot ask about
         // is one it must not claim is there.
         Err(_) => Probe::Unresponsive,
@@ -615,7 +627,7 @@ mod tests {
             std::time::Duration::from_millis(120),
             |_| {
                 std::thread::sleep(std::time::Duration::from_secs(30));
-                true
+                Probe::Mounted
             },
         );
 

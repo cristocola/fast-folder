@@ -48,6 +48,16 @@ impl Sandbox {
         sb
     }
 
+    /// A sandbox with **no base configured at all** — a brand-new install, so
+    /// the app asks where projects should live before it draws anything else.
+    pub fn unconfigured() -> Self {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let install = tmp.path().join("install");
+        let base = tmp.path().join("base");
+        fs::create_dir_all(install.join("templates")).unwrap();
+        Sandbox { tmp, install, base }
+    }
+
     /// Add extra library bases (`config set bases`), creating each directory.
     /// Returns their paths in the order given.
     pub fn with_bases(&self, names: &[&str]) -> Vec<PathBuf> {
@@ -312,6 +322,51 @@ pub mod pty {
     /// One scripted keystroke: how long after launch to send it, and what.
     pub type Keystroke = (Duration, Vec<u8>);
 
+    /// The terminal every pty test runs in.
+    pub const PTY_COLS: u16 = 120;
+    pub const PTY_ROWS: u16 = 40;
+
+    /// The transcript with every escape sequence removed, so an assertion can
+    /// match text the way a person sees it. ratatui redraws only the cells
+    /// that changed, so the result is a stream of fragments, not screens:
+    /// match on words, never on a whole line.
+    pub fn plain(transcript: &str) -> String {
+        let mut out = String::with_capacity(transcript.len());
+        let mut chars = transcript.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '\x1b' {
+                out.push(c);
+                continue;
+            }
+            match chars.next() {
+                // CSI: parameters, intermediates, then one final byte.
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                // OSC: up to BEL or ST.
+                Some(']') => {
+                    let mut previous = '\0';
+                    for c in chars.by_ref() {
+                        if c == '\x07' || (previous == '\x1b' && c == '\\') {
+                            break;
+                        }
+                        previous = c;
+                    }
+                }
+                // Two-byte escapes (charset selection and the like).
+                Some('(') | Some(')') | Some('#') => {
+                    chars.next();
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
     /// A keystroke script on a fixed cadence.
     ///
     /// Keys are spaced rather than burst because `dialoguer` redraws between
@@ -380,6 +435,26 @@ pub mod pty {
             self
         }
 
+        /// Tab — the next field of a form.
+        pub fn tab(self) -> Self {
+            self.push(b"\t", 300)
+        }
+
+        /// The arrows that change a form's choice in place.
+        pub fn right(mut self, n: usize) -> Self {
+            for _ in 0..n {
+                self = self.push(b"\x1b[C", 250);
+            }
+            self
+        }
+
+        pub fn left(mut self, n: usize) -> Self {
+            for _ in 0..n {
+                self = self.push(b"\x1b[D", 250);
+            }
+            self
+        }
+
         /// PageDown / PageUp — one viewport of the list.
         pub fn page_down(self) -> Self {
             self.push(b"\x1b[6~", 400)
@@ -416,6 +491,12 @@ pub mod pty {
         pub fn build(self) -> Vec<Keystroke> {
             self.steps
         }
+
+        /// When the next keystroke would be sent — the moment a screenshot of
+        /// "the state after everything so far" belongs to.
+        pub fn elapsed(&self) -> Duration {
+            Duration::from_millis(self.at_ms)
+        }
     }
 
     /// Run `program` with `args` and `env` overrides under a pty, feeding
@@ -428,7 +509,53 @@ pub mod pty {
         script: &[Keystroke],
         deadline: Duration,
     ) -> (String, i32) {
+        let (chunks, code) = run_with_stdout(program, args, env, script, deadline, None);
+        (join(&chunks), code)
+    }
+
+    /// `run`, keeping every read as its own chunk with the moment it arrived,
+    /// so a screen can be reconstructed as it was at any point of the script.
+    pub fn run_chunked(
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        deadline: Duration,
+    ) -> (Vec<(Duration, Vec<u8>)>, i32) {
         run_with_stdout(program, args, env, script, deadline, None)
+    }
+
+    /// `run_chunked` in a window of `cols` × `rows` rather than the suite's
+    /// 120×40 — the screenshot tool's way of looking at the compact layout.
+    #[allow(dead_code)]
+    pub fn run_chunked_sized(
+        cols: u16,
+        rows: u16,
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        deadline: Duration,
+    ) -> (Vec<(Duration, Vec<u8>)>, i32) {
+        run_sized(cols, rows, program, args, env, script, deadline, None)
+    }
+
+    /// The chunks that arrived before `until`, joined; what the screen was at
+    /// that moment once replayed.
+    pub fn until(chunks: &[(Duration, Vec<u8>)], until: Duration) -> Vec<u8> {
+        chunks
+            .iter()
+            .filter(|(at, _)| *at < until)
+            .flat_map(|(_, bytes)| bytes.iter().copied())
+            .collect()
+    }
+
+    fn join(chunks: &[(Duration, Vec<u8>)]) -> String {
+        let bytes: Vec<u8> = chunks
+            .iter()
+            .flat_map(|(_, bytes)| bytes.iter().copied())
+            .collect();
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     /// `run`, but with the child's **stdout** pointed at `stdout_file` while
@@ -447,7 +574,9 @@ pub mod pty {
         deadline: Duration,
         stdout_file: &std::path::Path,
     ) -> (String, i32) {
-        run_with_stdout(program, args, env, script, deadline, Some(stdout_file))
+        let (chunks, code) =
+            run_with_stdout(program, args, env, script, deadline, Some(stdout_file));
+        (join(&chunks), code)
     }
 
     fn run_with_stdout(
@@ -457,7 +586,30 @@ pub mod pty {
         script: &[Keystroke],
         deadline: Duration,
         stdout_file: Option<&std::path::Path>,
-    ) -> (String, i32) {
+    ) -> (Vec<(Duration, Vec<u8>)>, i32) {
+        run_sized(
+            PTY_COLS,
+            PTY_ROWS,
+            program,
+            args,
+            env,
+            script,
+            deadline,
+            stdout_file,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_sized(
+        cols: u16,
+        rows: u16,
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        deadline: Duration,
+        stdout_file: Option<&std::path::Path>,
+    ) -> (Vec<(Duration, Vec<u8>)>, i32) {
         // Everything the child needs is built *before* the fork: after it, only
         // async-signal-safe calls are legal, and `execve` is one — `setenv` is not.
         let prog = CString::new(program).unwrap();
@@ -510,14 +662,24 @@ pub mod pty {
         };
 
         let mut master: libc::c_int = -1;
-        // SAFETY: null term/winsize request the defaults; `master` is written by
+        // A real window size: the guided app lays itself out from it, and a
+        // pty with no size reports 0×0, which draws nothing. 120×40 is the
+        // large layout — the detail pane, the template strip, the tall header.
+        let winsize = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+
+        // SAFETY: a null termios requests the defaults; `master` is written by
         // the call and only read in the parent branch.
         let pid = unsafe {
             libc::forkpty(
                 &mut master,
                 std::ptr::null_mut(),
                 std::ptr::null(),
-                std::ptr::null(),
+                &winsize,
             )
         };
         assert!(pid >= 0, "forkpty failed");
@@ -543,7 +705,7 @@ pub mod pty {
         }
 
         let start = Instant::now();
-        let mut out: Vec<u8> = Vec::new();
+        let mut out: Vec<(Duration, Vec<u8>)> = Vec::new();
         let mut sent = 0usize;
         let mut status: libc::c_int = 0;
         let code = loop {
@@ -557,7 +719,7 @@ pub mod pty {
             // SAFETY: reading into a buffer we own, from a descriptor we own.
             let n = unsafe { libc::read(master, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
             if n > 0 {
-                out.extend_from_slice(&buf[..n as usize]);
+                out.push((start.elapsed(), buf[..n as usize].to_vec()));
             }
             // SAFETY: reaping our own child, non-blocking.
             let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
@@ -581,7 +743,7 @@ pub mod pty {
                 libc::close(redirect);
             }
         };
-        (String::from_utf8_lossy(&out).into_owned(), code)
+        (out, code)
     }
 }
 

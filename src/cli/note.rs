@@ -218,10 +218,23 @@ fn create_scratch_file() -> Result<(ScratchFile, std::fs::File)> {
 }
 
 /// Open the configured editor and return what the user wrote.
+///
+/// The TUI's "New note" action reaches the same scratch-file + editor flow
+/// through `note_from_editor` while suspended on the main screen.
+pub(crate) fn note_from_editor(editor: &str) -> Result<String> {
+    open_in_editor(editor)
+}
+
+/// Open the configured editor and return what the user wrote.
 fn open_in_editor(editor: &str) -> Result<String> {
     let (scratch, _handle) = create_scratch_file()?;
 
-    let status = std::process::Command::new(editor)
+    // `code --wait` is one editor: the first word is the program, the rest
+    // its arguments — the same split post-create's editor gets.
+    let mut parts = editor.split_whitespace();
+    let program = parts.next().unwrap_or(editor);
+    let status = std::process::Command::new(program)
+        .args(parts)
         .arg(&scratch.0)
         .status()
         .with_context(|| {

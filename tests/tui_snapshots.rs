@@ -11,12 +11,15 @@
 //! `INSTA_UPDATE=always cargo test --test tui_snapshots` (or `cargo insta
 //! review`) and commit it.
 
-use fastf::tui::app::update;
+use fastf::tui::app::{App, update};
 use fastf::tui::command::Key;
+use fastf::tui::entry::Entry;
 use fastf::tui::msg::Msg;
 use fastf::tui::testing::{
-    empty_fixture, fixture, render_to_string, sample_projects, sample_summary_moveable,
+    empty_fixture, fixture, render_to_string, sample_projects, sample_summary,
+    sample_summary_moveable,
 };
+use fastf::tui::theme::Theme;
 use ratatui::crossterm::event::KeyCode;
 
 fn snap(name: &str, frame: String) {
@@ -252,6 +255,109 @@ fn messages_open() {
     );
     let _ = update(&mut app, Msg::Key(Key::ch('L')));
     snap("messages_open", render_to_string(&app, 100, 30));
+}
+
+/// The smallest window the app draws in: no pane, no strip, two header lines.
+#[test]
+fn dashboard_60x16() {
+    let app = fixture(12, 60, 16);
+    snap("dashboard_60x16", render_to_string(&app, 60, 16));
+}
+
+/// The help at 80 columns: the columns are measured from the commands, and a
+/// description that does not fit continues under itself.
+#[test]
+fn help_80x24() {
+    let mut app = fixture(12, 80, 24);
+    let _ = update(&mut app, Msg::Key(Key::ch('?')));
+    snap("help_80x24", render_to_string(&app, 80, 24));
+}
+
+/// The settings on a 24-row terminal: the list scrolls to keep the cursor,
+/// which End takes to the last row.
+#[test]
+fn settings_24_rows() {
+    let mut app = fixture(12, 100, 24);
+    let _ = update(&mut app, Msg::Key(Key::ch(',')));
+    let _ = update(
+        &mut app,
+        Msg::SettingsLoaded(Box::new(fastf::tui::app::data::Settings {
+            base_dir: "/mnt/projects".to_string(),
+            date_format: "%Y-%m-%d".to_string(),
+            date_preview: "2026-09-03".to_string(),
+            preview_lines: 8,
+            confirm_create: true,
+            recent_default_limit: 20,
+            register_naming_pattern: "{date}_{name}_{id}".to_string(),
+            on_name_collision: "suffix".to_string(),
+            counter_floor: 248,
+            next_id: "ID0249".to_string(),
+            data_dir: "/home/user/.config/fastf".to_string(),
+            ..Default::default()
+        })),
+    );
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::End)));
+    snap("settings_24_rows", render_to_string(&app, 100, 24));
+}
+
+/// Slugs no template on disk answers to — `(registered)`, a template since
+/// deleted — sit after the real ones, dimmed, and are never the card the app
+/// opens on; the header counts the templates on disk.
+#[test]
+fn strip_with_orphans() {
+    let mut projects = sample_projects(12);
+    for project in projects.iter_mut().take(5) {
+        project.template = "(registered)".to_string();
+        project.template_name = "(registered)".to_string();
+    }
+    for project in projects.iter_mut().skip(5).take(2) {
+        project.template = "old-template".to_string();
+        project.template_name = "Old template".to_string();
+    }
+    let mut app = App::new(
+        Entry::Recent {
+            preset: Default::default(),
+            initial: projects,
+        },
+        Theme::mono(),
+        (120, 40),
+    );
+    app.is_menu = true;
+    app.clock = || "10:00:00".to_string();
+    let _ = app.start();
+    let _ = update(&mut app, Msg::Summary(Box::new(sample_summary(12))));
+    // Tab twice to the strip, End to the last card: an orphan.
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::End)));
+    snap("strip_with_orphans", render_to_string(&app, 120, 40));
+}
+
+/// Folder names too long for the 60 % split: the table takes what the names
+/// need, the size column stays, and the pane takes the rest.
+#[test]
+fn wide_names_120x40() {
+    let mut projects = sample_projects(6);
+    for (i, project) in projects.iter_mut().enumerate() {
+        project.name = format!(
+            "2026-08-2{i}_A_Very_Long_Client_Name_And_A_Longer_Project_Title_{}",
+            project.id
+        );
+        project.path = std::path::PathBuf::from(fastf::tui::testing::BASE).join(&project.name);
+    }
+    let mut app = App::new(
+        Entry::Recent {
+            preset: Default::default(),
+            initial: projects,
+        },
+        Theme::mono(),
+        (120, 40),
+    );
+    app.is_menu = true;
+    app.clock = || "10:00:00".to_string();
+    let _ = app.start();
+    let _ = update(&mut app, Msg::Summary(Box::new(sample_summary(6))));
+    snap("wide_names_120x40", render_to_string(&app, 120, 40));
 }
 
 /// A running delete job over three marks, one item in flight.

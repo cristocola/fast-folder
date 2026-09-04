@@ -8,7 +8,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::tui::app::{App, StatusLevel};
 use crate::tui::command;
-use crate::tui::view::{fit, split_line};
+use crate::tui::view::{fit, plural, split_line};
 
 const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
 
@@ -31,23 +31,31 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         ),
         Span::raw(gap),
     ];
-    left.push(Span::styled(format!("{projects} projects"), theme.text()));
+    left.push(Span::styled(
+        plural(projects, "project", "projects"),
+        theme.text(),
+    ));
     if !app.library.loaded {
         left.push(Span::styled(
             format!(" (from index) {}", SPINNER[(app.ticks % 4) as usize]),
             theme.dim(),
         ));
     }
+    // The templates on disk — not every slug a project ever named.
     left.push(Span::styled(
-        format!("{gap}{} templates", app.templates.cards.len()),
+        format!(
+            "{gap}{}",
+            plural(app.templates.on_disk, "template", "templates")
+        ),
         theme.text(),
     ));
     if let Some(summary) = &app.summary {
         left.push(Span::styled(
-            format!("{gap}{} bases", summary.bases.len()),
+            format!("{gap}{}", plural(summary.bases.len(), "base", "bases")),
             theme.text(),
         ));
     }
+
     let right = match app.summary.as_ref().and_then(|s| s.max_id.as_ref()) {
         Some(id) => vec![
             Span::styled("highest ", theme.dim()),

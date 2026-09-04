@@ -10,6 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use nucleo_matcher::Utf32String;
+use unicode_width::UnicodeWidthStr;
 
 use crate::core::library::{self, Project};
 use crate::core::project_info::Metadata;
@@ -131,6 +132,9 @@ pub struct LibraryState {
     pub meta: HashMap<PathBuf, Option<Metadata>>,
     /// Every tag the snapshot carries, sorted and distinct.
     pub known_tags: Vec<String>,
+    /// The widest id and the widest name among the rows shown — measured once
+    /// per `recompute`, so the table and the layout agree on them.
+    pub widths: (usize, usize),
 }
 
 impl Default for LibraryState {
@@ -160,6 +164,7 @@ impl LibraryState {
             sizes: HashMap::new(),
             meta: HashMap::new(),
             known_tags: Vec::new(),
+            widths: (4, 8),
         }
     }
 
@@ -319,6 +324,13 @@ impl LibraryState {
 
         self.filtered = rows.iter().map(|(index, _)| *index).collect();
         self.scores = rows.into_iter().map(|(_, info)| info).collect();
+        self.widths = self.filtered.iter().fold((4, 8), |(id_w, name_w), &index| {
+            let project = &self.snapshot[index];
+            (
+                id_w.max(UnicodeWidthStr::width(project.id.as_str())),
+                name_w.max(UnicodeWidthStr::width(project.name.as_str())),
+            )
+        });
 
         self.selected = match keep_path {
             Some(path) => self

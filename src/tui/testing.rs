@@ -89,6 +89,7 @@ pub fn sample_summary(projects: usize) -> Summary {
                 variables: 1,
                 folders: 1,
                 naming_pattern: "{date}_{name}_{id}".to_string(),
+                on_disk: true,
             },
             TemplateCard {
                 slug: "music-video".to_string(),
@@ -97,6 +98,7 @@ pub fn sample_summary(projects: usize) -> Summary {
                 variables: 4,
                 folders: 6,
                 naming_pattern: "{date}_{artist}_{title}_{id}".to_string(),
+                on_disk: true,
             },
             TemplateCard {
                 slug: "client-project".to_string(),
@@ -105,6 +107,7 @@ pub fn sample_summary(projects: usize) -> Summary {
                 variables: 2,
                 folders: 3,
                 naming_pattern: "{date}_{client}_{id}".to_string(),
+                on_disk: true,
             },
         ],
         attention: 1,

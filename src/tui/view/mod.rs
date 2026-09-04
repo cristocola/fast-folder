@@ -24,7 +24,7 @@ pub fn view(app: &App, frame: &mut Frame) {
         render_too_small(app, frame, area);
         return;
     }
-    let regions = layout::regions(area, app.detail_open);
+    let regions = layout::regions(area, app.detail_open, app.table_min_width());
 
     dashboard::header(app, frame, regions.header);
     let search_caret = dashboard::search_bar(app, frame, regions.search);
@@ -97,6 +97,11 @@ pub fn fit(text: &str, width: usize, ellipsis: &str) -> String {
     }
     out.push_str(ellipsis);
     out
+}
+
+/// `1 base`, `2 bases`: a count with its noun.
+pub fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
 }
 
 /// Pad `text` to `width` display columns.

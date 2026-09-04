@@ -70,13 +70,26 @@ pub struct TemplatesState {
     pub cards: Vec<TemplateCard>,
     pub counts: HashMap<String, usize>,
     pub selected: usize,
+    /// How many of the cards are templates on disk — what the header counts.
+    pub on_disk: usize,
 }
 
 impl TemplatesState {
-    /// Cards from the summary, plus a bare card for any slug the projects use
-    /// that no template on disk answers to; busiest first.
+    /// Cards from the summary — the templates on disk, busiest first — then a
+    /// bare card for any slug the projects still name that no template
+    /// answers to, so the strip can filter by it and say what it is. The
+    /// first card is always a real template, so the app never opens on
+    /// `(registered)`.
     pub fn rebuild(&mut self, summary: Option<&Summary>, counts: HashMap<String, usize>) {
-        let keep = self.selected_card().map(|c| c.slug.clone());
+        // The cursor stays on its card across a rebuild — unless it was on an
+        // orphan only because nothing on disk was known yet (discovery can
+        // land before the summary), in which case the first real template is
+        // where it belongs.
+        let keep = self
+            .selected_card()
+            .filter(|card| card.on_disk || self.on_disk == 0 && summary.is_none())
+            .map(|c| c.slug.clone());
+
         let mut cards: Vec<TemplateCard> = summary.map(|s| s.templates.clone()).unwrap_or_default();
         for slug in counts.keys() {
             if !cards.iter().any(|c| &c.slug == slug) {
@@ -87,20 +100,35 @@ impl TemplatesState {
                     variables: 0,
                     folders: 0,
                     naming_pattern: String::new(),
+                    on_disk: false,
                 });
             }
         }
         cards.sort_by(|a, b| {
             let ca = counts.get(&a.slug).copied().unwrap_or(0);
             let cb = counts.get(&b.slug).copied().unwrap_or(0);
-            cb.cmp(&ca).then_with(|| a.slug.cmp(&b.slug))
+            b.on_disk
+                .cmp(&a.on_disk)
+                .then_with(|| cb.cmp(&ca))
+                .then_with(|| a.slug.cmp(&b.slug))
         });
+        self.on_disk = cards.iter().filter(|c| c.on_disk).count();
         self.cards = cards;
         self.counts = counts;
         self.selected = keep
             .and_then(|slug| self.cards.iter().position(|c| c.slug == slug))
             .unwrap_or(0)
             .min(self.cards.len().saturating_sub(1));
+    }
+
+    /// What a card is called on screen: `(registered)` is a slug the engine
+    /// writes, not a name a person chose.
+    pub fn display_name(card: &TemplateCard) -> &str {
+        if card.slug == crate::core::operations::REGISTERED_SLUG {
+            "registered"
+        } else {
+            &card.slug
+        }
     }
 
     pub fn selected_card(&self) -> Option<&TemplateCard> {
@@ -306,7 +334,17 @@ impl App {
     }
 
     pub fn regions(&self) -> layout::Regions {
-        layout::regions(self.area(), self.detail_open)
+        layout::regions(self.area(), self.detail_open, self.table_min_width())
+    }
+
+    /// The width the table needs to show every folder name whole with the id
+    /// and the size beside it: the cursor cell, the id, the name and the size
+    /// cell, each followed by a space, inside the borders.
+    pub fn table_min_width(&self) -> u16 {
+        let (id_w, name_w) = self.library.widths;
+        // `choose_columns` adds a column only while it fits with its spacing.
+        (2 + 1 + id_w + 1 + name_w + 1 + crate::tui::rows::SIZE_CELL + 1).min(u16::MAX as usize)
+            as u16
     }
 
     pub fn rows_on_screen(&self) -> usize {
@@ -441,9 +479,15 @@ impl App {
 
     /// After anything that changed which rows are shown.
     fn after_rows_changed(&mut self) -> Vec<Effect> {
+        // Long names can close the pane (`layout::regions`); the focus cannot
+        // stay on a pane that is not drawn.
+        if self.focus == Focus::Detail && !self.detail_visible() {
+            self.focus = Focus::Projects;
+        }
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
         self.detail_scroll = 0;
+
         let mut effects = self.selection_effects();
         if self.search.query.needs_metadata() {
             let missing = self.library.paths_without_meta();
@@ -1676,11 +1720,15 @@ impl App {
             return Vec::new();
         };
         let (scroll, lines, rows) = match top {
-            Modal::Help { ctx, scroll } => (
-                scroll,
-                command::help_line_count(*ctx),
-                layout::help_box(area).height.saturating_sub(2) as usize,
-            ),
+            Modal::Help { ctx, scroll } => {
+                let inner = layout::help_box(area);
+                (
+                    scroll,
+                    command::help_line_count(*ctx, inner.width.saturating_sub(2) as usize),
+                    inner.height.saturating_sub(2) as usize,
+                )
+            }
+
             Modal::Message { lines, scroll, .. } => (
                 scroll,
                 lines.len(),

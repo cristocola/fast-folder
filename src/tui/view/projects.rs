@@ -128,7 +128,26 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     let rows_visible = inner.height.saturating_sub(1) as usize;
+    // An empty table says so inside the box, where the eye is, not only on
+    // the status line.
+    if app.library.loaded && app.library.is_empty() && inner.height > 3 {
+        let sentence = if app.library.snapshot.is_empty() {
+            "nothing here yet — n creates a project, e registers a folder"
+        } else {
+            "nothing matches"
+        };
+        let line = Rect::new(inner.x, inner.y + 2, inner.width, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                fit(sentence, inner.width as usize, g.ellipsis),
+                theme.dim(),
+            ))
+            .alignment(ratatui::layout::Alignment::Center),
+            line,
+        );
+    }
     let offset = app.library.offset;
+
     let end = (offset + rows_visible).min(app.library.len());
     let rows: Vec<Row> = (offset..end)
         .filter_map(|row| app.library.row(row).map(|p| (row, p)))

@@ -692,11 +692,11 @@ pub fn render_onboarding(
                 theme.text(),
             )),
             Line::from(Span::styled(
-                " Every new project is created inside this folder. You can add more",
+                " This folder is your first base — where new projects are created.",
                 theme.dim(),
             )),
             Line::from(Span::styled(
-                " later — a second drive, a network share — under Settings.",
+                " Add more later (a second drive, a network share) under Settings.",
                 theme.dim(),
             )),
         ]),

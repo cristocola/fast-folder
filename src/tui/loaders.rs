@@ -407,6 +407,7 @@ fn template_card(t: &template::Template) -> TemplateCard {
         variables: t.variables.len(),
         folders: count(&t.structure),
         naming_pattern: t.naming_pattern.clone(),
+        on_disk: true,
     }
 }
 

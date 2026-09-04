@@ -37,7 +37,15 @@ impl Regions {
     }
 }
 
-pub fn regions(area: Rect, detail_open: bool) -> Regions {
+/// The least the detail pane is worth drawing at: the name cut, but the
+/// template, the base, the date, the size and the tags all there.
+pub const DETAIL_PANE_MIN: u16 = 26;
+
+/// `table_min` is the width the table needs to show every folder name whole
+/// with the id and the size beside it. The split favours the table: it takes
+/// at least 60 % and as much more as the names need, the pane takes the rest
+/// — and closes, as `i` would, when the rest is under `DETAIL_PANE_MIN`.
+pub fn regions(area: Rect, detail_open: bool, table_min: u16) -> Regions {
     let tall = area.height >= TALL_MIN_HEIGHT;
     // Two lines, and a blank one under them where there is room to breathe.
     let header_height = if tall { 3 } else { 2 };
@@ -54,15 +62,21 @@ pub fn regions(area: Rect, detail_open: bool) -> Regions {
         ])
         .split(area);
 
-    let (table, detail) = if detail_open && area.width >= DETAIL_MIN_WIDTH {
-        let panes = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(bands[2]);
-        (panes[0], Some(panes[1]))
-    } else {
-        (bands[2], None)
-    };
+    let table_width = table_min.max(area.width * 60 / 100).min(area.width);
+    let pane_width = area.width - table_width;
+    let (table, detail) =
+        if detail_open && area.width >= DETAIL_MIN_WIDTH && pane_width >= DETAIL_PANE_MIN {
+            let panes = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(table_width),
+                    Constraint::Length(pane_width),
+                ])
+                .split(bands[2]);
+            (panes[0], Some(panes[1]))
+        } else {
+            (bands[2], None)
+        };
 
     Regions {
         header: bands[0],
@@ -138,10 +152,18 @@ pub fn pick_box(area: Rect, items: usize) -> Rect {
     centered_fixed(area, 50, height)
 }
 
-/// Where the help overlay is drawn. The app clamps its scroll with the same
-/// box the view draws it in.
+/// Where the help overlay is drawn: most of a narrow window, 84 % of a wide
+/// one. The app clamps its scroll with the same box the view draws it in.
 pub fn help_box(area: Rect) -> Rect {
-    centered(area, 84, 84)
+    if area.width < DETAIL_MIN_WIDTH {
+        centered_fixed(
+            area,
+            area.width.saturating_sub(4),
+            area.height.saturating_sub(3),
+        )
+    } else {
+        centered(area, 84, 84)
+    }
 }
 
 /// Where a read-only message (metadata, a journal, a report) is drawn.
@@ -167,8 +189,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_split_favours_the_table_and_closes_the_pane_when_it_must() {
+        // The names fit the 60 %: the split is the usual one.
+        let r = regions(Rect::new(0, 0, 120, 40), true, 54);
+        assert_eq!((r.table.width, r.detail.map(|d| d.width)), (72, Some(48)));
+        // Long names: the table takes what they need, the pane the rest.
+        let r = regions(Rect::new(0, 0, 120, 40), true, 80);
+        assert_eq!((r.table.width, r.detail.map(|d| d.width)), (80, Some(40)));
+        // Names so long the pane would be a sliver: it closes.
+        let r = regions(Rect::new(0, 0, 120, 40), true, 95);
+
+        assert!(r.detail.is_none());
+        assert_eq!(r.table.width, 120);
+    }
+
+    #[test]
     fn a_standard_terminal_gets_the_compact_layout() {
-        let r = regions(Rect::new(0, 0, 80, 24), true);
+        let r = regions(Rect::new(0, 0, 80, 24), true, 0);
         assert_eq!(r.header.height, 2);
         assert!(r.detail.is_none(), "80 columns is too narrow for the pane");
         assert!(r.strip.is_none());
@@ -178,11 +215,11 @@ mod tests {
 
     #[test]
     fn a_large_terminal_gets_the_pane_and_the_strip() {
-        let r = regions(Rect::new(0, 0, 120, 40), true);
+        let r = regions(Rect::new(0, 0, 120, 40), true, 0);
         assert_eq!(r.header.height, 3);
         assert!(r.detail.is_some());
         assert!(r.strip.is_some());
-        let r = regions(Rect::new(0, 0, 120, 40), false);
+        let r = regions(Rect::new(0, 0, 120, 40), false, 0);
         assert!(r.detail.is_none(), "the pane can be closed");
     }
 

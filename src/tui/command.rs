@@ -1349,15 +1349,141 @@ pub fn help_sections(ctx: Context) -> Vec<(Category, Vec<&'static Command>)> {
         .collect()
 }
 
-/// How many lines the help overlay draws for `ctx`: a heading and a blank
-/// per category, a line per command, and the three-line footer. The view
-/// draws exactly this, and `update` clamps the scroll with it.
-pub fn help_line_count(ctx: Context) -> usize {
-    help_sections(ctx)
+/// One line of the help overlay's body, as text; the view styles it. Built
+/// here so `update` can count the lines with the same arithmetic the view
+/// draws them by, and clamp the scroll to what there is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HelpLine {
+    Heading(&'static str),
+    /// A command: its keys, its title, and the first line of its description.
+    Command {
+        keys: String,
+        title: &'static str,
+        description: String,
+    },
+    /// The rest of a description that did not fit its line, drawn `indent`
+    /// columns in.
+    Continuation {
+        indent: usize,
+        text: String,
+    },
+    Blank,
+}
+
+/// Below this many columns for a description, the help puts descriptions on
+/// their own line under the keys and the title rather than beside them.
+const NARROW_DESCRIPTION: usize = 28;
+
+/// The three column widths the help overlay lays out in: keys, title, and
+/// what is left for the description — measured from the commands themselves,
+/// so a long title can never run into its description.
+pub fn help_columns(ctx: Context, inner_width: usize) -> (usize, usize, usize) {
+    let commands: Vec<&Command> = help_sections(ctx)
+        .into_iter()
+        .flat_map(|(_, commands)| commands)
+        .collect();
+    let keys_width = commands
         .iter()
-        .map(|(_, commands)| commands.len() + 2)
-        .sum::<usize>()
-        + 5
+        .map(|c| key_labels(c).chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(8, 18);
+    let title_width = commands
+        .iter()
+        .map(|c| c.title.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(8, 36);
+    // Three columns of indent, a space after the keys, a space after the title.
+    let description_width = inner_width.saturating_sub(3 + keys_width + 1 + title_width + 1);
+    (keys_width, title_width, description_width)
+}
+
+/// `? / F1`, `c / : / Ctrl-p`: a command's keys as the help prints them.
+pub fn key_labels(command: &Command) -> String {
+    command
+        .keys
+        .iter()
+        .map(|k| k.label())
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+/// The help overlay's body for `ctx`, laid out for `inner_width` columns: a
+/// description that does not fit its line continues under itself.
+pub fn help_lines(ctx: Context, inner_width: usize) -> Vec<HelpLine> {
+    let (keys_width, title_width, description_width) = help_columns(ctx, inner_width);
+    // Wide enough: three columns. Narrow: the description on its own line
+    // under the title, indented past the keys, so it reads as prose rather
+    // than a ladder of three-word lines.
+    let beside = description_width >= NARROW_DESCRIPTION;
+    let (indent, width) = if beside {
+        (3 + keys_width + 1 + title_width + 1, description_width)
+    } else {
+        let indent = 3 + keys_width + 1;
+        (indent, inner_width.saturating_sub(indent + 1).max(12))
+    };
+    let mut lines = Vec::new();
+    for (category, commands) in help_sections(ctx) {
+        lines.push(HelpLine::Heading(category.label()));
+        for c in commands {
+            let mut parts = wrap_words(c.description, width).into_iter();
+            lines.push(HelpLine::Command {
+                keys: key_labels(c),
+                title: c.title,
+                description: if beside {
+                    parts.next().unwrap_or_default()
+                } else {
+                    String::new()
+                },
+            });
+            lines.extend(parts.map(|text| HelpLine::Continuation { indent, text }));
+        }
+        lines.push(HelpLine::Blank);
+    }
+    lines
+}
+
+/// Greedy word wrap into lines of at most `width` characters; a word longer
+/// than a line is broken where it must be.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word.to_string();
+        while word.chars().count() > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            let head: String = word.chars().take(width).collect();
+            word = word.chars().skip(width).collect();
+            lines.push(head);
+        }
+        let needed = if current.is_empty() {
+            word.chars().count()
+        } else {
+            current.chars().count() + 1 + word.chars().count()
+        };
+        if needed > width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(&word);
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// How many lines the help overlay draws for `ctx` at `inner_width`: the
+/// body, and the five lines of footer under it. The view draws exactly
+/// this, and `update` clamps the scroll with it.
+pub fn help_line_count(ctx: Context, inner_width: usize) -> usize {
+    help_lines(ctx, inner_width).len() + 5
 }
 
 /// The palette's command entries: everything listed and not hidden, the

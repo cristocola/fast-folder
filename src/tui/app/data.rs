@@ -36,6 +36,9 @@ pub struct TemplateCard {
     pub variables: usize,
     pub folders: usize,
     pub naming_pattern: String,
+    /// A template that exists on disk, as opposed to a slug projects still
+    /// name whose template has gone (or `(registered)`, which never was one).
+    pub on_disk: bool,
 }
 
 /// The configuration the app itself needs to decide what to ask.

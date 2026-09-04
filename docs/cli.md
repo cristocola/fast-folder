@@ -131,7 +131,8 @@ and nothing you type reaches a pipe.
 
 What is on screen, top to bottom:
 
-- **The header** — two lines. How many projects, templates and bases there
+- **The header** — two lines. How many projects, templates (on disk — a slug
+  a project still names whose template has gone is not one) and bases there
   are and the highest ID; then each base with how many projects its index
   holds or that it is not mounted, and on the right `⚠ n needs attention`
   when an interrupted create or move is waiting for `fastf reconcile` (else
@@ -142,14 +143,19 @@ What is on screen, top to bottom:
   the template and the tags, as many as fit. The folder name is never cut: a
   narrow window drops the other columns first, tags before the template, the
   template before the base, the base before the date; the size goes last,
-  because it is the one thing the row knows that the name does not.
+  because it is the one thing the row knows that the name does not. When the
+  table is empty it says so inside the box.
 - **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
   selected project's template, base and date, its size and journal count, its
   tags, its template variables, the top of its folder and the first lines of
-  its notes.
+  its notes. The split favours the table: long folder names take the room
+  they need with the size beside them, the pane takes the rest, and closes —
+  as `i` would — when the rest would be a sliver.
 - **The template strip** (terminals 30 rows or taller) — one card per
-  template with how many projects use it. Tab reaches it; Enter filters the
-  list by the card, and the card that is filtering is underlined.
+  template with how many projects use it, the templates on disk first and,
+  dimmed after them, any slug projects still name that no template answers
+  to (`registered`, a template since deleted). Tab reaches it; Enter filters
+  the list by the card, and the card that is filtering is underlined.
 - **The status line and the hint bar** — what the last action did, and the
   keys that matter where you are.
 

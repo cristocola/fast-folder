@@ -68,9 +68,10 @@ pub fn describe(t: &Template) -> Vec<String> {
         lines.push(format!("  Desc:    {}", t.description));
     }
     lines.push(format!(
-        "  ID:      {}{}",
+        "  ID:      {}{}  ({} digits)",
         t.id.prefix,
-        "0".repeat(t.id.digits)
+        "0".repeat(t.id.digits),
+        t.id.digits
     ));
 
     if !t.variables.is_empty() {
@@ -81,7 +82,14 @@ pub fn describe(t: &Template) -> Vec<String> {
             lines.push(format!("  • {}{req}", v.slug));
             lines.push(format!("    Label:     {}", v.label));
             if !v.options.is_empty() {
-                lines.push(format!("    Options:   {}", v.options.join(", ")));
+                // One option list can be long; wrapped under its label so a
+                // dialog does not cut it.
+                let mut options =
+                    crate::tui::command::wrap_words(&v.options.join(", "), 56).into_iter();
+                if let Some(first) = options.next() {
+                    lines.push(format!("    Options:   {first}"));
+                }
+                lines.extend(options.map(|rest| format!("               {rest}")));
             }
             if !v.default.is_empty() {
                 lines.push(format!("    Default:   {}", v.default));

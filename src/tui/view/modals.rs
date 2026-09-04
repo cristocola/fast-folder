@@ -313,6 +313,28 @@ fn render_actions(
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let width = inner.width as usize;
+    // The key and title columns are as wide as the widest of each, and one
+    // space wider than that, so a title never runs into its description.
+    let key_w = entries
+        .iter()
+        .map(|(id, _)| {
+            command::find(*id)
+                .keys
+                .first()
+                .map(|k| k.label().chars().count())
+                .unwrap_or(0)
+        })
+        .max()
+        .unwrap_or(0)
+        .max(6)
+        + 1;
+    let title_w = entries
+        .iter()
+        .map(|(id, _)| command::find(*id).title.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(8, 36)
+        + 1;
 
     let items: Vec<ListItem> = entries
         .iter()
@@ -325,9 +347,9 @@ fn render_actions(
                 Availability::Hidden => (theme.dim(), ""),
             };
             let mut left = vec![Span::raw(" ")];
-            left.push(Span::styled(pad(&key, 7), theme.key()));
-            left.push(Span::styled(pad(command.title, 24), title_style));
-            let room = width.saturating_sub(1 + 8 + 24 + 2);
+            left.push(Span::styled(pad(&key, key_w), theme.key()));
+            left.push(Span::styled(pad(command.title, title_w), title_style));
+            let room = width.saturating_sub(1 + key_w + title_w + 2);
             left.push(Span::styled(fit(detail, room, g.ellipsis), theme.dim()));
             ListItem::new(Line::from(left))
         })
@@ -946,33 +968,33 @@ fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Fram
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // The columns are measured from the commands, so a long title cannot
+    // run into its description, and a description that does not fit its
+    // line continues under itself rather than being cut.
+    let width = inner.width as usize;
+    let (keys_w, title_w, _) = command::help_columns(ctx, width);
     let mut lines: Vec<Line> = Vec::new();
-    for (category, commands) in command::help_sections(ctx) {
-        lines.push(Line::from(Span::styled(
-            format!(" {}", category.label()),
-            theme.accent(),
-        )));
-        for c in commands {
-            let keys = c
-                .keys
-                .iter()
-                .map(|k| k.label())
-                .collect::<Vec<_>>()
-                .join(" / ");
-            lines.push(Line::from(vec![
-                Span::styled(format!("   {} ", pad(&keys, 14)), theme.key()),
-                Span::styled(pad(c.title, 30), theme.text()),
-                Span::styled(
-                    fit(
-                        c.description,
-                        (inner.width as usize).saturating_sub(49),
-                        g.ellipsis,
-                    ),
-                    theme.dim(),
-                ),
-            ]));
-        }
-        lines.push(Line::from(""));
+    for line in command::help_lines(ctx, width) {
+        lines.push(match line {
+            command::HelpLine::Heading(label) => {
+                Line::from(Span::styled(format!(" {label}"), theme.accent()))
+            }
+            command::HelpLine::Command {
+                keys,
+                title,
+                description,
+            } => Line::from(vec![
+                Span::styled(format!("   {} ", pad(&keys, keys_w)), theme.key()),
+                Span::styled(format!("{} ", pad(title, title_w)), theme.text()),
+                Span::styled(description, theme.dim()),
+            ]),
+            command::HelpLine::Continuation { indent, text } => Line::from(vec![
+                Span::raw(" ".repeat(indent)),
+                Span::styled(text, theme.dim()),
+            ]),
+
+            command::HelpLine::Blank => Line::from(""),
+        });
     }
     lines.push(Line::from(Span::styled(
         " The command palette (c) lists every command with its key; type to filter.",

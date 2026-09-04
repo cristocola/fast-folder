@@ -163,6 +163,35 @@ targeting fastf.exe.
   clears the workspace). Never solve a redist complaint by adding a merge
   module or a bootstrapper to the MSI — fix the link.
 
+## The Debian package
+
+`packaging/linux/build-deb.sh` builds it, and `release.yml`'s musl leg calls it
+with the **same staging directory the tarball is made from**, so the archive and
+the package can never disagree about what a release contains. It carries the
+static musl binary, which is why it declares no dependencies and installs on any
+derivative, old or new. `dpkg-deb --root-owner-group` writes every path as
+root:root, so no fakeroot and no privileged runner.
+
+A Debian version has to begin with a digit, so a `workflow_dispatch` dry run's
+`dev-<sha>` becomes `0.0.0~dev.<sha>`, which sorts below every real version.
+The MSI's `0.0.0` exists for the same reason.
+
+The asset is named `fastf-<tag>-amd64.deb` to match every other asset and to be
+picked up by the release job's `fastf-*` glob, its `SHA256SUMS` line and its
+attestation. Debian tools care about the metadata inside, not the filename.
+
+`smoke-linux`'s musl leg **installs it on the runner**, runs `fastf`, checks the
+man page, the completion, the desktop entry and an icon landed, and then
+`apt remove`s it and checks the command is gone. A package that unpacks is a
+different claim from a package that installs, so the release fails on the
+second one rather than shipping it.
+
+`packaging/linux/install.sh` is the other half, for distributions with no
+package: it resolves the latest tag through the GitHub API, downloads the musl
+archive **and** `SHA256SUMS`, verifies one against the other, and unpacks into
+`$PREFIX` (default `~/.local`). Keep the checksum step; a curl-to-shell
+installer that skips it is the thing people are right to distrust.
+
 ## Packaging-sensitive code
 
 `fastf completions` and `fastf mangen` skip `ensure_bootstrapped()` (see the

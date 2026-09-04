@@ -33,14 +33,14 @@ renamed or copied.
 Item 4. `copy_engine.rs`, `fastf copy-to`, `C` in the app. The copy keeps its
 ID; the base tells duplicates apart. `patch` locates by path first.
 
-## Phase 5 — release v3.1.0  🔄
-Bumped to 3.1.0, ROADMAP row written, README screenshot retaken, and the release
-skill now carries "Why the first tag fails". PR #44 is open and running the full
-matrix; the tag goes on a commit that run was green on. The docs gate
-(`RUSTDOCFLAGS="-D warnings" cargo doc`) caught one on the first run, which is
-the whole point of the step.
-Item 11. Document the five CI failure patterns in the release skill, add the
-"green PR run before the tag" step, bump, tag, AUR.
+## Phase 5 — release v3.1.0  ✅
+Bumped, ROADMAP row and release notes written, README screenshot retaken, and
+the release skill now carries "Why the first tag fails". PR #44 ran the full
+matrix and caught two of the documented patterns before any tag existed — the
+docs gate (`RUSTDOCFLAGS="-D warnings" cargo doc`, which is not part of
+`cargo test`, so nobody runs it by hand) and a Windows 8.3 short path compared
+to the long one, in a new test of my own. Both fixed, the matrix went green on
+both platforms, and only then was `v3.1.0` tagged.
 
 ## Why the first tag always failed
 

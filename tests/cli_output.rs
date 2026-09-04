@@ -497,15 +497,23 @@ fn the_relaunch_flag_is_on_no_surface_a_user_reads() {
     let page = std::fs::read_to_string(man.join("fastf.1")).expect("the man page");
     assert!(!page.contains("relaunched"), "the man page names it");
 
-    // And it still works where the relaunch puts it — first, ahead of the
-    // subcommand — while anywhere else it is an unknown flag like any other.
-    let out = sb.run(&["--relaunched", "recent", "--plain"]);
-    assert!(out.status.success(), "{out:?}");
+    // Anywhere but the one position the relaunch uses it is a word the user
+    // typed, on every platform.
     let out = sb.run(&["recent", "--relaunched"]);
     assert!(
         !out.status.success(),
         "a word the user typed must not be eaten: {out:?}"
     );
+
+    // And it still works where the relaunch puts it: first, ahead of the
+    // subcommand. Unix only, because the relaunch is — Windows allocates a
+    // console for a console application, so there is nothing there to mark and
+    // the flag is an unknown argument like any other.
+    #[cfg(unix)]
+    {
+        let out = sb.run(&["--relaunched", "recent", "--plain"]);
+        assert!(out.status.success(), "{out:?}");
+    }
 }
 
 /// `fastf paths` tells you where fastf keeps its things. Every path it prints

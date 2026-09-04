@@ -138,6 +138,18 @@ pub struct Status {
     pub expires_at: Option<u64>,
 }
 
+/// One line of the session's message log: what the status line said, and
+/// when. The line itself expires; the log keeps it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogEntry {
+    pub at: String,
+    pub level: StatusLevel,
+    pub text: String,
+}
+
+/// How many status lines the log keeps.
+pub const LOG_CAP: usize = 200;
+
 pub struct App {
     /// `fastf` with no arguments, as opposed to `recent`/`search`.
     pub is_menu: bool,
@@ -162,6 +174,18 @@ pub struct App {
     /// A batch job over the marked projects, while one is running.
     pub job: Option<jobs::Job>,
     pub status: Status,
+    /// Every status line this session set, oldest first, `LOG_CAP` at most —
+    /// so a warning that flashed under a dialog can be read back with `L`.
+    pub log: std::collections::VecDeque<LogEntry>,
+    /// Warnings that arrived while a dialog covered the status line, not yet
+    /// looked at: the status line and the hint bar say so until `L` is pressed.
+    pub unseen_warnings: usize,
+    /// The clock a log line is stamped with. The runtime's is the wall clock;
+    /// a fixture's stands still, so a snapshot never depends on the hour.
+    pub clock: fn() -> String,
+    /// Where the data lives, for the help's footer. Set by the runtime, which
+    /// may look; `None` in a fixture, so no snapshot can name a real path.
+    pub data_dir: Option<String>,
     /// The last few things this session did, oldest first.
     pub session: Vec<String>,
     /// `fastf template new` / `edit`: the studio or the builder to open as
@@ -202,6 +226,10 @@ impl App {
             move_progress: None,
             job: None,
             status: Status::default(),
+            log: std::collections::VecDeque::new(),
+            unseen_warnings: 0,
+            clock: crate::util::time::now_hms,
+            data_dir: None,
             session: crate::tui::frame::recent_actions(),
             studio_entry: None,
             select_when_found: None,
@@ -335,11 +363,50 @@ impl App {
     // --- status -----------------------------------------------------------
 
     fn set_status(&mut self, level: StatusLevel, text: impl Into<String>) {
+        let text = text.into();
+        self.log.push_back(LogEntry {
+            at: (self.clock)(),
+            level,
+            text: text.clone(),
+        });
+        while self.log.len() > LOG_CAP {
+            self.log.pop_front();
+        }
+        // A warning under a full-height dialog is a warning nobody saw.
+        if matches!(level, StatusLevel::Warn | StatusLevel::Error) && !self.modals.is_empty() {
+            self.unseen_warnings += 1;
+        }
         self.status = Status {
-            text: text.into(),
+            text,
             level,
             expires_at: Some(self.ticks + STATUS_TICKS),
         };
+    }
+
+    /// `L`: the session's messages, newest first, as a scrollable dialog.
+    fn open_log(&mut self) -> Vec<Effect> {
+        self.unseen_warnings = 0;
+        let g = self.theme.glyphs;
+        let body = if self.log.is_empty() {
+            "nothing yet".to_string()
+        } else {
+            self.log
+                .iter()
+                .rev()
+                .map(|entry| {
+                    let mark = match entry.level {
+                        StatusLevel::Warn => format!("{} ", g.warn),
+                        StatusLevel::Error => format!("{} ", g.cross),
+                        StatusLevel::Good | StatusLevel::Info => String::new(),
+                    };
+                    format!("{}  {mark}{}", entry.at, entry.text)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        self.modals
+            .push(Modal::message("messages", body, MessageLevel::Info));
+        Vec::new()
     }
 
     fn info(&mut self, text: impl Into<String>) {
@@ -1730,6 +1797,8 @@ impl App {
                 Vec::new()
             }
             CommandId::Close => self.close_top(),
+            CommandId::ShowLog => self.open_log(),
+
             CommandId::ActionsRun => {
                 let chosen = match self.modals.top() {
                     Some(Modal::Actions(actions)) => crate::tui::app::actions::action_entries(self)

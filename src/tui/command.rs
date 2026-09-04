@@ -279,10 +279,12 @@ pub enum CommandId {
     BuilderMoveDown,
     // The settings list
     SettingsChange,
+    // The message log
+    ShowLog,
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 59] = [
+    pub const ALL: [CommandId; 60] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -342,6 +344,7 @@ impl CommandId {
         CommandId::BuilderMoveUp,
         CommandId::BuilderMoveDown,
         CommandId::SettingsChange,
+        CommandId::ShowLog,
     ];
 }
 
@@ -576,6 +579,17 @@ pub static COMMANDS: &[Command] = &[
         Help,
         palette = true,
         hint = true,
+        always
+    ),
+    cmd!(
+        ShowLog,
+        "Show messages",
+        "every status line and warning this session, newest first, with the time it arrived",
+        G,
+        [Key::ch('L')],
+        Help,
+        palette = true,
+        hint = false,
         always
     ),
     cmd!(
@@ -1299,6 +1313,7 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::NewProject => "new",
         CommandId::Search => "search",
         CommandId::Help => "help",
+        CommandId::ShowLog => "messages",
         CommandId::Quit => "quit",
         CommandId::Close => "close",
         CommandId::StripFilter => "filter",
@@ -1342,7 +1357,7 @@ pub fn help_line_count(ctx: Context) -> usize {
         .iter()
         .map(|(_, commands)| commands.len() + 2)
         .sum::<usize>()
-        + 3
+        + 5
 }
 
 /// The palette's command entries: everything listed and not hidden, the

@@ -238,6 +238,22 @@ fn batch_delete_confirm() {
     snap("batch_delete_confirm", render_to_string(&app, 100, 30));
 }
 
+/// The message log: every status line this session set, newest first.
+#[test]
+fn messages_open() {
+    let mut app = fixture(12, 100, 30);
+    let _ = update(&mut app, Msg::Key(Key::ch('s')));
+    let _ = update(
+        &mut app,
+        Msg::Diag(
+            fastf::util::diag::Level::Warn,
+            "the archive base is not mounted".to_string(),
+        ),
+    );
+    let _ = update(&mut app, Msg::Key(Key::ch('L')));
+    snap("messages_open", render_to_string(&app, 100, 30));
+}
+
 /// A running delete job over three marks, one item in flight.
 #[test]
 fn job_progress_modal() {

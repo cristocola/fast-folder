@@ -13,6 +13,12 @@ pub fn now_iso8601() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// The local wall-clock time as `HH:MM:SS` — what a message log stamps a
+/// line with, for a person reading it back a minute later.
+pub fn now_hms() -> String {
+    chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::now_iso8601;

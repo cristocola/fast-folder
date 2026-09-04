@@ -21,6 +21,9 @@ pub const FIELD_PATH: &str = "path";
 pub const FIELD_RENAME: &str = "rename";
 /// Which date the record claims.
 pub const FIELD_CREATED: &str = "created";
+/// The date typed when `Created` is "a date I type" — what `--created` is on
+/// the command line.
+pub const FIELD_CREATED_DATE: &str = "created_date";
 /// Fill in the template's missing folders and files.
 pub const FIELD_APPLY: &str = "apply";
 
@@ -29,6 +32,7 @@ pub const SCOPE_RECURSIVE: &str = "every unregistered folder in a base";
 
 pub const CREATED_OWN: &str = "the folder's own date";
 pub const CREATED_TODAY: &str = "today";
+pub const CREATED_TYPED: &str = "a date I type";
 
 /// The register form. `templates` already carries [`NO_TEMPLATE`] first.
 pub fn register_form(templates: &[String]) -> Form {
@@ -63,9 +67,20 @@ pub fn register_form(templates: &[String]) -> Form {
             FIELD_CREATED,
             "Created",
             "a folder that predates fastf should usually keep its own date",
-            vec![CREATED_OWN.to_string(), CREATED_TODAY.to_string()],
+            vec![
+                CREATED_OWN.to_string(),
+                CREATED_TODAY.to_string(),
+                CREATED_TYPED.to_string(),
+            ],
             0,
         ),
+        Field::text(
+            FIELD_CREATED_DATE,
+            "Date",
+            "YYYY-MM-DD — the date the record will claim",
+            String::new(),
+        )
+        .hidden(true),
         Field::toggle(
             FIELD_APPLY,
             "Fill in the template",
@@ -87,9 +102,12 @@ pub fn is_recursive(form: &Form) -> bool {
 pub fn sync_visibility(flow: &mut Flow) {
     let recursive = is_recursive(&flow.form);
     let has_template = flow.form.value(FIELD_TEMPLATE) != NO_TEMPLATE;
+    let typed_date = flow.form.value(FIELD_CREATED) == CREATED_TYPED;
     flow.form.set_hidden(FIELD_RENAME, recursive);
     flow.form
         .set_hidden(FIELD_APPLY, recursive || !has_template);
+    flow.form
+        .set_hidden(FIELD_CREATED_DATE, recursive || !typed_date);
     if let Some(field) = flow.form.field_mut(FIELD_PATH) {
         field.label = if recursive { "Base" } else { "Folder" }.to_string();
         field.hint = if recursive {
@@ -110,6 +128,9 @@ pub fn request(flow: &Flow) -> Request {
         apply_structure: flow.form.is_on(FIELD_APPLY),
         rename: flow.form.is_on(FIELD_RENAME),
         use_today: flow.form.value(FIELD_CREATED) == CREATED_TODAY,
+        created_override: (flow.form.value(FIELD_CREATED) == CREATED_TYPED)
+            .then(|| flow.form.value(FIELD_CREATED_DATE).trim().to_string())
+            .filter(|date| !date.is_empty()),
         recursive: is_recursive(&flow.form),
     }
 }
@@ -125,6 +146,8 @@ pub struct Request {
     pub apply_structure: bool,
     pub rename: bool,
     pub use_today: bool,
+    /// A date typed for the record, as `--created` gives one.
+    pub created_override: Option<String>,
     pub recursive: bool,
 }
 

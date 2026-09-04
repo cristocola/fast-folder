@@ -149,7 +149,11 @@ impl Runtime {
         // line, like any other.
         let remembered = Session::load();
         let mut app = App::new(entry, theme, self.size());
+        app.data_dir = Some(crate::util::paths::display_path(
+            &crate::util::paths::install_dir(),
+        ));
         app.apply_session(&remembered);
+
         if let Some(suggested) = onboarding {
             app.request_onboarding(suggested);
         }
@@ -938,7 +942,7 @@ fn register_one(
         apply_structure: request.apply_structure && !request.recursive,
         rename: request.rename && !request.recursive,
         use_today: request.use_today,
-        created_override: None,
+        created_override: request.created_override.clone(),
         on_pinfo_conflict: if request.recursive {
             crate::cli::register::PinfoConflict::Skip
         } else {

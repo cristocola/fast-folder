@@ -129,7 +129,9 @@ pub fn fixture(n: usize, width: u16, height: u16) -> App {
         (width, height),
     );
     app.is_menu = true;
+    app.clock = || "10:00:00".to_string();
     let _ = app.start();
+
     let _ = crate::tui::app::update(
         &mut app,
         crate::tui::msg::Msg::Summary(Box::new(sample_summary(n))),

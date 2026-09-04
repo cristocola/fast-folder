@@ -190,6 +190,7 @@ keys that matter most:
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
 | `T`, `,` | the template studio, the settings |
 | `!` | check and recover — what `⚠ n needs attention` means |
+| `L` | the session's messages, newest first with the time each arrived — a warning that flashed under a dialog is counted on the status line until you read them |
 | F5, `R` | reload the library, reindex every base from its folders |
 | `q` | quit; in a dialog, close it |
 | Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the search bar, clear the query, clear the template filter, clear the marks — and only then quit |
@@ -250,7 +251,8 @@ what happens: a create shows the folder tree, the files, every resolved
 variable, the ID with the counter move it implies and the full path; an apply
 shows every item it would create and every one already there; a register shows
 the ID (and whether it was recovered from an `ID####` in the folder name), the
-date, the rename it would perform, and a warning when a `PROJECT_INFO.md` is
+date (the folder's own, today, or one you type — `--created` on the command
+line), the rename it would perform, and a warning when a `PROJECT_INFO.md` is
 about to be overwritten. Enter commits. Esc goes back to the answers — all of
 them still there — and Esc again abandons the flow.
 

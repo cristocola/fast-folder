@@ -223,6 +223,17 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
             ),
             style,
         ))
+    } else if app.unseen_warnings > 0 {
+        Line::from(Span::styled(
+            format!(
+                " {} {} warning{} arrived while a dialog was open   {}   L messages",
+                g.warn,
+                app.unseen_warnings,
+                if app.unseen_warnings == 1 { "" } else { "s" },
+                g.sep
+            ),
+            theme.warn(),
+        ))
     } else if !app.library.loaded {
         Line::from(Span::styled(" reading the library…", theme.dim()))
     } else if let Some(error) = &app.library.error {

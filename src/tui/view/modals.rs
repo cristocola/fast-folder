@@ -986,7 +986,18 @@ fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Fram
         " tag:x  template=y  created>date match exactly, and combine with the words.",
         theme.dim(),
     )));
+    lines.push(Line::from(""));
+    let mut footer = format!(" fastf {}", env!("CARGO_PKG_VERSION"));
+    if let Some(dir) = &app.data_dir {
+        footer.push_str(&format!("  {}  data in {dir}", g.sep));
+    }
+    footer.push_str(&format!(
+        "  {}  docs: github.com/cristocola/fast-folder",
+        g.sep
+    ));
+    lines.push(Line::from(Span::styled(footer, theme.dim())));
     let max_scroll = lines.len().saturating_sub(inner.height as usize);
+
     let paragraph = Paragraph::new(lines).scroll((scroll.min(max_scroll) as u16, 0));
     frame.render_widget(paragraph, inner);
 }

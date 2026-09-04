@@ -311,8 +311,18 @@ fn preview_register(
     }
     let plan = reg::plan_rename(&canonical, &template, has_template, &request.vars, &cfg)
         .map_err(|error| PreviewRefusal::anywhere(format!("{error:#}")))?;
-    let created = reg::resolve_created(&canonical, request.use_today, None)
-        .map_err(|error| PreviewRefusal::anywhere(format!("{error:#}")))?;
+    let created = reg::resolve_created(
+        &canonical,
+        request.use_today,
+        request.created_override.as_deref(),
+    )
+    .map_err(|error| {
+        PreviewRefusal::on(
+            crate::tui::app::register::FIELD_CREATED_DATE,
+            format!("{error:#}"),
+        )
+    })?;
+
     Ok(Preview::Register(Box::new(RegisterPreview {
         template: if has_template {
             template.name.clone()

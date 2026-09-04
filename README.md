@@ -1,6 +1,6 @@
 <h1 align="center">fastf</h1>
 
-<p align="center"><b>Fast Folder: a template-driven project scaffolder for any kind of structured work.</b></p>
+<p align="center"><b>Fast Folder: a full-screen terminal app and a command line for template-driven project folders.</b></p>
 
 <p align="center">
   <a href="https://github.com/cristocola/fast-folder/actions/workflows/ci.yml"><img src="https://github.com/cristocola/fast-folder/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -10,7 +10,9 @@
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-dea584.svg" alt="Built with Rust"></a>
 </p>
 
-Everyone who works in projects has a folder convention: how a new project should be named, which subfolders it needs, which starter files belong inside. In practice the convention lives in someone's head or a wiki page, and every rushed deadline erodes it a little more. fastf makes the convention executable. You describe the structure once as a template. From then on, creating a project means answering a few questions, and the result is always right: consistent name, complete folder skeleton, starter files pre-filled with your answers, a unique project ID, and metadata that lets you find the project again months later.
+Everyone who works in projects has a folder convention: how a new project should be named, which subfolders it needs, which starter files belong inside. In practice the convention lives in someone's head or a wiki page, and every rushed deadline erodes it a little more. fastf makes the convention executable. You describe the structure once as a template. From then on, creating a project means answering a few questions, and the result is always right: consistent name, complete folder skeleton, starter files pre-filled with your answers, a unique project ID, and metadata that lets you find the project again months later. The daily surface is a full-screen terminal app — your whole library on one screen, every verb a key away — and everything it does has a scriptable subcommand.
+
+<p align="center"><img src="docs/img/dashboard.svg" alt="fastf's dashboard: the header with the counts, the search bar, the project table with sizes filling in, the detail pane, and the template strip" width="960"></p>
 
 fastf is a **single-user** tool for self-contained project trees made from
 ordinary files and directories. Both its surfaces share the same state on one
@@ -54,11 +56,14 @@ than lost, and a network share that has gone away is reported rather than left
 as a frozen screen.
 
 Nothing it does is app-only: every action has a scriptable `fastf <command>`
-equivalent, and the rest of this README speaks fluent shell. The command line
+equivalent (`rename`, `unregister` and `delete` included), and the rest of this
+README speaks fluent shell. The command line
 asks its own questions in the same palette, a few rows at the cursor — never
 taking the screen away from what it just printed.
 
 The whole tool is a single self-contained Rust binary (under 4 MB) with no runtime dependencies. Install it from a package manager, or carry it as a portable folder on a USB stick. `fastf paths` always tells you where its data lives.
+
+The app needs a terminal of at least 60×16 (the detail pane appears from 100 columns, the template strip from 30 rows), draws in the sixteen colours where truecolor is not announced (`fastf config set theme` pins a palette) and in plain ASCII where the alphabet is not there (`FASTF_ASCII=1`); over ssh, on a console, or in the legacy Windows console it says what it cannot do rather than pretending. Details in [docs/cli.md](docs/cli.md#the-guided-app).
 
 ## Quick start
 
@@ -180,7 +185,7 @@ Tests are hermetic: they redirect all state through `FASTF_INSTALL_DIR` (and `HO
 | [`windows_semantics.rs`](tests/windows_semantics.rs) | reserved names, long paths, links, read-only files |
 | [`hostile_fs.rs`](tests/hostile_fs.rs) | corrupt caches, markers and metadata |
 | [`properties.rs`](tests/properties.rs) | generated-input properties (proptest) |
-| [`tui_pty.rs`](tests/tui_pty.rs) | the interactive menu through a real terminal (unix) |
+| [`tui_pty.rs`](tests/tui_pty.rs) | the guided app and the command line's prompts through a real terminal (unix) |
 | [`repo_hygiene.rs`](tests/repo_hygiene.rs) | no tracked file describes the machine it was written on |
 | [`layering.rs`](tests/layering.rs) | `core` and `util` never render, prompt, or reach for a surface |
 
@@ -191,7 +196,7 @@ Two things worth knowing before you change the copy or move paths:
   error there) or `FASTF_FAULT=create:mid-copy:abort` (kills the process there).
   See `util::faults::ALL_FAULT_POINTS`. Compiled out of release builds.
 - **Work counting.** Operations that cost real I/O name themselves, so a claim
-  like "the project browser no longer rescans the library" can be asserted rather
+  like "a tag patches its row and never rescans the library" can be asserted rather
   than believed. `FASTF_TRACE_FILE=/tmp/counts fastf` appends one line per traced
   operation. Also compiled out of release builds.
 - **Lint the other platform too.** `#[cfg(unix)]` code does not compile on a

@@ -7,4 +7,4 @@ Exec=fastf
 Icon=fastf
 Terminal=true
 Categories=Utility;FileTools;
-Keywords=projects;folders;templates;scaffolding;
+Keywords=projects;folders;templates;scaffolding;tui;terminal;

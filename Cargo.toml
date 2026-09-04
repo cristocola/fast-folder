@@ -9,7 +9,7 @@ repository = "https://github.com/cristocola/fast-folder"
 homepage = "https://github.com/cristocola/fast-folder"
 authors = ["Cristo Cola"]
 readme = "README.md"
-keywords = ["cli", "template", "scaffolding", "folders", "productivity"]
+keywords = ["cli", "tui", "template", "scaffolding", "folders"]
 categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]

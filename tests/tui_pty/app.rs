@@ -1,5 +1,5 @@
 //! The app itself: it opens, it survives a mistake, it can be left — and the
-//! settings, register and template flows it bridges to still contain errors.
+//! settings, the counter and the first run, driven through the runtime.
 //!
 //! Driven through a real terminal — `harness.rs` states why, and the rules
 //! every suite in this binary follows.

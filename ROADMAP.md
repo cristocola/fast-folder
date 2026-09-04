@@ -67,25 +67,26 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Released: **v3.0.0 — the guided app on ratatui.** One full-screen dashboard
-  replaced the menu-of-prompts: the library on screen and acted on, fuzzy
-  search and a command palette, sizes filling in without input, every mutation
-  patching its row rather than rescanning. Delivered in eight phases, one PR
-  each, recorded in `PLAN.md`.
-
-  What it added, phase by phase: the runtime, the one command registry, the
-  dashboard, search, sort and filters (0); the action menu and every
-  single-project verb as a native modal, with a move as a cancellable job (1);
-  marks, and every destructive or relocating verb over them as a
-  one-item-at-a-time job with a failure report that leaves the unrun rows
-  marked (2); the create, register and apply flows as a form, a preview built
-  by the code that commits it, and Enter (3); the template studio and a builder
-  that is a list of a template's parts, with a live folder tree beside the
-  paths that make it (4); every setting on one screen, the ID counter, the
-  maintenance verbs and a first-run dialog (5); the command line's own prompts
-  drawn by the same ratatui, and `dialoguer` removed (6); the mouse, the ASCII
-  alphabet for the legacy Windows console, and the two settings the old menu
-  drew retired (7).
+- Prepared: **v3.0.0 — the guided app on ratatui**, tagged on `main` when the
+  consolidation PR lands. One full-screen dashboard replaced the
+  menu-of-prompts: the library on screen and acted on, fuzzy search and a
+  command palette, sizes filling in without input, every mutation patching its
+  row rather than rescanning. Delivered in eight PRs (#35–#42) — the runtime,
+  the one command registry, the dashboard, search, sort and filters; the action
+  menu and every single-project verb as a native modal, with a move as a
+  cancellable job; marks, and the destructive verbs over them as jobs with a
+  failure report that leaves the unrun rows marked; the create, register and
+  apply flows as a form, a preview built by the code that commits it, and
+  Enter; the template studio and a builder that is a list of a template's
+  parts with a live folder tree; every setting on one screen, the ID counter,
+  the maintenance verbs and a first-run dialog; the command line's own
+  prompts drawn by the same ratatui, `dialoguer` removed; the mouse and the
+  ASCII alphabet for the legacy Windows console — and a ninth, the
+  consolidation pass (#43): every verb over the marks, delete by the word,
+  the message log, session memory, the theme key, the terminal always given
+  back, `rename`/`unregister`/`delete` on the command line, and the docs
+  brought into line. `.github/release-notes/v3.0.0.md` is the user-facing
+  account.
 
   **Breaking:** `show-banner` and `show-frame` are gone (accepted and ignored,
   so nothing that sets them starts failing); `recent-default-limit` is now
@@ -103,15 +104,29 @@ responsibility of the filesystem and backups.
 - Released: **v2.2.0, published 2026-09-01** — `fastf term` opens a terminal at
   a project's folder, the fourth verb (with `open`, `copy`, `path`) that
   resolves a query and hands the result to another program.
-- The v2.1.x guarantees are in the release train below and, phase by phase, in
-  `PLAN.md`; the current design is `CLAUDE.md`.
-- Verified by hand, 2026-08-31: the launcher smoke test (`PLAN.md` Phase 4) on
-  a desktop session, plus a Windows pass. Neither is reachable from CI.
-- Outstanding, and needing the maintainer: the manual passes each phase of
-  `PLAN.md` lists — a real move between mounted bases, a create with post-create
-  actions, a first run on a machine with no config, and a Windows console pass
-  for the ASCII alphabet.
-- Last reviewed: **2026-09-03** (v3.0.0, the ratatui rebuild complete)
+- The v2.1.x guarantees are in the release train below; the current design is
+  `CLAUDE.md`.
+- Verified by hand, 2026-08-31: the launcher smoke test on a desktop session,
+  plus a Windows pass. Neither is reachable from CI.
+- Outstanding manual passes, needing the maintainer (none is reachable from
+  CI; the pty suite covers each on a sandbox):
+  - `fastf` in an 80×24 and a 120×40 window; `fastf search tag:x`;
+    `fastf </dev/null`; `NO_COLOR=1 fastf`; a launcher-started `fastf` still
+    opens a window running the app.
+  - A real move between two mounted bases with the progress modal, and a
+    cancel mid-batch-move on a real second volume; the `$EDITOR` note flow in
+    a real terminal.
+  - A marked batch over the real library — a tag, a note, a delete.
+  - A real create with post-create actions (`git init` / `$EDITOR`) on a real
+    template, and a register of a folder that already holds a
+    `PROJECT_INFO.md`.
+  - Build a real template end to end and create a project from it; edit one
+    of the gallery templates.
+  - The legacy Windows console pass for the ASCII alphabet, and the mouse in a
+    terminal that reports it.
+  - Ctrl-Z and `fg`; `kill -INT` twice against the app leaves the shell
+    cooked; `ssh localhost -t fastf` picks a theme and `o` says "no display".
+- Last reviewed: **2026-09-04** (v3.0.0 consolidated)
 
 ## Release train
 
@@ -177,7 +192,7 @@ Regression coverage grows with the relevant release:
   post-verification, post-publication, and before/after source cleanup (v1.5.0).
 - [x] Cross-interface mutation-loss and registration partial-outcome cases
   (v1.5.1).
-- [x] Guided browser draws before measuring, fills in without input, and never
+- [x] The project list draws before measuring, fills in without input, and never
   reflows a row as a size lands (v1.6.0).
 - [x] Names that sanitize away or start with `.` are refused before any folder is
   created; the counter's maximum is enforced at `id set` and at create; an
@@ -204,7 +219,7 @@ Manual move smoke and follow-up:
 - [x] Linux same-filesystem direct rename and genuine cross-filesystem staged
   move (`/tmp` to `/dev/shm`) using the release binary.
 - [ ] Windows same-drive rename and ordinary move to another mounted drive/share
-  using the published MSI or ZIP; plus, new in v2.0.0, "Reveal" from the TUI
+  using the published MSI or ZIP; plus, new in v2.0.0, "Reveal" from the app's
   action menu and `fastf open` (the `ShellExecuteW` path — CI compiles and lints
   it, but only a real desktop session opens a window). This remains the sole post-release validation
   item, still outstanding across every release since v1.5.1.
@@ -238,9 +253,11 @@ closed plan file:
   offering a choice there is a larger change than it looks.
 - A native KRunner DBus runner: search-as-you-type from Alt+Space without
   spawning fastf per keystroke. Its own deliverable, probably its own repository.
-- `reveal_folder` on unix blocks on `.status()`. A file-manager handler that runs
-  in the foreground would hang a `fastf open` that has no terminal to show the
-  wait in. Consider detaching it the way the relaunch spawn does.
+- `reveal_folder` on unix still waits on `.status()` (the app runs it on a
+  worker, and since v3.0.0 it checks for a display, gives the handler no
+  terminal and reads the exit status). A file-manager handler that runs in the
+  foreground would still hold a `fastf open` that has no terminal to show the
+  wait in; detaching it the way the relaunch spawn does is the remaining step.
 - `ptyxis` (the GNOME 47+ default) in the emulator table, if anyone asks.
 - A watchdog for a clipboard tool that does not fork — the `wl-copy --foreground`
   shape. `clipboard::feed`'s `wait()` has no timeout.
@@ -255,5 +272,16 @@ Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 - The action menu only offers "Move to another base" when one is already
   mounted; an `Unresponsive` base could offer a "retry probe" item instead of
   just being left out.
-- `show-banner` and `show-frame` belonged to the menu the guided app replaced;
-  they still parse and do nothing. Remove them at the next major.
+- Clipboard via OSC 52 for ssh sessions, where no clipboard tool exists: a
+  new escape-sequence write to the terminal, deliberately left out of v3.0.0;
+  the "here is the path" dialog is the answer until then.
+- Delete to the system trash instead of permanently (a dependency and a core
+  change).
+- A `base=` search operator, or a base filter key, for a library on several
+  drives.
+- "Open in `$EDITOR`" as a project verb; the journal's `--since` in the app;
+  `fastf new --no-post` parity in the wizard.
+- Windows terminal-layer tests: the pty suite is unix by construction, so raw
+  mode, the mouse and the ASCII alphabet are untested there.
+- An input thread that truly blocks: it polls once a second when idle because
+  crossterm's read cannot be cancelled for the suspend handshake.

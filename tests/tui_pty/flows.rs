@@ -1,5 +1,5 @@
-//! The bridged flows: bulk register, maintenance, and the template builder —
-//! reached from the dashboard, run on the main screen, returned from.
+//! The flows that build something — create, register, apply, the template
+//! builder — and the command line's own prompts, driven through the runtime.
 //!
 //! Driven through a real terminal — `harness.rs` states why, and the rules
 //! every suite in this binary follows.
@@ -701,7 +701,7 @@ fn the_counter_is_raised_from_the_settings_screen() {
 }
 
 // ---------------------------------------------------------------------------
-// The command line's own prompts (Phase 6)
+// The command line's own prompts, on the same ratatui
 // ---------------------------------------------------------------------------
 
 /// Run one subcommand under a pty with `script`, and give back the transcript.

@@ -7,8 +7,9 @@ folders from **folder templates** — code, research, finance, music video,
 photography, film. Config, templates and the counter live together in one data
 dir; projects live in one or more *bases*.
 
-Two surfaces sit on one core: the guided terminal menu (`fastf`, the daily one)
-and the command line (`fastf new`, …). `core` and `util` know about neither.
+Two surfaces sit on one core: the guided app (`fastf`, the daily one — a
+full-screen ratatui dashboard) and the command line (`fastf new`, …). `core`
+and `util` know about neither.
 
 ## Build commands
 
@@ -70,32 +71,41 @@ tell you.
   `assets.rs` (the template-file copy engine: walk, classify, interpolate or
   byte-copy), `validated.rs` (typed slugs, relative paths and project folder
   names), `project_info.rs`.
-- `src/util/` — `lockfile` (cross-process `DataLock`), `atomic` (THE atomic
-  write), `fs_retry` (Windows sharing violations), `interrupt` (Ctrl-C
-  rollback), `faults` (failpoints), `trace` (work counting), `diag` (the one
-  warning sink), `yaml` (the one place the YAML crate is named), `time` (one
-  clock), `paths` (data-dir resolution, `display_path`, the shared boundary
-  checks including `contained_destination` and `is_link_like`, base probing),
-  `shell_open` (Windows `ShellExecuteW`), `relaunch` + `notify` (unix-only: the
+- `src/util/` — `lockfile` (cross-process `DataLock`; says what it is waiting
+  for after a second), `atomic` (THE atomic write), `fs_retry` (Windows
+  sharing violations), `interrupt` (Ctrl-C rollback, SIGHUP, and the
+  `set_restore` hook the surfaces register for the second signal), `faults`
+  (failpoints), `trace` (work counting), `diag` (the one warning sink), `yaml`
+  (the one place the YAML crate is named), `time` (one clock), `paths`
+  (data-dir resolution, `display_path`, the shared boundary checks including
+  `contained_destination` and `is_link_like`, base probing), `shell_open`
+  (Windows `ShellExecuteW`), `relaunch` + `notify` (unix-only: the
   headless-GUI terminal relaunch and `notify-send`), `test_env` (the one
   env-mutation guard, test-only), `tree_size`, `size_scan`, `human_bytes`,
-  `clipboard`, `tty`.
-- `src/cli/` — one module per subcommand, plus `render.rs`, the only module that
+  `clipboard`, `tty` (the terminal questions: `require_tty`, `has_display`,
+  the remembered cooked mode a signal handler restores).
+- `src/cli/` — one module per subcommand (`folder_verbs.rs` is `rename`,
+  `unregister` and `delete` together), plus `render.rs`, the only module that
   prints a plan, a create or an apply; `target.rs` (resolve a query to one
-  project, asking when it is ambiguous — the flow `open`/`copy`/`path` share);
+  project, asking when it is ambiguous — the flow `open`/`copy`/`path`/`term`
+  and the folder verbs share);
   and `terminal.rs` (the `Config`↔`util::relaunch` seam, since `util` may not
   read `Config`). `move_project.rs` is named that way because `move` is a
   keyword, and `path_cmd.rs`/`paths_cmd.rs` because both would otherwise read
   like `std::path` at their call sites.
 - `src/tui/` — every interactive terminal surface, all of it ratatui. The
   guided app: `runtime.rs` (the one module that owns the alternate screen, the
-  threads and the loop), `app/` (`App`, `update`, and one module per flow —
-  `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
-  `settings`, `palette`, `modal`), `view/` (renderers only, `&App` in),
-  `command.rs` (**the one registry** every key, palette entry, help line and
-  hint comes from), `msg.rs`/`effect.rs`, `theme.rs`, `fuzzy.rs`, `layout.rs`,
-  `loaders.rs` (the workers' reads), `widgets/` (`input`, `text_area`, `form`,
-  `tree`, `nav`), `testing.rs` (fixtures for the suites).
+  threads and the loop), `entry.rs` (how the app was opened), `app/` (`App`,
+  `update`, and one module per flow — `library`, `search`, `actions`, `jobs`,
+  `wizard`, `register`, `studio`, `settings`, `palette`, `modal`, `data`),
+  `view/` (renderers only, `&App` in), `command.rs` (**the one registry**
+  every key, palette entry, help line, key line and hint comes from — the
+  dialogs' too), `msg.rs`/`effect.rs`, `theme.rs` (the palette, a pure
+  function of an `Env`), `session.rs` (what a run leaves for the next one),
+  `frame.rs` (the session ring), `validators.rs` (the prompt texts),
+  `fuzzy.rs`, `layout.rs` (every box's geometry, read by `update` and `view`
+  alike), `loaders.rs` (the workers' reads), `widgets/` (`input`, `text_area`,
+  `form`, `tree`, `nav`), `testing.rs` (fixtures for the suites).
   The command line's own prompts: `inline.rs` (**the other module that may take
   the terminal** — a few rows at the cursor, never the alternate screen),
   `prompt.rs` (the contract over it), `pickers.rs`, `vars.rs`, `rows.rs`.
@@ -111,7 +121,7 @@ touch that directory.** This one is orientation, layering, the data-dir and
 counter models, the argument layer, and the traps that belong to no single
 module. `src/core/CLAUDE.md` is the engine — templates, interpolation, path
 safety, `PROJECT_INFO.md`, create/apply/register, moving, recovery, locking,
-search, output. `src/tui/CLAUDE.md` is the guided menu. `tests/CLAUDE.md` is the
+search, output. `src/tui/CLAUDE.md` is the guided app. `tests/CLAUDE.md` is the
 suites. Put a decision beside the code it constrains, not here.
 
 ### The layering rule
@@ -123,9 +133,9 @@ suppress, and `colored` in `core` is ANSI in a piped stdout. `cli` may call `tui
 helpers; new shared interactive code goes in `src/tui/`, not `cli/`.
 
 `tests/layering.rs` enforces all of it by reading the source — an import is not
-something a runtime test can see. Three exceptions, named there and nowhere
-else: `util::diag` (the warning sink), `util::live_select` (which draws a picker
-by design), `util::trace`.
+something a runtime test can see. Two exceptions, named there and nowhere
+else: `util::diag` (the warning sink) and `util::trace`. Only `tui::runtime`
+and `tui::inline` take the terminal.
 
 ## The repository is public
 
@@ -177,8 +187,9 @@ why every test harness must redirect `HOME` (`tests/common/env`).
 `Ok(default)` when the file is *absent*, so a fallback can only mask a parse or
 I/O error — and the config decides which directories are the library, so
 defaulting answers a different question with a success. Every surface propagates
-it: the CLI exits 1 (`main.rs` adds a `hint:` line naming the file) and the TUI
-refuses to open a menu.
+it: the CLI exits 1 (`main.rs` adds a `hint:` line naming the file) and the app
+never takes the screen — and a launcher-started `fastf` still opens a window,
+with the default terminal probe, so the error can be read.
 
 **`config::expand_base_path` / `resolve_base_dir_input` are the only way in for a
 base path.** The first expands `~` and requires absolute; the second adds
@@ -346,7 +357,7 @@ string), `xfce4-terminal -x` (its `-e` shell-parses one string), `xterm -e` last
 argv is passed as argv, never through a shell.
 
 `util::tty::mark_interactive_surface` has exactly **two** choke points —
-`require_tty`'s success path (every dialoguer prompt and picker) and
+`require_tty`'s success path (every inline prompt and picker) and
 `tui::runtime::Runtime::init` (the guided app, after its own `require_tty`) —
 and `main` reads it only to decide whether a relaunched window pauses before
 closing.
@@ -384,8 +395,6 @@ documented `$EDITOR` fallback never ran.
 
 # Gotchas that are just true
 
-- `dialoguer::Input::interact_text()` takes ownership of `self`. Never reuse an
-  `Input` across iterations — recreate it each time.
 - Rust 2024 makes `std::env::set_var`/`remove_var` unsafe, and `setenv` is not
   thread-safe underneath. **One guard per binary**: `util::test_env` under
   `src/`, `tests/common/env` under `tests/`, and `tests/layering.rs` fails the
@@ -398,8 +407,8 @@ documented `$EDITOR` fallback never ran.
   `faults` needs no lock: its arming is thread-local.
 - Concurrency tests must spawn **processes**, not threads: a thread test passes
   against an in-process `Mutex` while production stays broken.
-- **A Windows thread's stack is 1 MiB, not the main thread's 8.** The TUI
-  browser's size scan runs on worker threads, so any recursion bound must hold there —
+- **A Windows thread's stack is 1 MiB, not the main thread's 8.** The app's
+  size scan runs on worker threads, so any recursion bound must hold there —
   `paths::MAX_WALK_DEPTH` is 64 for that reason, not 256.
 - **Never match a source path with a `/` suffix.** `Path::display()` uses the
   platform separator, so `shown.ends_with("util/diag.rs")` silently matches

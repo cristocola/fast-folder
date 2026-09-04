@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "fastf",
-    about = "Fast Folder Creator — template-driven project folder generator",
+    about = "Fast Folder Creator — a full-screen app and a command line for template-driven project folders",
     long_about = "fastf creates structured project folders from YAML templates.\n\
 \n\
 Templates define a folder structure, placeholder files, and variables (text inputs\n\
@@ -95,14 +95,13 @@ enum Commands {
         action: IdAction,
     },
 
-    /// List recent projects — opens an interactive picker by default
+    /// List recent projects — opens the guided app on them by default
     #[command(
-        after_help = "By default, `fastf recent` opens an interactive picker so you can\n\
-        select a project and choose between opening its folder, viewing metadata,\n\
-        adding tags, or appending a journal note. Pass --plain (or pipe stdout)\n\
-        to get the non-interactive list output for scripts.\n\n\
+        after_help = "By default, `fastf recent` opens the guided app with these projects on\n\
+        screen (the flags shown as a filter chip Esc takes off), where every verb is a\n\
+        key away. Pass --plain (or pipe stdout) to get the plain list for scripts.\n\n\
         Examples:\n  \
-            fastf recent                           # interactive picker\n  \
+            fastf recent                           # the app, on the recent projects\n  \
             fastf recent --plain                   # non-interactive list (script-friendly)\n  \
             fastf recent --plain --limit 5\n  \
             fastf recent --template music-video\n  \
@@ -520,7 +519,7 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum TemplateAction {
-    /// Create a new template step-by-step with an interactive builder
+    /// Create a new template in the guided app's builder
     New,
     /// List all available templates with their slugs and descriptions
     List,
@@ -529,7 +528,7 @@ enum TemplateAction {
         /// Template slug (see 'fastf template list')
         slug: String,
     },
-    /// Edit an existing template interactively — existing values are pre-filled, press Enter to keep them
+    /// Edit an existing template in the guided app's builder: every part of it on one list
     Edit {
         /// Template slug (see 'fastf template list')
         slug: String,

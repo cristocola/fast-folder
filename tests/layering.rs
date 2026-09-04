@@ -248,7 +248,8 @@ fn only_the_runtime_touches_the_terminal() {
 
 /// The same rule one layer down. `util` is under `core`.
 ///
-/// `util::live_select` used to be the exception; it went in Phase 0. The one
+/// `util::live_select` used to be the exception; it went with the ratatui
+/// rebuild (v3.0.0). The one
 /// thing `util` may still do about a terminal is ask whether there *is* one
 /// (`util::tty`) and put the cursor back after a signal (`util::interrupt`).
 #[test]

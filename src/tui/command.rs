@@ -239,7 +239,7 @@ pub enum CommandId {
     CopyPath,
     ShowPath,
     ToggleDetail,
-    // Single-project actions, native from Phase 1
+    // Single-project actions
     AddTag,
     RemoveTags,
     ReautoTags,
@@ -251,7 +251,7 @@ pub enum CommandId {
     Delete,
     ShowMetadata,
     ShowJournal,
-    // Marks, batch targets from Phase 2
+    // Marks, batch targets
     MarkToggle,
     MarkAll,
     MarkNone,

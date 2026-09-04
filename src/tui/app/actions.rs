@@ -1,4 +1,4 @@
-//! The single-project actions, made native in Phase 1: the action-menu modal,
+//! The single-project actions as native dialogs: the action-menu modal,
 //! the text prompt, the yes/no confirm, the multi-pick for tags, and the pure
 //! lookups that feed them. The verbs themselves are declared once in
 //! `command.rs`; this module holds the modal state a verb opens and the lists

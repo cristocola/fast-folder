@@ -26,6 +26,10 @@
 //! `FASTF_SHOT_SIZE=80x24` runs the app in that window instead of the suite's
 //! 120×40, which is how the compact layout is looked at.
 //!
+//! `FASTF_SHOT_SVG=docs/img/dashboard.svg` also writes the frame as an SVG in
+//! the app's truecolor palette — the README's screenshot, taken from the real
+//! binary. Sandbox only: the repository is public.
+//!
 //! The library is a sandbox of `FASTF_SHOT_PROJECTS` planted projects (eight
 //! by default) unless `FASTF_SHOT_REAL=1`, which runs against **your own**
 //! configuration and library — read-only keys only, please.
@@ -113,9 +117,35 @@ fn screenshot() {
         ]
     };
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    let svg_path = std::env::var("FASTF_SHOT_SVG")
+        .ok()
+        .filter(|p| !p.is_empty());
+    if svg_path.is_some() {
+        assert!(
+            !real,
+            "FASTF_SHOT_SVG renders the sandbox only — the repository is public"
+        );
+    }
+    let mut env = env;
+    // An SVG wants the truecolor palette whatever this terminal announces.
+    if svg_path.is_some() {
+        env.push(("COLORTERM", std::path::Path::new("truecolor")));
+        env.push(("FASTF_THEME", std::path::Path::new("rich")));
+    }
     let (chunks, code) =
         pty::run_chunked_sized(cols, rows, common::FASTF, &argv, &env, &script, DEADLINE);
     let screen = screen_at_sized(&chunks, taken, cols, rows);
+    if let Some(path) = svg_path {
+        let parser = parser_at_sized(&chunks, taken, cols, rows);
+        let svg = super::svg::render(parser.screen(), &fastf::tui::theme::Theme::rich());
+        let sandbox = sb.tmp.path().display().to_string();
+        assert!(
+            !svg.contains(&sandbox),
+            "the picture must not name the sandbox path"
+        );
+        fs::write(&path, svg).expect("writing the SVG");
+        println!("── wrote {path} ──");
+    }
 
     println!();
     println!("── screen {cols}×{rows} after `{keys}` (exit {code}) ──");

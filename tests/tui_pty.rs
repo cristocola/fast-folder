@@ -11,7 +11,8 @@
 //!
 //! Unix only by construction: the harness is `libc::forkpty`.
 //!
-//! Three suites in one binary — see `harness` for why one.
+//! Three suites in one binary — see `harness` for why one — plus the
+//! screenshot tool and its SVG renderer.
 
 #![cfg(unix)]
 
@@ -20,11 +21,13 @@ mod common;
 #[path = "tui_pty/harness.rs"]
 mod harness;
 
-#[path = "tui_pty/browser.rs"]
-mod browser;
+#[path = "tui_pty/app.rs"]
+mod app;
 #[path = "tui_pty/flows.rs"]
 mod flows;
-#[path = "tui_pty/menu.rs"]
-mod menu;
+#[path = "tui_pty/list.rs"]
+mod list;
 #[path = "tui_pty/screenshot.rs"]
 mod screenshot;
+#[path = "tui_pty/svg.rs"]
+mod svg;

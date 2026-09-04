@@ -33,7 +33,7 @@ the directory is yours.
 
 The manifest holds metadata only. The file spec lives in `files/`.
 
-Keys fastf does not recognise are left alone. Saving a template from the TUI builder or the browser editor rewrites the keys below and preserves anything else you put in the file, in place — so a manifest carrying notes for your own tooling survives being edited in fastf. (Comments are the exception: YAML comments are lost on any save, in any editor.)
+Keys fastf does not recognise are left alone. Saving a template from the app's builder rewrites the keys below and preserves anything else you put in the file, in place — so a manifest carrying notes for your own tooling survives being edited in fastf. (Comments are the exception: YAML comments are lost on any save, in any editor.)
 
 ```yaml
 name: "Client Project"

@@ -7,8 +7,8 @@ away by a later validation failure, and a network-share stall is never a frozen
 screen.
 
 The root `CLAUDE.md` has the layering rule and the module list; `src/core/CLAUDE.md`
-has the engine underneath. `PLAN.md` is the phase-by-phase record of the
-ratatui rebuild; what follows is the design as it stands.
+has the engine underneath. The ratatui rebuild landed as v3.0.0 (PRs #35–#42
+and the consolidation pass, #43); what follows is the design as it stands.
 
 # The look
 
@@ -25,9 +25,15 @@ robust as a rock.** The rules, in the order they matter:
   `⚠` a warning, `⌕` search). No decorative symbols in titles or counters.
 - Whitespace and alignment do the structuring: three spaces between facts on
   a line, right-aligned figures, plain-word panel titles.
-- Every state is visible and quiet: loading (`(from index)` and a spinner),
-  empty (one sentence saying what to do), an error (one line, or a dialog when
-  it has more to say), disabled (dimmed, with the reason on the key).
+- Every state is visible and quiet: loading (`(from index)` and a spinner, a
+  dialog that says `reading…` the moment its key is pressed), empty (one
+  sentence saying what to do, inside the box), an error (one line, or a
+  dialog when it has more to say), disabled (dimmed, with the reason on the
+  key — `Move` with one base says which base is missing, `o` and `t` without
+  a display say so).
+- Columns are measured from their content, never fixed: a title can never run
+  into its description. A count reads `1 base`. A confirmation is sized to its
+  question and names every folder it is about.
 - Depth is in what it can do, not in what it shows at once. A screen shows what
   is needed to act; the palette and help hold the rest.
 
@@ -70,12 +76,24 @@ throws the offset away and re-derives the window every draw.
 **Every command is declared once, in `command.rs`**, with its title, its
 description, the contexts it fires in, its default keys, its category, and
 whether the palette and the hint bar show it. The keymap (`lookup`), the fuzzy
-palette (`palette_entries`), the help overlay (`help_sections`) and the hint bar
-(`hints`) all read that list; the prototype carried four copies of its key
-table and they had already drifted. `tests/tui_commands.rs` holds the
-invariants: one key means one thing per context (global bindings count
-everywhere), every id is declared exactly once, every bound command is in its
-context's help.
+palette (`palette_entries`), the help overlay (`help_lines`), the hint bar
+(`hints`) and every dialog's own key line all read that list; the prototype
+carried four copies of its key table and they had already drifted.
+`tests/tui_commands.rs` holds the invariants: one key means one thing per
+context (global bindings count everywhere), every id is declared exactly
+once, every bound command is in its context's help.
+
+The dialogs are contexts too — `Actions`, `Studio`, `Builder`, `Settings` —
+and their handlers end in `lookup_and_run`: a key a dialog does not consume
+itself (a text field's, `y`/`n`'s) is whatever the registry binds there.
+That is how `?` opens the help for wherever the keys go right now, and how a
+verb's own letter runs it from inside the action menu. `Close` (Esc, `q`) is
+one command for every dialog, one level at a time; `Quit` and `Back` are the
+dashboard's own, because the one-key-one-meaning invariant counts global
+bindings in every context — it is what caught `g` meaning both "first row"
+and "template from a folder" in the studio. The keys a text widget consumes
+(Ctrl-S in a text area, Tab in a form) are the one honest exception: the
+widget's key line names them.
 
 An `Availability` is a function of the app: `Disabled(reason)` is listed dimmed
 and pressing its key shows the reason; `Hidden` is not bound at all (Move with
@@ -103,6 +121,29 @@ installs the panic hook that restores the screen — for a panic **on the main
 thread only**. A worker's panic is caught by `spawn_worker` and becomes a
 warning; restoring the screen for it would tear the frame down under a session
 that is still running.
+
+**The terminal is always given back.** The second signal from outside (`kill
+-INT` twice, a terminal that sends one on close, SIGHUP) exits from the
+handler, where nothing of ratatui may run: `Runtime::init` registers
+`restore_on_signal` with `interrupt::set_restore`, which writes the escapes
+that undo the mouse, the paste reports and the alternate screen with raw
+system calls and puts back the terminal settings `tty::remember_cooked_mode`
+captured before raw mode was ever enabled. `inline.rs` registers its own for
+its rows, and installs a panic hook of its own. Ctrl-Z is a command
+(`Suspend`): the input thread is paused, the screen released, `SIGTSTP`
+raised, and `fg` retakes the screen at whatever size the window has — every
+suspend ends with a `Resize` message for that reason.
+
+**Pasted text goes into a field, never to the keys.** The input thread hands
+a run of printable keys that arrives faster than a hand can type over as one
+`Msg::Paste` (`collect_burst`) — what a terminal without bracketed paste
+delivers — and `on_paste` gives a single-line field the first line (and says
+how many it dropped), a text area every line, and the dashboard nothing but a
+status line. A pasted note once ran as a dozen commands.
+
+**The loop idles.** The input thread polls at 50 ms for two seconds after a
+key and once a second after that; `poll` returns the moment a key comes, so
+the cost is wakeups, not latency. The main loop's idle wake is a second.
 
 **Never call `Terminal::clear`.** In ratatui 0.30 it asks the terminal where
 its cursor is and waits up to two seconds for the answer, which a pty under
@@ -208,7 +249,7 @@ action menu" — and Enter dispatches exactly the `CommandId` a key would.
 
 ## The single-project actions
 
-Since Phase 1 the verbs on a selected project are native modals, not bridges.
+The verbs on a selected project are native modals, not bridges.
 `app/actions.rs` holds their states (`ActionsState`, `TextPrompt`, `Confirm`,
 `MultiPick`); `command.rs` binds `Enter` and `a` to the action menu, `A` /
 `Ctrl-T` to add / remove tags, `N` / `Ctrl-N` to the editor and inline notes,
@@ -313,9 +354,12 @@ which the old content loop could not declare at all.
 
 **`widgets/text_area.rs` is ours on purpose.** `tui-textarea`'s current release
 pins `ratatui 0.29`: it does not merely pull a second ratatui into the tree, it
-fails to resolve against ours. That is the plan's own condition for a widget
-crate. It is `LineEdit` with a second dimension and the same rule — the cursor
-is a char index, never a byte offset, on both axes.
+fails to resolve against ours. A widget crate has to build against the
+ratatui in `Cargo.toml`; this one does not, so the piece is ours. It is
+`LineEdit` with a second dimension and the same rule — the cursor is a char
+index, never a byte offset, on both axes — and its viewport is a `Cell`,
+because `view` takes the app by shared reference and a scroll re-derived from
+scratch every frame is a scroll that jumps.
 
 **`ListChange::SummaryOnly`** is what a template action reports: the header and
 the strip change, and not one folder moved, so re-reading every base would be a
@@ -429,5 +473,48 @@ Three layers, each for what only it can see:
   projects` never appears contiguously, and a word can arrive one letter at a
   time. `harness::app_screen` replays the transcript (up to the last
   `LeaveAlternateScreen`) into a `vt100` terminal and returns the frame a person
-  saw; `pty::plain` (escapes stripped) is for what a bridged flow printed in
-  cooked mode. Match on the screen, never on the stream.
+  saw; `pty::plain` (escapes stripped) is for what a suspended flow or an
+  inline prompt printed in cooked mode. Match on the screen, never on the
+  stream.
+
+## What the consolidation pass added
+
+Everything below landed in one pass after the eight phases, from three audits
+and forty frames of the screenshot tool.
+
+**The theme is a pure function of an `Env`** (`theme::choose`): `FASTF_THEME`,
+then `NO_COLOR`/`TERM=dumb`, then the config's `theme` key, then what the
+terminal announces — `COLORTERM`, a `TERM`/`TERM_PROGRAM` naming a truecolor
+emulator, Windows Terminal — else ANSI. A theme written on the settings
+screen takes effect on the frame that shows it was written
+(`Effect::Retheme` → `Msg::Themed`); `update` still reads no environment. The
+Windows ASCII heuristic is "a host that announces no emulator", and
+`FASTF_ASCII=0` forces Unicode.
+
+**Session memory** (`session.rs`): `state.toml` beside `config.toml` keeps the
+sort order, the pane and the id of the row the cursor was on; read before the
+first frame, written after the screen is given back, applied once on the
+first discovery — a reload is not a restart. `fastf recent`/`search` own
+their order and take only the pane's state.
+
+**Every verb but rename batches** (`jobs::JobKind` carries the answer — the
+tag, the note, the base — asked once); delete asks for the word `delete`,
+single or batch, and the prompt names every folder; the quick note is a text
+area (Enter saves, Alt-Enter breaks a line).
+
+**Geometry lives in `layout.rs`**, read by `update` and `view` alike, so a
+cursor can never leave the drawn window and End lands on the last line:
+`actions_box`, `pick_box`, `help_box`, `message_box`, `sized_dialog`,
+`settings_rows`, `studio_rows`. The table/pane split favours the table
+(`regions` takes the width the names need with the size beside them; the pane
+takes the rest and closes under `DETAIL_PANE_MIN`).
+
+**The message log** (`App.log`, `L`): every status line and `diag` warning,
+stamped by `App.clock` — the wall clock in the runtime, a fixed string in a
+fixture — and a count of the warnings that arrived under a dialog.
+
+**A malformed query is named while it is typed** (`core::query::diagnose`,
+additive; `parse` is unchanged for the command line).
+
+**Honest counts.** The header counts templates on disk (`TemplateCard::on_disk`);
+the strip lists orphan slugs dimmed after them and never opens on one.

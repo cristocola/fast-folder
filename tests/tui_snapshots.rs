@@ -140,7 +140,7 @@ fn narrow_keeps_the_folder_name() {
     let _ = KeyCode::Null;
 }
 
-// --- Phase 1: single-project actions -------------------------------------
+// --- single-project actions ----------------------------------------------
 
 #[test]
 fn action_menu_open() {
@@ -227,7 +227,7 @@ fn move_progress_modal() {
     snap("move_progress", render_to_string(&app, 100, 30));
 }
 
-// --- Phase 2: marks and batch jobs ---------------------------------------
+// --- marks and batch jobs ------------------------------------------------
 
 use fastf::tui::effect::{ActionOutcome, ListChange};
 
@@ -457,7 +457,7 @@ fn job_report_with_failures() {
 }
 
 // ---------------------------------------------------------------------------
-// The flows: create, apply, register (Phase 3)
+// The flows: create, apply, register
 // ---------------------------------------------------------------------------
 
 mod flows {
@@ -620,7 +620,7 @@ mod flows {
 }
 
 // ---------------------------------------------------------------------------
-// The template studio and the builder (Phase 4)
+// The template studio and the builder
 // ---------------------------------------------------------------------------
 
 mod studio {
@@ -760,7 +760,7 @@ mod studio {
 }
 
 // ---------------------------------------------------------------------------
-// Settings, the counter, maintenance and the first run (Phase 5)
+// Settings, the counter, maintenance and the first run
 // ---------------------------------------------------------------------------
 
 mod settings {

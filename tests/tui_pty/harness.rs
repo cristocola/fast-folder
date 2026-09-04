@@ -162,9 +162,22 @@ pub(crate) fn screen_at_sized(
     cols: u16,
     rows: u16,
 ) -> String {
+    parser_at_sized(chunks, until, cols, rows)
+        .screen()
+        .contents()
+}
+
+/// The replay itself, for a caller that wants the cells and not just the
+/// text — the screenshot tool's SVG.
+pub(crate) fn parser_at_sized(
+    chunks: &[(Duration, Vec<u8>)],
+    until: Duration,
+    cols: u16,
+    rows: u16,
+) -> vt100::Parser {
     let mut parser = vt100::Parser::new(rows, cols, 0);
     parser.process(&pty::until(chunks, until));
-    parser.screen().contents()
+    parser
 }
 
 /// How many times `name` was traced.

@@ -10,7 +10,8 @@ runs test *binaries* sequentially, so splitting is free for fast suites and
 expensive for slow ones: making the pty tests three targets added nineteen
 seconds of wall time, because their fixed keystroke schedules stopped
 overlapping. `tui_pty.rs` is therefore one binary with three modules under
-`tests/tui_pty/`. Everything else is a target per subject.
+`tests/tui_pty/` (`app`, `list`, `flows`), plus the screenshot tool and its
+SVG renderer. Everything else is a target per subject.
 
 The suites, and what each guards — the intent, not the case list:
 - `create.rs`, `metadata.rs`, `search.rs`, `template_engine.rs`, `register.rs`,
@@ -33,7 +34,7 @@ The suites, and what each guards — the intent, not the case list:
   theme at fixed sizes, against `tests/snapshots/*.snap` (`insta`; review a
   deliberate change with `INSTA_UPDATE=always cargo test --test tui_snapshots`
   and commit the file).
-- `tui_pty.rs` (unix; modules `menu`, `browser`, `flows`) — the guided app and
+- `tui_pty.rs` (unix; modules `app`, `list`, `flows`) — the guided app and
   the command line's own prompts through a real terminal: the runtime, the
   threads, the inline blocks, which a test backend cannot see. `tests/tui_pty/harness.rs` states the
   rules that keep these from being flaky — above all that ratatui redraws only
@@ -44,7 +45,9 @@ The suites, and what each guards — the intent, not the case list:
   --ignored --nocapture` drives the real binary with those keys in a planted
   sandbox (or your own library with `FASTF_SHOT_REAL=1`) and prints the frame
   it left on screen; `FASTF_SHOT_ARGS="copy shared"` drives a subcommand
-  instead, which is how the command line's inline prompts are looked at.
+  instead, which is how the command line's inline prompts are looked at;
+  `FASTF_SHOT_SIZE=80x24` picks the window; `FASTF_SHOT_SVG=<path>` writes
+  the frame as the SVG the README embeds (sandbox only — the repo is public).
   **Look at every screen you build this way** before writing its snapshot — it
   is what a person will see.
 - `relaunch.rs` (unix) — when fastf opens a terminal for itself and, mostly, when

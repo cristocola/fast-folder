@@ -10,7 +10,7 @@ On the very first launch fastf asks where your projects should live and suggests
 |---|---|
 | `fastf` | Open the guided app |
 | `fastf new [slug]` | Create a project from a template |
-| `fastf recent` | Interactive project picker with inline tags |
+| `fastf recent` | The guided app on the recent projects (`--plain` for a list) |
 | `fastf open <query>` | Reveal a project folder by ID or name |
 | `fastf copy <query>` | Put a project's folder path on the clipboard |
 | `fastf path <query>` | Print a project's folder path, and nothing else |
@@ -509,17 +509,8 @@ error: 'shared' is ambiguous — 2 matches. Specify a full ID:
 ```
 
 `move`, `tag`, `note`, and `notes` resolve queries the same way but do not open
-a picker; an ambiguous query is always the error above.
-
-Rows show inline tags. Selecting a project opens an action menu, most-used first: open folder, copy path, open terminal here, show metadata, Tags, Journal, move to another base, rename, unregister, delete.
-
-**Open terminal here** opens a terminal window whose shell starts in the
-project's folder — the same emulator resolution as `fastf term`, and always a
-new window, since the TUI is keeping the one you are in.
-
-**Copy path** puts the project's folder on the clipboard, using whichever of `wl-copy`, `xclip`, `xsel`, `clip`, or `pbcopy` is installed, and says which one it used. Where there is no clipboard tool — a headless session, a plain SSH login — it prints the path on its own line instead, so a terminal selection still works. It always says what it did.
-
-**Tags** adds a tag by picking one the library already uses (or typing a new one), removes tags by ticking them in a list rather than retyping them exactly, and re-derives the template's automatic tags from the project's current variables.
+a picker; an ambiguous query is always the error above. `rename`, `unregister`
+and `delete` get the picker, like `open`.
 
 Piping the output engages the plain list automatically:
 
@@ -527,11 +518,11 @@ Piping the output engages the plain list automatically:
 fastf recent | grep music-video
 ```
 
-The standalone `fastf recent` and `fastf search` commands retain their existing
-command-line output; live Size fields are exclusive to the guided TUI, so
-scripts do not acquire a new column. The one exception is a run with no terminal
-at all in a graphical session — a desktop launcher — where they open a terminal
-and run there instead of printing to nobody; a pipe, a redirect, cron and CI are
+The standalone `fastf recent` and `fastf search` commands keep their plain
+command-line output; live sizes are the guided app's alone, so scripts do not
+acquire a new column. The one exception is a run with no terminal at all in a
+graphical session — a desktop launcher — where they open a terminal and run
+there instead of printing to nobody; a pipe, a redirect, cron and CI are
 untouched, and `--plain` opts out. The full conditions are under
 [Launched from a desktop launcher](#launched-from-a-desktop-launcher).
 
@@ -549,7 +540,7 @@ fastf search artist=Aria* created>2026-01-01     # field prefix glob + date comp
 fastf search tag:draft --plain                   # pipe friendly
 ```
 
-Free text is a case-insensitive substring match. Project paths are deliberately excluded from free-text search, so a term that happens to appear in your home directory path never produces phantom matches. On a terminal, results open in the same interactive picker as `fastf recent`.
+Free text is a case-insensitive substring match. Project paths are deliberately excluded from free-text search, so a term that happens to appear in your home directory path never produces phantom matches. On a terminal, the results open in the guided app, the terms already in its search bar — as `fastf recent` does.
 
 ## Tags
 
@@ -759,7 +750,7 @@ terminal. It is internal — it is what stops a relaunch relaunching — and the
 no reason to set it by hand.
 
 A `config.toml` that exists but cannot be parsed stops every command, including
-the interactive menu, and names the file. fastf will not fall back to defaults
+the guided app, and names the file. fastf will not fall back to defaults
 there: the config decides which folders are your library, so a default would
 answer questions about a different one. Fix the file, or delete it to start over
 with defaults.

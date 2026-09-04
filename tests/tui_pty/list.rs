@@ -1,5 +1,5 @@
-//! The project list: order, live sizes, the search bar, the bridged action
-//! menu, and what a mutation does to the rows.
+//! The project list: order, live sizes, the search bar, the action menu, the
+//! marks and their batches, and what a mutation does to the rows.
 //!
 //! Driven through a real terminal — `harness.rs` states why, and the rules
 //! every suite in this binary follows.

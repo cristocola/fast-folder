@@ -618,7 +618,7 @@ fn a_summary_that_names_a_template_no_project_uses_still_gets_a_card() {
     assert_eq!(app.templates.count("orphan"), 1);
 }
 
-// --- Phase 1: single-project actions -------------------------------------
+// --- single-project actions ----------------------------------------------
 
 /// The single `Effect::Run` an action key produces.
 fn action_of(effects: &[Effect]) -> &Action {
@@ -875,7 +875,7 @@ fn quit_keys_cancel_a_running_move() {
 }
 
 // ---------------------------------------------------------------------------
-// Marks: what a batch verb will act on (Phase 2)
+// Marks: what a batch verb will act on
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -996,7 +996,7 @@ fn removing_a_row_drops_its_mark() {
 }
 
 // ---------------------------------------------------------------------------
-// Batch jobs over the marks (Phase 2)
+// Batch jobs over the marks
 // ---------------------------------------------------------------------------
 
 /// The id an `Effect::Run` carries, when the effects are exactly one run.
@@ -1208,7 +1208,7 @@ fn unregister_over_marks_confirms_the_count_then_runs() {
 }
 
 // ---------------------------------------------------------------------------
-// The flows: create, apply, register (Phase 3)
+// The flows: create, apply, register
 // ---------------------------------------------------------------------------
 
 mod flows {
@@ -1542,7 +1542,7 @@ mod flows {
 }
 
 // ---------------------------------------------------------------------------
-// The template studio and the builder (Phase 4)
+// The template studio and the builder
 // ---------------------------------------------------------------------------
 
 mod studio {
@@ -1844,7 +1844,7 @@ mod studio {
 }
 
 // ---------------------------------------------------------------------------
-// Settings, the counter, maintenance and the first run (Phase 5)
+// Settings, the counter, maintenance and the first run
 // ---------------------------------------------------------------------------
 
 mod settings {
@@ -2092,7 +2092,7 @@ mod settings {
 }
 
 // ---------------------------------------------------------------------------
-// The mouse (Phase 7)
+// The mouse
 // ---------------------------------------------------------------------------
 
 mod mouse {

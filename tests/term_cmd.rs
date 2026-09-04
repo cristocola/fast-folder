@@ -111,6 +111,44 @@ fn terminal_none_does_not_disable_an_explicit_term() {
     assert_eq!(argv, ["--workdir", &expected]);
 }
 
+/// The window fastf opens is the user's, and fastf's own bookkeeping must not
+/// be in it. `FASTF_RELAUNCHED` is inherited: a terminal opened from a
+/// relaunched fastf — the guided app's own "open a terminal here" — would pass
+/// it to its shell, the shell to everything typed into it, and one of those is
+/// a build that runs this suite, where the variable switches off the behaviour
+/// four of its cases are about.
+#[test]
+fn the_terminal_it_opens_carries_none_of_the_relaunch_marker() {
+    let sb = Sandbox::new();
+    let rec = recorder(&sb.tmp.path().join("bin"), "konsole");
+    sb.ok(&[
+        "config",
+        "set",
+        "terminal",
+        &rec.program.display().to_string(),
+    ]);
+    sb.plant_project(&sb.base, "proj", "ID0001");
+
+    // Piped, so this is not the relaunched window's own fastf (`window_is_ours`
+    // wants a real terminal): it spawns rather than execs, which is the path the
+    // app's terminal action takes.
+    let out = sb
+        .command()
+        .args(["term", "ID0001"])
+        .env("DISPLAY", ":99")
+        .env("FASTF_RELAUNCHED", "1")
+        .output()
+        .expect("running fastf");
+    assert!(out.status.success(), "{out:?}");
+
+    rec.argv().expect("the terminal should have been started");
+    assert_eq!(
+        rec.env_var("FASTF_RELAUNCHED"),
+        None,
+        "the window would hand the marker to its shell and its shell to everything after it"
+    );
+}
+
 /// The launcher case the whole feature exists for: an ambiguous `fastf term`
 /// with no terminal hands itself to one, argv verbatim, so the picker can be
 /// shown in a window.
@@ -221,6 +259,11 @@ fn a_relaunched_picker_execs_the_shell_in_its_own_window() {
     assert!(
         picked == expected || picked == shown_path(&sb.base.join("shared_two")),
         "the shell must start in a picked project, got {picked}"
+    );
+    assert_eq!(
+        shell_rec.env_var("FASTF_RELAUNCHED"),
+        None,
+        "this shell is the user's — it must not inherit fastf's loop guard"
     );
     assert!(
         !term_rec.was_called(),

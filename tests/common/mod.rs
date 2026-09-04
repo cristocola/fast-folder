@@ -664,7 +664,7 @@ pub mod pty {
         let mut master: libc::c_int = -1;
         // A real window size: the guided app lays itself out from it, and a
         // pty with no size reports 0×0, which draws nothing. 120×40 is the
-        // large layout — the detail pane, the template strip, the tall header.
+        // large layout — the detail pane and the header's blank third line.
         let winsize = libc::winsize {
             ws_row: rows,
             ws_col: cols,

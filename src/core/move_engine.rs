@@ -26,6 +26,14 @@ use crate::core::transactions::{self, MoveManifest, MovePhase, MoveTransaction};
 pub struct MoveOutcome {
     pub project: Project,
     pub cleanup_pending: bool,
+    /// Whether the move copied. `false` is the same-filesystem rename, which
+    /// is instant however large the folder is; `true` staged, verified and
+    /// published. The caller has to say which, because a move that finishes
+    /// before a frame can be drawn is indistinguishable from one that did
+    /// nothing — and the folder may be two hundred gigabytes.
+    pub staged: bool,
+    /// What was copied, when it staged: files and bytes.
+    pub copied: Option<(usize, u64)>,
 }
 
 /// Move a project folder into another base directory, keeping its folder name.
@@ -175,9 +183,12 @@ fn move_project_unlocked(
         match fs::rename(&project.path, &new_path) {
             Ok(()) => {
                 let moved = finish_move_bookkeeping(project, &old_base, &new_base, &new_path);
+                finish_progress(progress);
                 MoveOutcome {
                     project: moved,
                     cleanup_pending: false,
+                    staged: false,
+                    copied: None,
                 }
             }
             Err(error) if is_cross_device_error(&error) => {
@@ -316,9 +327,16 @@ pub(crate) fn staged_copy_verify_commit(
                 new_path.display()
             ));
             let moved = moved_view(project, new_base, new_path);
+            let copied = {
+                let state = progress.lock().unwrap_or_else(|error| error.into_inner());
+                (state.total_files, state.total_bytes)
+            };
+            finish_progress(progress);
             return Ok(MoveOutcome {
                 project: moved,
                 cleanup_pending: true,
+                staged: true,
+                copied: Some(copied),
             });
         }
     };
@@ -381,9 +399,16 @@ pub(crate) fn staged_copy_verify_commit(
         ));
     }
     set_phase(progress, JobPhase::Done);
+    let copied = {
+        let state = progress.lock().unwrap_or_else(|error| error.into_inner());
+        (state.total_files, state.total_bytes)
+    };
+    finish_progress(progress);
     Ok(MoveOutcome {
         project: moved,
         cleanup_pending,
+        staged: true,
+        copied: Some(copied),
     })
 }
 
@@ -436,6 +461,18 @@ pub(crate) fn finish_recovered_move(
     let original = project_from_meta(metadata, source_base, &source_base.join(source_folder));
     finish_move_bookkeeping(&original, source_base, target_base, final_path);
     Ok(())
+}
+
+/// The job is over. **`JobStatus` was assigned `Running` at construction and
+/// never changed anywhere in the crate**, so the runtime's "is it done yet"
+/// was always false: `Runtime.moving` was never cleared, a finished move kept
+/// emitting progress, and a later cancel set the flag on a dead job's handle.
+fn finish_progress(progress: &Mutex<Progress>) {
+    if let Ok(mut p) = progress.lock() {
+        p.status = crate::core::assets::JobStatus::Done;
+        p.phase = JobPhase::Done;
+        p.touch();
+    }
 }
 
 fn set_phase(progress: &Mutex<Progress>, phase: JobPhase) {

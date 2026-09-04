@@ -158,6 +158,11 @@ pub enum Action {
         project: Box<Project>,
         target: PathBuf,
     },
+    /// Copy a project to a folder outside every base, keeping its id.
+    CopyTo {
+        project: Box<Project>,
+        destination: PathBuf,
+    },
     Unregister(Box<Project>),
     Delete(Box<Project>),
     AppendNote {
@@ -222,13 +227,19 @@ pub enum Exit {
 pub enum ListChange {
     Patched {
         project: Box<Project>,
+        /// Where the row was before the action. **Two projects can carry the
+        /// same id** once `copy-to` has put one on a backup drive and that
+        /// drive is added as a base, so the row is found by its old path first
+        /// and only then by id — which is still what a rename or a move needs,
+        /// since those are exactly the actions that change the path.
+        was: PathBuf,
         stale: Vec<PathBuf>,
     },
     Removed {
         path: PathBuf,
     },
     Reload,
-    /// The projects did not move, but what the header and the template strip
+    /// The projects did not move, but what the header and the templates tab
     /// say about the library did — a template was written, renamed or deleted.
     /// Re-reading every base for that would be a walk to answer a question
     /// none of the folders were asked.

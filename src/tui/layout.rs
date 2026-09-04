@@ -11,7 +11,7 @@ pub const MIN_HEIGHT: u16 = 16;
 
 /// A terminal wide enough to keep the detail pane beside the list.
 pub const DETAIL_MIN_WIDTH: u16 = 100;
-/// A terminal tall enough for the tall header and the template strip.
+/// A terminal tall enough for the header's blank third line.
 pub const TALL_MIN_HEIGHT: u16 = 30;
 
 pub fn too_small(area: Rect) -> bool {
@@ -24,7 +24,6 @@ pub struct Regions {
     pub search: Rect,
     pub table: Rect,
     pub detail: Option<Rect>,
-    pub strip: Option<Rect>,
     pub status: Rect,
     pub hints: Rect,
 }
@@ -47,16 +46,16 @@ pub const DETAIL_PANE_MIN: u16 = 26;
 /// — and closes, as `i` would, when the rest is under `DETAIL_PANE_MIN`.
 pub fn regions(area: Rect, detail_open: bool, table_min: u16) -> Regions {
     let tall = area.height >= TALL_MIN_HEIGHT;
-    // Two lines, and a blank one under them where there is room to breathe.
+    // Two lines — the tabs and the bases — and a blank one under them where
+    // there is room to breathe. The templates strip that used to sit above the
+    // status line is a tab of its own now, which gave the table three rows back.
     let header_height = if tall { 3 } else { 2 };
-    let strip_height = if tall { 3 } else { 0 };
     let bands = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(header_height),
             Constraint::Length(1),
             Constraint::Min(5),
-            Constraint::Length(strip_height),
             Constraint::Length(1),
             Constraint::Length(1),
         ])
@@ -83,9 +82,8 @@ pub fn regions(area: Rect, detail_open: bool, table_min: u16) -> Regions {
         search: bands[1],
         table,
         detail,
-        strip: (strip_height > 0).then_some(bands[3]),
-        status: bands[4],
-        hints: bands[5],
+        status: bands[3],
+        hints: bands[4],
     }
 }
 
@@ -138,6 +136,11 @@ pub fn settings_rows(area: Rect) -> usize {
 /// The studio's list, beside a detail `lines` long.
 pub fn studio_rows(area: Rect, cards: usize, lines: usize) -> usize {
     list_rows(sized_dialog(area, cards.max(lines).max(4) as u16), 2)
+}
+
+/// The templates tab's list: the body band's rows, inside its border.
+pub fn template_rows(area: Rect) -> usize {
+    regions(area, false, 0).table.height.saturating_sub(2) as usize
 }
 
 /// The action menu's box: as tall as its verbs, within reason.
@@ -208,17 +211,18 @@ mod tests {
         let r = regions(Rect::new(0, 0, 80, 24), true, 0);
         assert_eq!(r.header.height, 2);
         assert!(r.detail.is_none(), "80 columns is too narrow for the pane");
-        assert!(r.strip.is_none());
         assert_eq!(r.table_rows(), 24 - 2 - 1 - 1 - 1 - 3);
         assert!(!too_small(Rect::new(0, 0, 80, 24)));
     }
 
+    /// The templates strip is a tab now, so the three rows it used to take
+    /// along the bottom belong to the table.
     #[test]
-    fn a_large_terminal_gets_the_pane_and_the_strip() {
+    fn a_large_terminal_gets_the_pane_and_the_rows_the_strip_used_to_take() {
         let r = regions(Rect::new(0, 0, 120, 40), true, 0);
         assert_eq!(r.header.height, 3);
         assert!(r.detail.is_some());
-        assert!(r.strip.is_some());
+        assert_eq!(r.table.height, 40 - 3 - 1 - 1 - 1);
         let r = regions(Rect::new(0, 0, 120, 40), false, 0);
         assert!(r.detail.is_none(), "the pane can be closed");
     }

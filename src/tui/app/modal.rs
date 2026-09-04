@@ -7,7 +7,7 @@
 use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, NoteState, TextPrompt};
 use crate::tui::app::palette::PaletteState;
 use crate::tui::app::settings::{Onboarding, SettingsState};
-use crate::tui::app::studio::{Builder, Studio};
+use crate::tui::app::studio::Builder;
 use crate::tui::app::wizard::Flow;
 use crate::tui::command::Context;
 use crate::tui::fuzzy::Fuzzy;
@@ -30,6 +30,8 @@ pub enum Then {
     AddTag,
     /// The picked value is a base path to move into.
     MoveToBase,
+    /// The picked value is a base path to restrict the list to.
+    BaseFilter,
     /// The picked value answers the named field of the open flow's form —
     /// what Space on a choice opens, so a twenty-template list is one fuzzy
     /// search rather than twenty presses of `→`.
@@ -124,7 +126,6 @@ pub enum Modal {
     /// A flow that builds something: create, apply, register, from-folder.
     Flow(Box<Flow>),
     /// Every template, with the selected one's details.
-    Studio(Studio),
     /// A template being written.
     Builder(Box<Builder>),
     /// Every setting, the ID counter and maintenance.
@@ -157,7 +158,6 @@ impl Modal {
         match self {
             Modal::Palette(_) => Context::Palette,
             Modal::Actions(_) => Context::Actions,
-            Modal::Studio(_) => Context::Studio,
             Modal::Builder(builder) if !builder.pending => match &builder.open {
                 None => Context::Builder,
                 Some(Open::Variables(list)) if list.editing.is_none() => Context::Builder,

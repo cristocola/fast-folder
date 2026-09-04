@@ -533,6 +533,20 @@ pub fn move_project(
     library::move_project_configured_with_outcome(project, target, progress, cancel)
 }
 
+/// Copy a project to a folder outside the library, keeping its id.
+///
+/// The application entry point, like `move_project`: `copy_engine` takes the
+/// lock, reloads the configuration under it, revalidates the source and checks
+/// the destination against that fresh snapshot.
+pub fn copy_project(
+    project: &Project,
+    destination: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<crate::core::copy_engine::CopyOutcome> {
+    crate::core::copy_engine::copy_project_configured(project, destination, progress, cancel)
+}
+
 /// Recover scoped v2 work and report what could not be settled automatically.
 ///
 /// The configuration is loaded before the pass rather than defaulted: which

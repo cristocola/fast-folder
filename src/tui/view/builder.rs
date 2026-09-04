@@ -1,8 +1,9 @@
-//! The template studio and the builder inside it.
+//! The template builder, the settings screen and the first-run question.
 //!
-//! Both are one dialog with several faces, drawn at one size so entering a
-//! section and coming back does not move the box under the reader — the same
-//! bargain `view::modals::render_flow` makes.
+//! The builder is one dialog with several faces, drawn at one size so entering
+//! a section and coming back does not move the box under the reader — the same
+//! bargain `view::modals::render_flow` makes. (The studio it used to open from
+//! is a tab now: `view::templates`.)
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
@@ -11,7 +12,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 
 use crate::tui::app::App;
 use crate::tui::app::settings::{Editing, SettingsState};
-use crate::tui::app::studio::{Builder, FileEdit, FileList, Open, Row, Section, Studio, VarList};
+use crate::tui::app::studio::{Builder, FileEdit, FileList, Open, Row, Section, VarList};
 use crate::tui::command::{self, Context};
 use crate::tui::theme::Theme;
 use crate::tui::view::{fit, pad};
@@ -106,85 +107,6 @@ fn registry_keys(app: &App, ctx: Context, width: usize) -> Vec<(String, String)>
             .map(|(key, what)| (key, what.to_string())),
     );
     out
-}
-
-// ---------------------------------------------------------------------------
-// The studio
-// ---------------------------------------------------------------------------
-
-pub fn render_studio(
-    app: &App,
-    studio: &Studio,
-    frame: &mut Frame,
-    area: Rect,
-) -> Option<Position> {
-    let theme = &app.theme;
-    let body = studio.cards.len().max(studio.lines.len()).max(4) as u16;
-    let area = sized(area, body);
-    let (body, footer, keys) = frame_parts(app, " templates ".to_string(), frame, area)?;
-
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
-        .split(body);
-
-    let items: Vec<ListItem> = studio
-        .cards
-        .iter()
-        .map(|card| {
-            let count = app.templates.count(&card.slug);
-            ListItem::new(Line::from(vec![
-                Span::raw(" "),
-                Span::styled(pad(&card.slug, 20), theme.text()),
-                Span::styled(format!("{count:>4}"), theme.dim()),
-            ]))
-        })
-        .collect();
-    if items.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                " no templates yet — n makes one, g reads one out of a folder",
-                theme.dim(),
-            )),
-            panes[0],
-        );
-    } else {
-        let list = List::new(items).highlight_style(theme.selection);
-        let mut state = ListState::default()
-            .with_offset(studio.offset)
-            .with_selected(Some(studio.selected));
-        frame.render_stateful_widget(list, panes[0], &mut state);
-    }
-
-    let detail: Vec<Line> = studio
-        .lines
-        .iter()
-        .map(|line| Line::from(Span::styled(format!(" {line}"), theme.text())))
-        .collect();
-    let detail = if detail.is_empty() {
-        vec![Line::from(Span::styled(" reading…", theme.dim()))]
-    } else {
-        detail
-    };
-    let max_scroll = detail.len().saturating_sub(panes[1].height as usize);
-    frame.render_widget(
-        Paragraph::new(detail).scroll((studio.scroll.min(max_scroll) as u16, 0)),
-        panes[1],
-    );
-
-    let note = match studio.cards.len() {
-        0 => String::new(),
-        n => format!(" {n} template{}", if n == 1 { "" } else { "s" }),
-    };
-    footer_line(frame, footer, &note, theme.dim());
-    frame.render_widget(
-        Paragraph::new(key_line(
-            theme,
-            &registry_keys(app, Context::Studio, keys.width as usize),
-        )),
-        keys,
-    );
-    None
 }
 
 // ---------------------------------------------------------------------------

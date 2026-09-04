@@ -43,6 +43,9 @@ pub enum TextThen {
     Delete,
     /// Raise the global ID counter to the number typed.
     RaiseCounter,
+    /// The folder to copy into. Refused by the engine rather than here, so the
+    /// command line and the app say the same words about the same rule.
+    CopyTo,
 }
 
 /// The quick note: a few lines typed where you are. Enter saves, Alt-Enter

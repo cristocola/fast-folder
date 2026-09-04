@@ -142,8 +142,9 @@ Templates always use `/` as the path separator, on every platform. fastf transla
 
 ## The builder
 
-`fastf template new`, `fastf template edit <slug>`, or `T` in the guided app and
-then `n` (new) or Enter (edit): all three open the same builder, which is **one
+`fastf template new`, `fastf template edit <slug>`, or `T` in the guided app —
+the templates tab — and then `n` (new) or Enter (edit): all three open the same
+builder, which is **one
 list of the template's five parts** — metadata, the ID format, variables, the
 folder structure, files — with Save and Discard under them. Each row shows what
 that part currently holds, so the list is the summary. Enter opens a part;

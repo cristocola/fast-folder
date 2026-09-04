@@ -149,6 +149,21 @@ pub fn run(args: MoveArgs) -> Result<()> {
         "to  ".dimmed(),
         crate::util::paths::display_path(&moved.path)
     );
+    // Which kind of move it was. Without it a rename and a two-hundred-gigabyte
+    // staged copy print the same three lines, and the instant one reads as
+    // though nothing happened.
+    println!(
+        "   {}",
+        match outcome.copied {
+            Some((files, bytes)) => format!(
+                "copied {files} file{}, {}, verified",
+                if files == 1 { "" } else { "s" },
+                crate::util::human_bytes::human_bytes(bytes)
+            ),
+            None => "renamed on the same filesystem, nothing copied".to_string(),
+        }
+        .dimmed()
+    );
     if outcome.cleanup_pending {
         eprintln!(
             "{} destination is complete, but the original could not be removed. \
@@ -216,7 +231,7 @@ fn run_with_progress(
 /// Single-line and ANSI-free for the same reason `recent::clamp_label` exists —
 /// the legacy Windows console miscounts wrapped rows and leaves ghosted
 /// characters behind when a redraw spans more than one.
-fn draw(p: &Progress) {
+pub(crate) fn draw(p: &Progress) {
     let line = format!(
         "  {:<10} {}/{} files  {}",
         p.phase,

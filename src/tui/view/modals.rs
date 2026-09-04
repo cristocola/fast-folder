@@ -31,7 +31,6 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         Modal::Confirm(confirm) => render_confirm(app, confirm, frame, area),
         Modal::MultiPick(pick) => render_multi_pick(app, pick, frame, area),
         Modal::Flow(flow) => render_flow(app, flow, frame, area),
-        Modal::Studio(studio) => crate::tui::view::builder::render_studio(app, studio, frame, area),
         Modal::Builder(builder) => {
             crate::tui::view::builder::render_builder(app, builder, frame, area)
         }
@@ -53,6 +52,35 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
     }
 }
 
+/// A progress bar, drawn from the theme's own two glyphs.
+///
+/// `width` cells, `done` of `total` filled, with the percentage after it. A
+/// `total` of zero draws an empty track rather than a full one — nothing
+/// measured is not everything done, and a move that has not scanned its
+/// manifest yet would otherwise open at 100 %.
+fn bar<'a>(app: &App, width: usize, done: u64, total: u64) -> Line<'a> {
+    let g = app.theme.glyphs;
+    let width = width.max(4);
+    let filled = if total == 0 {
+        0
+    } else {
+        // Saturating, because `done` is read from a live mutex and a manifest
+        // can be re-totalled between two frames.
+        ((done.min(total) as u128 * width as u128) / total as u128) as usize
+    };
+    let percent = if total == 0 {
+        0
+    } else {
+        (done.min(total) as u128 * 100 / total as u128) as u64
+    };
+    Line::from(vec![
+        Span::raw(" "),
+        Span::styled(g.bar_full.repeat(filled), app.theme.accent()),
+        Span::styled(g.bar_empty.repeat(width - filled), app.theme.dim()),
+        Span::styled(format!(" {percent:>3}%"), app.theme.dim()),
+    ])
+}
+
 /// The move job's progress, drawn over the dashboard while one runs. It is not
 /// a modal on the stack — it shares the lifetime of `App::busy` and disappears
 /// when the move answers. A batch job draws its own modal (`render_job`),
@@ -67,17 +95,14 @@ pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
     };
     let theme = &app.theme;
     let g = theme.glyphs;
-    let area = centered_fixed(area, 52, 9);
-    frame.render_widget(Clear, area);
-    let block = frame_block(app, " moving ".to_string(), true);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
+    let width = 54.min(area.width);
+    let track = (width as usize).saturating_sub(9);
     let lines = vec![
         Line::from(Span::styled(
             format!(" {} ", progress.phase.as_str()),
             theme.accent(),
         )),
+        bar(app, track, progress.copied_bytes, progress.total_bytes),
         Line::from(vec![
             Span::styled(
                 format!(" {} of {} files", progress.done_files, progress.total_files),
@@ -95,13 +120,18 @@ pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(
             format!(
                 " {}",
-                fit(&progress.current_file, inner.width as usize, g.ellipsis)
+                fit(&progress.current_file, width as usize - 3, g.ellipsis)
             ),
             theme.dim(),
         )),
         Line::from(""),
         Line::from(Span::styled(" Ctrl-C cancels", theme.dim())),
     ];
+    let area = centered_fixed(area, width, lines.len() as u16 + 2);
+    frame.render_widget(Clear, area);
+    let block = frame_block(app, " moving ".to_string(), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -115,23 +145,24 @@ pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
     };
     let theme = &app.theme;
     let g = theme.glyphs;
-    let tall = app.move_progress.is_some() || !job.failed.is_empty();
-    let area = centered_fixed(area, 64, if tall { 11 } else { 8 });
-    frame.render_widget(Clear, area);
-    let block = frame_block(app, format!(" {} ", job.kind.verb()), true);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    // Wide enough for the cancel line, which names what happens to the rows
+    // that have not run — a cut sentence there is the one worth reading whole.
+    let width = 68.min(area.width);
+    let track = (width as usize).saturating_sub(9);
 
     let mut lines = vec![
         Line::from(Span::styled(
             format!(" {} ", job.progress_line()),
             theme.accent(),
         )),
+        // The items, always — a batch of deletes or tags has no bytes to
+        // report and its bar is the only thing that moves.
+        bar(app, track, job.finished() as u64, job.total() as u64),
         Line::from(Span::styled(
             format!(
                 " {}",
                 match &job.inflight {
-                    Some(project) => fit(&project.name, inner.width as usize, g.ellipsis),
+                    Some(project) => fit(&project.name, width as usize - 3, g.ellipsis),
                     None => "finishing…".to_string(),
                 }
             ),
@@ -150,6 +181,7 @@ pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
                 theme.dim(),
             ),
         ]));
+        lines.push(bar(app, track, progress.copied_bytes, progress.total_bytes));
     }
     if !job.failed.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -159,9 +191,18 @@ pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        " Esc or Ctrl-C cancels — the projects that have not run stay marked",
+        " Esc or Ctrl-C cancels — the rest stay marked",
         theme.dim(),
     )));
+
+    // **Sized to what it holds**, like every other dialog here: a height
+    // guessed at the widest case left blank rows under a two-line batch and
+    // cut the cancel line off the tall one.
+    let area = centered_fixed(area, width, lines.len() as u16 + 2);
+    frame.render_widget(Clear, area);
+    let block = frame_block(app, format!(" {} ", job.kind.verb()), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -371,6 +412,7 @@ fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: R
         TextThen::AddTag => "add a tag",
         TextThen::Delete => "delete",
         TextThen::RaiseCounter => "ID counter",
+        TextThen::CopyTo => "copy to",
     };
     // The box grows with its question: a confirmation over six marked
     // folders names all six.

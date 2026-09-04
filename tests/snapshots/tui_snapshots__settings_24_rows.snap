@@ -2,14 +2,14 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fastf  ┌ settings ────────────────────────────────────────────────────────────────────────┐ ID0248 "
+" fast-fo┌ settings ────────────────────────────────────────────────────────────────────────┐ ID0248 "
 " → proje│   Ask to open after creating  no                                                 │tention "
 " ⌕ / to │   Preview lines               8                                                  │ newest "
 "┌ projec│   Name collision              suffix                                             │───────┐"
-"│  ID   │ Appearance                                                                       │248    │"
-"│▸ ID024│   Theme                       auto (follows the terminal)                        │ated   │"
+"│  ID   │ Appearance                                                                       │0248   │"
+"│▸ ID024│   Theme                       auto (follows the terminal)                        │eated  │"
 "│  ID024│ Library bases                                                                    │       │"
-"│  ID024│   Bases                       (only the base directory)                          │tries  │"
+"│  ID024│   Bases                       (only the base directory)                          │ntries │"
 "│  ID024│   Recent limit                20                                                 │       │"
 "│  ID024│ After a project is created                                                       │       │"
 "│  ID024│   git init                    no                                                 │       │"
@@ -24,5 +24,5 @@ expression: frame
 "│       │   Check and recover                                                              │       │"
 "│       │▸  Data locations              /home/user/.config/fastf                           │       │"
 "└───────│ where the config, the counter and the templates live, and how that was decided   │───────┘"
-" 12 of 1│ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │        "
+"        │ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │        "
 "        └──────────────────────────────────────────────────────────────────────────────────┘        "

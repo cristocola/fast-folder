@@ -657,6 +657,7 @@ fn run_action(
             Ok(ActionOutcome::new(
                 ListChange::Patched {
                     project: Box::new(patched),
+                    was: path.clone(),
                     stale: vec![path],
                 },
                 format!("Added 1 tag to {}", project.id),
@@ -672,6 +673,7 @@ fn run_action(
             Ok(ActionOutcome::new(
                 ListChange::Patched {
                     project: Box::new(patched),
+                    was: path.clone(),
                     stale: vec![path],
                 },
                 format!(
@@ -701,6 +703,7 @@ fn run_action(
             Ok(ActionOutcome::new(
                 ListChange::Patched {
                     project: Box::new(renamed.clone()),
+                    was: project.path.clone(),
                     stale,
                 },
                 format!("Renamed to {}", renamed.name),
@@ -711,7 +714,23 @@ fn run_action(
             let outcome =
                 crate::core::operations::move_project(&project, &target, progress, cancel)?;
             let moved = outcome.project;
-            let message = format!("Moved to {}", display_path(&moved.path));
+            // **Say which kind of move it was.** A same-filesystem rename is
+            // instant however large the folder is, and a message that only
+            // names the destination reads the same whether two hundred
+            // gigabytes were copied or nothing was — which is exactly the
+            // doubt an instant finish creates.
+            let message = match outcome.copied {
+                Some((files, bytes)) => format!(
+                    "Moved to {} — copied {files} file{}, {}, verified",
+                    display_path(&moved.path),
+                    if files == 1 { "" } else { "s" },
+                    crate::util::human_bytes::human_bytes(bytes)
+                ),
+                None => format!(
+                    "Moved to {} — renamed on the same filesystem, nothing copied",
+                    display_path(&moved.path)
+                ),
+            };
             let warning = outcome.cleanup_pending.then(|| {
                 format!(
                     "destination is complete, but cleanup is pending at {}",
@@ -723,12 +742,35 @@ fn run_action(
             Ok(ActionOutcome::new(
                 ListChange::Patched {
                     project: Box::new(moved),
+                    was: project.path.clone(),
                     stale,
                 },
                 message,
             )
             .warning(warning)
             .session(session))
+        }
+        Action::CopyTo {
+            project,
+            destination,
+        } => {
+            let outcome =
+                crate::core::operations::copy_project(&project, &destination, progress, cancel)?;
+            let (files, bytes) = outcome.copied;
+            // **No `ListChange`.** The copy lands outside every base by rule, so
+            // no row changed and nothing needs re-reading; a `Reload` here would
+            // walk the whole library to learn that.
+            Ok(ActionOutcome::new(
+                ListChange::None,
+                format!(
+                    "Copied {} to {} — {files} file{}, {}, verified",
+                    project.id,
+                    display_path(&outcome.path),
+                    if files == 1 { "" } else { "s" },
+                    crate::util::human_bytes::human_bytes(bytes)
+                ),
+            )
+            .session(format!("copied {}", project.id)))
         }
         Action::Create(request) => {
             // The plan is recomputed under the data lock inside `create`: the
@@ -998,6 +1040,7 @@ fn run_action(
             Ok(ActionOutcome::new(
                 ListChange::Patched {
                     project,
+                    was: path.clone(),
                     stale: vec![path],
                 },
                 "Journal entry added.",

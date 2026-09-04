@@ -19,6 +19,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf register <dir>` | Onboard an existing folder by writing its `PROJECT_INFO.md` |
 | `fastf apply <slug> <dir>` | Add missing template structure to an existing folder |
 | `fastf move <query> [base]` | Move a project into another configured base |
+| `fastf copy-to <query> <dir>` | Copy a project's folder outside your bases, keeping its ID |
 | `fastf rename <query> [name]` | Rename a project's folder on disk |
 | `fastf unregister <query>` | Forget a project — remove its `PROJECT_INFO.md`, keep the files |
 | `fastf delete <query>` | Delete a project's folder and everything inside it |
@@ -120,7 +121,7 @@ one question at a time. It is drawn on stderr, so `fastf > log` still opens it
 and nothing you type reaches a pipe.
 
 ```
- fastf   12 projects   3 templates   2 bases                          highest ID0248
+ fast-folder   library │ templates   3 bases                          highest ID0248
  → projects 9   archive 3   usb not mounted                       ⚠ 1 needs attention
 
  ⌕ tag:draft lulla                                              4/12 · relevance
@@ -128,39 +129,36 @@ and nothing you type reaches a pipe.
 │▸ ID0248 2026-09-01_Lullaby_Remix_ID0248 3.2 MB││2026-09-01_Lullaby_Remix_ID… │
 │  ID0247 2026-08-30_Client_Acme_ID0247  scanning…││music-video · projects       │
 └──────────────────────────────────────────────┘└─────────────────────────────┘
- ✓  Added 1 tag to ID0248
- / search  a actions  o open  t terminal  y copy path  n new  ? help
+ 2 marked · a verb acts on them instead of the row under the cursor
+ / search  a actions  o open  t terminal  y copy path  Space mark  n new  ? help
 ```
 
 What is on screen, top to bottom:
 
-- **The header** — two lines. How many projects, templates (on disk — a slug
-  a project still names whose template has gone is not one) and bases there
-  are and the highest ID; then each base with how many projects its index
-  holds or that it is not mounted, and on the right `⚠ n needs attention`
-  when an interrupted create or move is waiting for `fastf reconcile` (else
-  the last few things this session did). The first frame's counts come from
-  each base's index and are labelled `(from index)` until discovery answers.
-- **The search bar** — see below.
+- **The header** — two lines. The two tabs, `library` and `templates`, with
+  the one you are on underlined, then how many bases there are and the
+  highest ID; then each base with how many projects its index holds or that
+  it is not mounted, and on the right `⚠ n needs attention` when an
+  interrupted create or move is waiting for `fastf reconcile` (else the last
+  few things this session did).
+- **The search bar** — the query, and on the right the one place the list
+  reports itself: how many rows matched out of how many there are, the sort
+  order, the template and base filters, and how many rows are marked. The
+  first frame's counts come from each base's index and are labelled
+  `(from index)` until discovery answers. See below.
 - **The project table** — ID, folder name, then the size, the date, the base,
-  the template and the tags, as many as fit. The folder name is never cut: a
-  narrow window drops the other columns first, tags before the template, the
-  template before the base, the base before the date; the size goes last,
-  because it is the one thing the row knows that the name does not. When the
-  table is empty it says so inside the box.
+  the template and the tags, as many as fit; see
+  [Columns](#columns). The folder name is never cut. When the table is empty
+  it says so inside the box.
 - **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
   selected project's template, base and date, its size and journal count, its
   tags, its template variables, the top of its folder and the first lines of
   its notes. The split favours the table: long folder names take the room
   they need with the size beside them, the pane takes the rest, and closes —
   as `i` would — when the rest would be a sliver.
-- **The template strip** (terminals 30 rows or taller) — one card per
-  template with how many projects use it, the templates on disk first and,
-  dimmed after them, any slug projects still name that no template answers
-  to (`registered`, a template since deleted). Tab reaches it; Enter filters
-  the list by the card, and the card that is filtering is underlined.
-- **The status line and the hint bar** — what the last action did, and the
-  keys that matter where you are.
+- **The status line and the hint bar** — what the last action did (or, when
+  rows are marked, that a verb will act on them rather than on the cursor),
+  and the keys that matter where you are.
 
 Below 60×16 the app says so and waits for a bigger window or `q`.
 
@@ -184,26 +182,28 @@ keys that matter most:
 | ↑ / ↓, `k` / `j` | move the highlight, wrapping at the ends |
 | PageUp / PageDown | move by a screenful, stopping at the ends |
 | Home / End, `g` / `G` | first row, last row |
-| Tab / Shift-Tab | move focus between the list, the detail pane and the template strip |
+| `T` | the templates tab, and `T` again (or Esc) back to the library |
+| Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
 | `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size |
-| `f` / `F` | show only the selected project's template / show every template again |
+| `f` / `b` / `F` | show only the selected project's template / show only one base's projects / clear both filters |
 | `i` | show or hide the detail pane |
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
 | `A`, Ctrl-T | add a tag (pick one the library already knows, or type a new one); remove tags |
 | `N`, Ctrl-N | a journal note in your `$EDITOR`; a short note typed where you are — Enter saves, Alt-Enter breaks a line, a pasted paragraph lands whole |
+| `C` | copy the project to a folder outside your bases, keeping its ID |
 | `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good — it names the folder and asks you to type `delete` |
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
-| Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark** |
+| Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
-| `T`, `,` | the template studio, the settings |
+| `,` | the settings |
 | `!` | check and recover — what `⚠ n needs attention` means |
 | `L` | the session's messages, newest first with the time each arrived — a warning that flashed under a dialog is counted on the status line until you read them |
 | F5, `R` | reload the library, reindex every base from its folders |
 | Ctrl-Z | suspend to the shell, as in any program; `fg` brings the app back with its screen retaken (unix) |
 | `q` | quit; in a dialog, close it |
-| Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the search bar, clear the query, clear the template filter, clear the marks — and only then quit |
+| Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the search bar, clear the query, clear the filters, clear the marks — and only then quit |
 | Ctrl-C | leave at once (exit 130, `aborted.`) |
 
 #### Searching
@@ -230,9 +230,25 @@ exactly: `tag:draft`, `template=music-video`, `artist=Aria*`,
 template variable needs the rows' metadata, which is read for the rows that
 lack it and filled in as it lands; everything else is answered from the row.
 
-The bar's right edge counts what matched — `4/12` — and names the sort order
-and the template filter. When nothing matches, the status line says so and the
-query stays in the bar, one keystroke from being fixed.
+The bar's right edge is where the list's own state is reported, and the only
+place it is: what matched out of what there is (`4/12`), the sort order, the
+template and base filters, and how many rows are marked. When nothing matches,
+the status line says so and the query stays in the bar, one keystroke from
+being fixed.
+
+#### Columns
+
+The folder name is never cut — it is the column that tells two projects apart —
+so a row is eaten from the right and the optional columns are added only while
+the widest name still fits whole: the size, then the date, the base, the
+template and the tags, each measured from what the rows actually hold. Election
+stops at the first column that does not fit, so the columns you see are always
+the top of that list.
+
+**With projects from more than one base on screen, the base moves up to second,
+ahead of the date.** Every bundled naming pattern already carries the date
+inside the folder name, and after `fastf copy-to` two rows can carry the same ID
+and differ in nothing but which drive they are on.
 
 #### Sizes
 
@@ -279,11 +295,19 @@ it commits. A template's post-create actions (`git init`, your editor, its own
 commands) run on the main screen after the folder exists, and the dashboard
 comes back when you press Enter.
 
-`T` opens the **template studio**: every template on the left, the selected
-one's details on the right, and the verbs on it — `n` a new one, Enter to edit,
+`T` opens the **templates tab**: every template on the left, the selected one's
+details on the right, and the verbs on it — `n` a new one, Enter or `e` to edit,
 `g` to generate one from a folder that already has the shape you want, `D` to
-delete (it asks first). The builder is described in
+delete (it asks first). `f` shows that template's projects: it sets the library
+filter and takes you back to the library, which is where the answer is. `/`
+searches the list — a plain substring over the slug and the name. `T` again, or
+Esc, returns to the library. The builder is described in
 [templates.md](templates.md#the-builder).
+
+Real templates come first, then alphabetically; after them, dimmed, come the
+slugs your projects still name that no template on disk answers to — a template
+you deleted, or `registered` for folders onboarded without one. The number
+beside each is how many projects use it.
 
 `,` opens the **settings**: every setting fastf has, on one screen, grouped, with
 what it is set to beside it. Enter changes the highlighted one — a yes/no flips
@@ -370,8 +394,8 @@ second, none of them drawing.
 
 #### The mouse
 
-Clicking a row selects it; clicking the detail pane, the template strip or the
-search bar moves focus there; clicking a command-palette entry runs it. The
+Clicking a row selects it; clicking the detail pane or the search bar moves
+focus there; clicking a command-palette entry runs it. The
 wheel is `↑`/`↓`, three at a time, wherever the arrow keys already go — the
 list, the detail pane, a dialog that scrolls. Mouse reporting is on while the
 app is open, so hold **Shift** while dragging to select text, as in every other
@@ -398,6 +422,7 @@ fastf recent --limit 50
 fastf recent --template rust-project
 fastf recent --since 2026-01-01
 fastf recent --tag draft
+fastf recent --base archive          # one base, by its label or its full path
 
 fastf open ID0047                    # reveal in the system file manager
 fastf open 47                        # the ID number, however it is padded
@@ -608,8 +633,15 @@ fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 
 Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move stages every ordinary file—including legitimate `.tmp` and `.part` names—checks relative paths and byte lengths, commits atomically, and only then removes the source. Keep the project untouched while that copy is running.
 
-A cross-filesystem move reports its progress as it goes — the phase (copying,
-verifying, finalizing), how many files are done, and how much has been copied.
+**A move always says which kind it was**: `renamed on the same filesystem,
+nothing copied`, or `copied 412 files, 199.5 GB, verified`. A same-filesystem
+move is an atomic rename and finishes instantly however large the folder is, so
+without that line an instant finish on a 200 GB project is indistinguishable
+from one that did nothing.
+
+A cross-filesystem move reports its progress as it goes — a bar, the phase
+(copying, verifying, finalizing), how many files are done, and how much has been
+copied.
 **Ctrl-C cancels it safely before publication**: fastf removes only the private
 transaction owned by that operation and leaves the source untouched. Once
 publication begins, cancellation is too late. If the destination is published
@@ -627,6 +659,43 @@ Nothing has been changed. Move the folder with a tool that preserves links
 ```
 
 Moves *within* the same drive are unaffected: they are a rename, nothing is copied, and links travel along untouched.
+
+## Copying a project out of the library
+
+```bash
+fastf copy-to ID0047 /mnt/backup          # confirms first
+fastf copy-to lullaby ~/archive --yes     # for scripts
+```
+
+**The copy keeps its ID.** It is the same project on another drive: its
+`PROJECT_INFO.md` is copied unchanged. Point a base at that folder later and
+both list, told apart by the BASE column — which is the whole reason the ID is
+kept. The original is never touched.
+
+The destination must exist and must be **outside** every configured base. Two
+projects with one ID inside one library is a library that cannot answer "which
+one", and it would be made by a keystroke; fastf refuses and says so, naming the
+base it would have landed in.
+
+Underneath it is the same machinery as a cross-drive move: a manifest of every
+file, a private `.fastf-transactions/` staging tree under the destination,
+exact path/type/size verification, a check that the source did not change while
+it copied, and an atomic publish. Links are refused for the same reason a
+cross-drive move refuses them — a symlink or a junction cannot be reproduced
+faithfully somewhere else. Ctrl-C cancels and leaves nothing but the copy's own
+transaction, which it removes.
+
+`fastf copy` (no dash) is unrelated: it puts a project's path on the clipboard.
+In the guided app the verb is `C`, `Copy to…`, and it runs over every marked
+project when there are marks.
+
+Once two bases hold the same ID, a query that matches it says so:
+
+```
+error: 'ID0047' is in 2 bases — name the base, or open it from `fastf recent`:
+  ID0047  2026-07-10_Shoot_ID0047  in projects
+  ID0047  2026-07-10_Shoot_ID0047  in archive
+```
 
 ## Renaming, forgetting and deleting projects
 

@@ -301,10 +301,10 @@ fn settings_24_rows() {
 }
 
 /// Slugs no template on disk answers to — `(registered)`, a template since
-/// deleted — sit after the real ones, dimmed, and are never the card the app
-/// opens on; the header counts the templates on disk.
+/// deleted — sit after the real ones on the templates tab, dimmed, and are
+/// never the row the tab opens on.
 #[test]
-fn strip_with_orphans() {
+fn templates_tab_with_orphans() {
     let mut projects = sample_projects(12);
     for project in projects.iter_mut().take(5) {
         project.template = "(registered)".to_string();
@@ -326,11 +326,20 @@ fn strip_with_orphans() {
     app.clock = || "10:00:00".to_string();
     let _ = app.start();
     let _ = update(&mut app, Msg::Summary(Box::new(sample_summary(12))));
-    // Tab twice to the strip, End to the last card: an orphan.
-    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
-    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
-    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::End)));
-    snap("strip_with_orphans", render_to_string(&app, 120, 40));
+    // To the templates tab, then down past the real templates to an orphan.
+    let _ = update(&mut app, Msg::Key(Key::ch('T')));
+    for _ in 0..3 {
+        let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    }
+    assert_eq!(
+        app.studio.selected_slug().as_deref(),
+        Some("old-template"),
+        "the tab opens on a real template, and three rows down is an orphan"
+    );
+    snap(
+        "templates_tab_with_orphans",
+        render_to_string(&app, 120, 40),
+    );
 }
 
 /// Folder names too long for the 60 % split: the table takes what the names
@@ -637,11 +646,12 @@ mod studio {
         }
     }
 
-    /// The studio, with the selected template's details read.
+    /// The templates tab, with the selected template's details read.
     #[test]
     fn template_show() {
         let mut app = fixture(12, 100, 30);
         press(&mut app, Key::ch('T'));
+        press(&mut app, Key::plain(KeyCode::Down));
         let _ = update(
             &mut app,
             Msg::TemplateViewLoaded {

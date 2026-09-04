@@ -21,17 +21,29 @@ const TEMPLATE_MAX: usize = 16;
 const BASE_MAX: usize = 14;
 /// The date column: `YYYY-MM-DD`.
 const DATE_CELL: usize = 10;
-/// The least a tags column is worth showing at.
-const TAGS_MIN: usize = 12;
+/// The widest a tags column gets before it is clamped: three short tags and
+/// their `+n`.
+const TAGS_MAX: usize = 24;
 
 /// Which optional columns a table shows.
 ///
 /// **The folder name is never cut.** It is the one column that tells projects
 /// apart, and a row is eaten from the right — so the optional columns are added
 /// only while the widest name still fits whole, in the order a person misses
-/// them: the size, the date, the base, the template, the tags. The size comes
-/// first because it is the one thing the row knows that the name does not —
-/// every bundled naming pattern already carries the date.
+/// them: the size, the base, the date, the template, the tags. The size comes
+/// first because it is the one thing the row knows that the name does not.
+///
+/// **The base comes second, but only when there is more than one.** With one
+/// base the column repeats the same word on every row and the date is worth
+/// more; with two it is the only thing on the row that says which drive a
+/// project is on, and after `copy-to` two rows can carry the same id and differ
+/// in nothing else. Every bundled naming pattern already carries the date
+/// inside the folder name, so the date is what gives way.
+///
+/// **Election stops at the first column that does not fit**, rather than
+/// skipping it and trying the next. A narrower later column squeezing in past a
+/// wider earlier one produced a 60-column table with a BASE column and no SIZE,
+/// which reads as a bug rather than as a priority.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Columns {
     pub created: bool,
@@ -41,23 +53,62 @@ pub struct Columns {
     pub tags: bool,
 }
 
-/// `room` is what is left after the cursor cell, the id and their spacing.
-pub fn choose_columns(room: usize, name_w: usize, base_w: usize, template_w: usize) -> Columns {
+/// The display width of the tag cell `table` draws: at most three tags, spaced,
+/// then `+n` for the rest. Measured rather than guessed, because it is what
+/// decides the column's width.
+fn tag_cell_width(tags: &[String]) -> usize {
+    if tags.is_empty() {
+        return 0;
+    }
+    let shown: usize = tags.iter().take(3).map(|t| t.width()).sum();
+    let gaps = tags.len().min(3).saturating_sub(1);
+    let extra = match tags.len().saturating_sub(3) {
+        0 => 0,
+        n => 1 + format!("+{n}").width(),
+    };
+    shown + gaps + extra
+}
+
+/// `room` is what is left after the cursor cell, the id, their spacing and the
+/// right gutter. `many_bases` promotes the base column above the date.
+pub fn choose_columns(
+    room: usize,
+    name_w: usize,
+    base_w: usize,
+    template_w: usize,
+    tags_w: usize,
+    many_bases: bool,
+) -> Columns {
     let mut columns = Columns::default();
     let Some(mut left) = room.checked_sub(name_w) else {
         return columns;
     };
+    let mut done = false;
     let mut take = |width: usize, flag: &mut bool| {
+        if done {
+            return;
+        }
         if left > width {
             left -= width + 1;
             *flag = true;
+        } else {
+            done = true;
         }
     };
     take(SIZE_CELL, &mut columns.size);
-    take(DATE_CELL, &mut columns.created);
-    take(base_w, &mut columns.base);
+    if many_bases {
+        take(base_w, &mut columns.base);
+        take(DATE_CELL, &mut columns.created);
+    } else {
+        take(DATE_CELL, &mut columns.created);
+        take(base_w, &mut columns.base);
+    }
     take(template_w, &mut columns.template);
-    take(TAGS_MIN, &mut columns.tags);
+    // A measured width, and zero when no row on screen carries a tag — a TAGS
+    // header over a column of nothing is a column spent on nothing.
+    if tags_w > 0 {
+        take(tags_w, &mut columns.tags);
+    }
     columns
 }
 
@@ -74,11 +125,23 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
             if focused { theme.accent() } else { theme.dim() },
         ))
         .border_style(theme.border(focused));
-    let inner = block.inner(area);
+    let full_inner = block.inner(area);
     frame.render_widget(block, area);
-    if inner.height < 2 || inner.width < 4 {
+    if full_inner.height < 2 || full_inner.width < 4 {
         return;
     }
+    // **One column of gutter, always.** The last cell is right-aligned, so
+    // without it a size sits against the border glyph and reads as cut off —
+    // and the scrollbar, which is drawn over the border column, lands directly
+    // on the digits. It is reserved whether or not a scrollbar is showing:
+    // taking it back when the list gets short would reflow every width as rows
+    // arrive, which is the one thing the measured columns exist to prevent.
+    let inner = Rect::new(
+        full_inner.x,
+        full_inner.y,
+        full_inner.width - 1,
+        full_inner.height,
+    );
 
     // Widths measured from every row shown, never from the sizes, so a landing
     // snapshot cannot reflow the table.
@@ -86,19 +149,32 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     let mut name_w = 8usize;
     let mut base_w = 4usize;
     let mut template_w = 8usize;
+    let mut tags_w = 0usize;
+    // Whether the base column is worth promoting is a question about the rows
+    // on screen, not about the configuration: two bases with one unmounted
+    // shows one base's projects, and a column repeating one word earns nothing.
+    let mut first_base: Option<&std::path::Path> = None;
+    let mut many_bases = false;
     for row in 0..app.library.len() {
         if let Some(p) = app.library.row(row) {
             id_w = id_w.max(p.id.width());
             name_w = name_w.max(p.name.width());
             base_w = base_w.max(library::base_label(&p.base).width());
             template_w = template_w.max(p.template.width());
+            tags_w = tags_w.max(tag_cell_width(&p.tags));
+            match first_base {
+                None => first_base = Some(p.base.as_path()),
+                Some(seen) if seen != p.base.as_path() => many_bases = true,
+                Some(_) => {}
+            }
         }
     }
     let base_w = base_w.min(BASE_MAX);
     let template_w = template_w.min(TEMPLATE_MAX);
+    let tags_w = tags_w.min(TAGS_MAX);
     // The cursor cell and the id, each followed by a space.
     let room = (inner.width as usize).saturating_sub(2 + id_w + 1);
-    let columns = choose_columns(room, name_w, base_w, template_w);
+    let columns = choose_columns(room, name_w, base_w, template_w, tags_w, many_bases);
 
     let mut header = vec![Cell::from(""), Cell::from("ID"), Cell::from("PROJECT")];
     let mut constraints = vec![
@@ -107,7 +183,9 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
         Constraint::Fill(2),
     ];
     if columns.size {
-        header.push(Cell::from("SIZE"));
+        // Right-aligned over right-aligned figures: a left-aligned SIZE header
+        // sat seven columns away from every number under it.
+        header.push(Cell::from(format!("{:>width$}", "SIZE", width = SIZE_CELL)));
         constraints.push(Constraint::Length(SIZE_CELL as u16));
     }
     if columns.created {
@@ -124,7 +202,11 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     }
     if columns.tags {
         header.push(Cell::from("TAGS"));
-        constraints.push(Constraint::Fill(1));
+        // Measured, like every other column, rather than whatever `Fill` leaves
+        // over: sharing the slack with the name meant one column of gutter cut
+        // the first tag's last letter, and a tag cut mid-word says the wrong
+        // tag. The name keeps all the slack, which is the column that needs it.
+        constraints.push(Constraint::Length(tags_w as u16));
     }
 
     let rows_visible = inner.height.saturating_sub(1) as usize;
@@ -136,10 +218,12 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
         } else {
             "nothing matches"
         };
-        let line = Rect::new(inner.x, inner.y + 2, inner.width, 1);
+        // Centred in the box, so the gutter the table reserves does not push
+        // the one sentence in an empty list half a column off.
+        let line = Rect::new(full_inner.x, full_inner.y + 2, full_inner.width, 1);
         frame.render_widget(
             Paragraph::new(Span::styled(
-                fit(sentence, inner.width as usize, g.ellipsis),
+                fit(sentence, full_inner.width as usize, g.ellipsis),
                 theme.dim(),
             ))
             .alignment(ratatui::layout::Alignment::Center),
@@ -434,13 +518,14 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Columns, choose_columns};
+    use super::{Columns, choose_columns, tag_cell_width};
 
     #[test]
     fn columns_are_added_only_while_the_name_still_fits() {
-        // 80 columns: 78 inside the borders, minus the cursor cell, a six-char
-        // id and their spaces. A forty-char name keeps the size and the date.
-        let columns = choose_columns(78 - 2 - 7, 40, 8, 11);
+        // 80 columns: 78 inside the borders, minus the gutter, the cursor cell,
+        // a six-char id and their spaces. A forty-char name keeps the size and
+        // the date.
+        let columns = choose_columns(78 - 1 - 2 - 7, 40, 8, 11, 12, false);
         assert_eq!(
             columns,
             Columns {
@@ -453,11 +538,55 @@ mod tests {
         );
         // Beside the detail pane there is room for one more cell: the size,
         // not the date — the name carries the date already.
-        let beside_pane = choose_columns(70 - 2 - 7, 40, 8, 11);
+        let beside_pane = choose_columns(70 - 1 - 2 - 7, 40, 8, 11, 12, false);
         assert!(beside_pane.size && !beside_pane.created, "{beside_pane:?}");
         // No room for anything but the name.
-        assert_eq!(choose_columns(20, 40, 8, 11), Columns::default());
+        assert_eq!(choose_columns(20, 40, 8, 11, 12, false), Columns::default());
         // Wide: everything.
-        assert!(choose_columns(140, 40, 8, 11).tags);
+        assert!(choose_columns(140, 40, 8, 11, 12, false).tags);
+    }
+
+    #[test]
+    fn a_second_base_takes_the_date_s_place() {
+        // The same room that held the size and the date holds the size and the
+        // base instead once the rows come from two bases: the folder names
+        // carry the date, and nothing on the row says which drive it is on.
+        let one = choose_columns(78 - 1 - 2 - 7, 40, 8, 11, 12, false);
+        let two = choose_columns(78 - 1 - 2 - 7, 40, 8, 11, 12, true);
+        assert!(one.created && !one.base, "one base: {one:?}");
+        assert!(two.base && !two.created, "two bases: {two:?}");
+        assert!(one.size && two.size, "the size is first either way");
+    }
+
+    #[test]
+    fn election_stops_at_the_first_column_that_does_not_fit() {
+        // Room for the size and nothing more. The base is narrower than the
+        // date, and the greedy version let it slip in behind a date that had
+        // just been refused — a table with a BASE column and no SIZE.
+        let columns = choose_columns(40 + super::SIZE_CELL + 1 + 6, 40, 4, 11, 12, false);
+        assert!(columns.size, "{columns:?}");
+        assert!(
+            !columns.created && !columns.base && !columns.template && !columns.tags,
+            "nothing may be elected past the first refusal: {columns:?}"
+        );
+    }
+
+    #[test]
+    fn a_tags_column_is_measured_and_absent_when_no_row_has_one() {
+        // A library with no tags spends no column on a TAGS header.
+        let untagged = choose_columns(140, 40, 8, 11, 0, false);
+        assert!(!untagged.tags, "{untagged:?}");
+        assert!(untagged.template, "the columns before it still fit");
+
+        // Three tags, two gaps.
+        assert_eq!(tag_cell_width(&[]), 0);
+        assert_eq!(tag_cell_width(&["draft".into()]), 5);
+        assert_eq!(tag_cell_width(&["a".into(), "bb".into()]), 4);
+        // Past three, the rest become `+n` after a space.
+        let many: Vec<String> = ["aa", "bb", "cc", "dd", "ee"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(tag_cell_width(&many), 2 + 1 + 2 + 1 + 2 + 1 + 2);
     }
 }

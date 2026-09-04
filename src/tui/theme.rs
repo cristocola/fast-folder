@@ -197,6 +197,12 @@ pub struct Glyphs {
     pub check: &'static str,
     pub cross: &'static str,
     pub pending: &'static str,
+    /// A progress bar's filled and empty cell. Ours rather than ratatui's
+    /// `Gauge`, whose glyphs and colour model are its own: the palette here is
+    /// a pure function of an `Env`, and the ASCII path has to stay right on a
+    /// terminal that draws no block elements.
+    pub bar_full: &'static str,
+    pub bar_empty: &'static str,
 }
 
 impl Glyphs {
@@ -215,6 +221,8 @@ impl Glyphs {
             check: "✓",
             cross: "✗",
             pending: "scanning…",
+            bar_full: "█",
+            bar_empty: "░",
         }
     }
 
@@ -233,6 +241,8 @@ impl Glyphs {
             check: "+",
             cross: "x",
             pending: "scanning...",
+            bar_full: "#",
+            bar_empty: "-",
         }
     }
 }

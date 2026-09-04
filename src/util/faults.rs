@@ -172,6 +172,12 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "move:before-source-cleanup",
     "move:source-cleanup",
     "move:after-source-cleanup",
+    // A copy is a move that keeps its source, so it trips at the same places
+    // minus every one about removing the source — there is nothing to remove,
+    // and after publication there is nothing left to go wrong.
+    "copy:before-marker-write",
+    "copy:after-staging",
+    "copy:after-verify",
     "template:mid-save",
 ];
 

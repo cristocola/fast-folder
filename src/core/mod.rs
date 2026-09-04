@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod config;
+pub mod copy_engine;
 pub mod counter;
 pub mod library;
 pub mod move_engine;

@@ -57,39 +57,59 @@ const STATUS_TICKS: u64 = 30;
 /// How many project details the pane remembers.
 const DETAIL_CACHE: usize = 64;
 
+/// The most width the base column may claim from the layout. `BASE_MAX` in the
+/// table is what it may *draw* at; this is what it may take from the detail
+/// pane before the pane is worth more than the label.
+const BASE_CLAIM_MAX: usize = 14;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
     Projects,
     Detail,
+}
+
+/// Which tab the app is on.
+///
+/// **A tab, not a dialog.** Templates were an 84 %-wide modal over the library
+/// plus a three-row strip along the bottom that filtered by Enter and nothing
+/// else — two halves of one subject, neither of them a place you could work.
+/// The strip is gone (three rows back to the table) and the studio is the
+/// second tab, with the strip's counts, a filter box of its own, and the same
+/// verbs it always had.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Screen {
+    #[default]
+    Library,
     Templates,
 }
 
-/// The template strip: every template known, with how many projects use it.
+impl Screen {
+    pub const ALL: [Screen; 2] = [Screen::Library, Screen::Templates];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Screen::Library => "library",
+            Screen::Templates => "templates",
+        }
+    }
+}
+
+/// Every template known: the ones on disk, and the slugs projects still name
+/// that no template answers to. The counts come from the library.
 #[derive(Debug, Default)]
 pub struct TemplatesState {
     pub cards: Vec<TemplateCard>,
     pub counts: HashMap<String, usize>,
-    pub selected: usize,
-    /// How many of the cards are templates on disk — what the header counts.
+    /// How many of the cards are templates on disk.
     pub on_disk: usize,
 }
 
 impl TemplatesState {
     /// Cards from the summary — the templates on disk, busiest first — then a
     /// bare card for any slug the projects still name that no template
-    /// answers to, so the strip can filter by it and say what it is. The
-    /// first card is always a real template, so the app never opens on
-    /// `(registered)`.
+    /// answers to, so the tab can list it and say what it is. The first card
+    /// is always a real template, so the tab never opens on `(registered)`.
     pub fn rebuild(&mut self, summary: Option<&Summary>, counts: HashMap<String, usize>) {
-        // The cursor stays on its card across a rebuild — unless it was on an
-        // orphan only because nothing on disk was known yet (discovery can
-        // land before the summary), in which case the first real template is
-        // where it belongs.
-        let keep = self
-            .selected_card()
-            .filter(|card| card.on_disk || self.on_disk == 0 && summary.is_none())
-            .map(|c| c.slug.clone());
-
         let mut cards: Vec<TemplateCard> = summary.map(|s| s.templates.clone()).unwrap_or_default();
         for slug in counts.keys() {
             if !cards.iter().any(|c| &c.slug == slug) {
@@ -104,21 +124,24 @@ impl TemplatesState {
                 });
             }
         }
+        // Real templates first, then by slug. **Alphabetical, not busiest
+        // first**, which is what the horizontal strip used: a ribbon you read
+        // left to right wants the popular ones near the start, a list you scan
+        // and search wants to be in the same order tomorrow. Creating one
+        // project should not move a row.
+        // By the name the list shows, not the raw slug: `(registered)` is
+        // displayed as `registered` and sorting it under `(` puts it in front
+        // of every `d`, which reads as no order at all.
         cards.sort_by(|a, b| {
-            let ca = counts.get(&a.slug).copied().unwrap_or(0);
-            let cb = counts.get(&b.slug).copied().unwrap_or(0);
-            b.on_disk
-                .cmp(&a.on_disk)
-                .then_with(|| cb.cmp(&ca))
-                .then_with(|| a.slug.cmp(&b.slug))
+            b.on_disk.cmp(&a.on_disk).then_with(|| {
+                Self::display_name(a)
+                    .cmp(Self::display_name(b))
+                    .then_with(|| a.slug.cmp(&b.slug))
+            })
         });
         self.on_disk = cards.iter().filter(|c| c.on_disk).count();
         self.cards = cards;
         self.counts = counts;
-        self.selected = keep
-            .and_then(|slug| self.cards.iter().position(|c| c.slug == slug))
-            .unwrap_or(0)
-            .min(self.cards.len().saturating_sub(1));
     }
 
     /// What a card is called on screen: `(registered)` is a slug the engine
@@ -131,20 +154,8 @@ impl TemplatesState {
         }
     }
 
-    pub fn selected_card(&self) -> Option<&TemplateCard> {
-        self.cards.get(self.selected)
-    }
-
     pub fn count(&self, slug: &str) -> usize {
         self.counts.get(slug).copied().unwrap_or(0)
-    }
-
-    pub fn step(&mut self, delta: isize) {
-        if let Some(next) =
-            crate::tui::widgets::nav::wrap_step(Some(self.selected), self.cards.len(), delta)
-        {
-            self.selected = next;
-        }
     }
 }
 
@@ -191,7 +202,12 @@ pub struct App {
     pub detail_open: bool,
     pub detail_scroll: usize,
     pub focus: Focus,
+    pub screen: Screen,
     pub templates: TemplatesState,
+    /// The templates tab's own list. It is state on the app, not a modal:
+    /// a tab you can leave and come back to keeps its place, and a modal
+    /// cannot be a tab.
+    pub studio: Studio,
     pub modals: ModalStack,
     /// What the one running mutation is doing, for the status line.
     pub busy: Option<&'static str>,
@@ -251,7 +267,9 @@ impl App {
             detail_open: true,
             detail_scroll: 0,
             focus: Focus::Projects,
+            screen: Screen::Library,
             templates: TemplatesState::default(),
+            studio: Studio::default(),
             modals: ModalStack::default(),
             busy: None,
             busy_id: None,
@@ -313,18 +331,22 @@ impl App {
     pub fn start(&mut self) -> Vec<Effect> {
         let mut effects = vec![Effect::LoadSummary];
         // `fastf template new`/`edit` opened the app for one screen; put it up
-        // before the first frame so the command lands where it was aimed.
-        match self.studio_entry.take() {
-            Some(crate::tui::entry::StudioEntry::List) => effects.extend(self.open_studio()),
-            Some(crate::tui::entry::StudioEntry::New) => effects.extend(self.open_builder(None)),
-            Some(crate::tui::entry::StudioEntry::Edit(slug)) => {
-                effects.extend(self.open_builder(Some(slug)))
+        // before the first frame so the command lands where it was aimed. All
+        // three open **on the templates tab**, so Esc out of the builder leaves
+        // you among the templates rather than in a library nobody asked for.
+        if let Some(entry) = self.studio_entry.take() {
+            effects.extend(self.toggle_templates());
+            match entry {
+                crate::tui::entry::StudioEntry::List => {}
+                crate::tui::entry::StudioEntry::New => effects.extend(self.open_builder(None)),
+                crate::tui::entry::StudioEntry::Edit(slug) => {
+                    effects.extend(self.open_builder(Some(slug)))
+                }
             }
-            None => {}
         }
         if self.library.loaded {
-            self.templates
-                .rebuild(self.summary.as_ref(), self.library.per_template());
+            let template_reads = self.refresh_templates();
+            effects.extend(template_reads);
             effects.extend(self.after_rows_changed());
         } else {
             effects.push(self.discover());
@@ -344,12 +366,24 @@ impl App {
 
     /// The width the table needs to show every folder name whole with the id
     /// and the size beside it: the cursor cell, the id, the name and the size
-    /// cell, each followed by a space, inside the borders.
+    /// cell, each followed by a space, inside the borders, plus the right
+    /// gutter `view::projects::table` always reserves.
     pub fn table_min_width(&self) -> u16 {
         let (id_w, name_w) = self.library.widths;
+        // The base column joins the claim once the rows come from more than one
+        // base. It is elected right after the size there, and a table that did
+        // not ask for its width never got it: a library of ninety-character
+        // folder names left the split with room for the size and nothing else,
+        // so the one column saying which drive a project is on never appeared
+        // on the machine that had four of them.
+        let base = if self.library.many_bases {
+            self.library.base_width.min(BASE_CLAIM_MAX) + 1
+        } else {
+            0
+        };
         // `choose_columns` adds a column only while it fits with its spacing.
-        (2 + 1 + id_w + 1 + name_w + 1 + crate::tui::rows::SIZE_CELL + 1).min(u16::MAX as usize)
-            as u16
+        (2 + 1 + id_w + 1 + name_w + 1 + crate::tui::rows::SIZE_CELL + 1 + base + 1)
+            .min(u16::MAX as usize) as u16
     }
 
     pub fn rows_on_screen(&self) -> usize {
@@ -372,10 +406,12 @@ impl App {
     }
 
     fn focus_context(&self) -> Context {
+        if self.screen == Screen::Templates {
+            return Context::Templates;
+        }
         match self.focus {
             Focus::Projects => Context::Projects,
             Focus::Detail => Context::Detail,
-            Focus::Templates => Context::Templates,
         }
     }
 
@@ -529,6 +565,21 @@ impl App {
     }
 
     fn after_query_change(&mut self) -> Vec<Effect> {
+        // On the templates tab the bar filters the template list, which is a
+        // plain substring over a handful of slugs — no grammar, no metadata
+        // reads, and the cursor kept on a row the query still keeps.
+        if self.screen == Screen::Templates {
+            let rows = self.studio.rows(self.search.input.text());
+            self.studio.reselect(&rows);
+            self.studio
+                .clamp_viewport(&rows, layout::template_rows(self.area()));
+            return self
+                .studio
+                .selected_slug()
+                .filter(|slug| self.studio.shown.as_deref() != Some(slug.as_str()))
+                .map(|slug| vec![Effect::LoadTemplateView { slug }])
+                .unwrap_or_default();
+        }
         if !self.search.sync() {
             return Vec::new();
         }
@@ -543,8 +594,37 @@ impl App {
         self.after_rows_changed()
     }
 
+    /// Rebuild what is known about the templates and hand the tab its list.
+    ///
+    /// One call, because the two used to drift: the strip was rebuilt from the
+    /// summary *and* the library's per-template counts, while the studio took
+    /// the summary alone — so a slug projects still named that no template
+    /// answered to was in one list and not the other.
+    fn refresh_templates(&mut self) -> Vec<Effect> {
+        self.templates
+            .rebuild(self.summary.as_ref(), self.library.per_template());
+        let cards = self.templates.cards.clone();
+        self.studio.install(cards)
+    }
+
     fn set_template_filter(&mut self, slug: Option<String>) -> Vec<Effect> {
         self.library.template_filter = slug;
+        self.recompute();
+        self.after_rows_changed()
+    }
+
+    fn set_base_filter(&mut self, base: Option<PathBuf>) -> Vec<Effect> {
+        self.library.base_filter = base;
+        self.recompute();
+        self.after_rows_changed()
+    }
+
+    /// Both row filters off. `F` is one key because they are one question —
+    /// "why am I not seeing everything" — and answering half of it leaves the
+    /// list still short with no hint which half is left.
+    fn clear_filters(&mut self) -> Vec<Effect> {
+        self.library.template_filter = None;
+        self.library.base_filter = None;
         self.recompute();
         self.after_rows_changed()
     }
@@ -552,8 +632,12 @@ impl App {
     fn apply_change(&mut self, change: ListChange) -> Vec<Effect> {
         let mut effects = Vec::new();
         match change {
-            ListChange::Patched { project, stale } => {
-                if !self.library.patch(*project) {
+            ListChange::Patched {
+                project,
+                was,
+                stale,
+            } => {
+                if !self.library.patch(&was, *project) {
                     effects.push(self.discover());
                 }
                 for path in &stale {
@@ -575,8 +659,7 @@ impl App {
             ListChange::None => {}
         }
         self.recompute();
-        self.templates
-            .rebuild(self.summary.as_ref(), self.library.per_template());
+        effects.extend(self.refresh_templates());
         effects.extend(self.after_rows_changed());
         effects
     }
@@ -613,32 +696,9 @@ impl App {
             Msg::Summary(summary) => {
                 self.summary = Some(*summary);
                 self.summary_error = None;
-                self.templates
-                    .rebuild(self.summary.as_ref(), self.library.per_template());
-                // A template written or deleted while the studio is open is a
-                // change to the list it is showing.
-                if let Some(Modal::Studio(studio)) = self.modals.top_mut() {
-                    let cards = self
-                        .summary
-                        .as_ref()
-                        .map(|summary| summary.templates.clone())
-                        .unwrap_or_default();
-                    let keep = studio.selected_slug();
-                    studio.cards = cards;
-                    studio.selected = keep
-                        .and_then(|slug| studio.cards.iter().position(|card| card.slug == slug))
-                        .unwrap_or(0)
-                        .min(studio.cards.len().saturating_sub(1));
-                    if studio.shown.as_deref() != studio.selected_slug().as_deref() {
-                        studio.lines.clear();
-                        studio.shown = None;
-                    }
-                    return studio
-                        .selected_slug()
-                        .map(|slug| vec![Effect::LoadTemplateView { slug }])
-                        .unwrap_or_default();
-                }
-                Vec::new()
+                // A template written or deleted is a change to the templates
+                // tab's list, whether or not that tab is the one on screen.
+                self.refresh_templates()
             }
             Msg::SummaryFailed(error) => {
                 self.summary_error = Some(error.clone());
@@ -653,8 +713,7 @@ impl App {
                     return Vec::new();
                 }
                 self.recompute();
-                self.templates
-                    .rebuild(self.summary.as_ref(), self.library.per_template());
+                let mut effects = self.refresh_templates();
                 // A create or a register asked for its new project to be
                 // selected; it exists only once discovery has seen it.
                 if let Some(path) = self.select_when_found.clone()
@@ -668,7 +727,7 @@ impl App {
                 if let Some(id) = self.select_id_when_found.take() {
                     self.library.select_id(&id);
                 }
-                let mut effects = self.after_rows_changed();
+                effects.extend(self.after_rows_changed());
 
                 if self.library.dirty {
                     self.library.dirty = false;
@@ -723,12 +782,10 @@ impl App {
                 Vec::new()
             }
             Msg::TemplateViewLoaded { slug, lines } => {
-                if let Some(Modal::Studio(studio)) = self.modals.top_mut()
-                    && studio.selected_slug().as_deref() == Some(slug.as_str())
-                {
-                    studio.shown = Some(slug);
-                    studio.lines = lines;
-                    studio.scroll = 0;
+                if self.studio.selected_slug().as_deref() == Some(slug.as_str()) {
+                    self.studio.shown = Some(slug);
+                    self.studio.lines = lines;
+                    self.studio.scroll = 0;
                 }
                 Vec::new()
             }
@@ -1087,12 +1144,6 @@ impl App {
             self.focus = Focus::Detail;
             return Vec::new();
         }
-        if let Some(strip) = regions.strip
-            && inside(strip, column, row)
-        {
-            self.focus = Focus::Templates;
-            return Vec::new();
-        }
         if !inside(regions.table, column, row) {
             return Vec::new();
         }
@@ -1235,7 +1286,6 @@ impl App {
             Some(Modal::Confirm(_)) => self.on_confirm_key(key),
             Some(Modal::MultiPick(_)) => self.on_multi_pick_key(key),
             Some(Modal::Flow(_)) => self.on_flow_key(key),
-            Some(Modal::Studio(_)) => self.on_studio_key(key),
             Some(Modal::Builder(_)) => self.on_builder_key(key),
             Some(Modal::Settings(_)) => self.on_settings_key(key),
             Some(Modal::Onboarding(_)) => self.on_onboarding_key(key),
@@ -1326,6 +1376,36 @@ impl App {
                 }
                 self.add_tag(tag)
             }
+            TextThen::CopyTo => {
+                let typed = text.trim().to_string();
+                if typed.is_empty() {
+                    return Vec::new();
+                }
+                self.modals.pop();
+                // Expanded here, refused in the engine: `~/backups` has to mean
+                // the same thing it means in `config set bases`, and the rule
+                // about bases is stated once, in `copy_engine`.
+                let destination = match crate::core::config::expand_base_path(&typed) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        self.warn(format!("{error:#}"));
+                        return Vec::new();
+                    }
+                };
+                if self.batching() {
+                    return self.start_job(jobs::JobKind::CopyTo(destination), None);
+                }
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                self.run_action(
+                    "copying…",
+                    Action::CopyTo {
+                        project: Box::new(project),
+                        destination,
+                    },
+                )
+            }
             TextThen::RaiseCounter => {
                 self.modals.pop();
                 match text.trim().parse::<u64>() {
@@ -1360,8 +1440,16 @@ impl App {
     }
 
     /// Whether a verb acts on the marks rather than the selection.
+    ///
+    /// **Asked of `targets()`, not of the mark set.** Marks are kept by path
+    /// and survive a filter change; `targets()` intersects them with the rows
+    /// on screen. When those two disagreed, `batching()` said yes and
+    /// `targets()` came back empty, and every batch verb hit its
+    /// `if targets.is_empty() { return Vec::new(); }` — no picker, no dialog,
+    /// no message. Marking three rows and then typing a query made `A` do
+    /// nothing at all, which is what "batch tagging doesn't work" was.
     fn batching(&self) -> bool {
-        !self.library.marks.is_empty()
+        !self.library.targets().is_empty() && !self.library.marks.is_empty()
     }
 
     /// The folder names a confirmation is about: the marks, or the selection.
@@ -1646,6 +1734,10 @@ impl App {
                         self.after_rows_changed()
                     }
                     Then::TemplateFilter => self.set_template_filter(Some(item.value.clone())),
+                    Then::BaseFilter => {
+                        let base = (!item.value.is_empty()).then(|| PathBuf::from(&item.value));
+                        self.set_base_filter(base)
+                    }
                     Then::AddTag => {
                         if item.value == crate::tui::app::actions::NEW_TAG {
                             self.modals.push(Modal::TextPrompt(TextPrompt::new(
@@ -1741,10 +1833,6 @@ impl App {
                 lines.len(),
                 layout::message_box(area).height.saturating_sub(2) as usize,
             ),
-            Modal::Studio(studio) => {
-                studio.scroll = studio.scroll.saturating_add_signed(delta);
-                return Vec::new();
-            }
             _ => return Vec::new(),
         };
         let max = lines.saturating_sub(rows);
@@ -1819,6 +1907,15 @@ impl App {
                 if self.job.is_some() || self.move_progress.is_some() {
                     return self.request_cancel();
                 }
+                // On the templates tab, the first step back is to the library:
+                // Esc is "one level out", and a tab is a level.
+                if self.screen == Screen::Templates {
+                    if !self.search.input.is_empty() {
+                        self.search.input.clear();
+                        return Vec::new();
+                    }
+                    return self.toggle_templates();
+                }
                 if !self.search.input.is_empty() {
                     self.search.input.clear();
                     return self.after_query_change();
@@ -1869,16 +1966,10 @@ impl App {
                 self.run(id)
             }
             CommandId::StudioNew => self.open_builder(None),
-            CommandId::StudioEdit => {
-                let slug = match self.modals.top() {
-                    Some(Modal::Studio(studio)) => studio.selected_slug(),
-                    _ => None,
-                };
-                match slug {
-                    Some(slug) => self.open_builder(Some(slug)),
-                    None => Vec::new(),
-                }
-            }
+            CommandId::StudioEdit => match self.studio.selected_slug() {
+                Some(slug) => self.open_builder(Some(slug)),
+                None => Vec::new(),
+            },
             CommandId::StudioFromFolder => {
                 self.modals.push(Modal::Flow(Box::new(Flow::new(
                     FlowKind::FromFolder,
@@ -1887,11 +1978,7 @@ impl App {
                 Vec::new()
             }
             CommandId::StudioDelete => {
-                let slug = match self.modals.top() {
-                    Some(Modal::Studio(studio)) => studio.selected_slug(),
-                    _ => None,
-                };
-                let Some(slug) = slug else {
+                let Some(slug) = self.studio.selected_slug() else {
                     return Vec::new();
                 };
                 self.modals.push(Modal::Confirm(Confirm {
@@ -1923,6 +2010,9 @@ impl App {
                 if !self.modals.is_empty() {
                     return self.step_top_modal(delta);
                 }
+                if self.screen == Screen::Templates {
+                    return self.step_templates(delta);
+                }
                 match self.focus {
                     Focus::Projects => {
                         self.library.step(delta);
@@ -1933,10 +2023,6 @@ impl App {
                             .detail_scroll
                             .saturating_add_signed(delta)
                             .min(self.detail_scroll_max());
-                        Vec::new()
-                    }
-                    Focus::Templates => {
-                        self.templates.step(delta);
                         Vec::new()
                     }
                 }
@@ -1950,6 +2036,9 @@ impl App {
                 };
                 if !self.modals.is_empty() {
                     return self.page_top_modal(delta);
+                }
+                if self.screen == Screen::Templates {
+                    return self.step_templates(delta);
                 }
                 match self.focus {
                     Focus::Detail => {
@@ -1973,14 +2062,6 @@ impl App {
                 match self.focus {
                     Focus::Detail => {
                         self.detail_scroll = if first { 0 } else { self.detail_scroll_max() };
-                        Vec::new()
-                    }
-                    Focus::Templates => {
-                        self.templates.selected = if first {
-                            0
-                        } else {
-                            self.templates.cards.len().saturating_sub(1)
-                        };
                         Vec::new()
                     }
                     Focus::Projects => {
@@ -2031,7 +2112,8 @@ impl App {
                 let slug = self.library.selected().map(|p| p.template.clone());
                 self.set_template_filter(slug)
             }
-            CommandId::ClearTemplateFilter => self.set_template_filter(None),
+            CommandId::FilterBase => self.open_base_filter(),
+            CommandId::ClearFilters => self.clear_filters(),
             CommandId::Actions => {
                 self.modals.push(Modal::Actions(
                     crate::tui::app::actions::ActionsState::default(),
@@ -2153,6 +2235,15 @@ impl App {
                 Vec::new()
             }
             CommandId::Move => self.open_move_picker(),
+            CommandId::CopyTo => {
+                let mut prompt = TextPrompt::new(validators::COPY_TO_PROMPT, TextThen::CopyTo);
+                // The move progress modal is what a copy reports through too:
+                // it is the same staged copy underneath.
+                self.move_progress = None;
+                prompt.input = crate::tui::widgets::input::LineEdit::default();
+                self.modals.push(Modal::TextPrompt(prompt));
+                Vec::new()
+            }
             CommandId::Unregister => {
                 // Nothing is lost by unregistering, so a yes/no is enough —
                 // but the question names the folders it is about.
@@ -2189,17 +2280,22 @@ impl App {
             CommandId::NewProject => self.open_create(),
             CommandId::Register => self.open_register(),
             CommandId::ApplyTemplate => self.open_apply(),
-            CommandId::Templates => self.open_studio(),
+            CommandId::Templates => self.toggle_templates(),
             CommandId::Settings => self.open_settings(),
             CommandId::Reconcile => self.run_job(settings::Job::Reconcile),
+            // `f` on the templates tab: filter the library by this template
+            // **and go back to it**. The old strip set the filter and left you
+            // looking at the strip, which is the one place the answer is not.
             CommandId::StripFilter => {
-                let slug = self.templates.selected_card().map(|c| c.slug.clone());
+                let slug = self.studio.selected_slug();
                 let next = if slug == self.library.template_filter {
                     None
                 } else {
                     slug
                 };
-                self.set_template_filter(next)
+                let mut effects = self.toggle_templates();
+                effects.extend(self.set_template_filter(next));
+                effects
             }
         }
     }
@@ -2553,26 +2649,46 @@ impl App {
         }
     }
 
-    // --- the template studio ----------------------------------------------
+    // --- the templates tab ------------------------------------------------
 
-    /// `T`: every template, with the selected one's details beside it.
-    fn open_studio(&mut self) -> Vec<Effect> {
-        let cards = self
-            .summary
-            .as_ref()
-            .map(|summary| summary.templates.clone())
-            .unwrap_or_default();
-        let studio = Studio::new(cards);
-        let slug = studio.selected_slug();
-        self.modals.push(Modal::Studio(studio));
-        slug.map(|slug| vec![Effect::LoadTemplateView { slug }])
-            .unwrap_or_default()
+    /// `T`: to the templates tab, and `T` back. The search bar belongs to
+    /// whichever tab is showing, so switching drops the query with it — the
+    /// two searches are over different things and carrying one across would
+    /// hide most of the other list for no reason anyone typed.
+    fn toggle_templates(&mut self) -> Vec<Effect> {
+        self.screen = match self.screen {
+            Screen::Library => Screen::Templates,
+            Screen::Templates => Screen::Library,
+        };
+        self.search.editing = false;
+        self.search.input.clear();
+        self.search.query = Default::default();
+        self.recompute();
+        let mut effects = self.after_rows_changed();
+        if self.screen == Screen::Templates {
+            let rows = self.studio.rows("");
+            self.studio.reselect(&rows);
+            self.studio
+                .clamp_viewport(&rows, layout::template_rows(self.area()));
+            if self.studio.shown.is_none()
+                && let Some(slug) = self.studio.selected_slug()
+            {
+                effects.push(Effect::LoadTemplateView { slug });
+            }
+        }
+        effects
     }
 
-    /// The studio is a list: every key it answers is declared in the
-    /// registry under `Context::Studio`.
-    fn on_studio_key(&mut self, key: Key) -> Vec<Effect> {
-        self.lookup_and_run(key)
+    /// The templates tab's arrows, over the rows its own query keeps.
+    fn step_templates(&mut self, delta: isize) -> Vec<Effect> {
+        let rows = self.studio.rows(self.search.input.text());
+        self.studio.step(delta, &rows);
+        self.studio
+            .clamp_viewport(&rows, layout::template_rows(self.area()));
+        self.studio
+            .selected_slug()
+            .map(|slug| vec![Effect::LoadTemplateView { slug }])
+            .unwrap_or_default()
     }
 
     /// Esc on a dialog: one level at a time. A builder section goes back to
@@ -2617,18 +2733,6 @@ impl App {
                 )
                 .unwrap_or(0);
                 Vec::new()
-            }
-            Some(Modal::Studio(studio)) => {
-                studio.step(delta);
-                studio.clamp_viewport(layout::studio_rows(
-                    area,
-                    studio.cards.len(),
-                    studio.lines.len(),
-                ));
-                studio
-                    .selected_slug()
-                    .map(|slug| vec![Effect::LoadTemplateView { slug }])
-                    .unwrap_or_default()
             }
             Some(Modal::Builder(builder)) => {
                 match &mut builder.open {
@@ -2687,9 +2791,7 @@ impl App {
                 state.clamp_viewport(layout::settings_rows(area));
                 Vec::new()
             }
-            Some(Modal::Studio(_)) | Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => {
-                self.scroll_top_modal(delta)
-            }
+            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.scroll_top_modal(delta),
             _ => Vec::new(),
         }
     }
@@ -3186,9 +3288,6 @@ impl App {
         if regions.detail.is_some() {
             ring.push(Focus::Detail);
         }
-        if regions.strip.is_some() && !self.templates.cards.is_empty() {
-            ring.push(Focus::Templates);
-        }
         let at = ring.iter().position(|f| *f == self.focus).unwrap_or(0);
         let next = if forward {
             (at + 1) % ring.len()
@@ -3271,6 +3370,43 @@ impl App {
         Vec::new()
     }
 
+    /// `b`: pick the base to restrict the list to. Every configured base is
+    /// offered, mounted or not — an unmounted one showing `0` is the answer to
+    /// "where did those projects go", where hiding it is not.
+    fn open_base_filter(&mut self) -> Vec<Effect> {
+        let Some(summary) = &self.summary else {
+            return Vec::new();
+        };
+        let mut items: Vec<PickItem> = summary
+            .bases
+            .iter()
+            .map(|base| PickItem {
+                label: base.label.clone(),
+                detail: base.note(),
+                value: base.path.display().to_string(),
+            })
+            .collect();
+        if items.is_empty() {
+            return Vec::new();
+        }
+        // The way out is in the list, not only on a second key: a picker whose
+        // only escape is Esc cannot say that "every base" is a choice.
+        items.insert(
+            0,
+            PickItem {
+                label: "every base".to_string(),
+                detail: String::new(),
+                value: String::new(),
+            },
+        );
+        self.modals.push(Modal::Pick(PickState::new(
+            "Show which base?",
+            items,
+            Then::BaseFilter,
+        )));
+        Vec::new()
+    }
+
     /// `m`: pick the mounted base to move into, then move.
     fn open_move_picker(&mut self) -> Vec<Effect> {
         let targets = crate::tui::app::actions::move_targets(self);
@@ -3346,12 +3482,14 @@ impl App {
 
     /// One item's outcome landed: record it, patch the row, and move on.
     fn on_job_item_done(&mut self, outcome: Result<Box<ActionOutcome>, String>) -> Vec<Effect> {
-        // The item that was running leaves `inflight`, whatever happened.
-        let id = self
-            .job
-            .as_mut()
-            .and_then(|job| job.clear_inflight())
-            .unwrap_or_else(|| "?".to_string());
+        // The item that was running leaves `inflight`, whatever happened. Its
+        // path is what the mark is keyed by.
+        let finished = self.job.as_mut().and_then(|job| job.take_inflight());
+        let (id, path) = match finished {
+            Some(project) => (project.id, Some(project.path)),
+            None => ("?".to_string(), None),
+        };
+        let mut effects = Vec::new();
         match outcome {
             Ok(outcome) => {
                 let outcome = *outcome;
@@ -3364,21 +3502,39 @@ impl App {
                 {
                     job.warnings.push(warning);
                 }
-                self.apply_change(outcome.change);
+                // **The effects a change asks for are the job's too.** They
+                // were dropped here, where the single-action path returns them,
+                // and `apply_change`'s `Reload` arm calls `discover`, which
+                // sets `library.inflight` *before* handing back the effect that
+                // would answer it. A dropped one left the app waiting on a
+                // generation nothing would ever send, after which every patch
+                // only set `dirty` and the list stopped changing: a batch
+                // re-derive of tags rewrote every file and showed nothing, and
+                // the list stayed frozen for the rest of the session.
+                effects.extend(self.apply_change(outcome.change));
+                // A mark is the retry list. An item that succeeded is not on
+                // it any more, so "3 tagged" and the ✓ glyphs left on screen
+                // cannot disagree — `jobs.rs` has always said so; nothing did
+                // it, because `patch` only drops a mark when the path moved.
+                if let Some(path) = &path {
+                    self.library.marks.remove(path);
+                }
                 if let Some(job) = &mut self.job {
                     job.done += 1;
                 }
             }
             Err(error) => {
                 // A cancellation the user asked for is not a failure to list:
-                // the report says how many were left instead.
+                // the report says how many were left instead. Either way the
+                // mark stays: it is what a retry would act on.
                 let cancelled = self.job.as_ref().is_some_and(|job| job.cancelled);
                 if !cancelled && let Some(job) = &mut self.job {
                     job.failed.push((id, error));
                 }
             }
         }
-        self.job_advance()
+        effects.extend(self.job_advance());
+        effects
     }
 
     /// The job has no items left to begin: report and clear it.

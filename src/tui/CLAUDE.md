@@ -207,7 +207,34 @@ template, the tags. (The old row put base and template before the date; in a
 table with a detail pane beside it the size is what the row is for — the name
 carries the date already — and the pane shows the rest.) Widths are measured from the rows, never
 from the sizes, so a landing snapshot cannot reflow the table; the size cell is
-`rows::SIZE_CELL` wide and right-aligned.
+`rows::SIZE_CELL` wide and right-aligned, header included.
+
+**Election stops at the first column that does not fit.** The greedy version
+kept trying, so a narrower later column slipped in past a wider earlier one and
+a 60-column window drew a BASE column with no SIZE — which reads as a bug, not
+as a priority.
+
+**The base is promoted above the date when the rows come from more than one
+base**, which is a question about the rows on screen and not about the
+configuration: two bases with one unmounted shows one base's projects, and a
+column repeating one word earns nothing. `LibraryState.many_bases` and
+`base_width` are measured in `recompute` beside `widths`, because
+`App::table_min_width` has to claim the column the table is about to elect — a
+library of ninety-character names left the split with room for the size and
+nothing else, and the one column saying which drive a project is on never
+appeared on the machine that had four of them.
+
+**Every column is measured, the tags included.** The tags cell was a `Fill(1)`
+remainder sharing the slack with the name, so one column of gutter cut the first
+tag's last letter — and a tag cut mid-word names a different tag. It is
+`tag_cell_width` now, and absent entirely when no row on screen carries one.
+
+**The table reserves one column of right gutter, always.** The last cell is
+right-aligned, so without it a size sits against the border glyph and reads as
+cut off, with the scrollbar — drawn over the border column — landing on the
+digits. It is reserved whether or not a scrollbar is showing: taking it back
+when the list gets short would reflow every width as rows arrive, which is the
+one thing measured columns exist to prevent.
 
 **Nothing blocks on a size.** The list draws first with `scanning…` in the
 cell; `util::size_scan` owns two workers, `request` **replaces** the queue with
@@ -260,9 +287,12 @@ now is listed dimmed with the reason on the key, not hidden — pressing it says
 why. Prompt texts and validators live in `validators.rs`, byte-identical to
 the prompt-at-a-time flows they replaced.
 
-A finished verb patches its row by **id** (`ListChange::Patched`) because a
-rename or a move changed the path; the pty suite traces that the list is not
-rescanned. A typed confirmation that does not match keeps the text in the
+A finished verb patches its row by the **path it had**, and only then by id
+(`ListChange::Patched` carries `was`); the pty suite traces that the list is not
+rescanned. The id alone was the key, because it survives a rename and a move —
+but `copy-to` can put a second project with the same id on a backup drive, and
+once that drive is a base, patching by id tags one row and shows it on the
+other. The old path is unique whatever else is true. A typed confirmation that does not match keeps the text in the
 prompt and says `name did not match — nothing deleted`. A move is a one-item
 job on a worker (`spawn_worker`) with a `Progress` shared with the runtime and
 a cancel flag: Ctrl-C during a move cancels the job instead of quitting. The
@@ -324,12 +354,53 @@ the scope field hides the three that bulk registration cannot answer, because
 `cli::register::{plan_rename, recursive_targets, recursive_id_note}` are the
 print-free halves both surfaces preview from.
 
-## The template studio and the builder
+## Two tabs
 
-`T` opens `Modal::Studio`: every template on disk with the selected one's
-details beside it, read on a worker (`loaders::template_view`, which renders
-`cli::template::describe` — the same lines `template show` prints, so the two
-cannot drift). Its verbs are `n`, Enter, `g` and `D`.
+`App.screen` is `Screen::{Library, Templates}` and `T` switches between them.
+**A tab, not a dialog.** Templates were an 84 %-wide modal over the library
+*plus* a three-row strip along the bottom that showed the same counts and could
+be filtered by pressing Enter on a card and nothing else — two halves of one
+subject, neither of them a place you could work, and between them three rows off
+every table. The strip is gone (`Focus` is `Projects | Detail` now, and the
+focus ring with it), and `Studio` is state on the `App` rather than a modal,
+because a tab you leave and come back to keeps its place and a modal cannot be
+a tab.
+
+The two tabs share every band but the middle one — the name, the tabs, the
+bases, the status line, the keys stay where they are and only the work changes.
+The search bar belongs to whichever tab is showing: the library's is the query
+grammar, the templates tab's is a plain case-insensitive substring over the slug
+and the name (`Studio::rows`), because a template list is tens of rows and a
+fuzzy hit there says yes to almost every slug. Switching clears it, since the
+two are searches over different things.
+
+`Context::Studio` is gone; `Context::Templates` — which was the strip's — is the
+tab's, and carries the verbs the studio had. `LISTS` shrank to the library's own
+screen for the same reason: while the templates were a strip *on* that screen,
+`n` meant both "new project" and "new template" in one hint bar.
+
+`f` on the templates tab filters the library by the selected template **and
+goes back to it**. The strip set the filter and left you looking at the strip,
+which is the one place the answer is not.
+
+The tab is ordered real templates first, then **alphabetically by display
+name** — not busiest first, which is what a horizontal ribbon wanted. A list
+you scan and search should be in the same order tomorrow, and creating one
+project should not move a row. `TemplatesState::rebuild` is the one place the
+list is built (the counts and the orphan slugs both), and `App::refresh_templates`
+hands it to the tab: the two used to be built separately and drift, the strip
+from the summary *and* the per-template counts, the studio from the summary
+alone. `Studio::install` keeps the selection by slug, but **only once a real
+template has been on the list to choose from** — discovery lands before the
+summary, so the first list is nothing but orphan slugs, and keeping that
+parked the cursor on `(registered)` for the rest of the run.
+
+## The builder
+
+Enter or `e` on the tab opens it: every template on disk with the selected
+one's details beside it, read on a worker (`loaders::template_view`, which
+renders `cli::template::describe` — the same lines `template show` prints, so
+the two cannot drift). Its verbs are `n`, Enter, `g` and `D`.
 
 **The builder is a list of a template's five parts, not a sequence of steps.**
 The old one walked six steps and *then* offered a review menu to go back into
@@ -341,7 +412,8 @@ says `Cannot save:` with `Template::validate`'s own words rather than writing
 something that will not load.
 
 `fastf template new` and `fastf template edit <slug>` open the app at
-`Entry::Studio`, so the command line and `T` are one editor.
+`Entry::Studio` — the templates tab, or the builder straight away — so the
+command line and `T` are one editor.
 
 Two sections are more than a form. **Structure** is `widgets::text_area::TextArea`
 — one folder path per line, with the tree they make drawn beside them and
@@ -502,6 +574,45 @@ tag, the note, the base — asked once); delete asks for the word `delete`,
 single or batch, and the prompt names every folder; the quick note is a text
 area (Enter saves, Alt-Enter breaks a line).
 
+**A batch item's effects are the app's.** `on_job_item_done` returns what
+`apply_change` gave it, alongside the next item's `Run`. It used to drop them,
+and `App::discover` sets `library.inflight` *before* returning the effect that
+answers it — so one dropped `ListChange::Reload` left the app waiting on a
+generation nothing would ever send, after which every `patch`/`remove` only set
+`dirty` and **the list stopped changing for the rest of the session**. A batch
+re-derive of tags rewrote every file and showed nothing at all. The test
+helpers in `tests/tui_update.rs` look for the one `Effect::Run` among the
+effects rather than requiring it to stand alone, which is the shape this fix
+makes normal.
+
+**A mark is the retry list.** An item that succeeded loses its mark when its
+outcome lands (`take_inflight` hands the project back for its path);
+`LibraryState::patch` only ever dropped one when the path moved, so a clean
+batch reported "3 tagged" over three rows still wearing `✓`.
+
+**`command::batch_target` is what a batching verb is available on.** Marks are
+kept by path and survive a filter change, so a marked row can be off screen
+while the verb is aimed at it — `targets()` intersects the two and comes back
+empty, and every batch verb hit an early `return Vec::new()` with no picker, no
+dialog and no message. That is what "batch tagging does nothing" was. It is
+deliberately **not** part of `needs_selection`: `o`, `t` and `y` act on the row
+under the cursor and are none of a hidden mark's business.
+
+**A move says which kind it was.** `MoveOutcome::staged` and `copied` reach
+both surfaces: `renamed on the same filesystem, nothing copied`, or `copied 412
+files, 199.5 GB, verified`. A same-filesystem rename is instant however large
+the folder is, and a message naming only the destination reads the same either
+way. `JobStatus` is set to `Done` at the end of both paths — it was assigned
+`Running` at construction and never changed anywhere in the crate, so the
+runtime's "is it done yet" was always false, `Runtime.moving` was never
+cleared, and a later `Effect::CancelMove` set the flag on a dead job's handle.
+
+**The bar is ours** (`view::modals::bar`), drawn from `Glyphs::bar_full` /
+`bar_empty`, not ratatui's `Gauge`: the palette is a pure function of an `Env`
+and the ASCII path has to stay right on a terminal that draws no block
+elements. A `total` of zero draws an empty track — nothing measured is not
+everything done. Both progress dialogs are sized to the lines they hold.
+
 **Geometry lives in `layout.rs`**, read by `update` and `view` alike, so a
 cursor can never leave the drawn window and End lands on the last line:
 `actions_box`, `pick_box`, `help_box`, `message_box`, `sized_dialog`,
@@ -518,3 +629,14 @@ additive; `parse` is unchanged for the command line).
 
 **Honest counts.** The header counts templates on disk (`TemplateCard::on_disk`);
 the strip lists orphan slugs dimmed after them and never opens on one.
+
+**Each fact is stated once.** The project count lived in the header, in the
+search bar and in the status line, in three formats, which reads as three
+different facts; `?` was advertised by the hint bar *and* by a hand-written
+sentence on the status line. The search bar is now the one place the list
+reports itself — the counts, the `(from index)` spinner, the sort, the template
+and base filters, the mark count — the hint bar is the one place a key is
+advertised, and the status line is left for what neither can show: what a batch
+verb would act on right now. `MarkToggle` is `hint = true, palette = true` for
+the same reason: the sentence that used to advertise Space was exactly the
+drift the one registry exists to prevent.

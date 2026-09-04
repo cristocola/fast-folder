@@ -280,9 +280,11 @@ fn the_header_reports_the_library_from_the_index_without_scanning() {
     let screen = app_screen(&out);
 
     assert_eq!(code, 0, "the app should open and quit:\n{screen}");
+    // The count lives on the search bar now — shown once, beside the sort and
+    // the marks it belongs with, rather than three times in three formats.
     assert!(
-        screen.contains("2 projects"),
-        "the header should report the count:\n{screen}"
+        screen.contains("2/2"),
+        "the bar should report the count:\n{screen}"
     );
     assert!(
         screen.contains("highest ID0002"),
@@ -690,6 +692,63 @@ fn the_sort_order_and_the_cursor_survive_a_restart() {
     assert!(
         screen.contains("▸ ID0002"),
         "the cursor should be back on the row it was left on:\n{screen}"
+    );
+}
+
+/// The **other** half of the batch tag: a tag the library already knows, picked
+/// from the list rather than typed. It is the path a real library takes — the
+/// text prompt only appears when no tag exists anywhere — and it was the one
+/// with no coverage.
+///
+/// It also pins the two things a finished batch owes: every marked row loses
+/// its mark as its item lands (a mark is the retry list), and the list keeps
+/// working afterwards. The batch used to drop the effects `apply_change`
+/// returned, and `discover` arms `inflight` *before* handing back the effect
+/// that answers it — so a dropped one left the app waiting on a generation
+/// nothing would send, and the list stopped changing for the rest of the run.
+#[cfg(debug_assertions)]
+#[test]
+fn a_batch_tag_picked_from_the_list_lands_and_leaves_the_list_working() {
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Pick_C", "ID0003", "2026-03-03T00:00:00Z", 64);
+    plant_dated_project(&sb, "Pick_B", "ID0002", "2026-02-02T00:00:00Z", 64);
+    plant_dated_project(&sb, "Pick_A", "ID0001", "2026-01-01T00:00:00Z", 64);
+    // One project already carries the tag, so the picker has something to
+    // offer and the text prompt is never reached.
+    sb.ok(&["tag", "add", "Pick_A", "shipped"]);
+
+    let script = pty::Script::new()
+        .pause(1500)
+        .key(" ") // mark Pick_C
+        .key(" ") // mark Pick_B
+        .pause(400)
+        .key("A") // → the picker, with `shipped` in it
+        .pause(600)
+        .key("\r") // the first offered tag
+        .pause(2000)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "the batch should end at the dashboard:\n{text}");
+    for name in ["Pick_B", "Pick_C"] {
+        let shown = sb.ok(&["tag", "list", name]);
+        assert!(
+            shown.contains("shipped"),
+            "{name} should carry the picked tag:\n{shown}"
+        );
+    }
+    // A mark is the retry list: an item that succeeded is off it, so the
+    // report and the glyphs left on screen cannot disagree.
+    assert!(
+        !screen.contains(" ✓ "),
+        "a clean batch leaves no marks behind:\n{screen}"
+    );
+    assert!(
+        screen.contains("2 tagged"),
+        "the batch should report:\n{screen}"
     );
 }
 

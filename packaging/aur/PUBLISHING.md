@@ -41,7 +41,12 @@ The workflow gates itself now, so a release that exists has already passed the
 whole of CI on both platforms, had its tag checked against `Cargo.toml` **and**
 against `main`, and had its archives unpacked and run (`fastf --version` must
 equal the tag; the MSI's payload is extracted with an administrative install and
-run too). Every asset also carries a signed build-provenance attestation:
+run too). Every asset also carries a signed build-provenance attestation.
+
+That is a guarantee about the *artifact*, not about the tag going up cleanly:
+because the gate is the whole of CI, any platform-specific test failure is a
+failed release. Get a green PR run on both platforms before tagging — the
+`release` skill's "Why the first tag fails" lists the patterns.
 
 ```bash
 gh attestation verify fastf-v<version>-x86_64-unknown-linux-musl.tar.gz \

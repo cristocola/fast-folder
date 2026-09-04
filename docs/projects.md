@@ -114,7 +114,9 @@ fastf move ID0047 archive
 Moves are also available from the `fastf recent` action menu. The rules:
 
 - Targets must be configured bases, so a moved project always stays discoverable.
-- On the same filesystem, a move is an instant atomic rename.
+- On the same filesystem, a move is an instant atomic rename. fastf says so —
+  `renamed on the same filesystem, nothing copied` — because an instant finish
+  on a large folder otherwise reads as a move that did nothing.
 - Across filesystems (or to network storage), fastf creates an exclusive
   `.fastf-transactions/<operation-id>/` directory beneath the target base,
   copies into its private `staging/` tree, checks exact relative paths, entry
@@ -136,6 +138,25 @@ Links and special entries are refused when copying would be required. The
 checks are intended to prevent application mistakes and ordinary interrupted
 copies; hardware failure, power loss, bit rot, and storage corruption belong to
 the filesystem and backups.
+
+## Copies, and two bases holding one ID
+
+`fastf copy-to <query> <folder>` copies a project out of the library, keeping
+its `PROJECT_INFO.md` — and therefore its ID — unchanged. The destination must
+be outside every configured base, so a copy can never make a duplicate inside
+one library.
+
+Adding that folder as a base afterwards is the supported case, and it lists
+both rows. Discovery is a union over the bases and does not dedupe, which is
+what makes that work: the BASE column tells them apart, `s` sorts by base, and
+`b` filters to one. A query that matches both is reported as ambiguous, naming
+the bases rather than telling you to be more specific about an ID that is
+already exact.
+
+Each row acts on its own. Every mutation revalidates the project by **path and
+ID together** before touching anything, so tagging, renaming, moving or deleting
+one copy cannot reach the other. The global counter is unaffected: the same ID
+twice is still the same highest ID.
 
 ## Process-crash recovery
 

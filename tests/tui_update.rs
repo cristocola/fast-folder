@@ -81,7 +81,9 @@ fn a_stale_discovery_is_dropped_and_the_current_one_installs() {
     assert!(app.library.loaded);
     assert_eq!(app.library.len(), 3);
     assert!(
-        matches!(effects.first(), Some(Effect::RequestSizes(paths)) if paths.len() == 3),
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::RequestSizes(paths) if paths.len() == 3)),
         "the visible rows are measured once the list is known: {effects:?}"
     );
 }
@@ -399,6 +401,7 @@ fn a_patched_row_keeps_its_place_and_forgets_its_size() {
             id,
             ListChange::Patched {
                 project: Box::new(patched),
+                was: path.clone(),
                 stale: vec![path.clone()],
             },
         ),
@@ -452,6 +455,7 @@ fn a_patch_during_a_discovery_in_flight_asks_once_more() {
     assert!(effects.contains(&Effect::LoadSummary));
 
     let patched = app.library.selected().unwrap().clone();
+    let patched_path = patched.path.clone();
     let id = run_id(&press(&mut app, Key::ch('R')));
     update(
         &mut app,
@@ -459,6 +463,7 @@ fn a_patch_during_a_discovery_in_flight_asks_once_more() {
             id,
             ListChange::Patched {
                 project: Box::new(patched),
+                was: patched_path,
                 stale: Vec::new(),
             },
         ),
@@ -542,22 +547,44 @@ fn the_status_toast_expires_on_its_own() {
     assert!(app.status.text.is_empty());
 }
 
+/// The templates tab carries what the strip used to: every template, the
+/// orphan slugs after them, and the counts. `f` filters the library by the
+/// selected one **and goes back to it** — the strip set the filter and left
+/// you looking at the strip, which is the one place the answer is not.
 #[test]
-fn the_summary_fills_the_template_strip_and_a_strip_filter_toggles() {
+fn the_templates_tab_filters_the_library_and_returns_to_it() {
+    use fastf::tui::app::Screen;
+
     let mut app = fixture(12, 120, 40);
     assert_eq!(app.templates.cards.len(), 3);
+    assert_eq!(app.studio.cards.len(), 3, "the tab has the same list");
+
+    press(&mut app, Key::ch('T'));
+    assert_eq!(app.screen, Screen::Templates);
+    let slug = app.studio.selected_slug().unwrap();
+
+    press(&mut app, Key::ch('f'));
+    assert_eq!(app.library.template_filter.as_deref(), Some(slug.as_str()));
+    assert_eq!(app.screen, Screen::Library, "and back to the projects");
+
+    press(&mut app, Key::ch('T'));
+    press(&mut app, Key::ch('f'));
+    assert!(
+        app.library.template_filter.is_none(),
+        "the same template again clears it"
+    );
+}
+
+/// Tab and Shift-Tab move between the table and the pane; the templates tab is
+/// a tab, not a third pane in that ring.
+#[test]
+fn the_focus_ring_is_the_table_and_the_pane() {
+    let mut app = fixture(12, 120, 40);
+    assert_eq!(app.focus, Focus::Projects);
     press(&mut app, Key::plain(KeyCode::Tab));
     assert_eq!(app.focus, Focus::Detail);
     press(&mut app, Key::plain(KeyCode::Tab));
-    assert_eq!(app.focus, Focus::Templates);
-    let slug = app.templates.selected_card().unwrap().slug.clone();
-    press(&mut app, Key::plain(KeyCode::Enter));
-    assert_eq!(app.library.template_filter.as_deref(), Some(slug.as_str()));
-    press(&mut app, Key::plain(KeyCode::Enter));
-    assert!(
-        app.library.template_filter.is_none(),
-        "the same card again clears it"
-    );
+    assert_eq!(app.focus, Focus::Projects);
 }
 
 #[test]
@@ -620,12 +647,20 @@ fn a_summary_that_names_a_template_no_project_uses_still_gets_a_card() {
 
 // --- single-project actions ----------------------------------------------
 
-/// The single `Effect::Run` an action key produces.
+/// The one `Effect::Run` among the effects. Exactly one action may be started
+/// at a time, but a batch item's outcome also carries the list maintenance its
+/// row change asked for (`ForgetSizes`, `RequestSizes`, a detail read), so the
+/// run is looked for rather than required to stand alone.
 fn action_of(effects: &[Effect]) -> &Action {
-    match effects {
-        [Effect::Run(_, action)] => action,
-        other => panic!("expected one action, got {other:?}"),
-    }
+    let mut runs = effects.iter().filter_map(|effect| match effect {
+        Effect::Run(_, action) => Some(action.as_ref()),
+        _ => None,
+    });
+    let action = runs.next().unwrap_or_else(|| {
+        panic!("expected an action, got {effects:?}");
+    });
+    assert!(runs.next().is_none(), "one action at a time: {effects:?}");
+    action
 }
 
 #[test]
@@ -748,6 +783,7 @@ fn an_action_done_patch_forgets_the_stale_sizes() {
             outcome: Ok(Box::new(ActionOutcome::new(
                 ListChange::Patched {
                     project: Box::new(patched),
+                    was: selected_path.clone(),
                     stale: vec![selected_path.clone()],
                 },
                 "Added 1 tag",
@@ -999,12 +1035,17 @@ fn removing_a_row_drops_its_mark() {
 // Batch jobs over the marks
 // ---------------------------------------------------------------------------
 
-/// The id an `Effect::Run` carries, when the effects are exactly one run.
+/// The id the one `Effect::Run` among the effects carries.
 fn run_id(effects: &[Effect]) -> fastf::tui::effect::ActionId {
-    match effects {
-        [Effect::Run(id, _)] => *id,
-        other => panic!("expected one run, got {other:?}"),
-    }
+    let mut runs = effects.iter().filter_map(|effect| match effect {
+        Effect::Run(id, _) => Some(*id),
+        _ => None,
+    });
+    let id = runs
+        .next()
+        .unwrap_or_else(|| panic!("expected a run, got {effects:?}"));
+    assert!(runs.next().is_none(), "one action at a time: {effects:?}");
+    id
 }
 
 fn item_done(id: fastf::tui::effect::ActionId, change: ListChange) -> Msg {
@@ -1068,7 +1109,10 @@ fn delete_over_marks_confirms_once_then_runs_each_item() {
             },
         ),
     );
-    assert!(effects.is_empty());
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Run(..))),
+        "the job is over, nothing else may start: {effects:?}"
+    );
     assert!(app.job.is_none());
     assert!(app.modals.is_empty(), "a clean job needs no report modal");
     assert!(
@@ -1145,7 +1189,10 @@ fn esc_cancels_a_job_and_the_rest_stay_marked() {
             },
         ),
     );
-    assert!(effects.is_empty(), "no further item may start: {effects:?}");
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Run(..))),
+        "no further item may start: {effects:?}"
+    );
     assert!(app.job.is_none(), "the cancelled job is over");
     assert!(!app.library.marks.contains(&first));
     assert!(
@@ -1565,21 +1612,64 @@ mod studio {
     }
 
     #[test]
-    fn the_studio_lists_the_templates_and_reads_the_selected_one() {
+    fn the_templates_tab_lists_them_and_reads_the_selected_one() {
+        use fastf::tui::app::Screen;
+
         let mut app = fixture(6, 120, 40);
         let effects = press(&mut app, Key::ch('T'));
-        match app.modals.top() {
-            Some(Modal::Studio(studio)) => assert_eq!(studio.cards.len(), 3),
-            other => panic!("expected the studio, got {other:?}"),
-        }
+        assert_eq!(app.screen, Screen::Templates);
+        assert_eq!(app.studio.cards.len(), 3);
         assert!(
-            matches!(&effects[..], [Effect::LoadTemplateView { slug }] if slug == "general"),
-            "{effects:?}"
+            effects.iter().any(
+                |e| matches!(e, Effect::LoadTemplateView { slug } if slug == "client-project")
+            ),
+            "the tab is alphabetical, real templates first: {effects:?}"
         );
         let effects = press(&mut app, Key::plain(KeyCode::Down));
         assert!(
-            matches!(&effects[..], [Effect::LoadTemplateView { slug }] if slug == "music-video"),
+            matches!(&effects[..], [Effect::LoadTemplateView { slug }] if slug == "general"),
             "moving reads the next one: {effects:?}"
+        );
+        // `T` again is the way back, and Esc is the other one.
+        press(&mut app, Key::ch('T'));
+        assert_eq!(app.screen, Screen::Library);
+    }
+
+    /// The tab's own search box: a plain substring over the slugs and names,
+    /// with the cursor kept on a row the query still keeps.
+    /// `fastf template new` and `template edit <slug>` open the app on the
+    /// templates tab, so Esc out of the builder leaves you among the templates
+    /// rather than in a library nobody asked for.
+    #[test]
+    fn template_new_from_the_command_line_opens_on_the_tab() {
+        use fastf::tui::app::Screen;
+        use fastf::tui::entry::StudioEntry;
+
+        let mut app = fixture(6, 120, 40);
+        app.studio_entry = Some(StudioEntry::New);
+        let _ = app.start();
+        assert_eq!(app.screen, Screen::Templates);
+        assert!(matches!(app.modals.top(), Some(Modal::Builder(_))));
+
+        let _ = press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(app.modals.is_empty(), "Esc discards the new template");
+        assert_eq!(app.screen, Screen::Templates, "and lands on the tab");
+    }
+
+    #[test]
+    fn the_templates_tab_filters_its_own_list() {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('T'));
+        assert_eq!(app.studio.rows("").len(), 3);
+
+        press(&mut app, Key::ch('/'));
+        type_text(&mut app, "music");
+        let rows = app.studio.rows(app.search.input.text());
+        assert_eq!(rows.len(), 1, "one template matches");
+        assert_eq!(
+            app.studio.selected_slug().as_deref(),
+            Some("music-video"),
+            "the cursor lands on a row the query keeps"
         );
     }
 
@@ -1594,21 +1684,15 @@ mod studio {
                 lines: vec!["stale".to_string()],
             },
         );
-        match app.modals.top() {
-            Some(Modal::Studio(studio)) => assert!(studio.lines.is_empty()),
-            other => panic!("{other:?}"),
-        }
+        assert!(app.studio.lines.is_empty(), "a stale read is dropped");
         let _ = update(
             &mut app,
             Msg::TemplateViewLoaded {
-                slug: "general".to_string(),
-                lines: vec!["General".to_string()],
+                slug: "client-project".to_string(),
+                lines: vec!["Client project".to_string()],
             },
         );
-        match app.modals.top() {
-            Some(Modal::Studio(studio)) => assert_eq!(studio.lines, vec!["General".to_string()]),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(app.studio.lines, vec!["Client project".to_string()]);
     }
 
     #[test]
@@ -1669,15 +1753,19 @@ mod studio {
             other => panic!("expected a save, got {other:?}"),
         }
         assert!(
-            matches!(app.modals.top(), Some(Modal::Studio(_))),
-            "the builder closed onto the studio it came from"
+            app.modals.is_empty(),
+            "the builder closed onto the tab it came from"
         );
+        assert_eq!(app.screen, fastf::tui::app::Screen::Templates);
     }
 
     #[test]
     fn editing_reads_the_template_and_remembers_what_it_was_called() {
         let mut app = fixture(6, 120, 40);
         press(&mut app, Key::ch('T'));
+        // Down once: not the first row, so the read is plainly the selected
+        // one and not whatever happens to sort first.
+        press(&mut app, Key::plain(KeyCode::Down));
         let effects = press(&mut app, Key::ch('e'));
         assert!(
             matches!(&effects[..], [Effect::LoadTemplateSource { slug }] if slug == "general"),
@@ -1787,9 +1875,11 @@ mod studio {
         press(&mut app, Key::ch('T'));
         press(&mut app, Key::ch('D'));
         match app.modals.top() {
-            Some(Modal::Confirm(confirm)) => {
-                assert!(confirm.prompt.contains("general"), "{}", confirm.prompt)
-            }
+            Some(Modal::Confirm(confirm)) => assert!(
+                confirm.prompt.contains("client-project"),
+                "{}",
+                confirm.prompt
+            ),
             other => panic!("expected a confirm, got {other:?}"),
         }
         let effects = press(&mut app, Key::ch('n'));
@@ -1797,7 +1887,9 @@ mod studio {
 
         press(&mut app, Key::ch('D'));
         let effects = press(&mut app, Key::ch('y'));
-        assert!(matches!(action_of(&effects), Action::DeleteTemplate(slug) if slug == "general"));
+        assert!(
+            matches!(action_of(&effects), Action::DeleteTemplate(slug) if slug == "client-project")
+        );
     }
 
     #[test]
@@ -2156,10 +2248,6 @@ mod mouse {
         click(&mut app, detail.x + 2, detail.y + 2);
         assert_eq!(app.focus, Focus::Detail);
 
-        let strip = regions.strip.expect("40 rows has the strip");
-        click(&mut app, strip.x + 2, strip.y + 1);
-        assert_eq!(app.focus, Focus::Templates);
-
         click(&mut app, regions.search.x + 2, regions.search.y);
         assert!(app.search.editing, "the bar is where you type");
     }
@@ -2378,10 +2466,12 @@ fn help_opens_over_any_dialog_for_that_dialogs_context() {
 }
 
 #[test]
-fn the_studio_and_the_builder_answer_their_declared_keys() {
+fn the_templates_tab_and_the_builder_answer_their_declared_keys() {
+    use fastf::tui::app::Screen;
+
     let mut app = fixture(3, 120, 40);
     let _ = press(&mut app, Key::ch('T'));
-    assert!(matches!(app.modals.top(), Some(Modal::Studio(_))));
+    assert_eq!(app.screen, Screen::Templates);
     let _ = press(&mut app, Key::ch('D'));
     assert!(
         matches!(app.modals.top(), Some(Modal::Confirm(_))),
@@ -2394,7 +2484,7 @@ fn the_studio_and_the_builder_answer_their_declared_keys() {
     );
     let _ = press(&mut app, Key::ch('n'));
     assert!(
-        matches!(app.modals.top(), Some(Modal::Studio(_))),
+        app.modals.is_empty(),
         "n answers no and closes the confirmation"
     );
     let _ = press(&mut app, Key::ch('n'));
@@ -2404,12 +2494,14 @@ fn the_studio_and_the_builder_answer_their_declared_keys() {
     );
     let _ = press(&mut app, Key::plain(KeyCode::Esc));
     assert!(
-        matches!(app.modals.top(), Some(Modal::Studio(_))),
-        "Esc on the section list discards and returns to the studio"
+        app.modals.is_empty(),
+        "Esc on the section list discards and returns to the tab"
     );
+    assert_eq!(app.screen, Screen::Templates);
     assert!(app.status.text.contains("Discarded"));
-    let _ = press(&mut app, Key::ch('q'));
-    assert!(app.modals.is_empty(), "q closes the studio");
+    // Esc again is one more level out: the tab you came from.
+    let _ = press(&mut app, Key::plain(KeyCode::Esc));
+    assert_eq!(app.screen, Screen::Library);
 }
 
 #[test]
@@ -2595,6 +2687,7 @@ fn a_tag_over_marks_is_asked_once_and_runs_as_a_job_in_display_order() {
             id1,
             ListChange::Patched {
                 project: Box::new(patched),
+                was: rows[0].clone(),
                 stale: vec![rows[0].clone()],
             },
         ),
@@ -2610,6 +2703,77 @@ fn a_tag_over_marks_is_asked_once_and_runs_as_a_job_in_display_order() {
             .contains(&"reviewed".to_string()),
         "the row shows the tag as soon as its item lands"
     );
+}
+
+/// **The batch's effects are the app's too.** They were dropped, so a
+/// `Reload` — which `discover` arms by setting `inflight` *before* returning
+/// the effect that answers it — left the app waiting on a generation nothing
+/// would send, and every later patch only set `dirty`. A batch re-derive of
+/// tags rewrote every file, showed nothing, and froze the list for the rest of
+/// the session.
+#[test]
+fn a_batch_item_returns_the_effects_its_change_asked_for() {
+    use fastf::tui::command::CommandId;
+
+    let mut app = fixture(12, 120, 40);
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch(' '));
+    let effects = app.run(CommandId::ReautoTags);
+    let id1 = run_id(&effects);
+
+    let effects = update(&mut app, item_done(id1, ListChange::Reload));
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::Discover { .. })),
+        "a reload must reach the runtime: {effects:?}"
+    );
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::LoadSummary)),
+        "and so must the summary it asked for: {effects:?}"
+    );
+
+    // The discovery it armed is the one in flight, so its answer installs.
+    let generation = app.library.inflight.expect("a discovery is in flight");
+    update(
+        &mut app,
+        Msg::Discovered {
+            generation,
+            projects: sample_projects(12),
+        },
+    );
+    assert!(
+        app.library.inflight.is_none(),
+        "the list is not left waiting on a generation nothing will send"
+    );
+}
+
+/// Marks are kept by path and survive a filter change; `targets()` intersects
+/// them with the rows on screen. When the two disagreed, `batching()` said yes
+/// and every batch verb hit an early return with no picker, no dialog and no
+/// message — which is what "batch tagging does nothing" was.
+#[test]
+fn a_verb_aimed_at_marks_a_filter_hides_says_so() {
+    use fastf::tui::command::CommandId;
+
+    let mut app = fixture(12, 120, 40);
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch(' '));
+    assert_eq!(app.library.marks.len(), 2);
+
+    // A query that keeps nothing the marks are on.
+    press(&mut app, Key::ch('/'));
+    type_text(&mut app, "zzzznothing");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(app.library.is_empty(), "the filter hides every marked row");
+
+    let effects = app.run(CommandId::AddTag);
+    assert!(app.modals.is_empty(), "no picker over nothing");
+    assert!(effects.is_empty());
+    assert!(
+        app.status.text.contains("every marked row is hidden"),
+        "the refusal has to be said out loud: {:?}",
+        app.status.text
+    );
+    assert_eq!(app.library.marks.len(), 2, "the marks are not touched");
 }
 
 #[test]

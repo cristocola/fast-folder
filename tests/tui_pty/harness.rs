@@ -153,11 +153,16 @@ pub(crate) fn app_cursor(transcript: &str) -> (u16, u16) {
     parser.screen().cursor_position()
 }
 
-/// The frame the app showed at `until` into a chunked run: the transcript up
-/// to that moment, replayed. For a screenshot of a state the script then
-/// leaves — a dialog it closes on the way out.
-pub(crate) fn screen_at(chunks: &[(Duration, Vec<u8>)], until: Duration) -> String {
-    let mut parser = vt100::Parser::new(pty::PTY_ROWS, pty::PTY_COLS, 0);
+/// The frame the app showed at `until` into a chunked run in a `cols` × `rows`
+/// window: the transcript up to that moment, replayed. For a screenshot of a
+/// state the script then leaves — a dialog it closes on the way out.
+pub(crate) fn screen_at_sized(
+    chunks: &[(Duration, Vec<u8>)],
+    until: Duration,
+    cols: u16,
+    rows: u16,
+) -> String {
+    let mut parser = vt100::Parser::new(rows, cols, 0);
     parser.process(&pty::until(chunks, until));
     parser.screen().contents()
 }

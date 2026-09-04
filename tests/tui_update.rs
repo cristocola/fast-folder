@@ -704,7 +704,7 @@ fn notes_run_their_actions_and_the_editor_suspends() {
     let mut app = fixture(12, 80, 24);
     let selected = app.library.selected().unwrap().clone();
     press(&mut app, Key::ctrl('n'));
-    assert!(matches!(app.modals.top(), Some(Modal::TextPrompt(_))));
+    assert!(matches!(app.modals.top(), Some(Modal::Note(_))));
     type_text(&mut app, "mixing started");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(matches!(
@@ -772,9 +772,12 @@ fn an_action_done_removal_clamps_the_selection() {
     let doomed = app.library.selected().unwrap().path.clone();
     let name = app.library.selected().unwrap().name.clone();
 
-    // Delete with the exact name to confirm.
+    // Delete: the word confirms, and the prompt names the folder.
     press(&mut app, Key::ch('D'));
-    type_text(&mut app, &name);
+    assert!(
+        matches!(app.modals.top(), Some(Modal::TextPrompt(prompt)) if prompt.title.contains(&name))
+    );
+    type_text(&mut app, "delete");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     let id = match effects.as_slice() {
         [Effect::Run(id, _)] => *id,
@@ -799,20 +802,40 @@ fn an_action_done_removal_clamps_the_selection() {
 }
 
 #[test]
-fn a_typed_confirm_mismatch_deletes_nothing() {
+fn delete_asks_for_the_word_and_a_mismatch_deletes_nothing() {
     let mut app = fixture(12, 80, 24);
+    let name = app.library.selected().unwrap().name.clone();
     press(&mut app, Key::ch('D'));
-    type_text(&mut app, "not the name");
+    let Some(Modal::TextPrompt(prompt)) = app.modals.top() else {
+        panic!("delete asks in a text prompt");
+    };
+    assert!(
+        prompt.title.contains(&name) && prompt.title.contains("Type delete"),
+        "the question names the folder and the word: {}",
+        prompt.title
+    );
+    type_text(&mut app, "delet");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(effects.is_empty(), "nothing runs: {effects:?}");
-    assert!(app.modals.is_empty());
+    let Some(Modal::TextPrompt(prompt)) = app.modals.top() else {
+        panic!("a mismatch keeps the prompt up, text and all");
+    };
+    assert_eq!(prompt.input.text(), "delet");
     assert!(
-        app.status
-            .text
-            .contains("name did not match — nothing deleted"),
-        "{}",
-        app.status.text
+        prompt
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("type delete to confirm — nothing deleted")),
+        "{:?}",
+        prompt.error
     );
+    type_text(&mut app, "e");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(action_of(&effects), Action::Delete(_)),
+        "the word, any case, deletes: {effects:?}"
+    );
+    assert!(app.modals.is_empty());
 }
 
 #[test]
@@ -1001,10 +1024,18 @@ fn delete_over_marks_confirms_once_then_runs_each_item() {
     let first = app.library.row(0).unwrap().path.clone();
     let second = app.library.row(1).unwrap().path.clone();
 
-    // `D` over marks is a yes/no confirm, not the typed-name guard.
+    // `D` over marks asks for the same word, naming every folder.
     press(&mut app, Key::ch('D'));
-    assert!(matches!(app.modals.top(), Some(Modal::Confirm(_))));
-    let effects = press(&mut app, Key::ch('y'));
+    let Some(Modal::TextPrompt(prompt)) = app.modals.top() else {
+        panic!("delete asks in a text prompt");
+    };
+    assert!(
+        prompt.title.contains("these 2 projects"),
+        "the question counts the marks: {}",
+        prompt.title
+    );
+    type_text(&mut app, "DELETE");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
     let id1 = run_id(&effects);
     assert!(matches!(action_of(&effects), Action::Delete(project) if project.path == first));
     assert!(app.job.is_some(), "a job is running");
@@ -1054,7 +1085,8 @@ fn a_failed_item_keeps_its_mark_and_opens_a_report() {
     let doomed = app.library.selected().unwrap().path.clone();
     press(&mut app, Key::ch(' '));
     press(&mut app, Key::ch('D'));
-    let effects = press(&mut app, Key::ch('y'));
+    type_text(&mut app, "delete");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
     let id = run_id(&effects);
 
     let effects = update(
@@ -1092,7 +1124,8 @@ fn esc_cancels_a_job_and_the_rest_stay_marked() {
     let first = app.library.row(0).unwrap().path.clone();
     let second = app.library.row(1).unwrap().path.clone();
     press(&mut app, Key::ch('D'));
-    let effects = press(&mut app, Key::ch('y'));
+    type_text(&mut app, "delete");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
     let id1 = run_id(&effects);
     assert_eq!(app.job.as_ref().unwrap().pending.len(), 1);
 
@@ -2512,4 +2545,146 @@ fn the_too_small_guard_keeps_the_quit_gestures_honest() {
     );
     let effects = press(&mut app, Key::ch('q'));
     assert!(matches!(effects.first(), Some(Effect::Quit(Exit::Normal))));
+}
+
+// --- every verb over the marks ------------------------------------------------
+
+#[test]
+fn a_tag_over_marks_is_asked_once_and_runs_as_a_job_in_display_order() {
+    let mut app = fixture(12, 120, 40);
+    press(&mut app, Key::ch(' ')); // mark row 0
+    press(&mut app, Key::ch(' ')); // mark row 1
+    press(&mut app, Key::ch(' ')); // mark row 2
+    let rows: Vec<PathBuf> = (0..3)
+        .map(|row| app.library.row(row).unwrap().path.clone())
+        .collect();
+
+    press(&mut app, Key::ch('A'));
+    let Some(Modal::Pick(pick)) = app.modals.top() else {
+        panic!("A opens the tag picker");
+    };
+    assert!(pick.title.contains("3 projects"), "{}", pick.title);
+    // Type a new tag rather than pick one.
+    let new_tag = pick
+        .items
+        .iter()
+        .position(|item| item.value == fastf::tui::app::actions::NEW_TAG)
+        .expect("the picker offers a new tag");
+    for _ in 0..new_tag {
+        press(&mut app, Key::plain(KeyCode::Down));
+    }
+    press(&mut app, Key::plain(KeyCode::Enter));
+    type_text(&mut app, "reviewed");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+
+    let job = app.job.as_ref().expect("a tag job is running");
+    assert!(matches!(&job.kind, fastf::tui::app::jobs::JobKind::AddTag(tag) if tag == "reviewed"));
+    assert_eq!(job.pending.len(), 2, "one in flight, two to go");
+    let id1 = run_id(&effects);
+    assert!(
+        matches!(action_of(&effects), Action::AddTag { project, tag } if project.path == rows[0] && tag == "reviewed")
+    );
+
+    // The first item lands patched; the next starts; the mark stays until the
+    // row changes say it is done.
+    let mut patched = app.library.row(0).unwrap().clone();
+    patched.tags.push("reviewed".to_string());
+    let effects = update(
+        &mut app,
+        item_done(
+            id1,
+            ListChange::Patched {
+                project: Box::new(patched),
+                stale: vec![rows[0].clone()],
+            },
+        ),
+    );
+    assert!(
+        matches!(action_of(&effects), Action::AddTag { project, .. } if project.path == rows[1])
+    );
+    assert!(
+        app.library
+            .row(0)
+            .unwrap()
+            .tags
+            .contains(&"reviewed".to_string()),
+        "the row shows the tag as soon as its item lands"
+    );
+}
+
+#[test]
+fn a_quick_note_takes_several_lines_and_goes_to_every_mark() {
+    let mut app = fixture(12, 120, 40);
+    press(&mut app, Key::ctrl('n'));
+    assert!(matches!(app.modals.top(), Some(Modal::Note(note)) if note.count == 1));
+    type_text(&mut app, "first cut");
+    let mut alt_enter = Key::plain(KeyCode::Enter);
+    alt_enter.alt = true;
+    press(&mut app, alt_enter);
+    type_text(&mut app, "due Friday");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(action_of(&effects), Action::AppendNote { text, .. } if text == "first cut\ndue Friday"),
+        "Enter saves, Alt-Enter broke the line: {effects:?}"
+    );
+    assert!(app.modals.is_empty());
+
+    // Over marks the note is asked once and becomes a job.
+    let mut app = fixture(12, 120, 40);
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ctrl('n'));
+    assert!(matches!(app.modals.top(), Some(Modal::Note(note)) if note.count == 2));
+    let _ = update(&mut app, Msg::Paste("line one\nline two\n".to_string()));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(&app.job.as_ref().unwrap().kind, fastf::tui::app::jobs::JobKind::Note(text) if text == "line one\nline two"),
+        "a pasted paragraph is one note"
+    );
+    assert!(matches!(action_of(&effects), Action::AppendNote { .. }));
+}
+
+#[test]
+fn a_paste_never_becomes_keystrokes() {
+    let mut app = fixture(12, 120, 40);
+    let before = app.library.selected().unwrap().path.clone();
+    // Nothing takes typing: the paste is ignored and said so.
+    let effects = update(&mut app, Msg::Paste("D\ndelete\n".to_string()));
+    assert!(effects.is_empty() && app.modals.is_empty());
+    assert_eq!(app.library.selected().unwrap().path, before);
+    assert!(
+        app.status.text.contains("pasted text ignored"),
+        "{}",
+        app.status.text
+    );
+
+    // A single-line field keeps the first line and says so.
+    press(&mut app, Key::ch('r'));
+    press(&mut app, Key::ctrl('u')); // the prompt opens on the old name
+    let _ = update(&mut app, Msg::Paste("New_Name\nq\nD".to_string()));
+    let Some(Modal::TextPrompt(prompt)) = app.modals.top() else {
+        panic!("the rename prompt is still up");
+    };
+    assert_eq!(prompt.input.text(), "New_Name");
+    assert!(
+        app.status.text.contains("kept the first"),
+        "{}",
+        app.status.text
+    );
+}
+
+#[test]
+fn rename_does_not_batch_and_says_so() {
+    let mut app = fixture(12, 120, 40);
+    press(&mut app, Key::ch(' '));
+    let effects = press(&mut app, Key::ch('r'));
+    assert!(effects.is_empty() && app.modals.is_empty());
+    assert!(
+        app.status.text.contains("one folder at a time"),
+        "{}",
+        app.status.text
+    );
+    press(&mut app, Key::ch('-'));
+    press(&mut app, Key::ch('r'));
+    assert!(matches!(app.modals.top(), Some(Modal::TextPrompt(_))));
 }

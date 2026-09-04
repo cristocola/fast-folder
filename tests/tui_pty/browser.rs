@@ -117,12 +117,13 @@ fn a_delete_drops_its_row_without_rescanning_the_library() {
     plant_dated_project(&sb, "Kept_Project", "ID0001", "2026-01-01T00:00:00Z", 128);
     let trace = sb.tmp.path().join("trace");
 
-    // The newest row, Doomed_Project, is selected: `D` asks for its name.
+    // The newest row, Doomed_Project, is selected: `D` names it and asks
+    // for the word.
     let script = pty::Script::new()
         .pause(800)
         .key("D")
         .pause(400)
-        .line("Doomed_Project") // typed confirmation
+        .line("delete") // typed confirmation
         .pause(1200)
         .key(KEY_QUIT)
         .build();
@@ -686,5 +687,55 @@ fn the_sort_order_and_the_cursor_survive_a_restart() {
     assert!(
         screen.contains("▸ ID0002"),
         "the cursor should be back on the row it was left on:\n{screen}"
+    );
+}
+
+/// A tag over three marks is asked once and lands on every row, each row
+/// patched as its item finishes — and the library is not rescanned for it.
+#[cfg(debug_assertions)]
+#[test]
+fn a_tag_over_marks_lands_on_every_row_without_a_rescan() {
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Tag_C", "ID0003", "2026-03-03T00:00:00Z", 64);
+    plant_dated_project(&sb, "Tag_B", "ID0002", "2026-02-02T00:00:00Z", 64);
+    plant_dated_project(&sb, "Tag_A", "ID0001", "2026-01-01T00:00:00Z", 64);
+    let trace = sb.tmp.path().join("trace");
+
+    let script = pty::Script::new()
+        .pause(800)
+        .key(" ") // mark Tag_C
+        .key(" ") // mark Tag_B
+        .key(" ") // mark Tag_A
+        .pause(300)
+        .key("A") // → no known tags: the text prompt
+        .pause(400)
+        .line("reviewed")
+        .pause(2000) // three writes and their row patches
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch_traced(&sb, script, &trace);
+    let text = pty::plain(&out);
+    let screen = app_screen(&out);
+
+    assert_eq!(code, 0, "a batch tag should end at the dashboard:\n{text}");
+    assert!(
+        text.contains("3 tagged"),
+        "the batch should report:\n{text}"
+    );
+    for name in ["Tag_A", "Tag_B", "Tag_C"] {
+        let shown = sb.ok(&["tag", "list", name]);
+        assert!(
+            shown.contains("reviewed"),
+            "{name} should carry the tag:\n{shown}"
+        );
+    }
+    assert!(
+        screen.lines().filter(|l| l.contains("reviewed")).count() >= 3,
+        "every row should show the tag:\n{screen}"
+    );
+    assert_eq!(
+        traced(&trace, "discover"),
+        1,
+        "a batch tag must not rescan the library"
     );
 }

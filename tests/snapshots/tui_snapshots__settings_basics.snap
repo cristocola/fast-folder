@@ -30,5 +30,5 @@ expression: frame
 "┌ templa│ where new projects are created — empty falls back to your home directory, never …│───────┐"
 "│  clien│ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │ate}_{…│"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
-" 12 of 12 projects   ·   ? for help                                                                 "
+" 12 of 12 projects   ·   Space marks a row for a batch   ·   ? for help                             "
 "                                                                                                    "

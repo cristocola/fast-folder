@@ -16,11 +16,15 @@
 //! alternate screen, so the frame includes whatever was printed above them.
 //!
 //! Tokens, whitespace-separated: `enter` `esc` `up` `down` `left` `right`
-//! `pgup` `pgdn` `home` `end` `tab` `space` `ctrl-c` `ctrl-s` `ctrl-k` `ctrl-u`,
-//! `wait:<ms>`,
+//! `pgup` `pgdn` `home` `end` `tab` `space` `backspace` `delete` `f1` `f5`,
+//! `ctrl-<letter>` for any control chord (`ctrl-c` `ctrl-s` `ctrl-n` `ctrl-t`
+//! `ctrl-u` `ctrl-k` `ctrl-r` `ctrl-z`), `alt-enter`, `wait:<ms>`,
 //! `type:<text>` (typed as-is, no Enter), and any other token is sent as the
 //! keys it spells (`q`, `/`, `?`, `c`). The frame is taken after the last
 //! token, before the script ends the app.
+//!
+//! `FASTF_SHOT_SIZE=80x24` runs the app in that window instead of the suite's
+//! 120×40, which is how the compact layout is looked at.
 //!
 //! The library is a sandbox of `FASTF_SHOT_PROJECTS` planted projects (eight
 //! by default) unless `FASTF_SHOT_REAL=1`, which runs against **your own**
@@ -45,6 +49,14 @@ fn screenshot() {
         .and_then(|n| n.parse().ok())
         .unwrap_or(8);
 
+    let (cols, rows) = std::env::var("FASTF_SHOT_SIZE")
+        .ok()
+        .and_then(|size| {
+            let (c, r) = size.split_once('x')?;
+            Some((c.parse().ok()?, r.parse().ok()?))
+        })
+        .unwrap_or((pty::PTY_COLS, pty::PTY_ROWS));
+
     let mut script = pty::Script::new().pause(1200);
     for token in keys.split_whitespace() {
         script = match token {
@@ -60,14 +72,25 @@ fn screenshot() {
             "end" => script.key("\x1b[F"),
             "tab" => script.key("\t"),
             "space" => script.key(" "),
+            "backspace" => script.key("\x7f"),
+            "delete" => script.key("\x1b[3~"),
+            "f1" => script.key("\x1bOP"),
+            "f5" => script.key("\x1b[15~"),
+            "alt-enter" => script.key("\x1b\r"),
             "ctrl-c" => script.ctrl_c(),
-            "ctrl-s" => script.key("\x13"),
-            "ctrl-u" => script.key("\x15"),
-            "ctrl-k" => script.key("\x0b"),
             other => match other.split_once(':') {
                 Some(("wait", ms)) => script.pause(ms.parse().unwrap_or(500)),
                 Some(("type", text)) => script.key(text),
-                _ => script.key(other),
+                _ => match other.strip_prefix("ctrl-") {
+                    // A control chord is the letter's position in the
+                    // alphabet: Ctrl-A is 0x01, Ctrl-Z 0x1a.
+                    Some(letter)
+                        if letter.len() == 1 && letter.as_bytes()[0].is_ascii_lowercase() =>
+                    {
+                        script.key(&((letter.as_bytes()[0] - b'a' + 1) as char).to_string())
+                    }
+                    _ => script.key(other),
+                },
             },
         };
     }
@@ -90,15 +113,13 @@ fn screenshot() {
         ]
     };
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-    let (chunks, code) = pty::run_chunked(common::FASTF, &argv, &env, &script, DEADLINE);
-    let screen = screen_at(&chunks, taken);
+    let (chunks, code) =
+        pty::run_chunked_sized(cols, rows, common::FASTF, &argv, &env, &script, DEADLINE);
+    let screen = screen_at_sized(&chunks, taken, cols, rows);
 
     println!();
-    println!(
-        "── screen {}×{} after `{keys}` (exit {code}) ──",
-        pty::PTY_COLS,
-        pty::PTY_ROWS
-    );
+    println!("── screen {cols}×{rows} after `{keys}` (exit {code}) ──");
+
     for line in screen.lines() {
         println!("{line}");
     }

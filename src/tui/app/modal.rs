@@ -4,7 +4,7 @@
 //! pops one. What a picker's answer *means* is data (`Then`), not a closure,
 //! so `update` stays inspectable.
 
-use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, TextPrompt};
+use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, NoteState, TextPrompt};
 use crate::tui::app::palette::PaletteState;
 use crate::tui::app::settings::{Onboarding, SettingsState};
 use crate::tui::app::studio::{Builder, Studio};
@@ -112,8 +112,11 @@ pub enum Modal {
     Pick(PickState),
     /// The selected project's action menu.
     Actions(ActionsState),
-    /// A single-line prompt (rename, add a tag, a quick note, delete confirm).
+    /// A single-line prompt (rename, add a tag, the delete confirmation).
     TextPrompt(TextPrompt),
+    /// The quick journal note: a few lines, Enter saves.
+    Note(NoteState),
+
     /// A yes/no question; a bare `y`/`n` answers.
     Confirm(Confirm),
     /// A list where Space toggles and Enter confirms the picked set.

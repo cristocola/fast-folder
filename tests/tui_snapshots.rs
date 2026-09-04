@@ -150,9 +150,10 @@ fn action_menu_open() {
 fn delete_typed_confirm() {
     let mut app = fixture(12, 100, 30);
     let _ = update(&mut app, Msg::Key(Key::ch('D')));
-    for c in "2026-08-28_Lullaby_Remix_ID0248".chars() {
+    for c in "delet".chars() {
         let _ = update(&mut app, Msg::Key(Key::ch(c)));
     }
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
     snap("delete_typed_confirm", render_to_string(&app, 100, 30));
 }
 
@@ -245,7 +246,10 @@ fn job_progress_modal() {
         let _ = update(&mut app, Msg::Key(Key::ch(' ')));
     }
     let _ = update(&mut app, Msg::Key(Key::ch('D')));
-    let _ = update(&mut app, Msg::Key(Key::ch('y')));
+    for c in "delete".chars() {
+        let _ = update(&mut app, Msg::Key(Key::ch(c)));
+    }
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
     let job = app.job.as_ref().expect("the job is running");
     assert_eq!(job.pending.len(), 2);
     assert!(job.inflight.is_some());
@@ -289,7 +293,10 @@ fn job_report_with_failures() {
         let _ = update(&mut app, Msg::Key(Key::ch(' ')));
     }
     let _ = update(&mut app, Msg::Key(Key::ch('D')));
-    let effects = update(&mut app, Msg::Key(Key::ch('y')));
+    for c in "delete".chars() {
+        let _ = update(&mut app, Msg::Key(Key::ch(c)));
+    }
+    let effects = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
     let id1 = match effects.as_slice() {
         [fastf::tui::effect::Effect::Run(id, _)] => *id,
         other => panic!("expected one run, got {other:?}"),

@@ -7,59 +7,86 @@
 //! marks carry the retry state: a row whose item failed or never ran keeps its
 //! mark, and one whose item succeeded loses it with its row change.
 //!
-//! Only the destructive and relocating verbs batch (delete, unregister, move):
-//! acting on a run of folders is what the marks are for. Rename stays single —
-//! every row would need its own name.
+//! Every verb that means the same thing for each of several projects batches:
+//! delete, unregister and move, and the tags and the notes — select three,
+//! add a tag; select five, add the same note. Acting on a run of folders is
+//! what the marks are for. Rename stays single: every row would need its own
+//! name.
 
 use std::path::PathBuf;
 
 use crate::core::library::Project;
 use crate::tui::effect::Action;
 
-/// What one batch does to each of its items.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What one batch does to each of its items. The answer the verb needed —
+/// the tag, the note, the base — was asked once and travels with the kind.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobKind {
     Delete,
     Unregister,
     /// Move every item into the one picked base.
     Move,
+    /// Add the one tag to every item.
+    AddTag(String),
+    /// Take the picked tags off every item that has them.
+    RemoveTags(Vec<String>),
+    /// Recompute every item's template-derived tags.
+    ReautoTags,
+    /// Append the one note to every item's journal.
+    Note(String),
 }
 
 impl JobKind {
     /// The progress wording, in the imperative the runtime uses.
-    pub fn verb(self) -> &'static str {
+    pub fn verb(&self) -> &'static str {
         match self {
             JobKind::Delete => "deleting",
             JobKind::Unregister => "unregistering",
             JobKind::Move => "moving",
+            JobKind::AddTag(_) => "tagging",
+            JobKind::RemoveTags(_) => "untagging",
+            JobKind::ReautoTags => "re-deriving tags for",
+            JobKind::Note(_) => "noting",
         }
     }
 
     /// The busy label while one item runs, matching the single-verb wording.
-    pub fn busy(self) -> &'static str {
+    pub fn busy(&self) -> &'static str {
         match self {
             JobKind::Delete => "deleting…",
             JobKind::Unregister => "unregistering…",
             JobKind::Move => "moving…",
+            JobKind::AddTag(_) => "tagging…",
+            JobKind::RemoveTags(_) => "removing tags…",
+            JobKind::ReautoTags => "re-deriving tags…",
+            JobKind::Note(_) => "adding a note…",
         }
     }
 
     /// The finished report's headline, e.g. "3 deleted".
-    pub fn done(self, count: usize) -> String {
+    pub fn done(&self, count: usize) -> String {
         let noun = match self {
             JobKind::Delete => "deleted",
             JobKind::Unregister => "unregistered",
             JobKind::Move => "moved",
+            JobKind::AddTag(_) => "tagged",
+            JobKind::RemoveTags(_) => "untagged",
+            JobKind::ReautoTags => "re-derived",
+            JobKind::Note(_) => "noted",
         };
         format!("{count} {noun}")
     }
 
     /// The report modal's title.
-    pub fn report_title(self) -> String {
+    pub fn report_title(&self) -> String {
         let noun = match self {
             JobKind::Delete => "delete",
             JobKind::Unregister => "unregister",
             JobKind::Move => "move",
+            JobKind::AddTag(_) => "tag",
+            JobKind::RemoveTags(_) => "untag",
+            JobKind::ReautoTags => "re-derive",
+            JobKind::Note(_) => "note",
         };
         format!("{noun} report")
     }
@@ -133,12 +160,26 @@ impl Job {
 
     /// The `Action` one item of this job is.
     pub fn action_for(&self, project: &Project) -> Action {
-        match self.kind {
-            JobKind::Delete => Action::Delete(Box::new(project.clone())),
-            JobKind::Unregister => Action::Unregister(Box::new(project.clone())),
+        let project = Box::new(project.clone());
+        match &self.kind {
+            JobKind::Delete => Action::Delete(project),
+            JobKind::Unregister => Action::Unregister(project),
             JobKind::Move => Action::Move {
-                project: Box::new(project.clone()),
+                project,
                 target: self.target.clone().expect("a move job carries its target"),
+            },
+            JobKind::AddTag(tag) => Action::AddTag {
+                project,
+                tag: tag.clone(),
+            },
+            JobKind::RemoveTags(tags) => Action::RemoveTags {
+                project,
+                tags: tags.clone(),
+            },
+            JobKind::ReautoTags => Action::ReautoTags(project),
+            JobKind::Note(text) => Action::AppendNote {
+                project,
+                text: text.clone(),
             },
         }
     }
@@ -235,7 +276,7 @@ mod tests {
             Action::Unregister(_)
         ));
         let target = PathBuf::from("/mnt/archive");
-        match Job::new(JobKind::Move, projects, Some(target.clone())).action_for(&item) {
+        match Job::new(JobKind::Move, projects.clone(), Some(target.clone())).action_for(&item) {
             Action::Move {
                 project,
                 target: got,
@@ -245,6 +286,23 @@ mod tests {
             }
             other => panic!("expected a move, got {other:?}"),
         }
+        // The tag and the note were asked once and ride with the kind.
+        match Job::new(JobKind::AddTag("draft".into()), projects.clone(), None).action_for(&item) {
+            Action::AddTag { project, tag } => {
+                assert_eq!(*project, item);
+                assert_eq!(tag, "draft");
+            }
+            other => panic!("expected a tag, got {other:?}"),
+        }
+        match Job::new(JobKind::Note("first cut".into()), projects, None).action_for(&item) {
+            Action::AppendNote { project, text } => {
+                assert_eq!(*project, item);
+                assert_eq!(text, "first cut");
+            }
+            other => panic!("expected a note, got {other:?}"),
+        }
+        assert_eq!(JobKind::AddTag("x".into()).done(3), "3 tagged");
+        assert_eq!(JobKind::Note("x".into()).report_title(), "note report");
     }
 
     #[test]

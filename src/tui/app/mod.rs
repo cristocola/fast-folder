@@ -26,7 +26,9 @@ use ratatui::layout::Rect;
 
 use crate::core::assets::Progress;
 use crate::core::library::Project;
-use crate::tui::app::actions::{Confirm, ConfirmThen, MultiPick, MultiThen, TextPrompt, TextThen};
+use crate::tui::app::actions::{
+    Confirm, ConfirmThen, MultiPick, MultiThen, NoteState, TextPrompt, TextThen,
+};
 use crate::tui::command::{self, Availability, CommandId, Context, Key};
 use crate::tui::effect::{
     Action, ActionId, ActionOutcome, ApplyRequest, CreateRequest, Effect, Exit, FollowUp,
@@ -673,7 +675,12 @@ impl App {
                 self.session = crate::tui::frame::recent_actions();
                 match text {
                     Some(text) if !text.trim().is_empty() => {
-                        self.run_action("adding a note…", Action::AppendNote { project, text })
+                        if self.batching() {
+                            // The editor ran once; the note goes to every mark.
+                            self.start_job(jobs::JobKind::Note(text), None)
+                        } else {
+                            self.run_action("adding a note…", Action::AppendNote { project, text })
+                        }
                     }
                     _ => {
                         self.info("no note written");
@@ -681,6 +688,7 @@ impl App {
                     }
                 }
             }
+
             Msg::Diag(level, text) => {
                 match level {
                     Level::Warn => self.warn(format!("warning: {text}")),
@@ -798,26 +806,43 @@ impl App {
         Vec::new()
     }
 
+    /// Pasted text goes into whichever field has the caret, and nowhere
+    /// else. A single-line field takes the first line and says how many it
+    /// dropped; a text area takes them all; with no field open the paste is
+    /// ignored and said so — it is never read as keystrokes, which is how a
+    /// pasted paragraph once ran a dozen commands.
     fn on_paste(&mut self, text: &str) -> Vec<Effect> {
-        match self.modals.top_mut() {
+        let lines = text.lines().count();
+        let first = text.lines().next().unwrap_or_default().to_string();
+        let dropped = lines.saturating_sub(1);
+        let mut kept_first = false;
+        let effects = match self.modals.top_mut() {
             Some(Modal::Palette(palette)) => {
-                palette.input.paste(text);
+                palette.input.paste(&first);
+                kept_first = true;
                 self.refresh_palette();
                 Vec::new()
             }
             Some(Modal::Pick(pick)) => {
-                pick.query.paste(text);
+                pick.query.paste(&first);
+                kept_first = true;
                 pick.rank(&mut self.fuzzy);
                 Vec::new()
             }
             Some(Modal::TextPrompt(prompt)) => {
-                prompt.input.paste(text);
+                prompt.input.paste(&first);
                 prompt.error = None;
+                kept_first = true;
+                Vec::new()
+            }
+            Some(Modal::Note(note)) => {
+                note.area.paste(text);
                 Vec::new()
             }
             Some(Modal::Flow(flow)) => {
                 if let Some(field) = flow.form.focused_mut() {
-                    field.paste(text);
+                    field.paste(&first);
+                    kept_first = true;
                 }
                 Vec::new()
             }
@@ -825,14 +850,16 @@ impl App {
                 match &mut builder.open {
                     Some(Open::Metadata(form)) | Some(Open::Id(form)) => {
                         if let Some(field) = form.focused_mut() {
-                            field.paste(text);
+                            field.paste(&first);
+                            kept_first = true;
                         }
                     }
                     Some(Open::Variables(list)) => {
                         if let Some((_, form)) = &mut list.editing
                             && let Some(field) = form.focused_mut()
                         {
-                            field.paste(text);
+                            field.paste(&first);
+                            kept_first = true;
                         }
                     }
                     Some(Open::Structure(area)) => area.paste(text),
@@ -841,7 +868,8 @@ impl App {
                             if edit.in_body {
                                 edit.body.paste(text);
                             } else {
-                                edit.path.paste(text);
+                                edit.path.paste(&first);
+                                kept_first = true;
                             }
                         }
                     }
@@ -849,13 +877,43 @@ impl App {
                 }
                 Vec::new()
             }
-            Some(_) => Vec::new(),
+            Some(Modal::Settings(state)) => {
+                match &mut state.editing {
+                    Some(Editing::Value { input, error, .. }) => {
+                        input.paste(&first);
+                        *error = None;
+                        kept_first = true;
+                    }
+                    Some(Editing::Bases { area, .. }) => area.paste(text),
+                    None => {}
+                }
+                Vec::new()
+            }
+            Some(Modal::Onboarding(state)) => {
+                state.input.paste(&first);
+                kept_first = true;
+                Vec::new()
+            }
+            Some(_) => {
+                self.info("pasted text ignored — nothing here takes typing");
+                Vec::new()
+            }
             None if self.search.editing => {
-                self.search.input.paste(text);
+                self.search.input.paste(&first);
+                kept_first = true;
                 self.after_query_change()
             }
-            None => Vec::new(),
+            None => {
+                self.info("pasted text ignored — press / to search, or open a field first");
+                Vec::new()
+            }
+        };
+        if kept_first && dropped > 0 {
+            self.warn(format!(
+                "pasted {lines} lines — kept the first, this field takes one"
+            ));
         }
+        effects
     }
 
     // --- the mouse --------------------------------------------------------
@@ -1055,6 +1113,7 @@ impl App {
             Some(Modal::Pick(_)) => self.on_pick_key(key),
             Some(Modal::Actions(_)) => self.on_actions_key(key),
             Some(Modal::TextPrompt(_)) => self.on_text_prompt_key(key),
+            Some(Modal::Note(_)) => self.on_note_key(key),
             Some(Modal::Confirm(_)) => self.on_confirm_key(key),
             Some(Modal::MultiPick(_)) => self.on_multi_pick_key(key),
             Some(Modal::Flow(_)) => self.on_flow_key(key),
@@ -1147,33 +1206,7 @@ impl App {
                 if tag.is_empty() {
                     return Vec::new();
                 }
-                let Some(project) = project else {
-                    return Vec::new();
-                };
-                self.run_action(
-                    "tagging…",
-                    Action::AddTag {
-                        project: Box::new(project),
-                        tag,
-                    },
-                )
-            }
-            TextThen::Note => {
-                self.modals.pop();
-                let message = text.trim().to_string();
-                if message.is_empty() {
-                    return Vec::new();
-                }
-                let Some(project) = project else {
-                    return Vec::new();
-                };
-                self.run_action(
-                    "adding a note…",
-                    Action::AppendNote {
-                        project: Box::new(project),
-                        text: message,
-                    },
-                )
+                self.add_tag(tag)
             }
             TextThen::RaiseCounter => {
                 self.modals.pop();
@@ -1188,16 +1221,104 @@ impl App {
                     }
                 }
             }
-            TextThen::Delete { expect } => {
-                self.modals.pop();
-                if text.trim() != expect {
-                    self.warn(validators::DELETE_MISMATCH);
+            TextThen::Delete => {
+                if !text.trim().eq_ignore_ascii_case(validators::DELETE_WORD) {
+                    // The text stays: one Backspace fixes a typo.
+                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                        prompt.error = Some(validators::DELETE_MISMATCH.to_string());
+                    }
                     return Vec::new();
+                }
+                self.modals.pop();
+                if self.batching() {
+                    return self.start_job(jobs::JobKind::Delete, None);
                 }
                 let Some(project) = project else {
                     return Vec::new();
                 };
                 self.run_action("deleting…", Action::Delete(Box::new(project)))
+            }
+        }
+    }
+
+    /// Whether a verb acts on the marks rather than the selection.
+    fn batching(&self) -> bool {
+        !self.library.marks.is_empty()
+    }
+
+    /// The folder names a confirmation is about: the marks, or the selection.
+    fn target_names(&self) -> Vec<String> {
+        self.library
+            .targets()
+            .iter()
+            .map(|project| project.name.clone())
+            .collect()
+    }
+
+    /// One tag, on the selection or on every mark.
+    fn add_tag(&mut self, tag: String) -> Vec<Effect> {
+        if self.batching() {
+            return self.start_job(jobs::JobKind::AddTag(tag), None);
+        }
+        let Some(project) = self.library.selected().cloned() else {
+            return Vec::new();
+        };
+        self.run_action(
+            "tagging…",
+            Action::AddTag {
+                project: Box::new(project),
+                tag,
+            },
+        )
+    }
+
+    /// One note, on the selection or on every mark.
+    fn add_note(&mut self, text: String) -> Vec<Effect> {
+        if self.batching() {
+            return self.start_job(jobs::JobKind::Note(text), None);
+        }
+        let Some(project) = self.library.selected().cloned() else {
+            return Vec::new();
+        };
+        self.run_action(
+            "adding a note…",
+            Action::AppendNote {
+                project: Box::new(project),
+                text,
+            },
+        )
+    }
+
+    /// The quick note: Enter saves, Alt-Enter breaks a line, Esc cancels;
+    /// everything else is the text area's.
+    fn on_note_key(&mut self, key: Key) -> Vec<Effect> {
+        match key.code {
+            KeyCode::Esc if !key.ctrl => {
+                self.modals.pop();
+                Vec::new()
+            }
+            KeyCode::Enter if !key.alt && !key.ctrl => {
+                let Some(Modal::Note(note)) = self.modals.pop() else {
+                    return Vec::new();
+                };
+                let text = note.area.text().trim().to_string();
+                if text.is_empty() {
+                    self.info("no note written");
+                    return Vec::new();
+                }
+                self.add_note(text)
+            }
+            KeyCode::Enter => {
+                if let Some(Modal::Note(note)) = self.modals.top_mut() {
+                    note.area.apply(&Key::plain(KeyCode::Enter));
+                }
+                Vec::new()
+            }
+            _ => {
+                if let Some(Modal::Note(note)) = self.modals.top_mut() {
+                    note.area.apply(&key);
+                }
+                Vec::new()
             }
         }
     }
@@ -1262,6 +1383,9 @@ impl App {
             MultiThen::RemoveTags => {
                 if chosen.is_empty() {
                     return Vec::new();
+                }
+                if self.batching() {
+                    return self.start_job(jobs::JobKind::RemoveTags(chosen), None);
                 }
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();
@@ -1412,16 +1536,7 @@ impl App {
                             )));
                             return Vec::new();
                         }
-                        let Some(project) = self.library.selected().cloned() else {
-                            return Vec::new();
-                        };
-                        self.run_action(
-                            "tagging…",
-                            Action::AddTag {
-                                project: Box::new(project),
-                                tag: item.value.clone(),
-                            },
-                        )
+                        self.add_tag(item.value.clone())
                     }
                     Then::MoveToBase => {
                         let target = PathBuf::from(item.value.clone());
@@ -1855,37 +1970,51 @@ impl App {
             }
             CommandId::AddTag => self.open_add_tag(),
             CommandId::RemoveTags => {
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
-                };
-                if project.tags.is_empty() {
+                // Over marks the list is every tag any of them has; a project
+                // that lacks one of the picked tags is simply left as it is.
+                let targets = self.library.targets();
+                let mut tags: Vec<String> = targets
+                    .iter()
+                    .flat_map(|project| project.tags.iter().cloned())
+                    .collect();
+                tags.sort();
+                tags.dedup();
+                if tags.is_empty() {
                     self.warn("no tags to remove");
                     return Vec::new();
                 }
+                let title = if targets.len() > 1 {
+                    format!("Remove tags from {} projects", targets.len())
+                } else {
+                    "Remove tags".to_string()
+                };
                 self.modals.push(Modal::MultiPick(MultiPick::new(
-                    "Remove tags",
-                    project.tags.clone(),
+                    title,
+                    tags,
                     MultiThen::RemoveTags,
                 )));
                 Vec::new()
             }
             CommandId::ReautoTags => {
+                if self.batching() {
+                    return self.start_job(jobs::JobKind::ReautoTags, None);
+                }
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();
                 };
                 self.run_action("re-deriving tags…", Action::ReautoTags(Box::new(project)))
             }
             CommandId::AddNote => {
-                let Some(project) = self.library.selected().cloned() else {
+                // The editor opens once; over marks the text it comes back
+                // with goes to every one of them (`Msg::Resumed`).
+                let Some(project) = self.library.targets().into_iter().next() else {
                     return Vec::new();
                 };
                 vec![Effect::Suspend(Suspended::Note(Box::new(project)))]
             }
             CommandId::NoteInline => {
-                self.modals.push(Modal::TextPrompt(TextPrompt::new(
-                    validators::NOTE_PROMPT,
-                    TextThen::Note,
-                )));
+                let count = self.library.targets().len();
+                self.modals.push(Modal::Note(NoteState::new(count)));
                 Vec::new()
             }
             CommandId::Rename => {
@@ -1900,54 +2029,37 @@ impl App {
             }
             CommandId::Move => self.open_move_picker(),
             CommandId::Unregister => {
-                if !self.library.marks.is_empty() {
-                    let targets = self.library.targets();
-                    self.modals.push(Modal::Confirm(Confirm {
-                        prompt: format!(
-                            "Unregister {} project{}? Only PROJECT_INFO.md is removed — the files stay.",
-                            targets.len(),
-                            if targets.len() == 1 { "" } else { "s" }
-                        ),
-                        then: ConfirmThen::UnregisterBatch,
-                    }));
+                // Nothing is lost by unregistering, so a yes/no is enough —
+                // but the question names the folders it is about.
+                let names = self.target_names();
+                if names.is_empty() {
                     return Vec::new();
                 }
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
+                let then = if self.batching() {
+                    ConfirmThen::UnregisterBatch
+                } else {
+                    ConfirmThen::Unregister
                 };
                 self.modals.push(Modal::Confirm(Confirm {
-                    prompt: validators::unregister_prompt(&project.name),
-                    then: ConfirmThen::Unregister,
+                    prompt: validators::unregister_prompt(&names),
+                    then,
                 }));
                 Vec::new()
             }
             CommandId::Delete => {
-                if !self.library.marks.is_empty() {
-                    // The typed-name guard belongs to a single deletion; a
-                    // batch got its own yes/no confirmation instead.
-                    let targets = self.library.targets();
-                    self.modals.push(Modal::Confirm(Confirm {
-                        prompt: format!(
-                            "Delete {} project{} permanently? Everything inside the folders will be gone.",
-                            targets.len(),
-                            if targets.len() == 1 { "" } else { "s" }
-                        ),
-                        then: ConfirmThen::DeleteBatch,
-                    }));
+                // One word confirms a delete, single or batch, and the prompt
+                // names every folder it is about.
+                let names = self.target_names();
+                if names.is_empty() {
                     return Vec::new();
                 }
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
-                };
-                let prompt = validators::delete_prompt(&project.name);
                 self.modals.push(Modal::TextPrompt(TextPrompt::new(
-                    prompt,
-                    TextThen::Delete {
-                        expect: project.name.clone(),
-                    },
+                    validators::delete_prompt(&names),
+                    TextThen::Delete,
                 )));
                 Vec::new()
             }
+
             CommandId::ShowMetadata | CommandId::ShowJournal => self.open_view(id),
             CommandId::NewProject => self.open_create(),
             CommandId::Register => self.open_register(),
@@ -2988,18 +3100,26 @@ impl App {
         }
     }
 
-    /// `A`: pick a tag the library already uses, or type a new one.
+    /// `A`: pick a tag the library already uses, or type a new one. Over
+    /// marks the list is every known tag not already on all of them, and the
+    /// answer is asked once.
     fn open_add_tag(&mut self) -> Vec<Effect> {
-        let Some(project) = self.library.selected().cloned() else {
+        let targets = self.library.targets();
+        if targets.is_empty() {
             return Vec::new();
-        };
+        }
         let available: Vec<String> = self
             .library
             .known_tags
             .iter()
-            .filter(|tag| !project.tags.contains(tag))
+            .filter(|tag| !targets.iter().all(|project| project.tags.contains(tag)))
             .cloned()
             .collect();
+        let title = if targets.len() > 1 {
+            format!("Tag to add to {} projects", targets.len())
+        } else {
+            "Tag to add".to_string()
+        };
         if available.is_empty() {
             self.modals.push(Modal::TextPrompt(TextPrompt::new(
                 validators::ADD_TAG_PROMPT,
@@ -3007,6 +3127,7 @@ impl App {
             )));
             return Vec::new();
         }
+
         let mut items: Vec<PickItem> = available
             .into_iter()
             .map(|tag| PickItem {
@@ -3020,11 +3141,8 @@ impl App {
             detail: String::new(),
             value: crate::tui::app::actions::NEW_TAG.to_string(),
         });
-        self.modals.push(Modal::Pick(PickState::new(
-            "Tag to add",
-            items,
-            Then::AddTag,
-        )));
+        self.modals
+            .push(Modal::Pick(PickState::new(title, items, Then::AddTag)));
         Vec::new()
     }
 
@@ -3081,7 +3199,7 @@ impl App {
     /// item ran, or the job was cancelled — finish it.
     fn job_advance(&mut self) -> Vec<Effect> {
         let kind = match self.job.as_ref() {
-            Some(job) => job.kind,
+            Some(job) => job.kind.clone(),
             None => return Vec::new(),
         };
         let Some(project) = self.job.as_mut().and_then(|job| job.begin_next().cloned()) else {

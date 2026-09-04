@@ -183,10 +183,10 @@ keys that matter most:
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
 | `A`, Ctrl-T | add a tag (pick one the library already knows, or type a new one); remove tags |
-| `N`, Ctrl-N | a journal note in your `$EDITOR`; a one-line note typed where you are |
-| `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good |
+| `N`, Ctrl-N | a journal note in your `$EDITOR`; a short note typed where you are — Enter saves, Alt-Enter breaks a line, a pasted paragraph lands whole |
+| `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good — it names the folder and asks you to type `delete` |
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
-| Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — a verb then runs over **every mark** |
+| Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark** |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
 | `T`, `,` | the template studio, the settings |
 | `!` | check and recover — what `⚠ n needs attention` means |
@@ -298,9 +298,9 @@ dashboard as dialogs. `Enter` or `a` opens the action menu, and a verb's own
 key (`A`, `r`, `D`, `M`, …) runs straight to its dialog — from the list, and
 from inside the menu, which lists every key beside its verb. A tag you pick where
 the library already knows some, or type where it does not; remove-tags lists
-every tag on the project with a space to mark each; a typed confirmation —
-delete asks for the folder's name — keeps your text and says why it was
-refused when it does not match; `y` or `n` answers a yes/no without Enter. A
+every tag on the project with a space to mark each; delete names the folder
+and asks you to type the word `delete` — a typo keeps your text and says why
+it was refused; `y` or `n` answers a yes/no without Enter. A
 move shows its progress (phase and bytes) while it runs, cancelled with Esc
 or Ctrl-C. `N`
 drops out of the terminal into your `$EDITOR` and appends whatever you save to
@@ -310,21 +310,31 @@ scrollable with the arrow keys.
 **Marks make a verb a batch.** Space marks the row and steps on, so a run of
 marks is one keystroke per row; `*` marks everything the current view shows
 (what a search leaves behind stays unmarked); `-` clears; the search bar
-counts the marks. Once anything is marked, `m` moves every mark to the base
-you pick, and `D` and `u` confirm once — with the count — before running over
-every mark. The batch runs one item at a time in the order the rows are
-shown: each row is patched as its item lands, the modal names the project
-being acted on, and Esc, `q` or Ctrl-C stop after the current item. A row
-whose item failed keeps its mark, and the report that follows names the
-failures and how many are left marked — close it and the list is exactly the
-state on disk.
+counts the marks and the action menu's title says how many. Once anything is
+marked, every verb but rename acts on all of them, and asks its one question
+once: `A` adds one tag to each, Ctrl-T lists every tag any of them has and
+takes the ticked ones off each, Ctrl-N and `N` append the same note to each
+(the editor opens once), `m` moves every mark to the base you pick, and `D`
+and `u` name the folders and confirm once before running over them. The
+batch runs one item at a time in the order the rows are shown: each row is
+patched as its item lands, the modal names the project being acted on, and
+Esc, `q` or Ctrl-C stop after the current item. A row whose item failed keeps
+its mark, and the report that follows names the failures and how many are
+left marked — close it and the list is exactly the state on disk.
 
 In these flows **Esc backs out of anything**, one level at a time: every menu,
 every confirmation and every text field takes it, and nothing you have already
 answered is thrown away by leaving one. A value a prompt rejects — a folder that
-does not exist, a page size of 0, a slug with a space in it — stays on the line
-to be corrected rather than being cleared for you to type again, and the reason
-appears under it.
+does not exist, a recent limit of 0, a slug with a space in it — stays on the
+line to be corrected rather than being cleared for you to type again, and the
+reason appears under it.
+
+**Pasted text goes into a field, never to the keys.** A paste lands in
+whichever field has the caret: a text area takes every line, a single-line
+field takes the first and says how many it dropped, and with no field open the
+paste is ignored and said so. A terminal that cannot announce a paste delivers
+it as keystrokes; a run of them faster than a hand can type is taken as a paste
+all the same, so a paragraph pasted onto the dashboard never runs as commands.
 
 #### The mouse
 

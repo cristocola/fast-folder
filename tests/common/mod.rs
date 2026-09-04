@@ -525,6 +525,21 @@ pub mod pty {
         run_with_stdout(program, args, env, script, deadline, None)
     }
 
+    /// `run_chunked` in a window of `cols` × `rows` rather than the suite's
+    /// 120×40 — the screenshot tool's way of looking at the compact layout.
+    #[allow(dead_code)]
+    pub fn run_chunked_sized(
+        cols: u16,
+        rows: u16,
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        deadline: Duration,
+    ) -> (Vec<(Duration, Vec<u8>)>, i32) {
+        run_sized(cols, rows, program, args, env, script, deadline, None)
+    }
+
     /// The chunks that arrived before `until`, joined; what the screen was at
     /// that moment once replayed.
     pub fn until(chunks: &[(Duration, Vec<u8>)], until: Duration) -> Vec<u8> {
@@ -565,6 +580,29 @@ pub mod pty {
     }
 
     fn run_with_stdout(
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        deadline: Duration,
+        stdout_file: Option<&std::path::Path>,
+    ) -> (Vec<(Duration, Vec<u8>)>, i32) {
+        run_sized(
+            PTY_COLS,
+            PTY_ROWS,
+            program,
+            args,
+            env,
+            script,
+            deadline,
+            stdout_file,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_sized(
+        cols: u16,
+        rows: u16,
         program: &str,
         args: &[&str],
         env: &[(&str, &std::path::Path)],
@@ -628,11 +666,12 @@ pub mod pty {
         // pty with no size reports 0×0, which draws nothing. 120×40 is the
         // large layout — the detail pane, the template strip, the tall header.
         let winsize = libc::winsize {
-            ws_row: PTY_ROWS,
-            ws_col: PTY_COLS,
+            ws_row: rows,
+            ws_col: cols,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
+
         // SAFETY: a null termios requests the defaults; `master` is written by
         // the call and only read in the parent branch.
         let pid = unsafe {

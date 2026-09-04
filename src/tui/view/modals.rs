@@ -27,6 +27,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         Modal::Pick(pick) => Some(render_pick(app, pick, frame, area)),
         Modal::Actions(actions) => render_actions(app, actions, frame, area),
         Modal::TextPrompt(prompt) => Some(render_text_prompt(app, prompt, frame, area)),
+        Modal::Note(note) => Some(render_note(app, note, frame, area)),
         Modal::Confirm(confirm) => render_confirm(app, confirm, frame, area),
         Modal::MultiPick(pick) => render_multi_pick(app, pick, frame, area),
         Modal::Flow(flow) => render_flow(app, flow, frame, area),
@@ -301,9 +302,13 @@ fn render_actions(
     let area = crate::tui::layout::actions_box(area, entries.len());
     frame.render_widget(Clear, area);
     let project = app.library.selected();
-    let title = project
-        .map(|p| format!(" {} · actions ", p.id))
-        .unwrap_or_else(|| " actions ".to_string());
+    // Over marks the verbs act on every one of them, and the title says so.
+    let marked = app.library.marks.len();
+    let title = match project {
+        _ if marked > 0 => format!(" {marked} marked {} actions ", g.sep),
+        Some(p) => format!(" {} {} actions ", p.id, g.sep),
+        None => " actions ".to_string(),
+    };
     let block = frame_block(app, title, true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -342,30 +347,34 @@ fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: R
     let verb = match prompt.then {
         TextThen::Rename => "rename",
         TextThen::AddTag => "add a tag",
-        TextThen::Note => "note",
-        TextThen::Delete { .. } => "delete",
+        TextThen::Delete => "delete",
         TextThen::RaiseCounter => "ID counter",
     };
-    let area = centered_fixed(area, 62, 8);
+    // The box grows with its question: a confirmation over six marked
+    // folders names all six.
+    let width: u16 = 62;
+    let prompt_rows = wrapped_rows(&prompt.title, usize::from(width) - 3).clamp(1, 6) as u16;
+    let area = centered_fixed(area, width, prompt_rows + 6);
     frame.render_widget(Clear, area);
     let block = frame_block(app, format!(" {} ", verb), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // The prompt itself, wrapped, above the input line.
-    let prompt_area = Rect::new(inner.x, inner.y, inner.width, 2);
+    // The prompt itself, wrapped, above the input line — inset a column, so
+    // every wrapped line sits where the first one does.
+    let prompt_area = inset(Rect::new(inner.x, inner.y, inner.width, prompt_rows));
     frame.render_widget(
         Paragraph::new(Span::styled(prompt.title.clone(), theme.dim())).wrap(Wrap { trim: false }),
         prompt_area,
     );
 
-    let input_area = Rect::new(inner.x, inner.y + 2, inner.width, 1);
+    let input_area = Rect::new(inner.x, inner.y + prompt_rows + 1, inner.width, 1);
     let caret = prompt
         .input
         .render_line(input_area, frame.buffer_mut(), Span::raw(" "), theme.text())
-        .unwrap_or(Position::new(inner.x, inner.y + 2));
+        .unwrap_or(Position::new(inner.x, input_area.y));
     if let Some(error) = &prompt.error {
-        let error_area = Rect::new(inner.x, inner.y + 3, inner.width, 1);
+        let error_area = Rect::new(inner.x, input_area.y + 1, inner.width, 1);
         frame.render_widget(
             Paragraph::new(Span::styled(format!(" {error}"), theme.warn())),
             error_area,
@@ -374,27 +383,130 @@ fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: R
     caret
 }
 
+/// One column of padding on the left: wrapped text drawn here keeps every
+/// line where the first one starts, which a leading space cannot do.
+fn inset(area: Rect) -> Rect {
+    Rect::new(
+        area.x + 1,
+        area.y,
+        area.width.saturating_sub(1),
+        area.height,
+    )
+}
+
+/// How many rows `text` takes when word-wrapped at `width` columns — the
+/// greedy wrap `Paragraph::wrap` does, a word at a time and a long word
+/// broken where it must be — so a box can be sized to its question.
+fn wrapped_rows(text: &str, width: usize) -> usize {
+    let width = width.max(1);
+    text.lines()
+        .map(|line| {
+            let mut rows = 1usize;
+            let mut used = 0usize;
+            for word in line.split(' ') {
+                let w = word.width();
+                if used == 0 {
+                    used = w;
+                } else if used + 1 + w <= width {
+                    used += 1 + w;
+                } else {
+                    rows += 1;
+                    used = w;
+                }
+                while used > width {
+                    rows += 1;
+                    used -= width;
+                }
+            }
+            rows
+        })
+        .sum()
+}
+
+/// The quick note: a small text area over the dashboard. Enter saves,
+/// Alt-Enter breaks a line, and a pasted paragraph lands whole.
+fn render_note(
+    app: &App,
+    note: &crate::tui::app::actions::NoteState,
+    frame: &mut Frame,
+    area: Rect,
+) -> Position {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let rows = (note.area.lines().len() as u16).clamp(3, 8);
+    let area = centered_fixed(area, 62, rows + 5);
+    frame.render_widget(Clear, area);
+    let title = if note.count > 1 {
+        format!(" note {} {} projects ", g.sep, note.count)
+    } else {
+        " note ".to_string()
+    };
+    let block = frame_block(app, title, true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let prompt_area = Rect::new(inner.x, inner.y, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {}", crate::tui::validators::note_prompt(note.count)),
+            theme.dim(),
+        )),
+        prompt_area,
+    );
+    let text_area = Rect::new(
+        inner.x + 1,
+        inner.y + 1,
+        inner.width.saturating_sub(1),
+        rows,
+    );
+    let caret = note
+        .area
+        .render(text_area, frame.buffer_mut(), theme.text())
+        .unwrap_or(Position::new(text_area.x, text_area.y));
+    let keys_area = Rect::new(inner.x, inner.y + 1 + rows, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Enter ", theme.key()),
+            Span::styled("save   ", theme.dim()),
+            Span::styled("Alt-Enter ", theme.key()),
+            Span::styled("new line   ", theme.dim()),
+            Span::styled("Esc ", theme.key()),
+            Span::styled("cancel", theme.dim()),
+        ])),
+        keys_area,
+    );
+    caret
+}
+
 fn render_confirm(app: &App, confirm: &Confirm, frame: &mut Frame, area: Rect) -> Option<Position> {
     let theme = &app.theme;
-    let area = centered_fixed(area, 64, 8);
+    // Sized to its question, which names every folder it is about.
+    let width: u16 = 64;
+    let rows = wrapped_rows(&confirm.prompt, usize::from(width) - 3).clamp(1, 8) as u16;
+    let area = centered_fixed(area, width, rows + 5);
     frame.render_widget(Clear, area);
     let block = frame_block(app, " confirm ".to_string(), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let lines = vec![
-        Line::from(Span::styled(format!(" {}", confirm.prompt), theme.text())),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("y ", theme.key()),
+    let prompt_area = inset(Rect::new(inner.x, inner.y, inner.width, rows));
+    frame.render_widget(
+        Paragraph::new(Span::styled(confirm.prompt.clone(), theme.text()))
+            .wrap(Wrap { trim: false }),
+        prompt_area,
+    );
+    let keys_area = Rect::new(inner.x, inner.y + rows + 1, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" y ", theme.key()),
             Span::styled("yes   ", theme.dim()),
             Span::styled("n ", theme.key()),
             Span::styled("no   ", theme.dim()),
             Span::styled("Esc ", theme.key()),
             Span::styled("cancel", theme.dim()),
-        ]),
-    ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        ])),
+        keys_area,
+    );
     None
 }
 
@@ -904,16 +1016,11 @@ fn render_message(
     frame.render_widget(block, area);
     let text: Vec<Line> = lines
         .iter()
-        .map(|line| {
-            Line::from(Span::styled(
-                format!(" {line}"),
-                Style::default().fg(theme.text),
-            ))
-        })
+        .map(|line| Line::from(Span::styled(line.clone(), Style::default().fg(theme.text))))
         .collect();
     let max_scroll = lines.len().saturating_sub(inner.height as usize);
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: false })
         .scroll((scroll.min(max_scroll) as u16, 0));
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, inset(inner));
 }

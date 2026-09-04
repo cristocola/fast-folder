@@ -1072,8 +1072,26 @@ fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
                 if key.kind == KeyEventKind::Release {
                     continue;
                 }
-                Msg::Key(key.into())
+                // A terminal without bracketed paste delivers a paste as
+                // keystrokes, and a pasted paragraph typed into the dashboard
+                // is a dozen commands. Text that arrives faster than a hand
+                // can type — many printable keys already queued together — is
+                // handed over as one paste instead.
+                let (msgs, rest) = match collect_burst(key.into()) {
+                    Burst::Keys(keys) => (
+                        keys.into_iter().map(Msg::Key).collect::<Vec<_>>(),
+                        Vec::new(),
+                    ),
+                    Burst::Paste(text, rest) => (vec![Msg::Paste(text)], rest),
+                };
+                for msg in msgs.into_iter().chain(rest.into_iter().map(Msg::Key)) {
+                    if tx.send(msg).is_err() {
+                        return;
+                    }
+                }
+                continue;
             }
+
             Ok(Event::Paste(text)) => Msg::Paste(text),
             Ok(Event::Resize(width, height)) => Msg::Resize(width, height),
             Ok(Event::Mouse(mouse)) => {
@@ -1098,6 +1116,61 @@ fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
             return;
         }
     }
+}
+
+/// What a run of queued key events turned out to be: the keys as typed, or
+/// pasted text followed by whatever key ended the run.
+enum Burst {
+    Keys(Vec<crate::tui::command::Key>),
+    Paste(String, Vec<crate::tui::command::Key>),
+}
+
+/// A human types a few keys a second; a paste lands dozens in one poll
+/// window. Below this many queued printable keys the run is typing.
+const PASTE_BURST: usize = 8;
+
+/// Read every key event already queued behind `first` without waiting. A run
+/// of at least `PASTE_BURST` printable keys (Enter counting as a newline) is
+/// a paste; anything else is the keys, in order, untouched.
+fn collect_burst(first: crate::tui::command::Key) -> Burst {
+    use crate::tui::command::Key;
+    use ratatui::crossterm::event::KeyCode;
+
+    let as_text = |key: &Key| -> Option<char> {
+        match key.code {
+            KeyCode::Enter if !key.ctrl && !key.alt => Some('\n'),
+            KeyCode::Tab if !key.ctrl && !key.alt => Some('\t'),
+            _ => key.typed(),
+        }
+    };
+    let mut keys = vec![first];
+    if as_text(&first).is_none() {
+        return Burst::Keys(keys);
+    }
+    while matches!(event::poll(Duration::ZERO), Ok(true)) {
+        match event::read() {
+            Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => {
+                let key: Key = key.into();
+                let printable = as_text(&key).is_some();
+                keys.push(key);
+                if !printable {
+                    break;
+                }
+            }
+            Ok(Event::Key(_)) => continue,
+            // Anything but a key ends the run; it is lost here, which the
+            // one thing this loop discards — a mouse event — can afford.
+            _ => break,
+        }
+    }
+    let printable = keys.iter().take_while(|key| as_text(key).is_some()).count();
+    if printable >= PASTE_BURST {
+        let rest = keys.split_off(printable);
+        let text: String = keys.iter().filter_map(as_text).collect();
+        // A key that ended the run is still a key, and follows the paste.
+        return Burst::Paste(text, rest);
+    }
+    Burst::Keys(keys)
 }
 
 // ---------------------------------------------------------------------------

@@ -37,13 +37,31 @@ impl ActionsState {
 pub enum TextThen {
     Rename,
     AddTag,
-    Note,
-    /// Type the folder name to confirm; only an exact match deletes.
-    Delete {
-        expect: String,
-    },
+    /// Type the word `delete` to confirm; nothing else deletes. The prompt
+    /// names the folder — or the folders, over marks — so what is being
+    /// confirmed is on screen, and the word is the same every time.
+    Delete,
     /// Raise the global ID counter to the number typed.
     RaiseCounter,
+}
+
+/// The quick note: a few lines typed where you are. Enter saves, Alt-Enter
+/// (or a pasted newline) breaks a line — so a pasted paragraph is one note,
+/// and never a run of keystrokes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoteState {
+    pub area: crate::tui::widgets::text_area::TextArea,
+    /// How many projects the note goes to: the marks, or the one selected.
+    pub count: usize,
+}
+
+impl NoteState {
+    pub fn new(count: usize) -> Self {
+        Self {
+            area: crate::tui::widgets::text_area::TextArea::new(),
+            count,
+        }
+    }
 }
 
 /// A single-line prompt drawn over the dashboard. Esc cancels; Enter submits

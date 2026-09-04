@@ -250,9 +250,10 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
             }
         } else {
             format!(
-                "{} of {} projects   {}   ? for help",
+                "{} of {} projects   {}   Space marks a row for a batch   {}   ? for help",
                 app.library.len(),
                 app.library.snapshot.len(),
+                g.sep,
                 g.sep
             )
         };
@@ -287,6 +288,11 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
                 ("Esc".to_string(), "cancel"),
             ]
         }
+        Some(Modal::Note(_)) => vec![
+            ("Enter".to_string(), "save"),
+            ("Alt-Enter".to_string(), "new line"),
+            ("Esc".to_string(), "cancel"),
+        ],
         Some(Modal::Confirm(_)) => vec![
             ("y".to_string(), "yes"),
             ("n".to_string(), "no"),

@@ -30,5 +30,5 @@ expression: frame
 "┌ templates ───└────────────────────────────────────────────────────────────────────┘──────────────┐"
 "│  client-project 4  general 4  music-video 4                ││ Client project · 2 vars · {date}_{…│"
 "└────────────────────────────────────────────────────────────┘└────────────────────────────────────┘"
-" 12 of 12 projects   ·   ? for help                                                                 "
+" 12 of 12 projects   ·   Space marks a row for a batch   ·   ? for help                             "
 " ↑↓ move  Enter run  Esc close  # projects only                                                     "

@@ -393,6 +393,14 @@ fn selection_and_not_busy(app: &App) -> Availability {
     }
 }
 
+/// A verb that cannot batch: rename, where every row would need its own name.
+fn single_and_not_busy(app: &App) -> Availability {
+    if !app.library.marks.is_empty() {
+        return Availability::Disabled("one folder at a time — clear the marks (-) to rename");
+    }
+    selection_and_not_busy(app)
+}
+
 fn has_search(app: &App) -> Availability {
     if app.search.input.is_empty() {
         Availability::Hidden
@@ -841,7 +849,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         AddTag,
         "Add a tag",
-        "pick one the library already uses, or type a new one",
+        "pick one the library already uses, or type a new one — on every marked project, if any",
         ACTIONS,
         [Key::ch('A')],
         Project,
@@ -852,7 +860,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         RemoveTags,
         "Remove tags",
-        "tick the tags to take off this project",
+        "tick the tags to take off this project, or off every marked one",
         ACTIONS,
         [Key::ctrl('t')],
         Project,
@@ -863,7 +871,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         ReautoTags,
         "Re-derive tags",
-        "recompute the template's automatic tags from the variables",
+        "recompute the template's automatic tags from the variables — for every mark, if any",
         ACTIONS,
         [],
         Project,
@@ -874,7 +882,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         AddNote,
         "New note",
-        "write a journal note in your editor",
+        "write a journal note in your editor — the same note on every marked project, if any",
         ACTIONS,
         [Key::ch('N')],
         Project,
@@ -885,7 +893,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         NoteInline,
         "Quick note",
-        "type a one-line journal note",
+        "type a short journal note where you are (Alt-Enter for a new line) — on every mark, if any",
         ACTIONS,
         [Key::ctrl('n')],
         Project,
@@ -902,12 +910,12 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = false,
-        selection_and_not_busy
+        single_and_not_busy
     ),
     cmd!(
         Move,
         "Move to another base",
-        "move this project into a different mounted base",
+        "move this project — or every marked one — into a different mounted base",
         ACTIONS,
         [Key::ch('m')],
         Project,
@@ -918,7 +926,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Unregister,
         "Unregister (keep files)",
-        "remove its PROJECT_INFO.md; the files stay on disk",
+        "remove its PROJECT_INFO.md; the files stay on disk — every marked one, if any",
         ACTIONS,
         [Key::ch('u')],
         Project,
@@ -929,7 +937,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Delete,
         "Delete folder permanently",
-        "delete the project and everything inside it",
+        "delete the project and everything inside it — every marked one, if any; it asks for the word delete",
         ACTIONS,
         [Key::ch('D')],
         Project,

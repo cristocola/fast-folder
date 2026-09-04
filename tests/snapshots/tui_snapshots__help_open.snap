@@ -30,5 +30,5 @@ expression: frame
 "┌ templa│   a / Enter      Project actions               open the action menu for the sel… │───────┐"
 "│  clien│   o              Open project folder           reveal it in the file manager     │ate}_{…│"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
-" 12 of 12 projects   ·   ? for help                                                                 "
+" 12 of 12 projects   ·   Space marks a row for a batch   ·   ? for help                             "
 " Esc close  ↑↓ scroll                                                                               "

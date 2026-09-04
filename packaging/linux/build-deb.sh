@@ -17,8 +17,15 @@ staging="${1:?usage: build-deb.sh <staging-dir> <version> <output.deb>}"
 version="${2:?usage: build-deb.sh <staging-dir> <version> <output.deb>}"
 out="${3:?usage: build-deb.sh <staging-dir> <version> <output.deb>}"
 
-# Debian versions carry no leading v.
+# Debian versions carry no leading v, and they must begin with a digit.
+# `workflow_dispatch` dry runs pass `dev-<sha>`, which dpkg-deb refuses, so it
+# becomes a version that sorts below every real one. The same reason the MSI
+# uses 0.0.0 for a dry run.
 debver="${version#v}"
+case "$debver" in
+  [0-9]*) ;;
+  *) debver="0.0.0~$(printf '%s' "$debver" | tr '-' '.')" ;;
+esac
 
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT

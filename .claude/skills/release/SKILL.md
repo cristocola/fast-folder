@@ -172,6 +172,10 @@ static musl binary, which is why it declares no dependencies and installs on any
 derivative, old or new. `dpkg-deb --root-owner-group` writes every path as
 root:root, so no fakeroot and no privileged runner.
 
+A Debian version has to begin with a digit, so a `workflow_dispatch` dry run's
+`dev-<sha>` becomes `0.0.0~dev.<sha>`, which sorts below every real version.
+The MSI's `0.0.0` exists for the same reason.
+
 The asset is named `fastf-<tag>-amd64.deb` to match every other asset and to be
 picked up by the release job's `fastf-*` glob, its `SHA256SUMS` line and its
 attestation. Debian tools care about the metadata inside, not the filename.

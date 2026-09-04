@@ -27,7 +27,20 @@ use std::process::{Command, Stdio};
 use crate::util::paths;
 
 /// Set on the child, so the rerun cannot relaunch itself. Internal.
+///
+/// It says only "do not relaunch", never "this process *is* the rerun": it is
+/// inherited by every descendant, and a wrong inheritance here can only suppress
+/// a window, which is the safe direction. The positive claim is [`RELAUNCHED_FLAG`].
 pub const RELAUNCHED_VAR: &str = "FASTF_RELAUNCHED";
+
+/// Put on the rerun's own command line, ahead of the argv the user typed.
+///
+/// argv, not an environment variable, because **this one is a claim about the
+/// process rather than about the session**: only the program the emulator was
+/// asked to run receives it, and nothing that program starts inherits it. Every
+/// bug the variable caused came from a descendant answering a question only the
+/// rerun itself may answer.
+pub const RELAUNCHED_FLAG: &str = "--relaunched";
 /// Set by the user to turn the whole mechanism off. Public, documented.
 pub const NO_RELAUNCH_VAR: &str = "FASTF_NO_RELAUNCH";
 
@@ -292,6 +305,9 @@ fn build(program: &str, style: &ArgStyle, exe: &OsStr, args: &[OsString]) -> Vec
         }
     }
     argv.push(exe.to_os_string());
+    // Ahead of everything the user typed: a global flag, so it is read whatever
+    // the subcommand is, and never swallowed by a `trailing_var_arg` positional.
+    argv.push(OsString::from(RELAUNCHED_FLAG));
     argv.extend(args.iter().cloned());
     argv
 }
@@ -318,7 +334,9 @@ mod tests {
     }
 
     /// Each emulator's flag is the one *it* means, and the command reaches it as
-    /// argv — an argument containing a space stays one argument.
+    /// argv — an argument containing a space stays one argument. `--relaunched`
+    /// leads the rerun's own arguments: a global flag before the subcommand,
+    /// where no `trailing_var_arg` positional can swallow it.
     #[test]
     fn every_emulator_gets_the_argv_convention_it_actually_wants() {
         let all = commands(None);
@@ -331,7 +349,14 @@ mod tests {
 
         assert_eq!(
             find("konsole"),
-            ["konsole", "-e", "/usr/bin/fastf", "search", "rust project"]
+            [
+                "konsole",
+                "-e",
+                "/usr/bin/fastf",
+                "--relaunched",
+                "search",
+                "rust project"
+            ]
         );
         // Not `-e`: gnome-terminal's is deprecated and takes one string.
         assert_eq!(
@@ -340,6 +365,7 @@ mod tests {
                 "gnome-terminal",
                 "--",
                 "/usr/bin/fastf",
+                "--relaunched",
                 "search",
                 "rust project"
             ]
@@ -351,17 +377,30 @@ mod tests {
                 "xfce4-terminal",
                 "-x",
                 "/usr/bin/fastf",
+                "--relaunched",
                 "search",
                 "rust project"
             ]
         );
         assert_eq!(
             find("kitty"),
-            ["kitty", "/usr/bin/fastf", "search", "rust project"]
+            [
+                "kitty",
+                "/usr/bin/fastf",
+                "--relaunched",
+                "search",
+                "rust project"
+            ]
         );
         assert_eq!(
             find("foot"),
-            ["foot", "/usr/bin/fastf", "search", "rust project"]
+            [
+                "foot",
+                "/usr/bin/fastf",
+                "--relaunched",
+                "search",
+                "rust project"
+            ]
         );
         assert_eq!(
             find("wezterm"),
@@ -370,6 +409,7 @@ mod tests {
                 "start",
                 "--",
                 "/usr/bin/fastf",
+                "--relaunched",
                 "search",
                 "rust project"
             ]
@@ -377,11 +417,24 @@ mod tests {
         // xterm's -e must be its last option, so nothing may follow it.
         assert_eq!(
             find("xterm"),
-            ["xterm", "-e", "/usr/bin/fastf", "search", "rust project"]
+            [
+                "xterm",
+                "-e",
+                "/usr/bin/fastf",
+                "--relaunched",
+                "search",
+                "rust project"
+            ]
         );
         assert_eq!(
             find(XDG_RESOLVER),
-            [XDG_RESOLVER, "/usr/bin/fastf", "search", "rust project"]
+            [
+                XDG_RESOLVER,
+                "/usr/bin/fastf",
+                "--relaunched",
+                "search",
+                "rust project"
+            ]
         );
     }
 
@@ -397,6 +450,7 @@ mod tests {
                 "/usr/bin/konsole",
                 "-e",
                 "/usr/bin/fastf",
+                "--relaunched",
                 "search",
                 "rust project"
             ],
@@ -413,6 +467,7 @@ mod tests {
                 "my-terminal",
                 "-e",
                 "/usr/bin/fastf",
+                "--relaunched",
                 "search",
                 "rust project"
             ]

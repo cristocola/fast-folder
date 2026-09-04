@@ -349,6 +349,18 @@ question and its answer is stderr — gating on stdout would make the picker
 unreachable from `cd "$(fastf path lullaby)"`, which redirects stdout by
 construction, and would reintroduce the exact defect `util::tty` exists to fix.
 
+**"I am the rerun" is a flag on argv; the environment only ever says "do not
+relaunch".** `respawn_in_terminal` puts a hidden `--relaunched` ahead of the
+argv it repeats, and `cli::terminal::relaunched_window()` is the only reader —
+the pause `main` takes before a window closes, and `window_is_ours()`. An
+environment variable cannot carry that claim: `FASTF_RELAUNCHED` is inherited by
+the window's shell and by everything typed into it, which is how `fastf
+completions bash` came to stop for a keypress inside a package build and `fastf
+term proj` came to replace the shell it was typed in. The variable keeps only
+the half inheritance cannot spoil — suppressing a relaunch — because a
+descendant that reads it wrongly opens no window, and no window is the safe
+direction.
+
 **The relaunch fires only where output provably has no reader.** All of:
 no stream is a TTY; stdout *and* stderr are each a socket, character device, or
 closed (`EBADF`) — never a regular file or FIFO, which mean somebody is keeping

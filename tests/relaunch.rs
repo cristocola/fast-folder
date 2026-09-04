@@ -75,8 +75,8 @@ fn a_null_stdio_gui_session_relaunches_through_the_configured_terminal() {
 
     let argv = rec.argv().expect("the terminal should have been started");
     // The configured terminal is not one fastf knows, so it gets the
-    // xterm-compatible `-e`, then the executable, then the original argv —
-    // `rust project` still one argument.
+    // xterm-compatible `-e`, then the executable, then `--relaunched` and the
+    // original argv — `rust project` still one argument.
     assert_eq!(argv[0], "-e", "an unknown emulator gets the -e convention");
     assert!(
         argv[1].ends_with("fastf"),
@@ -84,8 +84,9 @@ fn a_null_stdio_gui_session_relaunches_through_the_configured_terminal() {
     );
     assert_eq!(
         &argv[2..],
-        ["search", "rust project"],
-        "the rerun must carry the original argv verbatim, got {argv:?}"
+        ["--relaunched", "search", "rust project"],
+        "the rerun carries the flag that says it is the rerun, then the original \
+         argv verbatim, got {argv:?}"
     );
 }
 
@@ -131,10 +132,13 @@ fn ssh_connection_suppresses_it() {
     assert!(!rec.was_called(), "an ssh session must not open a window");
 }
 
-/// The loop guard. Inside the relaunched process the terminal may still not be
-/// a terminal — a `terminal` command that is not an emulator at all, say — and
-/// a second relaunch would fork a window per attempt forever. With
-/// `FASTF_RELAUNCHED` set fastf behaves exactly like today's build.
+/// The loop guard, and the one job `FASTF_RELAUNCHED` still has. Inside the
+/// relaunched process the terminal may still not be a terminal — a `terminal`
+/// command that is not an emulator at all, say — and a second relaunch would
+/// fork a window per attempt forever. The variable is inherited, so a descendant
+/// that wrongly reads it opens no window: suppression is the safe direction, and
+/// it is why this half stayed an environment variable when the claim "I am the
+/// rerun" moved to argv.
 #[test]
 fn a_relaunched_child_with_no_tty_falls_through_to_plain_output() {
     let (sb, rec) = sandbox_with_recorder();
@@ -209,7 +213,7 @@ fn an_ambiguous_query_from_a_launcher_opens_a_terminal_instead_of_erroring() {
         run.output
     );
     let argv = rec.argv().expect("the terminal should have been started");
-    assert_eq!(&argv[2..], ["copy", "shared"]);
+    assert_eq!(&argv[2..], ["--relaunched", "copy", "shared"]);
 }
 
 /// The redirect case, spelled out because it is the contract: `fastf path x > f`

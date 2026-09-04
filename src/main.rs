@@ -31,6 +31,13 @@ Getting started:\n\
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Set by fastf on the copy of itself it runs inside a terminal it opened.
+    /// Hidden: it is fastf's own bookkeeping, and it rides on argv rather than
+    /// on an environment variable precisely so that nothing this process starts
+    /// can inherit the claim. See `cli::terminal::relaunched_window`.
+    #[arg(long, hide = true)]
+    relaunched: bool,
 }
 
 #[derive(Subcommand)]
@@ -781,6 +788,13 @@ fn main() {
 /// attention and closes at once — the alternative is a keypress demanded of
 /// somebody who just pressed a key.
 ///
+/// **The claim that this is that window rides on argv, not on the environment.**
+/// `FASTF_RELAUNCHED` is inherited, so a shell inside the window has it and so
+/// does everything typed into that shell — and `fastf completions bash` in a
+/// package build then stopped and waited for an Enter nobody was there to
+/// press. `cli::terminal::relaunched_window` reads the `--relaunched` flag the
+/// relaunch put on this process's own command line, which nothing inherits.
+///
 /// After `restore_terminal` and in cooked mode, so there is no ordering hazard
 /// with the interrupt module, and skipped entirely on an interrupt: Ctrl-C means
 /// go away.
@@ -788,7 +802,7 @@ fn main() {
 fn pause_before_the_window_closes() {
     use std::io::{BufRead, IsTerminal, Write};
 
-    if std::env::var_os(fastf::util::relaunch::RELAUNCHED_VAR).is_none()
+    if !fastf::cli::terminal::relaunched_window()
         || fastf::util::tty::interactive_surface_ran()
         || fastf::util::interrupt::is_set()
         || !std::io::stdin().is_terminal()
@@ -819,6 +833,12 @@ fn is_config_parse_failure(rendered: &str) -> bool {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+
+    // Before anything else reads it: this is the one place the flag is turned
+    // into the answer every later caller asks for.
+    if cli.relaunched {
+        cli::terminal::mark_relaunched_window();
+    }
 
     // Fail early with a clean error if no data directory can be resolved
     // (e.g. $HOME unset) — everything downstream assumes it exists.

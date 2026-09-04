@@ -557,7 +557,7 @@ fn a_relaunched_run_with_nothing_interactive_waits_for_enter() {
     let script = pty::Script::new().pause(600).key("\r").build();
     let (out, code) = pty::run(
         common::FASTF,
-        &["recent"],
+        &["--relaunched", "recent"],
         &[
             ("FASTF_INSTALL_DIR", sb.install.as_path()),
             ("HOME", sb.tmp.path()),
@@ -574,6 +574,45 @@ fn a_relaunched_run_with_nothing_interactive_waits_for_enter() {
     );
 }
 
+/// The third case, and the one that cost a release: `FASTF_RELAUNCHED` is
+/// **inherited**. Every shell in a window fastf opened carries it until that
+/// window is closed, and so does everything started from that shell — a package
+/// build among them. `fastf completions bash` in a PKGBUILD's `package()` then
+/// found the variable set, a terminal on stdin and stderr, and stopped to wait
+/// for an Enter nobody was there to press.
+///
+/// So the variable is deliberately *all* this run is given: no `--relaunched`,
+/// because nothing inherits that, which is exactly why the claim lives there.
+#[test]
+fn a_command_no_relaunch_could_have_started_never_waits() {
+    let sb = Sandbox::new();
+
+    // No keystrokes at all: if the pause comes back, nothing answers it and the
+    // deadline is what ends the run.
+    let script = pty::Script::new().build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &["completions", "bash"],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_RELAUNCHED", std::path::Path::new("1")),
+        ],
+        &script,
+        DEADLINE,
+    );
+
+    assert_eq!(code, 0, "the packaging step must exit on its own:\n{out}");
+    assert!(
+        !out.contains("press Enter to close"),
+        "a packaging step has nobody to press it:\n{out}"
+    );
+    assert!(
+        out.contains("fastf"),
+        "and the completions are still what it printed:\n{out}"
+    );
+}
+
 /// The other half: a window that ran a picker or a menu already had the user's
 /// attention for as long as they wanted it, so demanding one more keypress from
 /// somebody who has just pressed a key is noise.
@@ -587,7 +626,7 @@ fn a_relaunched_run_that_showed_a_picker_does_not_wait() {
     let script = pty::Script::new().pause(1200).esc().pause(600).build();
     let (out, code) = pty::run(
         common::FASTF,
-        &["recent"],
+        &["--relaunched", "recent"],
         &[
             ("FASTF_INSTALL_DIR", sb.install.as_path()),
             ("HOME", sb.tmp.path()),

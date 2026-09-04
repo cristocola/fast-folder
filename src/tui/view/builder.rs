@@ -13,7 +13,6 @@ use crate::tui::app::App;
 use crate::tui::app::settings::{Editing, SettingsState};
 use crate::tui::app::studio::{Builder, FileEdit, FileList, Open, Row, Section, Studio, VarList};
 use crate::tui::command::{self, Context};
-use crate::tui::layout::centered;
 use crate::tui::theme::Theme;
 use crate::tui::view::{fit, pad};
 use crate::tui::widgets::form::Form;
@@ -21,17 +20,10 @@ use crate::tui::widgets::form::Form;
 /// How wide the labels down the left of every list here are.
 const LABEL: usize = 18;
 
-/// A box sized to what it holds — never taller than most of the screen, never
-/// so short that the footer and the key line crowd the content.
+/// A box sized to what it holds — `layout::sized_dialog`, which the app
+/// reads too, so a list's viewport is clamped to the rows that are drawn.
 fn sized(area: Rect, body: u16) -> Rect {
-    let full = centered(area, 84, 96);
-    let height = (body + 4).clamp(8.min(full.height), full.height);
-    Rect::new(
-        full.x,
-        full.y + (full.height - height) / 2,
-        full.width,
-        height,
-    )
+    crate::tui::layout::sized_dialog(area, body)
 }
 
 /// How many rows the builder's open face wants.
@@ -250,7 +242,7 @@ pub fn render_builder(
         ),
         Some(Open::Variables(list)) => render_variables(app, builder, list, frame, body, width),
         Some(Open::Structure(area_state)) => {
-            let caret = render_structure(app, builder, area_state, frame, body);
+            let caret = render_structure(app, area_state, frame, body);
             (
                 caret,
                 Some("one folder path per line — use / to nest on every platform".to_string()),
@@ -409,7 +401,6 @@ fn render_variables(
 /// alone never showed.
 fn render_structure(
     app: &App,
-    builder: &Builder,
     area_state: &crate::tui::widgets::text_area::TextArea,
     frame: &mut Frame,
     area: Rect,
@@ -434,10 +425,7 @@ fn render_structure(
     frame.render_widget(Paragraph::new(lines), panes[1]);
 
     // `render` keeps the editor's own scroll, so a long list does not jump.
-    let mut editable = area_state.clone();
-    let caret = editable.render(panes[0], frame.buffer_mut(), theme.text());
-    let _ = builder;
-    caret
+    area_state.render(panes[0], frame.buffer_mut(), theme.text())
 }
 
 fn render_files(
@@ -537,8 +525,9 @@ fn render_file_edit(
         tokens_area,
     );
 
-    let mut body = edit.body.clone();
-    let caret_body = body.render(body_area, frame.buffer_mut(), theme.text());
+    let caret_body = edit
+        .body
+        .render(body_area, frame.buffer_mut(), theme.text());
 
     (
         if edit.in_body { caret_body } else { caret_path },
@@ -566,8 +555,17 @@ pub fn render_settings(
     let g = theme.glyphs;
     let area = sized(area, 22);
     let (body, footer, keys) = frame_parts(app, " settings ".to_string(), frame, area)?;
+    if state.rows.is_empty() {
+        footer_line(frame, footer, " reading the settings…", theme.dim());
+        frame.render_widget(
+            Paragraph::new(key_line(theme, &pairs(&[("Esc", "close")]))),
+            keys,
+        );
+        return None;
+    }
 
     let width = body.width as usize;
+
     let items: Vec<ListItem> = state
         .rows
         .iter()
@@ -671,8 +669,7 @@ fn render_setting_editor(
             let outer = block(app, " one base per line ".to_string());
             let inner = outer.inner(box_area);
             frame.render_widget(outer, box_area);
-            let mut editable = area.clone();
-            editable.render(inner, frame.buffer_mut(), theme.text())
+            area.render(inner, frame.buffer_mut(), theme.text())
         }
     }
 }

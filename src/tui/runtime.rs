@@ -107,7 +107,7 @@ impl Runtime {
         diag::set_sink(Box::new(move |level, message| {
             let _ = sink_tx.send(Msg::Diag(level, message.to_string()));
         }));
-        let input = InputThread::spawn(tx.clone());
+        let input = InputThread::spawn(tx.clone())?;
         let detail = DetailWorker::spawn(tx.clone());
         Ok(Self {
             terminal,
@@ -995,16 +995,20 @@ struct Gate {
 }
 
 impl InputThread {
-    fn spawn(tx: Sender<Msg>) -> Self {
+    /// An app with no input thread has no keyboard, no message and no way
+    /// out but a signal, so a thread that cannot be started is an error
+    /// before the screen is taken, not a silent one after.
+    fn spawn(tx: Sender<Msg>) -> Result<Self> {
         let gate = Arc::new(Gate {
             state: Mutex::new(GateState::default()),
             changed: Condvar::new(),
         });
         let thread_gate = Arc::clone(&gate);
-        let _ = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("fastf-input".to_string())
-            .spawn(move || input_loop(&thread_gate, &tx));
-        Self { gate }
+            .spawn(move || input_loop(&thread_gate, &tx))
+            .context("starting the input thread")?;
+        Ok(Self { gate })
     }
 
     fn pause(&self) {
@@ -1116,7 +1120,7 @@ impl DetailWorker {
     fn spawn(tx: Sender<Msg>) -> Self {
         let slot = Arc::new((Mutex::new(DetailSlot::default()), Condvar::new()));
         let thread_slot = Arc::clone(&slot);
-        let _ = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("fastf-detail".to_string())
             .stack_size(WORKER_STACK)
             .spawn(move || {
@@ -1146,6 +1150,11 @@ impl DetailWorker {
                     }
                 }
             });
+        if let Err(err) = spawned {
+            diag::warn(format!(
+                "could not start the detail reader: {err} — the pane will stay on reading…"
+            ));
+        }
         Self { slot }
     }
 

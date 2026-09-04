@@ -52,9 +52,6 @@ use wizard::{Flow, FlowKind, Step};
 
 /// How long a status message stays, in ticks of 200 ms.
 const STATUS_TICKS: u64 = 30;
-/// How many rows the settings list shows before it scrolls — the height
-/// `view::builder::render_settings` asks for.
-const SETTINGS_ROWS: usize = 22;
 /// How many project details the pane remembers.
 const DETAIL_CACHE: usize = 64;
 
@@ -417,6 +414,13 @@ impl App {
         if !self.search.sync() {
             return Vec::new();
         }
+        // A query the grammar cannot mean anything by is said so while it is
+        // being typed, not answered with an empty list.
+        if let Some(problem) = self.search.query.diagnose() {
+            self.warn(problem);
+        } else if self.status.level == StatusLevel::Warn && self.status.expires_at.is_some() {
+            self.status = Status::default();
+        }
         self.recompute();
         self.after_rows_changed()
     }
@@ -611,14 +615,12 @@ impl App {
                 Vec::new()
             }
             Msg::SettingsLoaded(loaded) => {
+                // The screen went up when `,` was pressed, saying it was
+                // reading; a read that lands after it was closed has nothing
+                // to fill in and is dropped.
                 let theme = loaded.theme.clone();
-                match self.modals.top_mut() {
-                    Some(Modal::Settings(state)) => state.refresh(*loaded),
-                    // The first read is what decides whether a brand-new
-                    // install is asked where its projects should live.
-                    _ => self
-                        .modals
-                        .push(Modal::Settings(Box::new(SettingsState::new(*loaded)))),
+                if let Some(Modal::Settings(state)) = self.modals.top_mut() {
+                    state.refresh(*loaded);
                 }
                 // A theme written on this screen takes effect on the frame
                 // that shows it was written.
@@ -647,8 +649,18 @@ impl App {
                 Vec::new()
             }
             Msg::ViewLoaded { title, lines } => {
-                self.modals
-                    .push(Modal::message(title, lines.join("\n"), MessageLevel::Info));
+                // The dialog went up when the key was pressed, saying it was
+                // reading; fill it in if it is still the one on top, else
+                // the user has moved on and the read is dropped.
+                if let Some(Modal::Message {
+                    title: shown,
+                    lines: body,
+                    ..
+                }) = self.modals.top_mut()
+                    && *shown == title
+                {
+                    *body = lines;
+                }
                 Vec::new()
             }
             Msg::ActionDone { id, outcome } => self.on_action_done(id, outcome),
@@ -954,11 +966,20 @@ impl App {
 
     fn on_key(&mut self, key: Key) -> Vec<Effect> {
         if layout::too_small(self.area()) {
-            return if key == Key::ch('q') || key == Key::ctrl('c') {
-                vec![Effect::Quit(Exit::Normal)]
+            // The guard takes only the two quit gestures — and a job that is
+            // running still turns them into a cancel, exactly as it does on
+            // a screen big enough to show it.
+            if key != Key::ch('q') && key != Key::ctrl('c') {
+                return Vec::new();
+            }
+            if self.job.is_some() || self.move_progress.is_some() {
+                return self.request_cancel();
+            }
+            return vec![Effect::Quit(if key == Key::ctrl('c') {
+                Exit::Interrupted
             } else {
-                Vec::new()
-            };
+                Exit::Normal
+            })];
         }
         if key == Key::ctrl('c') {
             // A job or a move is running: Ctrl-C cancels it rather than
@@ -1360,6 +1381,7 @@ impl App {
     }
 
     fn on_pick_key(&mut self, key: Key) -> Vec<Effect> {
+        let area = self.area();
         match key.code {
             KeyCode::Esc => {
                 self.modals.pop();
@@ -1432,7 +1454,10 @@ impl App {
             KeyCode::Up | KeyCode::Down if !key.ctrl => {
                 if let Some(Modal::Pick(pick)) = self.modals.top_mut() {
                     pick.step(if key.code == KeyCode::Down { 1 } else { -1 });
-                    pick.clamp_viewport(12);
+                    pick.clamp_viewport(layout::list_rows(
+                        layout::pick_box(area, pick.ranked.len()),
+                        2,
+                    ));
                 }
                 Vec::new()
             }
@@ -1490,6 +1515,40 @@ impl App {
         Vec::new()
     }
 
+    /// An upper bound on how far the detail pane can scroll: the lines it
+    /// draws for the selected row, less the rows it has — so scrolling stops
+    /// about where the text does, a blank line or two past the end at worst
+    /// and never a screenful of nothing.
+    fn detail_scroll_max(&self) -> usize {
+        let Some(project) = self.library.selected() else {
+            return 0;
+        };
+        let mut lines = 4 + usize::from(!project.tags.is_empty());
+        if let Some(detail) = self.details.get(&project.path) {
+            lines += usize::from(detail.error.is_some());
+            if let Some(meta) = &detail.meta
+                && !meta.variables.is_empty()
+            {
+                lines += 1 + meta.variables.len();
+            }
+            if !detail.listing.is_empty() {
+                lines += 2 + detail.listing.len();
+            }
+            if !detail.journal.is_empty() {
+                lines += 1 + detail.journal.len();
+            }
+            if !detail.notes.is_empty() {
+                lines += 1 + detail.notes.len();
+            }
+        }
+        let rows = self
+            .regions()
+            .detail
+            .map(|pane| pane.height.saturating_sub(2) as usize)
+            .unwrap_or(0);
+        lines.saturating_sub(rows)
+    }
+
     /// A screenful, for the pagers: the height of the list on screen.
     fn page_rows(&self) -> usize {
         self.rows_on_screen().max(1)
@@ -1517,7 +1576,10 @@ impl App {
                 vec![Effect::Quit(Exit::Normal)]
             }
             CommandId::Back => {
-                if self.job.is_some() {
+                // Anything running is cancelled first: a batch job and a
+                // single move alike, before a keystroke can clear something
+                // the user was looking at.
+                if self.job.is_some() || self.move_progress.is_some() {
                     return self.request_cancel();
                 }
                 if !self.search.input.is_empty() {
@@ -1534,8 +1596,14 @@ impl App {
                     self.info("marks cleared");
                     return Vec::new();
                 }
-                if self.move_progress.is_some() {
-                    return self.request_cancel();
+                if self.library.preset.is_some() {
+                    // `fastf recent --tag draft` opened the app already
+                    // narrowed; the chip is a filter like any other, and Esc
+                    // takes it off rather than leaving the app inside it.
+                    self.library.preset = None;
+                    self.recompute();
+                    self.info("showing every project");
+                    return self.after_rows_changed();
                 }
                 vec![Effect::Quit(Exit::Normal)]
             }
@@ -1621,7 +1689,10 @@ impl App {
                         self.after_selection_change()
                     }
                     Focus::Detail => {
-                        self.detail_scroll = self.detail_scroll.saturating_add_signed(delta);
+                        self.detail_scroll = self
+                            .detail_scroll
+                            .saturating_add_signed(delta)
+                            .min(self.detail_scroll_max());
                         Vec::new()
                     }
                     Focus::Templates => {
@@ -1642,7 +1713,10 @@ impl App {
                 }
                 match self.focus {
                     Focus::Detail => {
-                        self.detail_scroll = self.detail_scroll.saturating_add_signed(delta);
+                        self.detail_scroll = self
+                            .detail_scroll
+                            .saturating_add_signed(delta)
+                            .min(self.detail_scroll_max());
                         Vec::new()
                     }
                     _ => {
@@ -1658,7 +1732,7 @@ impl App {
                 }
                 match self.focus {
                     Focus::Detail => {
-                        self.detail_scroll = if first { 0 } else { usize::MAX / 2 };
+                        self.detail_scroll = if first { 0 } else { self.detail_scroll_max() };
                         Vec::new()
                     }
                     Focus::Templates => {
@@ -2287,11 +2361,15 @@ impl App {
 
     /// The arrows on whatever dialog is on top.
     fn step_top_modal(&mut self, delta: isize) -> Vec<Effect> {
+        let area = self.area();
         let actions_len = crate::tui::app::actions::action_entries(self).len();
         match self.modals.top_mut() {
             Some(Modal::Actions(actions)) => {
                 actions.step(actions_len, delta);
-                actions.clamp_viewport(actions_len, 12);
+                actions.clamp_viewport(
+                    actions_len,
+                    layout::list_rows(layout::actions_box(area, actions_len), 0),
+                );
                 Vec::new()
             }
             Some(Modal::MultiPick(pick)) => {
@@ -2305,7 +2383,11 @@ impl App {
             }
             Some(Modal::Studio(studio)) => {
                 studio.step(delta);
-                studio.clamp_viewport(12);
+                studio.clamp_viewport(layout::studio_rows(
+                    area,
+                    studio.cards.len(),
+                    studio.lines.len(),
+                ));
                 studio
                     .selected_slug()
                     .map(|slug| vec![Effect::LoadTemplateView { slug }])
@@ -2334,7 +2416,7 @@ impl App {
             }
             Some(Modal::Settings(state)) => {
                 state.step(delta);
-                state.clamp_viewport(SETTINGS_ROWS);
+                state.clamp_viewport(layout::settings_rows(area));
                 Vec::new()
             }
             Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.scroll_top_modal(delta),
@@ -2345,6 +2427,7 @@ impl App {
     /// A page, or the ends (`isize::MIN`/`isize::MAX`), on whatever dialog
     /// is on top.
     fn page_top_modal(&mut self, delta: isize) -> Vec<Effect> {
+        let area = self.area();
         let actions_len = crate::tui::app::actions::action_entries(self).len();
         let jump = |selected: usize, len: usize| -> usize {
             crate::tui::widgets::nav::clamp_jump(Some(selected), len, delta).unwrap_or(0)
@@ -2352,7 +2435,10 @@ impl App {
         match self.modals.top_mut() {
             Some(Modal::Actions(actions)) => {
                 actions.selected = jump(actions.selected, actions_len);
-                actions.clamp_viewport(actions_len, 12);
+                actions.clamp_viewport(
+                    actions_len,
+                    layout::list_rows(layout::actions_box(area, actions_len), 0),
+                );
                 Vec::new()
             }
             Some(Modal::MultiPick(pick)) => {
@@ -2361,7 +2447,7 @@ impl App {
             }
             Some(Modal::Settings(state)) => {
                 state.jump(delta);
-                state.clamp_viewport(SETTINGS_ROWS);
+                state.clamp_viewport(layout::settings_rows(area));
                 Vec::new()
             }
             Some(Modal::Studio(_)) | Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => {
@@ -2715,9 +2801,12 @@ impl App {
 
     // --- settings, the counter, maintenance ------------------------------
 
-    /// `,`: every setting on one screen. The list is built from a read, so the
-    /// screen opens when the answer lands rather than showing stale values.
+    /// `,`: every setting on one screen. The screen goes up at once, saying
+    /// it is reading, and the rows are filled in when the read lands — so the
+    /// key is seen to have worked, and no value shown is stale.
     fn open_settings(&mut self) -> Vec<Effect> {
+        self.modals
+            .push(Modal::Settings(Box::new(SettingsState::pending())));
         vec![Effect::LoadSettings]
     }
 
@@ -2798,11 +2887,11 @@ impl App {
             settings::Job::SyncCounters => self.run_action(job.busy(), Action::SyncCounters),
             settings::Job::Reindex => self.run_action(job.busy(), Action::Reindex),
             settings::Job::Reconcile => self.run_action(job.busy(), Action::Reconcile),
-            settings::Job::DataLocations => vec![Effect::LoadView {
-                title: "data locations".to_string(),
-                path: PathBuf::new(),
-                kind: ViewKind::DataLocations,
-            }],
+            settings::Job::DataLocations => self.load_view(
+                "data locations".to_string(),
+                PathBuf::new(),
+                ViewKind::DataLocations,
+            ),
         }
     }
 
@@ -3119,11 +3208,19 @@ impl App {
                 "journal"
             }
         );
-        vec![Effect::LoadView {
-            title,
-            path: project.path.clone(),
-            kind,
-        }]
+        self.load_view(title, project.path.clone(), kind)
+    }
+
+    /// A read-only view: the dialog goes up at once saying it is reading, so
+    /// the key is seen to have worked on a slow disk, and the worker's answer
+    /// fills it in (`Msg::ViewLoaded`) if it is still the one on top.
+    fn load_view(&mut self, title: String, path: PathBuf, kind: ViewKind) -> Vec<Effect> {
+        self.modals.push(Modal::message(
+            title.clone(),
+            "reading…",
+            MessageLevel::Info,
+        ));
+        vec![Effect::LoadView { title, path, kind }]
     }
 }
 

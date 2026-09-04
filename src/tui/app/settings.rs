@@ -139,12 +139,31 @@ impl SettingsState {
         }
     }
 
-    /// Rebuild after a write, keeping the cursor on the row it was on.
+    /// The screen before its first read has landed: no rows, and a footer
+    /// saying so. `refresh` fills it in.
+    pub fn pending() -> Self {
+        Self {
+            settings: Settings::default(),
+            rows: Vec::new(),
+            selected: 0,
+            offset: 0,
+            editing: None,
+            pending: true,
+        }
+    }
+
+    /// Rebuild after a write, keeping the cursor on the row it was on — or,
+    /// for the first read, on the first row there is.
     pub fn refresh(&mut self, settings: Settings) {
+        let first = self.rows.is_empty();
         let keep = self.selected;
         self.settings = settings;
         self.rows = rows(&self.settings);
-        self.selected = keep.min(self.rows.len().saturating_sub(1));
+        self.selected = if first {
+            self.rows.iter().position(Row::selectable).unwrap_or(0)
+        } else {
+            keep.min(self.rows.len().saturating_sub(1))
+        };
         if !self.rows.get(self.selected).is_some_and(Row::selectable) {
             self.step(1);
         }
@@ -590,11 +609,9 @@ mod tests {
             state.step(1);
         }
         state.begin_edit();
-        state.fail("recent_default_limit must be at least 1");
-        assert_eq!(
-            state.error(),
-            Some("recent_default_limit must be at least 1")
-        );
+        state.fail("recent_limit must be at least 1");
+        assert_eq!(state.error(), Some("recent_limit must be at least 1"));
+
         assert_eq!(
             state.pending_write(),
             Some(("recent-limit", "20".to_string())),

@@ -74,7 +74,16 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
                 bases.push(Span::styled(format!(" {}", base.note()), theme.dim()));
             }
         }
-        None => bases.push(Span::styled("probing bases…", theme.dim())),
+        None => match &app.summary_error {
+            Some(error) => {
+                bases.push(Span::styled(
+                    format!("{} the bases could not be read: {error}", g.warn),
+                    theme.warn(),
+                ));
+                bases.push(Span::styled("   F5 retries", theme.dim()));
+            }
+            None => bases.push(Span::styled("probing bases…", theme.dim())),
+        },
     }
     let right = match app.summary.as_ref().map(|s| s.attention) {
         Some(n) if n > 0 => vec![Span::styled(
@@ -128,11 +137,16 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
         ));
     }
     right.push(Span::raw(" "));
-    let right_width: usize = right.iter().map(|s| s.width()).sum();
+    // The counts win the row over the query text, but never past the row's
+    // end: a long template filter on a narrow terminal is cut, not drawn
+    // outside the frame.
+    let right_width: usize = right.iter().map(|s| s.width()).sum::<usize>().min(width);
 
     let mut prefix = format!(" {} ", g.search);
     if let Some(preset) = &app.library.preset {
-        prefix.push_str(&format!("[{}] ", preset.label()));
+        // `fastf recent --tag draft`: the chip is a filter, and Esc takes it
+        // off like any other.
+        prefix.push_str(&format!("[{} {} Esc clears] ", preset.label(), g.sep));
     }
     let prefix_span = Span::styled(
         prefix.clone(),
@@ -168,12 +182,15 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
     };
 
     let right_area = Rect::new(
-        area.x + (width - right_width) as u16,
+        area.x + width.saturating_sub(right_width) as u16,
         area.y,
         right_width as u16,
         1,
     );
-    frame.render_widget(Paragraph::new(Line::from(right)), right_area);
+    frame.render_widget(
+        Paragraph::new(Line::from(right)).alignment(ratatui::layout::Alignment::Right),
+        right_area,
+    );
     caret.filter(|_| app.search.editing)
 }
 
@@ -214,7 +231,23 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
         let idle = if app.library.is_empty() && app.library.snapshot.is_empty() {
             "no projects yet — press n to create one, or e to register a folder".to_string()
         } else if app.library.is_empty() {
-            "no matches — loosen the query, or press F to clear the template filter".to_string()
+            // Name the thing that is hiding the rows, not every thing that
+            // could.
+            match (
+                app.library.template_filter.is_some(),
+                app.library.preset.is_some(),
+                app.search.input.is_empty(),
+            ) {
+                (true, _, _) => {
+                    "no matches — loosen the query, or press F to clear the template filter"
+                        .to_string()
+                }
+                (false, true, _) => {
+                    "no matches — Esc clears the filter this app was opened with".to_string()
+                }
+                (false, false, false) => "no matches — loosen the query".to_string(),
+                (false, false, true) => "nothing to show".to_string(),
+            }
         } else {
             format!(
                 "{} of {} projects   {}   ? for help",

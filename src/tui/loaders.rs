@@ -78,7 +78,10 @@ pub fn settings() -> Result<crate::tui::app::data::Settings> {
     use crate::core::counter::Counters;
 
     let cfg = Config::load()?;
-    let counters = Counters::load().unwrap_or_default();
+    // A counter file that cannot be read is an error to read, not a floor
+    // of zero: the number it holds is what stops an unplugged base from
+    // restarting the numbering.
+    let counters = Counters::load()?;
     let floor = Counters::floor(&cfg);
     let next = Counters::next_value(&cfg, &counters).unwrap_or(floor);
     let (data_dir, mode) = paths::try_install_dir()?;
@@ -404,11 +407,19 @@ pub fn discover() -> Result<Vec<Project>> {
 }
 
 /// Read one project's `PROJECT_INFO.md` for a query that needs its variables.
+/// A file that cannot be read drops out of the query — it has no variables
+/// to answer with — and says so, once, rather than vanishing.
 pub fn metadata(paths: &[PathBuf]) -> Vec<(PathBuf, Option<Metadata>)> {
     paths
         .iter()
         .map(|path| {
-            let meta = project_info::read_metadata(path).ok().flatten();
+            let meta = match project_info::read_metadata(path) {
+                Ok(meta) => meta,
+                Err(err) => {
+                    crate::util::diag::warn(format!("{}: {err:#}", paths::display_path(path)));
+                    None
+                }
+            };
             (path.clone(), meta)
         })
         .collect()
@@ -541,38 +552,49 @@ fn journal_view(path: &Path) -> Vec<String> {
 pub fn detail(path: &Path) -> ProjectDetail {
     let mut detail = ProjectDetail::default();
 
+    // Every read that fails says so in the pane; the first failure is the
+    // one shown, and the rest of the pane is whatever could be read.
+    let mut problems: Vec<String> = Vec::new();
     match project_info::read_metadata(path) {
         Ok(meta) => detail.meta = meta,
-        Err(err) => detail.error = Some(format!("{err:#}")),
+        Err(err) => problems.push(format!("{err:#}")),
     }
 
-    if let Ok(entries) = project_info::read_journal_entries(path) {
-        detail.journal_count = entries.len();
-        detail.journal = entries
-            .iter()
-            .rev()
-            .take(JOURNAL_LIMIT)
-            .map(|entry| {
-                (
-                    entry
-                        .timestamp
-                        .get(..10)
-                        .unwrap_or(&entry.timestamp)
-                        .to_string(),
-                    entry.message.clone(),
-                )
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
+    match project_info::read_journal_entries(path) {
+        Ok(entries) => {
+            detail.journal_count = entries.len();
+            detail.journal = entries
+                .iter()
+                .rev()
+                .take(JOURNAL_LIMIT)
+                .map(|entry| {
+                    (
+                        entry
+                            .timestamp
+                            .get(..10)
+                            .unwrap_or(&entry.timestamp)
+                            .to_string(),
+                        entry.message.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+        }
+        Err(err) => problems.push(format!("journal: {err:#}")),
     }
 
-    if let Ok(content) = project_info::read(path) {
-        detail.notes = notes_section(&content);
+    match project_info::read(path) {
+        Ok(content) => detail.notes = notes_section(&content),
+        Err(err) => problems.push(format!("notes: {err:#}")),
     }
 
-    detail.listing = listing(path);
+    match listing(path) {
+        Ok(entries) => detail.listing = entries,
+        Err(err) => problems.push(format!("folder: {err}")),
+    }
+    detail.error = problems.into_iter().next();
     detail
 }
 
@@ -595,11 +617,10 @@ fn notes_section(content: &str) -> Vec<String> {
         .collect()
 }
 
-/// Directories first, then files, both sorted; the metadata file hidden.
-fn listing(path: &Path) -> Vec<Entry> {
-    let Ok(read) = std::fs::read_dir(path) else {
-        return Vec::new();
-    };
+/// Directories first, then files, both sorted; the metadata file hidden. A
+/// folder that cannot be listed is an error, not an empty folder.
+fn listing(path: &Path) -> std::io::Result<Vec<Entry>> {
+    let read = std::fs::read_dir(path)?;
     let mut entries: Vec<Entry> = read
         .flatten()
         .filter_map(|entry| {
@@ -613,7 +634,7 @@ fn listing(path: &Path) -> Vec<Entry> {
         .take(LISTING_LIMIT)
         .collect();
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
-    entries
+    Ok(entries)
 }
 
 #[cfg(test)]

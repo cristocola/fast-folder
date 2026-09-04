@@ -95,6 +95,49 @@ pub fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
         .split(vertical)[1]
 }
 
+/// A dialog sized to what it holds — never taller than most of the screen,
+/// never so short that its footer and key line crowd the content. The studio,
+/// the builder and the settings are drawn in one of these.
+pub fn sized_dialog(area: Rect, body: u16) -> Rect {
+    let full = centered(area, 84, 96);
+    let height = (body + 4).clamp(8.min(full.height), full.height);
+    Rect::new(
+        full.x,
+        full.y + (full.height - height) / 2,
+        full.width,
+        height,
+    )
+}
+
+/// How many rows a list drawn inside `dialog` shows, under `above` rows of
+/// chrome besides the borders (a footer and a key line, a query line…).
+pub fn list_rows(dialog: Rect, above: u16) -> usize {
+    dialog.height.saturating_sub(2 + above) as usize
+}
+
+/// The settings list: `sized_dialog` at its full body, minus the footer and
+/// the key line.
+pub fn settings_rows(area: Rect) -> usize {
+    list_rows(sized_dialog(area, 22), 2)
+}
+
+/// The studio's list, beside a detail `lines` long.
+pub fn studio_rows(area: Rect, cards: usize, lines: usize) -> usize {
+    list_rows(sized_dialog(area, cards.max(lines).max(4) as u16), 2)
+}
+
+/// The action menu's box: as tall as its verbs, within reason.
+pub fn actions_box(area: Rect, entries: usize) -> Rect {
+    let height = (entries as u16 + 4).clamp(8, 30);
+    centered_fixed(area, 64, height)
+}
+
+/// A fuzzy picker's box: a query line, a blank, then the ranked rows.
+pub fn pick_box(area: Rect, items: usize) -> Rect {
+    let height = (items as u16 + 4).clamp(6, 16);
+    centered_fixed(area, 50, height)
+}
+
 /// Where the help overlay is drawn. The app clamps its scroll with the same
 /// box the view draws it in.
 pub fn help_box(area: Rect) -> Rect {

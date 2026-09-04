@@ -13,6 +13,8 @@
 //! both axes. A folder name can hold any character a filesystem can, and
 //! slicing one mid-character panics.
 
+use std::cell::Cell;
+
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Position, Rect};
@@ -30,8 +32,10 @@ pub struct TextArea {
     row: usize,
     /// Chars before the caret on that line.
     column: usize,
-    /// First visible line.
-    offset: usize,
+    /// First visible line. A `Cell` because the viewport is decided while
+    /// drawing — `view` takes the app by shared reference — and a scroll that
+    /// is re-derived from scratch every frame is a scroll that jumps.
+    offset: Cell<usize>,
 }
 
 impl Default for TextArea {
@@ -40,7 +44,7 @@ impl Default for TextArea {
             lines: vec![String::new()],
             row: 0,
             column: 0,
-            offset: 0,
+            offset: Cell::new(0),
         }
     }
 }
@@ -64,7 +68,7 @@ impl TextArea {
             lines,
             row,
             column,
-            offset: 0,
+            offset: Cell::new(0),
         }
     }
 
@@ -235,15 +239,20 @@ impl TextArea {
         }
     }
 
-    fn clamp_viewport(&mut self, rows: usize) {
-        self.offset =
-            super::nav::viewport_offset(self.offset, Some(self.row), self.lines.len(), rows);
+    fn clamp_viewport(&self, rows: usize) {
+        self.offset.set(super::nav::viewport_offset(
+            self.offset.get(),
+            Some(self.row),
+            self.lines.len(),
+            rows,
+        ));
     }
 
-    /// Draw into `area` and report where the caret is. Takes `&mut self` for
-    /// the viewport alone — the same bargain `LibraryState.offset` makes:
-    /// scrolling is state, and re-deriving it every frame throws it away.
-    pub fn render(&mut self, area: Rect, buffer: &mut Buffer, style: Style) -> Option<Position> {
+    /// Draw into `area` and report where the caret is. The viewport it keeps
+    /// is the same bargain `LibraryState.offset` makes: scrolling is state,
+    /// and re-deriving it every frame throws it away — which is what a
+    /// caller that cloned the area before drawing used to do.
+    pub fn render(&self, area: Rect, buffer: &mut Buffer, style: Style) -> Option<Position> {
         if area.height == 0 || area.width == 0 {
             return None;
         }
@@ -252,7 +261,7 @@ impl TextArea {
         let rendered: Vec<Line> = self
             .lines
             .iter()
-            .skip(self.offset)
+            .skip(self.offset.get())
             .take(area.height as usize)
             .map(|line| {
                 let (shown, _) = visible_window(line, line.chars().count(), width, 0);
@@ -261,7 +270,7 @@ impl TextArea {
             .collect();
         Paragraph::new(rendered).render(area, buffer);
 
-        let row = self.row.checked_sub(self.offset)?;
+        let row = self.row.checked_sub(self.offset.get())?;
         if row >= area.height as usize {
             return None;
         }

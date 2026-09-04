@@ -119,6 +119,68 @@ fn parse_term(term: &str) -> Option<Predicate> {
     Some(Predicate::Free(term.to_string()))
 }
 
+/// Why a term cannot mean what it looks like it means, if it cannot. `parse`
+/// never refuses a term — a script may pass anything — but a person typing
+/// `created>` or `template=` into the search bar is better told than shown
+/// an empty list. `None` for a term the grammar is happy with.
+pub fn diagnose(term: &str) -> Option<String> {
+    let term = term.trim();
+    if term.is_empty() {
+        return None;
+    }
+    if term == "tag:" {
+        return Some("tag: needs a tag, like tag:draft or tag:client/*".to_string());
+    }
+    for (op, name) in [('>', "after"), ('<', "before")] {
+        if let Some((key, value)) = term.split_once(op) {
+            if key.is_empty() {
+                return Some(format!(
+                    "{op} needs a field before it, like created{op}2026-01-01"
+                ));
+            }
+            if value.is_empty() {
+                return Some(format!(
+                    "{key}{op} needs a value ({name} what?), like {key}{op}2026-01-01"
+                ));
+            }
+            if key == "created" && !looks_like_a_date(value) {
+                return Some(format!(
+                    "created{op} needs a date like 2026-01-01, not '{value}'"
+                ));
+            }
+            return None;
+        }
+    }
+    if let Some((key, value)) = term.split_once('=') {
+        if key.is_empty() {
+            return Some("= needs a field before it, like template=music-video".to_string());
+        }
+        if value.is_empty() {
+            return Some(format!("{key}= needs a value, like {key}=something"));
+        }
+    }
+    None
+}
+
+/// `YYYY-MM-DD`, or a prefix of it (`2026`, `2026-05`): what `created` holds
+/// and what a comparison against it can mean.
+fn looks_like_a_date(value: &str) -> bool {
+    let value = value.trim();
+    let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+    let mut parts = value.splitn(3, '-');
+    let year = parts.next().unwrap_or_default();
+    if !digits(year, 4) {
+        return false;
+    }
+    match (parts.next(), parts.next()) {
+        (None, _) => true,
+        (Some(month), None) => digits(month, 2),
+        (Some(month), Some(day)) => {
+            digits(month, 2) && (digits(day, 2) || day.len() > 2 && digits(&day[..2], 2))
+        }
+    }
+}
+
 fn to_pattern(s: &str) -> Pattern {
     if let Some(prefix) = s.strip_suffix('*') {
         Pattern::Prefix(prefix.to_string())
@@ -218,6 +280,29 @@ fn resolve_field(key: &str, meta: &Metadata) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::diagnose;
+
+    #[test]
+    fn a_term_the_grammar_cannot_mean_anything_by_is_named() {
+        assert_eq!(diagnose("lullaby"), None);
+        assert_eq!(diagnose("tag:draft"), None);
+        assert_eq!(diagnose("template=music-video"), None);
+        assert_eq!(diagnose("created>2026-01-01"), None);
+        assert_eq!(diagnose("created>2026"), None);
+        assert_eq!(diagnose("created<2026-05"), None);
+        assert_eq!(diagnose("artist=Aria*"), None);
+        assert!(diagnose("tag:").unwrap().contains("tag:draft"));
+        assert!(diagnose("created>").unwrap().contains("needs a value"));
+        assert!(
+            diagnose("created>notadate")
+                .unwrap()
+                .contains("needs a date like 2026-01-01")
+        );
+        assert!(diagnose("template=").unwrap().contains("needs a value"));
+        assert!(diagnose("=x").unwrap().contains("needs a field"));
+        assert!(diagnose(">2026").unwrap().contains("needs a field"));
+    }
+
     use super::*;
     use std::collections::BTreeMap;
 

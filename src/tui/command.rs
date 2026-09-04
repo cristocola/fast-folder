@@ -472,22 +472,27 @@ fn builder_variables_open(app: &App) -> Availability {
     }
 }
 
-/// Move needs a mounted base to move to that is not the one the project is in.
+/// Move needs a mounted base to move to that is not the one the project is
+/// in. With one base it is listed dimmed with the reason rather than hidden:
+/// a person with one drive should still learn that a second one is a key
+/// away, and pressing `m` should say why nothing happened.
 fn can_move(app: &App) -> Availability {
     let Some(project) = app.library.selected() else {
         return Availability::Hidden;
     };
     let Some(summary) = &app.summary else {
-        return Availability::Hidden;
+        return Availability::Disabled("still probing the bases");
     };
     if summary
         .bases
         .iter()
         .any(|base| base.probe.usable() && base.path != project.base)
     {
-        Availability::Enabled
+        not_busy(app)
+    } else if summary.bases.len() > 1 {
+        Availability::Disabled("no other base is mounted right now")
     } else {
-        Availability::Hidden
+        Availability::Disabled("only one base is configured — add another under Settings")
     }
 }
 

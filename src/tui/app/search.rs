@@ -45,6 +45,12 @@ impl Query {
         self.structured.is_empty() && self.free.is_empty()
     }
 
+    /// What is wrong with the query as typed, if anything — the first term
+    /// the grammar cannot mean anything by.
+    pub fn diagnose(&self) -> Option<String> {
+        self.raw.split_whitespace().find_map(query::diagnose)
+    }
+
     /// The fuzzy pattern text: every bare word, space-joined.
     pub fn free_text(&self) -> String {
         self.free.join(" ")

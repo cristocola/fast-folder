@@ -240,8 +240,8 @@ fn render_palette(app: &App, palette: &PaletteState, frame: &mut Frame, area: Re
 fn render_pick(app: &App, pick: &PickState, frame: &mut Frame, area: Rect) -> Position {
     let theme = &app.theme;
     let g = theme.glyphs;
-    let height = (pick.ranked.len() as u16 + 4).clamp(6, 16);
-    let area = centered_fixed(area, 50, height);
+    let area = crate::tui::layout::pick_box(area, pick.ranked.len());
+
     frame.render_widget(Clear, area);
     let block = frame_block(app, format!(" {} ", pick.title), true);
     let inner = block.inner(area);
@@ -298,8 +298,7 @@ fn render_actions(
     let theme = &app.theme;
     let g = theme.glyphs;
     let entries = crate::tui::app::actions::action_entries(app);
-    let height = (entries.len() as u16 + 4).clamp(8, 30);
-    let area = centered_fixed(area, 64, height);
+    let area = crate::tui::layout::actions_box(area, entries.len());
     frame.render_widget(Clear, area);
     let project = app.library.selected();
     let title = project

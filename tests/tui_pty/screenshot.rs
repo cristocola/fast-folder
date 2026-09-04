@@ -157,48 +157,224 @@ fn screenshot() {
 }
 
 /// A library with something in every column: several templates, tags, dates
-/// spread across months, and payloads of different sizes.
+/// spread across months, distinct project names, and sizes across every
+/// magnitude the size column can render.
+///
+/// **Every name is different and every size is different.** This library is
+/// what the README's picture shows, and a column of repeated names or a column
+/// of numbers that all read `xxx KB` demonstrates nothing about either column.
+/// The payloads are sparse files: `tree_size` reads `metadata.len()`, so a
+/// forty gigabyte project costs one `set_len` call and no disk.
 fn plant_showcase(sb: &Sandbox, n: usize) {
-    let templates = [
-        ("music-video", "Music video"),
-        ("general", "General"),
-        ("client-project", "Client project"),
-        ("photography", "Photography"),
+    // name, template slug, template display name, size in bytes.
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    struct Row {
+        name: &'static str,
+        slug: &'static str,
+        display: &'static str,
+        bytes: u64,
+        client: &'static str,
+        folders: &'static [&'static str],
+    }
+    const VIDEO: &[&str] = &["01_Footage", "02_Audio", "03_Project_Files", "04_Export"];
+    const CLIENT: &[&str] = &["00_Brief", "01_Working", "02_Delivery"];
+    const PHOTO: &[&str] = &["01_RAW", "02_Selects", "03_Retouched", "04_Delivery"];
+    const PLAIN: &[&str] = &["00_Inbox", "01_Work"];
+    let rows: [Row; 16] = [
+        Row {
+            name: "Spring_Campaign",
+            slug: "client-project",
+            display: "Client project",
+            bytes: 41 * GB,
+            client: "Acme",
+            folders: CLIENT,
+        },
+        Row {
+            name: "Documentary_Rough_Cut",
+            slug: "video-production",
+            display: "Video production",
+            bytes: 22 * GB,
+            client: "Northwind",
+            folders: VIDEO,
+        },
+        Row {
+            name: "Lullaby_Remix",
+            slug: "music-video",
+            display: "Music video",
+            bytes: 12 * GB,
+            client: "Aria_Vance",
+            folders: VIDEO,
+        },
+        Row {
+            name: "Wedding_Highlights",
+            slug: "photography",
+            display: "Photography",
+            bytes: 6 * GB + 400 * MB,
+            client: "Bell",
+            folders: PHOTO,
+        },
+        Row {
+            name: "Product_Launch_Reel",
+            slug: "video-production",
+            display: "Video production",
+            bytes: 3 * GB + 200 * MB,
+            client: "Acme",
+            folders: VIDEO,
+        },
+        Row {
+            name: "Live_Session",
+            slug: "music-video",
+            display: "Music video",
+            bytes: GB + 300 * MB,
+            client: "Aria_Vance",
+            folders: VIDEO,
+        },
+        Row {
+            name: "Autumn_Lookbook",
+            slug: "photography",
+            display: "Photography",
+            bytes: 880 * MB,
+            client: "Meridian",
+            folders: PHOTO,
+        },
+        Row {
+            name: "Album_Artwork",
+            slug: "music-video",
+            display: "Music video",
+            bytes: 340 * MB,
+            client: "Aria_Vance",
+            folders: PLAIN,
+        },
+        Row {
+            name: "Client_Onboarding_Acme",
+            slug: "client-project",
+            display: "Client project",
+            bytes: 96 * MB,
+            client: "Acme",
+            folders: CLIENT,
+        },
+        Row {
+            name: "Motion_Graphics_Pack",
+            slug: "general",
+            display: "General",
+            bytes: 47 * MB,
+            client: "Meridian",
+            folders: PLAIN,
+        },
+        Row {
+            name: "Interview_Series",
+            slug: "video-production",
+            display: "Video production",
+            bytes: 12 * MB,
+            client: "Northwind",
+            folders: VIDEO,
+        },
+        Row {
+            name: "Portfolio_Site",
+            slug: "general",
+            display: "General",
+            bytes: 4 * MB + 200 * KB,
+            client: "Meridian",
+            folders: PLAIN,
+        },
+        Row {
+            name: "Studio_Website",
+            slug: "general",
+            display: "General",
+            bytes: 760 * KB,
+            client: "Bell",
+            folders: PLAIN,
+        },
+        Row {
+            name: "Brand_Refresh",
+            slug: "client-project",
+            display: "Client project",
+            bytes: 220 * KB,
+            client: "Northwind",
+            folders: CLIENT,
+        },
+        Row {
+            name: "Podcast_Intro",
+            slug: "general",
+            display: "General",
+            bytes: 48 * KB,
+            client: "Bell",
+            folders: PLAIN,
+        },
+        Row {
+            name: "Archive_Restoration",
+            slug: "photography",
+            display: "Photography",
+            bytes: 3 * KB,
+            client: "Meridian",
+            folders: PHOTO,
+        },
     ];
-    let names = [
-        "Lullaby_Remix",
-        "Client_Onboarding_Acme",
-        "Old_Shoot",
-        "Spring_Campaign",
-        "Live_Session",
-        "Portfolio_Site",
-        "Wedding_Highlights",
-        "Podcast_Intro",
-    ];
+    // **Two bases**, because one of the things worth showing is that a library
+    // can span drives: a working one and an archive. The sandbox's own base is
+    // called `base`, which says nothing, so the showcase configures its own.
+    let projects = sb.tmp.path().join("projects");
+    let archive = sb.tmp.path().join("archive");
+    fs::create_dir_all(&projects).unwrap();
+    fs::create_dir_all(&archive).unwrap();
+    sb.ok(&["config", "set", "base-dir", &projects.display().to_string()]);
+    sb.ok(&["config", "set", "bases", &archive.display().to_string()]);
+
     for i in 0..n {
-        let (slug, name) = templates[i % templates.len()];
-        let id = format!("ID{:04}", 200 + n - i);
-        let month = 1 + (i % 8) as u32;
-        let day = 1 + (i % 27) as u32;
-        let folder = format!("2026-{month:02}-{day:02}_{}_{id}", names[i % names.len()]);
-        let root = plant_dated_project(
-            sb,
-            &folder,
-            &id,
-            &format!("2026-{month:02}-{day:02}T10:00:00Z"),
-            (i + 1) * 40_000,
-        );
+        let row = &rows[i % rows.len()];
+        // Ascending with the row, so an id sort reads as the order the
+        // projects were made in and a date sort reads as something else.
+        let id = format!("ID{:04}", 201 + i);
+        let month = 1 + (i % 9) as u32;
+        let day = 2 + (i % 26) as u32;
+        let folder = format!("2026-{month:02}-{day:02}_{}_{id}", row.name);
+        let base = if i % 4 == 1 { &archive } else { &projects };
+        let root = sb.plant_project(base, &folder, &id);
+        for sub in row.folders {
+            fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        let payload =
+            fs::File::create(root.join(row.folders[0]).join("payload.bin")).expect("the payload");
+        payload.set_len(row.bytes).expect("a sparse payload");
+        drop(payload);
+        // A file at the top level as well as folders, so the detail pane's
+        // "inside" reads like a project and not like a directory listing.
+        let note = match row.slug {
+            "client-project" => "BRIEF.md",
+            "photography" => "SHOTLIST.md",
+            "general" => "NOTES.md",
+            _ => "TREATMENT.md",
+        };
+        fs::write(root.join(note), "#\n").unwrap();
+
         let pinfo = root.join("PROJECT_INFO.md");
         let raw = fs::read_to_string(&pinfo).unwrap();
         let tags = match i % 3 {
-            0 => "tags:\n  - draft",
-            1 => "tags:\n  - client/Acme\n  - draft",
-            _ => "tags: []",
+            0 => format!("tags:\n  - draft\n  - client/{}", row.client),
+            1 => format!("tags:\n  - client/{}", row.client),
+            _ => format!("tags:\n  - delivered\n  - client/{}", row.client),
         };
+        let title = row.name.replace('_', " ");
         let raw = raw
-            .replace("template: general", &format!("template: {slug}"))
-            .replace("template_name: General", &format!("template_name: {name}"))
-            .replace("tags: []", tags);
+            .replace("template: general", &format!("template: {}", row.slug))
+            .replace(
+                "template_name: General",
+                &format!("template_name: {}", row.display),
+            )
+            .replace(
+                "created: 2026-01-01T00:00:00Z",
+                &format!("created: 2026-{month:02}-{day:02}T10:00:00Z"),
+            )
+            .replace(
+                "variables: {}",
+                &format!(
+                    "variables:\n  client: {}\n  project: {title}\n  year: '2026'",
+                    row.client
+                ),
+            )
+            .replace("tags: []", &tags);
         fs::write(&pinfo, raw).unwrap();
     }
     // The index the header reads before discovery answers.

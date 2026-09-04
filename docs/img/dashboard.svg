@@ -3,15 +3,17 @@
 <text x="8.0" y="21.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold"> fast-folder</text>
 <text x="134.0" y="21.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold" text-decoration="underline">library</text>
 <text x="192.8" y="21.5" xml:space="preserve" fill="#767e88"> │ templates</text>
-<text x="293.6" y="21.5" xml:space="preserve" fill="#c9ced4">   1 base                                                              </text>
+<text x="293.6" y="21.5" xml:space="preserve" fill="#c9ced4">   2 bases                                                             </text>
 <text x="890.0" y="21.5" xml:space="preserve" fill="#767e88">highest </text>
 <text x="957.2" y="21.5" xml:space="preserve" fill="#c9ced4">ID0214 </text>
 <text x="16.4" y="39.5" xml:space="preserve" fill="#767e88">→ </text>
-<text x="33.2" y="39.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">base</text>
-<text x="66.8" y="39.5" xml:space="preserve" fill="#767e88"> 14</text>
+<text x="33.2" y="39.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">projects</text>
+<text x="100.4" y="39.5" xml:space="preserve" fill="#767e88"> 10</text>
+<text x="150.8" y="39.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">archive</text>
+<text x="209.6" y="39.5" xml:space="preserve" fill="#767e88"> 4</text>
 <text x="8.0" y="75.5" xml:space="preserve" fill="#767e88"> ⌕ / to search</text>
-<text x="125.6" y="75.5" xml:space="preserve" fill="#c9ced4">                                                                                           14/14</text>
-<text x="932.0" y="75.5" xml:space="preserve" fill="#767e88"> · newest</text>
+<text x="125.6" y="75.5" xml:space="preserve" fill="#c9ced4">                                                                                               14/14</text>
+<text x="965.6" y="75.5" xml:space="preserve" fill="#767e88"> · id</text>
 <line x1="12.2" y1="89.0" x2="16.4" y2="89.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="89.0" x2="12.2" y2="98.0" stroke="#7aa2c4" stroke-width="1"/>
 <text x="16.4" y="93.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold"> projects </text>
@@ -136,12 +138,12 @@
 <line x1="596.0" y1="89.0" x2="600.2" y2="89.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="600.2" y1="89.0" x2="604.4" y2="89.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="604.4" y1="89.0" x2="608.6" y2="89.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="89.0" x2="608.6" y2="98.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="89.0" x2="621.2" y2="89.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="89.0" x2="617.0" y2="98.0" stroke="#464c54" stroke-width="1"/>
-<text x="621.2" y="93.5" xml:space="preserve" fill="#767e88"> ID0207 </text>
-<line x1="688.4" y1="89.0" x2="692.6" y2="89.0" stroke="#464c54" stroke-width="1"/>
-<line x1="692.6" y1="89.0" x2="696.8" y2="89.0" stroke="#464c54" stroke-width="1"/>
+<line x1="608.6" y1="89.0" x2="612.8" y2="89.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="612.8" y1="89.0" x2="617.0" y2="89.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="89.0" x2="617.0" y2="98.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="89.0" x2="629.6" y2="89.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="89.0" x2="625.4" y2="98.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="93.5" xml:space="preserve" fill="#767e88"> ID0201 </text>
 <line x1="696.8" y1="89.0" x2="701.0" y2="89.0" stroke="#464c54" stroke-width="1"/>
 <line x1="701.0" y1="89.0" x2="705.2" y2="89.0" stroke="#464c54" stroke-width="1"/>
 <line x1="705.2" y1="89.0" x2="709.4" y2="89.0" stroke="#464c54" stroke-width="1"/>
@@ -220,12 +222,12 @@
 <line x1="1011.8" y1="89.0" x2="1011.8" y2="98.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="98.0" x2="12.2" y2="107.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="107.0" x2="12.2" y2="116.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="16.4" y="111.5" xml:space="preserve" fill="#767e88" font-weight="bold">  ID     PROJECT                                                 SIZE</text>
-<line x1="608.6" y1="98.0" x2="608.6" y2="107.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="107.0" x2="608.6" y2="116.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="98.0" x2="617.0" y2="107.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="107.0" x2="617.0" y2="116.0" stroke="#464c54" stroke-width="1"/>
-<text x="621.2" y="111.5" xml:space="preserve" fill="#c9ced4" font-weight="bold">2026-08-08_Podcast_Intro_ID0207</text>
+<text x="16.4" y="111.5" xml:space="preserve" fill="#767e88" font-weight="bold">  ID     PROJECT                                         SIZE BASE    </text>
+<line x1="617.0" y1="98.0" x2="617.0" y2="107.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="107.0" x2="617.0" y2="116.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="98.0" x2="625.4" y2="107.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="107.0" x2="625.4" y2="116.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="111.5" xml:space="preserve" fill="#c9ced4" font-weight="bold">2026-01-02_Spring_Campaign_ID0201</text>
 <line x1="1011.8" y1="98.0" x2="1011.8" y2="107.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="107.0" x2="1011.8" y2="116.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="116.0" x2="12.2" y2="125.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -234,290 +236,318 @@
 <text x="16.4" y="129.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">▸</text>
 <rect x="24.8" y="116.0" width="8.4" height="18.0" fill="#2c343e"/>
 <rect x="33.2" y="116.0" width="50.4" height="18.0" fill="#2c343e"/>
-<text x="33.2" y="129.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0207</text>
-<rect x="83.6" y="116.0" width="512.4" height="18.0" fill="#2c343e"/>
-<text x="83.6" y="129.5" xml:space="preserve" fill="#c9ced4" font-weight="bold"> 2026-08-08_Podcast_Intro_ID0207                     312.7 KB</text>
-<line x1="608.6" y1="116.0" x2="608.6" y2="125.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="125.0" x2="608.6" y2="134.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="116.0" x2="617.0" y2="125.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="125.0" x2="617.0" y2="134.0" stroke="#464c54" stroke-width="1"/>
-<text x="621.2" y="129.5" xml:space="preserve" fill="#767e88">photography · </text>
-<text x="738.8" y="129.5" xml:space="preserve" fill="#7aa2c4">base</text>
-<text x="772.4" y="129.5" xml:space="preserve" fill="#767e88"> · created </text>
-<text x="864.8" y="129.5" xml:space="preserve" fill="#c9ced4">2026-08-08       </text>
+<text x="33.2" y="129.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0201</text>
+<rect x="83.6" y="116.0" width="453.6" height="18.0" fill="#2c343e"/>
+<text x="83.6" y="129.5" xml:space="preserve" fill="#c9ced4" font-weight="bold"> 2026-01-02_Spring_Campaign_ID0201            41.0 GB </text>
+<rect x="537.2" y="116.0" width="67.2" height="18.0" fill="#2c343e"/>
+<text x="537.2" y="129.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">projects</text>
+<line x1="617.0" y1="116.0" x2="617.0" y2="125.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="125.0" x2="617.0" y2="134.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="116.0" x2="625.4" y2="125.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="125.0" x2="625.4" y2="134.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="129.5" xml:space="preserve" fill="#767e88">client-project · </text>
+<text x="772.4" y="129.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<text x="839.6" y="129.5" xml:space="preserve" fill="#767e88"> · created</text>
 <line x1="1011.8" y1="116.0" x2="1011.8" y2="125.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="125.0" x2="1011.8" y2="134.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="134.0" x2="12.2" y2="143.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="143.0" x2="12.2" y2="152.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="147.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0208</text>
-<text x="83.6" y="147.5" xml:space="preserve" fill="#c9ced4"> 2026-07-07_Wedding_Highlights_ID0208                273.7 KB </text>
-<line x1="608.6" y1="134.0" x2="608.6" y2="143.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="143.0" x2="608.6" y2="152.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="134.0" x2="617.0" y2="143.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="143.0" x2="617.0" y2="152.0" stroke="#464c54" stroke-width="1"/>
-<text x="621.2" y="147.5" xml:space="preserve" fill="#c9ced4">312.7 KB</text>
-<text x="688.4" y="147.5" xml:space="preserve" fill="#767e88">   ·   0 journal entries</text>
+<text x="33.2" y="147.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0202</text>
+<text x="83.6" y="147.5" xml:space="preserve" fill="#c9ced4"> 2026-02-03_Documentary_Rough_Cut_ID0202      22.0 GB </text>
+<text x="537.2" y="147.5" xml:space="preserve" fill="#7aa2c4">archive</text>
+<line x1="617.0" y1="134.0" x2="617.0" y2="143.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="143.0" x2="617.0" y2="152.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="134.0" x2="625.4" y2="143.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="143.0" x2="625.4" y2="152.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="147.5" xml:space="preserve" fill="#c9ced4">2026-01-02                                   </text>
 <line x1="1011.8" y1="134.0" x2="1011.8" y2="143.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="143.0" x2="1011.8" y2="152.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="152.0" x2="12.2" y2="161.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="161.0" x2="12.2" y2="170.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="165.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0201</text>
-<text x="83.6" y="165.5" xml:space="preserve" fill="#c9ced4"> 2026-06-14_Portfolio_Site_ID0201                    547.1 KB </text>
-<line x1="608.6" y1="152.0" x2="608.6" y2="161.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="161.0" x2="608.6" y2="170.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="152.0" x2="617.0" y2="161.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="161.0" x2="617.0" y2="170.0" stroke="#464c54" stroke-width="1"/>
-<text x="621.2" y="165.5" xml:space="preserve" fill="#767e88">tags  </text>
-<text x="671.6" y="165.5" xml:space="preserve" fill="#8c96aa">● client/Acme  </text>
-<text x="797.6" y="165.5" xml:space="preserve" fill="#a0a07a">● draft  </text>
+<text x="33.2" y="165.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0203</text>
+<text x="83.6" y="165.5" xml:space="preserve" fill="#c9ced4"> 2026-03-04_Lullaby_Remix_ID0203              12.0 GB </text>
+<text x="537.2" y="165.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<line x1="617.0" y1="152.0" x2="617.0" y2="161.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="161.0" x2="617.0" y2="170.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="152.0" x2="625.4" y2="161.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="161.0" x2="625.4" y2="170.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="165.5" xml:space="preserve" fill="#c9ced4">41.0 GB</text>
+<text x="688.4" y="165.5" xml:space="preserve" fill="#767e88">   ·   0 journal entries</text>
 <line x1="1011.8" y1="152.0" x2="1011.8" y2="161.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="161.0" x2="1011.8" y2="170.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="170.0" x2="12.2" y2="179.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="179.0" x2="12.2" y2="188.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="183.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0209</text>
-<text x="83.6" y="183.5" xml:space="preserve" fill="#c9ced4"> 2026-06-06_Portfolio_Site_ID0209                    234.6 KB </text>
-<line x1="608.6" y1="170.0" x2="608.6" y2="179.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="179.0" x2="608.6" y2="188.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="170.0" x2="617.0" y2="179.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="179.0" x2="617.0" y2="188.0" stroke="#464c54" stroke-width="1"/>
-<text x="621.2" y="183.5" xml:space="preserve" fill="#767e88">── inside ────────────────────────────────────</text>
+<text x="33.2" y="183.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0204</text>
+<text x="83.6" y="183.5" xml:space="preserve" fill="#c9ced4"> 2026-04-05_Wedding_Highlights_ID0204          6.4 GB </text>
+<text x="537.2" y="183.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<line x1="617.0" y1="170.0" x2="617.0" y2="179.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="179.0" x2="617.0" y2="188.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="170.0" x2="625.4" y2="179.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="179.0" x2="625.4" y2="188.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="183.5" xml:space="preserve" fill="#767e88">tags  </text>
+<text x="680.0" y="183.5" xml:space="preserve" fill="#a0a07a">● draft  </text>
+<text x="755.6" y="183.5" xml:space="preserve" fill="#8c96aa">● client/Acme  </text>
 <line x1="1011.8" y1="170.0" x2="1011.8" y2="179.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="179.0" x2="1011.8" y2="188.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="188.0" x2="12.2" y2="197.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="197.0" x2="12.2" y2="206.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="201.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0202</text>
-<text x="83.6" y="201.5" xml:space="preserve" fill="#c9ced4"> 2026-05-13_Live_Session_ID0202                      508.0 KB </text>
-<line x1="608.6" y1="188.0" x2="608.6" y2="197.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="197.0" x2="608.6" y2="206.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="188.0" x2="617.0" y2="197.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="197.0" x2="617.0" y2="206.0" stroke="#464c54" stroke-width="1"/>
-<text x="621.2" y="201.5" xml:space="preserve" fill="#767e88">· payload.bin</text>
+<text x="33.2" y="201.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0205</text>
+<text x="83.6" y="201.5" xml:space="preserve" fill="#c9ced4"> 2026-05-06_Product_Launch_Reel_ID0205         3.2 GB </text>
+<text x="537.2" y="201.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<line x1="617.0" y1="188.0" x2="617.0" y2="197.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="197.0" x2="617.0" y2="206.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="188.0" x2="625.4" y2="197.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="197.0" x2="625.4" y2="206.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="201.5" xml:space="preserve" fill="#767e88">── variables ────────────────────────────────</text>
 <line x1="1011.8" y1="188.0" x2="1011.8" y2="197.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="197.0" x2="1011.8" y2="206.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="206.0" x2="12.2" y2="215.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="215.0" x2="12.2" y2="224.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="219.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0210</text>
-<text x="83.6" y="219.5" xml:space="preserve" fill="#c9ced4"> 2026-05-05_Live_Session_ID0210                      195.6 KB </text>
-<line x1="608.6" y1="206.0" x2="608.6" y2="215.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="215.0" x2="608.6" y2="224.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="206.0" x2="617.0" y2="215.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="215.0" x2="617.0" y2="224.0" stroke="#464c54" stroke-width="1"/>
+<text x="33.2" y="219.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0206</text>
+<text x="83.6" y="219.5" xml:space="preserve" fill="#c9ced4"> 2026-06-07_Live_Session_ID0206                1.3 GB </text>
+<text x="537.2" y="219.5" xml:space="preserve" fill="#7aa2c4">archive</text>
+<line x1="617.0" y1="206.0" x2="617.0" y2="215.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="215.0" x2="617.0" y2="224.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="206.0" x2="625.4" y2="215.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="215.0" x2="625.4" y2="224.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="219.5" xml:space="preserve" fill="#767e88">client  </text>
+<text x="696.8" y="219.5" xml:space="preserve" fill="#c9ced4">Acme                                 </text>
 <line x1="1011.8" y1="206.0" x2="1011.8" y2="215.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="215.0" x2="1011.8" y2="224.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="224.0" x2="12.2" y2="233.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="233.0" x2="12.2" y2="242.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="237.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0203</text>
-<text x="83.6" y="237.5" xml:space="preserve" fill="#c9ced4"> 2026-04-12_Spring_Campaign_ID0203                   469.0 KB </text>
-<line x1="608.6" y1="224.0" x2="608.6" y2="233.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="233.0" x2="608.6" y2="242.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="224.0" x2="617.0" y2="233.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="233.0" x2="617.0" y2="242.0" stroke="#464c54" stroke-width="1"/>
+<text x="33.2" y="237.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0207</text>
+<text x="83.6" y="237.5" xml:space="preserve" fill="#c9ced4"> 2026-07-08_Autumn_Lookbook_ID0207           880.0 MB </text>
+<text x="537.2" y="237.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<line x1="617.0" y1="224.0" x2="617.0" y2="233.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="233.0" x2="617.0" y2="242.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="224.0" x2="625.4" y2="233.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="233.0" x2="625.4" y2="242.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="237.5" xml:space="preserve" fill="#767e88">project </text>
+<text x="696.8" y="237.5" xml:space="preserve" fill="#c9ced4">Spring Campaign                      </text>
 <line x1="1011.8" y1="224.0" x2="1011.8" y2="233.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="233.0" x2="1011.8" y2="242.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="242.0" x2="12.2" y2="251.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="251.0" x2="12.2" y2="260.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="255.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0211</text>
-<text x="83.6" y="255.5" xml:space="preserve" fill="#c9ced4"> 2026-04-04_Spring_Campaign_ID0211                   156.5 KB </text>
-<line x1="608.6" y1="242.0" x2="608.6" y2="251.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="251.0" x2="608.6" y2="260.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="242.0" x2="617.0" y2="251.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="251.0" x2="617.0" y2="260.0" stroke="#464c54" stroke-width="1"/>
+<text x="33.2" y="255.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0208</text>
+<text x="83.6" y="255.5" xml:space="preserve" fill="#c9ced4"> 2026-08-09_Album_Artwork_ID0208             340.0 MB </text>
+<text x="537.2" y="255.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<line x1="617.0" y1="242.0" x2="617.0" y2="251.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="251.0" x2="617.0" y2="260.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="242.0" x2="625.4" y2="251.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="251.0" x2="625.4" y2="260.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="255.5" xml:space="preserve" fill="#767e88">year    </text>
+<text x="696.8" y="255.5" xml:space="preserve" fill="#c9ced4">2026                                 </text>
 <line x1="1011.8" y1="242.0" x2="1011.8" y2="251.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="251.0" x2="1011.8" y2="260.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="260.0" x2="12.2" y2="269.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="269.0" x2="12.2" y2="278.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="273.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0204</text>
-<text x="83.6" y="273.5" xml:space="preserve" fill="#c9ced4"> 2026-03-11_Old_Shoot_ID0204                         429.9 KB </text>
-<line x1="608.6" y1="260.0" x2="608.6" y2="269.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="269.0" x2="608.6" y2="278.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="260.0" x2="617.0" y2="269.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="269.0" x2="617.0" y2="278.0" stroke="#464c54" stroke-width="1"/>
+<text x="33.2" y="273.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0209</text>
+<text x="83.6" y="273.5" xml:space="preserve" fill="#c9ced4"> 2026-09-10_Client_Onboarding_Acme_ID0209     96.0 MB </text>
+<text x="537.2" y="273.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<line x1="617.0" y1="260.0" x2="617.0" y2="269.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="269.0" x2="617.0" y2="278.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="260.0" x2="625.4" y2="269.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="269.0" x2="625.4" y2="278.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="273.5" xml:space="preserve" fill="#767e88">── inside ───────────────────────────────────</text>
 <line x1="1011.8" y1="260.0" x2="1011.8" y2="269.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="269.0" x2="1011.8" y2="278.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="278.0" x2="12.2" y2="287.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="287.0" x2="12.2" y2="296.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="291.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0212</text>
-<text x="83.6" y="291.5" xml:space="preserve" fill="#c9ced4"> 2026-03-03_Old_Shoot_ID0212                         117.4 KB </text>
-<line x1="608.6" y1="278.0" x2="608.6" y2="287.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="287.0" x2="608.6" y2="296.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="278.0" x2="617.0" y2="287.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="287.0" x2="617.0" y2="296.0" stroke="#464c54" stroke-width="1"/>
+<text x="33.2" y="291.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0210</text>
+<text x="83.6" y="291.5" xml:space="preserve" fill="#c9ced4"> 2026-01-11_Motion_Graphics_Pack_ID0210       47.0 MB </text>
+<text x="537.2" y="291.5" xml:space="preserve" fill="#7aa2c4">archive</text>
+<line x1="617.0" y1="278.0" x2="617.0" y2="287.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="287.0" x2="617.0" y2="296.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="278.0" x2="625.4" y2="287.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="287.0" x2="625.4" y2="296.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="291.5" xml:space="preserve" fill="#767e88">▸ </text>
+<text x="646.4" y="291.5" xml:space="preserve" fill="#c9ced4">00_Brief/                                  </text>
 <line x1="1011.8" y1="278.0" x2="1011.8" y2="287.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="287.0" x2="1011.8" y2="296.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="296.0" x2="12.2" y2="305.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="305.0" x2="12.2" y2="314.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="309.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0205</text>
-<text x="83.6" y="309.5" xml:space="preserve" fill="#c9ced4"> 2026-02-10_Client_Onboarding_Acme_ID0205            390.9 KB </text>
-<line x1="608.6" y1="296.0" x2="608.6" y2="305.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="305.0" x2="608.6" y2="314.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="296.0" x2="617.0" y2="305.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="305.0" x2="617.0" y2="314.0" stroke="#464c54" stroke-width="1"/>
+<text x="33.2" y="309.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0211</text>
+<text x="83.6" y="309.5" xml:space="preserve" fill="#c9ced4"> 2026-02-12_Interview_Series_ID0211           12.0 MB </text>
+<text x="537.2" y="309.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<line x1="617.0" y1="296.0" x2="617.0" y2="305.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="305.0" x2="617.0" y2="314.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="296.0" x2="625.4" y2="305.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="305.0" x2="625.4" y2="314.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="309.5" xml:space="preserve" fill="#767e88">▸ </text>
+<text x="646.4" y="309.5" xml:space="preserve" fill="#c9ced4">01_Working/                                </text>
 <line x1="1011.8" y1="296.0" x2="1011.8" y2="305.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="305.0" x2="1011.8" y2="314.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="314.0" x2="12.2" y2="323.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="323.0" x2="12.2" y2="332.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="327.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0213</text>
-<text x="83.6" y="327.5" xml:space="preserve" fill="#c9ced4"> 2026-02-02_Client_Onboarding_Acme_ID0213             78.4 KB </text>
-<line x1="608.6" y1="314.0" x2="608.6" y2="323.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="323.0" x2="608.6" y2="332.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="314.0" x2="617.0" y2="323.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="323.0" x2="617.0" y2="332.0" stroke="#464c54" stroke-width="1"/>
+<text x="33.2" y="327.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0212</text>
+<text x="83.6" y="327.5" xml:space="preserve" fill="#c9ced4"> 2026-03-13_Portfolio_Site_ID0212              4.2 MB </text>
+<text x="537.2" y="327.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<line x1="617.0" y1="314.0" x2="617.0" y2="323.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="323.0" x2="617.0" y2="332.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="314.0" x2="625.4" y2="323.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="323.0" x2="625.4" y2="332.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="327.5" xml:space="preserve" fill="#767e88">▸ </text>
+<text x="646.4" y="327.5" xml:space="preserve" fill="#c9ced4">02_Delivery/                               </text>
 <line x1="1011.8" y1="314.0" x2="1011.8" y2="323.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="323.0" x2="1011.8" y2="332.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="332.0" x2="12.2" y2="341.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="341.0" x2="12.2" y2="350.0" stroke="#7aa2c4" stroke-width="1"/>
-<text x="33.2" y="345.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0206</text>
-<text x="83.6" y="345.5" xml:space="preserve" fill="#c9ced4"> 2026-01-09_Lullaby_Remix_ID0206                     351.8 KB </text>
-<line x1="608.6" y1="332.0" x2="608.6" y2="341.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="341.0" x2="608.6" y2="350.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="332.0" x2="617.0" y2="341.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="341.0" x2="617.0" y2="350.0" stroke="#464c54" stroke-width="1"/>
+<text x="33.2" y="345.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0213</text>
+<text x="83.6" y="345.5" xml:space="preserve" fill="#c9ced4"> 2026-04-14_Studio_Website_ID0213            760.3 KB </text>
+<text x="537.2" y="345.5" xml:space="preserve" fill="#7aa2c4">projects</text>
+<line x1="617.0" y1="332.0" x2="617.0" y2="341.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="341.0" x2="617.0" y2="350.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="332.0" x2="625.4" y2="341.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="341.0" x2="625.4" y2="350.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="345.5" xml:space="preserve" fill="#767e88">· BRIEF.md</text>
 <line x1="1011.8" y1="332.0" x2="1011.8" y2="341.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="341.0" x2="1011.8" y2="350.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="350.0" x2="12.2" y2="359.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="359.0" x2="12.2" y2="368.0" stroke="#7aa2c4" stroke-width="1"/>
 <text x="33.2" y="363.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">ID0214</text>
-<text x="83.6" y="363.5" xml:space="preserve" fill="#c9ced4"> 2026-01-01_Lullaby_Remix_ID0214                      39.3 KB </text>
-<line x1="608.6" y1="350.0" x2="608.6" y2="359.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="359.0" x2="608.6" y2="368.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="350.0" x2="617.0" y2="359.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="359.0" x2="617.0" y2="368.0" stroke="#464c54" stroke-width="1"/>
+<text x="83.6" y="363.5" xml:space="preserve" fill="#c9ced4"> 2026-05-15_Brand_Refresh_ID0214             220.3 KB </text>
+<text x="537.2" y="363.5" xml:space="preserve" fill="#7aa2c4">archive</text>
+<line x1="617.0" y1="350.0" x2="617.0" y2="359.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="359.0" x2="617.0" y2="368.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="350.0" x2="625.4" y2="359.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="359.0" x2="625.4" y2="368.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="350.0" x2="1011.8" y2="359.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="359.0" x2="1011.8" y2="368.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="368.0" x2="12.2" y2="377.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="377.0" x2="12.2" y2="386.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="368.0" x2="608.6" y2="377.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="377.0" x2="608.6" y2="386.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="368.0" x2="617.0" y2="377.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="377.0" x2="617.0" y2="386.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="368.0" x2="617.0" y2="377.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="377.0" x2="617.0" y2="386.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="368.0" x2="625.4" y2="377.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="377.0" x2="625.4" y2="386.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="368.0" x2="1011.8" y2="377.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="377.0" x2="1011.8" y2="386.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="386.0" x2="12.2" y2="395.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="395.0" x2="12.2" y2="404.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="386.0" x2="608.6" y2="395.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="395.0" x2="608.6" y2="404.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="386.0" x2="617.0" y2="395.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="395.0" x2="617.0" y2="404.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="386.0" x2="617.0" y2="395.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="395.0" x2="617.0" y2="404.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="386.0" x2="625.4" y2="395.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="395.0" x2="625.4" y2="404.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="386.0" x2="1011.8" y2="395.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="395.0" x2="1011.8" y2="404.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="404.0" x2="12.2" y2="413.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="413.0" x2="12.2" y2="422.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="404.0" x2="608.6" y2="413.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="413.0" x2="608.6" y2="422.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="404.0" x2="617.0" y2="413.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="413.0" x2="617.0" y2="422.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="404.0" x2="617.0" y2="413.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="413.0" x2="617.0" y2="422.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="404.0" x2="625.4" y2="413.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="413.0" x2="625.4" y2="422.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="404.0" x2="1011.8" y2="413.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="413.0" x2="1011.8" y2="422.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="422.0" x2="12.2" y2="431.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="431.0" x2="12.2" y2="440.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="422.0" x2="608.6" y2="431.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="431.0" x2="608.6" y2="440.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="422.0" x2="617.0" y2="431.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="431.0" x2="617.0" y2="440.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="422.0" x2="617.0" y2="431.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="431.0" x2="617.0" y2="440.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="422.0" x2="625.4" y2="431.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="431.0" x2="625.4" y2="440.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="422.0" x2="1011.8" y2="431.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="431.0" x2="1011.8" y2="440.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="440.0" x2="12.2" y2="449.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="449.0" x2="12.2" y2="458.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="440.0" x2="608.6" y2="449.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="449.0" x2="608.6" y2="458.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="440.0" x2="617.0" y2="449.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="449.0" x2="617.0" y2="458.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="440.0" x2="617.0" y2="449.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="449.0" x2="617.0" y2="458.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="440.0" x2="625.4" y2="449.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="449.0" x2="625.4" y2="458.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="440.0" x2="1011.8" y2="449.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="449.0" x2="1011.8" y2="458.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="458.0" x2="12.2" y2="467.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="467.0" x2="12.2" y2="476.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="458.0" x2="608.6" y2="467.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="467.0" x2="608.6" y2="476.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="458.0" x2="617.0" y2="467.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="467.0" x2="617.0" y2="476.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="458.0" x2="617.0" y2="467.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="467.0" x2="617.0" y2="476.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="458.0" x2="625.4" y2="467.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="467.0" x2="625.4" y2="476.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="458.0" x2="1011.8" y2="467.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="467.0" x2="1011.8" y2="476.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="476.0" x2="12.2" y2="485.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="485.0" x2="12.2" y2="494.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="476.0" x2="608.6" y2="485.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="485.0" x2="608.6" y2="494.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="476.0" x2="617.0" y2="485.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="485.0" x2="617.0" y2="494.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="476.0" x2="617.0" y2="485.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="485.0" x2="617.0" y2="494.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="476.0" x2="625.4" y2="485.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="485.0" x2="625.4" y2="494.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="476.0" x2="1011.8" y2="485.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="485.0" x2="1011.8" y2="494.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="494.0" x2="12.2" y2="503.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="503.0" x2="12.2" y2="512.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="494.0" x2="608.6" y2="503.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="503.0" x2="608.6" y2="512.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="494.0" x2="617.0" y2="503.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="503.0" x2="617.0" y2="512.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="494.0" x2="617.0" y2="503.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="503.0" x2="617.0" y2="512.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="494.0" x2="625.4" y2="503.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="503.0" x2="625.4" y2="512.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="494.0" x2="1011.8" y2="503.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="503.0" x2="1011.8" y2="512.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="512.0" x2="12.2" y2="521.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="521.0" x2="12.2" y2="530.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="512.0" x2="608.6" y2="521.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="521.0" x2="608.6" y2="530.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="512.0" x2="617.0" y2="521.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="521.0" x2="617.0" y2="530.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="512.0" x2="617.0" y2="521.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="521.0" x2="617.0" y2="530.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="512.0" x2="625.4" y2="521.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="521.0" x2="625.4" y2="530.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="512.0" x2="1011.8" y2="521.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="521.0" x2="1011.8" y2="530.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="530.0" x2="12.2" y2="539.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="539.0" x2="12.2" y2="548.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="530.0" x2="608.6" y2="539.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="539.0" x2="608.6" y2="548.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="530.0" x2="617.0" y2="539.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="539.0" x2="617.0" y2="548.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="530.0" x2="617.0" y2="539.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="539.0" x2="617.0" y2="548.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="530.0" x2="625.4" y2="539.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="539.0" x2="625.4" y2="548.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="530.0" x2="1011.8" y2="539.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="539.0" x2="1011.8" y2="548.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="548.0" x2="12.2" y2="557.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="557.0" x2="12.2" y2="566.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="548.0" x2="608.6" y2="557.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="557.0" x2="608.6" y2="566.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="548.0" x2="617.0" y2="557.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="557.0" x2="617.0" y2="566.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="548.0" x2="617.0" y2="557.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="557.0" x2="617.0" y2="566.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="548.0" x2="625.4" y2="557.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="557.0" x2="625.4" y2="566.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="548.0" x2="1011.8" y2="557.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="557.0" x2="1011.8" y2="566.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="566.0" x2="12.2" y2="575.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="575.0" x2="12.2" y2="584.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="566.0" x2="608.6" y2="575.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="575.0" x2="608.6" y2="584.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="566.0" x2="617.0" y2="575.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="575.0" x2="617.0" y2="584.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="566.0" x2="617.0" y2="575.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="575.0" x2="617.0" y2="584.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="566.0" x2="625.4" y2="575.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="575.0" x2="625.4" y2="584.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="566.0" x2="1011.8" y2="575.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="575.0" x2="1011.8" y2="584.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="584.0" x2="12.2" y2="593.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="593.0" x2="12.2" y2="602.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="584.0" x2="608.6" y2="593.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="593.0" x2="608.6" y2="602.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="584.0" x2="617.0" y2="593.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="593.0" x2="617.0" y2="602.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="584.0" x2="617.0" y2="593.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="593.0" x2="617.0" y2="602.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="584.0" x2="625.4" y2="593.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="593.0" x2="625.4" y2="602.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="584.0" x2="1011.8" y2="593.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="593.0" x2="1011.8" y2="602.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="602.0" x2="12.2" y2="611.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="611.0" x2="12.2" y2="620.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="602.0" x2="608.6" y2="611.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="611.0" x2="608.6" y2="620.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="602.0" x2="617.0" y2="611.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="611.0" x2="617.0" y2="620.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="602.0" x2="617.0" y2="611.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="611.0" x2="617.0" y2="620.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="602.0" x2="625.4" y2="611.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="611.0" x2="625.4" y2="620.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="602.0" x2="1011.8" y2="611.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="611.0" x2="1011.8" y2="620.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="620.0" x2="12.2" y2="629.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="629.0" x2="12.2" y2="638.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="620.0" x2="608.6" y2="629.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="629.0" x2="608.6" y2="638.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="620.0" x2="617.0" y2="629.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="629.0" x2="617.0" y2="638.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="620.0" x2="617.0" y2="629.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="629.0" x2="617.0" y2="638.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="620.0" x2="625.4" y2="629.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="629.0" x2="625.4" y2="638.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="620.0" x2="1011.8" y2="629.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="629.0" x2="1011.8" y2="638.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="638.0" x2="12.2" y2="647.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="647.0" x2="12.2" y2="656.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="638.0" x2="608.6" y2="647.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="647.0" x2="608.6" y2="656.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="638.0" x2="617.0" y2="647.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="647.0" x2="617.0" y2="656.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="638.0" x2="617.0" y2="647.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="647.0" x2="617.0" y2="656.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="638.0" x2="625.4" y2="647.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="647.0" x2="625.4" y2="656.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="638.0" x2="1011.8" y2="647.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="647.0" x2="1011.8" y2="656.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="656.0" x2="12.2" y2="665.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="12.2" y1="665.0" x2="12.2" y2="674.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="656.0" x2="608.6" y2="665.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="665.0" x2="608.6" y2="674.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="656.0" x2="617.0" y2="665.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="665.0" x2="617.0" y2="674.0" stroke="#464c54" stroke-width="1"/>
+<line x1="617.0" y1="656.0" x2="617.0" y2="665.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="665.0" x2="617.0" y2="674.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="625.4" y1="656.0" x2="625.4" y2="665.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="665.0" x2="625.4" y2="674.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="656.0" x2="1011.8" y2="665.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="665.0" x2="1011.8" y2="674.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="683.0" x2="16.4" y2="683.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -663,11 +693,11 @@
 <line x1="596.0" y1="683.0" x2="600.2" y2="683.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="600.2" y1="683.0" x2="604.4" y2="683.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="604.4" y1="683.0" x2="608.6" y2="683.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="608.6" y1="674.0" x2="608.6" y2="683.0" stroke="#7aa2c4" stroke-width="1"/>
-<line x1="617.0" y1="683.0" x2="621.2" y2="683.0" stroke="#464c54" stroke-width="1"/>
-<line x1="617.0" y1="674.0" x2="617.0" y2="683.0" stroke="#464c54" stroke-width="1"/>
-<line x1="621.2" y1="683.0" x2="625.4" y2="683.0" stroke="#464c54" stroke-width="1"/>
+<line x1="608.6" y1="683.0" x2="612.8" y2="683.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="612.8" y1="683.0" x2="617.0" y2="683.0" stroke="#7aa2c4" stroke-width="1"/>
+<line x1="617.0" y1="674.0" x2="617.0" y2="683.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="683.0" x2="629.6" y2="683.0" stroke="#464c54" stroke-width="1"/>
+<line x1="625.4" y1="674.0" x2="625.4" y2="683.0" stroke="#464c54" stroke-width="1"/>
 <line x1="629.6" y1="683.0" x2="633.8" y2="683.0" stroke="#464c54" stroke-width="1"/>
 <line x1="633.8" y1="683.0" x2="638.0" y2="683.0" stroke="#464c54" stroke-width="1"/>
 <line x1="638.0" y1="683.0" x2="642.2" y2="683.0" stroke="#464c54" stroke-width="1"/>

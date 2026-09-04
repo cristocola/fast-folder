@@ -129,20 +129,6 @@ jobs:
           cp packaging/icons/fastf-*.png "$staging/icons/"
           tar czf "$staging.tar.gz" "$staging"
 
-      # The Debian package carries the **static** build, so it installs on any
-      # derivative, old or new, and declares no dependencies. It ships what the
-      # archive ships, from the same staging directory, so the two can never
-      # disagree about what a release contains.
-      - name: Build .deb (musl)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          version="${GITHUB_REF_NAME#refs/tags/}"
-          [ "${GITHUB_REF_TYPE}" = "tag" ] || version="dev-${GITHUB_SHA::7}"
-          packaging/linux/build-deb.sh \
-            "fastf-${version}-${{ matrix.target }}" \
-            "$version" \
-            "fastf-${version}-amd64.deb"
-
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -187,7 +173,6 @@ jobs:
             fastf-*.tar.gz
             fastf-*.zip
             fastf-*.msi
-            fastf-*.deb
           if-no-files-found: error
 
   # Unpack what was actually built and run it. `build` verified the binary in
@@ -223,39 +208,6 @@ jobs:
           fi
           "$bin" completions bash > /dev/null
 
-      # Install the package the way a Debian or Ubuntu user would, run what it
-      # installed, then take it away again. A .deb that unpacks is not the same
-      # claim as a .deb that installs, puts `fastf` on PATH, brings its man page
-      # with it, and uninstalls cleanly.
-      - name: Install, run and remove the .deb
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          deb=$(ls fastf-*-amd64.deb)
-          sudo apt-get update
-          sudo apt-get install -y "./$deb"
-          command -v fastf
-          fastf --version
-          test -f /usr/share/man/man1/fastf.1.gz
-          test -f /usr/share/bash-completion/completions/fastf
-          test -f /usr/share/applications/fastf.desktop
-          test -f /usr/share/icons/hicolor/256x256/apps/fastf.png
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            expected="fastf ${GITHUB_REF_NAME#v}"
-            [ "$(fastf --version)" = "$expected" ] || {
-              echo "::error::the package reports '$(fastf --version)', expected '$expected'"
-              exit 1
-            }
-          fi
-          sudo apt-get remove -y fast-folder
-          # A path check, because bash remembers where it found `fastf` a few
-          # lines ago and `command -v` would answer from that cache.
-          for path in /usr/bin/fastf /usr/share/man/man1/fastf.1.gz \
-                      /usr/share/bash-completion/completions/fastf; do
-            if [ -e "$path" ]; then
-              echo "::error::$path survived apt remove"
-              exit 1
-            fi
-          done
 
   smoke-windows:
     name: smoke (windows)
@@ -356,7 +308,6 @@ jobs:
             fastf-*.tar.gz
             fastf-*.zip
             fastf-*.msi
-            fastf-*.deb
 
       # Hand-written notes for this tag, when there are any
       # (.github/release-notes/<tag>.md); the generated commit list follows.

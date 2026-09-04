@@ -21,13 +21,11 @@ Day to day you work in a full screen terminal app that shows your whole library 
 ## Quick start
 
 ```bash
-# Any Linux
+# Any Linux: downloads the binary and puts it on your PATH
 curl -fsSL https://raw.githubusercontent.com/cristocola/fast-folder/main/packaging/linux/install.sh | sh
 
 # Arch Linux
 paru -S fast-folder-bin
-
-# Debian, Ubuntu and derivatives: a .deb is on every release (see Installation)
 
 # Your first project
 fastf                        # pick a template, fill the form, done
@@ -88,18 +86,18 @@ The whole tool is one binary under 4 MB that carries everything it needs. Instal
 
 ## Installation
 
-### Any Linux, in one command
+### Any Linux
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cristocola/fast-folder/main/packaging/linux/install.sh | sh
 ```
 
-The script downloads the static release archive, checks it against the
-release's own `SHA256SUMS`, and unpacks it under `~/.local`: the binary in
-`~/.local/bin`, plus the man pages, the completions for bash, zsh and fish, the
-desktop entry and the icons. It runs as you and writes only inside your
-home directory, and it tells you at the end whether `~/.local/bin` is on
-your PATH along with the line to add if it is missing.
+The script downloads the statically linked release archive, checks it against
+the release's own `SHA256SUMS`, and unpacks the binary along with the man
+pages, the completions for bash, zsh and fish, the desktop entry and the icons.
+**It puts `fastf` on your PATH for you.** As root it installs into `/usr/local`,
+which is already on PATH. As anyone else it installs into `~/.local` and adds
+`~/.local/bin` to your shell profile, so the next shell has it.
 
 Read it before you run it, as with any script from the internet:
 [`packaging/linux/install.sh`](packaging/linux/install.sh). To read your copy
@@ -111,45 +109,19 @@ less install.sh
 sh install.sh
 ```
 
-`FASTF_VERSION=v3.1.1` pins a release, and `sudo PREFIX=/usr/local sh install.sh` installs it system wide.
-
-To remove it later, delete `~/.local/bin/fastf` along with the `fast-folder`
-files under `~/.local/share`.
-
-### Debian, Ubuntu, Mint and other Debian derivatives
-
-A `.deb` is on every [release](https://github.com/cristocola/fast-folder/releases), so `apt` owns the files and can take them away again:
-
-```bash
-ver=$(curl -fsSL https://api.github.com/repos/cristocola/fast-folder/releases/latest \
-  | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
-curl -fLO "https://github.com/cristocola/fast-folder/releases/download/$ver/fastf-$ver-amd64.deb"
-sudo apt install "./fastf-$ver-amd64.deb"
-```
-
-That puts `fastf` on your PATH and brings the man pages, the shell completions
-and a "Fast Folder" entry in your application menu with it. `sudo apt remove
-fast-folder` removes all of it. The package carries the statically linked
-build, so the same file installs on an old release and a current one alike.
+`FASTF_VERSION=v3.1.1` pins a release and `PREFIX=/opt/fastf` chooses where it
+goes. To remove it later, delete `fastf` from the `bin` directory it went into,
+the `fast-folder` files under `share`, and the two lines the script marked in
+your shell profile.
 
 ### Arch Linux (AUR)
 
 ```bash
-paru -S fast-folder-bin    # prebuilt static binary
-paru -S fast-folder        # build from source
+paru -S fast-folder-bin    # the prebuilt static binary
+paru -S fast-folder        # build it from source
 ```
 
 Both install the `fastf` command, shell completions, man pages, and a "Fast Folder" app menu entry that opens the terminal app.
-
-### Linux, by hand
-
-Download from the [releases page](https://github.com/cristocola/fast-folder/releases). The `musl` build is fully static and runs on any distribution. Checksums are in `SHA256SUMS`, and every asset carries a signed build provenance attestation (`gh attestation verify <file> --repo cristocola/fast-folder`).
-
-```bash
-tar xzf fastf-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz
-install -Dm755 fastf-vX.Y.Z-x86_64-unknown-linux-musl/fastf ~/.local/bin/fastf
-fastf --version
-```
 
 ### Windows
 
@@ -167,6 +139,8 @@ install -Dm755 target/release/fastf ~/.local/bin/fastf   # or copy fastf.exe ont
 ```
 
 On macOS the source build above is how you install it.
+
+Every release archive is listed in `SHA256SUMS` and carries a signed build provenance attestation, which `gh attestation verify <file> --repo cristocola/fast-folder` checks.
 
 ## Where fast-folder keeps its data
 

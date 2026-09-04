@@ -10,9 +10,8 @@
 //!
 //! Two things are deliberately allowed and must stay allowed:
 //! - **Attribution.** The maintainer's name and contact belong in `LICENSE`,
-//!   `Cargo.toml`, the PKGBUILDs, the Debian control file and the Windows
-//!   installer. AUR *requires* a `# Maintainer:` line and Debian requires a
-//!   `Maintainer:` field. Removing those would be less professional, not more.
+//!   `Cargo.toml`, the PKGBUILDs, and the installer. AUR *requires* a
+//!   `# Maintainer:` line. Removing those would be less professional, not more.
 //! - **Placeholder paths.** `/home/user`, `/home/you`, `C:\Users\user` are how
 //!   documentation shows a path. It is the *real* names that are the problem.
 
@@ -28,9 +27,6 @@ const ATTRIBUTION_FILES: &[&str] = &[
     "packaging/wix/main.wxs",
     "packaging/aur/fast-folder/PKGBUILD",
     "packaging/aur/fast-folder-bin/PKGBUILD",
-    // A Debian control file has a `Maintainer:` field, and it is required. It
-    // is the same kind of file as a PKGBUILD and belongs on the same list.
-    "packaging/linux/build-deb.sh",
 ];
 
 /// The one file that must contain every pattern it forbids: this one. It is

@@ -143,8 +143,7 @@ Nothing tracked here may describe the machine it was written on: no real home
 directory (`/home/<name>`, `C:\Users\<name>`), no personal mount point, no local
 project-folder path, no maintainer's name in prose. Write `/home/user`,
 `/mnt/projects/...`, "the maintainer". Attribution is the exception and belongs
-in `LICENSE`, `Cargo.toml`, `README.md`, the PKGBUILDs, the Debian control file
-(`packaging/linux/build-deb.sh`) and the Windows installer.
+in `LICENSE`, `Cargo.toml`, `README.md`, the PKGBUILDs and the installer.
 
 `tests/repo_hygiene.rs` enforces this over `git ls-files`, so the rule fails the
 build rather than relying on anyone remembering it. It runs only when the crate

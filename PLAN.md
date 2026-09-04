@@ -4,26 +4,26 @@ Eleven findings from driving v3.0.0 against a real library, plus a release that
 has never passed CI on its first tag. One branch, one commit per phase, one PR,
 then the release.
 
-## Phase 1 — the dashboard says each thing once  ⬜
+## Phase 1 — the dashboard says each thing once  ✅
 Items 1, 5, 6, 8a, 8b, 10.
 
-- [ ] The table gets a 1-column right gutter; `SIZE` header right-aligned;
+- [x] The table gets a 1-column right gutter; `SIZE` header right-aligned;
       `choose_columns` becomes a strict prefix (it could show BASE with no SIZE).
-- [ ] Column priority: size, base, created, template, tags when more than one
+- [x] Column priority: size, base, created, template, tags when more than one
       base is configured.
-- [ ] A base filter (`b`), cleared with the template filter by `F`.
+- [x] A base filter (`b`), cleared with the template filter by `F`.
       `Order::Base` compares the label then the full path.
-- [ ] `fastf recent --base <label>`.
-- [ ] The count is stated once, in the search bar. Header says `fast-folder`,
+- [x] `fastf recent --base <label>`.
+- [x] The count is stated once, in the search bar. Header says `fast-folder`,
       drops the project and template counts. Status line drops
       "N of M projects" and "? for help".
-- [ ] `MarkToggle` is in the hint bar and the palette.
+- [x] `MarkToggle` is in the hint bar and the palette.
 
 ## Phase 2 — a templates tab  ⬜
 Items 7, 9. A real tab strip (`library │ templates`), the bottom strip deleted,
 the studio promoted to a screen with a filter box.
 
-## Phase 3 — batch tags that land, and a move that explains itself  ⬜
+## Phase 3 — batch tags that land, and a move that explains itself  ✅
 Items 2, 3. Four job-path defects (dropped effects freezing the list, the
 `batching()`/`targets()` mismatch failing silently, marks never cleared,
 `JobStatus` write-once), a progress bar, and a move that says whether it

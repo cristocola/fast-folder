@@ -405,6 +405,22 @@ fn needs_selection(app: &App) -> Availability {
     }
 }
 
+/// **What every batching verb is available on.** Marks are kept by path and
+/// survive a filter change, so a marked row can be off screen while the verb is
+/// aimed at it — `targets()` intersects the two and comes back empty. Every one
+/// of these verbs then hit an early return with no picker, no dialog and no
+/// message, which is what "batch tagging does nothing" was. It is deliberately
+/// not part of `needs_selection`: `o`, `t` and `y` act on the row under the
+/// cursor and are none of a hidden mark's business.
+fn batch_target(app: &App) -> Availability {
+    if !app.library.marks.is_empty() && app.library.targets().is_empty() {
+        return Availability::Disabled(
+            "every marked row is hidden — F clears the filters, - clears the marks",
+        );
+    }
+    selection_and_not_busy(app)
+}
+
 fn not_busy(app: &App) -> Availability {
     if app.busy.is_some() || app.job.is_some() {
         Availability::Disabled("working…")
@@ -524,6 +540,11 @@ fn builder_variables_open(app: &App) -> Availability {
 /// a person with one drive should still learn that a second one is a key
 /// away, and pressing `m` should say why nothing happened.
 fn can_move(app: &App) -> Availability {
+    if let Availability::Disabled(reason) = batch_target(app)
+        && !app.library.marks.is_empty()
+    {
+        return Availability::Disabled(reason);
+    }
     let Some(project) = app.library.selected() else {
         return Availability::Hidden;
     };
@@ -927,7 +948,7 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = false,
-        selection_and_not_busy
+        batch_target
     ),
     cmd!(
         RemoveTags,
@@ -938,7 +959,7 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = false,
-        selection_and_not_busy
+        batch_target
     ),
     cmd!(
         ReautoTags,
@@ -949,7 +970,7 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = false,
-        selection_and_not_busy
+        batch_target
     ),
     cmd!(
         AddNote,
@@ -960,7 +981,7 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = false,
-        selection_and_not_busy
+        batch_target
     ),
     cmd!(
         NoteInline,
@@ -971,7 +992,7 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = false,
-        selection_and_not_busy
+        batch_target
     ),
     cmd!(
         Rename,
@@ -1004,7 +1025,7 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = false,
-        selection_and_not_busy
+        batch_target
     ),
     cmd!(
         Delete,
@@ -1015,7 +1036,7 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = false,
-        selection_and_not_busy
+        batch_target
     ),
     cmd!(
         ShowMetadata,

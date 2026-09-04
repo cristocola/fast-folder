@@ -620,12 +620,20 @@ fn a_summary_that_names_a_template_no_project_uses_still_gets_a_card() {
 
 // --- single-project actions ----------------------------------------------
 
-/// The single `Effect::Run` an action key produces.
+/// The one `Effect::Run` among the effects. Exactly one action may be started
+/// at a time, but a batch item's outcome also carries the list maintenance its
+/// row change asked for (`ForgetSizes`, `RequestSizes`, a detail read), so the
+/// run is looked for rather than required to stand alone.
 fn action_of(effects: &[Effect]) -> &Action {
-    match effects {
-        [Effect::Run(_, action)] => action,
-        other => panic!("expected one action, got {other:?}"),
-    }
+    let mut runs = effects.iter().filter_map(|effect| match effect {
+        Effect::Run(_, action) => Some(action.as_ref()),
+        _ => None,
+    });
+    let action = runs.next().unwrap_or_else(|| {
+        panic!("expected an action, got {effects:?}");
+    });
+    assert!(runs.next().is_none(), "one action at a time: {effects:?}");
+    action
 }
 
 #[test]
@@ -999,12 +1007,17 @@ fn removing_a_row_drops_its_mark() {
 // Batch jobs over the marks
 // ---------------------------------------------------------------------------
 
-/// The id an `Effect::Run` carries, when the effects are exactly one run.
+/// The id the one `Effect::Run` among the effects carries.
 fn run_id(effects: &[Effect]) -> fastf::tui::effect::ActionId {
-    match effects {
-        [Effect::Run(id, _)] => *id,
-        other => panic!("expected one run, got {other:?}"),
-    }
+    let mut runs = effects.iter().filter_map(|effect| match effect {
+        Effect::Run(id, _) => Some(*id),
+        _ => None,
+    });
+    let id = runs
+        .next()
+        .unwrap_or_else(|| panic!("expected a run, got {effects:?}"));
+    assert!(runs.next().is_none(), "one action at a time: {effects:?}");
+    id
 }
 
 fn item_done(id: fastf::tui::effect::ActionId, change: ListChange) -> Msg {
@@ -1068,7 +1081,10 @@ fn delete_over_marks_confirms_once_then_runs_each_item() {
             },
         ),
     );
-    assert!(effects.is_empty());
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Run(..))),
+        "the job is over, nothing else may start: {effects:?}"
+    );
     assert!(app.job.is_none());
     assert!(app.modals.is_empty(), "a clean job needs no report modal");
     assert!(
@@ -1145,7 +1161,10 @@ fn esc_cancels_a_job_and_the_rest_stay_marked() {
             },
         ),
     );
-    assert!(effects.is_empty(), "no further item may start: {effects:?}");
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Run(..))),
+        "no further item may start: {effects:?}"
+    );
     assert!(app.job.is_none(), "the cancelled job is over");
     assert!(!app.library.marks.contains(&first));
     assert!(
@@ -2610,6 +2629,77 @@ fn a_tag_over_marks_is_asked_once_and_runs_as_a_job_in_display_order() {
             .contains(&"reviewed".to_string()),
         "the row shows the tag as soon as its item lands"
     );
+}
+
+/// **The batch's effects are the app's too.** They were dropped, so a
+/// `Reload` — which `discover` arms by setting `inflight` *before* returning
+/// the effect that answers it — left the app waiting on a generation nothing
+/// would send, and every later patch only set `dirty`. A batch re-derive of
+/// tags rewrote every file, showed nothing, and froze the list for the rest of
+/// the session.
+#[test]
+fn a_batch_item_returns_the_effects_its_change_asked_for() {
+    use fastf::tui::command::CommandId;
+
+    let mut app = fixture(12, 120, 40);
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch(' '));
+    let effects = app.run(CommandId::ReautoTags);
+    let id1 = run_id(&effects);
+
+    let effects = update(&mut app, item_done(id1, ListChange::Reload));
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::Discover { .. })),
+        "a reload must reach the runtime: {effects:?}"
+    );
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::LoadSummary)),
+        "and so must the summary it asked for: {effects:?}"
+    );
+
+    // The discovery it armed is the one in flight, so its answer installs.
+    let generation = app.library.inflight.expect("a discovery is in flight");
+    update(
+        &mut app,
+        Msg::Discovered {
+            generation,
+            projects: sample_projects(12),
+        },
+    );
+    assert!(
+        app.library.inflight.is_none(),
+        "the list is not left waiting on a generation nothing will send"
+    );
+}
+
+/// Marks are kept by path and survive a filter change; `targets()` intersects
+/// them with the rows on screen. When the two disagreed, `batching()` said yes
+/// and every batch verb hit an early return with no picker, no dialog and no
+/// message — which is what "batch tagging does nothing" was.
+#[test]
+fn a_verb_aimed_at_marks_a_filter_hides_says_so() {
+    use fastf::tui::command::CommandId;
+
+    let mut app = fixture(12, 120, 40);
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch(' '));
+    assert_eq!(app.library.marks.len(), 2);
+
+    // A query that keeps nothing the marks are on.
+    press(&mut app, Key::ch('/'));
+    type_text(&mut app, "zzzznothing");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(app.library.is_empty(), "the filter hides every marked row");
+
+    let effects = app.run(CommandId::AddTag);
+    assert!(app.modals.is_empty(), "no picker over nothing");
+    assert!(effects.is_empty());
+    assert!(
+        app.status.text.contains("every marked row is hidden"),
+        "the refusal has to be said out loud: {:?}",
+        app.status.text
+    );
+    assert_eq!(app.library.marks.len(), 2, "the marks are not touched");
 }
 
 #[test]

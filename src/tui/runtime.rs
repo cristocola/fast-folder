@@ -711,7 +711,23 @@ fn run_action(
             let outcome =
                 crate::core::operations::move_project(&project, &target, progress, cancel)?;
             let moved = outcome.project;
-            let message = format!("Moved to {}", display_path(&moved.path));
+            // **Say which kind of move it was.** A same-filesystem rename is
+            // instant however large the folder is, and a message that only
+            // names the destination reads the same whether two hundred
+            // gigabytes were copied or nothing was — which is exactly the
+            // doubt an instant finish creates.
+            let message = match outcome.copied {
+                Some((files, bytes)) => format!(
+                    "Moved to {} — copied {files} file{}, {}, verified",
+                    display_path(&moved.path),
+                    if files == 1 { "" } else { "s" },
+                    crate::util::human_bytes::human_bytes(bytes)
+                ),
+                None => format!(
+                    "Moved to {} — renamed on the same filesystem, nothing copied",
+                    display_path(&moved.path)
+                ),
+            };
             let warning = outcome.cleanup_pending.then(|| {
                 format!(
                     "destination is complete, but cleanup is pending at {}",

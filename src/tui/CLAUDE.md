@@ -529,6 +529,45 @@ tag, the note, the base — asked once); delete asks for the word `delete`,
 single or batch, and the prompt names every folder; the quick note is a text
 area (Enter saves, Alt-Enter breaks a line).
 
+**A batch item's effects are the app's.** `on_job_item_done` returns what
+`apply_change` gave it, alongside the next item's `Run`. It used to drop them,
+and `App::discover` sets `library.inflight` *before* returning the effect that
+answers it — so one dropped `ListChange::Reload` left the app waiting on a
+generation nothing would ever send, after which every `patch`/`remove` only set
+`dirty` and **the list stopped changing for the rest of the session**. A batch
+re-derive of tags rewrote every file and showed nothing at all. The test
+helpers in `tests/tui_update.rs` look for the one `Effect::Run` among the
+effects rather than requiring it to stand alone, which is the shape this fix
+makes normal.
+
+**A mark is the retry list.** An item that succeeded loses its mark when its
+outcome lands (`take_inflight` hands the project back for its path);
+`LibraryState::patch` only ever dropped one when the path moved, so a clean
+batch reported "3 tagged" over three rows still wearing `✓`.
+
+**`command::batch_target` is what a batching verb is available on.** Marks are
+kept by path and survive a filter change, so a marked row can be off screen
+while the verb is aimed at it — `targets()` intersects the two and comes back
+empty, and every batch verb hit an early `return Vec::new()` with no picker, no
+dialog and no message. That is what "batch tagging does nothing" was. It is
+deliberately **not** part of `needs_selection`: `o`, `t` and `y` act on the row
+under the cursor and are none of a hidden mark's business.
+
+**A move says which kind it was.** `MoveOutcome::staged` and `copied` reach
+both surfaces: `renamed on the same filesystem, nothing copied`, or `copied 412
+files, 199.5 GB, verified`. A same-filesystem rename is instant however large
+the folder is, and a message naming only the destination reads the same either
+way. `JobStatus` is set to `Done` at the end of both paths — it was assigned
+`Running` at construction and never changed anywhere in the crate, so the
+runtime's "is it done yet" was always false, `Runtime.moving` was never
+cleared, and a later `Effect::CancelMove` set the flag on a dead job's handle.
+
+**The bar is ours** (`view::modals::bar`), drawn from `Glyphs::bar_full` /
+`bar_empty`, not ratatui's `Gauge`: the palette is a pure function of an `Env`
+and the ASCII path has to stay right on a terminal that draws no block
+elements. A `total` of zero draws an empty track — nothing measured is not
+everything done. Both progress dialogs are sized to the lines they hold.
+
 **Geometry lives in `layout.rs`**, read by `update` and `view` alike, so a
 cursor can never leave the drawn window and End lands on the last line:
 `actions_box`, `pick_box`, `help_box`, `message_box`, `sized_dialog`,

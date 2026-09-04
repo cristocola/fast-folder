@@ -114,7 +114,9 @@ fastf move ID0047 archive
 Moves are also available from the `fastf recent` action menu. The rules:
 
 - Targets must be configured bases, so a moved project always stays discoverable.
-- On the same filesystem, a move is an instant atomic rename.
+- On the same filesystem, a move is an instant atomic rename. fastf says so —
+  `renamed on the same filesystem, nothing copied` — because an instant finish
+  on a large folder otherwise reads as a move that did nothing.
 - Across filesystems (or to network storage), fastf creates an exclusive
   `.fastf-transactions/<operation-id>/` directory beneath the target base,
   copies into its private `staging/` tree, checks exact relative paths, entry

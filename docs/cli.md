@@ -625,8 +625,15 @@ fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 
 Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move stages every ordinary file—including legitimate `.tmp` and `.part` names—checks relative paths and byte lengths, commits atomically, and only then removes the source. Keep the project untouched while that copy is running.
 
-A cross-filesystem move reports its progress as it goes — the phase (copying,
-verifying, finalizing), how many files are done, and how much has been copied.
+**A move always says which kind it was**: `renamed on the same filesystem,
+nothing copied`, or `copied 412 files, 199.5 GB, verified`. A same-filesystem
+move is an atomic rename and finishes instantly however large the folder is, so
+without that line an instant finish on a 200 GB project is indistinguishable
+from one that did nothing.
+
+A cross-filesystem move reports its progress as it goes — a bar, the phase
+(copying, verifying, finalizing), how many files are done, and how much has been
+copied.
 **Ctrl-C cancels it safely before publication**: fastf removes only the private
 transaction owned by that operation and leaves the source untouched. Once
 publication begins, cancellation is too late. If the destination is published

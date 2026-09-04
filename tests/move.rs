@@ -25,6 +25,69 @@ fn sandboxed<R>(body: impl FnOnce(&Path) -> R) -> R {
 // Moving projects between bases
 // ---------------------------------------------------------------------------
 
+/// **A move says which kind it was.** Same-filesystem is an atomic rename that
+/// finishes before a frame can be drawn, however large the folder is; a message
+/// naming only the destination reads the same whether two hundred gigabytes
+/// were copied or nothing was, which is exactly the doubt an instant finish
+/// creates. `MoveOutcome::staged` and `copied` are what both surfaces report
+/// from.
+#[test]
+fn a_move_reports_whether_it_renamed_or_copied() {
+    sandboxed(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+
+        let base_a = install.join("projects");
+        let base_b = install.join("projects_b");
+        fs::create_dir_all(&base_a).unwrap();
+        fs::create_dir_all(&base_b).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.base_dir = base_a.display().to_string();
+        cfg.bases = vec![base_b.display().to_string()];
+        // `operations::move_project` reloads the configuration under the lock
+        // and revalidates both ends against it, so an in-memory `Config` is not
+        // enough here.
+        cfg.save().unwrap();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut counters = Counters::load().unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "reporter".to_string());
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        let project = library::discover(&cfg).remove(0);
+
+        // Both bases are on one filesystem here, so this is the rename.
+        let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let outcome =
+            fastf::core::operations::move_project(&project, &base_b, &progress, &cancel).unwrap();
+        assert!(!outcome.staged, "one filesystem is a rename");
+        assert!(outcome.copied.is_none(), "a rename copies nothing");
+        // The job is over, and says so. `JobStatus` was assigned `Running` at
+        // construction and never changed anywhere in the crate, so the
+        // runtime's "is it done yet" was always false: a finished move kept
+        // emitting progress and a later cancel set the flag on a dead handle.
+        let state = progress.lock().unwrap();
+        assert_eq!(state.status, fastf::core::assets::JobStatus::Done);
+        drop(state);
+
+        // The staged path, forced, reports what it copied. Debug only:
+        // `move_project_staged_for_test` is deliberately absent from a release
+        // build, so the assertion has to be too.
+        #[cfg(debug_assertions)]
+        {
+            let moved = library::discover(&cfg).remove(0);
+            let staged = library::move_project_staged_for_test(&moved, &base_a).unwrap();
+            assert!(staged.staged, "the staged path staged");
+            let (files, bytes) = staged.copied.expect("a staged move counts what it copied");
+            assert!(files > 0, "the manifest had files in it");
+            assert!(bytes > 0, "and bytes");
+        }
+    });
+}
+
 #[test]
 fn move_project_between_bases_full_round_trip() {
     sandboxed(|install| {

@@ -5,7 +5,7 @@
 //! `Msg::ActionDone` lands, so each row is patched as its item finishes, the
 //! progress modal always shows the truth, and a failure stops nothing. The
 //! marks carry the retry state: a row whose item failed or never ran keeps its
-//! mark, and one whose item succeeded loses it with its row change.
+//! mark, and one whose item succeeded loses it when its outcome lands.
 //!
 //! Every verb that means the same thing for each of several projects batches:
 //! delete, unregister and move, and the tags and the notes — select three,
@@ -152,10 +152,11 @@ impl Job {
         self.inflight.as_ref()
     }
 
-    /// The item that just finished leaves `inflight`; its id is returned for
-    /// the failure records.
-    pub fn clear_inflight(&mut self) -> Option<String> {
-        self.inflight.take().map(|p| p.id)
+    /// The item that just finished leaves `inflight` and is handed back: its id
+    /// names it in a failure record, and its path is the key its mark is held
+    /// under.
+    pub fn take_inflight(&mut self) -> Option<Project> {
+        self.inflight.take()
     }
 
     /// The `Action` one item of this job is.
@@ -245,7 +246,7 @@ mod tests {
         let mut order: Vec<String> = Vec::new();
         while let Some(item) = job.begin_next() {
             order.push(item.id.clone());
-            job.clear_inflight();
+            job.take_inflight();
         }
         let expected: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
         assert_eq!(order, expected, "the job runs in the order it was given");
@@ -257,7 +258,7 @@ mod tests {
     fn a_cancelled_job_stops_beginning_items() {
         let mut job = Job::new(JobKind::Delete, sample_projects(3), None);
         assert!(job.begin_next().is_some());
-        job.clear_inflight();
+        job.take_inflight();
         job.cancelled = true;
         assert!(job.begin_next().is_none(), "cancel stops the run");
         assert_eq!(job.pending.len(), 2, "the rest stay marked, not run");
@@ -314,7 +315,7 @@ mod tests {
         );
         // One clean, one failed, one never run (cancelled).
         job.begin_next();
-        job.clear_inflight();
+        job.take_inflight();
         job.done += 1;
         job.begin_next();
         let second = job
@@ -323,7 +324,7 @@ mod tests {
             .expect("second item in flight")
             .clone();
         let second_id = second.id.clone();
-        job.clear_inflight();
+        job.take_inflight();
         job.failed
             .push((second.id, "injected fault at 'move:after-staging'".into()));
         job.cancelled = true;
@@ -341,7 +342,7 @@ mod tests {
     fn a_clean_job_needs_no_report() {
         let mut job = Job::new(JobKind::Delete, sample_projects(2), None);
         while job.begin_next().is_some() {
-            job.clear_inflight();
+            job.take_inflight();
             job.done += 1;
         }
         assert_eq!(job.finished(), 2);

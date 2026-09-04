@@ -1393,8 +1393,16 @@ impl App {
     }
 
     /// Whether a verb acts on the marks rather than the selection.
+    ///
+    /// **Asked of `targets()`, not of the mark set.** Marks are kept by path
+    /// and survive a filter change; `targets()` intersects them with the rows
+    /// on screen. When those two disagreed, `batching()` said yes and
+    /// `targets()` came back empty, and every batch verb hit its
+    /// `if targets.is_empty() { return Vec::new(); }` — no picker, no dialog,
+    /// no message. Marking three rows and then typing a query made `A` do
+    /// nothing at all, which is what "batch tagging doesn't work" was.
     fn batching(&self) -> bool {
-        !self.library.marks.is_empty()
+        !self.library.targets().is_empty() && !self.library.marks.is_empty()
     }
 
     /// The folder names a confirmation is about: the marks, or the selection.
@@ -3421,12 +3429,14 @@ impl App {
 
     /// One item's outcome landed: record it, patch the row, and move on.
     fn on_job_item_done(&mut self, outcome: Result<Box<ActionOutcome>, String>) -> Vec<Effect> {
-        // The item that was running leaves `inflight`, whatever happened.
-        let id = self
-            .job
-            .as_mut()
-            .and_then(|job| job.clear_inflight())
-            .unwrap_or_else(|| "?".to_string());
+        // The item that was running leaves `inflight`, whatever happened. Its
+        // path is what the mark is keyed by.
+        let finished = self.job.as_mut().and_then(|job| job.take_inflight());
+        let (id, path) = match finished {
+            Some(project) => (project.id, Some(project.path)),
+            None => ("?".to_string(), None),
+        };
+        let mut effects = Vec::new();
         match outcome {
             Ok(outcome) => {
                 let outcome = *outcome;
@@ -3439,21 +3449,39 @@ impl App {
                 {
                     job.warnings.push(warning);
                 }
-                self.apply_change(outcome.change);
+                // **The effects a change asks for are the job's too.** They
+                // were dropped here, where the single-action path returns them,
+                // and `apply_change`'s `Reload` arm calls `discover`, which
+                // sets `library.inflight` *before* handing back the effect that
+                // would answer it. A dropped one left the app waiting on a
+                // generation nothing would ever send, after which every patch
+                // only set `dirty` and the list stopped changing: a batch
+                // re-derive of tags rewrote every file and showed nothing, and
+                // the list stayed frozen for the rest of the session.
+                effects.extend(self.apply_change(outcome.change));
+                // A mark is the retry list. An item that succeeded is not on
+                // it any more, so "3 tagged" and the ✓ glyphs left on screen
+                // cannot disagree — `jobs.rs` has always said so; nothing did
+                // it, because `patch` only drops a mark when the path moved.
+                if let Some(path) = &path {
+                    self.library.marks.remove(path);
+                }
                 if let Some(job) = &mut self.job {
                     job.done += 1;
                 }
             }
             Err(error) => {
                 // A cancellation the user asked for is not a failure to list:
-                // the report says how many were left instead.
+                // the report says how many were left instead. Either way the
+                // mark stays: it is what a retry would act on.
                 let cancelled = self.job.as_ref().is_some_and(|job| job.cancelled);
                 if !cancelled && let Some(job) = &mut self.job {
                     job.failed.push((id, error));
                 }
             }
         }
-        self.job_advance()
+        effects.extend(self.job_advance());
+        effects
     }
 
     /// The job has no items left to begin: report and clear it.

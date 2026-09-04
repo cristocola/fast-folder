@@ -11,6 +11,16 @@ Two surfaces sit on one core: the guided app (`fastf`, the daily one — a
 full-screen ratatui dashboard) and the command line (`fastf new`, …). `core`
 and `util` know about neither.
 
+## A workaround is not a fix
+
+fastf is installed by people who will never read this file. A defect is finished
+when a released version no longer has it — not when there is a command that
+steps around it, a variable to unset first, or a note about which shell to run
+the installer from. If an install or a build fails, the answer is the fix, the
+tag and the package bump, in that order, and nothing short of that is an answer
+to give. The same goes for work left uncommitted "for now": either the tree is
+clean and the release is out, or the job is not done.
+
 ## Build commands
 
 Standard cargo throughout. Clippy must be clean with `--all-targets -- -D

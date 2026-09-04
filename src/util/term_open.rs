@@ -87,6 +87,14 @@ fn build(program: &str, style: &CwdStyle, dir: &Path) -> Vec<OsString> {
 /// window is now the user's. Every spawn also sets `current_dir(dir)`, which is
 /// what carries the directory for xterm, for an unknown preference, and past
 /// any emulator that ignores its own flag.
+///
+/// **The relaunch marker is dropped here**, and in [`exec_shell_at`]. It says
+/// "this fastf process is a rerun" and it is inherited, so a window opened from
+/// a relaunched fastf would hand it to its shell, that shell would hand it to
+/// everything typed into it, and one of those is a build that runs fastf's own
+/// suite — where a set `FASTF_RELAUNCHED` turns off the very behaviour the
+/// suite is checking. Nothing fastf gives the user should carry fastf's
+/// bookkeeping.
 #[cfg(unix)]
 pub fn open_terminal_at(preference: Option<&str>, dir: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
@@ -116,6 +124,7 @@ pub fn open_terminal_at(preference: Option<&str>, dir: &Path) -> Result<()> {
             .stderr(Stdio::null())
             // The terminal must outlive us — same reason as the relaunch.
             .process_group(0)
+            .env_remove(crate::util::relaunch::RELAUNCHED_VAR)
             .spawn();
 
         if spawned.is_ok() {
@@ -138,17 +147,27 @@ pub fn open_terminal_at(preference: Option<&str>, dir: &Path) -> Result<()> {
 /// picker, and becoming the shell there *is* "open a terminal at the project" —
 /// a second window would strand this one. `$SHELL`, then `/bin/sh` if that
 /// fails to exec. Returns only on failure.
+///
+/// The shell is the user's from here on, so it does not inherit the relaunch
+/// marker — see [`open_terminal_at`] for what inheriting it costs.
 #[cfg(unix)]
 pub fn exec_shell_at(dir: &Path) -> anyhow::Error {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
+    let marker = crate::util::relaunch::RELAUNCHED_VAR;
     let shell = std::env::var_os("SHELL")
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| OsString::from("/bin/sh"));
-    let err = Command::new(&shell).current_dir(dir).exec();
+    let err = Command::new(&shell)
+        .current_dir(dir)
+        .env_remove(marker)
+        .exec();
     if shell.as_os_str() != "/bin/sh" {
-        let err = Command::new("/bin/sh").current_dir(dir).exec();
+        let err = Command::new("/bin/sh")
+            .current_dir(dir)
+            .env_remove(marker)
+            .exec();
         return anyhow::Error::from(err).context("could not start /bin/sh");
     }
     anyhow::Error::from(err).context(format!("could not start {}", shell.to_string_lossy()))

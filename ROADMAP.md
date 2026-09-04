@@ -148,6 +148,7 @@ responsibility of the filesystem and backups.
 | v3.0.0 | the guided app on ratatui: one dashboard over the whole library, every flow native, the command line's prompts in the same palette, and dialoguer gone | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.0.0) |
 | v3.1.0 | the dashboard says each thing once, templates are a tab, batch verbs land, and `copy-to` puts a project on a backup drive keeping its ID | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.0) |
 | v3.1.1 | one command installs fastf on any Linux, checksum verified, and puts it on PATH | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.1) |
+| v3.1.2 | the terminal fastf opens is the user's: it carries none of fastf's own bookkeeping, so nothing started from that window behaves differently | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.2) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find

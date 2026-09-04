@@ -287,9 +287,12 @@ now is listed dimmed with the reason on the key, not hidden — pressing it says
 why. Prompt texts and validators live in `validators.rs`, byte-identical to
 the prompt-at-a-time flows they replaced.
 
-A finished verb patches its row by **id** (`ListChange::Patched`) because a
-rename or a move changed the path; the pty suite traces that the list is not
-rescanned. A typed confirmation that does not match keeps the text in the
+A finished verb patches its row by the **path it had**, and only then by id
+(`ListChange::Patched` carries `was`); the pty suite traces that the list is not
+rescanned. The id alone was the key, because it survives a rename and a move —
+but `copy-to` can put a second project with the same id on a backup drive, and
+once that drive is a base, patching by id tags one row and shows it on the
+other. The old path is unique whatever else is true. A typed confirmation that does not match keeps the text in the
 prompt and says `name did not match — nothing deleted`. A move is a one-item
 job on a worker (`spawn_worker`) with a `Progress` shared with the runtime and
 a cancel flag: Ctrl-C during a move cancels the job instead of quitting. The

@@ -231,7 +231,7 @@ fn run_with_progress(
 /// Single-line and ANSI-free for the same reason `recent::clamp_label` exists —
 /// the legacy Windows console miscounts wrapped rows and leaves ghosted
 /// characters behind when a redraw spans more than one.
-fn draw(p: &Progress) {
+pub(crate) fn draw(p: &Progress) {
     let line = format!(
         "  {:<10} {}/{} files  {}",
         p.phase,

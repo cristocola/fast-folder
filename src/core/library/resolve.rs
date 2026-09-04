@@ -124,13 +124,38 @@ pub(crate) fn no_match_error(query: &str) -> anyhow::Error {
 /// The listing is capped at ten in the *text* only; `Resolution::Many` carries
 /// the whole set, because a picker can scroll and an error message cannot.
 pub(crate) fn ambiguous_error(query: &str, candidates: &[Project]) -> anyhow::Error {
-    let mut msg = format!(
-        "'{}' is ambiguous — {} matches. Specify a full ID:\n",
-        query,
-        candidates.len()
-    );
+    // **When every candidate is the same project, the full ID is not the
+    // answer** — it is what was typed. `fastf copy-to` puts a project on a
+    // backup drive keeping its id, and adding that drive as a base lists both;
+    // telling the reader to be more specific about an id that is already exact
+    // sends them looking for a distinction that is not there. The base is.
+    let one_id = candidates
+        .first()
+        .is_some_and(|first| candidates.iter().all(|p| p.id == first.id));
+    let mut msg = if one_id {
+        format!(
+            "'{}' is in {} bases — name the base, or open it from `fastf recent`:\n",
+            query,
+            candidates.len()
+        )
+    } else {
+        format!(
+            "'{}' is ambiguous — {} matches. Specify a full ID:\n",
+            query,
+            candidates.len()
+        )
+    };
     for p in candidates.iter().take(10) {
-        msg.push_str(&format!("  {}  {}  ({})\n", p.id, p.name, p.template));
+        if one_id {
+            msg.push_str(&format!(
+                "  {}  {}  in {}\n",
+                p.id,
+                p.name,
+                super::base_label(&p.base)
+            ));
+        } else {
+            msg.push_str(&format!("  {}  {}  ({})\n", p.id, p.name, p.template));
+        }
     }
     anyhow::anyhow!("{}", msg.trim_end())
 }

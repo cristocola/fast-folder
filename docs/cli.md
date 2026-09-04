@@ -19,6 +19,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf register <dir>` | Onboard an existing folder by writing its `PROJECT_INFO.md` |
 | `fastf apply <slug> <dir>` | Add missing template structure to an existing folder |
 | `fastf move <query> [base]` | Move a project into another configured base |
+| `fastf copy-to <query> <dir>` | Copy a project's folder outside your bases, keeping its ID |
 | `fastf rename <query> [name]` | Rename a project's folder on disk |
 | `fastf unregister <query>` | Forget a project — remove its `PROJECT_INFO.md`, keep the files |
 | `fastf delete <query>` | Delete a project's folder and everything inside it |
@@ -194,6 +195,7 @@ keys that matter most:
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
 | `A`, Ctrl-T | add a tag (pick one the library already knows, or type a new one); remove tags |
 | `N`, Ctrl-N | a journal note in your `$EDITOR`; a short note typed where you are — Enter saves, Alt-Enter breaks a line, a pasted paragraph lands whole |
+| `C` | copy the project to a folder outside your bases, keeping its ID |
 | `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good — it names the folder and asks you to type `delete` |
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
 | Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
@@ -660,6 +662,43 @@ Nothing has been changed. Move the folder with a tool that preserves links
 ```
 
 Moves *within* the same drive are unaffected: they are a rename, nothing is copied, and links travel along untouched.
+
+## Copying a project out of the library
+
+```bash
+fastf copy-to ID0047 /mnt/backup          # confirms first
+fastf copy-to lullaby ~/archive --yes     # for scripts
+```
+
+**The copy keeps its ID.** It is the same project on another drive: its
+`PROJECT_INFO.md` is copied unchanged. Point a base at that folder later and
+both list, told apart by the BASE column — which is the whole reason the ID is
+kept. The original is never touched.
+
+The destination must exist and must be **outside** every configured base. Two
+projects with one ID inside one library is a library that cannot answer "which
+one", and it would be made by a keystroke; fastf refuses and says so, naming the
+base it would have landed in.
+
+Underneath it is the same machinery as a cross-drive move: a manifest of every
+file, a private `.fastf-transactions/` staging tree under the destination,
+exact path/type/size verification, a check that the source did not change while
+it copied, and an atomic publish. Links are refused for the same reason a
+cross-drive move refuses them — a symlink or a junction cannot be reproduced
+faithfully somewhere else. Ctrl-C cancels and leaves nothing but the copy's own
+transaction, which it removes.
+
+`fastf copy` (no dash) is unrelated: it puts a project's path on the clipboard.
+In the guided app the verb is `C`, `Copy to…`, and it runs over every marked
+project when there are marks.
+
+Once two bases hold the same ID, a query that matches it says so:
+
+```
+error: 'ID0047' is in 2 bases — name the base, or open it from `fastf recent`:
+  ID0047  2026-07-10_Shoot_ID0047  in projects
+  ID0047  2026-07-10_Shoot_ID0047  in archive
+```
 
 ## Renaming, forgetting and deleting projects
 

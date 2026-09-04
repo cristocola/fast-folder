@@ -244,6 +244,7 @@ pub enum CommandId {
     NoteInline,
     Rename,
     Move,
+    CopyTo,
     Unregister,
     Delete,
     ShowMetadata,
@@ -283,7 +284,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 62] = [
+    pub const ALL: [CommandId; 63] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -319,6 +320,7 @@ impl CommandId {
         CommandId::NoteInline,
         CommandId::Rename,
         CommandId::Move,
+        CommandId::CopyTo,
         CommandId::Unregister,
         CommandId::Delete,
         CommandId::ShowMetadata,
@@ -1007,6 +1009,17 @@ pub static COMMANDS: &[Command] = &[
         palette = true,
         hint = false,
         can_move
+    ),
+    cmd!(
+        CopyTo,
+        "Copy to a folder",
+        "copy this project — or every marked one — to a folder outside your bases, keeping its ID",
+        ACTIONS,
+        [Key::ch('C')],
+        Project,
+        palette = true,
+        hint = false,
+        batch_target
     ),
     cmd!(
         Unregister,

@@ -412,6 +412,7 @@ fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: R
         TextThen::AddTag => "add a tag",
         TextThen::Delete => "delete",
         TextThen::RaiseCounter => "ID counter",
+        TextThen::CopyTo => "copy to",
     };
     // The box grows with its question: a confirmation over six marked
     // folders names all six.

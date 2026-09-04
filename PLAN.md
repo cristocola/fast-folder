@@ -29,7 +29,7 @@ Items 2, 3. Four job-path defects (dropped effects freezing the list, the
 `JobStatus` write-once), a progress bar, and a move that says whether it
 renamed or copied.
 
-## Phase 4 — copy a project  ⬜
+## Phase 4 — copy a project  ✅
 Item 4. `copy_engine.rs`, `fastf copy-to`, `C` in the app. The copy keeps its
 ID; the base tells duplicates apart. `patch` locates by path first.
 

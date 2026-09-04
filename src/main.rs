@@ -168,6 +168,22 @@ enum Commands {
         query: String,
     },
 
+    /// Copy a project's folder to somewhere outside your bases, keeping its ID
+    #[command(
+        after_help = "The copy is the same project on another drive: its\n        PROJECT_INFO.md, and its ID, are copied unchanged. Point a base at that\n        folder later and both list, told apart by the BASE column.\n\n        The destination must exist and must be **outside** every configured\n        base. Two projects with one ID inside one library is a library that\n        cannot answer \"which one\", and it would be made by a keystroke.\n\n        Links are refused, as they are for a cross-drive move: a symlink or a\n        junction cannot be reproduced faithfully somewhere else. The original is\n        never touched, and Ctrl-C leaves nothing behind but the copy's own\n        private transaction, which it removes.\n\n        `fastf copy` (no dash) is unrelated: it puts a path on the clipboard.\n\n        Examples:\n              fastf copy-to ID0047 /mnt/backup\n              fastf copy-to lullaby ~/archive --yes"
+    )]
+    CopyTo {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
+        query: String,
+
+        /// An existing folder outside every configured base
+        destination: String,
+
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+
     /// Print a project's folder path on stdout, and nothing else
     #[command(
         after_help = "Prints the path followed by a newline, with no colour and no\n\
@@ -921,6 +937,15 @@ fn run() -> Result<()> {
 
         Some(Commands::Open { query }) => cli::recent::open(&query),
         Some(Commands::Copy { query }) => cli::copy::run(&query),
+        Some(Commands::CopyTo {
+            query,
+            destination,
+            yes,
+        }) => cli::copy_to::run(cli::copy_to::CopyToArgs {
+            query,
+            destination,
+            yes,
+        }),
         Some(Commands::Path { query }) => cli::path_cmd::run(&query),
         Some(Commands::Term { query }) => cli::term_cmd::run(&query),
         Some(Commands::Move { query, base, yes }) => {

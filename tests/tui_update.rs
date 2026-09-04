@@ -401,6 +401,7 @@ fn a_patched_row_keeps_its_place_and_forgets_its_size() {
             id,
             ListChange::Patched {
                 project: Box::new(patched),
+                was: path.clone(),
                 stale: vec![path.clone()],
             },
         ),
@@ -454,6 +455,7 @@ fn a_patch_during_a_discovery_in_flight_asks_once_more() {
     assert!(effects.contains(&Effect::LoadSummary));
 
     let patched = app.library.selected().unwrap().clone();
+    let patched_path = patched.path.clone();
     let id = run_id(&press(&mut app, Key::ch('R')));
     update(
         &mut app,
@@ -461,6 +463,7 @@ fn a_patch_during_a_discovery_in_flight_asks_once_more() {
             id,
             ListChange::Patched {
                 project: Box::new(patched),
+                was: patched_path,
                 stale: Vec::new(),
             },
         ),
@@ -780,6 +783,7 @@ fn an_action_done_patch_forgets_the_stale_sizes() {
             outcome: Ok(Box::new(ActionOutcome::new(
                 ListChange::Patched {
                     project: Box::new(patched),
+                    was: selected_path.clone(),
                     stale: vec![selected_path.clone()],
                 },
                 "Added 1 tag",
@@ -2664,6 +2668,7 @@ fn a_tag_over_marks_is_asked_once_and_runs_as_a_job_in_display_order() {
             id1,
             ListChange::Patched {
                 project: Box::new(patched),
+                was: rows[0].clone(),
                 stale: vec![rows[0].clone()],
             },
         ),

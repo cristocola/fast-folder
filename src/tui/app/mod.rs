@@ -628,8 +628,12 @@ impl App {
     fn apply_change(&mut self, change: ListChange) -> Vec<Effect> {
         let mut effects = Vec::new();
         match change {
-            ListChange::Patched { project, stale } => {
-                if !self.library.patch(*project) {
+            ListChange::Patched {
+                project,
+                was,
+                stale,
+            } => {
+                if !self.library.patch(&was, *project) {
                     effects.push(self.discover());
                 }
                 for path in &stale {
@@ -1367,6 +1371,36 @@ impl App {
                     return Vec::new();
                 }
                 self.add_tag(tag)
+            }
+            TextThen::CopyTo => {
+                let typed = text.trim().to_string();
+                if typed.is_empty() {
+                    return Vec::new();
+                }
+                self.modals.pop();
+                // Expanded here, refused in the engine: `~/backups` has to mean
+                // the same thing it means in `config set bases`, and the rule
+                // about bases is stated once, in `copy_engine`.
+                let destination = match crate::core::config::expand_base_path(&typed) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        self.warn(format!("{error:#}"));
+                        return Vec::new();
+                    }
+                };
+                if self.batching() {
+                    return self.start_job(jobs::JobKind::CopyTo(destination), None);
+                }
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                self.run_action(
+                    "copying…",
+                    Action::CopyTo {
+                        project: Box::new(project),
+                        destination,
+                    },
+                )
             }
             TextThen::RaiseCounter => {
                 self.modals.pop();
@@ -2197,6 +2231,15 @@ impl App {
                 Vec::new()
             }
             CommandId::Move => self.open_move_picker(),
+            CommandId::CopyTo => {
+                let mut prompt = TextPrompt::new(validators::COPY_TO_PROMPT, TextThen::CopyTo);
+                // The move progress modal is what a copy reports through too:
+                // it is the same staged copy underneath.
+                self.move_progress = None;
+                prompt.input = crate::tui::widgets::input::LineEdit::default();
+                self.modals.push(Modal::TextPrompt(prompt));
+                Vec::new()
+            }
             CommandId::Unregister => {
                 // Nothing is lost by unregistering, so a yes/no is enough —
                 // but the question names the folders it is about.

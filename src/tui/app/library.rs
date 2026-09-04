@@ -225,12 +225,22 @@ impl LibraryState {
         }
     }
 
-    /// Replace one row after a content mutation, matched **by id** — a rename
-    /// or a move changes the path, but the id is the identity the frontmatter
-    /// carries, and it is what survives both. `false` when the row is not in
-    /// the snapshot (it was removed meanwhile).
-    pub fn patch(&mut self, project: Project) -> bool {
-        let Some(index) = self.snapshot.iter().position(|p| p.id == project.id) else {
+    /// Replace one row after a content mutation.
+    ///
+    /// **Found by the path it had, and only then by id.** The id is the
+    /// identity the frontmatter carries and it survives a rename and a move,
+    /// which is why it was the only key — but `copy-to` can put a second
+    /// project with the same id on a backup drive, and once that drive is a
+    /// base, patching by id alone tags one row and shows it on the other.
+    /// The old path is unique whatever else is true. `false` when neither
+    /// finds it (the row was removed meanwhile).
+    pub fn patch(&mut self, was: &Path, project: Project) -> bool {
+        let found = self
+            .snapshot
+            .iter()
+            .position(|p| p.path == was)
+            .or_else(|| self.snapshot.iter().position(|p| p.id == project.id));
+        let Some(index) = found else {
             return false;
         };
         if self.snapshot[index].path != project.path {

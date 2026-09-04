@@ -26,6 +26,8 @@ pub enum JobKind {
     Unregister,
     /// Move every item into the one picked base.
     Move,
+    /// Copy every item into the one folder, keeping each id.
+    CopyTo(PathBuf),
     /// Add the one tag to every item.
     AddTag(String),
     /// Take the picked tags off every item that has them.
@@ -43,6 +45,7 @@ impl JobKind {
             JobKind::Delete => "deleting",
             JobKind::Unregister => "unregistering",
             JobKind::Move => "moving",
+            JobKind::CopyTo(_) => "copying",
             JobKind::AddTag(_) => "tagging",
             JobKind::RemoveTags(_) => "untagging",
             JobKind::ReautoTags => "re-deriving tags for",
@@ -56,6 +59,7 @@ impl JobKind {
             JobKind::Delete => "deleting…",
             JobKind::Unregister => "unregistering…",
             JobKind::Move => "moving…",
+            JobKind::CopyTo(_) => "copying…",
             JobKind::AddTag(_) => "tagging…",
             JobKind::RemoveTags(_) => "removing tags…",
             JobKind::ReautoTags => "re-deriving tags…",
@@ -69,6 +73,7 @@ impl JobKind {
             JobKind::Delete => "deleted",
             JobKind::Unregister => "unregistered",
             JobKind::Move => "moved",
+            JobKind::CopyTo(_) => "copied",
             JobKind::AddTag(_) => "tagged",
             JobKind::RemoveTags(_) => "untagged",
             JobKind::ReautoTags => "re-derived",
@@ -83,6 +88,7 @@ impl JobKind {
             JobKind::Delete => "delete",
             JobKind::Unregister => "unregister",
             JobKind::Move => "move",
+            JobKind::CopyTo(_) => "copy",
             JobKind::AddTag(_) => "tag",
             JobKind::RemoveTags(_) => "untag",
             JobKind::ReautoTags => "re-derive",
@@ -176,6 +182,10 @@ impl Job {
             JobKind::RemoveTags(tags) => Action::RemoveTags {
                 project,
                 tags: tags.clone(),
+            },
+            JobKind::CopyTo(destination) => Action::CopyTo {
+                project,
+                destination: destination.clone(),
             },
             JobKind::ReautoTags => Action::ReautoTags(project),
             JobKind::Note(text) => Action::AppendNote {

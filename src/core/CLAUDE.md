@@ -295,6 +295,36 @@ and leaves the source. After publication, cancellation is too late; a
 source-removal failure retains `CleanupPending` and reports the destination as
 published.
 
+## Copying projects out
+
+`copy_engine::copy_project_configured` is a move that keeps its source: the same
+`MoveManifest::scan` (deny-by-default on links), the same `MoveTransaction`,
+the same `copy_to_staging`, the same `verify_destination` and
+`verify_source_unchanged`, the same atomic publish — and then nothing, because
+the source was never being given up. The two engines share `transactions` rather
+than each other, so **the one invariant lives in one place**: a destination is
+published only after it has been copied and verified in full.
+
+**There is no cleanup-pending state.** A move keeps its transaction when the
+source cannot be removed; a copy removes no source, so the transaction always
+goes.
+
+**`resolve_destination` is the whole rule**, and it is called before any
+confirmation is asked: a real directory, not inside the project (checked first —
+a project sits inside a base, and the base rule would answer that with the wrong
+sentence), and not a configured base or inside one. That last is what keeps the
+library's one-id-one-row property, because **the copy keeps its id**: it is the
+same project on another drive, and the base is what tells two of them apart.
+Two rows with one id in *one* library is a library that cannot answer "which
+one", and a keystroke would have made it.
+
+Once a copy's folder is adopted as a base, `discover` lists both — it unions the
+bases and does not dedupe, which is the behaviour, not an oversight.
+`revalidate_project_in_base` checks path **and** id, so neither row can be
+mistaken for the other; `resolve` reports the ambiguity by naming the bases
+rather than asking for a fuller id that is already exact; and `max_id` is
+unaffected, since the same id twice is the same highest id.
+
 ## Recovery
 
 **Create** writes `PROJECT_INFO.md` first with `provisioning: true`, clears the

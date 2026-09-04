@@ -2,7 +2,7 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fast-folder   2 bases                                           highest ID0248 "
+" fast-folder   library │ templates   2 bases                     highest ID0248 "
 " →┌ help · project list ─────────────────────────────────────────────────────┐n "
 " ⌕│ Navigate                                                                 │t "
 "┌ │   Ctrl-z         Suspend                                                 │─┐"

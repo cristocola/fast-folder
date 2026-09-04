@@ -19,7 +19,7 @@ Items 1, 5, 6, 8a, 8b, 10.
       "N of M projects" and "? for help".
 - [x] `MarkToggle` is in the hint bar and the palette.
 
-## Phase 2 — a templates tab  ⬜
+## Phase 2 — a templates tab  ✅
 Items 7, 9. A real tab strip (`library │ templates`), the bottom strip deleted,
 the studio promoted to a screen with a filter box.
 

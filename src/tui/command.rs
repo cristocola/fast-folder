@@ -107,13 +107,11 @@ pub enum Context {
     Projects,
     /// The detail pane has focus.
     Detail,
-    /// The template strip has focus.
+    /// The templates tab: every template, with the selected one's details
+    /// beside it and the verbs on it.
     Templates,
     /// The selected project's action menu is open.
     Actions,
-    /// The template studio: the list of templates with the selected one's
-    /// details beside it.
-    Studio,
     /// The template builder, on its section list or on the variables or
     /// files list — never while a form or a text area has the keys.
     Builder,
@@ -133,9 +131,8 @@ impl Context {
             Context::Global => "everywhere",
             Context::Projects => "project list",
             Context::Detail => "detail pane",
-            Context::Templates => "template strip",
+            Context::Templates => "templates tab",
             Context::Actions => "project actions",
-            Context::Studio => "template studio",
             Context::Builder => "template builder",
             Context::Settings => "settings",
             Context::SearchEdit => "search bar",
@@ -145,13 +142,12 @@ impl Context {
     }
 
     /// Every context, for the invariants and the help.
-    pub const ALL: [Context; 11] = [
+    pub const ALL: [Context; 10] = [
         Context::Global,
         Context::Projects,
         Context::Detail,
         Context::Templates,
         Context::Actions,
-        Context::Studio,
         Context::Builder,
         Context::Settings,
         Context::SearchEdit,
@@ -472,14 +468,6 @@ fn many_bases(app: &App) -> Availability {
     }
 }
 
-fn has_strip_selection(app: &App) -> Availability {
-    if app.templates.cards.is_empty() {
-        Availability::Disabled("no templates")
-    } else {
-        Availability::Enabled
-    }
-}
-
 fn has_any_rows(app: &App) -> Availability {
     if app.library.is_empty() {
         Availability::Disabled("no projects")
@@ -496,13 +484,12 @@ fn has_marks(app: &App) -> Availability {
     }
 }
 
-/// The studio's verbs on a template need one to be selected.
+/// The templates tab's verbs need a template selected.
 fn has_studio_selection(app: &App) -> Availability {
-    match app.modals.top() {
-        Some(crate::tui::app::modal::Modal::Studio(studio)) if studio.selected_slug().is_some() => {
-            Availability::Enabled
-        }
-        _ => Availability::Disabled("no templates yet — n makes one"),
+    if app.studio.selected_slug().is_some() {
+        Availability::Enabled
+    } else {
+        Availability::Disabled("no templates yet — n makes one")
     }
 }
 
@@ -565,17 +552,23 @@ fn can_move(app: &App) -> Availability {
 }
 
 const G: &[Context] = &[Context::Global];
-const LISTS: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
+/// The library's own screen: the table and the pane beside it. The templates
+/// tab is **not** in it — it was, while the templates were a strip along the
+/// bottom of this screen, and that is why `n` used to mean both "new project"
+/// and "new template" in the same hint bar.
+const LISTS: &[Context] = &[Context::Projects, Context::Detail];
 const PD: &[Context] = &[Context::Projects, Context::Detail];
 const ACTIONS: &[Context] = &[Context::Projects, Context::Detail, Context::Actions];
-const T: &[Context] = &[Context::Templates];
+const TEMPLATES: &[Context] = &[Context::Templates];
+/// Both tabs: the switch itself, the search bar, and the app-wide verbs that
+/// mean the same thing wherever you are.
+const TABS: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
 /// Every list and every scrollable dialog: where the arrow keys go.
 const SCROLLERS: &[Context] = &[
     Context::Projects,
     Context::Detail,
     Context::Templates,
     Context::Actions,
-    Context::Studio,
     Context::Builder,
     Context::Settings,
     Context::Modal,
@@ -584,12 +577,12 @@ const SCROLLERS: &[Context] = &[
 const PAGERS: &[Context] = &[
     Context::Projects,
     Context::Detail,
-    Context::Studio,
+    Context::Templates,
     Context::Settings,
     Context::Modal,
 ];
-/// The jumps to the ends. Not the studio: `g` is its "from a folder" there,
-/// and its list is a handful of rows.
+/// The jumps to the ends. Not the templates tab: `g` is its "from a folder"
+/// there, and its list is a handful of rows.
 const JUMPERS: &[Context] = &[
     Context::Projects,
     Context::Detail,
@@ -599,12 +592,11 @@ const JUMPERS: &[Context] = &[
 /// Every dialog that closes with Esc.
 const DIALOGS: &[Context] = &[
     Context::Actions,
-    Context::Studio,
     Context::Builder,
     Context::Settings,
     Context::Modal,
 ];
-const STUDIO: &[Context] = &[Context::Studio];
+const STUDIO: &[Context] = &[Context::Templates];
 const BUILDER: &[Context] = &[Context::Builder];
 const SETTINGS: &[Context] = &[Context::Settings];
 
@@ -798,7 +790,7 @@ pub static COMMANDS: &[Command] = &[
         Search,
         "Search",
         "type a query: words match a name, id, template or tag; tag:x template=y created>date match exactly",
-        LISTS,
+        TABS,
         [Key::ch('/')],
         Search,
         palette = true,
@@ -809,7 +801,7 @@ pub static COMMANDS: &[Command] = &[
         ClearSearch,
         "Clear the search",
         "show every project again",
-        LISTS,
+        TABS,
         [Key::ctrl('u')],
         Search,
         palette = true,
@@ -1132,22 +1124,24 @@ pub static COMMANDS: &[Command] = &[
         hint = false,
         not_busy
     ),
+    // The tab switch, from either tab: `T` goes to the templates and `T`
+    // comes back. One key for one place, in both directions.
     cmd!(
         Templates,
-        "Manage templates",
-        "create, edit, generate from a folder, apply, show, delete",
-        LISTS,
+        "Templates",
+        "the templates tab: every template, what it makes, and its verbs",
+        TABS,
         [Key::ch('T')],
         Templates,
         palette = true,
-        hint = false,
+        hint = true,
         not_busy
     ),
     cmd!(
         Settings,
         "Settings",
         "bases, workflow prompts, post-create actions, the ID counter, maintenance",
-        LISTS,
+        TABS,
         [Key::ch(',')],
         Settings,
         palette = true,
@@ -1158,26 +1152,25 @@ pub static COMMANDS: &[Command] = &[
         Reconcile,
         "Check and recover",
         "finish or roll back work a crash left half-done — what ⚠ needs attention means",
-        LISTS,
+        TABS,
         [Key::ch('!')],
         Library,
         palette = true,
         hint = false,
         not_busy
     ),
-    // --- the template strip -----------------------------------------------
+    // --- the templates tab ------------------------------------------------
     cmd!(
         StripFilter,
-        "Filter by this template",
-        "show only this template's projects (again to clear)",
-        T,
-        [Key::plain(KeyCode::Enter)],
+        "Show this template's projects",
+        "filter the library by the selected template and go back to it",
+        TEMPLATES,
+        [Key::ch('f')],
         Templates,
-        palette = false,
+        palette = true,
         hint = true,
-        has_strip_selection
+        has_studio_selection
     ),
-    // --- the template studio ----------------------------------------------
     cmd!(
         StudioEdit,
         "Edit this template",
@@ -1295,7 +1288,7 @@ pub static COMMANDS: &[Command] = &[
         Quit,
         "Quit",
         "leave fastf",
-        LISTS,
+        TABS,
         [Key::ch('q')],
         Navigate,
         palette = true,
@@ -1306,7 +1299,7 @@ pub static COMMANDS: &[Command] = &[
         Back,
         "Back",
         "one step back: cancel a running job, clear the search, the filter, the marks — then quit",
-        LISTS,
+        TABS,
         [Key::plain(KeyCode::Esc)],
         Navigate,
         palette = false,
@@ -1400,7 +1393,8 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::ShowLog => "messages",
         CommandId::Quit => "quit",
         CommandId::Close => "close",
-        CommandId::StripFilter => "filter",
+        CommandId::Templates => "templates",
+        CommandId::StripFilter => "its projects",
         CommandId::ActionsRun => "run",
         CommandId::StudioEdit => "edit",
         CommandId::StudioNew => "new",

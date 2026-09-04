@@ -2,7 +2,7 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fast-folder   2 bases                                                               highest ID0248 "
+" fast-folder   library │ templates   2 bases                                         highest ID0248 "
 " → projects 12   archive not mounted                                            ⚠ 1 needs attention "
 "                                                                                                    "
 " ⌕ / to search                                                                 12/12 · newest · 3 ✓ "
@@ -26,9 +26,9 @@ expression: frame
 "│                                                              ││                                  │"
 "│                                                              ││                                  │"
 "│                                                              ││                                  │"
+"│                                                              ││                                  │"
+"│                                                              ││                                  │"
+"│                                                              ││                                  │"
 "└──────────────────────────────────────────────────────────────┘└──────────────────────────────────┘"
-"┌ templates ─────────────────────────────────────────────────┐┌ template ──────────────────────────┐"
-"│  client-project 4  general 4  music-video 4                ││ Client project · 2 vars · {date}_{…│"
-"└────────────────────────────────────────────────────────────┘└────────────────────────────────────┘"
 " 3 marked · a verb acts on them instead of the row under the cursor                                 "
 " Enter confirm  Esc cancel                                                                          "

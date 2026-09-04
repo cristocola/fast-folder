@@ -27,14 +27,30 @@ pub fn view(app: &App, frame: &mut Frame) {
     let regions = layout::regions(area, app.detail_open, app.table_min_width());
 
     dashboard::header(app, frame, regions.header);
-    let search_caret = dashboard::search_bar(app, frame, regions.search);
-    projects::table(app, frame, regions.table);
-    if let Some(detail) = regions.detail {
-        projects::detail(app, frame, detail);
-    }
-    if let Some(strip) = regions.strip {
-        templates::strip(app, frame, strip);
-    }
+    // The two tabs share every band but the middle one, so the chrome — the
+    // name, the tabs, the bases, the status line, the keys — stays where it is
+    // when you switch, and only the work changes.
+    let search_caret = match app.screen {
+        crate::tui::app::Screen::Library => {
+            let caret = dashboard::search_bar(app, frame, regions.search);
+            projects::table(app, frame, regions.table);
+            if let Some(detail) = regions.detail {
+                projects::detail(app, frame, detail);
+            }
+            caret
+        }
+        crate::tui::app::Screen::Templates => {
+            let caret = templates::bar(app, frame, regions.search);
+            let body = Rect::new(
+                regions.table.x,
+                regions.table.y,
+                area.width,
+                regions.table.height,
+            );
+            templates::screen(app, frame, body);
+            caret
+        }
+    };
     dashboard::status(app, frame, regions.status);
     dashboard::hints(app, frame, regions.hints);
 

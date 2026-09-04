@@ -6,7 +6,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::tui::app::{App, StatusLevel};
+use crate::tui::app::{App, Screen, StatusLevel};
 use crate::tui::command;
 use crate::tui::view::{fit, plural, split_line};
 
@@ -18,11 +18,11 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
     let width = area.width as usize;
     let gap = "   ";
 
-    // Line 1: the product's name and the base count. **Not the project
-    // count** — the search bar states it, live, beside the sort and the marks,
-    // which is where a reader looking for "how many am I seeing" already is.
-    // Three sites saying the same pair of numbers in three formats read as
-    // three different facts.
+    // Line 1: the product's name, then the tabs. **Not the project count** —
+    // the search bar states it, live, beside the sort and the marks, which is
+    // where a reader looking for "how many am I seeing" already is. Three sites
+    // saying the same pair of numbers in three formats read as three different
+    // facts.
     let mut left = vec![
         Span::styled(
             " fast-folder",
@@ -30,9 +30,25 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         ),
         Span::raw(gap),
     ];
+    for (i, screen) in Screen::ALL.iter().enumerate() {
+        if i > 0 {
+            left.push(Span::styled(" │ ", theme.dim()));
+        }
+        let here = *screen == app.screen;
+        left.push(Span::styled(
+            screen.label(),
+            if here {
+                theme
+                    .accent()
+                    .add_modifier(ratatui::style::Modifier::UNDERLINED)
+            } else {
+                theme.dim()
+            },
+        ));
+    }
     if let Some(summary) = &app.summary {
         left.push(Span::styled(
-            plural(summary.bases.len(), "base", "bases"),
+            format!("{gap}{}", plural(summary.bases.len(), "base", "bases")),
             theme.text(),
         ));
     }
@@ -337,10 +353,7 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
         // A flow, the studio and the builder draw their own key line inside
         // their frame, beside what the keys act on; repeating it down here
         // would say it twice.
-        Some(Modal::Flow(_))
-        | Some(Modal::Studio(_))
-        | Some(Modal::Builder(_))
-        | Some(Modal::Settings(_)) => Vec::new(),
+        Some(Modal::Flow(_)) | Some(Modal::Builder(_)) | Some(Modal::Settings(_)) => Vec::new(),
         Some(Modal::Onboarding(_)) => vec![
             ("Enter".to_string(), "create it"),
             ("Esc".to_string(), "skip for now"),

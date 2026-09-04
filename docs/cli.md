@@ -184,7 +184,8 @@ keys that matter most:
 | ↑ / ↓, `k` / `j` | move the highlight, wrapping at the ends |
 | PageUp / PageDown | move by a screenful, stopping at the ends |
 | Home / End, `g` / `G` | first row, last row |
-| Tab / Shift-Tab | move focus between the list, the detail pane and the template strip |
+| `T` | the templates tab, and `T` again (or Esc) back to the library |
+| Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
 | `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size |
 | `f` / `b` / `F` | show only the selected project's template / show only one base's projects / clear both filters |
@@ -197,7 +198,7 @@ keys that matter most:
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
 | Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
-| `T`, `,` | the template studio, the settings |
+| `,` | the settings |
 | `!` | check and recover — what `⚠ n needs attention` means |
 | `L` | the session's messages, newest first with the time each arrived — a warning that flashed under a dialog is counted on the status line until you read them |
 | F5, `R` | reload the library, reindex every base from its folders |
@@ -295,11 +296,19 @@ it commits. A template's post-create actions (`git init`, your editor, its own
 commands) run on the main screen after the folder exists, and the dashboard
 comes back when you press Enter.
 
-`T` opens the **template studio**: every template on the left, the selected
-one's details on the right, and the verbs on it — `n` a new one, Enter to edit,
+`T` opens the **templates tab**: every template on the left, the selected one's
+details on the right, and the verbs on it — `n` a new one, Enter or `e` to edit,
 `g` to generate one from a folder that already has the shape you want, `D` to
-delete (it asks first). The builder is described in
+delete (it asks first). `f` shows that template's projects: it sets the library
+filter and takes you back to the library, which is where the answer is. `/`
+searches the list — a plain substring over the slug and the name. `T` again, or
+Esc, returns to the library. The builder is described in
 [templates.md](templates.md#the-builder).
+
+Real templates come first, then alphabetically; after them, dimmed, come the
+slugs your projects still name that no template on disk answers to — a template
+you deleted, or `registered` for folders onboarded without one. The number
+beside each is how many projects use it.
 
 `,` opens the **settings**: every setting fastf has, on one screen, grouped, with
 what it is set to beside it. Enter changes the highlighted one — a yes/no flips

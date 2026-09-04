@@ -351,12 +351,53 @@ the scope field hides the three that bulk registration cannot answer, because
 `cli::register::{plan_rename, recursive_targets, recursive_id_note}` are the
 print-free halves both surfaces preview from.
 
-## The template studio and the builder
+## Two tabs
 
-`T` opens `Modal::Studio`: every template on disk with the selected one's
-details beside it, read on a worker (`loaders::template_view`, which renders
-`cli::template::describe` — the same lines `template show` prints, so the two
-cannot drift). Its verbs are `n`, Enter, `g` and `D`.
+`App.screen` is `Screen::{Library, Templates}` and `T` switches between them.
+**A tab, not a dialog.** Templates were an 84 %-wide modal over the library
+*plus* a three-row strip along the bottom that showed the same counts and could
+be filtered by pressing Enter on a card and nothing else — two halves of one
+subject, neither of them a place you could work, and between them three rows off
+every table. The strip is gone (`Focus` is `Projects | Detail` now, and the
+focus ring with it), and `Studio` is state on the `App` rather than a modal,
+because a tab you leave and come back to keeps its place and a modal cannot be
+a tab.
+
+The two tabs share every band but the middle one — the name, the tabs, the
+bases, the status line, the keys stay where they are and only the work changes.
+The search bar belongs to whichever tab is showing: the library's is the query
+grammar, the templates tab's is a plain case-insensitive substring over the slug
+and the name (`Studio::rows`), because a template list is tens of rows and a
+fuzzy hit there says yes to almost every slug. Switching clears it, since the
+two are searches over different things.
+
+`Context::Studio` is gone; `Context::Templates` — which was the strip's — is the
+tab's, and carries the verbs the studio had. `LISTS` shrank to the library's own
+screen for the same reason: while the templates were a strip *on* that screen,
+`n` meant both "new project" and "new template" in one hint bar.
+
+`f` on the templates tab filters the library by the selected template **and
+goes back to it**. The strip set the filter and left you looking at the strip,
+which is the one place the answer is not.
+
+The tab is ordered real templates first, then **alphabetically by display
+name** — not busiest first, which is what a horizontal ribbon wanted. A list
+you scan and search should be in the same order tomorrow, and creating one
+project should not move a row. `TemplatesState::rebuild` is the one place the
+list is built (the counts and the orphan slugs both), and `App::refresh_templates`
+hands it to the tab: the two used to be built separately and drift, the strip
+from the summary *and* the per-template counts, the studio from the summary
+alone. `Studio::install` keeps the selection by slug, but **only once a real
+template has been on the list to choose from** — discovery lands before the
+summary, so the first list is nothing but orphan slugs, and keeping that
+parked the cursor on `(registered)` for the rest of the run.
+
+## The builder
+
+Enter or `e` on the tab opens it: every template on disk with the selected
+one's details beside it, read on a worker (`loaders::template_view`, which
+renders `cli::template::describe` — the same lines `template show` prints, so
+the two cannot drift). Its verbs are `n`, Enter, `g` and `D`.
 
 **The builder is a list of a template's five parts, not a sequence of steps.**
 The old one walked six steps and *then* offered a review menu to go back into
@@ -368,7 +409,8 @@ says `Cannot save:` with `Template::validate`'s own words rather than writing
 something that will not load.
 
 `fastf template new` and `fastf template edit <slug>` open the app at
-`Entry::Studio`, so the command line and `T` are one editor.
+`Entry::Studio` — the templates tab, or the builder straight away — so the
+command line and `T` are one editor.
 
 Two sections are more than a form. **Structure** is `widgets::text_area::TextArea`
 — one folder path per line, with the tree they make drawn beside them and

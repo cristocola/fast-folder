@@ -44,20 +44,106 @@ impl Studio {
         }
     }
 
+    /// Take a fresh card list, keeping the selection by **slug** — a template
+    /// written or deleted reorders the list, and an index does not survive
+    /// that. Returns the read the new selection wants.
+    pub fn install(&mut self, cards: Vec<TemplateCard>) -> Vec<crate::tui::effect::Effect> {
+        // **Whether the selection was ever a choice.** Discovery can land
+        // before the summary, and the first list is then nothing but the slugs
+        // the projects name — every one of them an orphan. Keeping that
+        // selection by slug parks the cursor on `(registered)` for the rest of
+        // the run. It is kept only once a real template has been on the list
+        // to choose from.
+        let had_real = self.cards.iter().any(|card| card.on_disk);
+        let keep = had_real.then(|| self.selected_slug()).flatten();
+        self.cards = cards;
+        self.selected = keep
+            .and_then(|slug| self.cards.iter().position(|card| card.slug == slug))
+            .or_else(|| self.cards.iter().position(|card| card.on_disk))
+            .unwrap_or(0)
+            .min(self.cards.len().saturating_sub(1));
+        // Only ask for a read the pane does not already hold. Discovery
+        // rebuilds this list on every answer, and asking again each time would
+        // put a template read behind every landing size.
+        if self.shown.as_deref() == self.selected_slug().as_deref() {
+            return Vec::new();
+        }
+        self.lines.clear();
+        self.shown = None;
+        self.selected_slug()
+            .map(|slug| vec![crate::tui::effect::Effect::LoadTemplateView { slug }])
+            .unwrap_or_default()
+    }
+
     pub fn selected_slug(&self) -> Option<String> {
         self.cards.get(self.selected).map(|card| card.slug.clone())
     }
 
-    pub fn step(&mut self, delta: isize) {
-        if let Some(next) = nav::wrap_step(Some(self.selected), self.cards.len(), delta) {
-            self.selected = next;
+    pub fn selected_card(&self) -> Option<&TemplateCard> {
+        self.cards.get(self.selected)
+    }
+
+    /// The cards a query keeps, as indices into `cards`.
+    ///
+    /// A plain case-insensitive substring over the slug and the display name —
+    /// deliberately not the library's fuzzy matcher. A template list is tens of
+    /// rows, not thousands, and a fuzzy hit there says yes to almost every
+    /// slug; what this box is for is typing three letters of a name you already
+    /// know.
+    pub fn rows(&self, query: &str) -> Vec<usize> {
+        let needle = query.trim().to_lowercase();
+        (0..self.cards.len())
+            .filter(|&i| {
+                needle.is_empty() || {
+                    let card = &self.cards[i];
+                    card.slug.to_lowercase().contains(&needle)
+                        || card.name.to_lowercase().contains(&needle)
+                }
+            })
+            .collect()
+    }
+
+    /// Where a card index sits in the filtered rows, for the list's cursor.
+    pub fn row_of(&self, index: usize, rows: &[usize]) -> Option<usize> {
+        rows.iter().position(|&i| i == index)
+    }
+
+    /// Move by `delta` **through the rows a query keeps**, not through every
+    /// card: a cursor that walks over hidden rows reads as a stuck key.
+    pub fn step(&mut self, delta: isize, rows: &[usize]) {
+        if rows.is_empty() {
+            return;
+        }
+        let at = self.row_of(self.selected, rows);
+        if let Some(next) = nav::wrap_step(at.or(Some(0)), rows.len(), delta) {
+            self.selected = rows[next];
         }
         self.scroll = 0;
     }
 
-    pub fn clamp_viewport(&mut self, rows: usize) {
-        self.offset =
-            nav::viewport_offset(self.offset, Some(self.selected), self.cards.len(), rows);
+    /// Put the cursor on the first or the last row a query keeps.
+    pub fn jump(&mut self, first: bool, rows: &[usize]) {
+        if let Some(&index) = if first { rows.first() } else { rows.last() } {
+            self.selected = index;
+            self.scroll = 0;
+        }
+    }
+
+    /// Keep the selection in view after a query narrowed the list.
+    pub fn reselect(&mut self, rows: &[usize]) {
+        if !rows.is_empty() && self.row_of(self.selected, rows).is_none() {
+            self.selected = rows[0];
+            self.scroll = 0;
+        }
+    }
+
+    pub fn clamp_viewport(&mut self, rows: &[usize], height: usize) {
+        self.offset = nav::viewport_offset(
+            self.offset,
+            self.row_of(self.selected, rows),
+            rows.len(),
+            height,
+        );
     }
 }
 

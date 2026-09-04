@@ -2,7 +2,7 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fast-folder   2 bases                                                               highest ID0248 "
+" fast-folder   library │ templates   2 bases                                         highest ID0248 "
 " → projects 12   archive not mounted                                            ⚠ 1 needs attention "
 "        ┌ settings ────────────────────────────────────────────────────────────────────────┐        "
 " ⌕ / to │ Project basics                                                                   │ newest "
@@ -26,9 +26,9 @@ expression: frame
 "│       │   git init                    yes                                                │       │"
 "│       │   Reveal the folder           no                                                 │       │"
 "│       │   Open in the editor          no                                                 │       │"
-"└───────│   Print the path              no                                                 │───────┘"
-"┌ templa│ where new projects are created — empty falls back to your home directory, never …│───────┐"
-"│  clien│ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │ate}_{…│"
+"│       │   Print the path              no                                                 │       │"
+"│       │ where new projects are created — empty falls back to your home directory, never …│       │"
+"│       │ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │       │"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 "                                                                                                    "
 "                                                                                                    "

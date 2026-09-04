@@ -31,7 +31,6 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         Modal::Confirm(confirm) => render_confirm(app, confirm, frame, area),
         Modal::MultiPick(pick) => render_multi_pick(app, pick, frame, area),
         Modal::Flow(flow) => render_flow(app, flow, frame, area),
-        Modal::Studio(studio) => crate::tui::view::builder::render_studio(app, studio, frame, area),
         Modal::Builder(builder) => {
             crate::tui::view::builder::render_builder(app, builder, frame, area)
         }

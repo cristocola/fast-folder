@@ -81,7 +81,9 @@ fn a_stale_discovery_is_dropped_and_the_current_one_installs() {
     assert!(app.library.loaded);
     assert_eq!(app.library.len(), 3);
     assert!(
-        matches!(effects.first(), Some(Effect::RequestSizes(paths)) if paths.len() == 3),
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::RequestSizes(paths) if paths.len() == 3)),
         "the visible rows are measured once the list is known: {effects:?}"
     );
 }
@@ -542,22 +544,44 @@ fn the_status_toast_expires_on_its_own() {
     assert!(app.status.text.is_empty());
 }
 
+/// The templates tab carries what the strip used to: every template, the
+/// orphan slugs after them, and the counts. `f` filters the library by the
+/// selected one **and goes back to it** — the strip set the filter and left
+/// you looking at the strip, which is the one place the answer is not.
 #[test]
-fn the_summary_fills_the_template_strip_and_a_strip_filter_toggles() {
+fn the_templates_tab_filters_the_library_and_returns_to_it() {
+    use fastf::tui::app::Screen;
+
     let mut app = fixture(12, 120, 40);
     assert_eq!(app.templates.cards.len(), 3);
+    assert_eq!(app.studio.cards.len(), 3, "the tab has the same list");
+
+    press(&mut app, Key::ch('T'));
+    assert_eq!(app.screen, Screen::Templates);
+    let slug = app.studio.selected_slug().unwrap();
+
+    press(&mut app, Key::ch('f'));
+    assert_eq!(app.library.template_filter.as_deref(), Some(slug.as_str()));
+    assert_eq!(app.screen, Screen::Library, "and back to the projects");
+
+    press(&mut app, Key::ch('T'));
+    press(&mut app, Key::ch('f'));
+    assert!(
+        app.library.template_filter.is_none(),
+        "the same template again clears it"
+    );
+}
+
+/// Tab and Shift-Tab move between the table and the pane; the templates tab is
+/// a tab, not a third pane in that ring.
+#[test]
+fn the_focus_ring_is_the_table_and_the_pane() {
+    let mut app = fixture(12, 120, 40);
+    assert_eq!(app.focus, Focus::Projects);
     press(&mut app, Key::plain(KeyCode::Tab));
     assert_eq!(app.focus, Focus::Detail);
     press(&mut app, Key::plain(KeyCode::Tab));
-    assert_eq!(app.focus, Focus::Templates);
-    let slug = app.templates.selected_card().unwrap().slug.clone();
-    press(&mut app, Key::plain(KeyCode::Enter));
-    assert_eq!(app.library.template_filter.as_deref(), Some(slug.as_str()));
-    press(&mut app, Key::plain(KeyCode::Enter));
-    assert!(
-        app.library.template_filter.is_none(),
-        "the same card again clears it"
-    );
+    assert_eq!(app.focus, Focus::Projects);
 }
 
 #[test]
@@ -1584,21 +1608,45 @@ mod studio {
     }
 
     #[test]
-    fn the_studio_lists_the_templates_and_reads_the_selected_one() {
+    fn the_templates_tab_lists_them_and_reads_the_selected_one() {
+        use fastf::tui::app::Screen;
+
         let mut app = fixture(6, 120, 40);
         let effects = press(&mut app, Key::ch('T'));
-        match app.modals.top() {
-            Some(Modal::Studio(studio)) => assert_eq!(studio.cards.len(), 3),
-            other => panic!("expected the studio, got {other:?}"),
-        }
+        assert_eq!(app.screen, Screen::Templates);
+        assert_eq!(app.studio.cards.len(), 3);
         assert!(
-            matches!(&effects[..], [Effect::LoadTemplateView { slug }] if slug == "general"),
-            "{effects:?}"
+            effects.iter().any(
+                |e| matches!(e, Effect::LoadTemplateView { slug } if slug == "client-project")
+            ),
+            "the tab is alphabetical, real templates first: {effects:?}"
         );
         let effects = press(&mut app, Key::plain(KeyCode::Down));
         assert!(
-            matches!(&effects[..], [Effect::LoadTemplateView { slug }] if slug == "music-video"),
+            matches!(&effects[..], [Effect::LoadTemplateView { slug }] if slug == "general"),
             "moving reads the next one: {effects:?}"
+        );
+        // `T` again is the way back, and Esc is the other one.
+        press(&mut app, Key::ch('T'));
+        assert_eq!(app.screen, Screen::Library);
+    }
+
+    /// The tab's own search box: a plain substring over the slugs and names,
+    /// with the cursor kept on a row the query still keeps.
+    #[test]
+    fn the_templates_tab_filters_its_own_list() {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('T'));
+        assert_eq!(app.studio.rows("").len(), 3);
+
+        press(&mut app, Key::ch('/'));
+        type_text(&mut app, "music");
+        let rows = app.studio.rows(app.search.input.text());
+        assert_eq!(rows.len(), 1, "one template matches");
+        assert_eq!(
+            app.studio.selected_slug().as_deref(),
+            Some("music-video"),
+            "the cursor lands on a row the query keeps"
         );
     }
 
@@ -1613,21 +1661,15 @@ mod studio {
                 lines: vec!["stale".to_string()],
             },
         );
-        match app.modals.top() {
-            Some(Modal::Studio(studio)) => assert!(studio.lines.is_empty()),
-            other => panic!("{other:?}"),
-        }
+        assert!(app.studio.lines.is_empty(), "a stale read is dropped");
         let _ = update(
             &mut app,
             Msg::TemplateViewLoaded {
-                slug: "general".to_string(),
-                lines: vec!["General".to_string()],
+                slug: "client-project".to_string(),
+                lines: vec!["Client project".to_string()],
             },
         );
-        match app.modals.top() {
-            Some(Modal::Studio(studio)) => assert_eq!(studio.lines, vec!["General".to_string()]),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(app.studio.lines, vec!["Client project".to_string()]);
     }
 
     #[test]
@@ -1688,15 +1730,19 @@ mod studio {
             other => panic!("expected a save, got {other:?}"),
         }
         assert!(
-            matches!(app.modals.top(), Some(Modal::Studio(_))),
-            "the builder closed onto the studio it came from"
+            app.modals.is_empty(),
+            "the builder closed onto the tab it came from"
         );
+        assert_eq!(app.screen, fastf::tui::app::Screen::Templates);
     }
 
     #[test]
     fn editing_reads_the_template_and_remembers_what_it_was_called() {
         let mut app = fixture(6, 120, 40);
         press(&mut app, Key::ch('T'));
+        // Down once: not the first row, so the read is plainly the selected
+        // one and not whatever happens to sort first.
+        press(&mut app, Key::plain(KeyCode::Down));
         let effects = press(&mut app, Key::ch('e'));
         assert!(
             matches!(&effects[..], [Effect::LoadTemplateSource { slug }] if slug == "general"),
@@ -1806,9 +1852,11 @@ mod studio {
         press(&mut app, Key::ch('T'));
         press(&mut app, Key::ch('D'));
         match app.modals.top() {
-            Some(Modal::Confirm(confirm)) => {
-                assert!(confirm.prompt.contains("general"), "{}", confirm.prompt)
-            }
+            Some(Modal::Confirm(confirm)) => assert!(
+                confirm.prompt.contains("client-project"),
+                "{}",
+                confirm.prompt
+            ),
             other => panic!("expected a confirm, got {other:?}"),
         }
         let effects = press(&mut app, Key::ch('n'));
@@ -1816,7 +1864,9 @@ mod studio {
 
         press(&mut app, Key::ch('D'));
         let effects = press(&mut app, Key::ch('y'));
-        assert!(matches!(action_of(&effects), Action::DeleteTemplate(slug) if slug == "general"));
+        assert!(
+            matches!(action_of(&effects), Action::DeleteTemplate(slug) if slug == "client-project")
+        );
     }
 
     #[test]
@@ -2175,10 +2225,6 @@ mod mouse {
         click(&mut app, detail.x + 2, detail.y + 2);
         assert_eq!(app.focus, Focus::Detail);
 
-        let strip = regions.strip.expect("40 rows has the strip");
-        click(&mut app, strip.x + 2, strip.y + 1);
-        assert_eq!(app.focus, Focus::Templates);
-
         click(&mut app, regions.search.x + 2, regions.search.y);
         assert!(app.search.editing, "the bar is where you type");
     }
@@ -2397,10 +2443,12 @@ fn help_opens_over_any_dialog_for_that_dialogs_context() {
 }
 
 #[test]
-fn the_studio_and_the_builder_answer_their_declared_keys() {
+fn the_templates_tab_and_the_builder_answer_their_declared_keys() {
+    use fastf::tui::app::Screen;
+
     let mut app = fixture(3, 120, 40);
     let _ = press(&mut app, Key::ch('T'));
-    assert!(matches!(app.modals.top(), Some(Modal::Studio(_))));
+    assert_eq!(app.screen, Screen::Templates);
     let _ = press(&mut app, Key::ch('D'));
     assert!(
         matches!(app.modals.top(), Some(Modal::Confirm(_))),
@@ -2413,7 +2461,7 @@ fn the_studio_and_the_builder_answer_their_declared_keys() {
     );
     let _ = press(&mut app, Key::ch('n'));
     assert!(
-        matches!(app.modals.top(), Some(Modal::Studio(_))),
+        app.modals.is_empty(),
         "n answers no and closes the confirmation"
     );
     let _ = press(&mut app, Key::ch('n'));
@@ -2423,12 +2471,14 @@ fn the_studio_and_the_builder_answer_their_declared_keys() {
     );
     let _ = press(&mut app, Key::plain(KeyCode::Esc));
     assert!(
-        matches!(app.modals.top(), Some(Modal::Studio(_))),
-        "Esc on the section list discards and returns to the studio"
+        app.modals.is_empty(),
+        "Esc on the section list discards and returns to the tab"
     );
+    assert_eq!(app.screen, Screen::Templates);
     assert!(app.status.text.contains("Discarded"));
-    let _ = press(&mut app, Key::ch('q'));
-    assert!(app.modals.is_empty(), "q closes the studio");
+    // Esc again is one more level out: the tab you came from.
+    let _ = press(&mut app, Key::plain(KeyCode::Esc));
+    assert_eq!(app.screen, Screen::Library);
 }
 
 #[test]

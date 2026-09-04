@@ -111,6 +111,14 @@ Shared harness rules — every new harness must follow all of them:
   restore used to be a line after `body()`, so a panicking test skipped it and
   the next test inherited a deleted tempdir as its `HOME`. `with_sandbox` hands
   the guard to the body, which is how `crash_recovery` arms a failpoint.
+- **A spawned fastf inherits nothing of whoever ran the suite.**
+  `Sandbox::command` and `pty::run` both drop `common::NOT_INHERITED` — every
+  variable fastf reads that the test did not set itself. `FASTF_RELAUNCHED` is
+  the one that proved it: the relaunch exports it onto the terminal it opens, so
+  every shell in that window carries it and so does everything typed into that
+  shell, and a package build started from such a window failed the four
+  positives in `relaunch.rs` and nothing else in the crate. A test that wants one
+  of these sets it itself; both spawners apply their own environment afterwards.
 - Redirecting `HOME` is not optional: an unconfigured `base_dir` falls back to
   the home directory, so a harness that skips it scans the developer's real home
   and self-heals the counter from their real projects.

@@ -28,6 +28,32 @@ use std::process::{Child, Command, Output};
 
 pub const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
 
+/// Variables fastf itself reads that a sandbox must never inherit from whoever
+/// ran the suite. Both spawners below drop them; a test that wants one sets it
+/// itself, because both apply their own environment after this list.
+///
+/// This is not tidiness. `FASTF_RELAUNCHED` is exported onto the terminal the
+/// relaunch opens, so every shell in that window inherits it and so does
+/// everything typed into that shell — including the build that runs this suite.
+/// With it set `headless_gui_session` answers `false`, and the four positives in
+/// `relaunch.rs` fail on one machine and nowhere else, which is the worst shape
+/// a failure can have. `SSH_CONNECTION` does the same over ssh, `FASTF_FAULT`
+/// injects one failure into every case at once, and `FASTF_THEME`, `FASTF_ASCII`
+/// and `NO_COLOR` repaint what the pty suite reads back.
+pub const NOT_INHERITED: &[&str] = &[
+    "EDITOR",
+    "FASTF_ASCII",
+    "FASTF_FAULT",
+    "FASTF_NO_RELAUNCH",
+    "FASTF_PROJECT_PATH",
+    "FASTF_RELAUNCHED",
+    "FASTF_THEME",
+    "FASTF_TRACE_FILE",
+    "NO_COLOR",
+    "SSH_CONNECTION",
+    "TERMINAL",
+];
+
 pub struct Sandbox {
     pub tmp: tempfile::TempDir,
     pub install: PathBuf,
@@ -93,14 +119,19 @@ impl Sandbox {
         fs::write(dir.join("files/README.md"), "# {name}\n").unwrap();
     }
 
-    /// Environment shared by every spawned process: same data dir, and HOME
-    /// redirected so an unconfigured base can never reach the real home.
+    /// Environment shared by every spawned process: same data dir, HOME
+    /// redirected so an unconfigured base can never reach the real home, and
+    /// [`NOT_INHERITED`] cleared so the developer's own shell cannot answer for
+    /// fastf.
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(FASTF);
         cmd.env("FASTF_INSTALL_DIR", &self.install).env(
             if cfg!(windows) { "USERPROFILE" } else { "HOME" },
             self.tmp.path(),
         );
+        for name in NOT_INHERITED {
+            cmd.env_remove(name);
+        }
         cmd
     }
 
@@ -618,6 +649,11 @@ pub mod pty {
             .collect();
         let mut envp: Vec<CString> = std::env::vars_os()
             .filter(|(k, _)| !env.iter().any(|(name, _)| k.as_bytes() == name.as_bytes()))
+            .filter(|(k, _)| {
+                !super::NOT_INHERITED
+                    .iter()
+                    .any(|name| k.as_bytes() == name.as_bytes())
+            })
             .map(|(k, v)| {
                 let mut buf = k.as_bytes().to_vec();
                 buf.push(b'=');
@@ -810,15 +846,17 @@ pub fn recorder(dir: &Path, name: &str) -> Recorder {
     fs::create_dir_all(dir).unwrap();
     let log = dir.join(format!("{name}.log"));
     let cwd_log = dir.join(format!("{name}.cwd"));
+    let env_log = dir.join(format!("{name}.env"));
     let program = dir.join(name);
-    // The working directory goes to its own file, written before the argv log:
-    // `wait_for_call` polls the argv log, so by the time it answers, the cwd is
-    // already on disk.
+    // The working directory and the environment go to their own files, written
+    // before the argv log: `wait_for_call` polls the argv log, so by the time it
+    // answers, both are already on disk.
     fs::write(
         &program,
         format!(
-            "#!/bin/sh\npwd >> {}\nprintf '%s\\n' \"$@\" >> {}\nexit 0\n",
+            "#!/bin/sh\npwd >> {}\nenv >> {}\nprintf '%s\\n' \"$@\" >> {}\nexit 0\n",
             cwd_log.display(),
+            env_log.display(),
             log.display()
         ),
     )
@@ -828,6 +866,7 @@ pub fn recorder(dir: &Path, name: &str) -> Recorder {
         program,
         log,
         cwd_log,
+        env_log,
     }
 }
 
@@ -836,6 +875,7 @@ pub struct Recorder {
     pub program: PathBuf,
     pub log: PathBuf,
     pub cwd_log: PathBuf,
+    pub env_log: PathBuf,
 }
 
 #[cfg(unix)]
@@ -875,6 +915,18 @@ impl Recorder {
     pub fn was_called(&self) -> bool {
         self.wait_for_call(std::time::Duration::from_millis(400))
             .is_some()
+    }
+
+    /// What one variable held in the recorded call's environment, or `None` if
+    /// it was unset there. Read it only after `argv` or `cwd` has answered —
+    /// this one does not poll, because "the variable is not set" and "the call
+    /// has not happened yet" look identical on disk.
+    pub fn env_var(&self, name: &str) -> Option<String> {
+        let raw = fs::read_to_string(&self.env_log).ok()?;
+        let prefix = format!("{name}=");
+        raw.lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .map(str::to_string)
     }
 
     /// The working directory of the one invocation, or `None` if it was never

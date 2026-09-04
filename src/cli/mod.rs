@@ -2,6 +2,8 @@ pub mod apply;
 pub mod config;
 pub mod copy;
 pub mod extra;
+pub mod folder_verbs;
+
 pub mod id;
 pub mod move_project;
 pub mod new;

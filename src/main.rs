@@ -224,6 +224,61 @@ enum Commands {
         yes: bool,
     },
 
+    /// Rename a project's folder on disk
+    #[command(
+        after_help = "The folder is renamed in place and the library's index updated; the project's\n\
+        ID and metadata do not change. Without a name, the current one is offered to edit.\n\n\
+        Examples:\n  \
+            fastf rename ID0047 2026-07-16_Spring_Campaign_v2_ID0047\n  \
+            fastf rename lullaby                    # edit the current name in a prompt\n  \
+            fastf rename ID0047 New_Name --yes      # no confirmation (for scripts)"
+    )]
+    Rename {
+        /// Project ID (e.g. ID0047), ID prefix, or name substring
+        query: String,
+
+        /// The new folder name. Omit to edit the current one interactively.
+        name: Option<String>,
+
+        /// Skip the confirmation prompt (for scripts).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Forget a project: remove its PROJECT_INFO.md and leave the files
+    #[command(
+        after_help = "Only PROJECT_INFO.md is removed — the folder and everything else in it stay\n\
+        exactly where they are. `fastf register` brings it back.\n\n\
+        Examples:\n  \
+            fastf unregister ID0047\n  \
+            fastf unregister ID0047 --yes           # no confirmation (for scripts)"
+    )]
+    Unregister {
+        /// Project ID (e.g. ID0047), ID prefix, or name substring
+        query: String,
+
+        /// Skip the confirmation prompt (for scripts).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Delete a project's folder and everything inside it
+    #[command(
+        after_help = "Permanent: there is no trash. Without --yes it names the folder and asks you\n\
+        to type the word `delete`, exactly as the guided app does.\n\n\
+        Examples:\n  \
+            fastf delete ID0047\n  \
+            fastf delete ID0047 --yes               # no confirmation (for scripts)"
+    )]
+    Delete {
+        /// Project ID (e.g. ID0047), ID prefix, or name substring
+        query: String,
+
+        /// Skip the confirmation (for scripts).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     /// Rebuild the project-library cache by rescanning every base
     #[command(
         about = "Force a full rescan of every base and rewrite its .fastf-index.json cache",
@@ -865,6 +920,9 @@ fn run() -> Result<()> {
         Some(Commands::Move { query, base, yes }) => {
             cli::move_project::run(cli::move_project::MoveArgs { query, base, yes })
         }
+        Some(Commands::Rename { query, name, yes }) => cli::folder_verbs::rename(&query, name, yes),
+        Some(Commands::Unregister { query, yes }) => cli::folder_verbs::unregister(&query, yes),
+        Some(Commands::Delete { query, yes }) => cli::folder_verbs::delete(&query, yes),
 
         Some(Commands::Reindex) => cli::reindex::run(),
         Some(Commands::Reconcile) => cli::reconcile::run(),

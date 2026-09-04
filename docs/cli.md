@@ -19,6 +19,9 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf register <dir>` | Onboard an existing folder by writing its `PROJECT_INFO.md` |
 | `fastf apply <slug> <dir>` | Add missing template structure to an existing folder |
 | `fastf move <query> [base]` | Move a project into another configured base |
+| `fastf rename <query> [name]` | Rename a project's folder on disk |
+| `fastf unregister <query>` | Forget a project — remove its `PROJECT_INFO.md`, keep the files |
+| `fastf delete <query>` | Delete a project's folder and everything inside it |
 | `fastf tag add/remove/list/reauto` | Manage project tags |
 | `fastf note add <id> [msg]` | Append a timestamped journal note |
 | `fastf notes <id>` | Show journal entries |
@@ -633,6 +636,25 @@ Nothing has been changed. Move the folder with a tool that preserves links
 ```
 
 Moves *within* the same drive are unaffected: they are a rename, nothing is copied, and links travel along untouched.
+
+## Renaming, forgetting and deleting projects
+
+```bash
+fastf rename ID0047 2026-07-16_Spring_Campaign_v2_ID0047
+fastf rename lullaby                 # the current name, offered to edit
+fastf unregister ID0047              # remove PROJECT_INFO.md; the files stay
+fastf delete ID0047                  # names the folder, asks you to type `delete`
+fastf delete ID0047 --yes            # for scripts
+```
+
+The three verbs the guided app's action menu has (`r`, `u`, `D`), for the
+command line. Each resolves its query like `open` does — an ambiguous one gets
+the picker — and asks the app's own question: rename offers the current name to
+edit and checks the new one the same way, unregister is a yes/no, delete names
+the folder and takes the word `delete` and nothing else. `--yes` answers for a
+script; without it and without a terminal to ask on, every one of them refuses
+rather than guessing. Unregister leaves the folder untouched, so `fastf
+register` brings the project straight back; delete is permanent.
 
 ### Interrupted-operation recovery
 

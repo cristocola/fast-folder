@@ -247,10 +247,15 @@ jobs:
             }
           fi
           sudo apt-get remove -y fast-folder
-          if command -v fastf >/dev/null 2>&1; then
-            echo "::error::fastf survived apt remove"
-            exit 1
-          fi
+          # A path check, because bash remembers where it found `fastf` a few
+          # lines ago and `command -v` would answer from that cache.
+          for path in /usr/bin/fastf /usr/share/man/man1/fastf.1.gz \
+                      /usr/share/bash-completion/completions/fastf; do
+            if [ -e "$path" ]; then
+              echo "::error::$path survived apt remove"
+              exit 1
+            fi
+          done
 
   smoke-windows:
     name: smoke (windows)

@@ -184,9 +184,14 @@ pub(crate) fn parser_at_sized(
 #[cfg(debug_assertions)]
 #[allow(dead_code)]
 pub(crate) fn traced(trace: &Path, name: &str) -> usize {
-    fs::read_to_string(trace)
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| *line == name)
-        .count()
+    let recorded = fs::read_to_string(trace).unwrap_or_default();
+    let count = recorded.lines().filter(|line| *line == name).count();
+    // Say what the file held when a count is asserted on: a zero with the
+    // whole trace beside it is a clue, a bare zero is not.
+    eprintln!(
+        "trace {} — {name}: {count}; recorded: [{}]",
+        trace.display(),
+        recorded.lines().collect::<Vec<_>>().join(", ")
+    );
+    count
 }

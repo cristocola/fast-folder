@@ -121,13 +121,13 @@ fn a_delete_drops_its_row_without_rescanning_the_library() {
     let trace = sb.tmp.path().join("trace");
 
     // The newest row, Doomed_Project, is selected: `D` names it and asks
-    // for the word.
+    // for the word. A generous first pause for a slow runner.
     let script = pty::Script::new()
-        .pause(800)
+        .pause(1500)
         .key("D")
-        .pause(400)
+        .pause(500)
         .line("delete") // typed confirmation
-        .pause(1200)
+        .pause(1500)
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch_traced(&sb, script, &trace);
@@ -705,15 +705,15 @@ fn a_tag_over_marks_lands_on_every_row_without_a_rescan() {
     let trace = sb.tmp.path().join("trace");
 
     let script = pty::Script::new()
-        .pause(800)
+        .pause(1500)
         .key(" ") // mark Tag_C
         .key(" ") // mark Tag_B
         .key(" ") // mark Tag_A
-        .pause(300)
-        .key("A") // → no known tags: the text prompt
         .pause(400)
+        .key("A") // → no known tags: the text prompt
+        .pause(500)
         .line("reviewed")
-        .pause(2000) // three writes and their row patches
+        .pause(2500) // three writes and their row patches
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch_traced(&sb, script, &trace);

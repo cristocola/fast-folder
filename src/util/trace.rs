@@ -40,7 +40,12 @@ pub fn hit(name: &str) {
         .append(true)
         .open(path)
     {
-        let _ = writeln!(file, "{name}");
+        // One `write` for the whole line. `writeln!` on a `File` can issue
+        // the text and the newline as two writes, and two workers hitting
+        // at once — discovery and the summary start together — interleaved
+        // them into `template_loaddiscover` on a two-core runner. A single
+        // append write of this size is atomic.
+        let _ = file.write_all(format!("{name}\n").as_bytes());
     }
 }
 

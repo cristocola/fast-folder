@@ -350,9 +350,13 @@ unreachable from `cd "$(fastf path lullaby)"`, which redirects stdout by
 construction, and would reintroduce the exact defect `util::tty` exists to fix.
 
 **"I am the rerun" is a flag on argv; the environment only ever says "do not
-relaunch".** `respawn_in_terminal` puts a hidden `--relaunched` ahead of the
-argv it repeats, and `cli::terminal::relaunched_window()` is the only reader —
-the pause `main` takes before a window closes, and `window_is_ours()`. An
+relaunch".** `respawn_in_terminal` puts `--relaunched` ahead of the argv it
+repeats; `main::take_the_relaunch_flag` takes it off again, in that first
+position only, **before clap ever sees it**, and
+`cli::terminal::relaunched_window()` is the only reader — the pause `main` takes
+before a window closes, and `window_is_ours()`. It is not a declared argument
+because `hide` keeps a flag out of `--help` and the man pages but not out of the
+generated shell completions, where `fastf --<TAB>` offered it. An
 environment variable cannot carry that claim: `FASTF_RELAUNCHED` is inherited by
 the window's shell and by everything typed into it, which is how `fastf
 completions bash` came to stop for a keypress inside a package build and `fastf

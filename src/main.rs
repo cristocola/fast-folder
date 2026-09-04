@@ -106,7 +106,8 @@ enum Commands {
             fastf recent --plain --limit 5\n  \
             fastf recent --template music-video\n  \
             fastf recent --since 2026-01-01\n  \
-            fastf recent --tag draft               # only projects with this tag"
+            fastf recent --tag draft               # only projects with this tag\n  \
+            fastf recent --base archive            # only one base's projects"
     )]
     Recent {
         /// Max number of projects to show (default: from config recent-limit, or 20)
@@ -124,6 +125,10 @@ enum Commands {
         /// Only show projects that have this exact tag
         #[arg(long)]
         tag: Option<String>,
+
+        /// Only show projects in this base, by its label or its full path
+        #[arg(long)]
+        base: Option<String>,
 
         /// Print the plain list and exit instead of entering the interactive picker.
         /// Auto-engages when stdout is not a TTY (e.g. piping to grep or a file).
@@ -903,12 +908,14 @@ fn run() -> Result<()> {
             template,
             since,
             tag,
+            base,
             plain,
         }) => cli::recent::run(cli::recent::RecentArgs {
             limit,
             template,
             since,
             tag,
+            base,
             plain,
         }),
 

@@ -280,9 +280,11 @@ fn the_header_reports_the_library_from_the_index_without_scanning() {
     let screen = app_screen(&out);
 
     assert_eq!(code, 0, "the app should open and quit:\n{screen}");
+    // The count lives on the search bar now — shown once, beside the sort and
+    // the marks it belongs with, rather than three times in three formats.
     assert!(
-        screen.contains("2 projects"),
-        "the header should report the count:\n{screen}"
+        screen.contains("2/2"),
+        "the bar should report the count:\n{screen}"
     );
     assert!(
         screen.contains("highest ID0002"),

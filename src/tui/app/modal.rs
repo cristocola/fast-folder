@@ -30,6 +30,8 @@ pub enum Then {
     AddTag,
     /// The picked value is a base path to move into.
     MoveToBase,
+    /// The picked value is a base path to restrict the list to.
+    BaseFilter,
     /// The picked value answers the named field of the open flow's form —
     /// what Space on a choice opens, so a twenty-template list is one fuzzy
     /// search rather than twenty presses of `→`.

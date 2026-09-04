@@ -231,7 +231,8 @@ pub enum CommandId {
     SortCycle,
     SortPick,
     FilterTemplate,
-    ClearTemplateFilter,
+    FilterBase,
+    ClearFilters,
     // The selected project
     Actions,
     OpenFolder,
@@ -286,7 +287,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 61] = [
+    pub const ALL: [CommandId; 62] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -307,7 +308,8 @@ impl CommandId {
         CommandId::SortCycle,
         CommandId::SortPick,
         CommandId::FilterTemplate,
-        CommandId::ClearTemplateFilter,
+        CommandId::FilterBase,
+        CommandId::ClearFilters,
         CommandId::Actions,
         CommandId::OpenFolder,
         CommandId::OpenTerminal,
@@ -434,11 +436,23 @@ fn has_search(app: &App) -> Availability {
     }
 }
 
-fn has_template_filter(app: &App) -> Availability {
-    if app.library.template_filter.is_some() {
+fn has_row_filter(app: &App) -> Availability {
+    if app.library.template_filter.is_some() || app.library.base_filter.is_some() {
         Availability::Enabled
     } else {
         Availability::Hidden
+    }
+}
+
+/// A base filter is worth offering only where there is more than one base to
+/// choose between — with one, every row answers it already.
+fn many_bases(app: &App) -> Availability {
+    match app.summary.as_ref() {
+        Some(summary) if summary.bases.len() > 1 => Availability::Enabled,
+        Some(_) => Availability::Hidden,
+        // The summary is still being read; the key is bound, and pressing it
+        // before the bases are known says so rather than doing nothing.
+        None => Availability::Disabled("still reading the bases"),
     }
 }
 
@@ -815,15 +829,26 @@ pub static COMMANDS: &[Command] = &[
         needs_selection
     ),
     cmd!(
-        ClearTemplateFilter,
-        "Clear the template filter",
-        "show every template's projects again",
+        FilterBase,
+        "Filter by base",
+        "show only the projects in one base",
+        LISTS,
+        [Key::ch('b')],
+        Search,
+        palette = true,
+        hint = false,
+        many_bases
+    ),
+    cmd!(
+        ClearFilters,
+        "Clear the filters",
+        "show every template's and every base's projects again",
         LISTS,
         [Key::ch('F')],
         Search,
         palette = true,
         hint = false,
-        has_template_filter
+        has_row_filter
     ),
     // --- the selected project --------------------------------------------
     cmd!(
@@ -1015,6 +1040,10 @@ pub static COMMANDS: &[Command] = &[
         needs_selection
     ),
     // --- marks (what a batch verb will act on) ----------------------------
+    // Marking is how every batch verb is aimed, so it belongs in the hint bar
+    // and the palette like any other verb. It was advertised only by a
+    // hand-written sentence on the status line, which is exactly the drift the
+    // one registry exists to prevent.
     cmd!(
         MarkToggle,
         "Mark / unmark",
@@ -1022,8 +1051,8 @@ pub static COMMANDS: &[Command] = &[
         PD,
         [Key::ch(' ')],
         Project,
-        palette = false,
-        hint = false,
+        palette = true,
+        hint = true,
         needs_selection
     ),
     cmd!(
@@ -1033,7 +1062,7 @@ pub static COMMANDS: &[Command] = &[
         PD,
         [Key::ch('*')],
         Project,
-        palette = false,
+        palette = true,
         hint = false,
         has_any_rows
     ),
@@ -1044,7 +1073,7 @@ pub static COMMANDS: &[Command] = &[
         PD,
         [Key::ch('-')],
         Project,
-        palette = false,
+        palette = true,
         hint = false,
         has_marks
     ),
@@ -1346,6 +1375,7 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::NewProject => "new",
         CommandId::Search => "search",
         CommandId::Help => "help",
+        CommandId::MarkToggle => "mark",
         CommandId::ShowLog => "messages",
         CommandId::Quit => "quit",
         CommandId::Close => "close",

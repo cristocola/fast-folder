@@ -9,6 +9,8 @@ pub struct Preset {
     pub template: Option<String>,
     pub since: Option<String>,
     pub tag: Option<String>,
+    /// A base, named by its label or its full path.
+    pub base: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -17,6 +19,7 @@ impl Preset {
         self.template.is_none()
             && self.since.is_none()
             && self.tag.is_none()
+            && self.base.is_none()
             && self.limit.is_none()
     }
 
@@ -31,6 +34,9 @@ impl Preset {
         }
         if let Some(t) = &self.tag {
             parts.push(format!("tag={t}"));
+        }
+        if let Some(b) = &self.base {
+            parts.push(format!("base={b}"));
         }
         if let Some(n) = self.limit {
             parts.push(format!("limit={n}"));
@@ -51,6 +57,11 @@ impl Preset {
         }
         if let Some(tag) = &self.tag
             && !project.tags.iter().any(|t| t == tag)
+        {
+            return false;
+        }
+        if let Some(base) = &self.base
+            && !crate::cli::recent::base_matches(project, base)
         {
             return false;
         }

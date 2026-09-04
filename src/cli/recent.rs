@@ -13,6 +13,8 @@ pub struct RecentArgs {
     pub since: Option<String>,
     /// Only show projects that have this tag.
     pub tag: Option<String>,
+    /// Only show projects in this base, named by its label or its full path.
+    pub base: Option<String>,
     /// Force the plain (non-interactive) list output. Auto-engages when stdout
     /// is not a TTY.
     pub plain: bool,
@@ -49,7 +51,14 @@ pub fn run(args: RecentArgs) -> Result<()> {
         return Ok(());
     }
 
-    let filtered = filter_projects(&projects, &args.template, &args.since, &args.tag, limit);
+    let filtered = filter_projects(
+        &projects,
+        &args.template,
+        &args.since,
+        &args.tag,
+        &args.base,
+        limit,
+    );
 
     if filtered.is_empty() {
         println!("{}", "No projects match those filters.".dimmed());
@@ -69,6 +78,7 @@ pub fn run(args: RecentArgs) -> Result<()> {
                 template: args.template.clone(),
                 since: args.since.clone(),
                 tag: args.tag.clone(),
+                base: args.base.clone(),
                 limit: args.limit,
             },
             initial: filtered.into_iter().cloned().collect(),
@@ -84,6 +94,7 @@ fn filter_projects<'a>(
     template: &Option<String>,
     since: &Option<String>,
     tag: &Option<String>,
+    base: &Option<String>,
     limit: usize,
 ) -> Vec<&'a Project> {
     // `discover` already returns newest-first; just filter + take.
@@ -105,12 +116,27 @@ fn filter_projects<'a>(
             {
                 return false;
             }
+            if let Some(want_base) = base
+                && !base_matches(p, want_base)
+            {
+                return false;
+            }
             true
         })
         .collect();
 
     filtered.truncate(limit);
     filtered
+}
+
+/// A base named on the command line: its short label, as every list prints it,
+/// or its full path, as `fastf paths` prints it. The same rule
+/// `fastf move --to` already uses, so one spelling works everywhere.
+pub fn base_matches(project: &Project, want: &str) -> bool {
+    let want = want.trim_end_matches(['/', '\\']);
+    library::base_label(&project.base) == want
+        || project.base == std::path::Path::new(want)
+        || crate::util::paths::display_path(&project.base) == want
 }
 
 /// Plain (non-interactive) list output. Shared by `fastf recent` and

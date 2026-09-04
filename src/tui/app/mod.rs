@@ -57,6 +57,11 @@ const STATUS_TICKS: u64 = 30;
 /// How many project details the pane remembers.
 const DETAIL_CACHE: usize = 64;
 
+/// The most width the base column may claim from the layout. `BASE_MAX` in the
+/// table is what it may *draw* at; this is what it may take from the detail
+/// pane before the pane is worth more than the label.
+const BASE_CLAIM_MAX: usize = 14;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
     Projects,
@@ -344,12 +349,24 @@ impl App {
 
     /// The width the table needs to show every folder name whole with the id
     /// and the size beside it: the cursor cell, the id, the name and the size
-    /// cell, each followed by a space, inside the borders.
+    /// cell, each followed by a space, inside the borders, plus the right
+    /// gutter `view::projects::table` always reserves.
     pub fn table_min_width(&self) -> u16 {
         let (id_w, name_w) = self.library.widths;
+        // The base column joins the claim once the rows come from more than one
+        // base. It is elected right after the size there, and a table that did
+        // not ask for its width never got it: a library of ninety-character
+        // folder names left the split with room for the size and nothing else,
+        // so the one column saying which drive a project is on never appeared
+        // on the machine that had four of them.
+        let base = if self.library.many_bases {
+            self.library.base_width.min(BASE_CLAIM_MAX) + 1
+        } else {
+            0
+        };
         // `choose_columns` adds a column only while it fits with its spacing.
-        (2 + 1 + id_w + 1 + name_w + 1 + crate::tui::rows::SIZE_CELL + 1).min(u16::MAX as usize)
-            as u16
+        (2 + 1 + id_w + 1 + name_w + 1 + crate::tui::rows::SIZE_CELL + 1 + base + 1)
+            .min(u16::MAX as usize) as u16
     }
 
     pub fn rows_on_screen(&self) -> usize {
@@ -545,6 +562,22 @@ impl App {
 
     fn set_template_filter(&mut self, slug: Option<String>) -> Vec<Effect> {
         self.library.template_filter = slug;
+        self.recompute();
+        self.after_rows_changed()
+    }
+
+    fn set_base_filter(&mut self, base: Option<PathBuf>) -> Vec<Effect> {
+        self.library.base_filter = base;
+        self.recompute();
+        self.after_rows_changed()
+    }
+
+    /// Both row filters off. `F` is one key because they are one question —
+    /// "why am I not seeing everything" — and answering half of it leaves the
+    /// list still short with no hint which half is left.
+    fn clear_filters(&mut self) -> Vec<Effect> {
+        self.library.template_filter = None;
+        self.library.base_filter = None;
         self.recompute();
         self.after_rows_changed()
     }
@@ -1646,6 +1679,10 @@ impl App {
                         self.after_rows_changed()
                     }
                     Then::TemplateFilter => self.set_template_filter(Some(item.value.clone())),
+                    Then::BaseFilter => {
+                        let base = (!item.value.is_empty()).then(|| PathBuf::from(&item.value));
+                        self.set_base_filter(base)
+                    }
                     Then::AddTag => {
                         if item.value == crate::tui::app::actions::NEW_TAG {
                             self.modals.push(Modal::TextPrompt(TextPrompt::new(
@@ -2031,7 +2068,8 @@ impl App {
                 let slug = self.library.selected().map(|p| p.template.clone());
                 self.set_template_filter(slug)
             }
-            CommandId::ClearTemplateFilter => self.set_template_filter(None),
+            CommandId::FilterBase => self.open_base_filter(),
+            CommandId::ClearFilters => self.clear_filters(),
             CommandId::Actions => {
                 self.modals.push(Modal::Actions(
                     crate::tui::app::actions::ActionsState::default(),
@@ -3268,6 +3306,43 @@ impl App {
         });
         self.modals
             .push(Modal::Pick(PickState::new(title, items, Then::AddTag)));
+        Vec::new()
+    }
+
+    /// `b`: pick the base to restrict the list to. Every configured base is
+    /// offered, mounted or not — an unmounted one showing `0` is the answer to
+    /// "where did those projects go", where hiding it is not.
+    fn open_base_filter(&mut self) -> Vec<Effect> {
+        let Some(summary) = &self.summary else {
+            return Vec::new();
+        };
+        let mut items: Vec<PickItem> = summary
+            .bases
+            .iter()
+            .map(|base| PickItem {
+                label: base.label.clone(),
+                detail: base.note(),
+                value: base.path.display().to_string(),
+            })
+            .collect();
+        if items.is_empty() {
+            return Vec::new();
+        }
+        // The way out is in the list, not only on a second key: a picker whose
+        // only escape is Esc cannot say that "every base" is a choice.
+        items.insert(
+            0,
+            PickItem {
+                label: "every base".to_string(),
+                detail: String::new(),
+                value: String::new(),
+            },
+        );
+        self.modals.push(Modal::Pick(PickState::new(
+            "Show which base?",
+            items,
+            Then::BaseFilter,
+        )));
         Vec::new()
     }
 

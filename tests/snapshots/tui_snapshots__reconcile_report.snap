@@ -2,15 +2,15 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fastf   12 projects   3 templates   2 bases                                         highest ID0248 "
+" fast-folder   2 bases                                                               highest ID0248 "
 " → projects 12   archive not mounted                                            ⚠ 1 needs attention "
 "        ┌ settings ────────────────────────────────────────────────────────────────────────┐        "
 " ⌕ / to │   Terminal                    (probe the known ones)                             │ newest "
 "┌ projec│   Register pattern            {date}_{name}_{id}                                 │───────┐"
-"│  ID   │ Creating a project                                                               │248    │"
-"│▸ ID024│   Confirm before creating     yes                                                │ated   │"
+"│  ID   │ Creating a project                                                               │0248   │"
+"│▸ ID024│   Confirm before creating     yes                                                │eated  │"
 "│  ID024│   Ask to open after creating  yes                                                │       │"
-"│  ID024│   Preview lines               20                                                 │tries  │"
+"│  ID024│   Preview lines               20                                                 │ntries │"
 "│  ID024│   Name collision              suffix                                             │       │"
 "│  ID024│ Appearance                                                                       │       │"
 "│  ID024│   Theme                       auto (follows the terminal)                        │       │"

@@ -18,40 +18,21 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
     let width = area.width as usize;
     let gap = "   ";
 
-    // Line 1: the name, the counts, the highest id.
-    let projects = if app.library.loaded {
-        app.library.snapshot.len()
-    } else {
-        app.summary.as_ref().map(|s| s.projects).unwrap_or(0)
-    };
+    // Line 1: the product's name and the base count. **Not the project
+    // count** — the search bar states it, live, beside the sort and the marks,
+    // which is where a reader looking for "how many am I seeing" already is.
+    // Three sites saying the same pair of numbers in three formats read as
+    // three different facts.
     let mut left = vec![
         Span::styled(
-            " fastf",
+            " fast-folder",
             theme.accent().add_modifier(ratatui::style::Modifier::BOLD),
         ),
         Span::raw(gap),
     ];
-    left.push(Span::styled(
-        plural(projects, "project", "projects"),
-        theme.text(),
-    ));
-    if !app.library.loaded {
-        left.push(Span::styled(
-            format!(" (from index) {}", SPINNER[(app.ticks % 4) as usize]),
-            theme.dim(),
-        ));
-    }
-    // The templates on disk — not every slug a project ever named.
-    left.push(Span::styled(
-        format!(
-            "{gap}{}",
-            plural(app.templates.on_disk, "template", "templates")
-        ),
-        theme.text(),
-    ));
     if let Some(summary) = &app.summary {
         left.push(Span::styled(
-            format!("{gap}{}", plural(summary.bases.len(), "base", "bases")),
+            plural(summary.bases.len(), "base", "bases"),
             theme.text(),
         ));
     }
@@ -120,10 +101,22 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
     let g = theme.glyphs;
     let width = area.width as usize;
 
+    // **The one place the count is stated.** Live, next to the sort it is
+    // ordered by, the filters that produced it and the marks a verb would act
+    // on — everything a reader asking "how many am I seeing" wants at once.
     let mut right = vec![Span::styled(
         format!("{}/{}", app.library.len(), app.library.snapshot.len()),
         theme.text(),
     )];
+    // The first frame's counts come from the index; the spinner rides with the
+    // number it qualifies rather than sitting in a header that no longer has
+    // one.
+    if !app.library.loaded {
+        right.push(Span::styled(
+            format!(" (from index) {}", SPINNER[(app.ticks % 4) as usize]),
+            theme.dim(),
+        ));
+    }
     right.push(Span::styled(
         format!(
             " {} {}",
@@ -135,6 +128,12 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
     if let Some(slug) = &app.library.template_filter {
         right.push(Span::styled(
             format!(" {} template={slug}", g.sep),
+            theme.accent_alt(),
+        ));
+    }
+    if let Some(base) = &app.library.base_filter {
+        right.push(Span::styled(
+            format!(" {} base={}", g.sep, crate::core::library::base_label(base)),
             theme.accent_alt(),
         ));
     }
@@ -268,13 +267,18 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
                 (false, false, true) => "nothing to show".to_string(),
             }
         } else {
-            format!(
-                "{} of {} projects   {}   Space marks a row for a batch   {}   ? for help",
-                app.library.len(),
-                app.library.snapshot.len(),
-                g.sep,
-                g.sep
-            )
+            // The counts are in the search bar and the keys are in the hint
+            // bar, both of them from the one place each fact lives. What is
+            // left for this line is the state neither of those can show: what
+            // a batch verb would act on right now.
+            match app.library.marks.len() {
+                0 => String::new(),
+                n => format!(
+                    "{n} marked {} a verb acts on {} instead of the row under the cursor",
+                    g.sep,
+                    if n == 1 { "it" } else { "them" }
+                ),
+            }
         };
         Line::from(Span::styled(format!(" {idle}"), theme.dim()))
     };

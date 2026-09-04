@@ -2,15 +2,15 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fastf   12 projects   3 templates   2 bases                                         highest ID0248 "
+" fast-folder   2 bases                                                               highest ID0248 "
 " → projects 12   archive not mounted                                            ⚠ 1 needs attention "
 "                                                                                                    "
 " ⌕ / to search                                                                       12/12 · newest "
-"┌ projects ───────────────────────────────────────────────────┐┌ ID0248 ───────────────────────────┐"
-"│  ID     PROJE┌ commands ──────────────────────────────────────────────────────────┐mix_ID0248    │"
-"│▸ ID0248 2026-│ ⌕ open                                                             │s · created   │"
+"┌ projects ────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────┐"
+"│  ID     PROJE┌ commands ──────────────────────────────────────────────────────────┐emix_ID0248   │"
+"│▸ ID0248 2026-│ ⌕ open                                                             │ts · created  │"
 "│  ID0247 2026-│                                                                    │              │"
-"│  ID0246 2026-│ Open project folder  · reveal it in the file manager             o │rnal entries  │"
+"│  ID0246 2026-│ Open project folder  · reveal it in the file manager             o │urnal entries │"
 "│  ID0245 2026-│ Open terminal here  · a new terminal window in the project fol…  t │              │"
 "│  ID0244 2026-│ Project actions  · open the action menu for the selected proje…  a │              │"
 "│  ID0243 2026-│                                                                    │              │"
@@ -30,5 +30,5 @@ expression: frame
 "┌ templates ───└────────────────────────────────────────────────────────────────────┘──────────────┐"
 "│  client-project 4  general 4  music-video 4                ││ Client project · 2 vars · {date}_{…│"
 "└────────────────────────────────────────────────────────────┘└────────────────────────────────────┘"
-" 12 of 12 projects   ·   Space marks a row for a batch   ·   ? for help                             "
+"                                                                                                    "
 " ↑↓ move  Enter run  Esc close  # projects only                                                     "

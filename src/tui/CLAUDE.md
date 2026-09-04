@@ -207,7 +207,34 @@ template, the tags. (The old row put base and template before the date; in a
 table with a detail pane beside it the size is what the row is for — the name
 carries the date already — and the pane shows the rest.) Widths are measured from the rows, never
 from the sizes, so a landing snapshot cannot reflow the table; the size cell is
-`rows::SIZE_CELL` wide and right-aligned.
+`rows::SIZE_CELL` wide and right-aligned, header included.
+
+**Election stops at the first column that does not fit.** The greedy version
+kept trying, so a narrower later column slipped in past a wider earlier one and
+a 60-column window drew a BASE column with no SIZE — which reads as a bug, not
+as a priority.
+
+**The base is promoted above the date when the rows come from more than one
+base**, which is a question about the rows on screen and not about the
+configuration: two bases with one unmounted shows one base's projects, and a
+column repeating one word earns nothing. `LibraryState.many_bases` and
+`base_width` are measured in `recompute` beside `widths`, because
+`App::table_min_width` has to claim the column the table is about to elect — a
+library of ninety-character names left the split with room for the size and
+nothing else, and the one column saying which drive a project is on never
+appeared on the machine that had four of them.
+
+**Every column is measured, the tags included.** The tags cell was a `Fill(1)`
+remainder sharing the slack with the name, so one column of gutter cut the first
+tag's last letter — and a tag cut mid-word names a different tag. It is
+`tag_cell_width` now, and absent entirely when no row on screen carries one.
+
+**The table reserves one column of right gutter, always.** The last cell is
+right-aligned, so without it a size sits against the border glyph and reads as
+cut off, with the scrollbar — drawn over the border column — landing on the
+digits. It is reserved whether or not a scrollbar is showing: taking it back
+when the list gets short would reflow every width as rows arrive, which is the
+one thing measured columns exist to prevent.
 
 **Nothing blocks on a size.** The list draws first with `scanning…` in the
 cell; `util::size_scan` owns two workers, `request` **replaces** the queue with
@@ -518,3 +545,14 @@ additive; `parse` is unchanged for the command line).
 
 **Honest counts.** The header counts templates on disk (`TemplateCard::on_disk`);
 the strip lists orphan slugs dimmed after them and never opens on one.
+
+**Each fact is stated once.** The project count lived in the header, in the
+search bar and in the status line, in three formats, which reads as three
+different facts; `?` was advertised by the hint bar *and* by a hand-written
+sentence on the status line. The search bar is now the one place the list
+reports itself — the counts, the `(from index)` spinner, the sort, the template
+and base filters, the mark count — the hint bar is the one place a key is
+advertised, and the status line is left for what neither can show: what a batch
+verb would act on right now. `MarkToggle` is `hint = true, palette = true` for
+the same reason: the sentence that used to advertise Space was exactly the
+drift the one registry exists to prevent.

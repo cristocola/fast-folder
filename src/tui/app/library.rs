@@ -124,6 +124,10 @@ pub struct LibraryState {
     /// What the user chose with `s`/`S`; `None` follows the query.
     pub explicit_sort: Option<Order>,
     pub template_filter: Option<String>,
+    /// The one base the list is restricted to, by its full path. A path rather
+    /// than a label, because two bases can share a basename and the label is
+    /// what `base_label` shortens for display, not what identifies a base.
+    pub base_filter: Option<PathBuf>,
     pub preset: Option<Preset>,
     /// Landed size cells; a missing key is still pending.
     pub sizes: HashMap<PathBuf, Option<u64>>,
@@ -135,6 +139,12 @@ pub struct LibraryState {
     /// The widest id and the widest name among the rows shown — measured once
     /// per `recompute`, so the table and the layout agree on them.
     pub widths: (usize, usize),
+    /// The widest base label among the rows shown, and whether they come from
+    /// more than one base. Measured beside `widths` for the same reason: the
+    /// layout has to reserve the base column the table is about to elect, or
+    /// the table asks for a width it will not use and the column never appears.
+    pub base_width: usize,
+    pub many_bases: bool,
 }
 
 impl Default for LibraryState {
@@ -160,11 +170,14 @@ impl LibraryState {
             marks: BTreeSet::new(),
             explicit_sort: None,
             template_filter: None,
+            base_filter: None,
             preset: None,
             sizes: HashMap::new(),
             meta: HashMap::new(),
             known_tags: Vec::new(),
             widths: (4, 8),
+            base_width: 4,
+            many_bases: false,
         }
     }
 
@@ -291,6 +304,11 @@ impl LibraryState {
             {
                 continue;
             }
+            if let Some(base) = &self.base_filter
+                && &project.base != base
+            {
+                continue;
+            }
             if let Some(preset) = &self.preset
                 && !preset.keeps(project)
             {
@@ -331,6 +349,20 @@ impl LibraryState {
                 name_w.max(UnicodeWidthStr::width(project.name.as_str())),
             )
         });
+        let mut base_width = 4usize;
+        let mut first_base: Option<&Path> = None;
+        let mut many = false;
+        for &index in &self.filtered {
+            let base = self.snapshot[index].base.as_path();
+            base_width = base_width.max(UnicodeWidthStr::width(library::base_label(base).as_str()));
+            match first_base {
+                None => first_base = Some(base),
+                Some(seen) if seen != base => many = true,
+                Some(_) => {}
+            }
+        }
+        self.base_width = base_width;
+        self.many_bases = many;
 
         self.selected = match keep_path {
             Some(path) => self
@@ -372,8 +404,13 @@ impl LibraryState {
                 .cmp(&crate::core::naming::id_value(&pb.id))
                 .then_with(|| pa.id.cmp(&pb.id)),
             Order::Template => pa.template.cmp(&pb.template).then_with(|| newest(pa, pb)),
+            // The label first, because that is the word the column shows and
+            // the order has to look sorted; the full path second, because two
+            // bases can share a basename (`/mnt/a/PROJECTS`, `/mnt/b/PROJECTS`)
+            // and grouping them into one run is not sorting by base.
             Order::Base => library::base_label(&pa.base)
                 .cmp(&library::base_label(&pb.base))
+                .then_with(|| pa.base.cmp(&pb.base))
                 .then_with(|| newest(pa, pb)),
             Order::Size => {
                 // Biggest first; unmeasured and unmeasurable rows last.

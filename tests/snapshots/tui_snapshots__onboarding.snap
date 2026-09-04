@@ -2,12 +2,12 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fastf   0 projects   3 templates   2 bases                                          highest ID0248 "
+" fast-folder   2 bases                                                               highest ID0248 "
 " → projects 0   archive not mounted                                             ⚠ 1 needs attention "
 "                                                                                                    "
 " ⌕ / to search                                                                         0/0 · newest "
 "┌ projects ────────────────────────────────────────────────┐┌ detail ──────────────────────────────┐"
-"│  ID   PROJECT        SIZE        CREATED    BASE TEMPLATE││nothing selected                      │"
+"│  ID   PROJECT              SIZE CREATED    BASE TEMPLATE ││nothing selected                      │"
 "│                                                          ││                                      │"
 "│nothing here yet — n creates a project, e registers a fol…││                                      │"
 "│                                                          ││                                      │"

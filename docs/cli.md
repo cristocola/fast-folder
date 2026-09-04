@@ -187,7 +187,7 @@ keys that matter most:
 | Tab / Shift-Tab | move focus between the list, the detail pane and the template strip |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
 | `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size |
-| `f` / `F` | show only the selected project's template / show every template again |
+| `f` / `b` / `F` | show only the selected project's template / show only one base's projects / clear both filters |
 | `i` | show or hide the detail pane |
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
@@ -195,7 +195,7 @@ keys that matter most:
 | `N`, Ctrl-N | a journal note in your `$EDITOR`; a short note typed where you are — Enter saves, Alt-Enter breaks a line, a pasted paragraph lands whole |
 | `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good — it names the folder and asks you to type `delete` |
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
-| Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark** |
+| Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
 | `T`, `,` | the template studio, the settings |
 | `!` | check and recover — what `⚠ n needs attention` means |
@@ -203,7 +203,7 @@ keys that matter most:
 | F5, `R` | reload the library, reindex every base from its folders |
 | Ctrl-Z | suspend to the shell, as in any program; `fg` brings the app back with its screen retaken (unix) |
 | `q` | quit; in a dialog, close it |
-| Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the search bar, clear the query, clear the template filter, clear the marks — and only then quit |
+| Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the search bar, clear the query, clear the filters, clear the marks — and only then quit |
 | Ctrl-C | leave at once (exit 130, `aborted.`) |
 
 #### Searching
@@ -230,9 +230,25 @@ exactly: `tag:draft`, `template=music-video`, `artist=Aria*`,
 template variable needs the rows' metadata, which is read for the rows that
 lack it and filled in as it lands; everything else is answered from the row.
 
-The bar's right edge counts what matched — `4/12` — and names the sort order
-and the template filter. When nothing matches, the status line says so and the
-query stays in the bar, one keystroke from being fixed.
+The bar's right edge is where the list's own state is reported, and the only
+place it is: what matched out of what there is (`4/12`), the sort order, the
+template and base filters, and how many rows are marked. When nothing matches,
+the status line says so and the query stays in the bar, one keystroke from
+being fixed.
+
+#### Columns
+
+The folder name is never cut — it is the column that tells two projects apart —
+so a row is eaten from the right and the optional columns are added only while
+the widest name still fits whole: the size, then the date, the base, the
+template and the tags, each measured from what the rows actually hold. Election
+stops at the first column that does not fit, so the columns you see are always
+the top of that list.
+
+**With projects from more than one base on screen, the base moves up to second,
+ahead of the date.** Every bundled naming pattern already carries the date
+inside the folder name, and after `fastf copy-to` two rows can carry the same ID
+and differ in nothing but which drive they are on.
 
 #### Sizes
 
@@ -398,6 +414,7 @@ fastf recent --limit 50
 fastf recent --template rust-project
 fastf recent --since 2026-01-01
 fastf recent --tag draft
+fastf recent --base archive          # one base, by its label or its full path
 
 fastf open ID0047                    # reveal in the system file manager
 fastf open 47                        # the ID number, however it is padded

@@ -147,6 +147,7 @@ responsibility of the filesystem and backups.
 | v2.2.1 | a text prompt shows its caret in the line being edited, so a rename has a visible insertion point | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.2.1) |
 | v3.0.0 | the guided app on ratatui: one dashboard over the whole library, every flow native, the command line's prompts in the same palette, and dialoguer gone | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.0.0) |
 | v3.1.0 | the dashboard says each thing once, templates are a tab, batch verbs land, and `copy-to` puts a project on a backup drive keeping its ID | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.0) |
+| v3.1.1 | a Debian package on every release and a one command installer for any Linux, both verified in CI | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.1) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find
@@ -187,6 +188,8 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
   and the MSI; every asset matched `SHA256SUMS` ([run 32631862162](https://github.com/cristocola/fast-folder/actions/runs/32631862162)).
 - [x] `makepkg -f` completed for `fast-folder` and `fast-folder-bin`; the source
   package's release test suite passed before both AUR repositories were pushed.
+- [x] The `.deb` installs on an Ubuntu runner, puts `fastf` on PATH with its man
+  page and completions, and uninstalls cleanly (`smoke-linux`'s musl leg).
 
 Regression coverage grows with the relevant release:
 

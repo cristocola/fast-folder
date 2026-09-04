@@ -11,7 +11,7 @@ pub const MIN_HEIGHT: u16 = 16;
 
 /// A terminal wide enough to keep the detail pane beside the list.
 pub const DETAIL_MIN_WIDTH: u16 = 100;
-/// A terminal tall enough for the tall header and the template strip.
+/// A terminal tall enough for the header's blank third line.
 pub const TALL_MIN_HEIGHT: u16 = 30;
 
 pub fn too_small(area: Rect) -> bool {

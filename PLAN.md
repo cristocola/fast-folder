@@ -33,7 +33,12 @@ renamed or copied.
 Item 4. `copy_engine.rs`, `fastf copy-to`, `C` in the app. The copy keeps its
 ID; the base tells duplicates apart. `patch` locates by path first.
 
-## Phase 5 — release v3.1.0  🔄  (bumped, documented; PR run, then tag)
+## Phase 5 — release v3.1.0  🔄
+Bumped to 3.1.0, ROADMAP row written, README screenshot retaken, and the release
+skill now carries "Why the first tag fails". PR #44 is open and running the full
+matrix; the tag goes on a commit that run was green on. The docs gate
+(`RUSTDOCFLAGS="-D warnings" cargo doc`) caught one on the first run, which is
+the whole point of the step.
 Item 11. Document the five CI failure patterns in the release skill, add the
 "green PR run before the tag" step, bump, tag, AUR.
 

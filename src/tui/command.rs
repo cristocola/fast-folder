@@ -260,11 +260,10 @@ pub enum CommandId {
     Templates,
     Settings,
     Reconcile,
-    // The template strip
-    StripFilter,
     // The action menu
     ActionsRun,
-    // The template studio
+    // The templates tab
+    StripFilter,
     StudioNew,
     StudioEdit,
     StudioFromFolder,

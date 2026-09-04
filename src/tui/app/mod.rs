@@ -331,14 +331,18 @@ impl App {
     pub fn start(&mut self) -> Vec<Effect> {
         let mut effects = vec![Effect::LoadSummary];
         // `fastf template new`/`edit` opened the app for one screen; put it up
-        // before the first frame so the command lands where it was aimed.
-        match self.studio_entry.take() {
-            Some(crate::tui::entry::StudioEntry::List) => effects.extend(self.toggle_templates()),
-            Some(crate::tui::entry::StudioEntry::New) => effects.extend(self.open_builder(None)),
-            Some(crate::tui::entry::StudioEntry::Edit(slug)) => {
-                effects.extend(self.open_builder(Some(slug)))
+        // before the first frame so the command lands where it was aimed. All
+        // three open **on the templates tab**, so Esc out of the builder leaves
+        // you among the templates rather than in a library nobody asked for.
+        if let Some(entry) = self.studio_entry.take() {
+            effects.extend(self.toggle_templates());
+            match entry {
+                crate::tui::entry::StudioEntry::List => {}
+                crate::tui::entry::StudioEntry::New => effects.extend(self.open_builder(None)),
+                crate::tui::entry::StudioEntry::Edit(slug) => {
+                    effects.extend(self.open_builder(Some(slug)))
+                }
             }
-            None => {}
         }
         if self.library.loaded {
             let template_reads = self.refresh_templates();

@@ -1637,6 +1637,25 @@ mod studio {
 
     /// The tab's own search box: a plain substring over the slugs and names,
     /// with the cursor kept on a row the query still keeps.
+    /// `fastf template new` and `template edit <slug>` open the app on the
+    /// templates tab, so Esc out of the builder leaves you among the templates
+    /// rather than in a library nobody asked for.
+    #[test]
+    fn template_new_from_the_command_line_opens_on_the_tab() {
+        use fastf::tui::app::Screen;
+        use fastf::tui::entry::StudioEntry;
+
+        let mut app = fixture(6, 120, 40);
+        app.studio_entry = Some(StudioEntry::New);
+        let _ = app.start();
+        assert_eq!(app.screen, Screen::Templates);
+        assert!(matches!(app.modals.top(), Some(Modal::Builder(_))));
+
+        let _ = press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(app.modals.is_empty(), "Esc discards the new template");
+        assert_eq!(app.screen, Screen::Templates, "and lands on the tab");
+    }
+
     #[test]
     fn the_templates_tab_filters_its_own_list() {
         let mut app = fixture(6, 120, 40);

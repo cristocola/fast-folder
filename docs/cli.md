@@ -816,9 +816,13 @@ Run `fastf config set --help` for the complete key list with descriptions.
 
 `FASTF_RELAUNCHED` is set by fastf on the copy of itself it starts inside a
 terminal. It is internal — it is what stops a relaunch relaunching — and there is
-no reason to set it by hand. fastf clears it again from any terminal window or
-shell it hands to you (`fastf term`, and the app's own terminal action), so
-nothing you go on to run from that window inherits it.
+no reason to set it by hand. It only ever switches the relaunch *off*, so a
+process that inherits it just behaves like any ordinary run. What tells fastf
+that it *is* the copy running in a window fastf opened is a hidden `--relaunched`
+flag on that process's own command line, which nothing it starts inherits: a
+shell in that window, and everything you type into it, is an ordinary fastf run.
+fastf also clears the variable from any terminal or shell it hands to you
+(`fastf term`, and the app's own terminal action).
 
 A `config.toml` that exists but cannot be parsed stops every command, including
 the guided app, and names the file. fastf will not fall back to defaults

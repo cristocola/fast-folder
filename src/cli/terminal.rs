@@ -6,7 +6,13 @@
 //! decided. It is also the one place the Windows/unix split is spelled out, so
 //! no caller needs a `cfg` of its own.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::core::config::Config;
+
+/// Set by [`mark_relaunched_window`] from the parsed `--relaunched`. See
+/// [`relaunched_window`].
+static RELAUNCHED_WINDOW: AtomicBool = AtomicBool::new(false);
 
 /// Hand this command over to a terminal emulator, if it has none and the user
 /// is at a desktop.
@@ -23,6 +29,29 @@ pub fn hand_off_to_a_terminal(cfg: &Config, plain: bool) -> bool {
         return false;
     }
     relaunch_impl(cfg)
+}
+
+/// Record that this process was started by [`crate::util::relaunch`] — `main`
+/// calls it for the hidden `--relaunched` flag, and nothing else may.
+pub fn mark_relaunched_window() {
+    RELAUNCHED_WINDOW.store(true, Ordering::SeqCst);
+}
+
+/// **Is this process the rerun the relaunch started, in the window it opened?**
+///
+/// The claim rides on argv (`--relaunched`), not on `FASTF_RELAUNCHED`, and that
+/// is the whole point: an environment variable is inherited, so every shell in
+/// that window has it and so does everything typed into that shell, none of
+/// which is the rerun. Read the wrong way it made `fastf completions bash` stop
+/// for a keypress in a package build, and `fastf term proj` replace the shell
+/// it was typed into instead of opening a window.
+///
+/// The variable keeps the one job inheritance cannot spoil: in
+/// [`crate::util::relaunch::headless_gui_session`] it only ever *suppresses* a
+/// relaunch, so a descendant that wrongly inherits it opens no window, which is
+/// the safe direction and the one a runaway loop would need.
+pub fn relaunched_window() -> bool {
+    RELAUNCHED_WINDOW.load(Ordering::SeqCst)
 }
 
 /// Was this process started with no terminal at all, inside a graphical
@@ -64,18 +93,21 @@ pub fn open_terminal_at(cfg: &Config, dir: &std::path::Path) -> anyhow::Result<(
 }
 
 /// Is this process the sole occupant of a window the relaunch opened for it —
-/// `FASTF_RELAUNCHED` set, with a real terminal on stdin and stderr?
+/// started with `--relaunched`, with a real terminal on stdin and stderr?
 ///
 /// When it is, "open a terminal at the project" means *become the shell here*:
 /// this window exists only because fastf had a picker to show, and spawning a
 /// second one would strand it.
+///
+/// [`relaunched_window`] is the same guard `main`'s pause needs and for the same
+/// reason: read from the inherited variable instead, `fastf term proj` typed
+/// into any shell that carries one replaced *that* shell rather than opening
+/// the window it was asked for.
 pub fn window_is_ours() -> bool {
     #[cfg(unix)]
     {
         use std::io::IsTerminal;
-        std::env::var_os(crate::util::relaunch::RELAUNCHED_VAR).is_some()
-            && std::io::stdin().is_terminal()
-            && std::io::stderr().is_terminal()
+        relaunched_window() && std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
     }
     #[cfg(not(unix))]
     {

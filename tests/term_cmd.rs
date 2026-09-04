@@ -177,7 +177,7 @@ fn an_ambiguous_term_from_a_launcher_hands_off_to_a_terminal() {
         argv[0], "-e",
         "the relaunch, not the term spawn: -e + fastf"
     );
-    assert_eq!(&argv[2..], ["term", "shared"]);
+    assert_eq!(&argv[2..], ["--relaunched", "term", "shared"]);
 }
 
 /// An unambiguous `fastf term` from a launcher needs no relaunch: the window it
@@ -212,6 +212,53 @@ fn a_headless_unambiguous_term_opens_the_terminal_and_notifies() {
     );
 }
 
+/// The other side of that case, and a defect the same inherited variable caused:
+/// a shell carrying `FASTF_RELAUNCHED` is not a window fastf opened. Every shell
+/// in such a window has it, so `fastf term proj` typed there took the exec path
+/// and replaced the user's own shell instead of opening the window they asked
+/// for. An unambiguous `term` never hands off, so it can never be looking at a
+/// relaunched window.
+#[test]
+fn an_unambiguous_term_in_a_marked_shell_still_opens_a_window() {
+    let sb = Sandbox::new();
+    let bin = sb.tmp.path().join("bin");
+    let term_rec = recorder(&bin, "konsole");
+    let shell_rec = recorder(&bin, "fake-shell");
+    sb.ok(&[
+        "config",
+        "set",
+        "terminal",
+        &term_rec.program.display().to_string(),
+    ]);
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let expected = shown_path(&dir);
+
+    // A pty, so stdin and stderr are real terminals — the rest of the exec
+    // path's conditions — with the marker set as an inherited one would be.
+    let script = common::pty::Script::new().build();
+    let (out, code) = common::pty::run(
+        common::FASTF,
+        &["term", "ID0001"],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_RELAUNCHED", std::path::Path::new("1")),
+            ("SHELL", shell_rec.program.as_path()),
+            ("DISPLAY", std::path::Path::new(":99")),
+        ],
+        &script,
+        std::time::Duration::from_secs(15),
+    );
+
+    assert_eq!(code, 0, "{out}");
+    let argv = term_rec.argv().expect("a window should have been opened");
+    assert_eq!(argv, ["--workdir", &expected]);
+    assert!(
+        !shell_rec.was_called(),
+        "the user's own shell must not be replaced:\n{out}"
+    );
+}
+
 /// The relaunched-picker case: fastf already owns the window a relaunch opened
 /// for its picker, so after the pick it must *become* the shell there — exec,
 /// not a second window. `$SHELL` is a recorder, so the proof is its working
@@ -232,14 +279,16 @@ fn a_relaunched_picker_execs_the_shell_in_its_own_window() {
     sb.plant_project(&sb.base, "shared_two", "ID0012");
     let expected = shown_path(&dir);
 
-    // A pty stands in for the relaunched window: FASTF_RELAUNCHED set, a real
-    // terminal on every stream, an ambiguous query — the picker draws, Enter
-    // takes the first row (ID0011, lists are newest-first but these share a
-    // date; the row text is asserted below).
+    // A pty stands in for the relaunched window, driven exactly as the relaunch
+    // drives it: `--relaunched` on the command line (the claim) and the variable
+    // in the environment (the loop guard), a real terminal on every stream, an
+    // ambiguous query — the picker draws, Enter takes the first row (ID0011,
+    // lists are newest-first but these share a date; the row text is asserted
+    // below).
     let script = common::pty::Script::new().enter().build();
     let (out, code) = common::pty::run(
         common::FASTF,
-        &["term", "shared"],
+        &["--relaunched", "term", "shared"],
         &[
             ("FASTF_INSTALL_DIR", sb.install.as_path()),
             ("HOME", sb.tmp.path()),

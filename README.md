@@ -109,7 +109,7 @@ less install.sh
 sh install.sh
 ```
 
-`FASTF_VERSION=v3.1.2` pins a release and `PREFIX=/opt/fastf` chooses where it
+`FASTF_VERSION=v3.1.3` pins a release and `PREFIX=/opt/fastf` chooses where it
 goes. To remove it later, delete `fastf` from the `bin` directory it went into,
 the `fast-folder` files under `share`, and the two lines the script marked in
 your shell profile.

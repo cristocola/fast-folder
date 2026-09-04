@@ -469,6 +469,45 @@ fn a_template_file_with_a_non_utf8_name_is_reproduced_byte_for_byte() {
 // both depend on.
 // ---------------------------------------------------------------------------
 
+/// fastf's own bookkeeping stays off every surface a user reads.
+///
+/// `--relaunched` is what the relaunch puts on the rerun's command line, and
+/// `main` takes it off again before clap sees it. Declaring it as a clap
+/// argument instead looked equivalent: `hide` kept it out of `--help` and the
+/// man pages, but **not** out of the generated completions, so `fastf --<TAB>`
+/// offered the user a flag that is none of their business.
+#[test]
+fn the_relaunch_flag_is_on_no_surface_a_user_reads() {
+    let sb = Sandbox::new();
+
+    for shell in ["bash", "zsh", "fish"] {
+        let script = sb.ok(&["completions", shell]);
+        assert!(
+            !script.contains("relaunched"),
+            "the {shell} completions offer it"
+        );
+    }
+    assert!(
+        !sb.ok(&["--help"]).contains("relaunched"),
+        "--help names it"
+    );
+
+    let man = sb.tmp.path().join("man");
+    sb.ok(&["mangen", &man.display().to_string()]);
+    let page = std::fs::read_to_string(man.join("fastf.1")).expect("the man page");
+    assert!(!page.contains("relaunched"), "the man page names it");
+
+    // And it still works where the relaunch puts it — first, ahead of the
+    // subcommand — while anywhere else it is an unknown flag like any other.
+    let out = sb.run(&["--relaunched", "recent", "--plain"]);
+    assert!(out.status.success(), "{out:?}");
+    let out = sb.run(&["recent", "--relaunched"]);
+    assert!(
+        !out.status.success(),
+        "a word the user typed must not be eaten: {out:?}"
+    );
+}
+
 /// `fastf paths` tells you where fastf keeps its things. Every path it prints
 /// must be real, or the answer is worse than no answer.
 #[test]

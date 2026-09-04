@@ -31,13 +31,6 @@ Getting started:\n\
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-
-    /// Set by fastf on the copy of itself it runs inside a terminal it opened.
-    /// Hidden: it is fastf's own bookkeeping, and it rides on argv rather than
-    /// on an environment variable precisely so that nothing this process starts
-    /// can inherit the claim. See `cli::terminal::relaunched_window`.
-    #[arg(long, hide = true)]
-    relaunched: bool,
 }
 
 #[derive(Subcommand)]
@@ -831,14 +824,40 @@ fn is_config_parse_failure(rendered: &str) -> bool {
     rendered.contains("parsing") && rendered.contains("config.toml")
 }
 
-fn run() -> Result<()> {
-    let cli = Cli::parse();
-
-    // Before anything else reads it: this is the one place the flag is turned
-    // into the answer every later caller asks for.
-    if cli.relaunched {
+/// Take `--relaunched` off the command line, recording it, before clap sees it.
+///
+/// It is fastf's own bookkeeping — `util::relaunch` writes it, `cli::terminal`
+/// reads it — and declaring it as a clap argument put it in front of users:
+/// `hide` keeps a flag out of `--help` and the man pages but **not** out of the
+/// generated shell completions, so `fastf --<TAB>` offered it. Off argv here, it
+/// exists on no surface at all.
+///
+/// Only in the first position, which is exactly where `relaunch::build` puts it:
+/// anywhere else it is a word the user typed, and clap should refuse it as it
+/// refuses any other unknown flag rather than silently eating it.
+#[cfg(unix)]
+fn take_the_relaunch_flag(
+    args: impl Iterator<Item = std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    let mut argv: Vec<std::ffi::OsString> = args.collect();
+    if argv.len() > 1 && argv[1] == fastf::util::relaunch::RELAUNCHED_FLAG {
+        argv.remove(1);
         cli::terminal::mark_relaunched_window();
     }
+    argv
+}
+
+/// Windows has no relaunch, so nothing ever puts the flag on a command line
+/// there — and `util::relaunch`, which names it, does not exist.
+#[cfg(not(unix))]
+fn take_the_relaunch_flag(
+    args: impl Iterator<Item = std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    args.collect()
+}
+
+fn run() -> Result<()> {
+    let cli = Cli::parse_from(take_the_relaunch_flag(std::env::args_os()));
 
     // Fail early with a clean error if no data directory can be resolved
     // (e.g. $HOME unset) — everything downstream assumes it exists.

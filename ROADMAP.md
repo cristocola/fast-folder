@@ -146,6 +146,7 @@ responsibility of the filesystem and backups.
 | v2.2.0 | `fastf term` opens a terminal at a project's folder | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.2.0) |
 | v2.2.1 | a text prompt shows its caret in the line being edited, so a rename has a visible insertion point | [release](https://github.com/cristocola/fast-folder/releases/tag/v2.2.1) |
 | v3.0.0 | the guided app on ratatui: one dashboard over the whole library, every flow native, the command line's prompts in the same palette, and dialoguer gone | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.0.0) |
+| v3.1.0 | the dashboard says each thing once, templates are a tab, batch verbs land, and `copy-to` puts a project on a backup drive keeping its ID | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.0) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find
@@ -158,6 +159,13 @@ release that wants it.
 calls `ci.yml` in full, and `build` needs it. A tag can no longer publish
 something CI has never seen, so this list is what to expect green rather than a
 checklist to work through by hand.
+
+**Which is exactly why the tag goes on a commit whose PR run was already
+green on both platforms.** Every release failure this project has had was a
+test that passes on the maintainer's Arch desktop and fails on a Windows runner
+or a headless two-core Linux one; because `gates` is the whole of CI, each one
+was a failed *release*. The `release` skill lists the five patterns and how to
+recognise them. Push the branch, open the PR, wait for the matrix, then tag.
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
@@ -182,6 +190,12 @@ checklist to work through by hand.
 
 Regression coverage grows with the relevant release:
 
+- [x] A copy lands verified with the original untouched and its ID kept; a
+  destination inside a configured base is refused by name; two bases holding one
+  ID list as two rows, resolve as "in 2 bases", and mutate independently
+  (v3.1.0).
+- [x] A batch item's effects reach the runtime, a batch aimed at marks a filter
+  hides says so, and a move reports rename versus copy (v3.1.0).
 - [x] Real `.tmp`/`.part`, zero-byte, binary, and empty-directory move payloads.
 - [x] Missing source, occupied target/staging, cancellation, marker failure, and
   cleanup-pending behavior.

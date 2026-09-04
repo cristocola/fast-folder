@@ -33,7 +33,7 @@ renamed or copied.
 Item 4. `copy_engine.rs`, `fastf copy-to`, `C` in the app. The copy keeps its
 ID; the base tells duplicates apart. `patch` locates by path first.
 
-## Phase 5 — release v3.1.0  ⬜
+## Phase 5 — release v3.1.0  🔄  (bumped, documented; PR run, then tag)
 Item 11. Document the five CI failure patterns in the release skill, add the
 "green PR run before the tag" step, bump, tag, AUR.
 

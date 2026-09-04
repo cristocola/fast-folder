@@ -11,6 +11,9 @@ with the maintainer's AUR SSH key**, because it needs `updpkgsums`/`makepkg`.
 
 ## Routine (as executed for 1.1.1 on 2026-07-27)
 
+0. **Get a green CI run on a PR branch first, and tag that commit.** See
+   *Why the first tag fails*, below — this is the step whose absence cost three
+   attempts on v2.0.0 and four on v3.0.0.
 1. Bump the crate version in `Cargo.toml`.
 2. Tag `v<version>` **on main** and push. The Release workflow now gates itself:
    `verify-version` checks the tag against `Cargo.toml` *and* that the tagged
@@ -27,6 +30,51 @@ with the maintainer's AUR SSH key**, because it needs `updpkgsums`/`makepkg`.
 6. Commit the `packaging/aur` bump to the repo.
 7. Stop after verifying the GitHub and AUR remotes. The maintainer updates the
    installed `fast-folder` package manually.
+
+## Why the first tag fails
+
+`release.yml`'s `gates` job calls the whole of `ci.yml`, and `build` needs it.
+That is the right design — a tag can no longer publish something CI has never
+seen — but it has a consequence the rest of this file used to leave implicit:
+**any CI failure is a failed release**, and the release run is where most people
+would first meet it.
+
+Every release failure this project has had was a *test* failure. Never a build,
+never the MSI, never the AUR packages. And every one was an environment delta
+that cannot reproduce on the maintainer's Arch desktop, which is why `cargo
+test` was green when the tag went up:
+
+| pattern | platform | nature | how it reads |
+|---|---|---|---|
+| an 8.3 short path (`RUNNER~1`) compared to the long one by string | Windows | deterministic; broken since written | a path assertion failing on two spellings of the same directory |
+| a torn `writeln!` in the tracer under two-core parallelism | Linux | genuinely racy | `must not rescan the library`, with a trace count of zero |
+| the pty harness pressing a key before the first frame | Linux | timing | a flow acting on a row that is not there yet |
+| no `DISPLAY` on a headless runner | Linux | deterministic after a behaviour change | `error: no display` from a command that used to need none |
+| Windows path and `cmd` semantics | Windows | deterministic | `hostile_fs` / `windows_semantics` disagreeing about a name |
+
+Recognising them: a Windows-only failure in a path comparison is almost always
+the first; `traced()` prints the whole trace file beside its count for the
+second, and a zero there with a plausible trace is a torn write rather than a
+missing call; anything in `tests/tui_pty/` that fails once and passes on a rerun
+is the third; anything mentioning a display is the fourth. Fixed instances are
+`33ff114`, `551418d` and `87f2a9f` — read those diffs before writing a new fix
+for the same shape.
+
+**The step that avoids all of it**: push the work as a branch, open the PR, and
+let the full matrix run there. `fail-fast: false` on both matrices means one run
+reports the Linux and the Windows failures together rather than serially. Tag
+only a commit whose PR run was green on both platforms. That is what was
+actually done for v3.0.0 — four PR runs, three failing, then a clean one — and
+the tag then passed first try in ten minutes.
+
+Note also the concurrency group `release-${{ github.ref }}` with
+`cancel-in-progress: false`: re-tagging while a run is going waits for it.
+
+**A fourth environment exists and is not covered by CI**: the AUR source
+package's `check()` is `cargo test --frozen --release` inside a makepkg sandbox
+— no display, a chroot, and `debug_assertions` off, so the failpoints and the
+tracer are compiled out. That is why `cargo clippy --all-targets --release` is a
+gate: its users once saw warnings CI called clean.
 
 ## Local machine safety boundary
 

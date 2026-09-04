@@ -41,8 +41,10 @@ pub fn run(entry: Entry) -> Result<()> {
     // not switch a terminal nobody is holding to the alternate screen.
     crate::util::tty::require_tty(
         "open the guided app",
-        "run a subcommand instead — see `fastf --help`",
+        "`fastf recent --plain` lists projects, `fastf search <words>` finds them, and every action \
+         has a subcommand — see `fastf --help`",
     )?;
+
     // Loaded here, before the screen: a configuration that cannot be parsed
     // must stop the app where the error can be read, and it is also what says
     // whether this is a first run.

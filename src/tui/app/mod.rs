@@ -214,6 +214,10 @@ pub struct App {
     /// Where the data lives, for the help's footer. Set by the runtime, which
     /// may look; `None` in a fixture, so no snapshot can name a real path.
     pub data_dir: Option<String>,
+    /// Whether a window could be opened from here — a desktop session. Set by
+    /// the runtime; `true` in a fixture, so a frame never depends on the
+    /// machine that rendered it.
+    pub has_display: bool,
     /// The last few things this session did, oldest first.
     pub session: Vec<String>,
     /// `fastf template new` / `edit`: the studio or the builder to open as
@@ -258,6 +262,7 @@ impl App {
             unseen_warnings: 0,
             clock: crate::util::time::now_hms,
             data_dir: None,
+            has_display: true,
             session: crate::tui::frame::recent_actions(),
             studio_entry: None,
             select_when_found: None,
@@ -782,6 +787,8 @@ impl App {
                 self.session = crate::tui::frame::recent_actions();
                 Vec::new()
             }
+            Msg::Resumed(Resumed::Shell) => Vec::new(),
+
             Msg::Resumed(Resumed::Note { project, text }) => {
                 self.session = crate::tui::frame::recent_actions();
                 match text {
@@ -1846,6 +1853,7 @@ impl App {
             }
             CommandId::Close => self.close_top(),
             CommandId::ShowLog => self.open_log(),
+            CommandId::Suspend => vec![Effect::Suspend(Suspended::Shell)],
 
             CommandId::ActionsRun => {
                 let chosen = match self.modals.top() {

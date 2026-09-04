@@ -198,6 +198,7 @@ keys that matter most:
 | `!` | check and recover — what `⚠ n needs attention` means |
 | `L` | the session's messages, newest first with the time each arrived — a warning that flashed under a dialog is counted on the status line until you read them |
 | F5, `R` | reload the library, reindex every base from its folders |
+| Ctrl-Z | suspend to the shell, as in any program; `fg` brings the app back with its screen retaken (unix) |
 | `q` | quit; in a dialog, close it |
 | Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the search bar, clear the query, clear the template filter, clear the marks — and only then quit |
 | Ctrl-C | leave at once (exit 130, `aborted.`) |
@@ -343,6 +344,26 @@ field takes the first and says how many it dropped, and with no field open the
 paste is ignored and said so. A terminal that cannot announce a paste delivers
 it as keystrokes; a run of them faster than a hand can type is taken as a paste
 all the same, so a paragraph pasted onto the dashboard never runs as commands.
+
+#### On a bare terminal
+
+Nothing in the app needs a desktop: it draws with the sixteen colours where
+truecolor is not announced (`config set theme` pins a palette), with plain
+ASCII where the alphabet is not there (`FASTF_ASCII=1`), and in a 60×16
+window. What it cannot do without a desktop session it says so about: with no
+`DISPLAY` or `WAYLAND_DISPLAY` — over ssh, on a console — `o` and `t` are dimmed
+with the reason, and `y` still copies the path when a clipboard tool exists
+(and shows it when none does). A journal note in `$EDITOR` and a template's
+post-create commands run on the main screen and wait for Enter before the app
+takes it back, so what they printed can be read.
+
+The terminal is always given back. Ctrl-C inside the app is a key (it cancels
+a running job, closes a dialog, or quits); a second `kill -INT`, a `kill
+-TERM`, a closed window (SIGHUP) or a panic each restore the screen and cooked
+mode before the process ends, and an interrupted create rolls its folder back.
+`fastf 2>/dev/null` — a refusal with nowhere to go — is repeated on stdout when
+that is still a terminal. The app costs nothing while idle: two wakeups a
+second, none of them drawing.
 
 #### The mouse
 

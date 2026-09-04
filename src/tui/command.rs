@@ -281,10 +281,12 @@ pub enum CommandId {
     SettingsChange,
     // The message log
     ShowLog,
+    // Ctrl-Z
+    Suspend,
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 60] = [
+    pub const ALL: [CommandId; 61] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -345,6 +347,7 @@ impl CommandId {
         CommandId::BuilderMoveDown,
         CommandId::SettingsChange,
         CommandId::ShowLog,
+        CommandId::Suspend,
     ];
 }
 
@@ -369,6 +372,25 @@ pub struct Command {
 
 fn always(_: &App) -> Availability {
     Availability::Enabled
+}
+
+/// Job control is a unix thing; on Windows the key is not bound at all.
+fn unix_only(_: &App) -> Availability {
+    if cfg!(unix) {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
+}
+
+/// A verb that starts a window — the file manager, a terminal — needs a
+/// desktop to start it on. Over ssh or on a console there is none, and the
+/// key says so instead of pretending.
+fn needs_selection_and_display(app: &App) -> Availability {
+    if !app.has_display {
+        return Availability::Disabled("no display — needs a desktop session; y copies the path");
+    }
+    needs_selection(app)
 }
 
 fn needs_selection(app: &App) -> Availability {
@@ -593,6 +615,17 @@ pub static COMMANDS: &[Command] = &[
         always
     ),
     cmd!(
+        Suspend,
+        "Suspend",
+        "give the terminal back to the shell, as Ctrl-Z does in any program — `fg` brings fastf back",
+        G,
+        [Key::ctrl('z')],
+        Navigate,
+        palette = true,
+        hint = false,
+        unix_only
+    ),
+    cmd!(
         Palette,
         "Command palette",
         "type to find any command, project or template",
@@ -813,7 +846,7 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = true,
-        needs_selection
+        needs_selection_and_display
     ),
     cmd!(
         OpenTerminal,
@@ -824,7 +857,7 @@ pub static COMMANDS: &[Command] = &[
         Project,
         palette = true,
         hint = true,
-        needs_selection
+        needs_selection_and_display
     ),
     cmd!(
         CopyPath,

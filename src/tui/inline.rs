@@ -82,9 +82,45 @@ struct Inline {
     open: bool,
 }
 
+/// Whether an inline prompt currently owns its rows — read by the panic hook
+/// and the signal restore, which give them back with raw writes.
+static INLINE_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static HOOK_INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Give the rows back from a signal handler or a panic: clear them, show the
+/// cursor, cooked mode — raw system calls only.
+fn restore_inline() {
+    use std::sync::atomic::Ordering;
+    if !INLINE_OPEN.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    crate::util::tty::write_raw(b"\r\x1b[J\x1b[?25h");
+    #[cfg(unix)]
+    crate::util::tty::restore_cooked_mode();
+}
+
+/// A panic inside a prompt prints its message in raw mode — staircased —
+/// unless the rows are given back first. Installed once, guarded.
+fn install_panic_hook() {
+    use std::sync::atomic::Ordering;
+    if HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_inline();
+        previous(info);
+    }));
+}
+
 impl Inline {
     fn open(height: usize) -> Result<Self> {
+        install_panic_hook();
+        #[cfg(unix)]
+        crate::util::tty::remember_cooked_mode();
         enable_raw_mode().context("putting the terminal into raw mode")?;
+        INLINE_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
+        crate::util::interrupt::set_restore(restore_inline);
         let columns = ratatui::crossterm::terminal::size()
             .map(|(columns, _)| columns as usize)
             .unwrap_or(80)
@@ -173,6 +209,8 @@ impl Inline {
     /// that skips a question nobody answered reads like it was never asked.
     fn close(mut self, line: Row) {
         self.open = false;
+        INLINE_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+        crate::util::interrupt::clear_restore();
         let mut out = String::from("\r\x1b[J");
         for (text, style) in &line {
             out.push_str(&paint_span(text, *style));
@@ -189,6 +227,8 @@ impl Drop for Inline {
             return;
         }
         self.open = false;
+        INLINE_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+        crate::util::interrupt::clear_restore();
         // The error path: give the rows and the cursor back whatever happened.
         self.emit("\r\x1b[J\x1b[?25h");
         let _ = disable_raw_mode();

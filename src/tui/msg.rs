@@ -123,4 +123,6 @@ pub enum Resumed {
     },
     /// A new project's post-create actions ran on the main screen.
     PostCreate,
+    /// `fg` after Ctrl-Z: the screen is retaken, at whatever size it has now.
+    Shell,
 }

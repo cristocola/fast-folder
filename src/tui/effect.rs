@@ -200,6 +200,9 @@ pub enum Suspended {
         root: PathBuf,
         template_slug: String,
     },
+    /// Ctrl-Z: give the terminal back and stop, as any program does; `fg`
+    /// brings the app back with its screen retaken. Unix only.
+    Shell,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

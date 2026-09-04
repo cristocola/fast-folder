@@ -734,3 +734,31 @@ fn an_ambiguous_copy_errors_with_candidates_when_piped() {
         );
     }
 }
+
+/// Without a desktop session there is nothing to open a window on: `open` and
+/// `term` say so and exit non-zero, rather than starting a program that dies
+/// at once and reporting it opened.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn open_and_term_refuse_without_a_display() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "proj", "ID0001");
+    for verb in ["open", "term"] {
+        let out = sb
+            .command()
+            .args([verb, "ID0001"])
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .output()
+            .expect("running fastf");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "{verb} must not claim success:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("no display"),
+            "{verb} should say what is missing:\n{stderr}"
+        );
+    }
+}

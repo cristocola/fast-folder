@@ -681,6 +681,15 @@ fn main() {
             // until it is repaired, so say what actually gets the user moving.
             eprintln!("  hint: fix the file, or delete it to start over with defaults");
         }
+        // `fastf 2>/dev/null`: the refusal just went nowhere. When stdout is
+        // still a terminal, say it there too — an exit code with no words is
+        // the one thing worse than an error.
+        {
+            use std::io::IsTerminal;
+            if !std::io::stderr().is_terminal() && std::io::stdout().is_terminal() {
+                println!("error: {rendered}");
+            }
+        }
         pause_before_the_window_closes();
         std::process::exit(1);
     }
@@ -755,7 +764,22 @@ fn run() -> Result<()> {
             // A launcher's `fastf` has no terminal to draw on, and the app's
             // own refusal would be written to the journal. Open a window
             // and run the app in it; anywhere else this is false.
-            let cfg = fastf::core::config::Config::load()?;
+            //
+            // A config that cannot be parsed is handed off too, with the
+            // default terminal probe: the window is where the error can be
+            // read, and the copy of fastf inside it prints it and waits.
+            let cfg = match fastf::core::config::Config::load() {
+                Ok(cfg) => cfg,
+                Err(err) => {
+                    if cli::terminal::hand_off_to_a_terminal(
+                        &fastf::core::config::Config::default(),
+                        false,
+                    ) {
+                        return Ok(());
+                    }
+                    return Err(err);
+                }
+            };
             if cli::terminal::hand_off_to_a_terminal(&cfg, false) {
                 return Ok(());
             }

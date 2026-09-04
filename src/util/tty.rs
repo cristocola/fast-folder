@@ -49,6 +49,72 @@ pub fn require_tty(what: &str, how: &str) -> Result<()> {
 }
 
 /// Record that a prompt, a picker or the app was drawn and waited on.
+/// The terminal's settings before raw mode was switched on, kept so a signal
+/// handler can put them back without going through crossterm — whose
+/// `disable_raw_mode` takes a lock, which a handler may not.
+#[cfg(unix)]
+static COOKED: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
+
+/// Remember the terminal's current settings, once — called before the first
+/// `enable_raw_mode`, so what is remembered is the shell's own mode.
+#[cfg(unix)]
+pub fn remember_cooked_mode() {
+    COOKED.get_or_init(|| {
+        // SAFETY: a zeroed termios is a valid value for tcgetattr to fill.
+        let mut termios: libc::termios = unsafe { std::mem::zeroed() };
+        // SAFETY: stderr is a descriptor this process owns; a failure leaves
+        // the zeroed value, and `restore_cooked_mode` checks it was filled.
+        let ok = unsafe { libc::tcgetattr(libc::STDERR_FILENO, &mut termios) } == 0;
+        if !ok {
+            termios.c_lflag = 0;
+        }
+        termios
+    });
+}
+
+/// Put the remembered settings back. Async-signal-safe: one `tcsetattr`.
+#[cfg(unix)]
+pub fn restore_cooked_mode() {
+    if let Some(termios) = COOKED.get()
+        && termios.c_lflag != 0
+    {
+        // SAFETY: a termios `tcgetattr` filled, applied to the same descriptor.
+        unsafe {
+            libc::tcsetattr(libc::STDERR_FILENO, libc::TCSANOW, termios);
+        }
+    }
+}
+
+/// Write bytes to stderr without a lock or an allocation — what a signal
+/// handler may do.
+#[cfg(unix)]
+pub fn write_raw(bytes: &[u8]) {
+    // SAFETY: `write` is async-signal-safe and the descriptor is ours.
+    unsafe {
+        let _ = libc::write(libc::STDERR_FILENO, bytes.as_ptr().cast(), bytes.len());
+    }
+}
+
+/// `write_raw` where there is no signal-safety rule to keep.
+#[cfg(not(unix))]
+pub fn write_raw(bytes: &[u8]) {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(bytes);
+    let _ = std::io::stderr().flush();
+}
+
+/// Whether a person could see what a program started from here would draw: a
+/// desktop session on unix (`DISPLAY` or `WAYLAND_DISPLAY`); always, on
+/// Windows and macOS, where a window needs no variable.
+pub fn has_display() -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        return true;
+    }
+    ["WAYLAND_DISPLAY", "DISPLAY"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+}
+
 pub fn mark_interactive_surface() {
     SURFACE_RAN.store(true, Ordering::Relaxed);
 }

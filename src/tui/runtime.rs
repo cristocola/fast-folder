@@ -44,8 +44,9 @@ use crate::util::{diag, interrupt, tty};
 
 /// How often the app is woken while something on screen is moving.
 const TICK: Duration = Duration::from_millis(200);
-/// How often an idle app looks for an external interrupt.
-const IDLE_WAKE: Duration = Duration::from_millis(500);
+/// How often an idle app looks for an external interrupt. A second: the
+/// signal is rare and the wake is not free on a laptop.
+const IDLE_WAKE: Duration = Duration::from_millis(1000);
 /// Worker stack: a Windows thread gets 1 MiB by default, and the walks and
 /// discovery below run under `MAX_WALK_DEPTH` recursion.
 const WORKER_STACK: usize = 4 << 20;
@@ -99,6 +100,10 @@ struct MovingJob {
 impl Runtime {
     fn init(tx: Sender<Msg>, rx: Receiver<Msg>) -> Result<Self> {
         install_panic_hook();
+        // The second Ctrl-C from outside — `kill -INT` twice, a terminal that
+        // sends one on close — exits from the handler, where nothing of
+        // ratatui may run; this gives the screen back with raw system calls.
+        interrupt::set_restore(restore_on_signal);
         let terminal = take_screen()?;
         // The one choke point that replaces `live_select`'s: an interactive
         // surface ran, so a relaunched window closes without a pause.
@@ -129,6 +134,7 @@ impl Runtime {
             moving.cancel.store(true, Ordering::SeqCst);
         }
         release_screen(&mut self.terminal);
+        interrupt::clear_restore();
     }
 
     fn size(&self) -> (u16, u16) {
@@ -152,6 +158,7 @@ impl Runtime {
         app.data_dir = Some(crate::util::paths::display_path(
             &crate::util::paths::install_dir(),
         ));
+        app.has_display = tty::has_display();
         app.apply_session(&remembered);
 
         if let Some(suggested) = onboarding {
@@ -392,6 +399,12 @@ impl Runtime {
                 }) => {
                     self.run_post_create(&root, &template_slug)?;
                     let _ = self.tx.send(Msg::Resumed(Resumed::PostCreate));
+                    self.announce_size();
+                }
+                Effect::Suspend(Suspended::Shell) => {
+                    self.suspend_to_shell()?;
+                    let _ = self.tx.send(Msg::Resumed(Resumed::Shell));
+                    self.announce_size();
                 }
             }
         }
@@ -424,17 +437,42 @@ impl Runtime {
                 colored::Colorize::bold(colored::Colorize::yellow("warning:"))
             ),
         }
-        eprint!(
-            "\n{}",
-            colored::Colorize::dimmed("press Enter to return to fastf…")
-        );
-        let _ = io::stderr().flush();
-        let mut discard = String::new();
-        let _ = io::stdin().read_line(&mut discard);
+        pause_for_enter();
 
         self.terminal = take_screen()?;
         self.input.resume();
         Ok(())
+    }
+
+    /// Ctrl-Z: give the terminal back, stop, and take it again when `fg`
+    /// brings the process back. The screen is released *before* the stop so
+    /// the shell gets a cooked terminal, and retaken after, at whatever size
+    /// the window has by then.
+    #[cfg(unix)]
+    fn suspend_to_shell(&mut self) -> Result<()> {
+        self.input.pause();
+        release_screen(&mut self.terminal);
+        // SAFETY: raising SIGTSTP on ourselves is the documented way for a
+        // program that owns the terminal to suspend; the default disposition
+        // stops the process, and SIGCONT resumes it right here.
+        unsafe {
+            libc::raise(libc::SIGTSTP);
+        }
+        self.terminal = take_screen()?;
+        self.input.resume();
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn suspend_to_shell(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// The window may have changed while the app was away; a resize the
+    /// terminal reported meanwhile went to nobody.
+    fn announce_size(&self) {
+        let (width, height) = self.size();
+        let _ = self.tx.send(Msg::Resize(width, height));
     }
 
     /// Give the terminal back, run `$EDITOR` on a scratch file for a journal
@@ -449,15 +487,20 @@ impl Runtime {
         let editor = Config::load()?.resolve_editor();
         let text = crate::cli::note::note_from_editor(&editor);
         if let Err(err) = &text {
+            // Said on the main screen, and left there to be read: taking the
+            // screen back at once would wipe it, and `no note written` on the
+            // status line is not the reason.
             eprintln!(
                 "{} {:#}",
                 colored::Colorize::bold(colored::Colorize::red("error:")),
                 err
             );
+            pause_for_enter();
         }
 
         self.terminal = take_screen()?;
         self.input.resume();
+        self.announce_size();
         Ok(Resumed::Note {
             project,
             text: text.ok(),
@@ -465,8 +508,45 @@ impl Runtime {
     }
 }
 
+/// `press Enter to return to fastf…`, read from the terminal itself rather
+/// than stdin — `fastf </dev/null` is supported, and stdin at end-of-file
+/// would return at once and flash the text past.
+fn pause_for_enter() {
+    eprint!(
+        "\n{}",
+        colored::Colorize::dimmed("press Enter to return to fastf…")
+    );
+    let _ = io::stderr().flush();
+    let mut discard = String::new();
+    #[cfg(unix)]
+    {
+        use std::io::BufRead;
+        if let Ok(tty) = std::fs::File::open("/dev/tty") {
+            let _ = io::BufReader::new(tty).read_line(&mut discard);
+            return;
+        }
+    }
+    let _ = io::stdin().read_line(&mut discard);
+}
+
+/// Give the screen back from a signal handler: the escapes that undo what
+/// `take_screen` switched on, then the terminal's own settings, with raw
+/// system calls only — a handler may not take crossterm's locks.
+fn restore_on_signal() {
+    if !SCREEN_OWNED.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    // Paste off, every mouse mode off, leave the alternate screen, show the
+    // cursor.
+    tty::write_raw(b"\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h");
+    #[cfg(unix)]
+    tty::restore_cooked_mode();
+}
+
 /// Raw mode, the alternate screen, bracketed paste — on stderr.
 fn take_screen() -> Result<Screen> {
+    #[cfg(unix)]
+    tty::remember_cooked_mode();
     enable_raw_mode().context("putting the terminal into raw mode")?;
     let mut stderr = io::stderr();
     if let Err(err) = execute!(
@@ -1018,8 +1098,9 @@ impl InputThread {
     fn pause(&self) {
         let mut state = self.gate.state.lock().unwrap_or_else(|e| e.into_inner());
         state.want_pause = true;
-        // The thread notices within one poll interval.
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        // The thread notices within one poll interval — up to a second when
+        // the app has been idle.
+        let deadline = std::time::Instant::now() + Duration::from_millis(1500);
         while !state.parked && !state.stop {
             let now = std::time::Instant::now();
             if now >= deadline {
@@ -1049,6 +1130,11 @@ impl InputThread {
 }
 
 fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
+    // A key just arrived: poll briskly, so a suspend that follows it (the
+    // editor, Ctrl-Z) is answered at once. Nothing for two seconds: poll
+    // once a second — `poll` returns the moment a key comes either way, so
+    // this costs no latency, only wakeups.
+    let mut last_event = std::time::Instant::now();
     loop {
         {
             let mut state = gate.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1064,8 +1150,13 @@ fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
                 return;
             }
         }
-        match event::poll(Duration::from_millis(50)) {
-            Ok(true) => {}
+        let poll = if last_event.elapsed() < Duration::from_secs(2) {
+            Duration::from_millis(50)
+        } else {
+            Duration::from_millis(1000)
+        };
+        match event::poll(poll) {
+            Ok(true) => last_event = std::time::Instant::now(),
             Ok(false) => continue,
             Err(_) => return,
         }

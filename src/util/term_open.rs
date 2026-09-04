@@ -92,6 +92,14 @@ pub fn open_terminal_at(preference: Option<&str>, dir: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
+    // A terminal window needs a desktop to open on; without one every
+    // emulator on PATH would start, die at once, and be reported as opened.
+    #[cfg(not(target_os = "macos"))]
+    if !crate::util::tty::has_display() {
+        bail!(
+            "no display — a terminal window needs a desktop session (DISPLAY or WAYLAND_DISPLAY)"
+        );
+    }
     let mut tried = Vec::new();
     for candidate in terminal_at_commands(preference, dir) {
         let (program, rest) = candidate.split_first().expect("candidate is never empty");

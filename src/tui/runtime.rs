@@ -485,7 +485,7 @@ impl Runtime {
         release_screen(&mut self.terminal);
 
         let editor = Config::load()?.resolve_editor();
-        let text = crate::cli::note::note_from_editor(&editor);
+        let text = crate::cli::note::note_from_editor(&editor, Some(&project.path));
         if let Err(err) = &text {
             // Said on the main screen, and left there to be read: taking the
             // screen back at once would wipe it, and `no note written` on the

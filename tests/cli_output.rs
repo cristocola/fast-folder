@@ -78,6 +78,65 @@ fn note_add_falls_back_to_the_editor_env_var() {
     );
 }
 
+/// Windows Notepad saves by reopening the file for writing with
+/// `FILE_SHARE_READ` alone, and `note add` kept its own write handle on the
+/// scratch file open for as long as the editor ran — a sharing violation on
+/// every save. Notepad reported it as "cannot create the file" and fell back
+/// to a Save As dialog opened in fastf's working directory, which from the
+/// Start Menu shortcut is the install folder under `Program Files`, where the
+/// second attempt was refused too. The note never reached the journal.
+#[cfg(windows)]
+#[test]
+fn note_add_survives_an_editor_that_saves_like_notepad() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+
+    // The editor string is split on whitespace, so the script's path may not
+    // hold any; a temp dir that does is a limit of this harness, not a defect.
+    let script = sb.tmp.path().join("notepad-like.ps1");
+    if script.display().to_string().contains(' ') {
+        eprintln!("skipping: the temp dir path contains a space");
+        return;
+    }
+    // Exactly Notepad's open: create-or-truncate, write access, readers only.
+    fs::write(
+        &script,
+        "$path = $args[0]\n\
+         try {\n\
+         $stream = [System.IO.File]::Open($path, 'Create', 'Write', 'Read')\n\
+         } catch {\n\
+         [Console]::Error.WriteLine('sharing violation: ' + $_.Exception.Message)\n\
+         exit 1\n\
+         }\n\
+         $writer = New-Object System.IO.StreamWriter($stream)\n\
+         $writer.WriteLine('written by the editor')\n\
+         $writer.Dispose()\n\
+         exit 0\n",
+    )
+    .unwrap();
+    let editor = format!(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File {}",
+        script.display()
+    );
+
+    let out = sb
+        .command()
+        .args(["note", "add", "ID0001"])
+        .env("EDITOR", &editor)
+        .output()
+        .expect("running fastf");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "an editor that saves the way Notepad does must be able to save:\n{stderr}"
+    );
+    let pinfo = fs::read_to_string(dir.join("PROJECT_INFO.md")).unwrap();
+    assert!(
+        pinfo.contains("written by the editor"),
+        "the editor's text never reached the journal:\n{pinfo}"
+    );
+}
+
 /// `tag reauto` on a folder registered without a template failed with
 /// "template '(registered)' not found", which reads like a broken install.
 #[test]

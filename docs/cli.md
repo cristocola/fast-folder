@@ -591,6 +591,11 @@ fastf notes ID0047 --since 2026-04-01
 
 Entries are timestamped lines in the `## Journal` section of the project's `PROJECT_INFO.md`. They are append-only and grow over the project's lifetime.
 
+With no message, the editor (`config.editor`, else `$EDITOR`, else Notepad on
+Windows and `nano` elsewhere) opens on a scratch file, started in the project's
+folder; save, close it, and what you wrote is appended. Lines starting with `#`
+are dropped, and an empty note writes nothing.
+
 ## Registering existing folders
 
 `register` makes a folder that fastf did not create discoverable, by writing a `PROJECT_INFO.md` into it:

@@ -178,17 +178,32 @@ mod tests {
         fs::write(root.join("local.bin"), [0_u8; 11]).unwrap();
         fs::write(outside.join("large.bin"), [0_u8; 101]).unwrap();
 
-        // Creating links can require Developer Mode on older Windows hosts.
-        // Skip only that environmental restriction; every created link is
+        // Creating a symlink needs `SeCreateSymbolicLinkPrivilege`, which an
+        // ordinary account has only under Developer Mode or elevation. Skip
+        // that environmental restriction; every link that *is* created is
         // asserted not to contribute to the total.
+        //
+        // **The refusal is `ERROR_PRIVILEGE_NOT_HELD` (1314), not
+        // `PermissionDenied`.** Rust maps only `ERROR_ACCESS_DENIED` (5) to
+        // that kind and leaves 1314 uncategorized, so a guard reading the kind
+        // alone never fires — and this test failed on every un-elevated
+        // Windows machine without Developer Mode, which is the ordinary state
+        // of a contributor's box. It passed in CI because the runners are
+        // elevated, so the whole suite was red for outside contributors and
+        // green everywhere it was looked at. Elsewhere the crate sidesteps the
+        // privilege entirely by testing with `mklink /J` junctions, which need
+        // none; here real symlinks are the subject, so the skip is the answer.
+        let unprivileged = |error: &std::io::Error| {
+            error.kind() == ErrorKind::PermissionDenied || error.raw_os_error() == Some(1314)
+        };
         if let Err(error) = symlink_file(outside.join("large.bin"), root.join("file-link")) {
-            if error.kind() == ErrorKind::PermissionDenied {
+            if unprivileged(&error) {
                 return;
             }
             panic!("creating file link: {error}");
         }
         if let Err(error) = symlink_dir(&outside, root.join("dir-link")) {
-            if error.kind() == ErrorKind::PermissionDenied {
+            if unprivileged(&error) {
                 return;
             }
             panic!("creating directory link: {error}");

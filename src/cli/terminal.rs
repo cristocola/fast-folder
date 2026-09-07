@@ -31,8 +31,13 @@ pub fn hand_off_to_a_terminal(cfg: &Config, plain: bool) -> bool {
     relaunch_impl(cfg)
 }
 
-/// Record that this process was started by [`crate::util::relaunch`] — `main`
-/// calls it for the hidden `--relaunched` flag, and nothing else may.
+/// Record that this process was started by `util::relaunch` — `main` calls it
+/// for the hidden `--relaunched` flag, and nothing else may.
+///
+/// (A plain span, not an intra-doc link: `util::relaunch` is `cfg(unix)`, so on
+/// a Windows target the link has no item to resolve to and
+/// `RUSTDOCFLAGS="-D warnings" cargo doc` — a release gate — fails. It only
+/// ever ran on Linux, where the module is there.)
 pub fn mark_relaunched_window() {
     RELAUNCHED_WINDOW.store(true, Ordering::SeqCst);
 }
@@ -47,7 +52,7 @@ pub fn mark_relaunched_window() {
 /// it was typed into instead of opening a window.
 ///
 /// The variable keeps the one job inheritance cannot spoil: in
-/// [`crate::util::relaunch::headless_gui_session`] it only ever *suppresses* a
+/// `util::relaunch::headless_gui_session` it only ever *suppresses* a
 /// relaunch, so a descendant that wrongly inherits it opens no window, which is
 /// the safe direction and the one a runaway loop would need.
 pub fn relaunched_window() -> bool {

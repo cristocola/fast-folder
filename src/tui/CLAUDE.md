@@ -411,6 +411,60 @@ the old builder printed after each step. Nothing is written until Save, and Save
 says `Cannot save:` with `Template::validate`'s own words rather than writing
 something that will not load.
 
+**The builder stays up until the write has landed.** `save_template` used to
+pop the modal in the same breath as handing the effect over, so a refusal from
+*under* the data lock — an occupied slug, a lock held by another terminal, a
+full disk — arrived with nothing to land on: the template and every answer in
+it were gone, and one red line on the status bar was all that was left.
+`Builder::saving` is the flag; `on_action_done` pops the modal on the success
+path only, and puts the refusal on the list otherwise, beside the two arms that
+already do this for `Settings` and `Onboarding`. While it is set the builder
+takes no keys at all, Esc included — a write already sent cannot be cancelled,
+and pretending otherwise is worse than waiting.
+
+**Leaving asks when there is something to lose.** `Builder::original` is the
+template as the builder opened it, and `is_dirty` is a whole-document
+comparison, so correcting a typo and correcting it back is not "worked on" — a
+question nobody needs is the fastest way to teach people to answer it without
+reading. Esc, `q` and Ctrl-C all reach it: `close_top` asks through
+`ConfirmThen::DiscardTemplate`, and the Ctrl-C branch in `on_key` defers to
+`close_top` for a dirty builder rather than popping the modal itself, because
+it was the one gesture that reached past the question and it did not even
+leave a status line behind.
+
+**A new template may not land on an occupied slug.** The rename guard in
+`operations::save_template` lived inside `if let Some(original)`, and a new
+template carries `None` — so typing `general` as the slug of a new template
+overwrote the bundled one and said `✓ Saved`. The authority is core, keyed on
+the **manifest** rather than the directory (`load_all` reads only
+subdirectories holding a `template.yaml`, so a bare directory is a leftover and
+not a template); the app asks the same question of the cards already in memory
+first, so the refusal lands on the list instead of arriving from a worker.
+
+**On an edit the slug stops following the name.** `suggest_slug` rewrites any
+slug field nobody has typed into, and a form built from a loaded template has
+touched nothing — so correcting a typo in the *title* of `music-video` retyped
+the slug, and Save renamed the template's directory to match. `metadata_form`
+marks the field `touched` when the template already has a slug, which is what
+"this value was chosen" means for one that is already on disk.
+
+**The naming pattern is checked where it is written.** Two mistakes that
+`Template::validate` cannot refuse, because both produce a template that loads
+and saves perfectly and then names every project wrongly: a `{token}` no
+variable answers (`{clientname}` for `client_name`, left in the folder name
+verbatim), and a declared variable the pattern never uses — which is the one
+that costs a first template, since the questions are asked, the answers are
+recorded, and every folder name comes out identical. `studio::pattern_warning`
+says which; the Metadata row wears `⚠` and the footer carries the sentence, and
+the metadata form updates its own hint on the keystroke that caused it
+(`sync_metadata_form`). Neither refuses a save: both are legal.
+
+**The footer says what the highlighted row is for.** It was empty until a save
+was refused, over a list of five nouns in the manifest's vocabulary. `s` saves
+from the section list — the one face of the builder with nothing to type into,
+which is the same bargain `a`, `d`, `K` and `J` already make on the lists
+inside it (`command::builder_list_closed`).
+
 `fastf template new` and `fastf template edit <slug>` open the app at
 `Entry::Studio` — the templates tab, or the builder straight away — so the
 command line and `T` are one editor.

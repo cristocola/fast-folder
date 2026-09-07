@@ -910,6 +910,12 @@ impl App {
                 if matches!(self.modals.top(), Some(Modal::Onboarding(_))) {
                     self.modals.pop();
                 }
+                // A template that saved is on disk; the builder holding it has
+                // nothing left to hold. Only now, and only here — see
+                // `save_template`.
+                if matches!(self.modals.top(), Some(Modal::Builder(builder)) if builder.saving) {
+                    self.modals.pop();
+                }
                 let mut effects = self.apply_change(outcome.change);
                 if let Some(FollowUp::PostCreate {
                     root,
@@ -942,6 +948,13 @@ impl App {
                     Some(Modal::Onboarding(state)) => {
                         state.pending = false;
                         state.error = Some(error);
+                    }
+                    // The refusal goes under the list the template is still
+                    // sitting in, in the same place `Cannot save:` already
+                    // appears, with every answer untouched.
+                    Some(Modal::Builder(builder)) if builder.saving => {
+                        builder.saving = false;
+                        builder.error = Some(format!("Cannot save: {error}"));
                     }
                     _ => self.error(format!("error: {error}")),
                 }
@@ -1213,6 +1226,16 @@ impl App {
             // quitting under a worker that is still mutating the filesystem.
             if self.job.is_some() || self.move_progress.is_some() {
                 return self.request_cancel();
+            }
+            // Here Ctrl-C is a close, and a close may not throw away a
+            // template that has been worked on — the one gesture that reached
+            // past the question Esc and `q` now ask, and the quietest, since
+            // it did not even leave a status line behind.
+            if matches!(
+                self.modals.top(),
+                Some(Modal::Builder(builder)) if builder.saving || builder.is_dirty()
+            ) {
+                return self.close_top();
             }
             return if self.modals.pop().is_some() {
                 Vec::new()
@@ -1558,6 +1581,12 @@ impl App {
             }
             ConfirmThen::DeleteTemplate(slug) => {
                 self.run_action("deleting the template…", Action::DeleteTemplate(slug))
+            }
+            ConfirmThen::DiscardTemplate => {
+                // The confirm was popped above; the builder under it goes now.
+                self.modals.pop();
+                self.info("Discarded — the template was not written.");
+                Vec::new()
             }
             ConfirmThen::DeleteBatch => self.start_job(jobs::JobKind::Delete, None),
             ConfirmThen::UnregisterBatch => self.start_job(jobs::JobKind::Unregister, None),
@@ -1993,6 +2022,7 @@ impl App {
             CommandId::BuilderMoveUp | CommandId::BuilderMoveDown => {
                 self.builder_move(id == CommandId::BuilderMoveUp)
             }
+            CommandId::BuilderSave => self.save_template(),
             CommandId::SettingsChange => self.settings_change(),
             CommandId::Palette => {
                 self.open_palette();
@@ -2697,11 +2727,28 @@ impl App {
     fn close_top(&mut self) -> Vec<Effect> {
         match self.modals.top_mut() {
             Some(Modal::Builder(builder)) => {
+                // A save is in flight and the answer is nearly here; closing
+                // now would leave the outcome nothing to land on.
+                if builder.saving {
+                    return Vec::new();
+                }
                 if builder.open.is_some() {
                     builder.open = None;
+                } else if builder.is_dirty() {
+                    // **A template that has been worked on is not thrown away
+                    // on one keystroke.** Esc and `q` popped the builder and
+                    // said so afterwards, on the status line, by which time
+                    // every answer was gone — and `q` is the key this app
+                    // teaches you to close things with everywhere else.
+                    let prompt =
+                        validators::discard_template_prompt(builder.original_slug.is_some());
+                    self.modals.push(Modal::Confirm(Confirm {
+                        prompt,
+                        then: ConfirmThen::DiscardTemplate,
+                    }));
                 } else {
                     self.modals.pop();
-                    self.info("Discarded — the template was not written.");
+                    self.info("Closed — nothing was written.");
                 }
             }
             Some(_) => {
@@ -2810,11 +2857,9 @@ impl App {
                     Vec::new()
                 }
                 Row::Save => self.save_template(),
-                Row::Discard => {
-                    self.modals.pop();
-                    self.info("Discarded — the template was not written.");
-                    Vec::new()
-                }
+                // Discard asks the same question Esc does, through the same
+                // ladder — the row is the spelled-out spelling of the key.
+                Row::Discard => self.close_top(),
             },
             Some(Open::Variables(list)) => {
                 if let Some(variable) = builder.template.variables.get(list.selected) {
@@ -2964,6 +3009,13 @@ impl App {
             }
             return Vec::new();
         }
+        // A save is in flight: it is one worker call away from an answer, and
+        // every key until then would act on a template that may be about to
+        // close. Esc included — cancelling a write already sent is not a
+        // thing this can promise.
+        if builder.saving {
+            return Vec::new();
+        }
         match &mut builder.open {
             None => self.on_builder_list_key(key),
             Some(Open::Metadata(_)) | Some(Open::Id(_)) => self.on_builder_form_key(key),
@@ -2981,24 +3033,69 @@ impl App {
 
     /// Save, or say what `Template::validate` refused — the check that used to
     /// print `Cannot save:` and drop back into the same menu.
+    /// Save, or say what refused it.
+    ///
+    /// **The builder stays up until the write has actually landed.** It used
+    /// to be popped the moment the effect was handed over, so a refusal from
+    /// under the data lock — an occupied slug, a lock held by another
+    /// terminal, a full disk — arrived with nothing to land on: the template
+    /// was gone, and all that was left was one red line on the status bar.
+    /// Everything typed into it was unrecoverable. `Modal::Builder` is popped
+    /// in `on_action_done` now, on the success path only.
     fn save_template(&mut self) -> Vec<Effect> {
-        let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
-            return Vec::new();
+        // Read what the save needs first, so the borrow ends before the app
+        // itself is needed.
+        let (template, original_slug) = {
+            let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
+                return Vec::new();
+            };
+            if builder.saving {
+                return Vec::new();
+            }
+            if let Err(error) = builder.template.validate() {
+                builder.error = Some(format!("Cannot save: {error:#}"));
+                return Vec::new();
+            }
+            (builder.template.clone(), builder.original_slug.clone())
         };
-        if let Err(error) = builder.template.validate() {
-            builder.error = Some(format!("Cannot save: {error:#}"));
+
+        // The slug must be free unless this very template was loaded from it.
+        // `operations::save_template` enforces that under the lock and is the
+        // authority; this is the same question asked of the cards already in
+        // memory, so the answer lands on the list instead of arriving from a
+        // worker. `update` reads no disk to do it.
+        let occupied = self.studio.cards.iter().any(|card| {
+            card.on_disk
+                && card.slug == template.slug
+                && original_slug.as_deref() != Some(card.slug.as_str())
+        });
+        if occupied {
+            if let Some(Modal::Builder(builder)) = self.modals.top_mut() {
+                builder.error = Some(format!(
+                    "Cannot save: a template called '{}' already exists — \
+                     give this one another slug, or edit that one instead",
+                    template.slug
+                ));
+            }
             return Vec::new();
         }
-        let Some(Modal::Builder(builder)) = self.modals.pop() else {
-            return Vec::new();
-        };
-        self.run_action(
+
+        let effects = self.run_action(
             "saving the template…",
             Action::SaveTemplate {
-                template: Box::new(builder.template),
-                original_slug: builder.original_slug,
+                template: Box::new(template),
+                original_slug,
             },
-        )
+        );
+        // `run_action` refuses while another one is running; only a save that
+        // actually started may put the builder into its saving state.
+        if !effects.is_empty()
+            && let Some(Modal::Builder(builder)) = self.modals.top_mut()
+        {
+            builder.saving = true;
+            builder.error = None;
+        }
+        effects
     }
 
     /// The metadata and ID sections: a form, checked here because every rule
@@ -3008,6 +3105,15 @@ impl App {
             return Vec::new();
         };
         let is_metadata = matches!(builder.open, Some(Open::Metadata(_)));
+        // Read off the template before the form is borrowed from the same
+        // builder: the naming-pattern advice is a question about the
+        // variables, and the form is a field of the thing that holds them.
+        let declared: Vec<String> = builder
+            .template
+            .variables
+            .iter()
+            .map(|v| v.slug.clone())
+            .collect();
         let (Some(Open::Metadata(form)) | Some(Open::Id(form))) = &mut builder.open else {
             return Vec::new();
         };
@@ -3032,7 +3138,13 @@ impl App {
                 builder.open = None;
                 builder.error = None;
             }
-            FormEvent::Changed if is_metadata => studio::suggest_slug(form),
+            // The slug follows the name until one is typed, and the naming
+            // pattern says on this keystroke what it would do with the
+            // variables this template declares.
+            FormEvent::Changed if is_metadata => {
+                let declared: Vec<&str> = declared.iter().map(String::as_str).collect();
+                studio::sync_metadata_form(form, &declared);
+            }
             _ => {}
         }
         Vec::new()

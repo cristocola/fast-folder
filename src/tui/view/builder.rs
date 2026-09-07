@@ -136,24 +136,30 @@ pub fn render_builder(
         footer_line(frame, footer, " reading the template…", theme.dim());
         return None;
     }
+    if builder.saving {
+        // The list stays drawn under it: a refusal lands here and the answers
+        // have to still be on screen when it does.
+        render_sections(app, builder, frame, body);
+        footer_line(frame, footer, " saving…", theme.dim());
+        return None;
+    }
 
     let width = keys.width as usize;
     let (caret, hint, key_pairs) = match &builder.open {
         None => (
             render_sections(app, builder, frame, body),
-            builder.error.clone(),
-            // On the section list Esc discards the template; the registry's
-            // word for the key is "close", and here that is what closing does.
-            registry_keys(app, Context::Builder, width)
-                .into_iter()
-                .map(|(key, what)| {
-                    if key == "Esc" {
-                        (key, "discard".to_string())
-                    } else {
-                        (key, what)
-                    }
-                })
-                .collect(),
+            // A refusal first; then whatever is wrong with the pattern; then
+            // what the highlighted row is for. The line was empty until a save
+            // was refused, which is a whole interface's worth of unused space
+            // over a list of five nouns.
+            builder
+                .error
+                .clone()
+                .or_else(|| row_note(builder))
+                .or_else(|| Some(builder.row().hint().to_string())),
+            // Esc asks before it discards now, so the registry's own word for
+            // the key — "close" — is the true one and the rewrite is gone.
+            registry_keys(app, Context::Builder, width),
         ),
         Some(Open::Metadata(form)) | Some(Open::Id(form)) => (
             render_form(app, form, frame, body),
@@ -179,11 +185,12 @@ pub fn render_builder(
         Some(Open::Files(list)) => render_files(app, builder, list, frame, body, width),
     };
 
-    let style = if builder.error.is_some() {
-        theme.warn()
-    } else {
-        theme.dim()
-    };
+    let style =
+        if builder.error.is_some() || (builder.open.is_none() && row_note(builder).is_some()) {
+            theme.warn()
+        } else {
+            theme.dim()
+        };
     let text = hint.unwrap_or_default();
     footer_line(
         frame,
@@ -196,6 +203,17 @@ pub fn render_builder(
     );
     frame.render_widget(Paragraph::new(key_line(theme, &key_pairs)), keys);
     caret
+}
+
+/// What the highlighted row has to say beyond its own hint: for Metadata,
+/// what the naming pattern would actually do. Nothing for the others yet.
+fn row_note(builder: &Builder) -> Option<String> {
+    match builder.row() {
+        Row::Section(Section::Metadata) => {
+            crate::tui::app::studio::pattern_warning(&builder.template)
+        }
+        _ => None,
+    }
 }
 
 fn section_of(open: &Open) -> &'static str {
@@ -229,6 +247,19 @@ fn render_sections(
                 " "
             };
             let (label, value, style) = match row {
+                // A pattern that ignores the template's own variables is
+                // marked where it can be seen without walking the list — the
+                // mistake costs a whole first template, and every project made
+                // from one gets the same folder name.
+                Row::Section(Section::Metadata)
+                    if crate::tui::app::studio::pattern_warning(&builder.template).is_some() =>
+                {
+                    (
+                        Section::Metadata.label(),
+                        format!("{}   {}", builder.summary(Section::Metadata), g.warn),
+                        theme.warn(),
+                    )
+                }
                 Row::Section(section) => (section.label(), builder.summary(*section), theme.dim()),
                 Row::Save => (
                     "Save",

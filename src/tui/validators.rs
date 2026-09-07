@@ -81,6 +81,16 @@ pub fn name_list(names: &[String], shown: usize) -> String {
     }
 }
 
+/// What leaving the builder with unsaved work asks. It names what is at stake
+/// — the edits, or a whole template — because "are you sure" answers nothing.
+pub fn discard_template_prompt(editing: bool) -> String {
+    if editing {
+        "Leave without saving? The changes to this template are thrown away".to_string()
+    } else {
+        "Leave without saving? This template has not been written yet".to_string()
+    }
+}
+
 /// The first-run question, and what skipping it says. The words are the
 /// onboarding flow's own.
 pub const ONBOARDING_PROMPT: &str = "Where should your projects live?";

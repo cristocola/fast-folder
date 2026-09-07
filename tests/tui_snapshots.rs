@@ -694,6 +694,53 @@ mod studio {
         snap("builder_review", render_to_string(&app, 100, 30));
     }
 
+    /// A template that asks two questions its folder name never uses. The
+    /// pattern is legal, the template saves, and every project made from it
+    /// gets the same folder name — so the row is marked and the footer says
+    /// what would happen.
+    #[test]
+    fn builder_pattern_ignores_the_variables() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('n'));
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Metadata
+        typed(&mut app, "Music video");
+        press(&mut app, Key::plain(KeyCode::Enter)); // keep, back to the list
+
+        // Declare a variable the suggested `{date}_{id}` cannot use.
+        press(&mut app, Key::plain(KeyCode::Down));
+        press(&mut app, Key::plain(KeyCode::Down)); // → Variables
+        press(&mut app, Key::plain(KeyCode::Enter));
+        press(&mut app, Key::ch('a'));
+        typed(&mut app, "artist");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        press(&mut app, Key::plain(KeyCode::Esc)); // back to the section list
+
+        // Back onto Metadata, where the warning belongs.
+        press(&mut app, Key::plain(KeyCode::Up));
+        press(&mut app, Key::plain(KeyCode::Up));
+        snap(
+            "builder_pattern_ignores_the_variables",
+            render_to_string(&app, 100, 30),
+        );
+    }
+
+    /// Leaving a template that has been worked on asks first.
+    #[test]
+    fn builder_asks_before_discarding() {
+        let mut app = fixture(12, 100, 30);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('n'));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        typed(&mut app, "Music video");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        press(&mut app, Key::plain(KeyCode::Esc));
+        snap(
+            "builder_asks_before_discarding",
+            render_to_string(&app, 100, 30),
+        );
+    }
+
     /// One variable's form, with the options line a select needs.
     #[test]
     fn builder_variable_form() {

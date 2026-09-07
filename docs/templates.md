@@ -151,13 +151,34 @@ that part currently holds, so the list is the summary. Enter opens a part;
 Esc closes it and comes back. There is no order to follow and no step to get
 past.
 
+The line under the list says what the highlighted part is for, so the five
+nouns are not the only thing to go on. `s` saves from anywhere on the list, and
+Enter on the Save row does the same.
+
 Nothing throws work away. Esc inside a part returns to the list with that part
 unchanged, not with the template gone, and nothing is written until Save. Save
 says `Cannot save:` and the reason when the template is not yet one fastf could
-load, and stays where it is.
+load, and stays where it is — including when the refusal comes from the write
+itself, so a slug that turns out to be taken or a data directory locked by
+another fastf leaves every answer on screen. Leaving a template you have
+changed asks first, whether you press Esc, `q` or Ctrl-C; a builder you have
+typed nothing into just closes.
 
-- **Metadata** and **ID** are forms; the slug follows the name until you type a
-  slug of your own, and every rule is checked on the field that broke it.
+A new template may not take a slug some template already answers to. Renaming
+one onto an occupied slug has always been refused, and creating one onto it is
+the same collision through the other door — it used to overwrite the template
+that was there.
+
+- **Metadata** and **ID** are forms; every rule is checked on the field that
+  broke it. On a *new* template the slug follows the name until you type one of
+  your own; on an existing template it does not, because the slug is the
+  template's folder on disk and Save renames that folder to match it.
+- The **naming pattern** is checked as you type it and again on the list. A
+  `{token}` no variable answers is named before it can reach a folder name, and
+  so is a variable the pattern never uses — the mistake that makes every
+  project from a template share one folder name. The Metadata row is marked
+  `⚠` while either is true. Neither stops a save: both are legal templates,
+  they are just almost never what was meant.
 - **Variables** is a list: `a` adds, Enter edits, `d` removes, `K`/`J` move one
   up or down. A `select` variable's options are one comma-separated line.
 - **Structure** is a text area — one folder path per line, `/` to nest — with

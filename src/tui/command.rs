@@ -274,6 +274,7 @@ pub enum CommandId {
     BuilderRemove,
     BuilderMoveUp,
     BuilderMoveDown,
+    BuilderSave,
     // The settings list
     SettingsChange,
     // The message log
@@ -283,7 +284,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 63] = [
+    pub const ALL: [CommandId; 64] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -344,6 +345,7 @@ impl CommandId {
         CommandId::BuilderRemove,
         CommandId::BuilderMoveUp,
         CommandId::BuilderMoveDown,
+        CommandId::BuilderSave,
         CommandId::SettingsChange,
         CommandId::ShowLog,
         CommandId::Suspend,
@@ -504,6 +506,24 @@ fn builder_list_open(app: &App) -> Availability {
                 builder.open,
                 Some(Open::Variables(_)) | Some(Open::Files(_))
             ) =>
+        {
+            Availability::Enabled
+        }
+        _ => Availability::Hidden,
+    }
+}
+
+/// `s` saves, and belongs to the section list alone.
+///
+/// Every other face of the builder is somewhere a letter is text: a form
+/// field, a path line, a folder list, a file's contents. The section list is
+/// the one place with nothing to type into, which is what lets a bare letter
+/// mean a verb there — the same bargain `a`, `d`, `K` and `J` already make on
+/// the lists inside it.
+fn builder_list_closed(app: &App) -> Availability {
+    match app.modals.top() {
+        Some(crate::tui::app::modal::Modal::Builder(builder))
+            if builder.open.is_none() && !builder.pending && !builder.saving =>
         {
             Availability::Enabled
         }
@@ -1283,6 +1303,17 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         builder_variables_open
     ),
+    cmd!(
+        BuilderSave,
+        "Save the template",
+        "write it to the templates folder, from anywhere on the section list",
+        BUILDER,
+        [Key::ch('s')],
+        Templates,
+        palette = false,
+        hint = true,
+        builder_list_closed
+    ),
     // --- the settings list -------------------------------------------------
     cmd!(
         SettingsChange,
@@ -1417,6 +1448,7 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::BuilderRemove => "remove",
         CommandId::BuilderMoveUp => "up",
         CommandId::BuilderMoveDown => "down",
+        CommandId::BuilderSave => "save",
         CommandId::SettingsChange => "change / run",
         _ => title,
     }

@@ -95,6 +95,8 @@ pub enum ConfirmThen {
     Unregister,
     /// Delete the named template and everything bundled with it.
     DeleteTemplate(String),
+    /// Leave the builder, throwing away a template that has been worked on.
+    DiscardTemplate,
     /// Delete every marked project (the marks are the batch).
     DeleteBatch,
     /// Unregister every marked project (the marks are the batch).

@@ -11,6 +11,7 @@
 //! The scratch `Template` is only written by Save, so leaving a section — or
 //! the whole builder — writes nothing.
 
+use crate::core::counter::Counters;
 use crate::core::template::{
     FileEntry, FolderNode, MAX_ID_DIGITS, Template, Transform, VarType, Variable,
 };
@@ -179,6 +180,23 @@ impl Section {
             Section::Files => "Files",
         }
     }
+
+    /// What this part *is*, in the words of somebody who has not read
+    /// `docs/templates.md`. The row labels are the on-disk vocabulary and have
+    /// to stay — they are what the manifest calls these things — but a list of
+    /// five nouns is not an interface, and the footer was empty until a save
+    /// was refused. The settings screen already spends its footer this way.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Section::Metadata => "what the template is called, and how its projects are named",
+            Section::Id => "the number every project gets, and how wide it is",
+            Section::Variables => {
+                "the questions asked when a project is made — each answer is a {token}"
+            }
+            Section::Structure => "the folders every new project starts with",
+            Section::Files => "files written into every project, with {tokens} filled in",
+        }
+    }
 }
 
 /// A row of the builder's home list: the five sections, then Save and Discard.
@@ -199,6 +217,14 @@ impl Row {
         Row::Save,
         Row::Discard,
     ];
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            Row::Section(section) => section.hint(),
+            Row::Save => "write it to the templates folder — nothing is written before this",
+            Row::Discard => "leave without writing; what you typed is thrown away",
+        }
+    }
 }
 
 /// Which section editor is open over the list.
@@ -250,6 +276,10 @@ pub struct Builder {
     /// the save has to rename the directory rather than leaving the old one
     /// behind as a stale duplicate.
     pub original_slug: Option<String>,
+    /// The template as it was when the builder opened — an empty one for
+    /// `new`, the loaded document for `edit`. Only ever compared against, so
+    /// the builder can tell whether leaving would throw work away.
+    pub original: Template,
     pub template: Template,
     pub selected: usize,
     pub open: Option<Open>,
@@ -257,6 +287,11 @@ pub struct Builder {
     pub error: Option<String>,
     /// A worker is reading the template being edited.
     pub pending: bool,
+    /// A save is in flight. The builder stays up until it lands: a refusal
+    /// from under the data lock — an occupied slug, a lock timeout, a full
+    /// disk — has to have something to land on, and the work has to still be
+    /// there when it does.
+    pub saving: bool,
 }
 
 impl Builder {
@@ -268,12 +303,25 @@ impl Builder {
         }
         Self {
             original_slug,
+            original: template.clone(),
             template,
             selected: 0,
             open: None,
             error: None,
             pending: false,
+            saving: false,
         }
+    }
+
+    /// Whether anything has been changed since the builder opened.
+    ///
+    /// The comparison is against the whole loaded document, so correcting a
+    /// typo and correcting it back is not "worked on" — which matters,
+    /// because the question this answers is asked on the way out and a
+    /// question nobody needs is the fastest way to teach people to answer
+    /// it without reading.
+    pub fn is_dirty(&self) -> bool {
+        self.template != self.original
     }
 
     pub fn is_edit(&self) -> bool {
@@ -310,7 +358,12 @@ impl Builder {
                     format!("{} · {} · {}", t.name, t.slug, t.naming_pattern)
                 }
             }
-            Section::Id => format!("{}{}", t.id.prefix, "0".repeat(t.id.digits)),
+            // Two real ones rather than `ID0000`, which is not an ID any
+            // project will ever carry and reads as a value already set wrong.
+            Section::Id => {
+                let show = |n: u64| Counters::format_id(&t.id.prefix, t.id.digits, n);
+                format!("{}, {} …", show(1), show(2))
+            }
             Section::Variables => {
                 if t.variables.is_empty() {
                     "(none)".to_string()
@@ -384,6 +437,20 @@ impl Builder {
 // ---------------------------------------------------------------------------
 
 pub fn metadata_form(template: &Template) -> Form {
+    // **On an edit the slug is already chosen, so it stops following the
+    // name.** `suggest_slug` rewrites the slug of any field nobody has typed
+    // in, and a form built from an existing template has touched nothing — so
+    // correcting a typo in the title of `music-video` silently retyped the
+    // slug, and Save renamed the template's directory on disk to match. The
+    // flag says "this value was chosen", which for a loaded template it was.
+    let mut slug = Field::text(
+        "slug",
+        "Slug",
+        "its folder name and its command-line argument — lowercase, no spaces",
+        template.slug.clone(),
+    );
+    slug.touched = !template.slug.is_empty();
+
     Form::new(vec![
         Field::text(
             "name",
@@ -391,12 +458,7 @@ pub fn metadata_form(template: &Template) -> Form {
             "what the template is called",
             template.name.clone(),
         ),
-        Field::text(
-            "slug",
-            "Slug",
-            "its filename and its command-line argument — lowercase, no spaces",
-            template.slug.clone(),
-        ),
+        slug,
         Field::text(
             "description",
             "Description",
@@ -519,10 +581,61 @@ pub fn variable_form(existing: Option<&Variable>) -> Form {
     ])
 }
 
-/// Show the options line only for a select — a text variable has none.
+/// Show the options line only for a select — a text variable has none — and
+/// let the transform row show what it would do to an answer.
 pub fn sync_variable_form(form: &mut Form) {
     let is_select = form.value("type") == "select";
     form.set_hidden("options", !is_select);
+
+    let shown = transform_example(&form.value("transform"));
+    if let Some(field) = form.field_mut("transform") {
+        field.hint = shown;
+    }
+}
+
+/// What a transform does, said with an answer rather than a name.
+///
+/// `TitleUnderscore` is the manifest's word and stays on the row — it is what
+/// the YAML says — but nothing about it tells you that a space becomes an
+/// underscore, and the four names differ from each other only in ways you have
+/// to already know to read.
+pub fn transform_example(label: &str) -> String {
+    let shown = match label {
+        "TitleUnderscore" => "Ariana Grande → Ariana_Grande",
+        "UpperUnderscore" => "Ariana Grande → ARIANA_GRANDE",
+        "LowerUnderscore" => "Ariana Grande → ariana_grande",
+        _ => "Ariana Grande → Ariana Grande (left exactly as typed)",
+    };
+    format!("how the answer is reshaped for the folder name: {shown}")
+}
+
+/// Keep the metadata form's own advice current as it is typed: the slug
+/// follows the name until one is typed, and the naming-pattern row says what
+/// the pattern would actually do with the variables this template declares.
+pub fn sync_metadata_form(form: &mut Form, declared: &[&str]) {
+    suggest_slug(form);
+    let pattern = form.value("naming_pattern");
+    let hint = pattern_warning_of(&pattern, declared).unwrap_or_else(|| {
+        let built_ins = BUILT_IN_TOKENS
+            .iter()
+            .map(|token| format!("{{{token}}}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        match declared.is_empty() {
+            true => format!("tokens: {built_ins}"),
+            false => format!(
+                "tokens: {built_ins} and {}",
+                declared
+                    .iter()
+                    .map(|s| format!("{{{s}}}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        }
+    });
+    if let Some(field) = form.field_mut("naming_pattern") {
+        field.hint = hint;
+    }
 }
 
 /// The variable a form describes, or the message refusing it.
@@ -589,6 +702,88 @@ pub fn file_from(edit: &FileEdit) -> Result<FileEntry, String> {
         },
         content: String::new(),
     })
+}
+
+/// The built-in tokens every naming pattern understands.
+pub const BUILT_IN_TOKENS: [&str; 5] = ["date", "YYYY", "MM", "DD", "id"];
+
+/// The `{token}` names a string mentions, in the order they appear.
+///
+/// A plain scan rather than a regex: a `{` with no `}` after it is not a
+/// token, and neither is an empty `{}`.
+pub fn tokens_in(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else { break };
+        let name = &after[..close];
+        if !name.is_empty() && !found.iter().any(|seen| seen == name) {
+            found.push(name.to_string());
+        }
+        rest = &after[close + 1..];
+    }
+    found
+}
+
+/// What is wrong with a naming pattern, in one sentence, or `None`.
+///
+/// Two mistakes, and neither is something `Template::validate` can refuse —
+/// both produce a template that loads and saves perfectly and then names every
+/// project wrongly, which is why they have to be said here:
+///
+/// - **A token no variable answers.** `{clientname}` typed for a variable
+///   called `client_name` is left in the folder name verbatim, braces and all.
+/// - **A variable the pattern never uses.** This is the one that costs a
+///   first template: declare `artist` and `title`, leave the suggested
+///   `{date}_{id}` alone, and every project is called `2026-09-07_ID0001`. The
+///   questions are asked, the answers are recorded in `PROJECT_INFO.md`, and
+///   the folder names are identical. Nothing says so until the first create.
+pub fn pattern_warning(template: &Template) -> Option<String> {
+    let declared: Vec<&str> = template.variables.iter().map(|v| v.slug.as_str()).collect();
+    pattern_warning_of(&template.naming_pattern, &declared)
+}
+
+/// The same check over a pattern being typed, before it has been committed to
+/// the scratch template — so the form can say it on the keystroke that caused
+/// it rather than after the section is closed.
+pub fn pattern_warning_of(pattern: &str, declared: &[&str]) -> Option<String> {
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return None;
+    }
+    let used = tokens_in(pattern);
+
+    let unknown: Vec<String> = used
+        .iter()
+        .filter(|token| {
+            !BUILT_IN_TOKENS.contains(&token.as_str()) && !declared.contains(&token.as_str())
+        })
+        .map(|token| format!("{{{token}}}"))
+        .collect();
+    if !unknown.is_empty() {
+        return Some(format!(
+            "{} matches no variable — it stays in the folder name as written",
+            unknown.join(" ")
+        ));
+    }
+
+    let unused: Vec<&str> = declared
+        .iter()
+        .copied()
+        .filter(|slug| !used.iter().any(|token| token == slug))
+        .collect();
+    if !unused.is_empty() {
+        return Some(format!(
+            "{} not in the pattern — every project gets the same folder name",
+            unused
+                .iter()
+                .map(|slug| format!("{{{slug}}}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+    }
+    None
 }
 
 /// The `{token}`s a template understands: its own variables, then the built-ins.
@@ -873,6 +1068,105 @@ mod tests {
             vec!["{artist}".to_string(), "{date}".to_string()]
         );
         assert!(tokens_used("plain text", &template).is_empty());
+    }
+
+    /// The mistake that costs a first template: declare `artist` and `title`,
+    /// leave the suggested `{date}_{id}` alone, and every project gets the
+    /// same folder name. It loads, it saves, and nothing says so until the
+    /// first create.
+    #[test]
+    fn a_pattern_that_ignores_its_variables_is_named_as_the_problem_it_is() {
+        let mut template = Template {
+            naming_pattern: "{date}_{id}".to_string(),
+            ..Template::default()
+        };
+        assert_eq!(
+            pattern_warning(&template),
+            None,
+            "with no variables declared there is nothing to leave out"
+        );
+
+        for slug in ["artist", "title"] {
+            let mut form = variable_form(None);
+            form.field_mut("slug").unwrap().set_text(slug);
+            template.variables.push(variable_from(&form).unwrap());
+        }
+        let warning = pattern_warning(&template).expect("both variables are unused");
+        assert!(warning.contains("{artist}"), "{warning}");
+        assert!(warning.contains("{title}"), "{warning}");
+        assert!(
+            warning.contains("same folder name"),
+            "it says what goes wrong, not just what is missing: {warning}"
+        );
+
+        template.naming_pattern = "{date}_{artist}_{title}_{id}".to_string();
+        assert_eq!(pattern_warning(&template), None, "now every one is used");
+    }
+
+    /// The other half: a token no variable answers stays in the folder name
+    /// exactly as typed, braces and all. `{clientname}` for `client_name`.
+    #[test]
+    fn a_token_no_variable_answers_is_named_before_it_reaches_a_folder() {
+        let mut template = Template::default();
+        let mut form = variable_form(None);
+        form.field_mut("slug").unwrap().set_text("client_name");
+        template.variables.push(variable_from(&form).unwrap());
+        template.naming_pattern = "{clientname}_{id}".to_string();
+
+        let warning = pattern_warning(&template).expect("the typo is not a variable");
+        assert!(warning.contains("{clientname}"), "{warning}");
+        assert!(warning.contains("matches no variable"), "{warning}");
+
+        // The unknown token is reported ahead of the unused one: it is the
+        // one that is simply wrong.
+        template.naming_pattern = "{client_name}_{id}".to_string();
+        assert_eq!(pattern_warning(&template), None);
+    }
+
+    #[test]
+    fn tokens_are_read_out_of_a_pattern_without_a_regex() {
+        assert_eq!(tokens_in("{date}_{id}"), vec!["date", "id"]);
+        assert_eq!(tokens_in("{a}{a}"), vec!["a"], "each one once");
+        assert!(tokens_in("no tokens here").is_empty());
+        assert!(tokens_in("{unclosed").is_empty(), "a brace is not a token");
+        assert!(tokens_in("{}").is_empty(), "and neither is an empty pair");
+    }
+
+    /// An edit must not let the title rewrite the slug: the slug is the
+    /// template's directory name, and Save renames the directory to match it.
+    #[test]
+    fn an_existing_templates_slug_is_already_chosen() {
+        let existing = Template {
+            name: "Client project".to_string(),
+            slug: "client-project".to_string(),
+            ..Template::default()
+        };
+
+        let mut form = metadata_form(&existing);
+        form.field_mut("name").unwrap().set_text("Something else");
+        suggest_slug(&mut form);
+        assert_eq!(
+            form.value("slug"),
+            "client-project",
+            "a loaded slug was chosen the moment it was written to disk"
+        );
+
+        // A brand-new template still gets the suggestion.
+        let mut fresh = metadata_form(&Template::default());
+        fresh.field_mut("name").unwrap().set_text("My Music Video");
+        suggest_slug(&mut fresh);
+        assert_eq!(fresh.value("slug"), "my-music-video");
+    }
+
+    #[test]
+    fn the_transform_row_shows_what_it_would_do_to_an_answer() {
+        let mut form = variable_form(None);
+        form.field_mut("transform")
+            .unwrap()
+            .select("TitleUnderscore");
+        sync_variable_form(&mut form);
+        let hint = &form.field("transform").unwrap().hint;
+        assert!(hint.contains("Ariana_Grande"), "{hint}");
     }
 
     #[test]

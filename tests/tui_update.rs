@@ -1752,6 +1752,12 @@ mod studio {
             }
             other => panic!("expected a save, got {other:?}"),
         }
+        // The builder stays up until the write has actually landed — a
+        // refusal from under the lock has to have something to land on. It
+        // closes when the outcome says the template is on disk.
+        assert!(builder(&app).saving, "the save is in flight");
+        let id = run_id(&effects);
+        let _ = update(&mut app, item_done(id, ListChange::SummaryOnly));
         assert!(
             app.modals.is_empty(),
             "the builder closed onto the tab it came from"
@@ -1867,6 +1873,207 @@ mod studio {
             other => panic!("{other:?}"),
         }
         assert!(builder(&app).template.files.is_empty());
+    }
+
+    /// Save handed the write to a worker and popped the builder in the same
+    /// breath, so a refusal from under the data lock — an occupied slug, a
+    /// lock held by another terminal, a full disk — arrived with nothing left
+    /// to land on. The template and every answer in it were gone, and all that
+    /// remained was one red line on the status bar.
+    #[test]
+    fn a_refused_save_keeps_the_builder_and_everything_in_it() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Metadata
+        // A slug the fixture's templates do not already answer to, so the
+        // save that is refused here is refused by the worker and not by the
+        // occupied-slug check.
+        type_text(&mut app, "Reel edit");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        for _ in 0..5 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        let effects = press(&mut app, Key::plain(KeyCode::Enter)); // Save
+        let id = run_id(&effects);
+        assert!(builder(&app).saving, "the builder says it is saving");
+
+        let _ = update(
+            &mut app,
+            Msg::ActionDone {
+                id,
+                outcome: Err("the data directory is locked by another fastf".to_string()),
+            },
+        );
+
+        let builder = builder(&app);
+        assert!(!builder.saving, "the save is over");
+        assert_eq!(
+            builder.template.name, "Reel edit",
+            "the work is still there"
+        );
+        let error = builder.error.clone().expect("the refusal is on the list");
+        assert!(error.contains("locked"), "it names the cause: {error}");
+    }
+
+    /// The other half: a save that lands closes the builder, once.
+    #[test]
+    fn a_save_that_lands_closes_the_builder() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "Demo");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        for _ in 0..5 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        let id = run_id(&effects);
+        let _ = update(&mut app, item_done(id, ListChange::SummaryOnly));
+        assert!(app.modals.is_empty(), "the builder closed onto the tab");
+    }
+
+    /// Esc, `q` and Ctrl-C all popped the builder outright and said so
+    /// afterwards on the status line, by which time every answer was gone.
+    #[test]
+    fn leaving_a_worked_on_template_asks_first() {
+        for key in [Key::plain(KeyCode::Esc), Key::ch('q'), Key::ctrl('c')] {
+            let mut app = fixture(6, 120, 40);
+            open_new(&mut app);
+            press(&mut app, Key::plain(KeyCode::Enter));
+            type_text(&mut app, "Music video");
+            press(&mut app, Key::plain(KeyCode::Enter));
+            assert!(builder(&app).is_dirty());
+
+            press(&mut app, key);
+            match app.modals.top() {
+                Some(Modal::Confirm(confirm)) => assert!(
+                    confirm.prompt.contains("without saving"),
+                    "{}",
+                    confirm.prompt
+                ),
+                other => panic!("{key:?} must ask before discarding, got {other:?}"),
+            }
+            // No is no: the template is still there, with its answer.
+            press(&mut app, Key::ch('n'));
+            assert_eq!(builder(&app).template.name, "Music video");
+
+            press(&mut app, key);
+            press(&mut app, Key::ch('y'));
+            assert!(app.modals.is_empty(), "yes leaves");
+        }
+    }
+
+    /// A question nobody needs teaches people to answer it without reading, so
+    /// a builder nothing was typed into closes on the first key.
+    #[test]
+    fn an_untouched_builder_closes_without_a_question() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        assert!(!builder(&app).is_dirty());
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(app.modals.is_empty(), "nothing was typed, nothing is asked");
+    }
+
+    /// Esc inside a section is still one rung of the ladder, not a discard.
+    #[test]
+    fn esc_inside_a_section_goes_back_to_the_list() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "Music video");
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(builder(&app).open.is_none(), "back on the section list");
+        assert!(!app.modals.is_empty(), "and still in the builder");
+    }
+
+    /// `suggest_slug` rewrites any slug nobody has typed in, and a form built
+    /// from an existing template has touched nothing — so correcting a typo in
+    /// the *title* of `music-video` silently retyped the slug, and Save
+    /// renamed the template's directory on disk to match.
+    #[test]
+    fn editing_a_template_does_not_let_the_name_rewrite_the_slug() {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('e'));
+        let template = Template {
+            name: "Client project".to_string(),
+            slug: "client-project".to_string(),
+            naming_pattern: "{date}_{id}".to_string(),
+            ..Template::default()
+        };
+        let _ = update(
+            &mut app,
+            Msg::TemplateSourceLoaded {
+                slug: "client-project".to_string(),
+                result: Ok(Box::new(template)),
+            },
+        );
+
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Metadata
+        type_text(&mut app, " renamed");
+        press(&mut app, Key::plain(KeyCode::Enter));
+
+        assert_eq!(builder(&app).template.name, "Client project renamed");
+        assert_eq!(
+            builder(&app).template.slug,
+            "client-project",
+            "the slug is the directory on disk and does not follow the title"
+        );
+    }
+
+    /// A new template typed onto an occupied slug overwrote the template that
+    /// was there. The refusal is asked of the cards already in memory, so it
+    /// lands on the list rather than after a worker round trip.
+    #[test]
+    fn a_new_template_may_not_take_a_slug_already_on_disk() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Metadata
+        type_text(&mut app, "General");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert_eq!(builder(&app).template.slug, "general", "the slug follows");
+
+        for _ in 0..5 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        let effects = press(&mut app, Key::plain(KeyCode::Enter)); // Save
+        assert!(effects.is_empty(), "nothing was written: {effects:?}");
+        let error = builder(&app).error.clone().expect("a refusal");
+        assert!(
+            error.contains("already exists"),
+            "it names the collision: {error}"
+        );
+        assert!(!app.modals.is_empty(), "the work is still on screen");
+    }
+
+    /// `s` saves from anywhere on the section list — the section list is the
+    /// one face of the builder with nothing to type into.
+    #[test]
+    fn s_saves_from_the_section_list() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "Demo");
+        press(&mut app, Key::plain(KeyCode::Enter));
+
+        // The cursor is still on Metadata, nowhere near the Save row.
+        assert_eq!(builder(&app).row(), Row::Section(Section::Metadata));
+        let effects = press(&mut app, Key::ch('s'));
+        match action_of(&effects) {
+            Action::SaveTemplate { template, .. } => assert_eq!(template.slug, "demo"),
+            other => panic!("expected a save, got {other:?}"),
+        }
+    }
+
+    /// Inside a section a letter is text, so `s` types rather than saving.
+    #[test]
+    fn s_inside_a_section_is_just_a_letter() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Metadata
+        let effects = press(&mut app, Key::ch('s'));
+        assert!(effects.is_empty(), "no save was started: {effects:?}");
+        assert!(matches!(builder(&app).open, Some(Open::Metadata(_))));
     }
 
     #[test]
@@ -2495,10 +2702,10 @@ fn the_templates_tab_and_the_builder_answer_their_declared_keys() {
     let _ = press(&mut app, Key::plain(KeyCode::Esc));
     assert!(
         app.modals.is_empty(),
-        "Esc on the section list discards and returns to the tab"
+        "Esc on an untouched section list returns to the tab without asking"
     );
     assert_eq!(app.screen, Screen::Templates);
-    assert!(app.status.text.contains("Discarded"));
+    assert!(app.status.text.contains("Closed"));
     // Esc again is one more level out: the tab you came from.
     let _ = press(&mut app, Key::plain(KeyCode::Esc));
     assert_eq!(app.screen, Screen::Library);

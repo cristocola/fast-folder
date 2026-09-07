@@ -383,6 +383,16 @@ only ways in; `Template::save_to_file` is `pub(crate)` so that stays true, and
 template was *loaded* under: when it differs, the directory is renamed before
 the manifest is written, because the builder's edit mode can change a slug and
 without the rename the old directory stayed behind as a stale duplicate.
+It is also what licenses writing over something that is already there — **a
+save may land on an existing template only when it was loaded from that very
+slug.** The collision check used to live inside `if let Some(original)`, so a
+*new* template (`None`) skipped it entirely and typing `general` as its slug
+replaced the bundled template, variables, structure and all, reporting `✓
+Saved`. The test is the **manifest**, not the directory: `load_all` reads only
+subdirectories that hold a `template.yaml`, so a bare directory is a leftover
+from a half-finished `from-folder` and refusing it would leave a slug nothing
+could ever claim. A caller re-saving a template it just loaded is editing and
+must say so — passing `None` there now asks to create one.
 `delete_template` refuses a template directory that is not a real directory
 directly under the templates directory — `remove_dir_all` follows a link, and
 the link's target is somewhere it has no business removing.

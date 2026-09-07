@@ -323,6 +323,66 @@ fn renaming_a_template_onto_an_existing_slug_is_refused() {
     });
 }
 
+/// Saving a **new** template onto a slug that already exists overwrote the
+/// manifest in place: the builder's `template new` had no `original_slug`, so
+/// the rename guard above never looked, and typing `general` as the slug of a
+/// new template replaced the bundled one — its variables, its structure and
+/// its naming pattern gone, with a `✓ Saved` on the status line. Renaming onto
+/// an occupied slug has always been refused; creating onto one is the same
+/// collision reached by the other door.
+#[test]
+fn a_new_template_may_not_overwrite_one_that_already_exists() {
+    sandboxed(|install| {
+        use fastf::core::operations;
+
+        let mut existing = in_memory("general");
+        existing.name = "The original".to_string();
+        operations::save_template(&existing, None).unwrap();
+        fs::create_dir_all(install.join("templates/general/files")).unwrap();
+        fs::write(install.join("templates/general/files/BRIEF.md"), b"kept").unwrap();
+
+        let mut newcomer = in_memory("general");
+        newcomer.name = "The impostor".to_string();
+        let error = operations::save_template(&newcomer, None)
+            .expect_err("a new template must not land on an occupied slug")
+            .to_string();
+        assert!(
+            error.contains("already exists"),
+            "the refusal must name the collision: {error}"
+        );
+
+        assert_eq!(
+            template::find_by_slug("general").unwrap().name,
+            "The original",
+            "the template on disk is untouched"
+        );
+        assert_eq!(
+            fs::read_to_string(install.join("templates/general/files/BRIEF.md")).unwrap(),
+            "kept",
+            "and so are its bundled files"
+        );
+    });
+}
+
+/// Editing a template and saving it under its own slug is not a collision —
+/// it is the ordinary case, and the guard above must not refuse it.
+#[test]
+fn editing_a_template_in_place_still_saves() {
+    sandboxed(|_install| {
+        use fastf::core::operations;
+
+        let mut tmpl = in_memory("keeper");
+        operations::save_template(&tmpl, None).unwrap();
+        tmpl.name = "Renamed in place".to_string();
+        operations::save_template(&tmpl, Some("keeper")).unwrap();
+
+        assert_eq!(
+            template::find_by_slug("keeper").unwrap().name,
+            "Renamed in place"
+        );
+    });
+}
+
 #[test]
 fn deleting_a_template_removes_its_directory_and_nothing_else() {
     sandboxed(|install| {

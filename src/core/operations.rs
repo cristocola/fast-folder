@@ -638,11 +638,46 @@ pub fn save_template(template: &Template, original_slug: Option<&str>) -> Result
     let slug = crate::core::validated::TemplateSlug::parse(&template.slug)?;
     let dir = crate::util::paths::template_dir(slug.as_str());
 
+    // **A save may land on a directory that already exists only when the
+    // template was loaded from that very slug** — that, and only that, is an
+    // edit in place. Everything else is a collision reached by one door or the
+    // other: a rename onto an occupied slug, which was always refused, or a
+    // *new* template typed onto one, which was not. The second had no guard at
+    // all, because the rename check lived inside `if let Some(original)` and a
+    // new template carries `None`: typing `general` as the slug of a new
+    // template overwrote the bundled one — its variables, its structure and its
+    // naming pattern replaced — and said `✓ Saved`.
+    let manifest = crate::util::paths::template_manifest(slug.as_str());
+    let loaded_here = match original_slug {
+        Some(original) => {
+            crate::core::validated::TemplateSlug::parse(original)?.as_str() == slug.as_str()
+        }
+        None => false,
+    };
+    // **A manifest, not a directory**: `load_all` reads only subdirectories
+    // that hold a `template.yaml`, so that file is what makes a template a
+    // template. A bare directory is a leftover — a `from-folder` that failed
+    // part way, or one somebody made by hand — and refusing to save into it
+    // would leave a slug nothing could ever claim.
+    if manifest.exists() && !loaded_here {
+        match original_slug {
+            Some(original) => {
+                bail!("template '{slug}' already exists — rename '{original}' to something else")
+            }
+            None => bail!(
+                "template '{slug}' already exists — edit it with `fastf template edit {slug}`, \
+                 or give the new template another slug"
+            ),
+        }
+    }
+
     if let Some(original) = original_slug {
         let original = crate::core::validated::TemplateSlug::parse(original)?;
         if original.as_str() != slug.as_str() {
             let from = crate::util::paths::template_dir(original.as_str());
             if from.exists() {
+                // The destination has no manifest or we would have bailed
+                // above, but `fs::rename` still needs the path itself free.
                 if dir.exists() {
                     bail!(
                         "template '{slug}' already exists — rename '{original}' to something else"
@@ -654,7 +689,6 @@ pub fn save_template(template: &Template, original_slug: Option<&str>) -> Result
         }
     }
 
-    let manifest = crate::util::paths::template_manifest(slug.as_str());
     template.save_to_file(&manifest)?;
     Ok(manifest)
 }

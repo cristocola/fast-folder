@@ -318,7 +318,10 @@ fn unknown_template_keys_survive_a_save_but_legacy_files_do_not() {
         .unwrap();
 
         let tmpl = template::find_by_slug("test").unwrap();
-        fastf::core::operations::save_template(&tmpl, None).unwrap();
+        // Loaded from `test` and written back to `test`: an edit in place, and
+        // it says so. Passing `None` here claimed to be creating a new
+        // template, which is now refused rather than overwriting one.
+        fastf::core::operations::save_template(&tmpl, Some("test")).unwrap();
 
         let saved = fs::read_to_string(&manifest).unwrap();
         assert!(

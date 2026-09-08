@@ -491,6 +491,89 @@ pub fn is_verbatim(rel: &str, verbatim: &[String]) -> bool {
     matches_any(rel, verbatim)
 }
 
+/// What a create will do with one entry under `files/`.
+///
+/// An enum rather than a pair of booleans, for the reason [`EntryKind`] is one:
+/// adding a case makes the compiler name every consumer that has to decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileAction {
+    /// An `exclude` glob matched, or the rendered path is one fastf owns.
+    /// Nothing is written, so nothing is listed and nothing is previewed.
+    Skipped,
+    /// A directory to reproduce, so a deliberately empty one survives.
+    Folder,
+    /// A link or special file: reported by the walk, never reproduced.
+    Unsupported,
+    /// A plain file whose `{tokens}` are substituted — if it reads as UTF-8.
+    Interpolated,
+    /// A plain file copied byte for byte: a `verbatim` glob, or larger than
+    /// [`TEXT_MAX_BYTES`]. Its `{braces}` reach the project intact.
+    Verbatim,
+}
+
+/// One walked entry, with the decision made and the path it will take.
+#[derive(Debug, Clone)]
+pub struct PlannedEntry<'a> {
+    pub entry: &'a AssetEntry,
+    /// The project-relative path this entry takes, tokens resolved — the same
+    /// spelling the copy is called with.
+    pub rel: String,
+    pub action: FileAction,
+}
+
+/// Resolve a walked `files/` subtree against a template's globs: **the one
+/// place that decides what happens to a template file.**
+///
+/// The rule used to be written three times — in the copy, in the dry run's file
+/// list, and in `apply`'s plan — and the dry run's *previews* were a fourth
+/// place that had no rule at all. It iterated the in-memory text buffer, which
+/// is every UTF-8 file under `files/` because its job is to feed the editors,
+/// so an `exclude`d file was previewed with a body it would never have and a
+/// `verbatim` file was previewed with its `{braces}` filled in — the exact
+/// opposite of what the copy writes. `docs/cli.md` promises "the preview is
+/// built by the same code the commit runs"; this is what makes that true.
+///
+/// One [`PlannedEntry`] per walked entry, `Skipped` included, so a caller that
+/// counts entries — a failpoint, a progress bar — still sees them all. It is
+/// infallible on purpose: this decides *policy*, and each caller keeps its own
+/// `SafeRelativePath` validation, which is load-bearing in `apply`, the one
+/// path that never goes through `plan()`.
+pub fn plan_entries<'a>(
+    entries: &'a [AssetEntry],
+    exclude: &[String],
+    verbatim: &[String],
+    vars: &HashMap<String, String>,
+    ctx: &crate::core::naming::RenderContext,
+) -> Vec<PlannedEntry<'a>> {
+    entries
+        .iter()
+        .map(|entry| {
+            // Globs are matched against the path **as written in the
+            // template** — an author writes `exclude: ["*.tmp"]` about the
+            // files they can see, not about the names those become.
+            let excluded = is_excluded(&entry.rel, exclude);
+            let rel = interp_rel_with(&entry.rel, vars, ctx);
+            let action = if excluded
+                // fastf owns PROJECT_INFO.md and its journals — a bundled file
+                // may never clobber one, so it is not written and not promised.
+                || crate::core::project_info::path_is_reserved(&rel)
+                || crate::core::provisioning::path_is_reserved(&rel)
+            {
+                FileAction::Skipped
+            } else if entry.is_dir() {
+                FileAction::Folder
+            } else if !entry.is_file() {
+                FileAction::Unsupported
+            } else if is_verbatim(&entry.rel, verbatim) || entry.size > TEXT_MAX_BYTES {
+                FileAction::Verbatim
+            } else {
+                FileAction::Interpolated
+            };
+            PlannedEntry { entry, rel, action }
+        })
+        .collect()
+}
+
 /// Copy one file atomically through a unique sibling temp.
 ///
 /// When `force_verbatim` is false the source is read as UTF-8 and, if that

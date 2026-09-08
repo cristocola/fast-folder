@@ -89,6 +89,8 @@ post_create:
 
 Non-empty folders are implied by the paths of files in `files/`. Only truly empty directories need listing under `structure:`.
 
+A dry run lists and previews exactly what a create will write, and nothing else: an excluded file appears nowhere, and a `verbatim` file is previewed with its `{braces}` intact — marked as verbatim — because that is what lands in the project. The preview and the copy make one decision per file, in one place, so they cannot disagree.
+
 The template `slug` is one directory component and may contain only ASCII
 letters, digits, `-`, and `_`. A `structure` name may use safe nested syntax
 such as `src/components`; it is not limited to one component.

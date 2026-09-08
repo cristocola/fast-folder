@@ -52,6 +52,10 @@ pub struct FilePreview {
     pub lines: Vec<String>,
     /// Lines beyond `config.preview_lines`.
     pub hidden: usize,
+    /// A `verbatim` file, previewed with its `{braces}` intact because that is
+    /// what lands. Said out loud by the renderers, since an unsubstituted token
+    /// otherwise reads as a substitution that failed.
+    pub verbatim: bool,
 }
 
 /// Everything a create preview says, with nothing about how it is drawn.
@@ -82,21 +86,39 @@ pub struct DryRunReport {
 /// Build the preview for a plan. Reads the template's `files/` subtree; writes
 /// nothing.
 pub fn plan_report(plan: &ProjectPlan, template: &Template, config: &Config) -> DryRunReport {
-    let now = chrono::Local::now();
+    // **One walk, one classification, both lists.** The file list and the
+    // previews are two answers to one question — "what will this create
+    // write?" — and they were computed from two different sources: this walk,
+    // and the in-memory text buffer, which is every UTF-8 file under `files/`
+    // regardless of `exclude` or `verbatim` because its job is to feed the
+    // editors. So a dry run listed the right files and previewed the wrong
+    // ones. `assets::plan_entries` is now the only thing that decides, and
+    // `copy_template_files` asks it too.
+    //
+    // The walk uses the plan's own context, not a second sample of the clock: a
+    // create spanning midnight must not preview a `{date}` in a file name
+    // differently from the one it writes.
+    //
+    // A template with no `files/` directory is ordinary, not an error.
+    let entries = assets::walk(&template.files_dir()).unwrap_or_default();
+    let planned = assets::plan_entries(
+        &entries,
+        &template.exclude,
+        &template.verbatim,
+        &plan.vars,
+        &plan.ctx,
+    );
 
-    let files = match assets::walk(&template.files_dir()) {
-        Ok(entries) => entries
-            .iter()
-            .filter(|e| e.is_file() && !assets::is_excluded(&e.rel, &template.exclude))
-            // The plan's own context, not a second sample of the clock: a
-            // create spanning midnight must not preview a `{date}` in a file
-            // name differently from the one it writes.
-            .map(|e| assets::interp_rel_with(&e.rel, &plan.vars, &plan.ctx))
-            .filter(|rel| !crate::core::project_info::path_is_reserved(rel))
-            .collect(),
-        // A template with no `files/` directory is ordinary, not an error.
-        Err(_) => Vec::new(),
-    };
+    let files: Vec<String> = planned
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.action,
+                assets::FileAction::Interpolated | assets::FileAction::Verbatim
+            )
+        })
+        .map(|p| p.rel.clone())
+        .collect();
 
     let values = template
         .variables
@@ -113,28 +135,48 @@ pub fn plan_report(plan: &ProjectPlan, template: &Template, config: &Config) -> 
         })
         .collect();
 
+    // The walk decides *which* files there are; the text buffer only answers
+    // *what text*. A file added to `files/` since the template was loaded is
+    // therefore listed but not previewed, and one the buffer still remembers
+    // after it was deleted appears in neither — disk wins, in both directions.
     let previews = if config.preview_lines > 0 {
-        template
+        let bodies: HashMap<&str, &str> = template
             .files
             .iter()
-            .filter(|entry| !entry.template.is_empty())
-            .map(|entry| {
-                let rendered = crate::core::naming::interpolate(
-                    &entry.template,
-                    &plan.vars,
-                    &config.date_format,
-                );
+            .map(|f| (f.path.as_str(), f.template.as_str()))
+            .collect();
+        planned
+            .iter()
+            .filter_map(|p| {
+                let verbatim = match p.action {
+                    assets::FileAction::Interpolated => false,
+                    // Previewed with its `{braces}` intact, because that is
+                    // what the copy writes. Leaving it out would make
+                    // "Previews:" a subset with an unexplained rule, and this
+                    // is the one place a `verbatim` glob that caught the wrong
+                    // file can be noticed before the project exists.
+                    assets::FileAction::Verbatim => true,
+                    _ => return None,
+                };
+                let body = bodies.get(p.entry.rel.as_str())?;
+                if body.is_empty() {
+                    return None;
+                }
+                // The same call `assets::copy_file` makes — including doing
+                // nothing at all to a verbatim file.
+                let rendered = if verbatim {
+                    (*body).to_string()
+                } else {
+                    crate::core::naming::interpolate_with(body, &plan.vars, &plan.ctx)
+                };
                 let all: Vec<&str> = rendered.lines().collect();
                 let shown = all.len().min(config.preview_lines);
-                FilePreview {
-                    path: crate::core::naming::interpolate(
-                        &entry.path,
-                        &plan.vars,
-                        &config.date_format,
-                    ),
+                Some(FilePreview {
+                    path: p.rel.clone(),
                     lines: all.iter().take(shown).map(|l| l.to_string()).collect(),
                     hidden: all.len().saturating_sub(shown),
-                }
+                    verbatim,
+                })
             })
             .collect()
     } else {
@@ -149,11 +191,16 @@ pub fn plan_report(plan: &ProjectPlan, template: &Template, config: &Config) -> 
         values,
         id: plan.id_str.clone(),
         counter: (plan.counter_value.saturating_sub(1), plan.counter_value),
-        date: now.format(&config.date_format).to_string(),
+        // The plan's context, not a second sample of the clock. These are the
+        // `Resolved:` rows — `{date}`, `{YYYY}` — and a create spanning
+        // midnight was able to name one day in them and write another into
+        // every file and folder name, which is the one thing the context
+        // exists to prevent.
+        date: plan.ctx.date.clone(),
         date_parts: (
-            now.format("%Y").to_string(),
-            now.format("%m").to_string(),
-            now.format("%d").to_string(),
+            plan.ctx.yyyy.clone(),
+            plan.ctx.mm.clone(),
+            plan.ctx.dd.clone(),
         ),
         previews,
     }
@@ -608,32 +655,30 @@ fn apply_plan_resolved(
 ) -> Result<Vec<ApplyAction>> {
     let mut out = Vec::new();
     walk_structure(&template.structure, target, vars, ctx, &mut out)?;
-    for entry in assets::walk(&template.files_dir())? {
-        if assets::is_excluded(&entry.rel, &template.exclude) {
+    let entries = assets::walk(&template.files_dir())?;
+    for planned in assets::plan_entries(&entries, &template.exclude, &template.verbatim, vars, ctx)
+    {
+        // `Skipped` is not written. `Unsupported` — a link or special file —
+        // is not reproducible either; the create path skips it with a warning,
+        // so the plan must not promise it.
+        if matches!(
+            planned.action,
+            assets::FileAction::Skipped | assets::FileAction::Unsupported
+        ) {
             continue;
         }
-        let raw = SafeRelativePath::parse(&entry.rel)?;
-        let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
-        let rel = SafeRelativePath::parse(&rendered)?;
-        if crate::core::project_info::path_is_reserved(rel.as_str())
-            || crate::core::provisioning::path_is_reserved(rel.as_str())
-        {
-            continue;
-        }
-        // Links and special files in a template are not reproducible; the
-        // create path skips them with a warning, so the plan must not promise
-        // them either.
-        if !entry.is_dir() && !entry.is_file() {
-            continue;
-        }
+        SafeRelativePath::parse(&planned.entry.rel)?;
+        let rel = SafeRelativePath::parse(&planned.rel)?;
         let path = rel.join_to(target);
         let exists = assets::entry_exists(&path)?;
-        out.push(match (entry.is_dir(), exists) {
-            (true, true) => ApplyAction::SkipFolder(path),
-            (true, false) => ApplyAction::CreateFolder(path),
-            (false, true) => ApplyAction::SkipFile(path),
-            (false, false) => ApplyAction::CreateFile(path),
-        });
+        out.push(
+            match (planned.action == assets::FileAction::Folder, exists) {
+                (true, true) => ApplyAction::SkipFolder(path),
+                (true, false) => ApplyAction::CreateFolder(path),
+                (false, true) => ApplyAction::SkipFile(path),
+                (false, false) => ApplyAction::CreateFile(path),
+            },
+        );
     }
     Ok(out)
 }
@@ -771,26 +816,39 @@ fn copy_template_files(
     skip_existing: bool,
 ) -> Result<()> {
     let files_dir = template.files_dir();
-    for entry in assets::walk(&files_dir)? {
+    let entries = assets::walk(&files_dir)?;
+    for planned in assets::plan_entries(&entries, &template.exclude, &template.verbatim, vars, ctx)
+    {
         // Between files is the safe place to notice Ctrl-C: nothing is
         // half-written, and unwinding here lets `create_inner` roll the whole
         // partial project back.
         crate::util::interrupt::check()?;
         crate::util::faults::check("create:mid-copy")?;
-        if assets::is_excluded(&entry.rel, &template.exclude) {
-            continue;
+        let entry = planned.entry;
+
+        match planned.action {
+            assets::FileAction::Skipped => continue,
+            // A link or special file in a template cannot be reproduced
+            // faithfully. Skipping is right here (unlike a move, nothing is
+            // deleted afterwards), but it must be *said* — a silently missing
+            // file in a new project is the kind of thing a user discovers days
+            // later.
+            assets::FileAction::Unsupported => {
+                crate::util::diag::warn(format!(
+                    "skipped '{}' from template '{}' — links and special files are not reproduced",
+                    entry.rel, template.slug
+                ));
+                continue;
+            }
+            _ => {}
         }
+
         // Validated as text — that is where `..`, drive letters and reserved
-        // names live, and all of them are ASCII.
-        let raw = SafeRelativePath::parse(&entry.rel)?;
-        let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
-        let rel = SafeRelativePath::parse(&rendered)?;
-        // fastf owns PROJECT_INFO.md — never let a bundled file clobber it.
-        if crate::core::project_info::path_is_reserved(rel.as_str())
-            || crate::core::provisioning::path_is_reserved(rel.as_str())
-        {
-            continue;
-        }
+        // names live, and all of them are ASCII. The classifier decided what
+        // happens to this entry; these two prove the name is one fastf may
+        // write, which is a separate question and stays with the write.
+        SafeRelativePath::parse(&entry.rel)?;
+        SafeRelativePath::parse(&planned.rel)?;
         // Built from the *native* path, so a name that is not valid UTF-8 lands
         // spelled exactly as it was rather than with `?` where its bytes were.
         // `require_native_relative` proves the *text* cannot escape `dest_root`;
@@ -799,22 +857,10 @@ fn copy_template_files(
         let native = assets::interp_rel_os(&entry.os_rel, vars, ctx);
         crate::util::paths::require_native_relative(&native, "template file")?;
 
-        if entry.is_dir() {
+        if planned.action == assets::FileAction::Folder {
             let dest = crate::util::paths::contained_destination(dest_root, &native)?;
             fs::create_dir_all(&dest)
                 .with_context(|| format!("creating directory {}", dest.display()))?;
-            continue;
-        }
-
-        // A link or special file in a template cannot be reproduced faithfully.
-        // Skipping is right here (unlike a move, nothing is deleted afterwards),
-        // but it must be *said* — a silently missing file in a new project is
-        // the kind of thing a user discovers days later.
-        if !entry.is_file() {
-            crate::util::diag::warn(format!(
-                "skipped '{}' from template '{}' — links and special files are not reproduced",
-                entry.rel, template.slug
-            ));
             continue;
         }
 
@@ -822,13 +868,11 @@ fn copy_template_files(
             continue;
         }
 
-        let force_verbatim = assets::is_verbatim(&entry.rel, &template.verbatim)
-            || entry.size > assets::TEXT_MAX_BYTES;
         assets::copy_file(
             &files_dir.join(&entry.os_rel),
             dest_root,
             &native,
-            force_verbatim,
+            planned.action == assets::FileAction::Verbatim,
             vars,
             ctx,
         )?;
@@ -956,8 +1000,24 @@ mod tests {
     use crate::core::plan::ProjectPlan;
     use crate::core::template::{FileEntry, FolderNode, Transform, VarType, Variable};
 
-    fn report_template() -> Template {
+    /// The template, with its `files/` subtree really on disk.
+    ///
+    /// It used to be a `Template` built in memory with a `files` buffer and no
+    /// directory at all, which previewed a file. It cannot any more, and that
+    /// is the fix rather than a casualty of it: `files/` on disk **is** the
+    /// create spec, a template with no directory writes nothing, and a preview
+    /// of a file that will not be written is the defect this whole change is
+    /// about. The buffer still supplies the text; the disk decides what exists.
+    fn report_template_in(root: &Path) -> Template {
+        let files = root.join("files");
+        std::fs::create_dir_all(&files).unwrap();
+        std::fs::write(
+            files.join("BRIEF.md"),
+            "# {artist}\nline two\nline three\nline four\n",
+        )
+        .unwrap();
         Template {
+            dir: root.to_path_buf(),
             name: "Shoot".to_string(),
             slug: "shoot".to_string(),
             naming_pattern: "{date}_{artist}_{id}".to_string(),
@@ -1013,6 +1073,7 @@ mod tests {
 
     #[test]
     fn the_report_interpolates_the_tree_with_name_rules() {
+        let fixture = tempfile::tempdir().unwrap();
         let config = Config {
             preview_lines: 0,
             ..Config::default()
@@ -1022,7 +1083,7 @@ mod tests {
         // one a raw substitution in the renderer would have got wrong.
         let report = plan_report(
             &report_plan(&[("artist", "Aria"), ("note", "")]),
-            &report_template(),
+            &report_template_in(fixture.path()),
             &config,
         );
 
@@ -1040,13 +1101,14 @@ mod tests {
 
     #[test]
     fn the_report_names_each_transform_and_marks_an_empty_value() {
+        let fixture = tempfile::tempdir().unwrap();
         let config = Config {
             preview_lines: 0,
             ..Config::default()
         };
         let report = plan_report(
             &report_plan(&[("artist", "Aria"), ("note", "")]),
-            &report_template(),
+            &report_template_in(fixture.path()),
             &config,
         );
 
@@ -1071,13 +1133,14 @@ mod tests {
 
     #[test]
     fn a_preview_is_cut_at_the_configured_line_count_and_says_how_many_are_left() {
+        let fixture = tempfile::tempdir().unwrap();
         let config = Config {
             preview_lines: 2,
             ..Config::default()
         };
         let report = plan_report(
             &report_plan(&[("artist", "Aria"), ("note", "")]),
-            &report_template(),
+            &report_template_in(fixture.path()),
             &config,
         );
 
@@ -1094,13 +1157,14 @@ mod tests {
 
     #[test]
     fn preview_lines_zero_means_no_previews_are_even_computed() {
+        let fixture = tempfile::tempdir().unwrap();
         let config = Config {
             preview_lines: 0,
             ..Config::default()
         };
         let report = plan_report(
             &report_plan(&[("artist", "Aria"), ("note", "")]),
-            &report_template(),
+            &report_template_in(fixture.path()),
             &config,
         );
         assert!(report.previews.is_empty());

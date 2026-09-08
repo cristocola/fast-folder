@@ -115,7 +115,20 @@ fn print_file_previews(report: &DryRunReport) {
 
     println!("\n  {}", "Previews:".bold());
     for preview in &report.previews {
-        println!("    {} {}", "•".cyan(), preview.path.green().bold());
+        // A verbatim file reaches the project with its `{braces}` intact, so
+        // that is how it is previewed — and it has to be said, or an
+        // unsubstituted token reads as a substitution that failed.
+        let marker = if preview.verbatim {
+            format!("  {}", "(verbatim — copied literally)".dimmed())
+        } else {
+            String::new()
+        };
+        println!(
+            "    {} {}{}",
+            "•".cyan(),
+            preview.path.green().bold(),
+            marker
+        );
         println!(
             "    {}",
             "┌──────────────────────────────────────────".dimmed()

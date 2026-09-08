@@ -801,10 +801,13 @@ fn preview_lines<'a>(app: &App, preview: &'a Preview) -> Vec<Line<'a>> {
             ]));
             for preview in &report.previews {
                 lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    format!(" {}", preview.path),
-                    theme.accent(),
-                )));
+                // The same marker the command line prints: this file's
+                // `{braces}` are what lands, not a substitution that failed.
+                let mut path = vec![Span::styled(format!(" {}", preview.path), theme.accent())];
+                if preview.verbatim {
+                    path.push(Span::styled("  (verbatim)", theme.dim()));
+                }
+                lines.push(Line::from(path));
                 for line in &preview.lines {
                     lines.push(Line::from(Span::styled(format!("   {line}"), theme.dim())));
                 }

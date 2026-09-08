@@ -81,6 +81,31 @@ is the property to protect.
 happens *within* a name and never across `/`. `interp_rel_os` does the same over
 a native path, converting a component only when it contains `{`.
 
+## One classification per template file
+
+**`assets::plan_entries` is the only thing that decides what happens to a file
+under `files/`**, and `FileAction::{Skipped, Folder, Unsupported, Interpolated,
+Verbatim}` is the answer. The rule — `exclude` on the path *as the template
+spells it*, then interpolate, then the two reserved predicates, then `verbatim`
+or oversize — used to be written out in `copy_template_files`, in
+`apply_plan_resolved`, and in the dry run's file list; the dry run's *previews*
+were a fourth place that had no rule at all. They iterated `Template.files`,
+which is every UTF-8 file under `files/` because its job is to feed the editors,
+so an `exclude`d file was previewed with a body it would never have and a
+`verbatim` file was previewed with its `{braces}` substituted — the opposite of
+what the copy writes, under a promise in `docs/cli.md` that the preview is built
+by the code that commits.
+
+One [`PlannedEntry`] per walked entry, `Skipped` included, so a caller that
+counts entries — a failpoint, a progress bar — still sees them all. It is
+**infallible**: it decides policy, and each caller keeps its own
+`SafeRelativePath` validation, which is load-bearing in `apply`, the one path
+that never goes through `plan()`.
+
+The walk decides *which* files exist and the text buffer only answers *what
+text*, so a template built in memory with a `files` buffer and no directory
+previews nothing — the same nothing it would write.
+
 ## Path safety
 
 `validated::TemplateSlug` accepts one ASCII alphanumeric/`-`/`_` component.

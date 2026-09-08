@@ -505,3 +505,216 @@ fn a_template_directory_that_is_a_link_is_never_deleted_through() {
         );
     });
 }
+
+/// **A dry run promises exactly what the create writes — previews included.**
+///
+/// "Files:" walked the real tree and applied `exclude`; "Previews:" iterated
+/// the in-memory text buffer, which is every UTF-8 file under `files/`
+/// regardless of any glob, because its job is to feed the editors. So one dry
+/// run answered "what will be written?" two different ways: an excluded file
+/// was previewed with a body it would never have, and a `verbatim` file was
+/// previewed with its `{braces}` filled in — the opposite of what lands.
+#[test]
+fn a_dry_run_previews_only_the_files_the_create_writes() {
+    sandboxed(|install| {
+        let yaml = r#"name: Assets
+slug: assets
+naming_pattern: "{id}_{name}"
+id:
+  prefix: A
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+    transform: title_underscore
+verbatim: ["*.tmpl"]
+exclude: [".DS_Store", "*.tmp"]
+"#;
+        let tdir = install.join("templates").join("assets");
+        fs::create_dir_all(tdir.join("files")).unwrap();
+        fs::write(tdir.join("template.yaml"), yaml).unwrap();
+        fs::write(
+            tdir.join("files").join("Note_{name}.md"),
+            "Hello {name} ({id})\n",
+        )
+        .unwrap();
+        fs::write(tdir.join("files").join("raw.tmpl"), "literal {name}\n").unwrap();
+        fs::write(tdir.join("files").join(".DS_Store"), "junk\n").unwrap();
+        fs::write(tdir.join("files").join("scratch.tmp"), "junk\n").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("assets").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "aurora".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+
+        let report = project::plan_report(&plan, &tmpl, &cfg);
+
+        // Nothing excluded is promised, in either list.
+        for junk in [".DS_Store", "scratch.tmp"] {
+            assert!(
+                !report.files.iter().any(|f| f == junk),
+                "an excluded file is not written, so it is not listed: {:?}",
+                report.files
+            );
+            assert!(
+                !report.previews.iter().any(|p| p.path == junk),
+                "nor previewed: {:?}",
+                report.previews.iter().map(|p| &p.path).collect::<Vec<_>>()
+            );
+        }
+
+        // A verbatim file reaches the project with its braces intact, and the
+        // preview says so rather than showing a substitution that will not
+        // happen.
+        let raw = report
+            .previews
+            .iter()
+            .find(|p| p.path == "raw.tmpl")
+            .expect("the verbatim file is previewed");
+        assert!(raw.verbatim, "and is marked as verbatim");
+        assert_eq!(raw.lines, vec!["literal {name}".to_string()]);
+
+        // An interpolated one is previewed as it will be written.
+        let note = report
+            .previews
+            .iter()
+            .find(|p| p.path == "Note_Aurora.md")
+            .expect("the interpolated file is previewed under its rendered name");
+        assert!(!note.verbatim);
+        assert_eq!(note.lines, vec!["Hello Aurora (A001)".to_string()]);
+
+        // Every previewed file is a file the create was going to write...
+        for preview in &report.previews {
+            assert!(
+                report.files.contains(&preview.path),
+                "{} was previewed but not listed: {:?}",
+                preview.path,
+                report.files
+            );
+        }
+
+        // ...and the create writes exactly the list, byte for byte where the
+        // preview showed bytes.
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        let root = &plan.root_path;
+        for file in &report.files {
+            assert!(
+                root.join(file).is_file(),
+                "promised but not written: {file}"
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(root.join("raw.tmpl")).unwrap(),
+            "literal {name}\n",
+            "the verbatim file is what its preview showed"
+        );
+        assert!(!root.join(".DS_Store").exists());
+        assert!(!root.join("scratch.tmp").exists());
+    });
+}
+
+/// **A design guard, not a regression:** one file, one spelling, in both lists
+/// of one report.
+///
+/// It passes on the build before the fix, because the two renderings agreed for
+/// this template — but they were *two* renderings: the file list used
+/// `assets::interp_rel_with` and the previews `naming::interpolate` over the
+/// whole path, which is the pair commit 7a704bd separated for exactly the case
+/// where they disagree. Now there is one list and one rendering, and this says
+/// so out loud.
+#[test]
+fn a_preview_path_is_spelled_the_way_the_file_list_spells_it() {
+    sandboxed(|install| {
+        let yaml = r#"name: Optional
+slug: optional
+naming_pattern: "{id}_{name}"
+id:
+  prefix: O
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+  - slug: maybe
+    label: Maybe
+    type: text
+    required: false
+"#;
+        let tdir = install.join("templates").join("optional");
+        fs::create_dir_all(tdir.join("files").join("pkg")).unwrap();
+        fs::write(tdir.join("template.yaml"), yaml).unwrap();
+        fs::write(tdir.join("files/Note_{maybe}.md"), "for {name}\n").unwrap();
+        fs::write(tdir.join("files/pkg/__init__.py"), "# {name}\n").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("optional").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Aurora".to_string());
+        vars.insert("maybe".to_string(), String::new());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let report = project::plan_report(&plan, &tmpl, &cfg);
+
+        let mut previewed: Vec<&str> = report.previews.iter().map(|p| p.path.as_str()).collect();
+        previewed.sort_unstable();
+        let mut listed: Vec<&str> = report.files.iter().map(String::as_str).collect();
+        listed.sort_unstable();
+        assert_eq!(
+            previewed, listed,
+            "one file, one spelling, in both lists of one report"
+        );
+
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        for file in &report.files {
+            assert!(
+                plan.root_path.join(file).is_file(),
+                "and it is the name on disk: {file}"
+            );
+        }
+    });
+}
+
+/// **A design guard.** The `Resolved:` rows come from the plan's own context,
+/// not a second sample of the clock: a create spanning midnight must not name
+/// one day in its summary and write another into every folder name. It is the
+/// kind of defect a test can only pin, never catch — the two samples agree
+/// every night but one.
+#[test]
+fn a_preview_reports_the_date_the_create_writes() {
+    sandboxed(|install| {
+        common::fixtures::write_minimal_template(install, "dated");
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("dated").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Aurora".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let report = project::plan_report(&plan, &tmpl, &cfg);
+
+        assert_eq!(report.date, plan.ctx.date);
+        assert_eq!(
+            report.date_parts,
+            (
+                plan.ctx.yyyy.clone(),
+                plan.ctx.mm.clone(),
+                plan.ctx.dd.clone()
+            )
+        );
+    });
+}

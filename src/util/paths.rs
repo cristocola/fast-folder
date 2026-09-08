@@ -201,9 +201,9 @@ fn strip_verbatim(raw: &str) -> String {
 /// project's metadata is about to be trusted.
 pub(crate) fn require_real_file(path: &Path, label: &str) -> Result<()> {
     let metadata = std::fs::symlink_metadata(path)
-        .with_context(|| format!("{label} is missing: {}", path.display()))?;
+        .with_context(|| format!("{label} is missing: {}", display_path(path)))?;
     if is_link_like(&metadata) || !metadata.file_type().is_file() {
-        bail!("{label} is not a real file: {}", path.display());
+        bail!("{label} is not a real file: {}", display_path(path));
     }
     Ok(())
 }
@@ -216,9 +216,9 @@ pub(crate) fn require_real_file(path: &Path, label: &str) -> Result<()> {
 /// trust a tree.
 pub fn require_real_directory(path: &Path, label: &str) -> Result<()> {
     let metadata = std::fs::symlink_metadata(path)
-        .with_context(|| format!("{label} does not exist: {}", path.display()))?;
+        .with_context(|| format!("{label} does not exist: {}", display_path(path)))?;
     if is_link_like(&metadata) || !metadata.file_type().is_dir() {
-        bail!("{label} is not a real directory: {}", path.display());
+        bail!("{label} is not a real directory: {}", display_path(path));
     }
     Ok(())
 }

@@ -36,13 +36,8 @@ pub fn run(query: &str) -> Result<()> {
 
     // Same check as `open`: a discovered path is a hint until it has been
     // looked at, and this one is about to become a shell's working directory.
-    library::revalidate_for_read(&project).with_context(|| {
-        format!(
-            "project '{}' cannot be opened at {}",
-            project.id,
-            paths::display_path(&project.path)
-        )
-    })?;
+    library::revalidate_for_read(&project)
+        .with_context(|| format!("project '{}' cannot be opened", project.id))?;
 
     // The relaunched-picker case: fastf already owns a fresh window that exists
     // only because there was a picker to show. Becoming the shell there *is*

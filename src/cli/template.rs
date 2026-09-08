@@ -112,11 +112,21 @@ pub fn describe(t: &Template) -> Vec<String> {
         lines.extend(crate::tui::widgets::tree::lines(&t.structure, false));
     }
 
-    if !t.files.is_empty() {
+    // The buffer holds every UTF-8 file under `files/`, because its job is to
+    // feed the editors — `exclude` is not its business, and it was not applied
+    // here either, so a `*.tmp` a create never writes was listed as one of the
+    // template's files.
+    let listed: Vec<&str> = t
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .filter(|rel| !crate::core::assets::is_excluded(rel, &t.exclude))
+        .collect();
+    if !listed.is_empty() {
         lines.push(String::new());
         lines.push("Files:".to_string());
-        for f in &t.files {
-            lines.push(format!("  • {}", f.path));
+        for path in listed {
+            lines.push(format!("  • {path}"));
         }
     }
 
@@ -155,28 +165,32 @@ pub fn describe(t: &Template) -> Vec<String> {
     lines
 }
 
+/// The files under `files/` that reach a project as bytes: everything the text
+/// buffer does not hold, minus everything the copy drops.
+///
+/// **It listed files that are never copied**, under a heading promising they
+/// are copied byte-for-byte. A root `PROJECT_INFO.md` is stripped from
+/// `t.files` (fastf owns that name) and skipped by every copy path, so it was
+/// absent from the buffer, present on disk, and named here as a bundled asset;
+/// an `exclude`d binary was listed for the same reason.
 fn bundled_assets(t: &Template) -> Vec<String> {
-    let root = paths::template_files_dir(&t.slug);
     let known: std::collections::HashSet<&str> = t.files.iter().map(|f| f.path.as_str()).collect();
-    let mut out = Vec::new();
-    collect_relative(&root, &root, &mut out);
-    out.retain(|rel| !known.contains(rel.as_str()));
+    let mut out: Vec<String> = crate::core::assets::walk(&t.files_dir())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| {
+            entry.is_file()
+                && !known.contains(entry.rel.as_str())
+                && !crate::core::assets::is_excluded(&entry.rel, &t.exclude)
+                // Reserved on the name as written: this list shows the
+                // template's own spelling, before any token is resolved.
+                && !crate::core::project_info::path_is_reserved(&entry.rel)
+                && !crate::core::provisioning::path_is_reserved(&entry.rel)
+        })
+        .map(|entry| entry.rel)
+        .collect();
     out.sort();
     out
-}
-
-fn collect_relative(root: &Path, dir: &Path, out: &mut Vec<String>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_relative(root, &path, out);
-        } else if let Ok(rel) = path.strip_prefix(root) {
-            out.push(rel.to_string_lossy().replace('\\', "/"));
-        }
-    }
 }
 
 /// Create a new template: the guided app, opened straight into the builder.

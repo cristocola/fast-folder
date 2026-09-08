@@ -561,13 +561,16 @@ Deleted a project folder manually? The next `fastf recent` simply won't list it.
 fastf search ariana                              # free text across variables, tags, folder, template, ID
 fastf search ariana lullaby                      # both terms must match
 fastf search tag:draft                           # exact tag
-fastf search tag:client/*                        # tag glob
+fastf search tag:client/*                        # tag wildcard
 fastf search template=music-video tag:draft      # clauses AND together
-fastf search artist=Aria* created>2026-01-01     # field prefix glob + date comparison
+fastf search artist=Aria* created>2026-01-01     # field wildcard + date comparison
+fastf search artist=*Grande                      # and it may lead, or do both: *ria*
 fastf search tag:draft --plain                   # pipe friendly
 ```
 
 A clause Fast Folder cannot read is refused by name rather than answered with an empty list. `created<tomorrow` is the one that mattered: `created` holds an ISO date and the comparison is on the text, so `tomorrow` sorts after every real date and the query matched every project you have. `created>`, `tag:` and `=x` are refused the same way. The guided app's search bar has always said so as you type; the command line says it now too.
+
+A `*` in a `key=` or `tag:` value may lead, trail, or do both — `Aria*`, `*Grande`, `*rian*` — matched case-insensitively. It is three shapes rather than a glob engine: a `*` in the middle of a value is a literal `*`, and a bare `key=*` means the field is present at all.
 
 Free text is a case-insensitive substring match. Project paths are deliberately excluded from free-text search, so a term that happens to appear in your home directory path never produces phantom matches. On a terminal, the results open in the guided app, the terms already in its search bar — as `fastf recent` does.
 

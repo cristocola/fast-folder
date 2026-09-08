@@ -8,11 +8,11 @@
 //! | `<term>`      | bare term — substring across vars, tags, folder,     |
 //! |               | template, template_name, id (case-insensitive)       |
 //! | `key=value`   | exact match (case-insensitive)                       |
-//! | `key=pat*`    | prefix/glob match                                    |
+//! | `key=pat*`    | wildcard: `pre*`, `*post`, `*mid*`                   |
 //! | `key>date`    | ISO-date: field is lexicographically after           |
 //! | `key<date`    | ISO-date: field is lexicographically before          |
 //! | `tag:value`   | exact tag match                                      |
-//! | `tag:pat*`    | tag prefix/glob match                                |
+//! | `tag:pat*`    | tag wildcard, the same three shapes                  |
 //!
 //! # Examples
 //! ```bash

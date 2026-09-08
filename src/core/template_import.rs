@@ -192,7 +192,13 @@ fn materialize(
     let template = Template {
         name: humanize_slug(slug),
         slug: slug.to_string(),
-        description: format!("Generated from {}", source.display()),
+        // `display_path`, not `.display()`: `source` was canonicalized above,
+        // which on Windows yields the `\\?\` verbatim form — and this string
+        // is written into `template.yaml` and read by people.
+        description: format!(
+            "Generated from {}",
+            crate::util::paths::display_path(source)
+        ),
         version: "1".to_string(),
         naming_pattern: "{id}_{date}_{name}".to_string(),
         id: IdConfig::default(),

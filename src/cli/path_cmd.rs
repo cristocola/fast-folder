@@ -43,9 +43,12 @@ fn print_path(project: &library::Project) -> Result<()> {
     // been looked at, and this one is about to be pasted into another command.
     library::revalidate_for_read(project).with_context(|| {
         format!(
-            "project '{}' has no folder at {}",
-            project.id,
-            paths::display_path(&project.path)
+            // Not "has no folder": the folder is usually right there and
+            // its metadata is what has gone. The layer below names the
+            // folder and the one below that names the file, so this says
+            // which project and which verb, once.
+            "project '{}' cannot be used",
+            project.id
         )
     })?;
 

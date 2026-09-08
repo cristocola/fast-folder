@@ -255,13 +255,8 @@ pub fn open(query: &str) -> Result<()> {
     // travels with the projects — a synced folder or an unpacked archive can
     // bring one along. Check what the path names before spawning the system
     // file manager on it.
-    library::revalidate_for_read(&project).with_context(|| {
-        format!(
-            "project '{}' cannot be opened at {}",
-            project.id,
-            crate::util::paths::display_path(&project.path)
-        )
-    })?;
+    library::revalidate_for_read(&project)
+        .with_context(|| format!("project '{}' cannot be opened", project.id))?;
     println!(
         "{} Opening {} ({})",
         "→".cyan().bold(),

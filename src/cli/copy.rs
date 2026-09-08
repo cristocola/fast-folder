@@ -38,13 +38,8 @@ fn report_copy(project: &library::Project) -> Result<()> {
     // `resolve` may have answered from a cache, and a cache is a file that
     // travels with the projects. Check what the path names before handing it to
     // another program, exactly as `open` does.
-    library::revalidate_for_read(project).with_context(|| {
-        format!(
-            "project '{}' cannot be copied at {}",
-            project.id,
-            paths::display_path(&project.path)
-        )
-    })?;
+    library::revalidate_for_read(project)
+        .with_context(|| format!("project '{}' cannot be copied", project.id))?;
 
     let shown = paths::display_path(&project.path);
     announce(&shown);

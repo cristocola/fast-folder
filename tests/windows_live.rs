@@ -118,10 +118,13 @@ fn live(case: &str) -> Option<Live> {
     std::fs::create_dir_all(&install).unwrap();
 
     // A name unique per case, so two cases never share a folder and a failure
-    // leaves something identifiable behind.
+    // leaves something identifiable behind. `live-` rather than `run-`,
+    // because the runner script beside the sandbox is called
+    // `run-windows-live.ps1` and a leftover check globbing `run-*` matched
+    // the script itself.
     let stamp = format!("{}-{}", std::process::id(), case);
-    let local = local_root.join(format!("run-{stamp}"));
-    let share = share_root.join(format!("run-{stamp}"));
+    let local = local_root.join(format!("live-{stamp}"));
+    let share = share_root.join(format!("live-{stamp}"));
     for dir in [&local, &share] {
         let _ = std::fs::remove_dir_all(dir);
         std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("creating {}: {e}", dir.display()));

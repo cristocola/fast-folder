@@ -158,6 +158,74 @@ files:
     });
 }
 
+/// **The preview names the file the create writes.**
+///
+/// A template file called `pkg/__init__.py` carries no token, so there is no
+/// vanished variable and nothing to clean up — but every preview ran each
+/// path segment through the separator collapse anyway, so the dry run listed
+/// `pkg/init_.py` while the copy wrote `pkg/__init__.py`. A `structure:` entry
+/// named `__pycache__` had the same split.
+#[test]
+fn a_literal_dunder_is_previewed_as_the_name_it_will_be_written_as() {
+    sandboxed(|install| {
+        let yaml = r#"name: Dunder
+slug: dunder
+naming_pattern: "{id}_{name}"
+id:
+  prefix: D
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+structure:
+  - name: "__pycache__"
+"#;
+        let tdir = install.join("templates").join("dunder");
+        fs::create_dir_all(tdir.join("files").join("pkg")).unwrap();
+        fs::write(tdir.join("template.yaml"), yaml).unwrap();
+        fs::write(tdir.join("files/pkg/__init__.py"), "# {name}\n").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("dunder").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Aurora".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+
+        // What the preview promises...
+        let report = project::plan_report(&plan, &tmpl, &cfg);
+        assert!(
+            report.files.iter().any(|f| f == "pkg/__init__.py"),
+            "the preview must name the real file, got {:?}",
+            report.files
+        );
+        assert_eq!(
+            report.structure.first().map(|n| n.name.as_str()),
+            Some("__pycache__"),
+            "and the real folder"
+        );
+
+        // ...is what the create delivers.
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        let root = &plan.root_path;
+        assert!(
+            root.join("pkg/__init__.py").is_file(),
+            "the written file is the previewed one"
+        );
+        assert!(root.join("__pycache__").is_dir());
+        assert!(
+            !root.join("pkg/init_.py").exists(),
+            "and the collapsed spelling was never a real path"
+        );
+    });
+}
+
 #[test]
 fn copy_engine_handles_binary_verbatim_and_globs() {
     // The files/ subtree: interpolated text, byte-identical binaries, a

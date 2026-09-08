@@ -408,13 +408,33 @@ pub fn interp_rel_os(
 }
 
 /// [`interp_rel`] against a prepared context — see [`crate::core::naming::RenderContext`].
+///
+/// **A component is only interpolated when it contains a token**, exactly as
+/// [`interp_rel_os`] has always done, so the two agree by construction for
+/// every UTF-8 path.
+///
+/// The separator collapse in `interpolate_name_with` is there for one job: an
+/// empty optional variable must take its leftover `_` or `-` with it rather
+/// than leaving a dangling one. A component with no `{` has no variable that
+/// could have vanished, so there is nothing to clean up and its name is meant
+/// literally. Running it through anyway rewrote names nobody had asked to
+/// change — `pkg/__init__.py` was *listed* as `pkg/init_.py` while the copy
+/// wrote the real one, and in `apply` the same collapsed name is what
+/// `entry_exists` is probed with, so the plan could report `[create]` for a
+/// file already on disk and `[skip]` for one it was about to write.
 pub fn interp_rel_with(
     rel: &str,
     vars: &HashMap<String, String>,
     ctx: &crate::core::naming::RenderContext,
 ) -> String {
     rel.split('/')
-        .map(|segment| crate::core::naming::interpolate_name_with(segment, vars, ctx))
+        .map(|segment| {
+            if segment.contains('{') {
+                crate::core::naming::interpolate_name_with(segment, vars, ctx)
+            } else {
+                segment.to_string()
+            }
+        })
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -817,6 +837,64 @@ mod tests {
         // Empty segment variable collapses within the segment, slash preserved.
         let out = interp_rel("05_Delivery/Note_{name}.md", &vars, "%Y-%m-%d");
         assert_eq!(out, "05_Delivery/Note_Aurora.md");
+    }
+
+    /// **A name only opts into separator collapse by containing a token.**
+    ///
+    /// The collapse exists so an empty optional variable does not leave a
+    /// dangling `_` behind; a component with no `{` in it has no variable to
+    /// vanish, so there is nothing to clean up and the name is meant
+    /// literally. `interp_rel_os` — the one the copy actually writes through —
+    /// has always worked that way; `interp_rel_with`, which every *preview*
+    /// goes through, did not, so `pkg/__init__.py` was listed as
+    /// `pkg/init_.py` and written as `pkg/__init__.py`.
+    #[test]
+    fn a_component_with_no_token_is_left_exactly_as_written() {
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Aurora".to_string());
+
+        assert_eq!(
+            interp_rel("pkg/__init__.py", &vars, "%Y-%m-%d"),
+            "pkg/__init__.py",
+            "a literal dunder survives: it is not a collapsed variable"
+        );
+        assert_eq!(
+            interp_rel("__pycache__/_leading", &vars, "%Y-%m-%d"),
+            "__pycache__/_leading"
+        );
+        // And a component that *does* carry a token still collapses.
+        vars.insert("client".to_string(), String::new());
+        assert_eq!(
+            interp_rel("{client}_{name}.md", &vars, "%Y-%m-%d"),
+            "Aurora.md",
+            "an empty optional variable still takes its separator with it"
+        );
+    }
+
+    /// The invariant the fix establishes, and the one worth pinning: the path
+    /// a preview renders and the path the copy writes are the same path.
+    #[test]
+    fn the_previewed_name_is_the_written_name() {
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Aurora".to_string());
+        vars.insert("client".to_string(), String::new());
+        let ctx = crate::core::naming::RenderContext::now("%Y-%m-%d");
+
+        for rel in [
+            "pkg/__init__.py",
+            "docs/{name}/README.md",
+            "{client}_{name}/notes.md",
+            "plain/nested/file.txt",
+            "__pycache__/keep",
+        ] {
+            let previewed = interp_rel_with(rel, &vars, &ctx);
+            let written = interp_rel_os(Path::new(rel), &vars, &ctx);
+            assert_eq!(
+                PathBuf::from(previewed.replace('/', std::path::MAIN_SEPARATOR_STR)),
+                written,
+                "preview and write disagree about {rel}"
+            );
+        }
     }
 
     /// The enums replaced `String` fields the browser reads by name. If these

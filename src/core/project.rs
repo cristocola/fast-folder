@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::core::assets;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
-use crate::core::naming::{RenderContext, interpolate_name};
+use crate::core::naming::RenderContext;
 pub use crate::core::plan::ProjectPlan;
 use crate::core::template::{FolderNode, Template};
 use crate::core::validated::{ProjectFolderName, SafeRelativePath};
@@ -88,7 +88,10 @@ pub fn plan_report(plan: &ProjectPlan, template: &Template, config: &Config) -> 
         Ok(entries) => entries
             .iter()
             .filter(|e| e.is_file() && !assets::is_excluded(&e.rel, &template.exclude))
-            .map(|e| assets::interp_rel(&e.rel, &plan.vars, &config.date_format))
+            // The plan's own context, not a second sample of the clock: a
+            // create spanning midnight must not preview a `{date}` in a file
+            // name differently from the one it writes.
+            .map(|e| assets::interp_rel_with(&e.rel, &plan.vars, &plan.ctx))
             .filter(|rel| !crate::core::project_info::path_is_reserved(rel))
             .collect(),
         // A template with no `files/` directory is ordinary, not an error.
@@ -141,7 +144,7 @@ pub fn plan_report(plan: &ProjectPlan, template: &Template, config: &Config) -> 
     DryRunReport {
         folder_name: plan.folder_name.clone(),
         root_path: plan.root_path.clone(),
-        structure: interpolated_structure(&template.structure, &plan.vars, &config.date_format),
+        structure: interpolated_structure(&template.structure, &plan.vars, &plan.ctx),
         files,
         values,
         id: plan.id_str.clone(),
@@ -158,18 +161,25 @@ pub fn plan_report(plan: &ProjectPlan, template: &Template, config: &Config) -> 
 
 /// The same tree with `{token}` placeholders resolved in every folder name.
 ///
-/// `interpolate_name`, never `interpolate`: these are path components, so an
-/// empty optional variable must take its leftover separator with it.
+/// These are path components, so an empty optional variable must take its
+/// leftover separator with it — and a component with no token at all must be
+/// left exactly as written.
+///
+/// **`assets::interp_rel_with`, not `interpolate_name`**, because that is what
+/// `create_structure` writes through: a `structure:` entry named
+/// `__pycache__` carries no variable that could have vanished, so nothing
+/// about it should collapse, and the preview must name the folder the create
+/// will actually make.
 pub fn interpolated_structure(
     nodes: &[FolderNode],
     vars: &HashMap<String, String>,
-    date_format: &str,
+    ctx: &RenderContext,
 ) -> Vec<FolderNode> {
     nodes
         .iter()
         .map(|node| FolderNode {
-            name: interpolate_name(&node.name, vars, date_format),
-            children: interpolated_structure(&node.children, vars, date_format),
+            name: assets::interp_rel_with(&node.name, vars, ctx),
+            children: interpolated_structure(&node.children, vars, ctx),
         })
         .collect()
 }

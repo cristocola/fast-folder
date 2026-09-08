@@ -429,6 +429,8 @@ fastf open 47                        # the ID number, however it is padded
 fastf open my-crate                  # substring match on project name
 ```
 
+A filter that cannot match anything is refused rather than answered. `--since` must be a date Fast Folder itself writes — `2026-01-01`, or a prefix of one like `2026` or `2026-05` — because the comparison is on the text: `--since 2026-6-1` sorts *after* every `2026-0…` project and would silently hide the year. `--base` and `--template` must name a base you have configured and a template that loads; both refusals list the real answers. An empty list then means what it says: nothing matched.
+
 `recent-limit` is the default `--limit` for `fastf recent`. It used to be called
 `recent-default-limit`, when it also sized a page of the old menu; the app
 scrolls, so that half of the name stopped meaning anything. The old key still
@@ -564,6 +566,8 @@ fastf search template=music-video tag:draft      # clauses AND together
 fastf search artist=Aria* created>2026-01-01     # field prefix glob + date comparison
 fastf search tag:draft --plain                   # pipe friendly
 ```
+
+A clause Fast Folder cannot read is refused by name rather than answered with an empty list. `created<tomorrow` is the one that mattered: `created` holds an ISO date and the comparison is on the text, so `tomorrow` sorts after every real date and the query matched every project you have. `created>`, `tag:` and `=x` are refused the same way. The guided app's search bar has always said so as you type; the command line says it now too.
 
 Free text is a case-insensitive substring match. Project paths are deliberately excluded from free-text search, so a term that happens to appear in your home directory path never produces phantom matches. On a terminal, the results open in the guided app, the terms already in its search bar — as `fastf recent` does.
 

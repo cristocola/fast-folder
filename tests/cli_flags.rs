@@ -398,3 +398,76 @@ fn the_destructive_verbs_refuse_to_guess_without_a_terminal() {
     );
     assert!(gamma.is_dir());
 }
+
+/// **A query fastf cannot read is refused, not answered.**
+///
+/// `created<tomorrow` compares lexicographically against `2026-…`, so it
+/// matched every project in the library; `created>`, `tag:` and `=x` printed
+/// "No projects match that query." and exited 0. The guided app's search bar
+/// has named all four by way of `query::diagnose` since it was written — the
+/// command line simply never called it.
+#[test]
+fn search_refuses_a_clause_it_cannot_read() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+
+    for (term, expected) in [
+        ("created<tomorrow", "date"),
+        ("created>", "value"),
+        ("tag:", "tag"),
+        ("=x", "field"),
+    ] {
+        let err = sb.fails(&["search", term]);
+        assert!(
+            err.contains(expected),
+            "`fastf search {term}` must say what is wrong, got:\n{err}"
+        );
+    }
+
+    // The clauses that do mean something still work.
+    let out = sb.ok(&["search", "created>2026-01-01", "--plain"]);
+    assert!(out.contains("ID0001"), "{out}");
+    let out = sb.ok(&["search", "Alpha", "--plain"]);
+    assert!(out.contains("ID0001"), "{out}");
+}
+
+/// **`recent` validates its filters, as `--limit 0` already did.**
+///
+/// A `--since` that is not a date, or a `--base`/`--template` that names
+/// nothing, answered "No projects match those filters" and exited 0.
+/// `--since 2026-6-1` is the sharp one: compared as text it sorts after every
+/// `2026-0…` project, so it silently dropped the whole year.
+#[test]
+fn recent_refuses_a_filter_that_can_only_match_nothing() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+
+    let err = sb.fails(&["recent", "--since", "2026-6-1"]);
+    assert!(
+        err.contains("2026-01-01") && err.contains("2026-6-1"),
+        "the refusal shows the shape and what was typed:\n{err}"
+    );
+    let err = sb.fails(&["recent", "--since", "last-tuesday"]);
+    assert!(err.contains("date"), "{err}");
+
+    let err = sb.fails(&["recent", "--base", "nosuchbase"]);
+    assert!(
+        err.contains("nosuchbase") && err.contains("not a configured base"),
+        "{err}"
+    );
+
+    let err = sb.fails(&["recent", "--template", "nosuchtemplate"]);
+    assert!(
+        err.contains("nosuchtemplate") && err.contains("not a template"),
+        "{err}"
+    );
+
+    // The spellings that do name something still work: a real date, the base's
+    // own label, and a bundled template.
+    let label = sb.base.file_name().unwrap().to_string_lossy().into_owned();
+    let out = sb.ok(&["recent", "--since", "2026-01-01", "--plain"]);
+    assert!(out.contains("ID0001"), "{out}");
+    let out = sb.ok(&["recent", "--base", &label, "--plain"]);
+    assert!(out.contains("ID0001"), "{out}");
+    sb.ok(&["recent", "--template", "general", "--plain"]);
+}

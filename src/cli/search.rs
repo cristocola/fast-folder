@@ -58,6 +58,21 @@ pub fn run(args: SearchArgs) -> Result<()> {
         return Ok(());
     }
 
+    // **A clause that cannot mean what it looks like is refused, not run.**
+    // `query::parse` never rejects a term — a script may pass anything, and a
+    // bare word is a free-text search — so `created<tomorrow` parsed as a
+    // lexicographic compare against `2026-…` and matched *every* project, while
+    // `created>`, `tag:` and `=x` printed "No projects match" and exited 0. The
+    // guided app's search bar has refused all of these by name since it was
+    // written; this is the same question, asked once, from the other surface.
+    //
+    // It sits below the hand-off deliberately: from a launcher the message
+    // would go to a journald socket, and the relaunched process asks it again
+    // in the window it opened, where it can be read.
+    if let Some(problem) = args.terms.iter().find_map(|term| query::diagnose(term)) {
+        anyhow::bail!("{problem}");
+    }
+
     let predicates = query::parse(&args.terms);
 
     // Now that bare terms parse to Predicate::Free, predicates can only be

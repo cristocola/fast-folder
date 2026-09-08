@@ -164,7 +164,11 @@ pub fn diagnose(term: &str) -> Option<String> {
 
 /// `YYYY-MM-DD`, or a prefix of it (`2026`, `2026-05`): what `created` holds
 /// and what a comparison against it can mean.
-fn looks_like_a_date(value: &str) -> bool {
+///
+/// Public because `fastf recent --since` compares the same field the same way
+/// and must ask the same question: `2026-6-1` is not a date fastf ever wrote,
+/// so as text it sorts after every `2026-0…` project and hides the year.
+pub fn looks_like_a_date(value: &str) -> bool {
     let value = value.trim();
     let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
     let mut parts = value.splitn(3, '-');

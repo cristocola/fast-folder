@@ -505,3 +505,415 @@ fn a_template_directory_that_is_a_link_is_never_deleted_through() {
         );
     });
 }
+
+/// **A dry run promises exactly what the create writes — previews included.**
+///
+/// "Files:" walked the real tree and applied `exclude`; "Previews:" iterated
+/// the in-memory text buffer, which is every UTF-8 file under `files/`
+/// regardless of any glob, because its job is to feed the editors. So one dry
+/// run answered "what will be written?" two different ways: an excluded file
+/// was previewed with a body it would never have, and a `verbatim` file was
+/// previewed with its `{braces}` filled in — the opposite of what lands.
+#[test]
+fn a_dry_run_previews_only_the_files_the_create_writes() {
+    sandboxed(|install| {
+        let yaml = r#"name: Assets
+slug: assets
+naming_pattern: "{id}_{name}"
+id:
+  prefix: A
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+    transform: title_underscore
+verbatim: ["*.tmpl"]
+exclude: [".DS_Store", "*.tmp"]
+"#;
+        let tdir = install.join("templates").join("assets");
+        fs::create_dir_all(tdir.join("files")).unwrap();
+        fs::write(tdir.join("template.yaml"), yaml).unwrap();
+        fs::write(
+            tdir.join("files").join("Note_{name}.md"),
+            "Hello {name} ({id})\n",
+        )
+        .unwrap();
+        fs::write(tdir.join("files").join("raw.tmpl"), "literal {name}\n").unwrap();
+        fs::write(tdir.join("files").join(".DS_Store"), "junk\n").unwrap();
+        fs::write(tdir.join("files").join("scratch.tmp"), "junk\n").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("assets").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "aurora".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+
+        let report = project::plan_report(&plan, &tmpl, &cfg);
+
+        // Nothing excluded is promised, in either list.
+        for junk in [".DS_Store", "scratch.tmp"] {
+            assert!(
+                !report.files.iter().any(|f| f == junk),
+                "an excluded file is not written, so it is not listed: {:?}",
+                report.files
+            );
+            assert!(
+                !report.previews.iter().any(|p| p.path == junk),
+                "nor previewed: {:?}",
+                report.previews.iter().map(|p| &p.path).collect::<Vec<_>>()
+            );
+        }
+
+        // A verbatim file reaches the project with its braces intact, and the
+        // preview says so rather than showing a substitution that will not
+        // happen.
+        let raw = report
+            .previews
+            .iter()
+            .find(|p| p.path == "raw.tmpl")
+            .expect("the verbatim file is previewed");
+        assert!(raw.verbatim, "and is marked as verbatim");
+        assert_eq!(raw.lines, vec!["literal {name}".to_string()]);
+
+        // An interpolated one is previewed as it will be written.
+        let note = report
+            .previews
+            .iter()
+            .find(|p| p.path == "Note_Aurora.md")
+            .expect("the interpolated file is previewed under its rendered name");
+        assert!(!note.verbatim);
+        assert_eq!(note.lines, vec!["Hello Aurora (A001)".to_string()]);
+
+        // Every previewed file is a file the create was going to write...
+        for preview in &report.previews {
+            assert!(
+                report.files.contains(&preview.path),
+                "{} was previewed but not listed: {:?}",
+                preview.path,
+                report.files
+            );
+        }
+
+        // ...and the create writes exactly the list, byte for byte where the
+        // preview showed bytes.
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        let root = &plan.root_path;
+        for file in &report.files {
+            assert!(
+                root.join(file).is_file(),
+                "promised but not written: {file}"
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(root.join("raw.tmpl")).unwrap(),
+            "literal {name}\n",
+            "the verbatim file is what its preview showed"
+        );
+        assert!(!root.join(".DS_Store").exists());
+        assert!(!root.join("scratch.tmp").exists());
+    });
+}
+
+/// **A design guard, not a regression:** one file, one spelling, in both lists
+/// of one report.
+///
+/// It passes on the build before the fix, because the two renderings agreed for
+/// this template — but they were *two* renderings: the file list used
+/// `assets::interp_rel_with` and the previews `naming::interpolate` over the
+/// whole path, which is the pair commit 7a704bd separated for exactly the case
+/// where they disagree. Now there is one list and one rendering, and this says
+/// so out loud.
+#[test]
+fn a_preview_path_is_spelled_the_way_the_file_list_spells_it() {
+    sandboxed(|install| {
+        let yaml = r#"name: Optional
+slug: optional
+naming_pattern: "{id}_{name}"
+id:
+  prefix: O
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+  - slug: maybe
+    label: Maybe
+    type: text
+    required: false
+"#;
+        let tdir = install.join("templates").join("optional");
+        fs::create_dir_all(tdir.join("files").join("pkg")).unwrap();
+        fs::write(tdir.join("template.yaml"), yaml).unwrap();
+        fs::write(tdir.join("files/Note_{maybe}.md"), "for {name}\n").unwrap();
+        fs::write(tdir.join("files/pkg/__init__.py"), "# {name}\n").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("optional").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Aurora".to_string());
+        vars.insert("maybe".to_string(), String::new());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let report = project::plan_report(&plan, &tmpl, &cfg);
+
+        let mut previewed: Vec<&str> = report.previews.iter().map(|p| p.path.as_str()).collect();
+        previewed.sort_unstable();
+        let mut listed: Vec<&str> = report.files.iter().map(String::as_str).collect();
+        listed.sort_unstable();
+        assert_eq!(
+            previewed, listed,
+            "one file, one spelling, in both lists of one report"
+        );
+
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        for file in &report.files {
+            assert!(
+                plan.root_path.join(file).is_file(),
+                "and it is the name on disk: {file}"
+            );
+        }
+    });
+}
+
+/// **A design guard.** The `Resolved:` rows come from the plan's own context,
+/// not a second sample of the clock: a create spanning midnight must not name
+/// one day in its summary and write another into every folder name. It is the
+/// kind of defect a test can only pin, never catch — the two samples agree
+/// every night but one.
+#[test]
+fn a_preview_reports_the_date_the_create_writes() {
+    sandboxed(|install| {
+        common::fixtures::write_minimal_template(install, "dated");
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("dated").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "Aurora".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let report = project::plan_report(&plan, &tmpl, &cfg);
+
+        assert_eq!(report.date, plan.ctx.date);
+        assert_eq!(
+            report.date_parts,
+            (
+                plan.ctx.yyyy.clone(),
+                plan.ctx.mm.clone(),
+                plan.ctx.dd.clone()
+            )
+        );
+    });
+}
+
+/// **`apply` asks only when there is something an answer could change.**
+///
+/// It asked whenever any text file had a body at all — the same unfiltered
+/// buffer the dry-run previews read — so a template whose only text was an
+/// `exclude`d `.DS_Store`, or a `verbatim` file whose `{braces}` are meant
+/// literally, or a plain README with no token in it, put a prompt in front of
+/// a user whose answer nothing could use.
+#[test]
+fn a_template_that_interpolates_nothing_has_nothing_to_ask() {
+    sandboxed(|install| {
+        let yaml = r#"name: Quiet
+slug: quiet
+naming_pattern: "{id}_{name}"
+id:
+  prefix: Q
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+verbatim: ["*.tmpl"]
+exclude: [".DS_Store"]
+structure:
+  - name: "00_Inbox"
+"#;
+        let tdir = install.join("templates").join("quiet");
+        fs::create_dir_all(tdir.join("files")).unwrap();
+        fs::write(tdir.join("template.yaml"), yaml).unwrap();
+        // Text, but nothing an answer reaches: a plain file with no token, one
+        // held literal, and one that is never copied at all.
+        fs::write(tdir.join("files/README.md"), "no tokens here\n").unwrap();
+        fs::write(tdir.join("files/raw.tmpl"), "literal {name}\n").unwrap();
+        fs::write(tdir.join("files/.DS_Store"), "{name}\n").unwrap();
+
+        let tmpl = template::find_by_slug("quiet").unwrap();
+        assert!(
+            !tmpl.interpolates_anything(),
+            "nothing here is interpolated, so `apply` has no question to ask"
+        );
+
+        // One token anywhere it is honoured, and the question is real again.
+        for (path, body) in [("USES.md", "for {name}\n"), ("Note_{name}.md", "plain\n")] {
+            fs::write(tdir.join("files").join(path), body).unwrap();
+            let tmpl = template::find_by_slug("quiet").unwrap();
+            assert!(
+                tmpl.interpolates_anything(),
+                "{path} carries a token that a create substitutes"
+            );
+            fs::remove_file(tdir.join("files").join(path)).unwrap();
+        }
+
+        // And a `{token}` in the folder structure alone is enough.
+        let structured = install.join("templates").join("structured");
+        fs::create_dir_all(structured.join("files")).unwrap();
+        fs::write(
+            structured.join("template.yaml"),
+            yaml.replace("slug: quiet", "slug: structured")
+                .replace(r#"- name: "00_Inbox""#, r#"- name: "{name}_Inbox""#),
+        )
+        .unwrap();
+        assert!(
+            template::find_by_slug("structured")
+                .unwrap()
+                .interpolates_anything()
+        );
+    });
+}
+
+/// **A template is addressed by the folder it lives in.**
+///
+/// Every lookup builds `templates/<slug>/template.yaml` from the slug, so a
+/// manifest whose `slug:` disagreed with its directory named a template no
+/// command could open: `fastf template list` printed it and `template show`
+/// answered "not found — run `fastf template list`", pointing at the list that
+/// had just named it.
+#[test]
+fn a_template_is_addressed_by_the_directory_it_lives_in() {
+    sandboxed(|install| {
+        // The `cp -r` case: the folder was renamed, the manifest was not.
+        common::fixtures::write_template(
+            install,
+            "renamed",
+            &common::fixtures::minimal_template_yaml("general"),
+        );
+
+        let listed = template::load_all().unwrap();
+        assert_eq!(
+            listed.iter().map(|t| t.slug.as_str()).collect::<Vec<_>>(),
+            vec!["renamed"],
+            "the list names the folder, which is the name every command accepts"
+        );
+        assert_eq!(listed[0].declared_slug.as_deref(), Some("general"));
+
+        let found = template::find_by_slug("renamed").unwrap();
+        assert_eq!(found.slug, "renamed");
+        assert!(
+            template::find_by_slug("general").is_err(),
+            "and the name in the manifest addresses nothing"
+        );
+
+        // `template show` says the two disagree, where a person is looking at
+        // that one template.
+        let shown = fastf::cli::template::describe(&found).join("\n");
+        assert!(
+            shown.contains("renamed") && shown.contains("general"),
+            "the slug line names both: {shown}"
+        );
+    });
+}
+
+/// **Two templates cannot answer to one slug.**
+///
+/// A manifest field cannot be unique. Two folders both declaring `slug:
+/// general` both listed, and `find_by_slug` resolved both to whichever came
+/// first — so picking the second previewed and created the *first* template,
+/// with the right ID and the wrong files, and no error anywhere. A directory
+/// name is unique by construction.
+#[test]
+fn two_templates_cannot_answer_to_one_slug() {
+    sandboxed(|install| {
+        for dir in ["alpha", "beta"] {
+            let yaml = common::fixtures::minimal_template_yaml("shared").replace(
+                r#"naming_pattern: "{id}_{name}""#,
+                &format!("naming_pattern: \"{dir}_{{id}}\""),
+            );
+            common::fixtures::write_template(install, dir, &yaml);
+        }
+
+        let mut slugs: Vec<String> = template::load_all()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.slug)
+            .collect();
+        slugs.sort();
+        assert_eq!(slugs, vec!["alpha".to_string(), "beta".to_string()]);
+
+        // Each resolves to its own template, not to whichever was read first.
+        assert_eq!(
+            template::find_by_slug("beta").unwrap().naming_pattern,
+            "beta_{id}",
+            "picking beta must not create alpha"
+        );
+        assert_eq!(
+            template::find_by_slug("alpha").unwrap().naming_pattern,
+            "alpha_{id}"
+        );
+    });
+}
+
+/// A folder whose name is not a valid slug cannot be addressed by any command,
+/// so listing it would be the same lie in a different place. `validate` refuses
+/// it and `load_all` reports it as it reports any unloadable manifest.
+#[test]
+fn a_template_folder_that_cannot_be_addressed_is_skipped() {
+    sandboxed(|install| {
+        common::fixtures::write_template(
+            install,
+            "my template",
+            &common::fixtures::minimal_template_yaml("fine"),
+        );
+        common::fixtures::write_minimal_template(install, "ordinary");
+
+        let slugs: Vec<String> = template::load_all()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.slug)
+            .collect();
+        assert_eq!(slugs, vec!["ordinary".to_string()]);
+    });
+}
+
+/// Saving a mismatched template through fastf repairs its manifest in place —
+/// no repair command, no migration, and no second copy left behind.
+#[test]
+fn editing_a_mismatched_template_repairs_its_manifest() {
+    sandboxed(|install| {
+        common::fixtures::write_template(
+            install,
+            "renamed",
+            &common::fixtures::minimal_template_yaml("general"),
+        );
+
+        let loaded = template::find_by_slug("renamed").unwrap();
+        fastf::core::operations::save_template(&loaded, Some("renamed")).unwrap();
+
+        let manifest = install.join("templates/renamed/template.yaml");
+        let raw = fs::read_to_string(&manifest).unwrap();
+        assert!(
+            raw.contains("slug: renamed"),
+            "the manifest agrees with its folder now:\n{raw}"
+        );
+        assert!(
+            !install.join("templates/general").exists(),
+            "and nothing was written under the name it used to claim"
+        );
+    });
+}

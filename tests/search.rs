@@ -354,3 +354,54 @@ fn a_gallery_template_may_declare_no_files_at_all() {
         );
     }
 }
+
+/// **A wildcard may lead, trail, or do both.**
+///
+/// `to_pattern` read a trailing `*` only, so `key=*value*` became the prefix
+/// `*value` and matched nothing at all — while `fastf search --help`,
+/// `docs/cli.md` and `cli/search.rs`'s own grammar table all called it a glob.
+/// Three shapes, not a glob engine: a `*` in the middle stays literal.
+#[test]
+fn a_wildcard_may_lead_or_trail_or_both() {
+    use std::collections::BTreeMap;
+
+    let meta = |vars: &[(&str, &str)], tags: &[&str]| project_info::Metadata {
+        id: "ID0001".to_string(),
+        id_number: None,
+        template: "music-video".to_string(),
+        template_name: "Music Video".to_string(),
+        created: "2026-03-01T00:00:00Z".to_string(),
+        folder: "ID0001_proj".to_string(),
+        path: "/projects/ID0001_proj".to_string(),
+        variables: vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<BTreeMap<_, _>>(),
+        tags: tags.iter().map(|s| s.to_string()).collect(),
+        provisioning: false,
+    };
+    let m = meta(&[("artist", "Ariana Grande")], &["client/Acme", "draft"]);
+    let matches = |term: &str| query::evaluate(&query::parse(&[term.to_string()]), &m);
+
+    // The one that matched nothing at all.
+    assert!(matches("artist=*Grande*"));
+    assert!(matches("tag:*Acme*"));
+
+    assert!(matches("artist=Ariana*"), "trailing, as it always did");
+    assert!(matches("artist=*Grande"), "leading");
+    assert!(matches("artist=Ariana Grande"), "and exact is still exact");
+    assert!(!matches("artist=Grande"));
+    assert!(!matches("artist=*Ariana"), "a suffix is a suffix");
+    assert!(!matches("artist=Grande*"), "and a prefix is a prefix");
+
+    // Case-insensitive in every shape, as the exact match has always been.
+    assert!(matches("artist=*grande"));
+    assert!(matches("tag:CLIENT/*"));
+
+    // A bare `*` is "has this field at all", not the empty string.
+    assert!(matches("artist=*"));
+    assert!(!matches("nosuchfield=*"));
+
+    // A `*` in the middle is not a wildcard: the grammar has three shapes.
+    assert!(!matches("artist=Ari*nde"));
+}

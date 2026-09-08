@@ -805,12 +805,18 @@ fn path_and_copy_refuse_a_stale_project() {
 
     let err = sb.fails(&["path", "ID0001"]);
     assert!(
-        err.contains("ID0001") && err.contains("has no folder at"),
-        "path must refuse a project whose metadata has gone:\n{err}"
+        err.contains("ID0001")
+            && err.contains("cannot be used")
+            // The layers say one thing each: which project, which folder,
+            // and which file is missing. The outer one used to claim the
+            // *folder* had gone, which is the one thing that was still there.
+            && err.contains("not a project folder")
+            && err.contains("project metadata is missing"),
+        "path must refuse a project whose metadata has gone, and say so:\n{err}"
     );
     let err = sb.fails(&["copy", "ID0001"]);
     assert!(
-        err.contains("ID0001") && err.contains("cannot be copied at"),
+        err.contains("ID0001") && err.contains("cannot be copied"),
         "copy must refuse a project whose metadata has gone:\n{err}"
     );
 }
@@ -867,4 +873,90 @@ fn open_and_term_refuse_without_a_display() {
             "{verb} should say what is missing:\n{stderr}"
         );
     }
+}
+
+/// **Every template the list names can be shown and created from.**
+///
+/// A manifest whose `slug:` disagreed with its directory was listed under the
+/// manifest's name, which every lookup then rejected — `fastf template show`
+/// answering "not found — run `fastf template list`" about a name that list
+/// had just printed. Only a real process sees both halves.
+#[test]
+fn every_template_the_list_names_can_be_shown_and_created() {
+    let sb = Sandbox::new();
+    // The `cp -r templates/general templates/my-kit` case: folder renamed,
+    // manifest not.
+    let dir = sb.install.join("templates").join("my-kit");
+    fs::create_dir_all(dir.join("files")).unwrap();
+    fs::write(
+        dir.join("template.yaml"),
+        "name: My Kit\nslug: general\nnaming_pattern: \"{id}_{name}\"\n\
+         id:\n  prefix: K\n  digits: 3\n\
+         variables:\n  - slug: name\n    label: Name\n    type: text\n    required: true\n",
+    )
+    .unwrap();
+
+    let listed = sb.ok(&["template", "list"]);
+    assert!(
+        listed.contains("my-kit"),
+        "the list names the folder: {listed}"
+    );
+
+    for slug in listed
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("• "))
+        .map(|line| {
+            line.split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .filter(|slug| !slug.is_empty())
+    {
+        sb.ok(&["template", "show", &slug]);
+    }
+
+    // And it can be created from — `new` used to print a whole preview and
+    // *then* fail, because the picker's template and the one `operations`
+    // re-resolves under the lock were looked up two different ways.
+    let out = sb.ok(&["new", "my-kit", "--name=Probe", "--dry-run", "--yes"]);
+    assert!(out.contains("K001"), "{out}");
+}
+
+/// **`template show` promises "copied byte-for-byte" — so it must only list
+/// files that are.** A root `PROJECT_INFO.md` is stripped from the text buffer
+/// (fastf owns that name) and dropped by every copy path, so it was absent from
+/// the buffer, present on disk, and named here as a bundled asset. An excluded
+/// file was listed for the same reason.
+#[test]
+fn template_show_lists_only_assets_that_are_really_copied() {
+    let sb = Sandbox::new();
+    let dir = sb.install.join("templates").join("kit");
+    fs::create_dir_all(dir.join("files")).unwrap();
+    fs::write(
+        dir.join("template.yaml"),
+        "name: Kit\nslug: kit\nnaming_pattern: \"{id}_{name}\"\n\
+         id:\n  prefix: K\n  digits: 3\n\
+         exclude: [\"*.tmp\"]\n\
+         variables:\n  - slug: name\n    label: Name\n    type: text\n    required: true\n",
+    )
+    .unwrap();
+    // A real bundled asset, plus two files no create will ever write.
+    fs::write(dir.join("files/logo.bin"), [0u8, 255, 16]).unwrap();
+    fs::write(dir.join("files/PROJECT_INFO.md"), "---\nid: nope\n---\n").unwrap();
+    fs::write(dir.join("files/scratch.tmp"), [0u8, 1]).unwrap();
+
+    let shown = sb.ok(&["template", "show", "kit"]);
+    assert!(
+        shown.contains("logo.bin"),
+        "the real asset is listed:\n{shown}"
+    );
+    assert!(
+        !shown.contains("PROJECT_INFO.md"),
+        "a file fastf drops is not promised byte-for-byte:\n{shown}"
+    );
+    assert!(
+        !shown.contains("scratch.tmp"),
+        "nor an excluded one:\n{shown}"
+    );
 }

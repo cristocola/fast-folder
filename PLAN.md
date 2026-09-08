@@ -1,53 +1,85 @@
-# PLAN.md — v3.1.0
+# PLAN.md — v3.2.0
 
-Eleven findings from driving v3.0.0 against a real library, plus a release that
-has never passed CI on its first tag. One branch, one commit per phase, one PR,
-then the release.
+The eight findings the Windows pass reproduced and did not fix, plus the release
+the eleven commits since v3.1.4 are waiting for. None of the eight is
+Windows-specific; they were recorded rather than fixed because that session was
+scoped to Windows filesystems. One branch, one commit per phase, one PR, then
+the release.
 
-## Phase 1 — the dashboard says each thing once  ✅
-Items 1, 5, 6, 8a, 8b, 10.
+**v3.2.0, not v3.1.5.** The backlog is not only fixes — the template builder
+gained validation, an Esc ladder and footer help — and this plan adds wildcard
+matching to the search grammar and new refusals to `search` and `recent`. Flags
+and schemas stay compatible.
 
-- [x] The table gets a 1-column right gutter; `SIZE` header right-aligned;
-      `choose_columns` becomes a strict prefix (it could show BASE with no SIZE).
-- [x] Column priority: size, base, created, template, tags when more than one
-      base is configured.
-- [x] A base filter (`b`), cleared with the template filter by `F`.
-      `Order::Base` compares the label then the full path.
-- [x] `fastf recent --base <label>`.
-- [x] The count is stated once, in the search bar. Header says `fast-folder`,
-      drops the project and template counts. Status line drops
-      "N of M projects" and "? for help".
-- [x] `MarkToggle` is in the hint bar and the palette.
+## Phase 1 — the diagnostics the app already has
+`query::diagnose` and `query::looks_like_a_date` exist and are called from the
+guided app's search bar and nowhere else.
 
-## Phase 2 — a templates tab  ✅
-Items 7, 9. A real tab strip (`library │ templates`), the bottom strip deleted,
-the studio promoted to a screen with a filter box.
+- [x] `fastf search` refuses a malformed clause instead of printing "No projects
+      match" with exit 0. `created<tomorrow` matched *every* project through a
+      lexicographic compare. Placed **after** `hand_off_to_a_terminal`, so a
+      launcher-started query shows its refusal in the window it opens.
+- [x] `fastf recent` validates `--since` (`2026-6-1` silently dropped every 2026
+      project), `--base` and `--template`, in the shape `--limit 0` already uses.
+- [x] `base_matches` takes a `&Path`, so the filter and the validation cannot
+      spell "which base is that" two ways.
 
-## Phase 3 — batch tags that land, and a move that explains itself  ✅
-Items 2, 3. Four job-path defects (dropped effects freezing the list, the
-`batching()`/`targets()` mismatch failing silently, marks never cleared,
-`JobStatus` write-once), a progress bar, and a move that says whether it
-renamed or copied.
+## Phase 2 — the counter is one number, shown once
+- [x] `print_counter` prints the value raw and takes "next" from
+      `Counters::next_value`, the one expression for it. It formatted with
+      `templates[0]`'s prefix behind a comment claiming templates share one, so
+      `fastf id show` printed `Global project ID: 202001  (next will be 2002)`.
 
-## Phase 4 — copy a project  ✅
-Item 4. `copy_engine.rs`, `fastf copy-to`, `C` in the app. The copy keeps its
-ID; the base tells duplicates apart. `patch` locates by path first.
+## Phase 3 — a preview names only what a create will write
+The dry run's "Files:" list walks the real tree and filters correctly; the
+"Previews:" section iterates the in-memory text buffer and applies neither
+`exclude` nor `verbatim`, so an excluded file is shown and a verbatim one is
+shown with its `{braces}` filled in — the opposite of what the copy does.
 
-## Phase 5 — release v3.1.0  ✅
-Bumped, ROADMAP row and release notes written, README screenshot retaken, and
-the release skill now carries "Why the first tag fails". PR #44 ran the full
-matrix and caught two of the documented patterns before any tag existed — the
-docs gate (`RUSTDOCFLAGS="-D warnings" cargo doc`, which is not part of
-`cargo test`, so nobody runs it by hand) and a Windows 8.3 short path compared
-to the long one, in a new test of my own. Both fixed, the matrix went green on
-both platforms, and only then was `v3.1.0` tagged.
+- [x] One classifier in `core::assets` — `plan_entries` and
+      `FileAction::{Skipped, Folder, Unsupported, Interpolated, Verbatim}` —
+      that the preview, `copy_template_files` and `apply_plan_resolved` all
+      call, so they agree by construction rather than by three lists that
+      happen to match. A verbatim file is previewed with its braces intact and
+      marked; an excluded one appears nowhere.
+- [x] Same root cause, its own commit: `apply` asked for variables whenever any
+      text file had a body, so an excluded or verbatim file made it prompt for
+      answers nothing could use (`Template::interpolates_anything`).
+- [x] Both reserved predicates fold into `Skip`; the file list checked only
+      `project_info`'s while the copy checked `provisioning`'s too.
+- [x] Preview paths go through `assets::interp_rel_with` with `plan.ctx`, like
+      the file list — not `naming::interpolate` with a second clock sample.
 
-## Why the first tag always failed
+## Phase 4 — a template is what its directory says
+- [x] **The folder's name is the slug**, and a manifest that disagrees is read
+      under the folder's name with the declared one kept for `template show` to
+      mention. The plan said refuse-and-skip; the deciding case was the one the
+      plan had not weighed — a manifest field cannot be unique, so two folders
+      declaring one slug both listed and `find_by_slug` resolved both to
+      whichever was read first, which is a create from the wrong template with
+      no error anywhere. Skipping hides a folder the user made; adopting the
+      folder's name keeps it working and a save repairs the manifest.
+- [x] A folder name that is not a valid slug cannot be addressed by any command,
+      so `validate` refuses it and `load_all` reports it as before.
 
-`release.yml`'s `gates` runs the whole of `ci.yml`, so any CI flake is a release
-failure. Every failure in the last 40 runs was a test failure — never a build,
-MSI or AUR failure — and every one is an environment delta that cannot reproduce
-on an Arch desktop: Windows 8.3 short paths, a torn tracer write under 2-core
-parallelism, the pty harness acting before the first frame, a headless runner
-with no DISPLAY, Windows path/cmd semantics. The missing step is a green PR run
-on both platforms before the tag.
+## Phase 5 — the small truths
+- [x] `template show` stops listing a stripped root `PROJECT_INFO.md` as an
+      asset "copied byte-for-byte" when every copy path drops it.
+- [x] `from-folder` writes `display_path`, not `\\?\C:\…`, into a description.
+- [x] The "no folder" refusal says what actually went missing, once, through
+      `display_path` at all three layers.
+- [x] `key=*value*` matches what it looks like it matches: `Pattern` gains
+      `Suffix` and `Contains`, and six sentences calling it a glob become true.
+
+## Phase 6 — housekeeping
+- [x] The stale v3.1.0 PLAN.md replaced by this one; root `CLAUDE.md`'s
+      `fs_retry` line carries the read-only attribute; ROADMAP's open-findings
+      section deleted and its regression coverage recorded against v3.2.0.
+
+## Phase 7 — release v3.2.0
+- [x] Version bump, ROADMAP row, release notes written.
+- [ ] Dependabot #49 merged first (it touches `release.yml`).
+- [ ] **A green PR run on both platforms before the tag.** `release.yml`'s
+      `gates` is the whole of CI, so any CI failure is a failed release — the
+      step whose absence cost three attempts on v2.0.0 and four on v3.0.0.
+- [ ] Both AUR packages bumped and pushed; this file deleted.

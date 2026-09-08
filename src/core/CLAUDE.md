@@ -32,6 +32,25 @@ needs contents, and reading every file of every template to print a name was
 work nobody asked for. `tui::pickers::pick_template` therefore re-loads the
 template it picked, because its caller previews it.
 
+**The directory is the template's identity, and the manifest's `slug:` is
+cosmetic.** `load_with` takes the folder's name as the slug and keeps a
+disagreeing manifest value in `declared_slug` for `template show` to mention.
+Every lookup builds `templates/<slug>/template.yaml` from the slug —
+`find_by_slug` is the only door — so a manifest naming something else was a
+template `template list` printed and every other command rejected; and because a
+manifest field cannot be unique, two folders declaring one slug both listed and
+both resolved to whichever was read first, which is a create from the wrong
+template with no error anywhere.
+
+This is the same doctrine as filesystem-as-truth for projects, applied to the
+opposite field, and the asymmetry is worth stating: a project has no by-name
+lookup — it is *discovered*, so its folder may be renamed freely and the
+metadata `id` is the identity. A template *is* looked up by name, and that name
+is a path component, so the path is the identity and the field is the one that
+gives way. fastf never writes a mismatch (`save_template` writes to
+`template_dir(slug)`, `from-folder` builds both from the slug); it comes from
+`cp -r` plus a half-finished edit, and a save through fastf repairs it.
+
 There is **no migrate command** for pre-v0.8 flat `<slug>.yaml` templates and no
 flat-form fallback — `load_all` only reads subdirectories with a `template.yaml`.
 `Template::OWNED_KEYS` must keep listing `files` and `dir`: without them a flat
@@ -80,6 +99,31 @@ is the property to protect.
 `assets::interp_rel` interpolates each path segment separately, so collapse
 happens *within* a name and never across `/`. `interp_rel_os` does the same over
 a native path, converting a component only when it contains `{`.
+
+## One classification per template file
+
+**`assets::plan_entries` is the only thing that decides what happens to a file
+under `files/`**, and `FileAction::{Skipped, Folder, Unsupported, Interpolated,
+Verbatim}` is the answer. The rule — `exclude` on the path *as the template
+spells it*, then interpolate, then the two reserved predicates, then `verbatim`
+or oversize — used to be written out in `copy_template_files`, in
+`apply_plan_resolved`, and in the dry run's file list; the dry run's *previews*
+were a fourth place that had no rule at all. They iterated `Template.files`,
+which is every UTF-8 file under `files/` because its job is to feed the editors,
+so an `exclude`d file was previewed with a body it would never have and a
+`verbatim` file was previewed with its `{braces}` substituted — the opposite of
+what the copy writes, under a promise in `docs/cli.md` that the preview is built
+by the code that commits.
+
+One [`PlannedEntry`] per walked entry, `Skipped` included, so a caller that
+counts entries — a failpoint, a progress bar — still sees them all. It is
+**infallible**: it decides policy, and each caller keeps its own
+`SafeRelativePath` validation, which is load-bearing in `apply`, the one path
+that never goes through `plan()`.
+
+The walk decides *which* files exist and the text buffer only answers *what
+text*, so a template built in memory with a `files` buffer and no directory
+previews nothing — the same nothing it would write.
 
 ## Path safety
 

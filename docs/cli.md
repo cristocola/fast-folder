@@ -429,6 +429,8 @@ fastf open 47                        # the ID number, however it is padded
 fastf open my-crate                  # substring match on project name
 ```
 
+A filter that cannot match anything is refused rather than answered. `--since` must be a date Fast Folder itself writes — `2026-01-01`, or a prefix of one like `2026` or `2026-05` — because the comparison is on the text: `--since 2026-6-1` sorts *after* every `2026-0…` project and would silently hide the year. `--base` and `--template` must name a base you have configured and a template that loads; both refusals list the real answers. An empty list then means what it says: nothing matched.
+
 `recent-limit` is the default `--limit` for `fastf recent`. It used to be called
 `recent-default-limit`, when it also sized a page of the old menu; the app
 scrolls, so that half of the name stopped meaning anything. The old key still
@@ -559,11 +561,16 @@ Deleted a project folder manually? The next `fastf recent` simply won't list it.
 fastf search ariana                              # free text across variables, tags, folder, template, ID
 fastf search ariana lullaby                      # both terms must match
 fastf search tag:draft                           # exact tag
-fastf search tag:client/*                        # tag glob
+fastf search tag:client/*                        # tag wildcard
 fastf search template=music-video tag:draft      # clauses AND together
-fastf search artist=Aria* created>2026-01-01     # field prefix glob + date comparison
+fastf search artist=Aria* created>2026-01-01     # field wildcard + date comparison
+fastf search artist=*Grande                      # and it may lead, or do both: *ria*
 fastf search tag:draft --plain                   # pipe friendly
 ```
+
+A clause Fast Folder cannot read is refused by name rather than answered with an empty list. `created<tomorrow` is the one that mattered: `created` holds an ISO date and the comparison is on the text, so `tomorrow` sorts after every real date and the query matched every project you have. `created>`, `tag:` and `=x` are refused the same way. The guided app's search bar has always said so as you type; the command line says it now too.
+
+A `*` in a `key=` or `tag:` value may lead, trail, or do both — `Aria*`, `*Grande`, `*rian*` — matched case-insensitively. It is three shapes rather than a glob engine: a `*` in the middle of a value is a literal `*`, and a bare `key=*` means the field is present at all.
 
 Free text is a case-insensitive substring match. Project paths are deliberately excluded from free-text search, so a term that happens to appear in your home directory path never produces phantom matches. On a terminal, the results open in the guided app, the terms already in its search bar — as `fastf recent` does.
 
@@ -843,7 +850,7 @@ fastf id sync          # make every base agree on the highest ID seen anywhere
 fastf id set 100       # raise the counter (next project becomes ID0101)
 ```
 
-One counter serves all templates, so IDs are unique across every project type.
+One counter serves all templates, so IDs are unique across every project type. `fastf id show` prints it as the number it is, not as any one template's id: the prefix and width that turn 47 into `ID0047` belong to the template a project is created from, and two templates need not agree on them.
 
 The counter is stored **inside your base folder** as `.fastf-counter.toml`, next to the projects it numbers — not in Fast Folder's config directory. That matters if you use more than one operating system: your project drive is already mounted by both, so both read the same number, with nothing to symlink or keep in sync. A base carried on an external drive brings its numbering with it.
 

@@ -60,8 +60,27 @@ fn a_digits_only_id_prefix_does_not_jump_the_counter() {
     sb.ok(&["new", "num", "--name=First", "--yes", "--no-preview"]);
     let shown = sb.ok(&["id", "show"]);
     assert!(
-        shown.contains("next will be 2"),
+        shown.contains("next project takes 2"),
         "one project means the next is number 2, not 2002: {shown}"
+    );
+
+    // **One number, said once.** The counter is a number; rendering it as an
+    // id is a template's business, and this line has no template. It used to
+    // format the value with `templates[0]`'s prefix and digits and then print
+    // "next" raw beside it, so a digits-only prefix produced
+    // `Global project ID: 2001  (next will be 2)` — the same quantity twice,
+    // spelled two ways, on one line.
+    let headline = shown
+        .lines()
+        .find(|line| line.contains("Global project ID:"))
+        .unwrap_or_else(|| panic!("no counter line in:\n{shown}"));
+    assert!(
+        headline.contains(" 1 ") && headline.contains("takes 2"),
+        "the counter and its successor are the same kind of number: {headline}"
+    );
+    assert!(
+        !headline.contains("2001"),
+        "no template's rendering belongs on this line: {headline}"
     );
 
     // The second project is 2002 as a *rendering* of the number 2 — not

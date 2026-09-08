@@ -451,11 +451,11 @@ enum Commands {
         Explicit operators (each clause ANDs with the rest):\n\
         \n  \
             key=value        exact match (case-insensitive)\n  \
-            key=prefix*      prefix/glob match\n  \
+            key=pat*         wildcard: pre*, *post, *mid*\n  \
             key>date         field is lexicographically after date\n  \
             key<date         field is lexicographically before date\n  \
             tag:value        exact tag match\n  \
-            tag:prefix*      tag prefix/glob match\n\n\
+            tag:pat*         tag wildcard, the same three shapes\n\n\
         Field names: id  template  template_name  created  folder  name  path\n\
         plus any template variable slug (e.g. artist=Aria*)\n\n\
         Examples:\n  \

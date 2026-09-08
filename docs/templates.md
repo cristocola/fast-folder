@@ -89,9 +89,13 @@ post_create:
 
 Non-empty folders are implied by the paths of files in `files/`. Only truly empty directories need listing under `structure:`.
 
+A dry run lists and previews exactly what a create will write, and nothing else: an excluded file appears nowhere, and a `verbatim` file is previewed with its `{braces}` intact — marked as verbatim — because that is what lands in the project. The preview and the copy make one decision per file, in one place, so they cannot disagree.
+
 The template `slug` is one directory component and may contain only ASCII
 letters, digits, `-`, and `_`. A `structure` name may use safe nested syntax
 such as `src/components`; it is not limited to one component.
+
+**The folder's name *is* the slug.** Every command addresses a template by the folder it lives in, so if you copy one (`cp -r templates/general templates/my-kit`) and forget to change `slug:` in the manifest, Fast Folder reads it as `my-kit` — the name that works — and `fastf template show` says the manifest disagrees. Saving that template through the builder rewrites `slug:` to match. A folder whose name is not a valid slug cannot be addressed by any command, so it is skipped with a warning naming its manifest.
 
 ### What `naming_pattern` and `id:` may be
 

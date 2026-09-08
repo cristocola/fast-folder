@@ -8,17 +8,8 @@ use crate::cli::render;
 use crate::core::config::Config;
 use crate::core::project;
 use crate::core::template;
-use crate::core::template::FolderNode;
 use crate::tui::vars::collect_vars;
 use crate::util::tty;
-
-/// Returns true if any folder name in the structure contains a `{token}` placeholder.
-/// Used to decide whether to prompt for variables during `fastf apply`.
-fn structure_has_tokens(nodes: &[FolderNode]) -> bool {
-    nodes
-        .iter()
-        .any(|n| n.name.contains('{') || structure_has_tokens(&n.children))
-}
 
 /// Collect variable values, but only if this template actually interpolates
 /// anything — a template of plain folders needs no answers.
@@ -31,9 +22,12 @@ pub fn collect_if_needed(
     tmpl: &crate::core::template::Template,
     provided: &HashMap<String, String>,
 ) -> Result<Option<HashMap<String, String>>> {
-    let needs_vars =
-        tmpl.files.iter().any(|f| !f.template.is_empty()) || structure_has_tokens(&tmpl.structure);
-    if needs_vars {
+    // **The question is whether anything is interpolated, not whether any file
+    // has text in it.** This read the same unfiltered buffer the dry-run
+    // previews did, so an `exclude`d file, a `verbatim` one whose braces are
+    // meant literally, or a plain README with no token in it all made `apply`
+    // ask for variables nothing would use.
+    if tmpl.interpolates_anything() {
         collect_vars(tmpl, provided)
     } else {
         Ok(Some(HashMap::new()))

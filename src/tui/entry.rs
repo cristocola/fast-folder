@@ -61,7 +61,7 @@ impl Preset {
             return false;
         }
         if let Some(base) = &self.base
-            && !crate::cli::recent::base_matches(project, base)
+            && !crate::cli::recent::base_matches(&project.base, base)
         {
             return false;
         }

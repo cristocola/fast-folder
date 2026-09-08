@@ -39,6 +39,8 @@ pub fn run(args: RecentArgs) -> Result<()> {
         return Ok(());
     }
 
+    validate_filters(&cfg, &args)?;
+
     // Filesystem-as-truth: discover projects from their PROJECT_INFO.md across
     // all bases (cache-accelerated). Already sorted newest-first.
     let projects = library::discover(&cfg);
@@ -89,6 +91,61 @@ pub fn run(args: RecentArgs) -> Result<()> {
     }
 }
 
+/// Refuse a filter that can only ever match nothing.
+///
+/// **"No projects match those filters" is an answer, and it was being given to
+/// a question fastf had not understood.** `--limit 0` was already refused right
+/// beside these three, so the surface disagreed with itself; and `--since` is
+/// the sharp one, because it is compared as text: `--since 2026-6-1` is not a
+/// date fastf writes, so it sorts *after* every `2026-0…` project and silently
+/// hid the whole year.
+///
+/// Every message names what was wrong and what the real answers are. A filter
+/// that matches nothing because the library is empty is still a legitimate
+/// empty list — this refuses only what cannot match by construction.
+fn validate_filters(cfg: &Config, args: &RecentArgs) -> Result<()> {
+    if let Some(since) = &args.since
+        && !crate::core::query::looks_like_a_date(since)
+    {
+        anyhow::bail!(
+            "--since needs a date like 2026-01-01, not '{since}'\n\
+             hint: months and days are two digits, and a prefix works too (2026, 2026-05)."
+        );
+    }
+
+    if let Some(slug) = &args.template {
+        let known = crate::core::template::load_all().unwrap_or_default();
+        if !known.iter().any(|t| &t.slug == slug) {
+            let names: Vec<&str> = known.iter().map(|t| t.slug.as_str()).collect();
+            anyhow::bail!(
+                "--template '{slug}' is not a template{}",
+                if names.is_empty() {
+                    " — run `fastf template list`".to_string()
+                } else {
+                    format!(" — try one of: {}", names.join(", "))
+                }
+            );
+        }
+    }
+
+    if let Some(want) = &args.base {
+        let bases = cfg.effective_bases();
+        if !bases.iter().any(|base| base_matches(base, want)) {
+            let labels: Vec<String> = bases.iter().map(|b| library::base_label(b)).collect();
+            anyhow::bail!(
+                "--base '{want}' is not a configured base{}",
+                if labels.is_empty() {
+                    " — run `fastf config set base-dir <path>`".to_string()
+                } else {
+                    format!(" — try one of: {}", labels.join(", "))
+                }
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn filter_projects<'a>(
     projects: &'a [Project],
     template: &Option<String>,
@@ -117,7 +174,7 @@ fn filter_projects<'a>(
                 return false;
             }
             if let Some(want_base) = base
-                && !base_matches(p, want_base)
+                && !base_matches(&p.base, want_base)
             {
                 return false;
             }
@@ -132,11 +189,17 @@ fn filter_projects<'a>(
 /// A base named on the command line: its short label, as every list prints it,
 /// or its full path, as `fastf paths` prints it. The same rule
 /// `fastf move --to` already uses, so one spelling works everywhere.
-pub fn base_matches(project: &Project, want: &str) -> bool {
+///
+/// **Takes the base itself, not a project in it**, because the same question is
+/// asked twice: once of every project while filtering, and once of the
+/// configured bases before filtering starts — a `--base` that names nothing was
+/// answered with "No projects match those filters", which is true of a typo and
+/// of an empty base alike. Two spellings of one rule is how they would drift.
+pub fn base_matches(base: &std::path::Path, want: &str) -> bool {
     let want = want.trim_end_matches(['/', '\\']);
-    library::base_label(&project.base) == want
-        || project.base == std::path::Path::new(want)
-        || crate::util::paths::display_path(&project.base) == want
+    library::base_label(base) == want
+        || base == std::path::Path::new(want)
+        || crate::util::paths::display_path(base) == want
 }
 
 /// Plain (non-interactive) list output. Shared by `fastf recent` and
@@ -192,13 +255,8 @@ pub fn open(query: &str) -> Result<()> {
     // travels with the projects — a synced folder or an unpacked archive can
     // bring one along. Check what the path names before spawning the system
     // file manager on it.
-    library::revalidate_for_read(&project).with_context(|| {
-        format!(
-            "project '{}' cannot be opened at {}",
-            project.id,
-            crate::util::paths::display_path(&project.path)
-        )
-    })?;
+    library::revalidate_for_read(&project)
+        .with_context(|| format!("project '{}' cannot be opened", project.id))?;
     println!(
         "{} Opening {} ({})",
         "→".cyan().bold(),

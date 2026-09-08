@@ -8,11 +8,11 @@
 //! |              | tags, all variable values, folder, template,    |
 //! |              | template_name, and id                           |
 //! | `key=value`  | exact match on frontmatter field or variable    |
-//! | `key=pat*`   | prefix match (wildcard only at end)             |
+//! | `key=pat*`   | wildcard match: `pre*`, `*post`, `*mid*`        |
 //! | `key>date`   | ISO-date comparison: field is after date        |
 //! | `key<date`   | ISO-date comparison: field is before date       |
 //! | `tag:value`  | exact tag match                                 |
-//! | `tag:pat*`   | tag prefix match (wildcard at end)              |
+//! | `tag:pat*`   | tag wildcard match, the same three shapes       |
 //!
 //! Unknown keys produce zero matches — not an error — which keeps forward
 //! compatibility as new frontmatter fields are added.  Bare terms are the
@@ -42,20 +42,29 @@ pub enum Predicate {
     Free(String),
 }
 
-/// Exact or prefix match pattern.
+/// What a `key=` or `tag:` value matches, once its `*`s have been read.
+///
+/// `*` was accepted at the end only, so `key=*value*` became the prefix
+/// `*value` and matched nothing at all — while `--help` and `docs/cli.md` both
+/// called it a glob. Reading the wildcard at either end is a dozen lines over
+/// the same comparison and makes those sentences true, rather than making the
+/// documentation smaller to fit the code.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
     Exact(String),
     Prefix(String),
+    Suffix(String),
+    Contains(String),
 }
 
 impl Pattern {
     fn matches(&self, candidate: &str) -> bool {
+        let candidate = candidate.to_ascii_lowercase();
         match self {
             Pattern::Exact(v) => candidate.eq_ignore_ascii_case(v),
-            Pattern::Prefix(p) => candidate
-                .to_ascii_lowercase()
-                .starts_with(&p.to_ascii_lowercase()),
+            Pattern::Prefix(p) => candidate.starts_with(&p.to_ascii_lowercase()),
+            Pattern::Suffix(p) => candidate.ends_with(&p.to_ascii_lowercase()),
+            Pattern::Contains(p) => candidate.contains(&p.to_ascii_lowercase()),
         }
     }
 }
@@ -164,7 +173,11 @@ pub fn diagnose(term: &str) -> Option<String> {
 
 /// `YYYY-MM-DD`, or a prefix of it (`2026`, `2026-05`): what `created` holds
 /// and what a comparison against it can mean.
-fn looks_like_a_date(value: &str) -> bool {
+///
+/// Public because `fastf recent --since` compares the same field the same way
+/// and must ask the same question: `2026-6-1` is not a date fastf ever wrote,
+/// so as text it sorts after every `2026-0…` project and hides the year.
+pub fn looks_like_a_date(value: &str) -> bool {
     let value = value.trim();
     let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
     let mut parts = value.splitn(3, '-');
@@ -181,11 +194,21 @@ fn looks_like_a_date(value: &str) -> bool {
     }
 }
 
+/// Read the `*`s off a value.
+///
+/// A bare `*` is every value that exists rather than the empty `Contains`,
+/// which is the same thing said less clearly. A `*` in the middle is not a
+/// wildcard — the grammar has three shapes, not a glob engine, and a literal
+/// `*` inside a tag stays literal.
 fn to_pattern(s: &str) -> Pattern {
-    if let Some(prefix) = s.strip_suffix('*') {
-        Pattern::Prefix(prefix.to_string())
-    } else {
-        Pattern::Exact(s.to_string())
+    if s == "*" {
+        return Pattern::Contains(String::new());
+    }
+    match (s.strip_prefix('*'), s.strip_suffix('*')) {
+        (Some(_), Some(_)) => Pattern::Contains(s[1..s.len() - 1].to_string()),
+        (Some(rest), None) => Pattern::Suffix(rest.to_string()),
+        (None, Some(rest)) => Pattern::Prefix(rest.to_string()),
+        (None, None) => Pattern::Exact(s.to_string()),
     }
 }
 

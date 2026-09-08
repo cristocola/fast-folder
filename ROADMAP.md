@@ -151,6 +151,7 @@ responsibility of the filesystem and backups.
 | v3.1.2 | the terminal fastf opens is the user's: it carries none of fastf's own bookkeeping, so nothing started from that window behaves differently | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.2) |
 | v3.1.3 | "I am the rerun" is a flag on the rerun's own command line, so nothing a fastf window starts can inherit the claim — a package build no longer stops for a keypress | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.3) |
 | v3.1.4 | that flag is off every surface a user reads: `hide` never kept it out of the generated shell completions | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.4) |
+| v3.2.0 | what a preview promises is what a create writes, and a template is addressed by the folder it lives in: eight findings the Windows pass reproduced, none of them Windows-specific | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.2.0) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find
@@ -193,6 +194,21 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
   package's release test suite passed before both AUR repositories were pushed.
 
 Regression coverage grows with the relevant release:
+
+- [x] A dry run's file list and its previews come from one walk and one
+  classification: an excluded file appears in neither, a verbatim one is
+  previewed with its `{braces}` intact and marked, and every previewed path is
+  a path the create writes (v3.2.0).
+- [x] A template is addressed by the folder it lives in: a manifest whose
+  `slug:` disagrees still loads under the folder's name, two folders cannot
+  answer to one slug, a folder name that is not a valid slug is skipped, and a
+  save repairs the manifest. Every template `template list` names can be shown
+  and created from (v3.2.0).
+- [x] `search` refuses a clause it cannot read and `recent` refuses a filter
+  that can only match nothing, both naming the real answers; a `*` in a value
+  may lead, trail or do both (v3.2.0).
+- [x] `id show` prints the counter and its successor as the same kind of
+  number, including under a digits-only `id.prefix` (v3.2.0).
 
 - [x] A copy lands verified with the original untouched and its ID kept; a
   destination inside a configured base is refused by name; two bases holding one
@@ -289,48 +305,6 @@ closed plan file:
 - `ptyxis` (the GNOME 47+ default) in the emulator table, if anyone asks.
 - A watchdog for a clipboard tool that does not fork — the `wl-copy --foreground`
   shape. `clipboard::feed`'s `wait()` has no timeout.
-
-Open findings from the Windows pass, reproduced but not fixed — none are
-Windows-specific, so they belong to an ordinary session rather than that one:
-
-- **`fastf search` never diagnoses a malformed clause.** `created<tomorrow`
-  matches every project (a lexicographic compare against `2026-…`), and
-  `created>`, `tag:` and `=x` print "No projects match" with exit 0. The app's
-  search bar already refuses all of these by name through `query::diagnose`
-  (`src/core/query.rs`), which `src/cli/search.rs` simply never calls. The
-  date shape check it needs, `looks_like_a_date`, is in that module too.
-- **`fastf recent` does not validate its filters.** A `--since` that is not a
-  date, or a `--base`/`--template` that names nothing, prints "No projects
-  match those filters" and exits 0. `--since 2026-6-1` is the sharp one: it
-  compares as text, so every 2026 project is silently dropped for want of a
-  zero. `--limit 0` is already refused right beside it, so the surface is
-  inconsistent with itself.
-- **`fastf id show` renders the counter through an arbitrary template's
-  format.** `print_counter` (`src/cli/id.rs`) formats the value with
-  `templates[0]`'s prefix and width — the comment there claims templates
-  "share prefix/digits", which is not true — so it printed `Global project ID:
-  202001  (next will be 2002)`: one number shown two ways on one line.
-- **A template directory whose name differs from its manifest `slug`** is
-  listed under the slug, which no command then accepts: `template show` and
-  `new` fail with "not found", and `new` prints a full preview before doing
-  so. `load_all` should refuse the mismatch the way it refuses an invalid
-  slug, or the listing should show the directory.
-- **A dry run previews files it will not write.** The "Previews:" section is
-  built from every text file the loader scanned, without applying `exclude` or
-  `verbatim`, so an excluded file is shown and a verbatim one is shown with
-  its `{braces}` filled in — the opposite of what the copy does. The "Files:"
-  list beside it filters correctly.
-- **`template show` lists a stripped root `PROJECT_INFO.md` as a bundled
-  asset**, promising it will be copied byte-for-byte when it is silently
-  dropped instead.
-- **`from-folder` writes the Windows verbatim prefix into a description**
-  (`Generated from \\?\C:\…`), and the "no folder" refusal for a project whose
-  metadata vanished says the folder is missing, repeats the path three times
-  and shows one copy verbatim. `util::paths::display_path` exists for exactly
-  this and is not used at those two sites.
-- **`key=*value*` matches nothing.** `to_pattern` accepts a trailing `*` only,
-  which is what the module documents, but `docs/cli.md` and `--help` both call
-  it a glob. A wording fix unless a leading `*` is wanted.
 
 Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 

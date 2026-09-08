@@ -481,7 +481,18 @@ fn reconcile_case_rename(base: &Path, name: &str, path: &Path, report: &mut Reco
         return;
     }
     match crate::util::fs_retry::rename(path, &destination) {
-        Ok(()) => report.restored += 1,
+        Ok(()) => {
+            // The base's cache has to learn, exactly as the create arm's resume
+            // does. Leaving it to the staleness gate is not enough: a rename
+            // within a directory does not reliably move that directory's mtime
+            // on Windows, and `write_cache` deliberately re-stamps the index
+            // *after* the rename that publishes it — so a cache written a
+            // moment ago can still read as current, and the project stays
+            // missing from a library it has just been put back into. Found by
+            // the Windows leg of CI, on Linux's own green run.
+            crate::core::library::refresh_cache(&destination);
+            report.restored += 1;
+        }
         Err(error) => report.unrecoverable.push(format!(
             "{}: an interrupted rename left this project here and it could not be \
              finished ({error}); rename it to {} by hand to make it visible again",

@@ -422,7 +422,13 @@ nowhere by then; it requires both a name only lifecycle writes *and* a
 `PROJECT_INFO.md` inside, since renaming somebody else's `.X.fastf-case` on top
 of whatever `X` is would be worse than the state being repaired, and it refuses
 rather than overwriting an occupied target. `ReconcileReport.restored` is the
-count.
+count, and the restore calls `library::refresh_cache` the way the create arm's
+resume does — leaving it to the staleness gate is not enough, because a rename
+within a directory does not reliably move that directory's mtime on Windows and
+`write_cache` re-stamps the index *after* the rename that publishes it, so the
+project stayed missing from a library it had just been put back into. The
+Windows leg of CI found that on a green Linux run; the test now reads the index
+before discovering, so both platforms catch it.
 
 **Pre-v2 markers contain arbitrary absolute paths and are never read as
 authority.** Reconcile reports them as `obsolete` without parsing, migrating,

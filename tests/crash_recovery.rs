@@ -834,6 +834,20 @@ fn reconcile_finishes_a_case_rename_that_was_killed_half_way() {
         );
         assert!(!staged.exists(), "and not under the staging name any more");
 
+        // Read the index *before* discovering, because a discovery would repair
+        // it and hide the question. The `discover` above left an empty one
+        // behind, and putting a folder back has to update it rather than trust
+        // the staleness gate to notice: a rename within a directory does not
+        // reliably move that directory's mtime on Windows, and `write_cache`
+        // re-stamps the index after the rename that publishes it — so the
+        // project stayed missing from a library it had just been put back into.
+        // The Windows leg of CI found that on a green Linux run.
+        let index = fs::read_to_string(base.join(library::CACHE_FILENAME)).unwrap();
+        assert!(
+            index.contains("ALBUM"),
+            "the base's index must learn about the restored project:\n{index}"
+        );
+
         let found = library::discover(&cfg);
         assert_eq!(found.len(), 1, "the project is back in the library");
         assert_eq!(found[0].id, "ID0001");

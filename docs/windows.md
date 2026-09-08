@@ -141,6 +141,28 @@ Releases up to and including v2.0.0 linked the Microsoft C runtime dynamically, 
 
 Download a newer release. Nothing needs uninstalling first: the MSI upgrades in place, and for the portable zip, replacing `fastf.exe` is the whole update. Installing the redistributable also works, but is no longer necessary.
 
+## The live filesystem tests
+
+Most of the suite runs anywhere. Two things cannot: moving a project between
+two **different** filesystems, and sharing the ID counter across a drive that
+two machines mount. Both need real infrastructure, so `tests/windows_live.rs`
+is opt-in and reads its two bases from the environment:
+
+```powershell
+$env:FASTF_WIN_LOCAL_BASE = "D:\fastf-sandbox"                  # a local NTFS folder
+$env:FASTF_WIN_SHARE_BASE = "\\yourserver\share\fastf-sandbox"  # on an SMB share
+cargo test --test windows_live -- --test-threads=1
+```
+
+The two must be on different volumes, or the cross-device cases prove nothing.
+With either variable unset the suite skips every case and passes, so a normal
+`cargo test` — on Windows, on Linux or in CI — is unaffected.
+
+It creates one `run-<pid>-<case>` folder per test under each base and removes
+it afterwards. Nothing else in either base is touched, and every run redirects
+its data directory into a temporary folder, so an installed fastf's config,
+templates and counters are never involved.
+
 ## Building from source on Windows
 
 Install Rust via [rustup](https://rustup.rs) (MSVC toolchain), then:

@@ -70,6 +70,23 @@ The suites, and what each guards — the intent, not the case list:
   runtime test can see.
 - `windows_semantics.rs` — reserved names, trailing dots, control chars, unicode,
   >MAX_PATH, case-only rename, read-only files, a real sharing violation, junctions.
+- `windows_live.rs` (windows; **opt-in**) — the two things no temporary
+  directory can show, because both need genuinely different filesystems: the
+  move engine's **staged copy**, which is reached only by a real
+  `ERROR_NOT_SAME_DEVICE` and is otherwise exercised by a synthetic error or a
+  failpoint; and the **ID counter over a drive two machines mount**, which is
+  what it was designed around. It takes its two bases from
+  `FASTF_WIN_LOCAL_BASE` (local NTFS) and `FASTF_WIN_SHARE_BASE` (an SMB
+  share) and **ships with no defaults**: with either unset it prints what it
+  wanted and passes, so it is inert on Linux, in CI, and on a machine that has
+  no share. It found two Windows-only defects on its first run — a read-only
+  destination blocking `atomic::write`'s publish, and a non-ASCII case-only
+  rename refused as its own target — and both now have cheap siblings in
+  `fs_retry`'s unit tests and `windows_semantics.rs`, because **a suite CI
+  never runs cannot be the only guard on a fix**.
+  The real paths live in a runner script beside the sandbox itself and never
+  in a tracked file: `repo_hygiene.rs` forbids exactly that, and a suite that
+  hard-codes one machine's layout is a suite only that machine can run.
 - `hostile_fs.rs` — corrupt caches/markers/metadata, absent bases, vanishing paths:
   **degrade, never panic, never lose data.**
 - `properties.rs` — proptest; above all, that `sanitize_name` output is always

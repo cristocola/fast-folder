@@ -155,7 +155,22 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
     // tidying up a folder name. On Windows `exists()` is case-insensitive, so the
     // target "already exists": it is the source. Detect that and go through a
     // temporary name, which is the only way the OS will apply the new casing.
-    let case_only_change = sanitized.eq_ignore_ascii_case(&project.name);
+    //
+    // **Folded over the whole string, not just its ASCII.** This was
+    // `eq_ignore_ascii_case`, which sees no difference to fold in `проект` →
+    // `ПРОЕКТ`: the rename was classified as an ordinary one, `entry_exists`
+    // answered `true` because NTFS *is* case-insensitive over Cyrillic, and
+    // the verb bailed with `rename target already exists` — the file it was
+    // being asked to rename. The identical ASCII rename worked, so the bug
+    // was invisible to a test suite written in English.
+    //
+    // `to_lowercase` is full Unicode simple lowercasing rather than NTFS's own
+    // uppercase table, so the two can still disagree at the margins (`ß`
+    // against `SS`, say). They disagree safely: a name this calls case-only
+    // that NTFS thinks is distinct merely takes the staging path and arrives
+    // correctly anyway, and the reverse — the case that failed — is what this
+    // fixes.
+    let case_only_change = sanitized.to_lowercase() == project.name.to_lowercase();
     if case_only_change {
         let mut staging = base.join(format!(".{sanitized}.fastf-case"));
         let mut attempt = 0;

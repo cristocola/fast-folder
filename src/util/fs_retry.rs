@@ -121,9 +121,69 @@ fn clear_readonly_tree_at(path: &Path, depth: usize) {
     }
 }
 
-/// [`std::fs::rename`] with transient-contention retries.
+/// [`std::fs::rename`] with transient-contention retries, and — on Windows —
+/// one more attempt with the destination's read-only *attribute* cleared.
+///
+/// This is the publish step of [`crate::util::atomic::write`], so it is how
+/// **every** metadata mutation lands: a tag, a journal note, a rename's
+/// bookkeeping, a move's, the config and the counters. Unix `rename(2)` never
+/// consults the target's mode — replacing a file is a property of the
+/// directory — so on Linux a read-only `PROJECT_INFO.md` is simply written
+/// through. Windows refuses `MoveFileEx` onto a target carrying
+/// `FILE_ATTRIBUTE_READONLY`, and the retry schedule then spent its full
+/// backoff before failing with `Access is denied`. A project restored from a
+/// backup, copied off read-only media or synced down by a cloud client
+/// arrives with that attribute set, and every one of those verbs stopped
+/// working on it.
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
-    retry(|| std::fs::rename(from, to))
+    match retry(|| std::fs::rename(from, to)) {
+        Ok(()) => Ok(()),
+        Err(err) => rename_without_readonly(from, to, err),
+    }
+}
+
+/// The read-only **attribute** is not a permission, and this is careful to
+/// bypass only the former.
+///
+/// `FILE_ATTRIBUTE_READONLY` is a flag on the file, routinely set by backup
+/// and copy tools without anybody choosing it, and it has no counterpart in
+/// the mode bits Unix would consult here. A real denial — an ACL, a share
+/// permission, a locked file — reports `Access is denied` too, but leaves the
+/// attribute clear, so the check below distinguishes them: the retry happens
+/// only when the destination actually carries the attribute, and any other
+/// cause returns the original error untouched.
+///
+/// The attribute is put back on the newly published file. The marking was the
+/// user's and the update was fastf's; keeping both is the only answer that
+/// loses neither.
+#[cfg(windows)]
+fn rename_without_readonly(from: &Path, to: &Path, err: io::Error) -> io::Result<()> {
+    if !is_transient(&err) && err.kind() != io::ErrorKind::PermissionDenied {
+        return Err(err);
+    }
+    let was_readonly = std::fs::symlink_metadata(to)
+        .map(|meta| meta.permissions().readonly())
+        .unwrap_or(false);
+    if !was_readonly {
+        // Denied for some other reason — an ACL, a share, an open handle.
+        // Not ours to work around.
+        return Err(err);
+    }
+    clear_readonly(to);
+    let outcome = retry(|| std::fs::rename(from, to));
+    if outcome.is_ok()
+        && let Ok(meta) = std::fs::symlink_metadata(to)
+    {
+        let mut perms = meta.permissions();
+        perms.set_readonly(true);
+        let _ = std::fs::set_permissions(to, perms);
+    }
+    outcome
+}
+
+#[cfg(not(windows))]
+fn rename_without_readonly(_from: &Path, _to: &Path, err: io::Error) -> io::Result<()> {
+    Err(err)
 }
 
 /// Last resort after a failed removal: on Windows, clear read-only attributes
@@ -212,6 +272,62 @@ mod tests {
 
         remove_dir_all(&root).unwrap();
         assert!(!root.exists(), "read-only file blocked the removal");
+    }
+
+    /// The publish step of `atomic::write` is a rename **over** an existing
+    /// file, and Windows refuses that when the target carries the read-only
+    /// attribute. Unix `rename(2)` never looks at the target's mode, so every
+    /// metadata verb — tag, note, rename, move, config, the counters — worked
+    /// on Linux and failed here with `Access is denied` after the full
+    /// backoff. Found by driving a real project whose `PROJECT_INFO.md` had
+    /// the attribute set, which is how one arrives from a backup, from
+    /// read-only media, or from a cloud client.
+    #[cfg(windows)]
+    #[test]
+    fn a_read_only_destination_does_not_block_the_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = dir.path().join("new.tmp");
+        let target = dir.path().join("PROJECT_INFO.md");
+        std::fs::write(&tmp, "fresh").unwrap();
+        std::fs::write(&target, "stale").unwrap();
+
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&target, perms).unwrap();
+
+        rename(&tmp, &target).expect("the publish must go through");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "fresh");
+        assert!(
+            std::fs::metadata(&target).unwrap().permissions().readonly(),
+            "the user's marking is put back on the file that replaced it"
+        );
+
+        // Leave nothing undeletable behind for the tempdir's own cleanup.
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&target, perms).unwrap();
+    }
+
+    /// The attribute is not a permission, and only the attribute is bypassed.
+    /// A rename that fails for any other reason keeps its original error —
+    /// nothing here reaches past an ACL, a share permission or an open handle.
+    #[cfg(windows)]
+    #[test]
+    fn a_denial_that_is_not_the_attribute_keeps_its_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = dir.path().join("new.tmp");
+        std::fs::write(&tmp, "fresh").unwrap();
+        // A directory that does not exist: denied for a reason no attribute
+        // sweep could ever fix.
+        let target = dir.path().join("absent").join("target.md");
+        let err = rename(&tmp, &target).unwrap_err();
+        assert_ne!(
+            err.kind(),
+            io::ErrorKind::AlreadyExists,
+            "the original failure is what is reported: {err}"
+        );
+        assert!(tmp.exists(), "and the source is left where it was");
     }
 
     #[test]

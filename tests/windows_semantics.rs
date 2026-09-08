@@ -123,6 +123,39 @@ fn case_only_rename_round_trips() {
     assert_eq!(library::scan_base(base).len(), 1);
 }
 
+/// The same tidy-up, on a name that is not ASCII.
+///
+/// The test above is the whole of the coverage this had, and it is written in
+/// English — so `eq_ignore_ascii_case`, which finds nothing to fold in
+/// `проект` against `ПРОЕКТ`, passed it. NTFS *is* case-insensitive over
+/// Cyrillic, so the rename was classified as an ordinary one, the existence
+/// check found the source sitting at the target, and the verb refused with
+/// `rename target already exists` — naming the very folder it was asked to
+/// rename. Found by driving a real project on a real NTFS volume.
+#[test]
+fn case_only_rename_round_trips_for_non_ascii_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "проект", "ID0001");
+    fs::write(base.join("проект/keep.txt"), "content").unwrap();
+
+    let project = library::scan_base(base).remove(0);
+    let renamed = library::rename_project_unlocked(&project, "ПРОЕКТ")
+        .expect("a non-ASCII case-only rename is the same tidy-up as an ASCII one");
+
+    assert_eq!(renamed.name, "ПРОЕКТ");
+    assert_eq!(
+        fs::read_to_string(renamed.path.join("keep.txt")).unwrap(),
+        "content",
+        "content must survive the two-step rename"
+    );
+    assert_eq!(
+        library::scan_base(base).len(),
+        1,
+        "one project, and no staging folder stranded under a dot-prefixed name"
+    );
+}
+
 /// A case-only rename that cannot commit must put the project back where it was.
 ///
 /// The two-step dance parks the folder under a dot-prefixed staging name, and

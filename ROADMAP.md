@@ -236,11 +236,21 @@ Manual move smoke and follow-up:
 
 - [x] Linux same-filesystem direct rename and genuine cross-filesystem staged
   move (`/tmp` to `/dev/shm`) using the release binary.
-- [ ] Windows same-drive rename and ordinary move to another mounted drive/share
-  using the published MSI or ZIP; plus, new in v2.0.0, "Reveal" from the app's
-  action menu and `fastf open` (the `ShellExecuteW` path — CI compiles and lints
-  it, but only a real desktop session opens a window). This remains the sole post-release validation
-  item, still outstanding across every release since v1.5.1.
+- [x] Windows same-drive rename and ordinary move to another mounted
+  drive/share, on a real NTFS volume and a real SMB share. Automated rather
+  than left to a hand-run smoke: `tests/windows_live.rs` is opt-in on two
+  environment-supplied bases, and covers the same-volume rename, the
+  cross-device staged copy end to end (verified, published, no transaction
+  left behind), a junction refused by the staged path, the counter converging
+  across the share, and discovery, tagging and notes over SMB. It found two
+  Windows-only defects on its first run — `atomic::write`'s publish blocked by
+  a read-only destination, and a non-ASCII case-only rename refused as its own
+  target — both fixed with regression tests that run in CI.
+- [ ] "Reveal" from the app's action menu and `fastf open` (the
+  `ShellExecuteW` path — CI compiles and lints it, but only a real desktop
+  session opens a window), plus `fastf term`. Outstanding since v1.5.1: these
+  need a person at a desktop to say whether the right window appeared, so no
+  suite can close them.
 
 Behavior changes and user documentation land together. CLI flags and the
 template and cache schemas remain compatible within a major version; rejecting

@@ -16,7 +16,6 @@ use colored::Colorize;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::library;
-use crate::core::template;
 
 pub fn show() -> Result<()> {
     // Viewing repairs: any base found below the floor is brought up to it.
@@ -107,20 +106,32 @@ fn print_counter(cfg: &Config, val: u64) {
     if val == 0 {
         println!("Global ID counter: 0  (no projects created yet)");
     } else {
-        // Display with the format from any available template (they share prefix/digits)
-        let formatted = match template::load_all() {
-            Ok(templates) if !templates.is_empty() => {
-                let t = &templates[0];
-                Counters::format_id(&t.id.prefix, t.id.digits, val)
-            }
-            _ => format!("{}", val),
-        };
-
+        // **The counter is a number, and a rendering of it is a template's
+        // business, not the counter's.** This formatted the value with
+        // `templates[0]`'s prefix and digits behind a comment claiming
+        // templates share them — they do not, `load_all` sorts by display
+        // name so `[0]` is whichever template happens to sort first, and the
+        // "next" beside it was printed raw. One line said one number two
+        // ways: `Global project ID: 202001  (next will be 2002)`.
+        //
+        // Every other place this number is shown already prints it plain:
+        // `fastf id sync` two functions above, and the settings screen. The ID
+        // a create actually mints is decided by that create's template.
+        let next = Counters::load()
+            .ok()
+            .and_then(|counters| Counters::next_value(cfg, &counters).ok());
         println!(
             "{} {}  {}",
             "Global project ID:".bold(),
-            formatted.green().bold(),
-            format!("(next will be {})", val + 1).dimmed()
+            val.to_string().green().bold(),
+            match next {
+                // The one expression for "which ID comes next" — never a
+                // second `+ 1` written out here, which is how a preview came
+                // to confirm one number and a commit to write another.
+                Some(next) => format!("(next project takes {next})"),
+                None => format!("(the maximum, {}, is reached)", Counters::MAX_VALUE),
+            }
+            .dimmed()
         );
     }
 

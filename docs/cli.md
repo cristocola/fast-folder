@@ -847,7 +847,7 @@ fastf id sync          # make every base agree on the highest ID seen anywhere
 fastf id set 100       # raise the counter (next project becomes ID0101)
 ```
 
-One counter serves all templates, so IDs are unique across every project type.
+One counter serves all templates, so IDs are unique across every project type. `fastf id show` prints it as the number it is, not as any one template's id: the prefix and width that turn 47 into `ID0047` belong to the template a project is created from, and two templates need not agree on them.
 
 The counter is stored **inside your base folder** as `.fastf-counter.toml`, next to the projects it numbers — not in Fast Folder's config directory. That matters if you use more than one operating system: your project drive is already mounted by both, so both read the same number, with nothing to symlink or keep in sync. A base carried on an external drive brings its numbering with it.
 

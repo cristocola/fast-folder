@@ -313,8 +313,12 @@ fn the_builder_saves_a_template_built_section_by_section() {
         .pause(300)
         .down(2) // → Save
         .enter()
-        .pause(1200)
-        .esc() // the studio → the dashboard
+        // The builder stays up until the write lands — a refusal from under
+        // the data lock has to have something to land on — so this pause is
+        // load-bearing now rather than slack: the Esc below belongs to the
+        // tab, and while a save is in flight the builder ignores it.
+        .pause(2500)
+        .esc() // the tab → the dashboard
         .pause(400)
         .key(KEY_QUIT)
         .build();
@@ -388,7 +392,8 @@ fn the_builder_can_declare_an_empty_file() {
         .pause(300)
         .down(1) // → Save
         .enter()
-        .pause(1200)
+        // Load-bearing: the builder holds the screen until the write lands.
+        .pause(2500)
         .esc()
         .pause(400)
         .key(KEY_QUIT)

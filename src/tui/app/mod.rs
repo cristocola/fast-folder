@@ -1231,9 +1231,19 @@ impl App {
             // template that has been worked on — the one gesture that reached
             // past the question Esc and `q` now ask, and the quietest, since
             // it did not even leave a status line behind.
+            //
+            // **A save in flight is deliberately not part of this.** Esc and
+            // `q` are ignored while one runs, because it is about to land and
+            // its refusal needs the list to land on. Ctrl-C is the opposite
+            // case: `DataLock::acquire` waits up to thirty seconds when
+            // another fastf holds it, so routing Ctrl-C into the same guard
+            // left the only way out of a half-minute wait doing nothing at
+            // all. It keeps its ordinary meaning instead — the write is a
+            // single atomic publish on a worker, and interrupting the app
+            // over it is exactly what the interrupt key is for.
             if matches!(
                 self.modals.top(),
-                Some(Modal::Builder(builder)) if builder.saving || builder.is_dirty()
+                Some(Modal::Builder(builder)) if builder.is_dirty() && !builder.saving
             ) {
                 return self.close_top();
             }

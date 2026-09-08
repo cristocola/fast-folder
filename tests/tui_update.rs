@@ -1915,6 +1915,41 @@ mod studio {
         assert!(error.contains("locked"), "it names the cause: {error}");
     }
 
+    /// Esc and `q` are ignored while a save is in flight — it is about to
+    /// land and its refusal needs the list to land on. **Ctrl-C is not**, and
+    /// must not be: `DataLock::acquire` waits up to thirty seconds when
+    /// another fastf holds it, so a save can sit there for half a minute, and
+    /// routing the interrupt key into the same guard left no way out of it at
+    /// all.
+    #[test]
+    fn a_save_in_flight_ignores_esc_but_never_traps_the_user() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "Reel edit");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        for _ in 0..5 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        press(&mut app, Key::plain(KeyCode::Enter)); // Save
+        assert!(builder(&app).saving);
+
+        // Esc waits for the outcome rather than dropping the work.
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(
+            matches!(app.modals.top(), Some(Modal::Builder(_))),
+            "Esc during a save waits for it"
+        );
+        assert!(builder(&app).saving, "and does not cancel it");
+
+        // Ctrl-C is the way out, as it is everywhere else in the app.
+        press(&mut app, Key::ctrl('c'));
+        assert!(
+            app.modals.is_empty(),
+            "Ctrl-C must not be swallowed while a save waits on the data lock"
+        );
+    }
+
     /// The other half: a save that lands closes the builder, once.
     #[test]
     fn a_save_that_lands_closes_the_builder() {

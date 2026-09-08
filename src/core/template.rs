@@ -215,6 +215,40 @@ impl Template {
         self.dir.join("files")
     }
 
+    /// Whether applying this template has any question to ask.
+    ///
+    /// **A file that will not be interpolated cannot need a variable.** `apply`
+    /// asked whenever *any* text file had a body at all — the same unfiltered
+    /// buffer the dry-run previews used — so a template whose only text was an
+    /// `exclude`d `.DS_Store`, or a `verbatim` file whose `{braces}` are meant
+    /// literally, or a plain README with no token in it, asked a question whose
+    /// answer nothing could use.
+    ///
+    /// Three things can carry a token: a folder in `structure`, a file's name,
+    /// and an interpolated file's body. This asks about exactly those.
+    pub fn interpolates_anything(&self) -> bool {
+        self.structure_has_tokens()
+            || self.files.iter().any(|f| {
+                if crate::core::assets::is_excluded(&f.path, &self.exclude) {
+                    return false;
+                }
+                // A name token is substituted whatever the body's fate is:
+                // `verbatim` is about contents, not about where a file lands.
+                f.path.contains('{')
+                    || (!crate::core::assets::is_verbatim(&f.path, &self.verbatim)
+                        && f.template.contains('{'))
+            })
+    }
+
+    fn structure_has_tokens(&self) -> bool {
+        fn any(nodes: &[FolderNode]) -> bool {
+            nodes
+                .iter()
+                .any(|n| n.name.contains('{') || any(&n.children))
+        }
+        any(&self.structure)
+    }
+
     /// Load a template from its `template.yaml` manifest. The manifest holds
     /// metadata only; the sibling `files/` directory holds the actual spec. The
     /// UTF-8 text files under `files/` are scanned into the in-memory `files`

@@ -718,3 +718,72 @@ fn a_preview_reports_the_date_the_create_writes() {
         );
     });
 }
+
+/// **`apply` asks only when there is something an answer could change.**
+///
+/// It asked whenever any text file had a body at all — the same unfiltered
+/// buffer the dry-run previews read — so a template whose only text was an
+/// `exclude`d `.DS_Store`, or a `verbatim` file whose `{braces}` are meant
+/// literally, or a plain README with no token in it, put a prompt in front of
+/// a user whose answer nothing could use.
+#[test]
+fn a_template_that_interpolates_nothing_has_nothing_to_ask() {
+    sandboxed(|install| {
+        let yaml = r#"name: Quiet
+slug: quiet
+naming_pattern: "{id}_{name}"
+id:
+  prefix: Q
+  digits: 3
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+verbatim: ["*.tmpl"]
+exclude: [".DS_Store"]
+structure:
+  - name: "00_Inbox"
+"#;
+        let tdir = install.join("templates").join("quiet");
+        fs::create_dir_all(tdir.join("files")).unwrap();
+        fs::write(tdir.join("template.yaml"), yaml).unwrap();
+        // Text, but nothing an answer reaches: a plain file with no token, one
+        // held literal, and one that is never copied at all.
+        fs::write(tdir.join("files/README.md"), "no tokens here\n").unwrap();
+        fs::write(tdir.join("files/raw.tmpl"), "literal {name}\n").unwrap();
+        fs::write(tdir.join("files/.DS_Store"), "{name}\n").unwrap();
+
+        let tmpl = template::find_by_slug("quiet").unwrap();
+        assert!(
+            !tmpl.interpolates_anything(),
+            "nothing here is interpolated, so `apply` has no question to ask"
+        );
+
+        // One token anywhere it is honoured, and the question is real again.
+        for (path, body) in [("USES.md", "for {name}\n"), ("Note_{name}.md", "plain\n")] {
+            fs::write(tdir.join("files").join(path), body).unwrap();
+            let tmpl = template::find_by_slug("quiet").unwrap();
+            assert!(
+                tmpl.interpolates_anything(),
+                "{path} carries a token that a create substitutes"
+            );
+            fs::remove_file(tdir.join("files").join(path)).unwrap();
+        }
+
+        // And a `{token}` in the folder structure alone is enough.
+        let structured = install.join("templates").join("structured");
+        fs::create_dir_all(structured.join("files")).unwrap();
+        fs::write(
+            structured.join("template.yaml"),
+            yaml.replace("slug: quiet", "slug: structured")
+                .replace(r#"- name: "00_Inbox""#, r#"- name: "{name}_Inbox""#),
+        )
+        .unwrap();
+        assert!(
+            template::find_by_slug("structured")
+                .unwrap()
+                .interpolates_anything()
+        );
+    });
+}

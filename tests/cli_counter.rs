@@ -232,6 +232,109 @@ fn a_failed_counter_write_warns_instead_of_going_quiet() {
     assert_eq!(ids_in(&sb.base), ["R0001".to_string()]);
 }
 
+/// An unreadable data-directory counter is said out loud, because it is the one
+/// input that knows about a base which is not mounted.
+///
+/// `Counters::floor` takes the max of three things, and only this file spans
+/// *every* base the machine has written to. Reading it as zero — which
+/// `unwrap_or(0)` did — leaves the floor coming from the mounted bases alone,
+/// so the next number handed out may be one the unplugged drive already used.
+/// It cannot be recovered from a file that will not parse; what the fix owes
+/// the user is to say the guard is not in play, before two projects share an ID
+/// rather than after.
+///
+/// `hostile_fs.rs` corrupts this same file with every base still mounted, where
+/// `library::max_id` covers for the zero and the defect is invisible. Unplugging
+/// the base that holds the high number is what makes it visible.
+#[test]
+fn an_unreadable_local_counter_is_reported_rather_than_read_as_zero() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    let bases = sb.with_bases(&["far", "near"]);
+    let (far, near) = (&bases[0], &bases[1]);
+
+    // All the early work happens in `far`, the only base configured — so `near`
+    // never learns the number by propagation and the data-dir counter is the
+    // only thing that knows it.
+    sb.ok(&["config", "set", "base-dir", far.to_str().unwrap()]);
+    for name in ["One", "Two", "Three"] {
+        sb.ok(&[
+            "new",
+            "race",
+            &format!("--name={name}"),
+            "--yes",
+            "--no-preview",
+        ]);
+    }
+    assert_eq!(sb.local_counter(), 3, "the machine's own counter followed");
+
+    // The drive is unplugged, a different base is configured, and the file that
+    // remembers `far` will not parse.
+    fs::rename(far, far.with_extension("unplugged")).unwrap();
+    sb.ok(&["config", "set", "base-dir", near.to_str().unwrap()]);
+    fs::write(sb.install.join("counters.toml"), "global = [not toml\n").unwrap();
+
+    let stderr = String::from_utf8_lossy(&sb.run(&["id", "show"]).stderr).into_owned();
+    assert!(
+        stderr.contains("could not read the ID counter"),
+        "the read failure must be reported, not absorbed: {stderr}"
+    );
+    assert!(
+        stderr.contains("counters.toml"),
+        "and it must name the file to fix: {stderr}"
+    );
+    // Once. `floor` is reached several times in one command, and one broken
+    // file saying so three times reads as three problems.
+    assert_eq!(
+        stderr.matches("could not read the ID counter").count(),
+        1,
+        "said once per process, not once per call: {stderr}"
+    );
+}
+
+/// A counter file that cannot be read is not a counter at its ceiling.
+///
+/// `print_counter` asked `Counters::load().ok().and_then(next_value)` and
+/// rendered `None` as "(the maximum, 999999999999, is reached)" — so an
+/// unparseable file printed a counter of 1 with a note saying twelve digits had
+/// been used up. Three different facts, and two of them were the same branch.
+#[test]
+fn an_unreadable_counter_is_not_reported_as_the_maximum() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["new", "race", "--name=One", "--yes", "--no-preview"]);
+    fs::write(sb.install.join("counters.toml"), "global = [not toml\n").unwrap();
+
+    let out = String::from_utf8_lossy(&sb.run(&["id", "show"]).stdout).into_owned();
+    assert!(
+        !out.contains("maximum"),
+        "nothing here is at its maximum: {out}"
+    );
+    assert!(
+        out.contains("cannot be read"),
+        "the honest answer is that the next ID is unknown: {out}"
+    );
+}
+
+/// And a create refuses outright rather than minting against a floor it could
+/// not compute — `cli::new` loads the counters with `?` before planning.
+#[test]
+fn a_create_refuses_while_the_counter_file_is_unreadable() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    fs::write(sb.install.join("counters.toml"), "global = [not toml\n").unwrap();
+
+    let err = sb.fails(&["new", "race", "--name=One", "--yes", "--no-preview"]);
+    assert!(
+        err.contains("counters.toml"),
+        "the refusal must name the file: {err}"
+    );
+    assert!(
+        ids_in(&sb.base).is_empty(),
+        "and nothing may be created against a floor fastf could not compute"
+    );
+}
+
 /// Creating one project loads each thing a small, bounded number of times.
 ///
 /// A design guard rather than a regression test: the two template parses are

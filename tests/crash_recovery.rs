@@ -782,3 +782,137 @@ fn force_staged_reaches_the_staged_path_on_one_volume() {
         );
     });
 }
+
+// ---------------------------------------------------------------------------
+// A case-only rename killed between its two renames
+// ---------------------------------------------------------------------------
+
+/// A hard kill mid case-only rename leaves the project parked under a
+/// dot-prefixed name, and `reconcile` finishes what it started.
+///
+/// `library::lifecycle::rename_project_inner` renames `Album` → `.ALBUM.fastf-case`
+/// → `ALBUM`, because a case-insensitive filesystem answers "does the target
+/// exist?" with "yes, it is the file you are renaming". Every *error* path puts
+/// it back and a failed rollback says where it left it — but a `kill -9` or a
+/// power loss between the two renames reaches neither, and `scan_base` skips
+/// dot-prefixed directories, so the project is simply gone from `recent`,
+/// `search`, `reindex`, `resolve` and the app with nothing recording that it
+/// happened. It was the one multi-step mutation in the crate with no recovery
+/// story.
+///
+/// The state is planted literally rather than driven through a failpoint, the
+/// same way the pre-v2 marker tests plant their bytes: what is under test is
+/// whether reconcile recognises the wreckage, not how it came about.
+#[test]
+fn reconcile_finishes_a_case_rename_that_was_killed_half_way() {
+    sandbox(|sb, _guard| {
+        let base = &sb.base;
+        let staged = base.join(".ALBUM.fastf-case");
+        fs::create_dir_all(&staged).unwrap();
+        fs::write(
+            fastf::core::project_info::pinfo_path(&staged),
+            "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
+             created: 2026-01-01T00:00:00Z\nfolder: ALBUM\npath: x\n\
+             variables: {}\ntags: []\n---\n\n## Notes\n",
+        )
+        .unwrap();
+
+        let cfg = config_for(base);
+        assert!(
+            library::discover(&cfg).is_empty(),
+            "a dot-prefixed folder is invisible — that is the whole problem"
+        );
+        // And it is counted as needing attention before anything is run.
+        assert_eq!(provisioning::list_incomplete(&cfg).len(), 1);
+
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert_eq!(report.restored, 1, "the rename is finished forward");
+        assert!(report.unrecoverable.is_empty(), "{report:?}");
+        assert!(
+            base.join("ALBUM").is_dir(),
+            "under the name it was going to"
+        );
+        assert!(!staged.exists(), "and not under the staging name any more");
+
+        // Read the index *before* discovering, because a discovery would repair
+        // it and hide the question. The `discover` above left an empty one
+        // behind, and putting a folder back has to update it rather than trust
+        // the staleness gate to notice: a rename within a directory does not
+        // reliably move that directory's mtime on Windows, and `write_cache`
+        // re-stamps the index after the rename that publishes it — so the
+        // project stayed missing from a library it had just been put back into.
+        // The Windows leg of CI found that on a green Linux run.
+        let index = fs::read_to_string(base.join(library::CACHE_FILENAME)).unwrap();
+        assert!(
+            index.contains("ALBUM"),
+            "the base's index must learn about the restored project:\n{index}"
+        );
+
+        let found = library::discover(&cfg);
+        assert_eq!(found.len(), 1, "the project is back in the library");
+        assert_eq!(found[0].id, "ID0001");
+
+        // Idempotent, like every other arm of the pass.
+        let again = provisioning::reconcile_unlocked(&cfg);
+        assert!(again.is_empty(), "nothing left to do: {again:?}");
+    });
+}
+
+/// It refuses when the name it was going to is taken, rather than renaming one
+/// project on top of another.
+#[test]
+fn a_stranded_case_rename_whose_target_is_taken_is_reported_not_forced() {
+    sandbox(|sb, _guard| {
+        let base = &sb.base;
+        let occupant = base.join("ALBUM");
+        fs::create_dir_all(&occupant).unwrap();
+        fs::write(occupant.join("theirs.txt"), b"not fastf's").unwrap();
+
+        let staged = base.join(".ALBUM.fastf-case");
+        fs::create_dir_all(&staged).unwrap();
+        fs::write(
+            fastf::core::project_info::pinfo_path(&staged),
+            "---\nid: ID0001\ntemplate: t\ntemplate_name: T\n\
+             created: 2026-01-01T00:00:00Z\nfolder: ALBUM\npath: x\n\
+             variables: {}\ntags: []\n---\n",
+        )
+        .unwrap();
+
+        let cfg = config_for(base);
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert_eq!(report.restored, 0);
+        assert_eq!(report.unrecoverable.len(), 1, "{report:?}");
+        assert!(
+            report.unrecoverable[0].contains("already"),
+            "the refusal must say why: {}",
+            report.unrecoverable[0]
+        );
+        assert!(
+            occupant.join("theirs.txt").exists(),
+            "and must not have written over what was there"
+        );
+    });
+}
+
+/// A dot-folder that merely looks like ours is left completely alone.
+///
+/// The name test is not enough on its own: renaming somebody's
+/// `.ALBUM.fastf-case` scratch directory on top of whatever `ALBUM` is would be
+/// a great deal worse than the state being repaired. It has to hold a
+/// `PROJECT_INFO.md` too.
+#[test]
+fn a_lookalike_dot_folder_is_not_treated_as_a_stranded_rename() {
+    sandbox(|sb, _guard| {
+        let base = &sb.base;
+        let decoy = base.join(".ALBUM.fastf-case");
+        fs::create_dir_all(&decoy).unwrap();
+        fs::write(decoy.join("notes.txt"), b"mine").unwrap();
+
+        let cfg = config_for(base);
+        assert!(provisioning::list_incomplete(&cfg).is_empty());
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(report.is_empty(), "nothing of ours here: {report:?}");
+        assert!(decoy.join("notes.txt").exists());
+        assert!(!base.join("ALBUM").exists());
+    });
+}

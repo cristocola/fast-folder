@@ -172,6 +172,72 @@ structure:
     });
 }
 
+/// `on_name_collision = "error"` restores refuse-a-duplicate.
+///
+/// The suffix policy is the default and the one that was covered; the other
+/// branch had no test anywhere, so a create that should have been refused would
+/// have quietly landed on `_2` instead — the exact outcome someone sets this
+/// key to prevent.
+#[test]
+fn on_name_collision_error_refuses_instead_of_suffixing() {
+    sandboxed(|install| {
+        write_template(
+            install,
+            "noid",
+            r#"name: No Id
+slug: noid
+description: fixture
+naming_pattern: "{name}"
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+    transform: title_underscore
+"#,
+        );
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        cfg.on_name_collision = fastf::core::config::NameCollision::Error;
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("noid").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "collide".to_string());
+
+        let mut counters = Counters::load().unwrap();
+        let first = project::create(
+            &project::plan(&tmpl, &vars, &cfg, &counters).unwrap(),
+            &tmpl,
+            &mut counters,
+            &cfg,
+            false,
+        )
+        .unwrap();
+        assert_eq!(first.folder_name, "Collide");
+
+        let mut counters = Counters::load().unwrap();
+        let err = project::create(
+            &project::plan(&tmpl, &vars, &cfg, &counters).unwrap(),
+            &tmpl,
+            &mut counters,
+            &cfg,
+            false,
+        )
+        .expect_err("the second create must be refused, not suffixed");
+        assert!(
+            err.to_string().contains("already exists"),
+            "the refusal must name the collision: {err:#}"
+        );
+
+        assert!(
+            !install.join("projects").join("Collide_2").exists(),
+            "and must not have created the folder it refused"
+        );
+        assert_eq!(library::discover(&cfg).len(), 1);
+    });
+}
+
 #[test]
 fn create_is_discoverable_without_jsonl() {
     sandboxed(|install| {

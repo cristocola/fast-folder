@@ -979,8 +979,8 @@ fn run_action(
                 "✓  Nothing to reconcile — every project is fully provisioned.".to_string()
             } else {
                 format!(
-                    "✓  Reconciled: {} resumed, {} committed, {} rolled back",
-                    report.resumed, report.completed, report.rolled_back
+                    "✓  Reconciled: {} resumed, {} committed, {} rolled back, {} restored",
+                    report.resumed, report.completed, report.rolled_back, report.restored
                 )
             };
             let outcome = ActionOutcome::new(ListChange::Reload, message).settings();

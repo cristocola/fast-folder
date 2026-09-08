@@ -261,6 +261,60 @@ fn journal_entries_round_trip() {
     });
 }
 
+/// A note written after a heading the user added is still a note.
+///
+/// The body below the frontmatter is theirs — `docs/projects.md` says "After
+/// creation the file is yours" — and adding any `##` of their own underneath
+/// the journal used to put every later entry past the point the reader stops
+/// at. `append_journal_entry` wrote at the end of the *file*;
+/// `read_journal_entries` stopped at the next `##`. So the write succeeded, the
+/// CLI printed the entry it had just saved, and it was never seen again. Both
+/// now go through one `journal_span`.
+#[test]
+fn a_note_after_a_heading_the_user_added_is_still_readable() {
+    sandboxed(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "journal-owned-body".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        let pinfo = project_info::pinfo_path(&plan.root_path);
+
+        project_info::append_journal_entry(&pinfo, "before").unwrap();
+
+        // The user keeps their own section under the journal.
+        let mut content = fs::read_to_string(&pinfo).unwrap();
+        content.push_str("\n## Archive\n\nthings I want to keep\n");
+        fs::write(&pinfo, &content).unwrap();
+
+        project_info::append_journal_entry(&pinfo, "after").unwrap();
+
+        let entries = project_info::read_journal_entries(&plan.root_path).unwrap();
+        let messages: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            ["before", "after"],
+            "a note fastf says it wrote must be a note fastf can read back"
+        );
+
+        // And the user's own section is still there, still below the journal.
+        let after = fs::read_to_string(&pinfo).unwrap();
+        assert!(after.contains("things I want to keep"));
+        assert!(
+            after.find("after").unwrap() < after.find("## Archive").unwrap(),
+            "the entry belongs in the journal section, not after somebody else's"
+        );
+    });
+}
+
 /// Tags added via write_frontmatter persist across a restart (re-parse).
 #[test]
 fn tag_add_persists() {

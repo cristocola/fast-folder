@@ -79,6 +79,48 @@ impl Counters {
         Ok(c)
     }
 
+    /// [`Counters::load`], reporting a read failure **once per process**.
+    ///
+    /// `load` already answers `Ok(default)` when the file is *absent*, so an
+    /// `Err` is only ever a real read or parse failure — and absorbing that as
+    /// zero drops the one input that knows about a base which is not mounted
+    /// right now. The floor then comes from the mounted bases alone, and the
+    /// next create hands out a number the unplugged drive already used: the
+    /// exact failure this file exists to prevent. The number cannot be
+    /// recovered from a file that will not parse; what is owed the user is to
+    /// say the guard is not in play, before two projects share an ID rather
+    /// than after.
+    ///
+    /// Once per process because `floor` runs on every create, every preview and
+    /// every `id` command, and several of those reach it more than once. One
+    /// unreadable file saying so three times in one command reads as three
+    /// problems.
+    fn load_or_report() -> Option<Self> {
+        match Self::load() {
+            Ok(counters) => Some(counters),
+            Err(err) => {
+                static REPORTED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    // The root cause's first line only: `load`'s own context
+                    // already names the file, and a `diag` warning has to fit a
+                    // status line — the TOML crate's error is a three-line
+                    // diagram with a caret in it.
+                    let reason = err.root_cause().to_string();
+                    let reason = reason.lines().next().unwrap_or("unreadable");
+                    crate::util::diag::warn(format!(
+                        "could not read the ID counter in {} ({reason}) — it is \
+                         left alone, and until it is fixed the next ID comes from \
+                         the bases that are mounted, so one that is not may \
+                         already hold it",
+                        paths::counters_path().display()
+                    ));
+                }
+                None
+            }
+        }
+    }
+
     /// Persist this machine's counter atomically. A truncated file would reset
     /// ID allocation, so the write must never be observable half-done.
     ///
@@ -142,16 +184,10 @@ impl Counters {
         // overwrite whatever could not be read. This is the counter that spans
         // every base this machine has written to — the one that stops an
         // unplugged drive from restarting numbering — so a failure to read it is
-        // reported and the write skipped, leaving the file for its owner to fix.
-        let mut local = match Self::load() {
-            Ok(local) => local,
-            Err(err) => {
-                crate::util::diag::warn(format!(
-                    "could not read the ID counter in {} ({err}) — leaving it alone",
-                    paths::counters_path().display()
-                ));
-                return;
-            }
+        // reported (by `load_or_report`, which also says the file is left alone)
+        // and the write skipped, leaving it for its owner to fix.
+        let Some(mut local) = Self::load_or_report() else {
+            return;
         };
         if value > local.get() {
             local.set_value(value);
@@ -263,8 +299,11 @@ impl Counters {
     ///   hand-edited counter file can never hand out an ID that already exists.
     ///
     /// The last one is why losing a counter file is untidy rather than harmful.
+    ///
+    /// Not `unwrap_or(0)` on the data-dir read — see `load_or_report`, which is
+    /// private because reporting a broken counter is nobody else’s business.
     pub fn floor(cfg: &Config) -> u64 {
-        let local = Self::load().map(|c| c.get()).unwrap_or(0);
+        let local = Self::load_or_report().map(|c| c.get()).unwrap_or(0);
         local
             .max(Self::base_floor(cfg))
             .max(crate::core::library::max_id(cfg))

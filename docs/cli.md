@@ -741,6 +741,15 @@ after a matching destination has been published, advanced through source
 cleanup. Missing bases, mismatched identities, malformed journals, or unknown
 states are reported without mutation. Running the command repeatedly is safe.
 
+It also finishes a **rename** that was interrupted. Renaming a folder to a
+different capitalisation of the same name has to go through a temporary name,
+because a case-insensitive filesystem answers "does `ALBUM` already exist?" with
+"yes, it is the folder you are renaming". If fastf is killed outright in the
+middle — a power cut, a `kill -9` — the project is left under a hidden
+`.<name>.fastf-case` folder, which nothing lists. `reconcile` puts it back under
+the name the rename was taking it to, and reports it as `restored`. If that name
+has since been taken by something else it says so and changes nothing.
+
 Markers written before recovery journal v2 contain arbitrary absolute paths.
 They remain obsolete: `reconcile` lists their own paths but never parses,
 migrates, resumes, rolls back, or deletes through them. It also never sweeps

@@ -39,6 +39,13 @@ pub fn run() -> Result<()> {
             report.completed
         );
     }
+    if report.restored > 0 {
+        println!(
+            "   {} {} project(s) put back where an interrupted rename was taking them",
+            "restored".dimmed(),
+            report.restored
+        );
+    }
     if report.rolled_back > 0 {
         println!(
             "   {} {} uncommitted move(s) — source left intact",

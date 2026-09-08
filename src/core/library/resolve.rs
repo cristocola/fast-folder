@@ -186,15 +186,37 @@ pub(crate) fn max_id_in_base(base: &Path) -> u64 {
 /// Read a base's projects **without** writing the cache: use a fresh cache if
 /// one is present, else scan the directory. Never mutates disk — safe for the
 /// preview/plan path.
+///
+/// A **rejected** entry abandons the whole cache and goes back to the folders,
+/// exactly as `discovery::discover_base` does — this used to `filter_map` the
+/// rejected one away and carry on reading the rest, which is the one thing the
+/// rule forbids. `.fastf-index.json` travels with the projects by design, so a
+/// synced folder or an unpacked archive can deliver one; an entry naming
+/// anything but a direct child of its own base means the file is no longer
+/// fastf's own bookkeeping, and the rest of it is not evidence of anything.
+///
+/// It matters most here, of all places: this is the read behind `max_id_in_base`
+/// and therefore behind `Counters::floor`. Silently dropping the entry that
+/// happened to hold the highest ID leaves the floor low, and the next create
+/// mints a number the library already has.
+///
+/// The difference from `discover_base` is only what happens afterwards: that one
+/// rewrites the cache from the scan, and this one may not write at all.
 pub(crate) fn read_base_readonly(base: &Path) -> Vec<Project> {
-    match load_cache(base) {
-        Some(cache) if !cache_is_stale(base) => cache
-            .entries
-            .into_iter()
-            .filter_map(|entry| entry.into_project(base))
-            .collect(),
-        _ => scan_base(base),
+    let Some(cache) = load_cache(base) else {
+        return scan_base(base);
+    };
+    if cache_is_stale(base) {
+        return scan_base(base);
     }
+    let mut projects = Vec::with_capacity(cache.entries.len());
+    for entry in cache.entries {
+        let Some(project) = entry.into_project(base) else {
+            return scan_base(base);
+        };
+        projects.push(project);
+    }
+    projects
 }
 
 /// Force a full rescan of every base and rewrite each `.fastf-index.json`,

@@ -158,6 +158,12 @@ pub enum IncompleteKind {
     CreateV2Invalid,
     #[serde(rename = "move-v2-invalid")]
     MoveV2Invalid,
+    /// A case-only rename that was killed between its two renames, leaving the
+    /// project parked under `.<target>.fastf-case`. Discovery skips dot-prefixed
+    /// folders, so until this is finished the project is simply gone from the
+    /// library.
+    #[serde(rename = "rename-staging")]
+    RenameStaging,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -200,6 +206,14 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                 continue;
             }
             if file_type.is_dir() && !file_type.is_symlink() {
+                if is_stranded_case_rename(&name, &path) {
+                    out.push(Incomplete {
+                        path: path.display().to_string(),
+                        kind: IncompleteKind::RenameStaging,
+                        pending: 0,
+                    });
+                    continue;
+                }
                 if entry_exists_quiet(&legacy_create_marker_path(&path)) {
                     out.push(Incomplete {
                         path: legacy_create_marker_path(&path).display().to_string(),
@@ -288,6 +302,8 @@ pub struct ReconcileReport {
     /// suffix sweeping no longer exists, so nothing writes it and `is_empty`
     /// does not consult it.
     pub swept: usize,
+    /// Case-only renames finished off — see [`IncompleteKind::RenameStaging`].
+    pub restored: usize,
     pub incomplete: Vec<String>,
     pub unrecoverable: Vec<String>,
     pub obsolete: Vec<String>,
@@ -298,6 +314,7 @@ impl ReconcileReport {
         self.resumed == 0
             && self.completed == 0
             && self.rolled_back == 0
+            && self.restored == 0
             && self.incomplete.is_empty()
             && self.unrecoverable.is_empty()
             && self.obsolete.is_empty()
@@ -398,6 +415,10 @@ fn reconcile_base(cfg: &Config, base: &Path, report: &mut ReconcileReport) {
             continue;
         }
         if file_type.is_dir() && !file_type.is_symlink() {
+            if is_stranded_case_rename(&name, &path) {
+                reconcile_case_rename(base, &name, &path, report);
+                continue;
+            }
             let legacy = legacy_create_marker_path(&path);
             if entry_exists_quiet(&legacy) {
                 report.obsolete.push(legacy.display().to_string());
@@ -414,6 +435,70 @@ fn reconcile_base(cfg: &Config, base: &Path, report: &mut ReconcileReport) {
     }
     if let Some(root) = transaction_root {
         reconcile_transactions(cfg, base, &root, report);
+    }
+}
+
+/// Is this dot-folder a project a case-only rename left behind?
+///
+/// Both halves matter. The name has to be one `library::lifecycle` writes, and
+/// the folder has to hold a `PROJECT_INFO.md` — otherwise a directory somebody
+/// else named `.Album.fastf-case` would be renamed on top of whatever `Album`
+/// is, which is a great deal worse than the state being repaired.
+fn is_stranded_case_rename(name: &str, path: &Path) -> bool {
+    crate::core::library::case_staging_target(name).is_some()
+        && entry_exists_quiet(&crate::core::project_info::pinfo_path(path))
+}
+
+/// Finish a case-only rename that was killed between its two renames.
+///
+/// `library::lifecycle::rename_project_inner` renames the project to
+/// `.<target>.fastf-case` and then to `<target>`; every *error* path puts it
+/// back, and a failed rollback says where it left it. A hard kill or a power
+/// loss reaches neither, and the project is then parked under a dot-prefixed
+/// name that `scan_base` skips — invisible to `recent`, `search`, `reindex`,
+/// `resolve` and the app, with nothing anywhere recording that it happened. It
+/// was the one multi-step mutation in the crate with no recovery story.
+///
+/// Finishing forward rather than rolling back is the only option and the right
+/// one: the staging name carries the *target*, and the name the project had
+/// before is not written down anywhere by then.
+fn reconcile_case_rename(base: &Path, name: &str, path: &Path, report: &mut ReconcileReport) {
+    let Some(target) = crate::core::library::case_staging_target(name) else {
+        return;
+    };
+    let destination = base.join(target);
+    // A case-only rename means the two names differ only in case, so on a
+    // case-insensitive filesystem `destination` is a different path from
+    // `path` — the staging folder is dot-prefixed. An occupied destination is
+    // therefore somebody else's, and is not ours to overwrite.
+    if entry_exists_quiet(&destination) {
+        report.unrecoverable.push(format!(
+            "{}: an interrupted rename left this project here, and {} is already \
+             taken; rename it by hand to make the project visible again",
+            crate::util::paths::display_path(path),
+            crate::util::paths::display_path(&destination)
+        ));
+        return;
+    }
+    match crate::util::fs_retry::rename(path, &destination) {
+        Ok(()) => {
+            // The base's cache has to learn, exactly as the create arm's resume
+            // does. Leaving it to the staleness gate is not enough: a rename
+            // within a directory does not reliably move that directory's mtime
+            // on Windows, and `write_cache` deliberately re-stamps the index
+            // *after* the rename that publishes it — so a cache written a
+            // moment ago can still read as current, and the project stays
+            // missing from a library it has just been put back into. Found by
+            // the Windows leg of CI, on Linux's own green run.
+            crate::core::library::refresh_cache(&destination);
+            report.restored += 1;
+        }
+        Err(error) => report.unrecoverable.push(format!(
+            "{}: an interrupted rename left this project here and it could not be \
+             finished ({error}); rename it to {} by hand to make it visible again",
+            crate::util::paths::display_path(path),
+            crate::util::paths::display_path(&destination)
+        )),
     }
 }
 

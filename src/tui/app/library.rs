@@ -410,8 +410,9 @@ impl LibraryState {
                 .to_lowercase()
                 .cmp(&pb.name.to_lowercase())
                 .then_with(|| newest(pa, pb)),
-            Order::Id => crate::core::naming::id_value(&pa.id)
-                .cmp(&crate::core::naming::id_value(&pb.id))
+            Order::Id => pa
+                .number()
+                .cmp(&pb.number())
                 .then_with(|| pa.id.cmp(&pb.id)),
             Order::Template => pa.template.cmp(&pb.template).then_with(|| newest(pa, pb)),
             // The label first, because that is the word the column shows and

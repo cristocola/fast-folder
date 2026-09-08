@@ -156,6 +156,7 @@ proptest! {
         // Evaluating them against arbitrary metadata must be equally safe.
         let meta = project_info::Metadata {
             id: "ID0001".to_string(),
+            id_number: None,
             template: "t".to_string(),
             template_name: "T".to_string(),
             created: "2026-01-01T00:00:00Z".to_string(),

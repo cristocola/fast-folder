@@ -282,6 +282,9 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
         }
         let project = Project {
             id,
+            // The number this register recovered from the folder name, or
+            // minted; recovering a low one never lowers the counter.
+            id_number: Some(id_value),
             template: template.slug.clone(),
             template_name: template.name.clone(),
             name: plan.folder_name.clone(),
@@ -608,8 +611,61 @@ pub fn set_counter(value: u64) -> Result<CounterOutcome> {
 pub fn reindex() -> Result<(Config, usize)> {
     let _mutation_lock = DataLock::acquire()?;
     let config = Config::load()?;
+    backfill_id_numbers(&config);
     let total = library::reindex(&config);
     Ok((config, total))
+}
+
+/// Record the number behind each project's id, for projects written before
+/// `Metadata::id_number` existed.
+///
+/// **Why this is here and not on the counter's path.** Reading a number back
+/// out of a rendered id needs the template's `id.prefix` to know where the
+/// prefix ends, and the counter's floor is computed on every create *and*
+/// every preview, over every project in every base — loading a template per
+/// row there would be absurd, and worse, it has no answer for the cases that
+/// already exist: a project registered without a template, one whose template
+/// was deleted or renamed, one copied in from a machine with different
+/// templates. A guess that reads too *low* mints a duplicate id, which is
+/// worse than reading too high.
+///
+/// Reindex is where that lookup is affordable and where "no answer" is a fine
+/// outcome: it already holds the lock, it is the declared verb for changes
+/// fastf could not observe, and a project it cannot resolve is simply left
+/// alone to keep using the parse fallback.
+fn backfill_id_numbers(config: &Config) {
+    for project in library::discover(config) {
+        if project.id_number.is_some() {
+            continue;
+        }
+        // Only a template that still exists and whose prefix really does
+        // prefix this id can say where the digits begin.
+        let Ok(template) = crate::core::template::find_by_slug(&project.template) else {
+            continue;
+        };
+        let prefix = &template.id.prefix;
+        let Some(digits) = project.id.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(value) = digits.parse::<u64>() else {
+            continue;
+        };
+        let pinfo = crate::core::project_info::pinfo_path(&project.path);
+        if !pinfo.is_file() {
+            continue;
+        }
+        if let Err(err) = crate::core::project_info::write_frontmatter(&pinfo, |meta| {
+            meta.id_number = Some(value);
+        }) {
+            crate::util::diag::warn(format!(
+                "could not record the id number for {}: {err:#}",
+                project.id
+            ));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

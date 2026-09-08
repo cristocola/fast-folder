@@ -69,6 +69,27 @@ pub fn path_is_reserved(path: &str) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
     pub id: String,
+    /// The project's number, as the counter minted it — `1` for `ID0001`.
+    ///
+    /// **The id string is a rendering, and a rendering cannot be inverted.**
+    /// `Counters::format_id` is lossy: prefix `20` with two digits and prefix
+    /// `2` with three both render `1` as `2001`. Reading the number back by
+    /// parsing the trailing digits therefore guesses, and a template with a
+    /// digits-only `id.prefix` — which `docs/cli.md` names as a supported
+    /// case — makes it guess catastrophically: `2001` reads back as two
+    /// thousand and one, the counter's self-heal floor jumps there, and
+    /// because the counter only ever rises, one create renumbers the library
+    /// for good.
+    ///
+    /// So the number is written down instead of re-derived.
+    /// `naming::id_value` remains as the fallback for every project written
+    /// before this field existed.
+    ///
+    /// `Option` + `skip_serializing_if`, so a file written by an earlier
+    /// version stays byte-identical after a no-op mutation — the guarantee
+    /// the round-trip tests hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id_number: Option<u64>,
     pub template: String,
     pub template_name: String,
     pub created: String,
@@ -107,6 +128,7 @@ impl Metadata {
     /// `owned_keys_covers_every_serialized_field`.
     pub const OWNED_KEYS: &'static [&'static str] = &[
         "id",
+        "id_number",
         "template",
         "template_name",
         "created",
@@ -149,6 +171,11 @@ impl Metadata {
 
         Self {
             id: plan.id_str.clone(),
+            // The number the counter actually minted, recorded rather than
+            // left to be parsed back out of `id` later. Register sets it too:
+            // its plan carries the id recovered from the folder name, and
+            // recovering a low one must not lower the counter.
+            id_number: Some(plan.counter_value),
             template: tmpl.slug.clone(),
             template_name: tmpl.name.clone(),
             created,
@@ -517,9 +544,11 @@ mod tests {
     /// to succeed and changes nothing. Catch it here rather than in a bug report.
     #[test]
     fn owned_keys_covers_every_serialized_field() {
-        // `provisioning: true` so nothing is skipped and every key is emitted.
+        // `provisioning: true` and `id_number: Some` so nothing is skipped and
+        // every key is emitted.
         let meta = Metadata {
             id: "ID0001".to_string(),
+            id_number: Some(1),
             template: "t".to_string(),
             template_name: "T".to_string(),
             created: "2026-01-01T00:00:00Z".to_string(),

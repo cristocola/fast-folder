@@ -110,6 +110,7 @@ fn a_cache_entry_that_leaves_its_base_is_dropped() {
         let entry = CacheEntry {
             dir: dir.to_string(),
             id: "ID0001".to_string(),
+            id_number: None,
             template: "gen".to_string(),
             template_name: "General".to_string(),
             name: "forged".to_string(),
@@ -126,6 +127,7 @@ fn a_cache_entry_that_leaves_its_base_is_dropped() {
     let entry = CacheEntry {
         dir: "proj_a".to_string(),
         id: "ID0001".to_string(),
+        id_number: None,
         template: "gen".to_string(),
         template_name: "General".to_string(),
         name: "proj_a".to_string(),
@@ -169,6 +171,7 @@ fn existence_check_drops_missing_folder() {
     let real = scan_base(base);
     let phantom = Project {
         id: "ID0099".to_string(),
+        id_number: None,
         template: "gen".to_string(),
         template_name: "gen name".to_string(),
         name: "proj_ghost".to_string(),

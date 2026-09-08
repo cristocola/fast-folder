@@ -68,6 +68,7 @@ impl Query {
 pub fn row_meta(project: &Project) -> Metadata {
     Metadata {
         id: project.id.clone(),
+        id_number: project.id_number,
         template: project.template.clone(),
         template_name: project.template_name.clone(),
         created: project.created.clone(),

@@ -216,6 +216,7 @@ mod tests {
     fn project(id: &str, name: &str) -> Project {
         Project {
             id: id.to_string(),
+            id_number: None,
             template: "general".to_string(),
             template_name: "General".to_string(),
             name: name.to_string(),

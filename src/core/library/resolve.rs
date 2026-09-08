@@ -4,7 +4,6 @@ use anyhow::Result;
 use std::path::Path;
 
 use crate::core::config::Config;
-use crate::core::naming;
 
 use super::cache::*;
 use super::discovery::*;
@@ -40,7 +39,7 @@ pub enum Resolution {
 /// case-insensitive name substring.
 ///
 /// The numeric tier is what makes `fastf open 37` find `ID0037`: an all-digits
-/// query is read as an ID *number* and compared with [`naming::id_value`], so
+/// query is read as an ID *number* and compared with [`Project::number`], so
 /// it is prefix-agnostic and immune to padding width. It sits *below* the exact
 /// tier because a template may declare a digits-only ID prefix, which makes an
 /// all-digits string a legal complete ID; it sits *above* the prefix tier
@@ -57,10 +56,7 @@ pub fn resolve_matches(cfg: &Config, query: &str) -> Resolution {
     if matches.is_empty()
         && let Some(n) = numeric_query(query)
     {
-        matches = projects
-            .iter()
-            .filter(|p| naming::id_value(&p.id) == Some(n))
-            .collect();
+        matches = projects.iter().filter(|p| p.number() == Some(n)).collect();
     }
     // 3. ID prefix.
     if matches.is_empty() {
@@ -182,7 +178,7 @@ pub fn max_id(cfg: &Config) -> u64 {
 pub(crate) fn max_id_in_base(base: &Path) -> u64 {
     read_base_readonly(base)
         .iter()
-        .filter_map(|project| naming::id_value(&project.id))
+        .filter_map(|project| project.number())
         .max()
         .unwrap_or(0)
 }

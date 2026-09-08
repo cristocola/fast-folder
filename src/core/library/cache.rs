@@ -25,6 +25,11 @@ pub(crate) struct CacheEntry {
     /// Base-relative directory (portable across OSes / drive letters).
     pub(crate) dir: String,
     pub(crate) id: String,
+    /// The number behind the id. `serde(default)` rather than a version bump:
+    /// an older cache simply reads as `None`, and `Project::number`'s fallback
+    /// covers it, so nothing has to be rescanned to adopt this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) id_number: Option<u64>,
     pub(crate) template: String,
     pub(crate) template_name: String,
     pub(crate) name: String,
@@ -49,6 +54,7 @@ impl CacheEntry {
         Self {
             dir: entry_dir(project, base),
             id: project.id.clone(),
+            id_number: project.id_number,
             template: project.template.clone(),
             template_name: project.template_name.clone(),
             name: project.name.clone(),
@@ -82,6 +88,7 @@ impl CacheEntry {
 
         Some(Project {
             id: self.id,
+            id_number: self.id_number,
             template: self.template,
             template_name: self.template_name,
             name: self.name,
@@ -147,7 +154,7 @@ pub fn index_summary(base: &Path) -> Option<IndexSummary> {
     let max_id = cache
         .entries
         .iter()
-        .max_by_key(|entry| naming::id_value(&entry.id))
+        .max_by_key(|entry| entry.id_number.or_else(|| naming::id_value(&entry.id)))
         .map(|entry| entry.id.clone());
     let newest = cache
         .entries

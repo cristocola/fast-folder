@@ -17,6 +17,9 @@ pub(crate) const SCAN_DEPTH: usize = 1;
 pub struct Project {
     /// Authoritative ID from the `PROJECT_INFO.md` frontmatter.
     pub id: String,
+    /// The number behind that id, when the project records one. Read through
+    /// [`Project::number`], never directly — see it for why.
+    pub id_number: Option<u64>,
     pub template: String,
     pub template_name: String,
     /// Folder basename (cosmetic).
@@ -34,6 +37,26 @@ pub struct Project {
     /// always `true` for returned projects (the field exists so future callers
     /// can render a transient "missing" state without a signature change).
     pub exists: bool,
+}
+
+impl Project {
+    /// **The one way to ask what number a project is.**
+    ///
+    /// Prefers the number recorded in `PROJECT_INFO.md`, and falls back to
+    /// reading the trailing digits of the id string for every project written
+    /// before that field existed.
+    ///
+    /// The fallback is a guess, and for one shape of template a bad one:
+    /// `Counters::format_id` is lossy, so a digits-only `id.prefix` renders
+    /// project 1 as `2001` and the parse reads two thousand and one back.
+    /// That fed the counter's self-heal floor, and the counter never
+    /// descends — so a single create renumbered a whole library. Recording
+    /// the number removes the guess for everything created from here on, and
+    /// `fastf reindex` backfills what came before.
+    pub fn number(&self) -> Option<u64> {
+        self.id_number
+            .or_else(|| crate::core::naming::id_value(&self.id))
+    }
 }
 
 /// Short display label for a base directory: its last path component (e.g.

@@ -40,6 +40,7 @@ pub fn sample_projects(n: usize) -> Vec<Project> {
             let folder = format!("2026-08-{day:02}_{}_{id}", names[i % names.len()]);
             Project {
                 id,
+                id_number: Some(248 - i as u64),
                 template: slug.to_string(),
                 template_name: name.to_string(),
                 path: PathBuf::from(BASE).join(&folder),

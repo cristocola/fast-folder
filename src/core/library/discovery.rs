@@ -188,6 +188,7 @@ pub(crate) fn project_from_meta(meta: Metadata, base: &Path, dir: &Path) -> Proj
     };
     Project {
         id: meta.id,
+        id_number: meta.id_number,
         template: meta.template,
         template_name: meta.template_name,
         name,

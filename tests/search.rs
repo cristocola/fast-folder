@@ -33,6 +33,7 @@ fn query_predicates_each_operator() {
     let make_meta = |id: &str, tmpl: &str, created: &str, tags: &[&str], vars: &[(&str, &str)]| {
         project_info::Metadata {
             id: id.to_string(),
+            id_number: None,
             template: tmpl.to_string(),
             template_name: tmpl.to_string(),
             created: created.to_string(),

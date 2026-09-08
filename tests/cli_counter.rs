@@ -32,6 +32,61 @@ fn id_set_below_the_floor_is_refused() {
     );
 }
 
+/// **A digits-only `id.prefix` must not renumber the library.**
+///
+/// `docs/cli.md` names digits-only prefixes as a supported case — it is why
+/// the numeric lookup tier sits below exact-id. But `Counters::format_id` is a
+/// lossy encoder: prefix `20` with two digits renders project 1 as `2001`, and
+/// reading the number back by parsing the trailing digits answered two
+/// thousand and one. That fed the counter's self-heal floor, and the counter
+/// never descends — so one create from such a template renumbered every
+/// project after it, permanently, and `fastf path 1` could not find the
+/// project numbered 1.
+///
+/// The number is recorded in `PROJECT_INFO.md` now rather than re-derived.
+#[test]
+fn a_digits_only_id_prefix_does_not_jump_the_counter() {
+    let sb = Sandbox::new();
+    let dir = sb.install.join("templates").join("num");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("template.yaml"),
+        "name: Numeric\nslug: num\nnaming_pattern: \"{name}_{id}\"\n\
+         id:\n  prefix: \"20\"\n  digits: 2\n\
+         variables:\n  - slug: name\n    label: Name\n    type: text\n    required: true\n",
+    )
+    .unwrap();
+
+    sb.ok(&["new", "num", "--name=First", "--yes", "--no-preview"]);
+    let shown = sb.ok(&["id", "show"]);
+    assert!(
+        shown.contains("next will be 2"),
+        "one project means the next is number 2, not 2002: {shown}"
+    );
+
+    // The second project is 2002 as a *rendering* of the number 2 — not
+    // 202002, which is what a floor of 2001 would have produced.
+    //
+    // The stored ids are quoted: an all-digits id has to be, or YAML reads it
+    // back as an integer and the `String` field rejects the whole document.
+    sb.ok(&["new", "num", "--name=Second", "--yes", "--no-preview"]);
+    let ids: Vec<String> = ids_in(&sb.base)
+        .iter()
+        .map(|id| id.trim_matches(['\'', '"']).to_string())
+        .collect();
+    assert!(
+        ids.contains(&"2002".to_string()),
+        "expected the second project to be 2002, got {ids:?}"
+    );
+
+    // And the number is reachable by number, which is the documented tier.
+    let path = sb.ok(&["path", "1"]);
+    assert!(
+        path.contains("First"),
+        "`path 1` must find the project numbered 1: {path}"
+    );
+}
+
 /// Deleting every project must not let the counter fall back and reissue IDs.
 /// `fastf id reset` used to report success and change nothing at all.
 #[test]

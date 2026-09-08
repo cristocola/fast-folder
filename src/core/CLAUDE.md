@@ -252,7 +252,30 @@ replace spaces — `fastf new` gets that from the variable's transform. Register
 no-template path has no transform, so it uses `slugify_folder_name`.
 
 `naming::parse_id_token(name, prefix)` (register only) versus `naming::id_value`
-(prefix-agnostic trailing digits, for `max_id`). Do not swap them.
+(prefix-agnostic trailing digits). Do not swap them.
+
+**A project's number is written down, not re-derived.** `Metadata.id_number`
+holds what the counter minted, and `Project::number()` is the one way to ask
+for it — it prefers the field and falls back to `id_value` for projects
+written before it existed. `Counters::format_id` is a *lossy* encoder (prefix
+`20` with two digits and prefix `2` with three both render 1 as `2001`), so
+inverting it by parsing is a guess, and for the digits-only prefix
+`docs/cli.md` explicitly supports it guessed catastrophically: `2001` read
+back as two thousand and one, `max_id` fed that to the counter floor, and
+since the counter never descends **one create renumbered the whole library
+permanently**. Making the read prefix-aware instead was rejected — the floor
+is computed on every create *and* every preview over every project, so a
+template load per row is absurd there, and it has no answer at all for a
+project registered without a template, one whose template was deleted, or one
+copied from a machine with different templates; a guess that reads too *low*
+mints a duplicate id, which is worse than one that reads too high. That
+lookup is affordable exactly once, in `reindex`, which backfills the field and
+leaves anything it cannot resolve alone.
+
+`id_number` is `Option<u64>` with `skip_serializing_if`, and `CacheEntry`
+carries it with `serde(default)` and **no `CACHE_VERSION` bump**: an older
+file simply reads as `None` and the fallback covers it, so nothing has to be
+rescanned or rewritten to adopt this.
 
 ## Moving projects
 

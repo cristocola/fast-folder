@@ -527,6 +527,7 @@ fn opening_a_project_checks_the_path_before_spawning_anything() {
         let real = write_project(base, "real", &valid_frontmatter("ID0001", "real"));
         let project = library::Project {
             id: "ID0001".to_string(),
+            id_number: None,
             template: "t".to_string(),
             template_name: "T".to_string(),
             name: "real".to_string(),
@@ -591,6 +592,7 @@ fn a_project_directory_replaced_by_a_link_is_not_opened() {
 
         let project = library::Project {
             id: "ID0001".to_string(),
+            id_number: None,
             template: "t".to_string(),
             template_name: "T".to_string(),
             name: "linked".to_string(),

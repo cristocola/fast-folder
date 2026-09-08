@@ -309,6 +309,7 @@ mod tests {
     fn make_meta(id: &str, template: &str, tags: &[&str]) -> Metadata {
         Metadata {
             id: id.to_string(),
+            id_number: None,
             template: template.to_string(),
             template_name: template.to_string(),
             created: "2026-01-15T10:00:00Z".to_string(),
@@ -439,6 +440,7 @@ mod tests {
     ) -> Metadata {
         Metadata {
             id: id.to_string(),
+            id_number: None,
             template: template.to_string(),
             template_name: template_name.to_string(),
             created: "2026-01-15T10:00:00Z".to_string(),

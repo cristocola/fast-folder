@@ -521,6 +521,7 @@ fn provision_project(
     // new project's parent (canonical), matching `library::discover`'s bases.
     let project = crate::core::library::Project {
         id: plan.id_str.clone(),
+        id_number: Some(plan.counter_value),
         template: template.slug.clone(),
         template_name: template.name.clone(),
         name: plan.folder_name.clone(),

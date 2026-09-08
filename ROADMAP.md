@@ -290,6 +290,48 @@ closed plan file:
 - A watchdog for a clipboard tool that does not fork — the `wl-copy --foreground`
   shape. `clipboard::feed`'s `wait()` has no timeout.
 
+Open findings from the Windows pass, reproduced but not fixed — none are
+Windows-specific, so they belong to an ordinary session rather than that one:
+
+- **`fastf search` never diagnoses a malformed clause.** `created<tomorrow`
+  matches every project (a lexicographic compare against `2026-…`), and
+  `created>`, `tag:` and `=x` print "No projects match" with exit 0. The app's
+  search bar already refuses all of these by name through `query::diagnose`
+  (`src/core/query.rs`), which `src/cli/search.rs` simply never calls. The
+  date shape check it needs, `looks_like_a_date`, is in that module too.
+- **`fastf recent` does not validate its filters.** A `--since` that is not a
+  date, or a `--base`/`--template` that names nothing, prints "No projects
+  match those filters" and exits 0. `--since 2026-6-1` is the sharp one: it
+  compares as text, so every 2026 project is silently dropped for want of a
+  zero. `--limit 0` is already refused right beside it, so the surface is
+  inconsistent with itself.
+- **`fastf id show` renders the counter through an arbitrary template's
+  format.** `print_counter` (`src/cli/id.rs`) formats the value with
+  `templates[0]`'s prefix and width — the comment there claims templates
+  "share prefix/digits", which is not true — so it printed `Global project ID:
+  202001  (next will be 2002)`: one number shown two ways on one line.
+- **A template directory whose name differs from its manifest `slug`** is
+  listed under the slug, which no command then accepts: `template show` and
+  `new` fail with "not found", and `new` prints a full preview before doing
+  so. `load_all` should refuse the mismatch the way it refuses an invalid
+  slug, or the listing should show the directory.
+- **A dry run previews files it will not write.** The "Previews:" section is
+  built from every text file the loader scanned, without applying `exclude` or
+  `verbatim`, so an excluded file is shown and a verbatim one is shown with
+  its `{braces}` filled in — the opposite of what the copy does. The "Files:"
+  list beside it filters correctly.
+- **`template show` lists a stripped root `PROJECT_INFO.md` as a bundled
+  asset**, promising it will be copied byte-for-byte when it is silently
+  dropped instead.
+- **`from-folder` writes the Windows verbatim prefix into a description**
+  (`Generated from \\?\C:\…`), and the "no folder" refusal for a project whose
+  metadata vanished says the folder is missing, repeats the path three times
+  and shows one copy verbatim. `util::paths::display_path` exists for exactly
+  this and is not used at those two sites.
+- **`key=*value*` matches nothing.** `to_pattern` accepts a trailing `*` only,
+  which is what the module documents, but `docs/cli.md` and `--help` both call
+  it a glob. A wording fix unless a leading `*` is wanted.
+
 Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 
 - `query::resolve_field` clones per field access and `Predicate::Free`

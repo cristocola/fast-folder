@@ -117,21 +117,30 @@ fn print_counter(cfg: &Config, val: u64) {
         // Every other place this number is shown already prints it plain:
         // `fastf id sync` two functions above, and the settings screen. The ID
         // a create actually mints is decided by that create's template.
-        let next = Counters::load()
-            .ok()
-            .and_then(|counters| Counters::next_value(cfg, &counters).ok());
+        //
+        // The three answers are different facts and used to be two: a counter
+        // file that would not parse made `load()` an `Err`, which collapsed
+        // into the same `None` as a real overflow and printed "the maximum,
+        // 999999999999, is reached" over a counter reading 1. A question that
+        // cannot be answered is answered with that, not with a number.
+        let next = match Counters::load() {
+            // The one expression for "which ID comes next" — never a second
+            // `+ 1` written out here, which is how a preview came to confirm
+            // one number and a commit to write another.
+            Ok(counters) => match Counters::next_value(cfg, &counters) {
+                Ok(next) => format!("(next project takes {next})"),
+                // `next_value` fails on exactly one thing: the `checked_add`
+                // against `MAX_VALUE`.
+                Err(_) => format!("(the maximum, {}, is reached)", Counters::MAX_VALUE),
+            },
+            // Already reported through `diag` by whatever computed the floor.
+            Err(_) => "(the counter file cannot be read, so the next ID is unknown)".to_string(),
+        };
         println!(
             "{} {}  {}",
             "Global project ID:".bold(),
             val.to_string().green().bold(),
-            match next {
-                // The one expression for "which ID comes next" — never a
-                // second `+ 1` written out here, which is how a preview came
-                // to confirm one number and a commit to write another.
-                Some(next) => format!("(next project takes {next})"),
-                None => format!("(the maximum, {}, is reached)", Counters::MAX_VALUE),
-            }
-            .dimmed()
+            next.dimmed()
         );
     }
 

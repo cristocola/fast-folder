@@ -43,6 +43,10 @@ After creation the file is yours. fastf rewrites the frontmatter when you tag, m
 
 This matters most when two machines share one library. A newer fastf can write a key an older one has never heard of, and the older one will not delete it.
 
+**If you break it, fastf says so.** Only `id` and `template` are required; `created`, `folder`, `path` and `template_name` can go missing and the project is still a project (`created` falls back to the folder's own date, and the other two are read from the folder itself anyway). But a `PROJECT_INFO.md` fastf genuinely cannot read — bytes that are not UTF-8, a missing `---` line, YAML that does not parse — means the folder drops out of `recent`, `search` and the app, and every command that walks the library prints a warning naming the folder and the file. Fix the file and it comes straight back; nothing else about the project has changed.
+
+The one to watch for on a shared drive is the encoding: a Windows editor saving as the system codepage rather than UTF-8 turns one accented character into bytes fastf cannot read.
+
 ## Discovery and bases
 
 fastf looks for projects in your **base directory** (`base-dir`, where new projects are created) plus any extra **bases** you configure:

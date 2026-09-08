@@ -409,6 +409,21 @@ entering cleanup; `CleanupPending` repeats those checks before source removal.
 Missing bases, malformed journals, identity mismatches and unknown states are
 report-only.
 
+**A case-only rename** stages through `.<target>.fastf-case`, and reconcile
+finishes it. `library::lifecycle::case_staging_name`/`case_staging_target` are
+the one spelling of that name, so the writer and the recovery cannot disagree
+about it. Every *error* path in the rename rolls back, and a failed rollback says
+where it left the folder; a hard kill between the two renames reaches neither,
+and `scan_base` skips dot-prefixed directories — so the project was simply gone,
+with nothing anywhere recording it. It was the one multi-step mutation in the
+crate with no recovery story. Reconcile finishes **forward**, because the staging
+name carries the target and the name the folder had before is written down
+nowhere by then; it requires both a name only lifecycle writes *and* a
+`PROJECT_INFO.md` inside, since renaming somebody else's `.X.fastf-case` on top
+of whatever `X` is would be worse than the state being repaired, and it refuses
+rather than overwriting an occupied target. `ReconcileReport.restored` is the
+count.
+
 **Pre-v2 markers contain arbitrary absolute paths and are never read as
 authority.** Reconcile reports them as `obsolete` without parsing, migrating,
 following, copying, deleting or suffix-sweeping. Never resurrect v1 JSON
@@ -493,7 +508,15 @@ excluded**, with a regression test: home-directory text must never produce
 phantom matches.
 
 **Journal** entries are append-only markdown lines under `## Journal`:
-`- 2026-04-20T14:32:11Z — message`. `notes --since` compares timestamps
+`- 2026-04-20T14:32:11Z — message`. **`project_info::journal_span` is the one
+definition of where that section is**, read by the writer and the reader alike.
+They had one each: `append_journal_entry` wrote at the end of the *file* whenever
+a `## Journal` heading existed anywhere, and `parse_journal_entries` stopped at
+the next `##`. The body is the user's own — `docs/projects.md` says so — so a
+heading of their own underneath the journal put every later note past the point
+the reader stops at: written, `Ok`, printed, and never seen again. The
+no-section-yet branch still emits exactly the bytes it always did; these files
+are diffed and committed. `notes --since` compares timestamps
 lexicographically, which is cheap and correct because ISO-8601 sorts as text.
 **Slice a timestamp with `.get(..10)`, never `[..10]`** — a hand-edited file can
 put anything there, and byte-slicing panicked on the first multi-byte character.

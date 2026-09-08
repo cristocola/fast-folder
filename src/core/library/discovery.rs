@@ -161,18 +161,73 @@ pub fn scan_base(base: &Path) -> Vec<Project> {
 /// Build a [`Project`] from a folder iff it contains a readable
 /// `PROJECT_INFO.md` with parseable frontmatter. Uses the fixed reserved
 /// filename directly (no config lookup) — metadata is now the project identity.
+///
+/// A folder fastf *cannot* read is warned about here rather than skipped in
+/// silence. This is the one walk over the whole library, so it is the one place
+/// that knows the difference between a folder nobody claimed and a project that
+/// has stopped being visible.
 pub(crate) fn project_at(base: &Path, dir: &Path) -> Option<Project> {
-    let meta = read_project_meta(dir)?;
-    Some(project_from_meta(meta, base, dir))
+    match read_project_meta_reporting(dir) {
+        Ok(meta) => Some(project_from_meta(meta, base, dir)),
+        Err(NotAProject::NoMetadata) => None,
+        Err(NotAProject::Unreadable(why)) => {
+            crate::util::diag::warn(format!(
+                "{} holds a {} fastf cannot read, so it is not in the library: {why}",
+                crate::util::paths::display_path(dir),
+                project_info::RESERVED_FILENAME
+            ));
+            None
+        }
+    }
+}
+
+/// Why a folder yielded no [`Metadata`].
+///
+/// Discovery used to answer this with a bare `None`, which conflates two facts
+/// that could not be more different. "There is no `PROJECT_INFO.md` here" is
+/// what every ordinary folder looks like and must stay silent. "There is one
+/// and fastf cannot read it" is a project the user still has and the library
+/// has stopped showing — and that was silent too, so one bad line in a file
+/// `docs/projects.md` explicitly invites people to edit ("After creation the
+/// file is yours") dropped the project out of `recent`, `search` and the app,
+/// with `reindex` reporting a count of zero as a success.
+pub(crate) enum NotAProject {
+    /// No `PROJECT_INFO.md` in this folder.
+    NoMetadata,
+    /// A `PROJECT_INFO.md` is there and did not become `Metadata`: unreadable
+    /// bytes, no frontmatter delimiters, or YAML that will not deserialize.
+    Unreadable(String),
+}
+
+/// Read + parse the frontmatter of `<dir>/PROJECT_INFO.md`, saying which kind
+/// of nothing it found. [`read_project_meta`] is the shape callers that do not
+/// care keep using.
+pub(crate) fn read_project_meta_reporting(dir: &Path) -> Result<Metadata, NotAProject> {
+    let path = dir.join(project_info::RESERVED_FILENAME);
+    let body = match fs::read_to_string(&path) {
+        Ok(body) => body,
+        // Only "it is not there" is an ordinary folder. Everything else —
+        // permissions, a device error, bytes that are not UTF-8 (which is what
+        // a Windows editor saving as the ANSI codepage leaves behind on a
+        // shared drive) — is a file that exists and did not open.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(NotAProject::NoMetadata);
+        }
+        Err(err) => return Err(NotAProject::Unreadable(err.to_string())),
+    };
+    let Some((frontmatter, _)) = project_info::split_frontmatter_body(&body) else {
+        return Err(NotAProject::Unreadable(
+            "no `---` frontmatter block at the top of the file".to_string(),
+        ));
+    };
+    crate::util::yaml::from_str::<Metadata>(frontmatter)
+        .map_err(|err| NotAProject::Unreadable(err.to_string()))
 }
 
 /// Read + parse the frontmatter of `<dir>/PROJECT_INFO.md`. `None` on any
 /// failure (missing file, no frontmatter, malformed YAML).
 pub(crate) fn read_project_meta(dir: &Path) -> Option<Metadata> {
-    let path = dir.join(project_info::RESERVED_FILENAME);
-    let body = fs::read_to_string(&path).ok()?;
-    let (frontmatter, _) = project_info::split_frontmatter_body(&body)?;
-    crate::util::yaml::from_str::<Metadata>(frontmatter).ok()
+    read_project_meta_reporting(dir).ok()
 }
 
 pub(crate) fn project_from_meta(meta: Metadata, base: &Path, dir: &Path) -> Project {

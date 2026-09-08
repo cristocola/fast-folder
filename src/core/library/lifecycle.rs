@@ -125,6 +125,41 @@ pub fn rename_project_configured(project: &Project, new_folder: &str) -> Result<
     rename_project_inner(&project, new_folder)
 }
 
+/// The suffix on the folder a case-only rename passes through.
+///
+/// The staging name is `.<target>.fastf-case[n]`: dot-prefixed so nothing can
+/// mistake it for a project while it is there, and carrying the **target** name
+/// so the operation can still be finished by anything that finds it later.
+/// `provisioning::reconcile` is that anything — this is spelled here, beside the
+/// only writer, and read there.
+pub(crate) const CASE_STAGING_SUFFIX: &str = ".fastf-case";
+
+/// The staging folder name for a case-only rename to `target`, attempt `n`.
+pub(crate) fn case_staging_name(target: &str, attempt: u32) -> String {
+    if attempt == 0 {
+        format!(".{target}{CASE_STAGING_SUFFIX}")
+    } else {
+        format!(".{target}{CASE_STAGING_SUFFIX}{attempt}")
+    }
+}
+
+/// The folder name a case-only staging directory was on its way to, or `None`
+/// if `name` is not one of ours.
+pub(crate) fn case_staging_target(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix('.')?;
+    let at = rest.rfind(CASE_STAGING_SUFFIX)?;
+    // Whatever trails the suffix is the collision counter and must be digits —
+    // otherwise `.notes.fastf-case-backup` would be read as ours.
+    let (target, trailing) = rest.split_at(at);
+    if !trailing[CASE_STAGING_SUFFIX.len()..]
+        .chars()
+        .all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    (!target.is_empty()).then_some(target)
+}
+
 /// What to say when a case-only rename could neither commit nor be undone.
 ///
 /// The folder is parked under a dot-prefixed staging name at this point, and
@@ -172,11 +207,11 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
     // fixes.
     let case_only_change = sanitized.to_lowercase() == project.name.to_lowercase();
     if case_only_change {
-        let mut staging = base.join(format!(".{sanitized}.fastf-case"));
         let mut attempt = 0;
+        let mut staging = base.join(case_staging_name(&sanitized, attempt));
         while assets::entry_exists(&staging)? {
             attempt += 1;
-            staging = base.join(format!(".{sanitized}.fastf-case{attempt}"));
+            staging = base.join(case_staging_name(&sanitized, attempt));
         }
         crate::util::fs_retry::rename(&project.path, &staging)?;
         if let Err(err) = crate::util::fs_retry::rename(&staging, &new_path) {
@@ -238,4 +273,38 @@ pub(crate) fn remove_from_base_cache(project: &Project) {
         .map(to_forward_slashes)
         .unwrap_or_else(|_| project.name.clone());
     cache_remove(&base, &dir);
+}
+
+#[cfg(test)]
+mod case_staging_tests {
+    use super::{case_staging_name, case_staging_target};
+
+    #[test]
+    fn a_staging_name_names_the_folder_it_was_going_to() {
+        assert_eq!(case_staging_name("Album", 0), ".Album.fastf-case");
+        assert_eq!(case_staging_name("Album", 3), ".Album.fastf-case3");
+        assert_eq!(case_staging_target(".Album.fastf-case"), Some("Album"));
+        assert_eq!(case_staging_target(".Album.fastf-case3"), Some("Album"));
+    }
+
+    #[test]
+    fn nothing_else_is_read_as_ours() {
+        // Somebody else's dot-folder, and near-misses of our own shape.
+        for name in [
+            ".git",
+            "Album.fastf-case",
+            ".fastf-case",
+            ".Album.fastf-case-backup",
+            ".Album.fastf-caseX",
+        ] {
+            assert_eq!(case_staging_target(name), None, "{name} is not ours");
+        }
+    }
+
+    #[test]
+    fn a_target_that_contains_the_suffix_survives_the_round_trip() {
+        // `rfind`, not `find`: the last occurrence is the one we appended.
+        let staged = case_staging_name("Album.fastf-case", 0);
+        assert_eq!(case_staging_target(&staged), Some("Album.fastf-case"));
+    }
 }

@@ -609,6 +609,112 @@ fn reindex_rescans_and_reports_a_count() {
     );
 }
 
+/// `reindex` writes down the number behind each id for projects that predate
+/// the field, and leaves alone the ones it cannot resolve.
+///
+/// This is the only repair path for the defect `Metadata::id_number` exists to
+/// prevent — a lossy id rendering parsed back into a number that is far too
+/// large, taken as the counter floor, and, because the counter never descends,
+/// renumbering the whole library on the next create. It had no test at all.
+#[test]
+fn reindex_writes_down_the_number_behind_an_id_it_can_resolve() {
+    let sb = Sandbox::new();
+    sb.write_template("race"); // prefix `R`, four digits
+
+    let plant = |folder: &str, id: &str, template: &str| {
+        let dir = sb.base.join(folder);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("PROJECT_INFO.md"),
+            format!(
+                "---\nid: {id}\ntemplate: {template}\ntemplate_name: T\n\
+                 created: 2026-01-01T00:00:00Z\nfolder: {folder}\npath: x\n\
+                 variables: {{}}\ntags: []\n---\n"
+            ),
+        )
+        .unwrap();
+        dir
+    };
+    // Written before the field existed: no `id_number:` line anywhere.
+    let known = plant("R0042_Known", "R0042", "race");
+    // Its template is gone, so nothing can say where the prefix ends.
+    let orphan = plant("X0007_Orphan", "X0007", "vanished");
+
+    sb.ok(&["reindex"]);
+
+    let known_meta = fs::read_to_string(known.join("PROJECT_INFO.md")).unwrap();
+    assert!(
+        known_meta.contains("id_number: 42"),
+        "the number behind R0042 should be written down:\n{known_meta}"
+    );
+    let orphan_meta = fs::read_to_string(orphan.join("PROJECT_INFO.md")).unwrap();
+    assert!(
+        !orphan_meta.contains("id_number"),
+        "a project whose template is gone is left alone, never guessed at:\n{orphan_meta}"
+    );
+}
+
+/// A project fastf cannot read is named on stderr rather than quietly missing
+/// from the count.
+///
+/// `reindex` is the command whose whole job is to look again, so "Reindexed 1
+/// project" over a base holding two is the worst possible answer: it reports
+/// the loss as a success. Driven as a process because the warning goes through
+/// `util::diag` to stderr, which only a process has.
+#[test]
+fn reindex_names_a_project_it_cannot_read() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+    let broken = sb.plant_project(&sb.base, "2026-01-02_Beta_ID0002", "ID0002");
+    // Not UTF-8: what a Windows editor saving as the ANSI codepage leaves on a
+    // drive both operating systems mount.
+    fs::write(broken.join("PROJECT_INFO.md"), b"---\nid: ID\xe9002\n---\n").unwrap();
+
+    let out = sb.run(&["reindex"]);
+    assert!(out.status.success(), "a bad file is not a failed reindex");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Beta"),
+        "the folder fastf could not read must be named:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("PROJECT_INFO.md"),
+        "and the file, so the user knows what to open:\n{stderr}"
+    );
+}
+
+/// A hand-edited `PROJECT_INFO.md` missing a field that is not the project's
+/// identity keeps the project in the library.
+///
+/// `docs/projects.md` says "After creation the file is yours", and deleting one
+/// `created:` line used to take the folder out of `recent`, `search` and the
+/// app with nothing said anywhere.
+#[test]
+fn a_hand_edit_that_drops_created_does_not_drop_the_project() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+    let path = dir.join("PROJECT_INFO.md");
+    let kept: String = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.starts_with("created:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(&path, kept).unwrap();
+
+    let out = sb.run(&["recent", "--plain"]);
+    assert!(out.status.success());
+    let listed = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        listed.contains("ID0001"),
+        "the project is still on disk and must still be listed:\n{listed}"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).is_empty(),
+        "and nothing is wrong, so nothing should be said"
+    );
+}
+
 /// `fastf reconcile` on a library with nothing outstanding says so and exits 0.
 /// Reporting "nothing to do" is the common case and the one that must be quiet.
 #[test]

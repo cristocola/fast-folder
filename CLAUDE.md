@@ -250,7 +250,13 @@ edits fastf cannot observe.
 `library::max_id(cfg)` **must stay read-only** — `plan()`/preview call it through
 the counter self-heal, so it uses `read_base_readonly` (fresh cache or scan, no
 write), never `discover` (which writes). Route it through `discover` and previews
-start writing caches.
+start writing caches. **It rejects a bad cache the same way `discover_base` does**
+— abandon the file, go back to the folders — rather than `filter_map`ping the
+rejected entry away and reading the rest, which is what it used to do. Of every
+reader this is the one where believing half a forged file matters most: it is
+`max_id_in_base`, and therefore the counter floor. Dropping whichever entry
+happened to hold the highest id leaves the floor low and the next create mints a
+number the library already has.
 
 **A `CacheEntry`'s `dir` must be exactly one ordinary path component, not
 dot-prefixed.** `into_project` returns `Option` and drops anything else: an
@@ -261,6 +267,26 @@ dot-prefixed because `scan_base` skips those. A rejected entry is **not** treate
 like a vanished folder — a folder that has gone is transient and the row is
 dropped, but an entry pointing outside its base means the file is no longer
 fastf's own bookkeeping, so the cache is abandoned and the base rescanned.
+
+**A folder fastf cannot read is not the same as a folder that is not a
+project, and only the first is worth saying.** `read_project_meta_reporting` is
+where the two part: no `PROJECT_INFO.md` is `NotAProject::NoMetadata` and stays
+silent, because every base has ordinary folders in it; a file that is there and
+does not open — unreadable bytes, no `---` delimiters, YAML that will not
+deserialize — is `Unreadable`, and `project_at` names it through `diag::warn`.
+The bare `None` that preceded this meant a project could leave the library in
+total silence, and `reindex` — the one command whose job is to look again —
+reported the smaller count as a success.
+
+**Only `id` and `template` are required to deserialize.** `template_name`,
+`created`, `folder` and `path` carry `#[serde(default)]`, because
+deserialization is all-or-nothing and none of them is identity: `created`
+already had `folder_created_fallback` behind it, and `folder`/`path` are
+re-derived in `project_from_meta` and never read from the file at all. They were
+optional in the model and required only by the derive, so one deleted `created:`
+line — in a file `docs/projects.md` invites people to edit — took the project
+out of the library. Serialization is unchanged, so `OWNED_KEYS` and the
+byte-identical round-trip are untouched.
 
 `library::revalidate_for_read` is the cheap sibling of `guard`'s mutation
 revalidation, for handing a discovered path to **another program**: a real
@@ -317,10 +343,21 @@ it; `operations::set_counter` refuses anything above it. Without the ceiling,
 `id set` accepted `u64::MAX` (above the floor was the only rule) and the next
 create's `+ 1` overflowed: a panic in debug, a wrap to zero in release.
 
-`Counters::propagate` **must not** `unwrap_or_default()` the data-dir counter.
-A read error reads as zero, zero is below everything, so the write proceeds and
-overwrites what could not be read — the exact file whose job is to stop an
-unplugged base from restarting numbering. It warns and skips instead.
+`Counters::propagate` **must not** `unwrap_or_default()` the data-dir counter,
+and **neither must `Counters::floor`**. A read error reads as zero, zero is below
+everything: for `propagate` the write then proceeds and overwrites what could not
+be read, and for `floor` the next id comes from the mounted bases alone — either
+way it is the exact file whose job is to stop an unplugged base from restarting
+numbering. Both go through `Counters::load_or_report`, which warns and answers
+`None`; `load` already returns `Ok(default)` for an *absent* file, so an `Err`
+there is only ever real. The report is **once per process**, because `floor` runs
+on every create, every preview and every `id` command and several of those reach
+it twice — one broken file saying so three times reads as three problems.
+
+A counter that cannot be read is also **not** a counter at its ceiling.
+`cli::id::print_counter` asked `load().ok().and_then(next_value)` and rendered
+that `None` as "the maximum, 999999999999, is reached" over a counter reading 1.
+Three facts, three branches.
 
 `naming::id_value` rejects any id containing a hyphen. An interim build wrote
 UUIDs, and reading the trailing digits of one would put the floor at 20044.

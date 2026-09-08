@@ -57,6 +57,33 @@ fn valid_frontmatter(id: &str, folder: &str) -> String {
     )
 }
 
+/// Everything `core` said through [`fastf::util::diag`] while `body` ran.
+///
+/// The sink is process-global, so this is only sound inside `sandbox()`, which
+/// holds this binary's `SERIAL` for the length of the body. The guard clears
+/// the sink in `Drop` rather than after the call, so a panicking assertion
+/// cannot leave the next test collecting into a dead `Vec`.
+fn collecting_diag<R>(body: impl FnOnce() -> R) -> (R, Vec<String>) {
+    struct Installed(std::sync::Arc<Mutex<Vec<String>>>);
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            fastf::util::diag::clear_sink();
+        }
+    }
+
+    let collected: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::default();
+    let sink = std::sync::Arc::clone(&collected);
+    fastf::util::diag::set_sink(Box::new(move |_level, message| {
+        sink.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(message.to_string());
+    }));
+    let guard = Installed(collected);
+    let out = body();
+    let messages = guard.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    (out, messages)
+}
+
 fn config_for(base: &Path) -> Config {
     let mut cfg = Config::default();
     cfg.base_dir = base.display().to_string();
@@ -91,9 +118,15 @@ fn corrupt_cache_self_heals() {
 }
 
 /// Projects whose metadata cannot be parsed are skipped, and must not take the
-/// rest of the library down with them.
+/// rest of the library down with them — **and each one says so.**
+///
+/// Skipping in silence is what made a project disappear: `docs/projects.md`
+/// invites the user to edit this file, and a single bad line took the folder
+/// out of `recent`, `search` and the app with nothing said anywhere and
+/// `reindex` reporting the smaller count as a success. A folder fastf cannot
+/// read is a folder the user still has.
 #[test]
-fn unparseable_metadata_is_skipped_not_fatal() {
+fn unparseable_metadata_is_skipped_but_never_in_silence() {
     sandbox(|_install, base| {
         write_project(base, "good", &valid_frontmatter("ID0001", "good"));
         write_project(base, "no_frontmatter", "just some notes, no YAML here\n");
@@ -102,7 +135,7 @@ fn unparseable_metadata_is_skipped_not_fatal() {
         write_project(base, "empty", "");
 
         let cfg = config_for(base);
-        let found = library::discover(&cfg);
+        let (found, said) = collecting_diag(|| library::discover(&cfg));
         assert_eq!(
             found.len(),
             1,
@@ -111,8 +144,111 @@ fn unparseable_metadata_is_skipped_not_fatal() {
         );
         assert_eq!(found[0].id, "ID0001");
 
+        for folder in ["no_frontmatter", "truncated", "bad_yaml", "empty"] {
+            assert!(
+                said.iter().any(|m| m.contains(folder)),
+                "{folder} was dropped without a word; said: {said:?}"
+            );
+        }
+        assert!(
+            said.iter().all(|m| !m.contains("good")),
+            "the readable project must not be warned about: {said:?}"
+        );
+
         // And the counter self-heal must not choke on the broken ones.
         assert_eq!(library::max_id(&cfg), 1);
+    });
+}
+
+/// An ordinary folder is not a broken project. Only a `PROJECT_INFO.md` that
+/// exists and will not open earns a warning — otherwise every base with a
+/// `Downloads` in it would warn on every discovery, and a warning nobody can
+/// act on teaches people to ignore the ones they can.
+#[test]
+fn a_folder_with_no_metadata_at_all_is_passed_over_in_silence() {
+    sandbox(|_install, base| {
+        write_project(base, "good", &valid_frontmatter("ID0001", "good"));
+        fs::create_dir_all(base.join("just_a_folder")).unwrap();
+
+        let cfg = config_for(base);
+        let (found, said) = collecting_diag(|| library::discover(&cfg));
+        assert_eq!(found.len(), 1);
+        assert!(said.is_empty(), "nothing to report, but said {said:?}");
+    });
+}
+
+/// A hand-edit that drops a field which is not the project's identity must not
+/// drop the project.
+///
+/// Deserialization is all-or-nothing, so one missing `created:` line used to
+/// mean `read_project_meta` answered `None` and the folder stopped being a
+/// project. `created`, `folder`, `path` and `template_name` are none of them
+/// identity — `created` already had a fallback, and `folder`/`path` are
+/// re-derived from the directory and never read — so they default now, and
+/// only `id` and `template` are load-bearing.
+#[test]
+fn metadata_missing_a_field_that_is_not_identity_is_still_a_project() {
+    sandbox(|_install, base| {
+        let full = valid_frontmatter("ID0001", "good");
+        for (folder, dropped) in [
+            ("no_created", "created:"),
+            ("no_folder", "folder:"),
+            ("no_path", "path:"),
+            ("no_template_name", "template_name:"),
+        ] {
+            let trimmed: String = full
+                .lines()
+                .filter(|line| !line.starts_with(dropped))
+                .map(|line| format!("{line}\n"))
+                .collect();
+            write_project(base, folder, &trimmed);
+        }
+
+        let cfg = config_for(base);
+        let (found, said) = collecting_diag(|| library::discover(&cfg));
+        let mut names: Vec<&str> = found.iter().map(|p| p.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["no_created", "no_folder", "no_path", "no_template_name"],
+            "a non-identity field is not what makes a folder a project"
+        );
+        assert!(said.is_empty(), "nothing is wrong here, but said {said:?}");
+        // `created` falls back to the folder's own timestamp rather than being
+        // left empty, so sorting the library still has something to sort on.
+        assert!(
+            found.iter().all(|p| !p.created.trim().is_empty()),
+            "created should fall back to the folder's own date"
+        );
+    });
+}
+
+/// Bytes that are not UTF-8 are the realistic version of this: a shared drive
+/// two operating systems mount, and one editor on the Windows side that saves
+/// as the ANSI codepage. The project is not readable and must be named.
+#[test]
+fn metadata_that_is_not_utf8_is_named_rather_than_dropped_quietly() {
+    sandbox(|_install, base| {
+        write_project(base, "good", &valid_frontmatter("ID0001", "good"));
+        let dir = base.join("ansi");
+        fs::create_dir_all(&dir).unwrap();
+        let mut bytes = valid_frontmatter("ID0002", "ansi").into_bytes();
+        // A lone 0xE9 — `é` as cp1252 wrote it, invalid on its own in UTF-8.
+        let at = bytes
+            .windows(7)
+            .position(|w| w == b"folder:")
+            .expect("frontmatter has a folder key")
+            + 8;
+        bytes[at] = 0xE9;
+        fs::write(project_info::pinfo_path(&dir), bytes).unwrap();
+
+        let cfg = config_for(base);
+        let (found, said) = collecting_diag(|| library::discover(&cfg));
+        assert_eq!(found.len(), 1, "the unreadable one is not in the library");
+        assert!(
+            said.iter().any(|m| m.contains("ansi")),
+            "the folder must be named: {said:?}"
+        );
     });
 }
 
@@ -469,6 +605,58 @@ fn plant_cache(base: &Path, dirs: &[&str]) {
         format!("{{\"version\":1,\"entries\":[{}]}}", entries.join(",")),
     )
     .unwrap();
+}
+
+/// The counter floor reads through a *different* function from discovery, and
+/// it used to keep reading a cache it had already rejected an entry from.
+///
+/// `max_id` → `max_id_in_base` → `library::resolve::read_base_readonly`, which
+/// `filter_map`ped the rejected entry away and carried on with the rest.
+/// `discover_base` does the documented thing — abandons the file and goes back
+/// to the folders — and the rule says why: an entry naming anything but a direct
+/// child of its own base means the file is no longer fastf's own bookkeeping, so
+/// nothing else in it is evidence either. Of all the readers, this is the one
+/// where believing half a forged file matters most: it decides the next ID.
+#[test]
+fn a_forged_cache_is_abandoned_by_the_counter_floor_too() {
+    sandbox(|_install, base| {
+        write_project(base, "real", &valid_frontmatter("ID0001", "real"));
+        assert_eq!(library::max_id(&config_for(base)), 1);
+
+        // A cache claiming two projects, the higher-numbered of which names a
+        // path outside the base. Planted last, so the staleness gate passes and
+        // the cache is actually read.
+        plant_cache(base, &["real", "../outside"]);
+
+        let cfg = config_for(base);
+        assert_eq!(
+            library::max_id(&cfg),
+            1,
+            "the floor must come from the folders once the cache is rejected, \
+             not from whichever forged entries happened to survive a filter"
+        );
+    });
+}
+
+/// And the read stays read-only while it does that. `max_id` runs on every
+/// create *and* every preview, so a rescan that rewrote the cache would turn
+/// previewing a project into a write.
+#[test]
+fn abandoning_a_forged_cache_still_writes_nothing() {
+    sandbox(|_install, base| {
+        write_project(base, "real", &valid_frontmatter("ID0001", "real"));
+        plant_cache(base, &["real", "../outside"]);
+        let cache = base.join(library::CACHE_FILENAME);
+        let before = fs::read(&cache).unwrap();
+
+        assert_eq!(library::max_id(&config_for(base)), 1);
+
+        assert_eq!(
+            fs::read(&cache).unwrap(),
+            before,
+            "the preview/plan path may not rewrite the cache, however bad it is"
+        );
+    });
 }
 
 #[test]

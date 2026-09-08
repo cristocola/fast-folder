@@ -195,6 +195,24 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
 
 Regression coverage grows with the relevant release:
 
+- [x] A folder holding a `PROJECT_INFO.md` fastf cannot read is named rather
+  than dropped in silence, and a hand-edit that removes a field which is not the
+  project's identity does not remove the project; an ordinary folder with no
+  metadata still says nothing (v3.3.0).
+- [x] An unreadable data-directory counter is reported once per process instead
+  of read as zero, a create refuses while it cannot be read, and `id show` says
+  the next ID is unknown rather than claiming the maximum is reached; the
+  counter floor abandons a forged cache the way discovery does, without writing
+  (v3.3.0).
+- [x] A journal note written after a heading the user added is still readable,
+  and their section stays where they put it (v3.3.0).
+- [x] `reconcile` finishes a case-only rename that was killed between its two
+  renames, refuses when the target is taken, and leaves a lookalike dot-folder
+  alone (v3.3.0).
+- [x] `reindex` writes down the number behind an id it can resolve and leaves
+  alone one it cannot; `on_name_collision = "error"` refuses instead of
+  suffixing (v3.3.0).
+
 - [x] A dry run's file list and its previews come from one walk and one
   classification: an excluded file appears in neither, a verbatim one is
   previewed with its `{braces}` intact and marked, and every previewed path is

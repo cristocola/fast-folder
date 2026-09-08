@@ -91,9 +91,31 @@ pub struct Metadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id_number: Option<u64>,
     pub template: String,
+    /// Everything from here to `path` carries `#[serde(default)]` because none
+    /// of it is the project's identity, and a field that is not identity must
+    /// not be able to *remove* a project.
+    ///
+    /// Deserialization is all-or-nothing: one missing required key and
+    /// `read_project_meta` returns `None`, which discovery reads as "this
+    /// folder is not a project". So a `PROJECT_INFO.md` fastf wrote itself,
+    /// missing one `created:` line after a hand-edit — and `docs/projects.md`
+    /// says the file is the user's to edit — dropped the project out of
+    /// `recent`, `search`, `reindex` and the app, with `reindex` reporting a
+    /// count of zero as a success.
+    ///
+    /// `created` already had a fallback one layer up (`folder_created_fallback`
+    /// in `library::discovery`, for filesystems with no birth time), and
+    /// `folder`/`path` are re-derived from the directory in `project_from_meta`
+    /// and never read from here at all — so all three were *already* optional
+    /// in the model and required only by the derive. `id` and `template` stay
+    /// required: they are what a project is.
+    #[serde(default)]
     pub template_name: String,
+    #[serde(default)]
     pub created: String,
+    #[serde(default)]
     pub folder: String,
+    #[serde(default)]
     pub path: String,
     #[serde(default)]
     pub variables: BTreeMap<String, String>,
@@ -404,10 +426,39 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
     crate::util::atomic::write(path, new_content.as_bytes())
 }
 
+/// Where the `## Journal` section is in a `PROJECT_INFO.md` body: the byte
+/// range from the heading to the start of the next `##`, or to the end.
+///
+/// **The one definition, read by the writer and the reader alike.** They had
+/// one each: `append_journal_entry` wrote at the end of the *file* whenever a
+/// `## Journal` heading existed anywhere, and `parse_journal_entries` stopped
+/// reading at the next `##`. The body below the frontmatter is documented as
+/// the user's own — `docs/projects.md` says so — so adding any heading of your
+/// own underneath the journal put every later `fastf note` past the readable
+/// region: the note was written, `Ok` was returned, the entry was printed, and
+/// `fastf notes` never showed it again.
+///
+/// `None` when there is no journal at all. The end index is always a `char`
+/// boundary: it is either the length, or the offset of a `\n`.
+fn journal_span(content: &str) -> Option<std::ops::Range<usize>> {
+    let start = content.find(JOURNAL_HEADING)?;
+    // Search past the heading's own `##` so it cannot match itself.
+    let end = content[start + 2..]
+        .find("\n##")
+        .map(|offset| start + 2 + offset)
+        .unwrap_or(content.len());
+    Some(start..end)
+}
+
+/// The `## Journal` heading, spelled once.
+const JOURNAL_HEADING: &str = "## Journal";
+
 /// Append a timestamped journal entry to `## Journal` in the file.
 ///
 /// If the file has no `## Journal` section one is created before EOF.
-/// Entries are appended in chronological order (oldest first).
+/// Entries are appended in chronological order (oldest first), at the end of
+/// **the section** rather than the end of the file — see `journal_span`, which
+/// the reader shares.
 /// The write is atomic: unique temp file + rename.
 pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
     let content =
@@ -424,21 +475,31 @@ pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
     let timestamp = crate::util::time::now_iso8601();
     let entry_line = format!("- {} — {}\n", timestamp, message);
 
-    let new_content = if content.contains("## Journal") {
-        // Section exists — append at end of file (chronological order).
-        if content.ends_with('\n') {
-            format!("{}{}", content, entry_line)
-        } else {
-            format!("{}\n{}", content, entry_line)
-        }
-    } else {
-        // No section yet — add it at end of file.
-        if content.ends_with('\n') {
-            format!("{}## Journal\n\n{}", content, entry_line)
-        } else {
-            format!("{}\n\n## Journal\n\n{}", content, entry_line)
+    // With the journal last — which is every file fastf wrote itself — the
+    // insertion point is the end of the file and these bytes are exactly what
+    // the old end-of-file append produced.
+    let insert_at = match journal_span(&content) {
+        Some(span) => span.end,
+        // No section yet: open one at the end of the file. These are the bytes
+        // this branch has always written — the body is diffed and committed by
+        // users, so it does not move for a fix that is about somewhere else.
+        None => {
+            let opened = if content.ends_with('\n') {
+                format!("{content}{JOURNAL_HEADING}\n\n{entry_line}")
+            } else {
+                format!("{content}\n\n{JOURNAL_HEADING}\n\n{entry_line}")
+            };
+            return crate::util::atomic::write(path, opened.as_bytes());
         }
     };
+
+    let mut new_content = String::with_capacity(content.len() + entry_line.len() + 1);
+    new_content.push_str(&content[..insert_at]);
+    if !new_content.is_empty() && !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+    new_content.push_str(&entry_line);
+    new_content.push_str(&content[insert_at..]);
 
     crate::util::atomic::write(path, new_content.as_bytes())
 }
@@ -460,18 +521,11 @@ pub struct JournalEntry {
 }
 
 fn parse_journal_entries(content: &str) -> Vec<JournalEntry> {
-    // Only process lines after the `## Journal` header.
-    let Some(journal_start) = content.find("## Journal") else {
+    // The same span the writer appends into — see `journal_span`.
+    let Some(span) = journal_span(content) else {
         return vec![];
     };
-    let journal_section = &content[journal_start..];
-
-    // Find where the next `##` section starts (if any) and stop there.
-    let section_body = if let Some(next_h2) = journal_section[2..].find("\n##") {
-        &journal_section[..next_h2 + 2] // stop before next ##
-    } else {
-        journal_section
-    };
+    let section_body = &content[span];
 
     let mut entries = Vec::new();
     for line in section_body.lines() {

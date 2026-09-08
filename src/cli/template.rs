@@ -62,7 +62,16 @@ pub fn show(slug: &str) -> Result<()> {
 /// one. The first line is the template's name.
 pub fn describe(t: &Template) -> Vec<String> {
     let mut lines = vec![t.name.clone()];
-    lines.push(format!("  Slug:    {}", t.slug));
+    // Said here rather than warned about on every load: `load_all` runs on
+    // every dashboard refresh, nothing has failed, and the one moment this is
+    // worth reading is while looking at the template it is about.
+    match &t.declared_slug {
+        Some(declared) => lines.push(format!(
+            "  Slug:    {}   (template.yaml says '{}' — the folder name is the slug)",
+            t.slug, declared
+        )),
+        None => lines.push(format!("  Slug:    {}", t.slug)),
+    }
     lines.push(format!("  Pattern: {}", t.naming_pattern));
     if !t.description.is_empty() {
         lines.push(format!("  Desc:    {}", t.description));

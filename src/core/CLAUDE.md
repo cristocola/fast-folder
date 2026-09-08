@@ -32,6 +32,25 @@ needs contents, and reading every file of every template to print a name was
 work nobody asked for. `tui::pickers::pick_template` therefore re-loads the
 template it picked, because its caller previews it.
 
+**The directory is the template's identity, and the manifest's `slug:` is
+cosmetic.** `load_with` takes the folder's name as the slug and keeps a
+disagreeing manifest value in `declared_slug` for `template show` to mention.
+Every lookup builds `templates/<slug>/template.yaml` from the slug —
+`find_by_slug` is the only door — so a manifest naming something else was a
+template `template list` printed and every other command rejected; and because a
+manifest field cannot be unique, two folders declaring one slug both listed and
+both resolved to whichever was read first, which is a create from the wrong
+template with no error anywhere.
+
+This is the same doctrine as filesystem-as-truth for projects, applied to the
+opposite field, and the asymmetry is worth stating: a project has no by-name
+lookup — it is *discovered*, so its folder may be renamed freely and the
+metadata `id` is the identity. A template *is* looked up by name, and that name
+is a path component, so the path is the identity and the field is the one that
+gives way. fastf never writes a mismatch (`save_template` writes to
+`template_dir(slug)`, `from-folder` builds both from the slug); it comes from
+`cp -r` plus a half-finished edit, and a save through fastf repairs it.
+
 There is **no migrate command** for pre-v0.8 flat `<slug>.yaml` templates and no
 flat-form fallback — `load_all` only reads subdirectories with a `template.yaml`.
 `Template::OWNED_KEYS` must keep listing `files` and `dir`: without them a flat

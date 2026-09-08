@@ -787,3 +787,133 @@ structure:
         );
     });
 }
+
+/// **A template is addressed by the folder it lives in.**
+///
+/// Every lookup builds `templates/<slug>/template.yaml` from the slug, so a
+/// manifest whose `slug:` disagreed with its directory named a template no
+/// command could open: `fastf template list` printed it and `template show`
+/// answered "not found — run `fastf template list`", pointing at the list that
+/// had just named it.
+#[test]
+fn a_template_is_addressed_by_the_directory_it_lives_in() {
+    sandboxed(|install| {
+        // The `cp -r` case: the folder was renamed, the manifest was not.
+        common::fixtures::write_template(
+            install,
+            "renamed",
+            &common::fixtures::minimal_template_yaml("general"),
+        );
+
+        let listed = template::load_all().unwrap();
+        assert_eq!(
+            listed.iter().map(|t| t.slug.as_str()).collect::<Vec<_>>(),
+            vec!["renamed"],
+            "the list names the folder, which is the name every command accepts"
+        );
+        assert_eq!(listed[0].declared_slug.as_deref(), Some("general"));
+
+        let found = template::find_by_slug("renamed").unwrap();
+        assert_eq!(found.slug, "renamed");
+        assert!(
+            template::find_by_slug("general").is_err(),
+            "and the name in the manifest addresses nothing"
+        );
+
+        // `template show` says the two disagree, where a person is looking at
+        // that one template.
+        let shown = fastf::cli::template::describe(&found).join("\n");
+        assert!(
+            shown.contains("renamed") && shown.contains("general"),
+            "the slug line names both: {shown}"
+        );
+    });
+}
+
+/// **Two templates cannot answer to one slug.**
+///
+/// A manifest field cannot be unique. Two folders both declaring `slug:
+/// general` both listed, and `find_by_slug` resolved both to whichever came
+/// first — so picking the second previewed and created the *first* template,
+/// with the right ID and the wrong files, and no error anywhere. A directory
+/// name is unique by construction.
+#[test]
+fn two_templates_cannot_answer_to_one_slug() {
+    sandboxed(|install| {
+        for dir in ["alpha", "beta"] {
+            let yaml = common::fixtures::minimal_template_yaml("shared").replace(
+                r#"naming_pattern: "{id}_{name}""#,
+                &format!("naming_pattern: \"{dir}_{{id}}\""),
+            );
+            common::fixtures::write_template(install, dir, &yaml);
+        }
+
+        let mut slugs: Vec<String> = template::load_all()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.slug)
+            .collect();
+        slugs.sort();
+        assert_eq!(slugs, vec!["alpha".to_string(), "beta".to_string()]);
+
+        // Each resolves to its own template, not to whichever was read first.
+        assert_eq!(
+            template::find_by_slug("beta").unwrap().naming_pattern,
+            "beta_{id}",
+            "picking beta must not create alpha"
+        );
+        assert_eq!(
+            template::find_by_slug("alpha").unwrap().naming_pattern,
+            "alpha_{id}"
+        );
+    });
+}
+
+/// A folder whose name is not a valid slug cannot be addressed by any command,
+/// so listing it would be the same lie in a different place. `validate` refuses
+/// it and `load_all` reports it as it reports any unloadable manifest.
+#[test]
+fn a_template_folder_that_cannot_be_addressed_is_skipped() {
+    sandboxed(|install| {
+        common::fixtures::write_template(
+            install,
+            "my template",
+            &common::fixtures::minimal_template_yaml("fine"),
+        );
+        common::fixtures::write_minimal_template(install, "ordinary");
+
+        let slugs: Vec<String> = template::load_all()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.slug)
+            .collect();
+        assert_eq!(slugs, vec!["ordinary".to_string()]);
+    });
+}
+
+/// Saving a mismatched template through fastf repairs its manifest in place —
+/// no repair command, no migration, and no second copy left behind.
+#[test]
+fn editing_a_mismatched_template_repairs_its_manifest() {
+    sandboxed(|install| {
+        common::fixtures::write_template(
+            install,
+            "renamed",
+            &common::fixtures::minimal_template_yaml("general"),
+        );
+
+        let loaded = template::find_by_slug("renamed").unwrap();
+        fastf::core::operations::save_template(&loaded, Some("renamed")).unwrap();
+
+        let manifest = install.join("templates/renamed/template.yaml");
+        let raw = fs::read_to_string(&manifest).unwrap();
+        assert!(
+            raw.contains("slug: renamed"),
+            "the manifest agrees with its folder now:\n{raw}"
+        );
+        assert!(
+            !install.join("templates/general").exists(),
+            "and nothing was written under the name it used to claim"
+        );
+    });
+}

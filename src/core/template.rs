@@ -58,6 +58,15 @@ pub struct Template {
     #[serde(skip)]
     pub dir: PathBuf,
 
+    /// What the manifest's `slug:` said, when the directory it sits in is
+    /// called something else and won.
+    ///
+    /// `None` in every ordinary case, which is every template fastf has ever
+    /// written. Kept so `template show` can say the two disagree, at the one
+    /// moment a person is looking at that template — see [`Self::load_with`].
+    #[serde(skip)]
+    pub declared_slug: Option<String>,
+
     /// Optional per-template post-create actions (override the global config).
     /// `None` = fall back to `config.toml`'s `post_create` block.
     #[serde(default)]
@@ -283,6 +292,36 @@ impl Template {
             )
         })?;
         t.dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        // **The directory is the template's identity.** Every lookup in the
+        // crate builds `templates/<slug>/template.yaml` from the slug —
+        // `find_by_slug` is the only door — so a manifest whose `slug:`
+        // disagrees with the folder it sits in named a template no command
+        // could then open: `fastf template list` printed it and `template
+        // show` answered "not found — run `fastf template list`", pointing at
+        // the list that had just named it.
+        //
+        // Worse, a manifest field cannot be unique. Two folders both declaring
+        // `slug: general` both listed, and `find_by_slug` resolved both to
+        // whichever came first — picking the second one previewed and created
+        // the *first* template, with the right id and the wrong files, and no
+        // error anywhere. A directory name is unique by construction.
+        //
+        // fastf never writes this state: `save_template` writes to
+        // `template_dir(slug)` and renames the old directory first, and
+        // `from-folder` builds both from the slug. It arises through the door
+        // the docs deliberately leave open — `cp -r templates/general
+        // templates/my-kit` and edit half of it — so the repair keeps that
+        // template working under the name every command accepts, and saving it
+        // through fastf rewrites the manifest to agree.
+        //
+        // A directory name that is not a valid slug is unaddressable by
+        // definition, so `validate()` below refuses it and `load_all` reports
+        // it the way it reports any other unloadable manifest.
+        if let Some(name) = t.dir.file_name().and_then(|n| n.to_str())
+            && name != t.slug
+        {
+            t.declared_slug = Some(std::mem::replace(&mut t.slug, name.to_string()));
+        }
         if buffer == FileBuffer::Load {
             t.scan_files();
         }

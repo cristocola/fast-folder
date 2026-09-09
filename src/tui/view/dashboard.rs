@@ -85,7 +85,13 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
                     format!("{} the bases could not be read: {error}", g.warn),
                     theme.warn(),
                 ));
-                bases.push(Span::styled("   F5 retries", theme.dim()));
+                bases.push(Span::styled(
+                    format!(
+                        "   {} retries",
+                        crate::tui::command::key_of(crate::tui::command::CommandId::Reload)
+                    ),
+                    theme.dim(),
+                ));
             }
             None => bases.push(Span::styled("probing bases…", theme.dim())),
         },
@@ -194,7 +200,8 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
             Span::styled(
                 fit(
                     placeholder,
-                    text_room.saturating_sub(prefix.len()),
+                    text_room
+                        .saturating_sub(unicode_width::UnicodeWidthStr::width(prefix.as_str())),
                     g.ellipsis,
                 ),
                 theme.dim(),
@@ -249,11 +256,12 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
     } else if app.unseen_warnings > 0 {
         Line::from(Span::styled(
             format!(
-                " {} {} warning{} arrived while a dialog was open   {}   L messages",
+                " {} {} warning{} arrived while a dialog was open   {}   {} messages",
                 g.warn,
                 app.unseen_warnings,
                 if app.unseen_warnings == 1 { "" } else { "s" },
-                g.sep
+                g.sep,
+                crate::tui::command::key_of(crate::tui::command::CommandId::ShowLog)
             ),
             theme.warn(),
         ))
@@ -263,7 +271,11 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(format!(" {error}"), theme.bad()))
     } else {
         let idle = if app.library.is_empty() && app.library.snapshot.is_empty() {
-            "no projects yet — press n to create one, or e to register a folder".to_string()
+            format!(
+                "no projects yet — press {} to create one, or {} to register a folder",
+                crate::tui::command::key_of(crate::tui::command::CommandId::NewProject),
+                crate::tui::command::key_of(crate::tui::command::CommandId::Register)
+            )
         } else if app.library.is_empty() {
             // Name the thing that is hiding the rows, not every thing that
             // could.
@@ -272,10 +284,10 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
                 app.library.preset.is_some(),
                 app.search.input.is_empty(),
             ) {
-                (true, _, _) => {
-                    "no matches — loosen the query, or press F to clear the template filter"
-                        .to_string()
-                }
+                (true, _, _) => format!(
+                    "no matches — loosen the query, or press {} to clear the template filter",
+                    crate::tui::command::key_of(crate::tui::command::CommandId::ClearFilters)
+                ),
                 (false, true, _) => {
                     "no matches — Esc clears the filter this app was opened with".to_string()
                 }
@@ -327,16 +339,12 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
                 ("Esc".to_string(), "cancel"),
             ]
         }
-        Some(Modal::Note(_)) => vec![
-            ("Enter".to_string(), "save"),
-            ("Alt-Enter".to_string(), "new line"),
-            ("Esc".to_string(), "cancel"),
-        ],
-        Some(Modal::Confirm(_)) => vec![
-            ("y".to_string(), "yes"),
-            ("n".to_string(), "no"),
-            ("Esc".to_string(), "cancel"),
-        ],
+        // Note and Confirm draw their own key line inside the box, beside the
+        // question, for the same reason a flow does — and these two repeated it
+        // down here word for word. The hint bar is the one place a key is
+        // advertised; when a dialog has already advertised its own, that place
+        // is inside the dialog.
+        Some(Modal::Note(_)) | Some(Modal::Confirm(_)) => Vec::new(),
         Some(Modal::MultiPick(_)) => vec![
             ("Space".to_string(), "toggle"),
             ("Enter".to_string(), "confirm"),
@@ -352,12 +360,11 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
         }
         // A flow, the studio and the builder draw their own key line inside
         // their frame, beside what the keys act on; repeating it down here
-        // would say it twice.
+        // would say it twice. Note, Confirm and Onboarding above are the same
+        // case — they were the three that had been missed.
         Some(Modal::Flow(_)) | Some(Modal::Builder(_)) | Some(Modal::Settings(_)) => Vec::new(),
-        Some(Modal::Onboarding(_)) => vec![
-            ("Enter".to_string(), "create it"),
-            ("Esc".to_string(), "skip for now"),
-        ],
+        // Same again: the welcome dialog carries its own.
+        Some(Modal::Onboarding(_)) => Vec::new(),
         None => match app.context() {
             crate::tui::command::Context::SearchEdit => vec![
                 ("Enter".to_string(), "keep"),

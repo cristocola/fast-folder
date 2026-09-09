@@ -28,7 +28,7 @@ expression: frame
 "│       │   Open in the editor          no                                                 │       │"
 "│       │   Print the path              no                                                 │       │"
 "│       │ one folder per line — Enter opens the list, Ctrl-S keeps it                      │       │"
-"│       │ Ctrl-S keep   Enter new line   Esc leave it unchanged                            │       │"
+"│       │ Ctrl-S keep   Enter new line   Esc leave it unchanged   Ctrl-K drop the line     │       │"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 "                                                                                                    "
 "                                                                                                    "

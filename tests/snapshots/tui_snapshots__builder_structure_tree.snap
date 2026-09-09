@@ -21,7 +21,7 @@ expression: frame
 "│       │                                                                                  │       │"
 "│       │                                                                                  │       │"
 "│       │ one folder path per line — use / to nest on every platform                       │       │"
-"│       │ Ctrl-S keep   Enter new line   Ctrl-K drop the line   Esc back                   │       │"
+"│       │ Ctrl-S keep   Enter new line   Esc back   Ctrl-K drop the line                   │       │"
 "│       └──────────────────────────────────────────────────────────────────────────────────┘       │"
 "│                                    ││                                                            │"
 "│                                    ││                                                            │"

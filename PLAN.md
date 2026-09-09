@@ -76,17 +76,35 @@ editor: ten rows down is **Theme**, whose Enter cycles the value where it
 stands. It asserts the editor is on screen now, so the snapshot named after a
 screen is a snapshot of that screen.
 
-## Phase 3 — Every surface says one thing  ·  status: not started
+## Phase 3 — Every surface says one thing  ·  status: **done**
 
-CLI: the `recent_limit` key the file does not hold; Esc at the template picker
-as an error; `register --recursive` reporting success over total failure; two
-answers for one flag mistake; `--limit 0` above the launcher hand-off; the
-editor's discarded exit status; four sentences for "you cancelled"; two dead
-ends and a `✓` over an empty reconcile.
+CLI: the `recent_limit` key the file did not hold; Esc at the template picker as
+an error; `register --recursive` reporting success over total failure;
+`--limit 0` above the launcher hand-off; the editor's discarded exit status;
+four sentences for "you cancelled"; two dead ends and a `✓` over a report that
+could not inspect anything; a dead branch and a redundant config load.
 
-App: eight places drifted out of the one registry; keys that do nothing and say
-nothing; bytes measured where columns are meant; a template description that
-cannot be read in the app; twelve hardcoded `✓`.
+App: `command::key_of` and `command::NO_TEMPLATES`, so a sentence that names a
+key reads it from the registry; three dialogs that printed their key line twice;
+a key line cut mid-word; Enter on a yes/no; the builder's lists clamping where
+the registry says lists wrap; `Ctrl-K` missing from the base editor's line;
+bytes and characters measured where columns were meant, `visible_window`
+included; the template description that could not be read in the app; the
+settings screen's fixed 26-column label; twelve hardcoded `✓`; an unheaded
+warnings list.
+
+**Not done, deliberately:** `?` still does nothing inside a create/apply/register
+*form*. The form is a place you type into — on a choice field every letter is
+`Ignored`, so falling through to the registry would make `q` (`Close`
+everywhere) throw away a filled-in form with no question. The preview step has
+nothing to type into, and `?` and `q` work there. The reason is a comment at
+`on_flow_key`.
+
+The two-layer flag validation (finding 3.4 — `register <path> --dry-run` is
+clap's exit 2 while `register <path> --var=x --dry-run` is `validate`'s exit 1)
+is deferred to Phase 4's documentation pass: the *code* is right in both cases,
+and what is wrong is `CLAUDE.md`'s model of what `trailing_var_arg` does in
+clap 4.6.
 
 ## Phase 4 — The record  ·  status: not started
 

@@ -64,7 +64,7 @@ pub fn run(args: CopyToArgs) -> Result<()> {
         );
         let ok = crate::tui::prompt::confirm("Copy this project?", true)?.unwrap_or(false);
         if !ok {
-            println!("Aborted.");
+            crate::tui::prompt::report_cancelled("nothing was copied");
             return Ok(());
         }
     }

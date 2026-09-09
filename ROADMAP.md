@@ -195,6 +195,16 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
 
 Regression coverage grows with the relevant release:
 
+- [x] The key `config set` takes is the key `config.toml` holds is the key
+  `config show` prints; Esc at the template picker is a cancel and not an error;
+  a recursive register that onboarded nothing exits non-zero and says what it
+  skipped; an editor that failed is not reported as having opened anything; and
+  every refusal `recent` makes is below the launcher hand-off (v3.3.0).
+- [x] A sentence that names a key reads it from the command registry, a key line
+  is cut at a whole pair, and a success wears the theme's own tick — so the
+  ASCII alphabet is right everywhere (v3.3.0).
+- [x] Widths are display columns everywhere, the line editor's window included,
+  so a CJK or Cyrillic name puts the caret where it belongs (v3.3.0).
 - [x] The settings screen's base editor opens on a short window instead of
   panicking, a confirmation names every folder it is about at 60 columns, and a
   text area's drawn line and its caret agree about where the cursor is (v3.3.0).

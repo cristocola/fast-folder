@@ -381,10 +381,22 @@ fn render_actions(
         .iter()
         .map(|(id, availability)| {
             let command = command::find(*id);
-            let key = command.keys.first().map(|k| k.label()).unwrap_or_default();
+            // A verb with no key of its own shows `Enter`, which is what runs
+            // the row under the cursor and is therefore the only way to reach
+            // it. An empty column under a menu whose own description promises
+            // "the verb under the cursor — or press its own key" reads as a
+            // row that cannot be run at all.
+            let key = command
+                .keys
+                .first()
+                .map(|k| k.label())
+                .unwrap_or_else(|| "Enter".to_string());
             let (title_style, detail) = match availability {
                 Availability::Enabled => (theme.text(), command.description),
                 Availability::Disabled(reason) => (theme.dim(), *reason),
+                // `action_entries` filters `Hidden` out before this is reached, so a
+                // row that says nothing cannot get here; the arm is only for the match
+                // to be exhaustive.
                 Availability::Hidden => (theme.dim(), ""),
             };
             let mut left = vec![Span::raw(" ")];
@@ -584,7 +596,7 @@ fn render_confirm(app: &App, confirm: &Confirm, frame: &mut Frame, area: Rect) -
     let keys_area = Rect::new(inner.x, inner.y + rows + 1, inner.width, 1);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" y ", theme.key()),
+            Span::styled(" y / Enter ", theme.key()),
             Span::styled("yes   ", theme.dim()),
             Span::styled("n ", theme.key()),
             Span::styled("no   ", theme.dim()),

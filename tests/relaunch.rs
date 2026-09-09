@@ -216,6 +216,31 @@ fn an_ambiguous_query_from_a_launcher_opens_a_terminal_instead_of_erroring() {
     assert_eq!(&argv[2..], ["--relaunched", "copy", "shared"]);
 }
 
+/// Every one of `recent`'s refusals is below the hand-off, `--limit` included.
+///
+/// `--since`, `--template` and `--base` were validated after the relaunch for
+/// the reason `cli::search` spells out — from a launcher the message goes to a
+/// journald socket nobody reads, and the relaunched process asks the same
+/// question again in the window it opened. `--limit 0` was refused *above* it,
+/// so from a desktop launcher it failed into the journal with no window at all
+/// while its three siblings got one.
+#[test]
+fn a_bad_limit_from_a_launcher_opens_a_terminal_like_every_other_refusal() {
+    let (sb, rec) = sandbox_with_recorder();
+    sb.plant_project(&sb.base, "proj", "ID0001");
+
+    let run = sb.run_like_a_launcher(&["recent", "--limit", "0"], &[("DISPLAY", ":99")]);
+
+    assert_eq!(run.code, 0, "handing off is not a failure: {}", run.output);
+    assert!(
+        !run.output.contains("must be at least 1"),
+        "the refusal belongs to a reader, not to the journal:\n{}",
+        run.output
+    );
+    let argv = rec.argv().expect("the terminal should have been started");
+    assert_eq!(&argv[2..], ["--relaunched", "recent", "--limit", "0"]);
+}
+
 /// The redirect case, spelled out because it is the contract: `fastf path x > f`
 /// writes the path to the file and opens nothing, display or no display. A
 /// regular file is somebody keeping the bytes.

@@ -235,7 +235,7 @@ pub fn delete(slug: &str, yes: bool) -> Result<()> {
         )?
         .unwrap_or(false);
         if !ok {
-            println!("Aborted.");
+            crate::tui::prompt::report_cancelled(&format!("template '{slug}' was not deleted"));
             return Ok(());
         }
     }
@@ -338,7 +338,7 @@ pub fn run_from_folder(args: FromFolderArgs) -> Result<()> {
             )?
             .unwrap_or(false);
             if !ok {
-                println!("Aborted.");
+                crate::tui::prompt::report_cancelled("no template was written");
                 return Ok(());
             }
         }

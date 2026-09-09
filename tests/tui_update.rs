@@ -1108,6 +1108,41 @@ fn item_done(id: fastf::tui::effect::ActionId, change: ListChange) -> Msg {
     }
 }
 
+/// A success is marked with the theme's tick, not with a literal one.
+///
+/// Twelve of `runtime::run_action`'s messages carried a hardcoded `✓`, which
+/// `Glyphs::ascii` maps to `+` — so on a legacy Windows console, or anywhere
+/// with `FASTF_ASCII=1`, they drew a replacement box beside the app's own
+/// correctly-themed messages. `run_action` runs on a worker with no theme to
+/// ask; `App::good` is the one place all of them pass through.
+#[test]
+fn a_success_message_wears_the_theme_glyph_not_a_hardcoded_one() {
+    use fastf::tui::theme::{Glyphs, Theme};
+
+    let mut app = fixture(4, 100, 30);
+    app.theme = Theme::mono().with_glyphs(Glyphs::ascii());
+
+    let effects = press(&mut app, Key::ch('A'));
+    let effects = if effects.iter().any(|e| matches!(e, Effect::Run(_, _))) {
+        effects
+    } else {
+        // `A` opens a tag picker first; answer it.
+        press(&mut app, Key::plain(KeyCode::Enter))
+    };
+    let id = run_id(&effects);
+    let _ = update(&mut app, item_done(id, ListChange::SummaryOnly));
+
+    let shown = &app.status.text;
+    assert!(
+        !shown.contains(Glyphs::unicode().check),
+        "the ASCII theme must not draw a unicode tick: {shown:?}"
+    );
+    assert!(
+        shown.starts_with(Glyphs::ascii().check),
+        "and it must draw its own: {shown:?}"
+    );
+}
+
 #[test]
 fn delete_over_marks_confirms_once_then_runs_each_item() {
     let mut app = fixture(12, 80, 24);

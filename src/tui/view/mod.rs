@@ -82,7 +82,10 @@ fn render_too_small(app: &App, frame: &mut Frame, area: Rect) {
             theme.warn(),
         )),
         Line::from(Span::styled(
-            "make it bigger, or press q to quit",
+            format!(
+                "make it bigger, or press {} to quit",
+                crate::tui::command::key_of(crate::tui::command::CommandId::Quit)
+            ),
             theme.dim(),
         )),
     ];

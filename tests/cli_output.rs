@@ -715,6 +715,124 @@ fn a_hand_edit_that_drops_created_does_not_drop_the_project() {
     );
 }
 
+/// The key `config set` takes is the key `config.toml` holds is the key
+/// `config show` prints.
+///
+/// They were three different words for one setting: the Rust field is
+/// `recent_default_limit` and carried no `serde(rename)`, so `config set
+/// recent-limit 50` printed `Set recent_limit = 50` and wrote
+/// `recent_default_limit = 50`. Somebody following the docs and hand-writing
+/// `recent_limit = 50` into the file got it silently ignored — `Config` has no
+/// `deny_unknown_fields` — and fell back to the default.
+#[test]
+fn the_recent_limit_key_is_one_word_everywhere() {
+    let sb = Sandbox::new();
+    sb.ok(&["config", "set", "recent-limit", "50"]);
+
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    assert!(
+        config.contains("recent_limit = 50"),
+        "the file must hold the name every surface shows:\n{config}"
+    );
+
+    // And a value written by hand under that name is read.
+    let edited = config.replace("recent_limit = 50", "recent_limit = 7");
+    fs::write(sb.install.join("config.toml"), edited).unwrap();
+    let shown = sb.ok(&["config", "show"]);
+    assert!(
+        shown.contains("recent_limit:") && shown.contains('7'),
+        "a hand-written value must be the one in force:\n{shown}"
+    );
+
+    // Every config.toml written before this still parses.
+    let old_spelling = fs::read_to_string(sb.install.join("config.toml"))
+        .unwrap()
+        .replace("recent_limit = 7", "recent_default_limit = 9");
+    fs::write(sb.install.join("config.toml"), old_spelling).unwrap();
+    let shown = sb.ok(&["config", "show"]);
+    assert!(
+        shown.contains('9'),
+        "the old key has to keep parsing:\n{shown}"
+    );
+}
+
+/// A recursive register that registered nothing is not a success.
+///
+/// Each failure was an `eprintln!` on stderr and the tail printed
+/// `✓ Registered 0 folders.` and returned `Ok(())` regardless, so a script saw
+/// a clean exit for a run that onboarded nothing.
+///
+/// Unix-only because a read-only directory is what makes the *write* fail while
+/// the folder is still a target: the code path is platform-independent.
+#[cfg(unix)]
+#[test]
+fn a_recursive_register_that_onboards_nothing_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sb = Sandbox::new();
+    let mut made = Vec::new();
+    for name in ["Alpha", "Beta"] {
+        let dir = sb.base.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+        made.push(dir);
+    }
+
+    let base = sb.base.display().to_string();
+    let out = sb.run(&["register", "--recursive", &base]);
+    // Restore before any assertion, so a failure still leaves a removable
+    // tempdir behind.
+    for dir in &made {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    assert!(
+        !out.status.success(),
+        "registering nothing is not a success: {out:?}"
+    );
+    let listed = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        listed.contains("skipped 2"),
+        "the summary must count what it skipped:\n{listed}"
+    );
+}
+
+/// An editor that failed did not open the project, whatever it exited for.
+///
+/// Both `spawn_editor` arms dropped the child's `ExitStatus` and propagated
+/// only the *spawn* error, so `✓ opened in <editor>` was printed
+/// unconditionally — and on Windows `cmd /c start` succeeds for an editor that
+/// does not exist, so a typo in the `editor` key reported success over nothing
+/// at all. `git_init` and a template's `commands`, in the same function, have
+/// always checked.
+///
+/// Unix-only for the fixture: `false` is coreutils' one-line "exit 1", always
+/// present, and `common::recorder` hard-codes `exit 0` so it cannot say this.
+#[cfg(unix)]
+#[test]
+fn an_editor_that_failed_is_not_reported_as_having_opened_anything() {
+    let sb = Sandbox::new();
+    sb.write_template("race");
+    sb.ok(&["config", "set", "post_create.open_in_editor", "true"]);
+    sb.ok(&["config", "set", "editor", "false"]);
+
+    let out = sb.run(&["new", "race", "--name=One", "--yes", "--no-preview"]);
+    assert!(
+        out.status.success(),
+        "the project is still created: {out:?}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stdout.contains("opened in") && !stderr.contains("opened in"),
+        "nothing opened, so nothing may say it did:\n{stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("could not open editor") || stderr.contains("could not open editor"),
+        "and the failure is worth a word:\n{stdout}{stderr}"
+    );
+}
+
 /// `fastf reconcile` on a library with nothing outstanding says so and exits 0.
 /// Reporting "nothing to do" is the common case and the one that must be quiet.
 #[test]

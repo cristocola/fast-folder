@@ -233,15 +233,26 @@ pub fn reveal_folder(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Start the editor, and say so only if it started.
+///
+/// The `ExitStatus` used to be dropped on both platforms, so `run` pushed
+/// `opened in <editor>` whatever happened — and on Windows `cmd /c start`
+/// succeeds for an editor that does not exist, so a typo in the `editor` key
+/// printed `✓ opened in <typo>` over nothing at all. The two neighbouring
+/// actions in the same function, `git_init` and a template's `commands`, have
+/// always checked.
 #[cfg(windows)]
 fn spawn_editor(editor: &str, path: &Path) -> Result<()> {
     // Editors like `code` on Windows ship as .cmd shims that only cmd.exe can
     // resolve, so this one child still goes through a shell. The *path* does
     // not: it is passed as `"%FASTF_PROJECT_PATH%"`, which cmd expands to the
     // variable set below rather than to anything in the folder's own name.
-    project_command("cmd", path)
+    let status = project_command("cmd", path)
         .args(["/c", "start", "", editor, "\"%FASTF_PROJECT_PATH%\""])
         .status()?;
+    if !status.success() {
+        anyhow::bail!("{editor} exited with {status}");
+    }
     Ok(())
 }
 
@@ -256,7 +267,10 @@ fn spawn_editor(editor: &str, path: &Path) -> Result<()> {
     for arg in parts {
         cmd.arg(arg);
     }
-    cmd.arg(path).status()?;
+    let status = cmd.arg(path).status()?;
+    if !status.success() {
+        anyhow::bail!("{editor} exited with {status}");
+    }
     Ok(())
 }
 

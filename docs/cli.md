@@ -434,7 +434,9 @@ A filter that cannot match anything is refused rather than answered. `--since` m
 `recent-limit` is the default `--limit` for `fastf recent`. It used to be called
 `recent-default-limit`, when it also sized a page of the old menu; the app
 scrolls, so that half of the name stopped meaning anything. The old key still
-parses.
+parses, in `config.toml` and at `fastf config set` alike — and until v3.3.0 the
+old key was the one the file actually held, so `recent_limit = 50` written by
+hand was ignored. If you have one of those in your `config.toml`, it works now.
 
 ```bash
 fastf config set recent-limit 20

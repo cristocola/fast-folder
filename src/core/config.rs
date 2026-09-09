@@ -46,8 +46,25 @@ pub struct Config {
     pub prompt_open_after_create: bool,
 
     /// Page size for the guided TUI's Projects browser and default `--limit`
-    /// for `fastf recent`. The key name is retained for compatibility.
-    #[serde(default = "default_recent_limit")]
+    /// for `fastf recent`.
+    ///
+    /// **Stored as `recent_limit`, which is what every surface calls it.** The
+    /// field kept its old name and carried no `rename`, so `fastf config set
+    /// recent-limit 50` printed `Set recent_limit = 50` and wrote
+    /// `recent_default_limit = 50`, and `config show` labelled it
+    /// `recent_limit:` — three spellings for one setting, only one of them the
+    /// one in the file. Somebody following the docs and hand-writing
+    /// `recent_limit = 50` got it silently ignored, because `Config` has no
+    /// `deny_unknown_fields`, and fell back to the default.
+    ///
+    /// The `alias` keeps every `config.toml` written before this parsing. The
+    /// Rust field name stays as it is: it is spelled at thirty call sites and
+    /// none of them is a file.
+    #[serde(
+        rename = "recent_limit",
+        alias = "recent_default_limit",
+        default = "default_recent_limit"
+    )]
     pub recent_default_limit: usize,
 
     /// Show the "Create this project?" confirm prompt in `fastf new`.

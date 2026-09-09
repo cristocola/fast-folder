@@ -78,11 +78,32 @@ fn footer_line(frame: &mut Frame, area: Rect, text: &str, style: ratatui::style:
     frame.render_widget(Paragraph::new(Span::styled(text.to_string(), style)), area);
 }
 
-fn key_line<K: AsRef<str>, V: AsRef<str>>(theme: &Theme, pairs: &[(K, V)]) -> Line<'static> {
+/// A dialog's own key line, cut at a **whole pair**.
+///
+/// `registry_keys` below has always fitted its list to the width it is drawn
+/// in; this one took every pair it was handed and let the terminal cut the
+/// last one wherever it landed — so a narrow settings dialog advertised
+/// `Esc leave i`, which is a key line saying something that is not a key. Half
+/// an entry is worse than none: the entries are ordered, so the ones that fit
+/// are the ones that matter most.
+fn key_line<K: AsRef<str>, V: AsRef<str>>(
+    theme: &Theme,
+    pairs: &[(K, V)],
+    width: usize,
+) -> Line<'static> {
     let mut spans = Vec::new();
+    let mut used = 0usize;
     for (key, what) in pairs {
-        spans.push(Span::styled(format!(" {} ", key.as_ref()), theme.key()));
-        spans.push(Span::styled(format!("{}  ", what.as_ref()), theme.dim()));
+        let key = format!(" {} ", key.as_ref());
+        let what = format!("{}  ", what.as_ref());
+        let cost = unicode_width::UnicodeWidthStr::width(key.as_str())
+            + unicode_width::UnicodeWidthStr::width(what.as_str());
+        if used + cost > width {
+            break;
+        }
+        used += cost;
+        spans.push(Span::styled(key, theme.key()));
+        spans.push(Span::styled(what, theme.dim()));
     }
     Line::from(spans)
 }
@@ -174,11 +195,12 @@ pub fn render_builder(
             (
                 caret,
                 Some("one folder path per line — use / to nest on every platform".to_string()),
+                // Same order as the base list's, and for the same reason.
                 pairs(&[
                     ("Ctrl-S", "keep"),
                     ("Enter", "new line"),
-                    ("Ctrl-K", "drop the line"),
                     ("Esc", "back"),
+                    ("Ctrl-K", "drop the line"),
                 ]),
             )
         }
@@ -201,7 +223,10 @@ pub fn render_builder(
         ),
         style,
     );
-    frame.render_widget(Paragraph::new(key_line(theme, &key_pairs)), keys);
+    frame.render_widget(
+        Paragraph::new(key_line(theme, &key_pairs, keys.width as usize)),
+        keys,
+    );
     caret
 }
 
@@ -511,13 +536,31 @@ pub fn render_settings(
     if state.rows.is_empty() {
         footer_line(frame, footer, " reading the settings…", theme.dim());
         frame.render_widget(
-            Paragraph::new(key_line(theme, &pairs(&[("Esc", "close")]))),
+            Paragraph::new(key_line(
+                theme,
+                &pairs(&[("Esc", "close")]),
+                keys.width as usize,
+            )),
             keys,
         );
         return None;
     }
 
     let width = body.width as usize;
+    // **Measured from the rows, not fixed at 26.** `pad` does not truncate, so
+    // a label longer than the constant pushed its value right and past the box
+    // edge — and today's longest, "Ask to open after creating", is exactly 26,
+    // which is zero headroom for the next setting anybody adds. The rule
+    // everywhere else in this app is that a column is as wide as its content:
+    // a title can never run into its description.
+    let label_width = state
+        .rows
+        .iter()
+        .filter(|row| row.selectable())
+        .map(|row| unicode_width::UnicodeWidthStr::width(row.label))
+        .max()
+        .unwrap_or(26)
+        .min(width.saturating_sub(12));
 
     let items: Vec<ListItem> = state
         .rows
@@ -537,10 +580,16 @@ pub fn render_settings(
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{cursor}  "), theme.accent()),
-                Span::styled(pad(row.label, 26), theme.text()),
+                Span::styled(pad(row.label, label_width), theme.text()),
                 Span::raw("  "),
                 Span::styled(
-                    fit(&row.value, width.saturating_sub(32), g.ellipsis),
+                    // The cursor, two spaces, the label, two more: what is left
+                    // is the value's.
+                    fit(
+                        &row.value,
+                        width.saturating_sub(label_width + 6),
+                        g.ellipsis,
+                    ),
                     theme.dim(),
                 ),
             ]))
@@ -559,7 +608,7 @@ pub fn render_settings(
     // stays where the eye already is.
     let caret = state.editing.as_ref().and_then(|editing| {
         let row = state.selected.checked_sub(state.offset)? as u16;
-        render_setting_editor(app, editing, frame, body, row)
+        render_setting_editor(app, editing, frame, body, row, label_width)
     });
 
     let (text, style) = match (state.error(), state.pending) {
@@ -577,15 +626,26 @@ pub fn render_settings(
         style,
     );
     let key_pairs: Vec<(String, String)> = match &state.editing {
+        // `Ctrl-K` too: the same widget answers it, the Structure editor's
+        // key line names it, and dropping a line is exactly what somebody
+        // opens this box to do.
+        //
+        // The way out comes **before** it, because `key_line` drops whole
+        // pairs from the end when the box is narrow — and the one entry that
+        // must survive that is the one that says how to leave.
         Some(Editing::Bases { .. }) => pairs(&[
             ("Ctrl-S", "keep"),
             ("Enter", "new line"),
             ("Esc", "leave it unchanged"),
+            ("Ctrl-K", "drop the line"),
         ]),
         Some(Editing::Value { .. }) => pairs(&[("Enter", "keep"), ("Esc", "leave it unchanged")]),
         None => registry_keys(app, Context::Settings, keys.width as usize),
     };
-    frame.render_widget(Paragraph::new(key_line(theme, &key_pairs)), keys);
+    frame.render_widget(
+        Paragraph::new(key_line(theme, &key_pairs, keys.width as usize)),
+        keys,
+    );
     caret
 }
 
@@ -595,6 +655,7 @@ fn render_setting_editor(
     frame: &mut Frame,
     body: Rect,
     row: u16,
+    label_width: usize,
 ) -> Option<Position> {
     let theme = &app.theme;
     if row >= body.height {
@@ -607,7 +668,9 @@ fn render_setting_editor(
             input.render_line(
                 line,
                 frame.buffer_mut(),
-                Span::styled(format!("   {}  ", pad(label, 26)), theme.accent()),
+                // The same width the list uses, so the editor opens exactly
+                // over the row it belongs to.
+                Span::styled(format!("   {}  ", pad(label, label_width)), theme.accent()),
                 theme.text(),
             )
         }
@@ -682,6 +745,7 @@ pub fn render_onboarding(
         Paragraph::new(key_line(
             theme,
             &[("Enter", "create it"), ("Esc", "skip for now")],
+            keys.width as usize,
         )),
         keys,
     );

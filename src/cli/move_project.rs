@@ -90,7 +90,7 @@ pub fn run(args: MoveArgs) -> Result<()> {
                 })?
         }
         None => {
-            let default_base = Config::load()?.effective_bases().first().cloned();
+            let default_base = cfg.effective_bases().first().cloned();
             let picked = crate::tui::pickers::pick_base(
                 &format!("Move '{}' to which base?", project.name),
                 &candidates,
@@ -125,7 +125,7 @@ pub fn run(args: MoveArgs) -> Result<()> {
         );
         let ok = crate::tui::prompt::confirm("Move this project?", true)?.unwrap_or(false);
         if !ok {
-            println!("Aborted.");
+            crate::tui::prompt::report_cancelled("nothing moved");
             return Ok(());
         }
     }

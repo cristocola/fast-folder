@@ -527,6 +527,7 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
     }
 
     let mut registered = 0usize;
+    let mut skipped = 0usize;
     for path in targets {
         match register_core(RegisterOptions {
             path: path.clone(),
@@ -547,16 +548,40 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
                 );
                 registered += 1;
             }
-            Err(e) => eprintln!("  {} {}: {}", "skip".yellow().bold(), path.display(), e),
+            Err(e) => {
+                eprintln!("  {} {}: {}", "skip".yellow().bold(), path.display(), e);
+                skipped += 1;
+            }
         }
     }
     println!();
+    // **The summary counts both, and registering nothing is not a success.**
+    // Every failure was an `eprintln!` and the tail printed `✓ Registered 0
+    // folders.` and returned `Ok(())` regardless — so a base whose children
+    // were all unwritable, or all already held a `PROJECT_INFO.md` that
+    // `--on-conflict skip` refused, gave a script a clean exit for a run that
+    // onboarded nothing. A flag that cannot be obeyed is an error, and so is a
+    // pass that did nothing it was asked to.
     println!(
-        "{}  Registered {} folder{}.",
-        "✓".green().bold(),
+        "{}  Registered {} folder{}{}.",
+        if registered == 0 {
+            "✗".red().bold()
+        } else {
+            "✓".green().bold()
+        },
         registered,
-        if registered == 1 { "" } else { "s" }
+        if registered == 1 { "" } else { "s" },
+        match skipped {
+            0 => String::new(),
+            n => format!(", skipped {n}"),
+        }
     );
+    if registered == 0 && skipped > 0 {
+        anyhow::bail!(
+            "nothing was registered — see the skipped folders above for why, \
+             one line each"
+        );
+    }
     Ok(())
 }
 

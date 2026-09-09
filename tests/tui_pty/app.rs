@@ -111,7 +111,7 @@ fn an_invalid_setting_is_corrected_in_place() {
     );
     let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
     assert!(
-        config.contains("recent_default_limit = 5"),
+        config.contains("recent_limit = 5"),
         "the corrected value should have been saved:\n{config}"
     );
 }

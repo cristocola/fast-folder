@@ -186,18 +186,54 @@ pub fn visible_window(
     columns: usize,
     prompt_width: usize,
 ) -> (String, usize) {
+    use unicode_width::UnicodeWidthChar;
+
+    // **Display columns, not characters.** The window was built from
+    // `chars()` and the offset it returned was a char index, which
+    // `render_line` then adds to `prefix.width()` to place the terminal
+    // cursor — so for a CJK or emoji folder name in a rename prompt the window
+    // was twice as wide as the field and the caret was drawn at roughly half
+    // the column it belonged in. `view::fit` and `view::pad` have always
+    // measured properly; this was the odd one out.
+    let width_of = |c: char| UnicodeWidthChar::width(c).unwrap_or(0);
     let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
     // One column of headroom so the cursor position itself never lands in the
     // last cell, which is where terminals disagree about wrapping.
     let room = columns.saturating_sub(prompt_width + 1);
-    if room == 0 || chars.len() <= room {
-        return (text.to_string(), cursor.min(chars.len()));
+    let total: usize = chars.iter().copied().map(width_of).sum();
+    if room == 0 || total <= room {
+        return (
+            text.to_string(),
+            chars[..cursor].iter().copied().map(width_of).sum(),
+        );
     }
-    let end = (cursor + 1).max(room).min(chars.len());
-    let start = end - room;
+
+    // Back from the cursor while the run fits, then forward with whatever is
+    // left over: the window always contains the cursor and prefers to keep the
+    // end of the text visible, which is where a person typing is looking.
+    let mut start = cursor.min(chars.len());
+    let mut used = chars.get(cursor).copied().map_or(0, width_of).min(room);
+    while start > 0 {
+        let w = width_of(chars[start - 1]);
+        if used + w > room {
+            break;
+        }
+        used += w;
+        start -= 1;
+    }
+    let mut stop = (cursor + 1).min(chars.len());
+    while stop < chars.len() {
+        let w = width_of(chars[stop]);
+        if used + w > room {
+            break;
+        }
+        used += w;
+        stop += 1;
+    }
     (
-        chars[start..end].iter().collect(),
-        cursor.saturating_sub(start),
+        chars[start..stop].iter().collect(),
+        chars[start..cursor].iter().copied().map(width_of).sum(),
     )
 }
 
@@ -330,6 +366,42 @@ mod tests {
         assert_eq!(offset, 0);
     }
 
+    /// A wide character is two columns, and the caret has to know it.
+    ///
+    /// The window was built from `chars()` and returned a char index, which
+    /// `render_line` adds to `prefix.width()` to place the terminal cursor —
+    /// so a client folder named in Japanese or Cyrillic put the caret at about
+    /// half the column it belonged in, and the window drawn was twice as wide
+    /// as the field it was drawn in.
+    #[test]
+    fn a_window_over_wide_characters_is_measured_in_columns() {
+        use unicode_width::UnicodeWidthStr;
+
+        // Ten double-width characters: twenty columns of text.
+        let text = "作品作品作品作品作品";
+        let room = 10; // 20 columns of line, a 9-column prompt, one of headroom
+        let (window, caret) = visible_window(text, 10, 20, 9);
+        assert!(
+            window.width() <= room,
+            "the window must fit the room it is drawn in: {window:?} is {} columns",
+            window.width()
+        );
+        assert!(
+            caret <= room,
+            "and the caret must land inside it, not at a char index: {caret}"
+        );
+
+        // At the start of the same text the window begins at the start.
+        let (window, caret) = visible_window(text, 0, 20, 9);
+        assert!(window.starts_with('作'));
+        assert_eq!(caret, 0);
+        assert!(window.width() <= room, "{window:?}");
+
+        // A mixed line: the caret is the width of what precedes it.
+        let (_, caret) = visible_window("ab作", 3, 80, 0);
+        assert_eq!(caret, 4, "a + b + 作 is four columns");
+    }
+
     #[test]
     fn the_caret_column_always_lands_inside_the_line() {
         // Whatever the text, the window and the cursor's place in it, the column
@@ -340,8 +412,10 @@ mod tests {
         for columns in [12usize, 20, 26, 80] {
             for cursor in 0..=text.chars().count() {
                 let (window, offset) = visible_window(&text, cursor, columns, prompt_width);
+                // Columns, not characters — the same units `render_line` adds
+                // this to.
                 assert!(
-                    offset <= window.chars().count(),
+                    offset <= unicode_width::UnicodeWidthStr::width(window.as_str()),
                     "offset {offset} outside window {window:?}"
                 );
                 if columns > prompt_width + 1 {

@@ -34,8 +34,12 @@ pub fn run(args: NewArgs) -> Result<()> {
         config.preview_lines = 0;
     }
 
-    // Resolve template
-    let tmpl = resolve_template(args.template_slug.as_deref(), &config)?;
+    // Resolve template. `None` is Esc at the picker: a cancel, like Esc at any
+    // of the variable prompts below it, and not an error.
+    let Some(tmpl) = resolve_template(args.template_slug.as_deref(), &config)? else {
+        crate::tui::prompt::report_cancelled("nothing was created");
+        return Ok(());
+    };
 
     // Warn about CLI var keys that don't match any template variable
     let known_slugs: std::collections::HashSet<&str> =
@@ -151,31 +155,35 @@ fn should_prompt_open(args: &NewArgs, tmpl: &Template, config: &Config) -> bool 
     true
 }
 
-fn resolve_template(slug: Option<&str>, config: &Config) -> Result<Template> {
+fn resolve_template(slug: Option<&str>, config: &Config) -> Result<Option<Template>> {
     // If slug provided directly, use it
     if let Some(s) = slug {
-        return template::find_by_slug(s);
+        return template::find_by_slug(s).map(Some);
     }
 
     // If default_template is configured, use it
     if !config.default_template.is_empty() {
-        return template::find_by_slug(&config.default_template);
+        return template::find_by_slug(&config.default_template).map(Some);
     }
 
-    // Otherwise prompt
+    // Otherwise prompt. `None` means Esc.
     pick_template_interactively()
 }
 
-pub fn pick_template_interactively() -> Result<Template> {
-    let picked = crate::tui::pickers::pick_template(
+/// `Ok(None)` is Esc — cancelled, not failed.
+///
+/// It used to `bail!`, so pressing Esc at the *template* step printed a red
+/// `error: no template chosen` and exited 1, while pressing Esc one prompt
+/// later — at the first variable — printed `Cancelled — nothing was created.`
+/// and exited 0. `docs/cli.md` states the rule for both: "Esc cancels, says so,
+/// and exits 0, because deciding not to act is not a failure", and every
+/// sibling picker already obeys it.
+pub fn pick_template_interactively() -> Result<Option<Template>> {
+    crate::tui::pickers::pick_template(
         "Select template",
         "name it instead: `fastf new <slug>`\n  \
          (or set one with `fastf config set default-template <slug>`)",
-    )?;
-    match picked {
-        Some(tmpl) => Ok(tmpl),
-        None => bail!("no template chosen"),
-    }
+    )
 }
 
 // ---------------------------------------------------------------------------

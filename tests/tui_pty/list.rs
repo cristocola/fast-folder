@@ -742,9 +742,16 @@ fn a_batch_tag_picked_from_the_list_lands_and_leaves_the_list_working() {
     }
     // A mark is the retry list: an item that succeeded is off it, so the
     // report and the glyphs left on screen cannot disagree.
+    //
+    // Asked of the **rows**, not of the whole screen: the success status line
+    // wears the theme's tick now, and the mark and the tick are the same glyph.
+    let marked_rows: Vec<&str> = screen
+        .lines()
+        .filter(|line| line.contains("Pick_") && line.contains('✓'))
+        .collect();
     assert!(
-        !screen.contains(" ✓ "),
-        "a clean batch leaves no marks behind:\n{screen}"
+        marked_rows.is_empty(),
+        "a clean batch leaves no marks behind: {marked_rows:?}\n{screen}"
     );
     assert!(
         screen.contains("2 tagged"),

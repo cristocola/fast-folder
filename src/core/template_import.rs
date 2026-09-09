@@ -83,6 +83,10 @@ fn scan_dir(
 ) -> Result<Vec<FolderNode>> {
     scan_dir_at(root, current, 0, bundle_assets, plan)
 }
+// Depth-0 entry point above. **Nothing else may call it** — the recursive step
+// goes to `scan_dir_at` with `depth + 1`, which it used to do through here
+// instead, resetting the counter at every level and leaving the limit
+// unreachable.
 
 fn scan_dir_at(
     root: &Path,
@@ -114,7 +118,7 @@ fn scan_dir_at(
             let name = display_name.into_owned();
             crate::core::validated::SafeRelativePath::parse(&name)?;
             plan.folders += 1;
-            let children = scan_dir(root, &path, bundle_assets, plan)?;
+            let children = scan_dir_at(root, &path, depth + 1, bundle_assets, plan)?;
             folders.push(FolderNode { name, children });
         } else if file_type.is_file() {
             classify_file(root, &path, entry.metadata()?.len(), bundle_assets, plan)?;

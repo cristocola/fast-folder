@@ -565,7 +565,34 @@ pub fn find_by_slug(slug: &str) -> Result<Template> {
     Template::load_from_file(&path)
 }
 
+/// **The one bound on how deep a template's `structure:` may go**, and the
+/// reason the five recursions over it elsewhere need none of their own.
+///
+/// `Template::load_with` and `save_to_file` both run `validate()`, so a
+/// structure that gets past here is the only kind that exists in memory —
+/// `structure_has_tokens`, `project::interpolated_structure`, `walk_structure`
+/// and `create_structure` then walk something already known to be shallow
+/// enough. Bounding it here rather than in each of them keeps the limit in one
+/// place and refuses the manifest with a sentence instead of failing halfway
+/// through a create.
+///
+/// The limit is `paths::MAX_WALK_DEPTH`, because these nodes become real
+/// directories: a structure deeper than fastf's own walks could measure is one
+/// it should not be creating. The check is made **as it descends**, so a
+/// manifest deep enough to overflow the stack is refused rather than being
+/// counted first.
 fn validate_structure(nodes: &[FolderNode], template_slug: &str) -> Result<()> {
+    validate_structure_at(nodes, template_slug, 0)
+}
+
+fn validate_structure_at(nodes: &[FolderNode], template_slug: &str, depth: usize) -> Result<()> {
+    if depth >= crate::util::paths::MAX_WALK_DEPTH {
+        bail!(
+            "template '{}' nests its structure more than {} folders deep",
+            template_slug,
+            crate::util::paths::MAX_WALK_DEPTH
+        );
+    }
     for node in nodes {
         SafeRelativePath::parse(&node.name).with_context(|| {
             format!(
@@ -573,7 +600,7 @@ fn validate_structure(nodes: &[FolderNode], template_slug: &str) -> Result<()> {
                 template_slug, node.name
             )
         })?;
-        validate_structure(&node.children, template_slug)?;
+        validate_structure_at(&node.children, template_slug, depth + 1)?;
     }
     Ok(())
 }

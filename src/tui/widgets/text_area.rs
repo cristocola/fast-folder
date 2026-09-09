@@ -261,10 +261,24 @@ impl TextArea {
         let rendered: Vec<Line> = self
             .lines
             .iter()
+            .enumerate()
             .skip(self.offset.get())
             .take(area.height as usize)
-            .map(|line| {
-                let (shown, _) = visible_window(line, line.chars().count(), width, 0);
+            .map(|(index, line)| {
+                // **The line the caret is on is windowed at the caret.** Every
+                // line used to be windowed at its end, while the caret below
+                // was windowed at `self.column` — two different windows over
+                // the same string. Press Home on a line longer than the pane
+                // and the caret sat at column 0 over the middle of the line,
+                // and every character typed landed off-window and never
+                // appeared. `LineEdit::render_line` has always used one window
+                // for both.
+                let cursor = if index == self.row {
+                    self.column
+                } else {
+                    line.chars().count()
+                };
+                let (shown, _) = visible_window(line, cursor, width, 0);
                 Line::from(Span::styled(shown, style))
             })
             .collect();
@@ -296,6 +310,59 @@ mod tests {
 
     fn key(code: KeyCode) -> Key {
         Key::plain(code)
+    }
+
+    /// The character under the caret is the character the caret is pointing at.
+    ///
+    /// The line was windowed at its **end** and the caret at `self.column`, so
+    /// on a line longer than the pane the two disagreed by however far the
+    /// cursor was from the end. Home, then type: the caret sat at column 0, the
+    /// text drawn under it was the middle of the line, and every keystroke
+    /// landed somewhere off-window. The structure and files editors in the
+    /// template builder, the settings screen's base list and the quick note all
+    /// use this widget.
+    #[test]
+    fn the_drawn_line_and_the_caret_agree_about_where_the_cursor_is() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::Style;
+
+        // Twenty-six characters of known text in a ten-column pane.
+        let mut area = TextArea::with_text("abcdefghijklmnopqrstuvwxyz");
+        area.apply(&key(KeyCode::Home));
+        assert_eq!(area.cursor(), (0, 0));
+
+        let rect = Rect::new(0, 0, 10, 3);
+        let mut buffer = Buffer::empty(rect);
+        let caret = area
+            .render(rect, &mut buffer, Style::default())
+            .expect("a caret on a visible row");
+
+        let drawn: String = (0..rect.width)
+            .map(|x| buffer[(x, 0)].symbol().to_string())
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(
+            drawn.starts_with('a'),
+            "the cursor is at the start, so the start is what is drawn: {drawn:?}"
+        );
+        let under_caret = buffer[(caret.x, caret.y)].symbol().to_string();
+        assert_eq!(
+            under_caret, "a",
+            "the caret must point at the character the cursor is on, not at \
+             whatever the line's own window happened to put there"
+        );
+
+        // And at the other end of the same line it still agrees.
+        area.apply(&key(KeyCode::End));
+        let caret = area
+            .render(rect, &mut buffer, Style::default())
+            .expect("a caret on a visible row");
+        assert_eq!(
+            buffer[(caret.x.saturating_sub(1), caret.y)].symbol(),
+            "z",
+            "at the end, the last character sits just before the caret"
+        );
     }
 
     #[test]

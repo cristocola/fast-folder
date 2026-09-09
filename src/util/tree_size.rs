@@ -29,6 +29,10 @@ pub(crate) fn directory_size_until(root: &Path, cancel: &AtomicBool) -> Option<u
     directory_size_inner(root, cancel).ok()
 }
 
+/// The depth-0 entry point. **Nothing else may call it** — the recursive step
+/// goes to `directory_size_at` with `depth + 1`, which is what it used to do
+/// through here instead, resetting the counter at every level and leaving the
+/// limit below unreachable.
 fn directory_size_inner(root: &Path, cancel: &AtomicBool) -> io::Result<u64> {
     directory_size_at(root, cancel, 0)
 }
@@ -74,7 +78,7 @@ fn directory_size_at(root: &Path, cancel: &AtomicBool, depth: usize) -> io::Resu
         }
 
         let bytes = if file_type.is_dir() {
-            directory_size_inner(&path, cancel)?
+            directory_size_at(&path, cancel, depth + 1)?
         } else if file_type.is_file() {
             metadata.len()
         } else {
@@ -111,6 +115,48 @@ mod tests {
         fs::write(root.join("nested/data.bin"), [0_u8; 17]).unwrap();
 
         assert_eq!(directory_size(&root), Some(8 + 6 + 17));
+    }
+
+    /// The depth limit is enforced, so a pathological tree is `None` rather
+    /// than a dead process.
+    ///
+    /// It was written down and unreachable: `directory_size_at` checked `depth`
+    /// and then recursed through `directory_size_inner`, which starts again at
+    /// zero. This walk runs on `util::size_scan`'s workers without anybody
+    /// asking for it, and a stack overflow is not an unwind — so the failure was
+    /// the whole app dying while looking at a folder.
+    ///
+    /// Unix only, for the setup's sake rather than the code's: a tree this deep
+    /// needs a path past Windows' MAX_PATH, which `create_dir_all` refuses
+    /// without long-path support. `MAX_WALK_DEPTH` is cross-platform.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_past_the_depth_limit_is_unavailable_rather_than_fatal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("deep");
+        let mut path = root.clone();
+        for level in 0..crate::util::paths::MAX_WALK_DEPTH + 5 {
+            path = path.join(format!("l{level}"));
+        }
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("leaf.bin"), [0_u8; 4]).unwrap();
+
+        assert_eq!(
+            directory_size(&root),
+            None,
+            "past the limit the snapshot is unavailable, like any other read failure"
+        );
+
+        // And a tree just inside the limit still measures, so the bound is the
+        // one that is written down rather than something stricter.
+        let shallow = tmp.path().join("shallow");
+        let mut path = shallow.clone();
+        for level in 0..crate::util::paths::MAX_WALK_DEPTH - 2 {
+            path = path.join(format!("l{level}"));
+        }
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("leaf.bin"), [0_u8; 4]).unwrap();
+        assert_eq!(directory_size(&shallow), Some(4));
     }
 
     #[test]

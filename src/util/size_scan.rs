@@ -57,6 +57,11 @@ impl Default for SizeScanner {
     }
 }
 
+/// 4 MiB, matching `tui::runtime::spawn_worker`. The default a Windows thread
+/// gets is 1 MiB, and 256 frames of a `read_dir` iterator already overflowed
+/// one — which is why `paths::MAX_WALK_DEPTH` is 64 rather than 256.
+const WORKER_STACK: usize = 4 * 1024 * 1024;
+
 impl SizeScanner {
     pub fn new() -> Self {
         let state = Arc::new(Mutex::new(State {
@@ -72,7 +77,17 @@ impl SizeScanner {
                 let state = Arc::clone(&state);
                 let wake = Arc::clone(&wake);
                 let cancel = Arc::clone(&cancel);
-                std::thread::spawn(move || worker(&state, &wake, &cancel))
+                // A real stack, for the same reason `tui::runtime::spawn_worker`
+                // asks for one: a Windows thread gets 1 MiB by default, and
+                // these threads run `tree_size`, which recurses to
+                // `paths::MAX_WALK_DEPTH`. A stack overflow is not an unwind —
+                // it takes the process with it, and the size scan is the one
+                // walk that runs without anybody asking for it.
+                std::thread::Builder::new()
+                    .name("fastf-size".to_string())
+                    .stack_size(WORKER_STACK)
+                    .spawn(move || worker(&state, &wake, &cancel))
+                    .expect("spawning a size-scan worker")
             })
             .collect();
         Self {

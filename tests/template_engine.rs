@@ -917,3 +917,65 @@ fn editing_a_mismatched_template_repairs_its_manifest() {
         );
     });
 }
+
+/// A manifest that nests its `structure:` past the walk limit is refused when
+/// it loads, rather than recursed over five more times.
+///
+/// `structure:` becomes real directories, and `Template::validate` is the one
+/// gate every load and every save goes through — so bounding it here is what
+/// lets `structure_has_tokens`, `interpolated_structure`, `walk_structure` and
+/// `create_structure` walk it with no bound of their own. None of them had one,
+/// and `template from-folder` could generate a tree as deep as the folder it
+/// read.
+///
+/// The refusal has to come from the descent rather than from a count taken
+/// first, or the stack is already gone by the time anybody says so.
+#[test]
+fn a_structure_nested_past_the_walk_limit_is_refused_on_load() {
+    sandboxed(|install| {
+        let depth = fastf::util::paths::MAX_WALK_DEPTH + 5;
+        // `structure:` as nested `- name:` / `children:` blocks.
+        let mut yaml =
+            String::from("name: Deep\nslug: deep\nnaming_pattern: \"{id}\"\nstructure:\n");
+        for level in 0..depth {
+            let indent = "  ".repeat(level * 2);
+            yaml.push_str(&format!("{indent}  - name: l{level}\n"));
+            if level + 1 < depth {
+                yaml.push_str(&format!("{indent}    children:\n"));
+            }
+        }
+        let dir = install.join("templates").join("deep");
+        fs::create_dir_all(dir.join("files")).unwrap();
+        fs::write(dir.join("template.yaml"), yaml).unwrap();
+
+        let loaded = template::find_by_slug("deep");
+        assert!(loaded.is_err(), "a structure that deep must not load");
+        let message = format!("{:#}", loaded.unwrap_err());
+        assert!(
+            message.contains("deep"),
+            "the refusal should name the template and the limit: {message}"
+        );
+    });
+}
+
+/// And one just inside the limit still loads, so the bound is the one that is
+/// written down rather than something stricter.
+#[test]
+fn a_structure_just_inside_the_walk_limit_still_loads() {
+    sandboxed(|install| {
+        let depth = fastf::util::paths::MAX_WALK_DEPTH - 2;
+        let mut yaml = String::from("name: Deep\nslug: ok\nnaming_pattern: \"{id}\"\nstructure:\n");
+        for level in 0..depth {
+            let indent = "  ".repeat(level * 2);
+            yaml.push_str(&format!("{indent}  - name: l{level}\n"));
+            if level + 1 < depth {
+                yaml.push_str(&format!("{indent}    children:\n"));
+            }
+        }
+        let dir = install.join("templates").join("ok");
+        fs::create_dir_all(dir.join("files")).unwrap();
+        fs::write(dir.join("template.yaml"), yaml).unwrap();
+
+        assert!(template::find_by_slug("ok").is_ok());
+    });
+}

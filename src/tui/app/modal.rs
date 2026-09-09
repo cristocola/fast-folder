@@ -158,7 +158,7 @@ impl Modal {
         match self {
             Modal::Palette(_) => Context::Palette,
             Modal::Actions(_) => Context::Actions,
-            Modal::Builder(builder) if !builder.pending => match &builder.open {
+            Modal::Builder(builder) if builder.pending.is_none() => match &builder.open {
                 None => Context::Builder,
                 Some(Open::Variables(list)) if list.editing.is_none() => Context::Builder,
                 Some(Open::Files(list)) if list.editing.is_none() => Context::Builder,

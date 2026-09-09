@@ -195,6 +195,15 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
 
 Regression coverage grows with the relevant release:
 
+- [x] The settings screen's base editor opens on a short window instead of
+  panicking, a confirmation names every folder it is about at 60 columns, and a
+  text area's drawn line and its caret agree about where the cursor is (v3.3.0).
+- [x] The depth limit is enforced on every recursive walk that declares one —
+  the size scan, a move manifest, and reading a template out of a folder — and a
+  template's `structure:` is bounded where it loads (v3.3.0).
+- [x] A destructive verb runs on the project its dialog named or on nothing, a
+  worked-on template is not thrown away by any quit gesture, and a template read
+  that answers for something else is dropped (v3.3.0).
 - [x] A folder holding a `PROJECT_INFO.md` fastf cannot read is named rather
   than dropped in silence, and a hand-edit that removes a field which is not the
   project's identity does not remove the project; an ordinary folder with no

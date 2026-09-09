@@ -298,10 +298,6 @@ pub struct ReconcileReport {
     pub resumed: usize,
     pub completed: usize,
     pub rolled_back: usize,
-    /// Always zero. Retained because `/api/reconcile` promises the field;
-    /// suffix sweeping no longer exists, so nothing writes it and `is_empty`
-    /// does not consult it.
-    pub swept: usize,
     /// Case-only renames finished off — see [`IncompleteKind::RenameStaging`].
     pub restored: usize,
     pub incomplete: Vec<String>,

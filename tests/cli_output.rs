@@ -833,6 +833,97 @@ fn an_editor_that_failed_is_not_reported_as_having_opened_anything() {
     );
 }
 
+/// The first-run banner is on stderr, so `$(fastf path …)` is a path.
+///
+/// `ensure_bootstrapped` runs for every command but `completions` and
+/// `mangen`, and printed two lines with `println!`. On a machine whose data
+/// directory does not exist yet but whose base already holds projects — a
+/// second computer, a portable base, a scripted `FASTF_INSTALL_DIR` —
+/// `cd "$(fastf path lullaby)"` got `fastf: initialized in …` prepended to the
+/// path. `docs/cli.md` states the contract: "prints the path followed by a
+/// newline — no colour, no decoration, nothing else on stdout".
+#[test]
+fn the_first_run_banner_never_lands_in_a_command_substitution() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+
+    // Throw the data directory away, keeping the base and its projects: the
+    // next command bootstraps from scratch.
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    fs::remove_dir_all(&sb.install).unwrap();
+    fs::create_dir_all(&sb.install).unwrap();
+    fs::write(sb.install.join("config.toml"), config).unwrap();
+
+    let out = sb.run(&["path", "ID0001"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.trim_end(),
+        shown_path(&dir),
+        "stdout is the path and nothing else:\n{stdout}"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("initialized in"),
+        "and the banner is still said, on the stream for saying things"
+    );
+}
+
+/// `tag reauto` re-derives the template's own tags and leaves the free-form
+/// ones alone.
+///
+/// It is the safety valve for a template whose `tag_from` changed, and it
+/// **removes** tags before re-deriving them — so a bug here loses tags a user
+/// typed. The only test it had asserted a *refusal* (a project registered
+/// without a template has nothing to re-derive), so the path that actually
+/// touches the file had none at all.
+#[test]
+fn tag_reauto_re_derives_the_automatic_tags_and_keeps_the_free_form_ones() {
+    let sb = Sandbox::new();
+    // A template whose `tier` variable drives an auto tag.
+    let dir = sb.install.join("templates").join("client");
+    fs::create_dir_all(dir.join("files")).unwrap();
+    fs::write(
+        dir.join("template.yaml"),
+        "name: Client\nslug: client\nnaming_pattern: \"{id}_{name}\"\n\
+         id:\n  prefix: C\n  digits: 4\n\
+         variables:\n  - slug: name\n    label: Name\n    type: text\n    required: true\n\
+         \x20   transform: none\n  - slug: tier\n    label: Tier\n    type: text\n\
+         \x20   transform: none\n\
+         tag_from: [\"tier\"]\n",
+    )
+    .unwrap();
+
+    sb.ok(&[
+        "new",
+        "client",
+        "--name=One",
+        "--tier=Indie",
+        "--yes",
+        "--no-preview",
+    ]);
+    sb.ok(&["tag", "add", "C0001", "urgent"]);
+
+    let before = sb.ok(&["tag", "list", "C0001"]);
+    assert!(before.contains("tier/Indie"), "{before}");
+    assert!(before.contains("urgent"), "{before}");
+
+    let out = sb.ok(&["tag", "reauto", "C0001"]);
+    assert!(
+        out.contains("C0001"),
+        "the verb should name what it did:\n{out}"
+    );
+
+    let after = sb.ok(&["tag", "list", "C0001"]);
+    assert!(
+        after.contains("tier/Indie"),
+        "the derived tag comes back:\n{after}"
+    );
+    assert!(
+        after.contains("urgent"),
+        "and a tag the user typed is not the template's to remove:\n{after}"
+    );
+}
+
 /// `fastf reconcile` on a library with nothing outstanding says so and exits 0.
 /// Reporting "nothing to do" is the common case and the one that must be quiet.
 #[test]

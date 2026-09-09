@@ -271,8 +271,8 @@ impl Template {
     ///
     /// Listing templates does not need their contents, and reading every UTF-8
     /// file of every template to print a name and a description is work nobody
-    /// asked for — `fastf template list`, `fastf id show`, the template picker
-    /// and `/api/state` all did it.
+    /// asked for — `fastf template list`, `fastf id show` and the template
+    /// picker all did it.
     pub fn load_with(path: &Path, buffer: FileBuffer) -> Result<Self> {
         crate::util::trace::hit("template_load");
         let raw = fs::read_to_string(path)
@@ -513,11 +513,6 @@ impl Template {
             }
         }
         Ok(())
-    }
-
-    /// Path to this template's manifest: `templates/<slug>/template.yaml`.
-    pub fn file_path(&self) -> PathBuf {
-        paths::template_manifest(&self.slug)
     }
 }
 

@@ -15,6 +15,14 @@ const FROM_FOLDER_MAX_FILE_SIZE: u64 = 64 * 1024;
 /// Directory names that are skipped during `from-folder` scans. Keeping this
 /// list short and hardcoded is intentional — German-engineering lean, no config
 /// surface area for what are effectively noise directories.
+/// A comma-separated rendering of the private `FROM_FOLDER_IGNORE`, for the help text
+/// and the docs — so a name added to the list cannot go unmentioned. `--help`
+/// listed nine of the twelve, and `.DS_Store`, `venv` and `.next` vanished from
+/// people's templates with nothing anywhere accounting for them.
+pub fn from_folder_ignored() -> String {
+    FROM_FOLDER_IGNORE.join(", ")
+}
+
 const FROM_FOLDER_IGNORE: &[&str] = &[
     ".git",
     ".DS_Store",
@@ -508,7 +516,8 @@ fn print_from_folder_summary(slug: &str, report: &FromFolderReport) {
     println!("   Use it:     {}", format!("fastf new {}", slug).dimmed());
 }
 
-/// Human-readable byte size (KB/MB/GB) for confirmations and summaries.
+/// A template slug is one component of a path, so it is checked before any
+/// path is built from it.
 fn validate_slug(slug: &str) -> Result<()> {
     crate::core::validated::TemplateSlug::parse(slug).map(|_| ())
 }

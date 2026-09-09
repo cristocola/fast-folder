@@ -135,6 +135,15 @@ proptest! {
 
     /// Interpolated *names* must stay single components no matter what a
     /// variable contains — this is what stops a value from escaping the project.
+    ///
+    /// **Asked of `interpolate_name` itself.** It used to wrap the result in
+    /// `sanitize_name` before asserting, and the property above already proves
+    /// `sanitize_name`'s output is a creatable single component for *arbitrary*
+    /// input — so `interpolate_name` could have returned `../../etc` and this
+    /// still passed. What it has to prove is that interpolation does not
+    /// *introduce* a separator that its inputs did not have: every variable
+    /// value is sanitized on the way in (`plan` does exactly that), and the
+    /// pattern itself is the template author's.
     #[test]
     fn interpolated_names_never_traverse(
         pattern in "[a-z{}_-]{0,20}",
@@ -142,11 +151,17 @@ proptest! {
     ) {
         let mut vars = HashMap::new();
         vars.insert("name".to_string(), naming::sanitize_name(&value));
-        let out = naming::sanitize_name(&naming::interpolate_name(&pattern, &vars, "%Y-%m-%d"));
+        let out = naming::interpolate_name(&pattern, &vars, "%Y-%m-%d");
 
         prop_assert!(!out.contains('/'), "{out:?}");
         prop_assert!(!out.contains('\\'), "{out:?}");
         prop_assert_ne!(out.as_str(), "..");
+        // And `ProjectFolderName` is the gate a create actually passes through:
+        // whatever it accepts is one ordinary component.
+        if let Ok(name) = fastf::core::validated::ProjectFolderName::parse(&out) {
+            let name = name.into_string();
+            prop_assert_eq!(std::path::Path::new(&name).components().count(), 1, "{}", name);
+        }
     }
 
     /// The search parser takes raw user input and must never panic on it.
@@ -242,7 +257,13 @@ proptest! {
             return Ok(()); // generated body broke the delimiters; not our concern
         };
         prop_assert_eq!(split_body, body.as_str(), "body must survive the split verbatim");
-        prop_assert!(frontmatter.contains(&id));
+        // The frontmatter half has to parse back into the metadata it was
+        // written from. `contains(&id)` was the assertion here, and the test
+        // formats `id: {id}` into the string it then splits — so it restated
+        // its own setup and would have passed over any parse failure at all.
+        let meta: project_info::Metadata = fastf::util::yaml::from_str(frontmatter)
+            .map_err(|e| TestCaseError::fail(format!("frontmatter must parse: {e}")))?;
+        prop_assert_eq!(meta.id, id);
     }
 }
 

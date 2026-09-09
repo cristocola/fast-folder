@@ -194,7 +194,7 @@ fn filter_projects<'a>(
 
 /// A base named on the command line: its short label, as every list prints it,
 /// or its full path, as `fastf paths` prints it. The same rule
-/// `fastf move --to` already uses, so one spelling works everywhere.
+/// `fastf move <query> [base]` already takes, so one spelling works everywhere.
 ///
 /// **Takes the base itself, not a project in it**, because the same question is
 /// asked twice: once of every project while filtering, and once of the

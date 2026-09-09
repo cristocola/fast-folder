@@ -57,15 +57,19 @@ pub struct Progress {
     ///
     /// It tells "slow" from "stuck" — a copy to a cloud-synced or network
     /// destination can legitimately sit for minutes, so there is no wall-clock
-    /// timeout, only an honest "no progress for N minutes" note.
+    /// timeout. **Nothing reads it yet:** the "no progress for N minutes" note
+    /// it was written for belonged to the browser UI removed at v2.0.0, and the
+    /// progress dialog has not grown one. It is kept because the field is the
+    /// hard half — every writer already `touch`es it — and because a journal
+    /// written by an older fastf carries it.
     pub last_progress_at: u64,
 }
 
 /// Where a background job has got to.
 ///
 /// Was a `String` set by literal at fifteen call sites, which is exactly as many
-/// chances to write `"canceled"`. The serialized names are unchanged, so the
-/// JSON the browser reads is byte-identical.
+/// chances to write `"canceled"`. The serialized names are unchanged, so a
+/// journal written by an older fastf still reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
@@ -125,17 +129,10 @@ impl Progress {
     pub fn touch(&mut self) {
         self.last_progress_at = now_millis();
     }
-
-    /// Milliseconds since the last observed movement. Saturates at 0 if the
-    /// clock moved backwards.
-    pub fn idle_millis(&self) -> u64 {
-        now_millis().saturating_sub(self.last_progress_at)
-    }
 }
 
-/// Unix-epoch milliseconds. The frontend compares this against its own
-/// `Date.now()`, which is sound because the UI is loopback-only — same machine,
-/// same clock.
+/// Unix-epoch milliseconds, from this machine's clock — the only one that ever
+/// reads them.
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -980,11 +977,12 @@ mod tests {
         }
     }
 
-    /// The enums replaced `String` fields the browser reads by name. If these
-    /// change, `/api/job/<id>` starts answering in a vocabulary the frontend
-    /// does not know, and there is nothing in the JSON to say so.
+    /// The enums replaced `String` fields set by literal, and their serialized
+    /// names are what a move journal written by an older fastf holds. If these
+    /// change, `reconcile` reads a phase it does not know from a file it is
+    /// meant to recover, and there is nothing in the JSON to say so.
     #[test]
-    fn job_status_and_phase_serialize_to_the_names_the_browser_reads() {
+    fn job_status_and_phase_serialize_to_the_names_a_journal_holds() {
         use super::{JobPhase, JobStatus};
 
         for (value, name) in [

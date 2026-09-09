@@ -479,8 +479,7 @@ fn set_phase(progress: &Mutex<Progress>, phase: JobPhase) {
     if let Ok(mut p) = progress.lock() {
         p.phase = phase;
         // A phase change is real movement: without it, verifying a large tree
-        // looks identical to a dead worker to both the staleness floor and the
-        // frontend's stall notice.
+        // looks identical to a dead worker to anything reading the timestamp.
         p.touch();
     }
 }

@@ -537,9 +537,9 @@ error: 'shared' is ambiguous — 2 matches. Specify a full ID:
   ID0011  shared_one  (general)
 ```
 
-`move`, `tag`, `note`, and `notes` resolve queries the same way but do not open
-a picker; an ambiguous query is always the error above. `rename`, `unregister`
-and `delete` get the picker, like `open`.
+`move`, `tag`, `note`, `notes` and `copy-to` resolve queries the same way but do
+not open a picker; an ambiguous query is always the error above. `rename`,
+`unregister` and `delete` get the picker, like `open`.
 
 Piping the output engages the plain list automatically:
 
@@ -780,6 +780,8 @@ its builder, so there is one template editor rather than two that drift. See
 
 `from-folder` reproduces every text file up to 64 KB and skips binary and larger files unless `--bundle-assets` is given, which confirms the total size first — pass `--yes` to accept it without asking. `--dry-run` prints the same scan (folders, files, assets with sizes) and writes nothing. `--force` replaces an existing template's whole `files/` tree rather than merging into it.
 
+Common noise directories are skipped without being mentioned: `.git`, `.DS_Store`, `node_modules`, `target`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `.next`, `.idea` and `.vscode`. `fastf template from-folder --help` prints the same list, read from the same place.
+
 A template is a folder. Share one by copying its folder, and use a gallery example by copying `examples/templates/<slug>/` into your templates directory. See [templates.md](templates.md) for the full authoring guide.
 
 ## Configuration
@@ -810,6 +812,7 @@ fastf config set bases ""                        # clear the list
 fastf config set prompt-open-after-create false
 fastf config set confirm-create false            # skip "Create this project?" like a permanent --yes
 fastf config set recent-limit 50
+fastf config set preview-lines 12                # how many template files a create preview lists; 0 is none
 fastf config set register-naming-pattern "{id}_{name}"
 fastf config set on-name-collision error          # refuse a duplicate folder name instead of adding _2
 

@@ -337,3 +337,59 @@ fn two_bases_with_one_id_list_as_two_rows() {
         }
     });
 }
+
+/// A same-filesystem move preserves a symlink inside the project.
+///
+/// The staged path refuses links deny-by-default, and refusing them on the
+/// rename too would block the common case for no benefit — a rename copies
+/// nothing and preserves them perfectly. That guarantee was pinned only by
+/// `windows_semantics.rs`'s `#[cfg(windows)]` junction test and by the opt-in
+/// `windows_live.rs`, and `tests/CLAUDE.md` legislates against exactly that:
+/// "a suite CI never runs cannot be the only guard on a fix". This is the unix
+/// sibling, and it costs three lines.
+#[cfg(unix)]
+#[test]
+fn a_same_filesystem_move_preserves_a_symlink_inside_the_project() {
+    sandboxed(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+
+        let base_a = install.join("projects");
+        let base_b = install.join("projects_b");
+        fs::create_dir_all(&base_a).unwrap();
+        fs::create_dir_all(&base_b).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.base_dir = base_a.display().to_string();
+        cfg.bases = vec![base_b.display().to_string()];
+        cfg.save().unwrap();
+
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut counters = Counters::load().unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "linked".to_string());
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+
+        let project = library::discover(&cfg).remove(0);
+        let link = project.path.join("shortcut");
+        std::os::unix::fs::symlink("PROJECT_INFO.md", &link).unwrap();
+
+        let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let outcome =
+            fastf::core::operations::move_project(&project, &base_b, &progress, &cancel).unwrap();
+        assert!(!outcome.staged, "one filesystem is a rename");
+
+        let moved = base_b.join(&project.name).join("shortcut");
+        let kind = fs::symlink_metadata(&moved).expect("the link came with the project");
+        assert!(
+            kind.file_type().is_symlink(),
+            "a rename preserves it as a link, not as a copy of its target"
+        );
+        assert_eq!(
+            fs::read_link(&moved).unwrap(),
+            std::path::Path::new("PROJECT_INFO.md"),
+            "and pointing where it pointed"
+        );
+    });
+}

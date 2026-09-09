@@ -111,6 +111,33 @@ test, which is exactly where the
 rename prompt once spent a release offering one folder name and committing
 another. `#![allow(dead_code)]` because each binary uses a different subset.
 
+## Three ways a test passes over the thing it is for
+
+All three cost a release each; all three are cheap to avoid.
+
+**Do not read the artefact through the code that repairs it.** `reconcile`'s
+case-rename test asked `library::discover` whether the project was back, and
+discovery rescans and rewrites the index on the way past — so the assertion
+could only ever fail where the base directory's mtime happened not to move. On
+Linux a rename moves it and the test was green; the Windows leg found the real
+defect, which was that the restore never told the index anything. Read the file
+itself, **before** calling anything that would put it right.
+
+**A test named after a screen has to assert the screen is on it.**
+`settings_bases_as_text` pressed Down ten times and Enter, and ten is *Theme*,
+whose Enter cycles the value where it stands and opens nothing. The snapshot
+named after the bases editor had never contained one — so the test written to
+look at the thing that later panicked could not have caught the panic. Assert a
+word only that screen has (`frame.contains("one base per line")`) before
+`snap()`.
+
+**An assertion that restates its own setup proves nothing.** `properties.rs`
+formatted `id: {id}` into a string and then asserted the string contained the
+id; another wrapped `interpolate_name`'s output in the `sanitize_name` whose
+output is already proved safe for arbitrary input, so the function under test
+could have returned `../../etc` and passed. Assert the *result of the thing*, in
+the units the caller uses.
+
 **Write a test against the broken build first.** Several have passed pre-fix and
 were relabelled as design guards rather than left looking like regressions they
 are not — and several more caught a defect the fix was assumed to have covered.

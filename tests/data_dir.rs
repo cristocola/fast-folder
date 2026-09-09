@@ -91,6 +91,53 @@ fn bootstrap_lands_in_user_dir_for_system_install() {
     });
 }
 
+/// A first run that failed between the two bundled templates is finished by the
+/// next one.
+///
+/// The guard was "is the templates directory empty" and both templates were
+/// written under it, so a failure after the first — a full disk, a permission,
+/// a Ctrl-C — left the directory non-empty, the guard false ever after, and
+/// `client-project` never written. The user was left with one of the two
+/// templates the README promises and nothing anywhere saying so.
+#[test]
+fn a_half_written_first_run_is_finished_by_the_next_one() {
+    with_user_dir_env(|tmp, _guard| {
+        let templates = tmp.join("fastf").join("templates");
+        // Exactly what the interrupted run leaves: one template, and a
+        // directory that is no longer empty.
+        fs::create_dir_all(templates.join("general").join("files")).unwrap();
+        fs::write(
+            templates.join("general").join("template.yaml"),
+            "name: General\nnaming_pattern: \"{id}\"\n",
+        )
+        .unwrap();
+
+        fastf::bootstrap::ensure_bootstrapped().expect("bootstrap must succeed");
+
+        assert!(
+            templates
+                .join("client-project")
+                .join("template.yaml")
+                .is_file(),
+            "the template that was never written must be written now"
+        );
+        assert!(
+            templates
+                .join("client-project")
+                .join("files")
+                .join("BRIEF.md")
+                .is_file(),
+            "and the file it ships with it"
+        );
+        // And the one that was already there is the user's, untouched.
+        let kept = fs::read_to_string(templates.join("general").join("template.yaml")).unwrap();
+        assert!(
+            kept.contains("naming_pattern: \"{id}\""),
+            "an existing manifest is never overwritten:\n{kept}"
+        );
+    });
+}
+
 #[test]
 fn mangen_writes_man_pages() {
     // Drives the real binary (mangen lives in main.rs, not the lib). The env

@@ -39,15 +39,19 @@ impl RowWidths {
         I: IntoIterator<Item = &'a Project> + Clone,
     {
         Self {
+            // **Display columns, not bytes, in every one of these.** Three of
+            // the four measured `.len()` while the comment on the fourth
+            // explained why that is wrong: a base folder called `Проекты` is
+            // seven columns and fourteen bytes, so the column reserved fourteen
+            // and left a gap nothing filled. A template slug or an id can carry
+            // the same characters. `LibraryState::recompute` measures the same
+            // base label with `width()`, so the two disagreed about one string.
             id: projects
                 .clone()
                 .into_iter()
-                .map(|p| p.id.len())
+                .map(|p| p.id.width())
                 .max()
                 .unwrap_or(4),
-            // Display columns, not bytes: a folder name is the one cell a user
-            // can fill with anything, accents and CJK included, and `.len()`
-            // would pad it to the wrong place.
             name: projects
                 .clone()
                 .into_iter()
@@ -57,12 +61,12 @@ impl RowWidths {
             template: projects
                 .clone()
                 .into_iter()
-                .map(|p| p.template.len())
+                .map(|p| p.template.width())
                 .max()
                 .unwrap_or(8),
             base: projects
                 .into_iter()
-                .map(|p| library::base_label(&p.base).len())
+                .map(|p| library::base_label(&p.base).width())
                 .max()
                 .unwrap_or(4),
         }

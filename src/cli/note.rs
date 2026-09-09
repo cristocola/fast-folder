@@ -42,10 +42,10 @@ pub fn add(args: NoteAddArgs) -> Result<()> {
     let pinfo = project_info::pinfo_path(&candidate.path);
 
     if !pinfo.exists() {
+        // The same sentence `fastf tag` says about the same condition.
         bail!(
-            "no {} found for project {}",
-            project_info::RESERVED_FILENAME,
-            candidate.id
+            "{}",
+            crate::cli::tag::no_metadata_message(&candidate.id, &candidate.path)
         );
     }
 

@@ -13,6 +13,24 @@ use colored::Colorize;
 use crate::core::library;
 use crate::core::{config::Config, project_info};
 
+/// What to say when a project's folder has no `PROJECT_INFO.md`.
+///
+/// `tag` and `note` reach this same condition and said two different things,
+/// and neither named the way out — which is `register`, the command whose whole
+/// job is writing that file into a folder that lacks one. `tag reauto` already
+/// had the right shape: name the cause, then the command.
+pub(crate) fn no_metadata_message(id: &str, path: &std::path::Path) -> String {
+    format!(
+        "no {} in {} — so {} is not a project fastf can read or write.\n  \
+         Write one with `fastf register {}`, which leaves everything else in \
+         the folder alone.",
+        project_info::RESERVED_FILENAME,
+        crate::util::paths::display_path(path),
+        id,
+        crate::util::paths::display_path(path)
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Public entry points (called from main.rs)
 // ---------------------------------------------------------------------------
@@ -68,11 +86,7 @@ pub fn list(query: &str) -> Result<()> {
     let project = library::revalidate_project(&cfg, &candidate)?;
     let path = project_info::pinfo_path(&project.path);
     if !path.exists() {
-        bail!(
-            "no {} found for project {} — this project may predate the metadata feature",
-            project_info::RESERVED_FILENAME,
-            project.id
-        );
+        bail!("{}", no_metadata_message(&project.id, &project.path));
     }
 
     let meta = project_info::read_metadata(&project.path)?.ok_or_else(|| {

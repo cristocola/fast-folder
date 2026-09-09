@@ -492,7 +492,17 @@ impl App {
         self.set_status(StatusLevel::Info, text);
     }
 
+    /// A success, with the theme's own tick in front of it.
+    ///
+    /// **The glyph belongs here and not in the message.** Twelve of
+    /// `runtime::run_action`'s strings carried a literal `✓`, which
+    /// `Glyphs::ascii` maps to `+` — so on a legacy Windows console, or under
+    /// `FASTF_ASCII=1`, they drew a replacement box beside the app's own
+    /// correctly-themed messages. `run_action` runs on a worker with no theme
+    /// to ask, and this is the one place every one of its messages passes
+    /// through.
     fn good(&mut self, text: impl Into<String>) {
+        let text = format!("{}  {}", self.theme.glyphs.check, text.into());
         self.set_status(StatusLevel::Good, text);
     }
 
@@ -742,7 +752,10 @@ impl App {
                     self.library.error = Some(error.clone());
                     self.modals.push(Modal::message(
                         "the library could not be read",
-                        format!("{error}\n\nfix the configuration (`fastf config show`), then reload with F5."),
+                        format!(
+                            "{error}\n\nfix the configuration (`fastf config show`), then reload with {}.",
+                            command::key_of(CommandId::Reload)
+                        ),
                         MessageLevel::Error,
                     ));
                 }
@@ -975,22 +988,19 @@ impl App {
     fn on_spawned(&mut self, what: SpawnKind, outcome: Result<String, String>) -> Vec<Effect> {
         match (what, outcome) {
             (SpawnKind::Reveal(project), Ok(_)) => {
-                self.good(format!(
-                    "{}  Opened {} in the file manager",
-                    self.theme.glyphs.check, project.name
-                ));
+                self.good(format!("Opened {} in the file manager", project.name));
             }
             (SpawnKind::Reveal(_), Err(error)) => {
                 self.error(format!("could not open the folder: {error}"))
             }
             (SpawnKind::Terminal(_), Ok(_)) => {
-                self.good(format!("{}  Terminal opened", self.theme.glyphs.check));
+                self.good("Terminal opened");
             }
             (SpawnKind::Terminal(_), Err(error)) => {
                 self.error(format!("could not open a terminal: {error}"));
             }
             (SpawnKind::Clipboard(_), Ok(tool)) => {
-                self.good(format!("{}  Copied with {tool}", self.theme.glyphs.check));
+                self.good(format!("Copied with {tool}"));
             }
             (SpawnKind::Clipboard(text), Err(_)) => {
                 self.modals.push(Modal::message(
@@ -1101,7 +1111,10 @@ impl App {
                 self.after_query_change()
             }
             None => {
-                self.info("pasted text ignored — press / to search, or open a field first");
+                self.info(format!(
+                    "pasted text ignored — press {} to search, or open a field first",
+                    command::key_of(CommandId::Search)
+                ));
                 Vec::new()
             }
         };
@@ -1601,6 +1614,12 @@ impl App {
                 self.modals.pop();
                 Vec::new()
             }
+            // Enter is the commonest reflex there is on a two-button dialog,
+            // and nothing bound it in `Context::Modal` — so it fell through to
+            // the registry and produced silence. It answers `y`, which is the
+            // key line's first entry and the default every `confirm` in this
+            // app already offers.
+            KeyCode::Enter => self.answer_confirm(true),
             _ => self.lookup_and_run(key),
         }
     }
@@ -2440,7 +2459,7 @@ impl App {
     fn open_create(&mut self) -> Vec<Effect> {
         let slugs = self.template_slugs();
         if slugs.is_empty() {
-            self.warn("no templates yet — press T to make one");
+            self.warn(command::NO_TEMPLATES);
             return Vec::new();
         }
         let default = self.prefs().default_template;
@@ -2460,7 +2479,7 @@ impl App {
     fn open_apply(&mut self) -> Vec<Effect> {
         let slugs = self.template_slugs();
         if slugs.is_empty() {
-            self.warn("no templates yet — press T to make one");
+            self.warn(command::NO_TEMPLATES);
             return Vec::new();
         }
         let default = self.prefs().default_template;
@@ -2903,21 +2922,22 @@ impl App {
                 Vec::new()
             }
             Some(Modal::Builder(builder)) => {
+                // `wrap_step`, like every other list in the app —
+                // `CommandId::Down`'s own description says "a list wraps at
+                // the end", and these two clamped instead.
                 match &mut builder.open {
                     None => builder.step(delta),
                     Some(Open::Variables(list)) => {
                         let count = builder.template.variables.len();
-                        list.selected = list
-                            .selected
-                            .saturating_add_signed(delta)
-                            .min(count.saturating_sub(1));
+                        list.selected =
+                            crate::tui::widgets::nav::wrap_step(Some(list.selected), count, delta)
+                                .unwrap_or(0);
                     }
                     Some(Open::Files(list)) => {
                         let count = builder.template.files.len();
-                        list.selected = list
-                            .selected
-                            .saturating_add_signed(delta)
-                            .min(count.saturating_sub(1));
+                        list.selected =
+                            crate::tui::widgets::nav::wrap_step(Some(list.selected), count, delta)
+                                .unwrap_or(0);
                     }
                     Some(_) => {}
                 }

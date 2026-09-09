@@ -218,6 +218,14 @@ does not exist.
 `Config` whose `base_dir` was mutated afterwards misses and recomputes, so the
 memo can save work but cannot answer the wrong question.
 
+**The key `config set` takes is the key `config.toml` holds is the key `config
+show` prints.** `recent_limit` was three different words for one setting: the
+Rust field is `recent_default_limit` and carried no `serde(rename)`, so a value
+hand-written under the name every surface shows was silently ignored — `Config`
+has no `deny_unknown_fields` — and the default applied instead. The field now
+carries `rename = "recent_limit"` plus an `alias` for the old spelling, so every
+file written before this still parses.
+
 Old keys that no longer exist (`project_info_enabled`, `project_info_filename`,
 `pinfo_*`, and `show_banner`/`show_frame`, which went with the menu they drew)
 keep parsing because `Config` has no `deny_unknown_fields`; `config set` accepts

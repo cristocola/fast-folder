@@ -14,7 +14,7 @@ expression: frame
 "│  ID0245 2026-08-│ p      Show path                 print the full path in th…  │                 │"
 "│  ID0244 2026-08-│ A      Add a tag                 pick one the library alre…  │                 │"
 "│  ID0243 2026-08-│ Ctrl-t Remove tags               tick the tags to take off…  │                 │"
-"│  ID0242 2026-08-│        Re-derive tags            recompute the template's …  │                 │"
+"│  ID0242 2026-08-│ Enter  Re-derive tags            recompute the template's …  │                 │"
 "│  ID0241 2026-08-│ N      New note                  write a journal note in y…  │                 │"
 "│  ID0240 2026-08-│ Ctrl-n Quick note                type a short journal note…  │                 │"
 "│  ID0239 2026-08-│ r      Rename folder             change the folder's name …  │                 │"

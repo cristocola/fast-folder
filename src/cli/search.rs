@@ -42,13 +42,6 @@ pub struct SearchArgs {
 pub fn run(args: SearchArgs) -> Result<()> {
     let cfg = Config::load()?;
 
-    if args.terms.is_empty() {
-        anyhow::bail!(
-            "no search terms provided — try: fastf search ariana\n\
-             Run `fastf search --help` for the full query grammar."
-        );
-    }
-
     // Nothing below this line can be read from a desktop launcher: stdout and
     // stderr are journald sockets there, and the picker has no terminal to draw
     // on. Rather than working into the void, open a terminal and run this again

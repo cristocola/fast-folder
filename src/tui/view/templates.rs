@@ -45,7 +45,13 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
     let rows = studio.rows(app.search.input.text());
     if rows.is_empty() {
         let sentence = if studio.cards.is_empty() {
-            "no templates yet — n makes one, g reads one out of a folder"
+            // The registry's sentence, plus the one extra way in that only
+            // this tab offers.
+            &*format!(
+                "{}, or {} reads one out of a folder",
+                crate::tui::command::NO_TEMPLATES,
+                crate::tui::command::key_of(crate::tui::command::CommandId::StudioFromFolder)
+            )
         } else {
             "nothing matches"
         };
@@ -136,10 +142,24 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
         Some(_) if studio.lines.is_empty() => {
             vec![Line::from(Span::styled(" reading…", theme.dim()))]
         }
+        // Cut to the pane with the app's own ellipsis, like every other cell.
+        // These lines went in raw, so a description longer than the pane was
+        // hard-cut at the edge with nothing to say it had been — while `fastf
+        // template show` printed it in full. The pane scrolls now (Tab, then
+        // the arrows), so the tail of a long one is reachable; what a line
+        // cannot do is wrap, or the tree beside it would stop lining up.
         Some(_) => studio
             .lines
             .iter()
-            .map(|line| Line::from(Span::styled(format!(" {line}"), theme.text())))
+            .map(|line| {
+                Line::from(Span::styled(
+                    format!(
+                        " {}",
+                        fit(line, inner.width.saturating_sub(1) as usize, g.ellipsis)
+                    ),
+                    theme.text(),
+                ))
+            })
             .collect(),
         None => vec![Line::from(Span::styled(" nothing selected", theme.dim()))],
     };
@@ -194,7 +214,7 @@ pub fn bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             Span::styled(
                 fit(
                     "/ to search the templates",
-                    text_room.saturating_sub(prefix.len()),
+                    text_room.saturating_sub(prefix.width()),
                     g.ellipsis,
                 ),
                 theme.dim(),

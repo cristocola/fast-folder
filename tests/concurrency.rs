@@ -148,12 +148,12 @@ fn concurrent_config_writes_do_not_lose_updates() {
 
     let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
     for (key, value) in &writes {
-        // The stored field is `recent_default_limit`; `recent-limit` is what
-        // the key was renamed to at v3.0.0.
-        let field = match *key {
-            "recent-limit" => "recent_default_limit".to_string(),
-            other => other.replace('-', "_"),
-        };
+        // The key `config set` takes, the key `config show` prints and the
+        // key the file holds are one word now. They were three: the Rust field
+        // is still `recent_default_limit`, and it carried no `serde(rename)`,
+        // so this test used to have to translate between them — which is the
+        // shape of a defect, not of a mapping.
+        let field = key.replace('-', "_");
         let expected_present = config
             .lines()
             .any(|l| l.starts_with(&field) && l.contains(value));

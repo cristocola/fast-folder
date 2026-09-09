@@ -55,6 +55,13 @@ pub fn text(prompt: &str, opts: TextOpts<'_>) -> Result<Option<String>> {
 /// The one sentence a cancelled flow prints before returning to where it came
 /// from. `what` completes "Cancelled — _": say what did *not* happen, since the
 /// reassurance is the point ("nothing was created", not "aborted").
+///
+/// **Every "you cancelled" goes through here.** There were four: this,
+/// `Cancelled — nothing moved.`, a bare `Aborted.` at five confirmations, and a
+/// lowercase `aborted.` for Ctrl-C. `Aborted.` on its own says neither what was
+/// cancelled nor what state the project is in, which is the whole thing this
+/// exists to fix — and answering `n` to `fastf move` printed it while
+/// cancelling the same command's base picker printed the sentence.
 pub fn report_cancelled(what: &str) {
     println!("{}", format!("Cancelled — {what}.").dimmed());
 }

@@ -24,7 +24,18 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("{}  Reconcile report complete.", "✓".green().bold());
+    // Not a green tick over a report that may be nothing but "could not
+    // inspect": the tick means something worked, and here it only means the
+    // pass ran.
+    let clean = report.unrecoverable.is_empty();
+    println!(
+        "{}  Reconcile report complete.",
+        if clean {
+            "✓".green().bold()
+        } else {
+            "⚠".yellow().bold()
+        }
+    );
     if report.resumed > 0 {
         println!(
             "   {} {} interrupted copy job(s) finished",
@@ -94,6 +105,15 @@ pub fn run() -> Result<()> {
         for item in &report.unrecoverable {
             println!("     - {}", item.yellow());
         }
+        // The other two blocks each end with a sentence saying what to do.
+        // This one — the category the user can do least about — ended with the
+        // bare list.
+        println!(
+            "     {}",
+            "Nothing was changed for these. Look at each path yourself: fastf could not \
+             read it, or reading it would have meant guessing."
+                .dimmed()
+        );
     }
     Ok(())
 }

@@ -22,12 +22,6 @@ pub struct RecentArgs {
 
 pub fn run(args: RecentArgs) -> Result<()> {
     let cfg = Config::load()?;
-    // `--limit 0` used to be clamped to 1, quietly showing a project the user
-    // asked not to see. Refuse instead — a zero-length list is not what anyone
-    // means by it.
-    if args.limit == Some(0) {
-        anyhow::bail!("--limit must be at least 1");
-    }
     let limit = args.limit.unwrap_or(cfg.recent_default_limit).max(1);
 
     // Nothing below this line can be read from a desktop launcher: stdout and
@@ -39,6 +33,18 @@ pub fn run(args: RecentArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Every refusal is **below** the hand-off, for the reason `cli::search`
+    // spells out: from a desktop launcher this message would go to a journald
+    // socket nobody reads, and the relaunched process asks the same question
+    // again in the window it opened. `--limit 0` was refused above it while its
+    // three siblings were refused here — the move went the wrong way for the
+    // one case that stayed put.
+    //
+    // `--limit 0` used to be clamped to 1, quietly showing a project the user
+    // asked not to see. A zero-length list is not what anyone means by it.
+    if args.limit == Some(0) {
+        anyhow::bail!("--limit must be at least 1");
+    }
     validate_filters(&cfg, &args)?;
 
     // Filesystem-as-truth: discover projects from their PROJECT_INFO.md across

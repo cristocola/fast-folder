@@ -119,7 +119,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         )?
         .unwrap_or(false);
         if !ok {
-            println!("Aborted.");
+            crate::tui::prompt::report_cancelled("the folder is unchanged");
             return Ok(());
         }
     }

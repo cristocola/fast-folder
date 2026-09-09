@@ -492,7 +492,7 @@ fn has_studio_selection(app: &App) -> Availability {
     if app.studio.selected_slug().is_some() {
         Availability::Enabled
     } else {
-        Availability::Disabled("no templates yet — n makes one")
+        Availability::Disabled(NO_TEMPLATES)
     }
 }
 
@@ -979,6 +979,11 @@ pub static COMMANDS: &[Command] = &[
         "Re-derive tags",
         "recompute the template's automatic tags from the variables — for every mark, if any",
         ACTIONS,
+        // Deliberately keyless: every mnemonic near it is taken (`R` is
+        // Reindex, `r` is rename), and inventing a chord for a verb this rare
+        // costs more than it is worth. The action menu shows `Enter` for a row
+        // with no key of its own rather than an empty column — see
+        // `view::modals::render_actions`.
         [],
         Project,
         palette = true,
@@ -1522,6 +1527,29 @@ pub fn help_columns(ctx: Context, inner_width: usize) -> (usize, usize, usize) {
 }
 
 /// `? / F1`, `c / : / Ctrl-p`: a command's keys as the help prints them.
+/// The key a command is bound to, for a sentence that has to name one.
+///
+/// **Read the registry; never spell a key in prose.** Eight sentences did —
+/// three of them said "no templates yet" three different ways and one named `T`,
+/// the tab switch, where the registry says `n`. They all happened to be right
+/// the day they were written, which is exactly the drift the one registry
+/// exists to prevent: `command.rs` carried four copies of its key table in the
+/// prototype and they had already disagreed.
+///
+/// Empty when a command has no key of its own, which is a sentence that should
+/// not have been written.
+/// The one sentence for "there are no templates on disk", and the key it names
+/// is the key that makes one.
+pub const NO_TEMPLATES: &str = "no templates yet — n makes one";
+
+pub fn key_of(id: CommandId) -> String {
+    find(id)
+        .keys
+        .first()
+        .map(|key| key.label())
+        .unwrap_or_default()
+}
+
 pub fn key_labels(command: &Command) -> String {
     command
         .keys

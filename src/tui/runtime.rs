@@ -650,7 +650,7 @@ fn run_action(
             Ok(ActionOutcome::new(
                 ListChange::Reload,
                 format!(
-                    "✓  Reindexed {count} project{} across {bases} base{}.",
+                    "Reindexed {count} project{} across {bases} base{}.",
                     if count == 1 { "" } else { "s" },
                     if bases == 1 { "" } else { "s" }
                 ),
@@ -798,7 +798,7 @@ fn run_action(
             let id = created.plan.id_str.clone();
             let outcome = ActionOutcome::new(
                 ListChange::Reload,
-                format!("✓  Created {id}  {}", created.plan.folder_name),
+                format!("Created {id}  {}", created.plan.folder_name),
             )
             .session(format!("created {id}"))
             .select(root.clone());
@@ -835,7 +835,7 @@ fn run_action(
                 // showing, so the row is re-read rather than guessed at.
                 ListChange::Reload,
                 format!(
-                    "✓  Applied {} — {created} item{} created",
+                    "Applied {} — {created} item{} created",
                     request.template_slug,
                     if created == 1 { "" } else { "s" }
                 ),
@@ -861,7 +861,7 @@ fn run_action(
             let outcome = ActionOutcome::new(
                 ListChange::Reload,
                 format!(
-                    "✓  Registered {registered} folder{}",
+                    "Registered {registered} folder{}",
                     if registered == 1 { "" } else { "s" }
                 ),
             )
@@ -878,7 +878,7 @@ fn run_action(
             let path = project.path.clone();
             Ok(ActionOutcome::new(
                 ListChange::Reload,
-                format!("✓  Registered {}  {}", project.id, project.name),
+                format!("Registered {}  {}", project.id, project.name),
             )
             .session(format!("registered {}", project.id))
             .select(path))
@@ -894,7 +894,7 @@ fn run_action(
                 // A template's counts are on the header and the strip, so the
                 // summary is re-read; not a folder moved, so the list is not.
                 ListChange::SummaryOnly,
-                format!("✓  Saved template {slug} to {}", display_path(&manifest)),
+                format!("Saved template {slug} to {}", display_path(&manifest)),
             )
             .session(format!("saved template {slug}")))
         }
@@ -913,7 +913,7 @@ fn run_action(
                 request.bundle_assets,
             )?;
             let mut message = format!(
-                "✓  Generated template {} — {} folder{}, {} text file{}",
+                "Generated template {} — {} folder{}, {} text file{}",
                 request.slug,
                 report.folders,
                 if report.folders == 1 { "" } else { "s" },
@@ -960,7 +960,7 @@ fn run_action(
             let resolved = crate::core::config::init_base_dir(&raw)?;
             Ok(ActionOutcome::new(
                 ListChange::Reload,
-                format!("✓  Projects base set to {}", display_path(&resolved)),
+                format!("Projects base set to {}", display_path(&resolved)),
             )
             .session(format!("base set to {}", display_path(&resolved))))
         }
@@ -968,7 +968,7 @@ fn run_action(
             let outcome = crate::core::operations::set_counter(value)?;
             Ok(ActionOutcome::new(
                 ListChange::SummaryOnly,
-                format!("✓  Global ID counter raised to {}", outcome.value),
+                format!("Global ID counter raised to {}", outcome.value),
             )
             .settings())
         }
@@ -976,17 +976,17 @@ fn run_action(
             let outcome = crate::core::operations::converge_counter()?;
             Ok(ActionOutcome::new(
                 ListChange::SummaryOnly,
-                format!("✓  Every mounted base reads {}", outcome.value),
+                format!("Every mounted base reads {}", outcome.value),
             )
             .settings())
         }
         Action::Reconcile => {
             let report = crate::core::operations::reconcile()?;
             let message = if report.is_empty() {
-                "✓  Nothing to reconcile — every project is fully provisioned.".to_string()
+                "Nothing to reconcile — every project is fully provisioned.".to_string()
             } else {
                 format!(
-                    "✓  Reconciled: {} resumed, {} committed, {} rolled back, {} restored",
+                    "Reconciled: {} resumed, {} committed, {} rolled back, {} restored",
                     report.resumed, report.completed, report.rolled_back, report.restored
                 )
             };

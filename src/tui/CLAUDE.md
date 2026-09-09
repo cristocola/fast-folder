@@ -119,6 +119,27 @@ and "template from a folder" in the studio. The keys a text widget consumes
 (Ctrl-S in a text area, Tab in a form) are the one honest exception: the
 widget's key line names them.
 
+**A sentence that names a key reads it from here.** `command::key_of(id)` and
+`command::NO_TEMPLATES` exist because eight did not: three different sentences
+for "no templates yet", one of them naming `T` — the tab switch — where the
+registry says `n`, and seven keys spelled into status lines and empty states.
+They were all correct on the day they were written, which is the drift the one
+registry exists to prevent. A verb with no key of its own shows `Enter` in the
+action menu, because that is what runs the row under the cursor; an empty column
+reads as a row that cannot be run.
+
+**A key line is cut at a whole pair, and the way out comes before the extras.**
+`view::builder::key_line` takes the width it is drawn in and drops entries from
+the end — it used to take every pair it was handed and let the terminal cut the
+last one wherever it landed, so a narrow settings dialog advertised
+`Esc leave i`. Half an entry is a key line saying something that is not a key.
+
+**Success wears the theme's tick, and `App::good` is where it is put on.**
+Twelve of `runtime::run_action`'s messages carried a literal `✓`, which
+`Glyphs::ascii` maps to `+` — so on a legacy Windows console they drew a
+replacement box beside the app's own correctly-themed messages. `run_action`
+runs on a worker with no theme to ask.
+
 An `Availability` is a function of the app: `Disabled(reason)` is listed dimmed
 and pressing its key shows the reason; `Hidden` is not bound at all (Move with
 no other mounted base, Clear-filter with no filter).
@@ -260,6 +281,15 @@ column repeating one word earns nothing. `LibraryState.many_bases` and
 library of ninety-character names left the split with room for the size and
 nothing else, and the one column saying which drive a project is on never
 appeared on the machine that had four of them.
+
+**Everything is measured in display columns, never in bytes or characters.**
+`RowWidths` measured three of its four in bytes while the comment on the fourth
+explained why that is wrong — a base folder called `Проекты` is seven columns
+and fourteen bytes — and `widgets::input::visible_window` built its window from
+`chars()` and returned a char index that `render_line` then added to
+`prefix.width()`, so a CJK folder name in a rename prompt put the caret at
+roughly half the column it belonged in. `view::fit` and `view::pad` were always
+right; everything else has caught up.
 
 **Every column is measured, the tags included.** The tags cell was a `Fill(1)`
 remainder sharing the slack with the name, so one column of gutter cut the first

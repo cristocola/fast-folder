@@ -219,8 +219,21 @@ impl Job {
                 lines.push(format!("  {id}: {error}"));
             }
         }
-        for warning in &self.warnings {
-            lines.push(format!("  warning: {warning}"));
+        // A heading, like the failures above. A clean batch that reported
+        // source-cleanup warnings opened its dialog with an indented list
+        // under nothing at all.
+        if !self.warnings.is_empty() {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push(format!(
+                "{} warning{}:",
+                self.warnings.len(),
+                if self.warnings.len() == 1 { "" } else { "s" }
+            ));
+            for warning in &self.warnings {
+                lines.push(format!("  {warning}"));
+            }
         }
         if self.cancelled {
             let left = self.pending.len();

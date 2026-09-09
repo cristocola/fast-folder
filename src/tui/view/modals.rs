@@ -408,16 +408,15 @@ fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: R
 
     let theme = &app.theme;
     let verb = match prompt.then {
-        TextThen::Rename => "rename",
+        TextThen::Rename(_) => "rename",
         TextThen::AddTag => "add a tag",
-        TextThen::Delete => "delete",
+        TextThen::Delete(_) => "delete",
         TextThen::RaiseCounter => "ID counter",
         TextThen::CopyTo => "copy to",
     };
     // The box grows with its question: a confirmation over six marked
     // folders names all six.
-    let width: u16 = 62;
-    let prompt_rows = wrapped_rows(&prompt.title, usize::from(width) - 3).clamp(1, 6) as u16;
+    let (width, prompt_rows) = question_size(area, &prompt.title, 62, 6);
     let area = centered_fixed(area, width, prompt_rows + 6);
     frame.render_widget(Clear, area);
     let block = frame_block(app, format!(" {} ", verb), true);
@@ -542,11 +541,34 @@ fn render_note(
     caret
 }
 
+/// The width a question's box will get, and how many rows its text takes there.
+///
+/// **Measured at the width it will actually be drawn at.** Both dialogs asked
+/// `wrapped_rows` about a hardcoded 62 or 64 and then let `centered_fixed` clamp
+/// the box to the screen, so on a 60-column window — one row above the app's own
+/// minimum — the text wrapped wider than had been reserved and the tail was cut.
+///
+/// The row ceiling is the screen too, not a constant. `validators::delete_prompt`
+/// over six long folder names goes past eight wrapped rows easily, and a
+/// destructive confirmation that hides part of the list of what it is about is
+/// the one that must not: *"A confirmation is sized to its question and names
+/// every folder it is about."*
+fn question_size(area: Rect, question: &str, wanted: u16, chrome: u16) -> (u16, u16) {
+    let width = wanted.min(area.width);
+    let rows = wrapped_rows(question, usize::from(width).saturating_sub(3)) as u16;
+    // The screen is the only ceiling. It was a flat 6 or 8, which is fewer
+    // rows than six folder names take.
+    let ceiling = area.height.saturating_sub(chrome);
+    (
+        width,
+        crate::tui::layout::fit_between(rows, 1, ceiling.max(1)),
+    )
+}
+
 fn render_confirm(app: &App, confirm: &Confirm, frame: &mut Frame, area: Rect) -> Option<Position> {
     let theme = &app.theme;
     // Sized to its question, which names every folder it is about.
-    let width: u16 = 64;
-    let rows = wrapped_rows(&confirm.prompt, usize::from(width) - 3).clamp(1, 8) as u16;
+    let (width, rows) = question_size(area, &confirm.prompt, 64, 5);
     let area = centered_fixed(area, width, rows + 5);
     frame.render_widget(Clear, area);
     let block = frame_block(app, " confirm ".to_string(), true);
@@ -619,18 +641,58 @@ fn render_multi_pick(
 /// A flow is one dialog with two faces: the questions, and what answering them
 /// would do. Both are drawn in the same frame at the same size, so committing
 /// and going back do not move the box under the reader.
-fn render_flow(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<Position> {
-    let theme = &app.theme;
+/// The dialog's own rectangle, sized to what it holds.
+///
+/// Split out so `update` can ask the same question `view` answers — the
+/// preview's scroll is clamped from this, and clamping it only at draw time is
+/// what let the flow's `scroll` run to 200 over a twelve-line preview and then
+/// take twenty PgUps to come back, reading as a frozen dialog the whole time.
+fn flow_rect(area: Rect, flow: &Flow) -> Rect {
     // Sized to what it holds, so the footer sits under the last answer rather
     // than at the bottom of a mostly-empty box. The preview takes the room it
     // needs and scrolls past that.
-    let width = (area.width * 76 / 100).clamp(46.min(area.width), 96);
+    let width = crate::tui::layout::fit_between(
+        crate::tui::layout::percent_of(area.width, 76),
+        46.min(area.width),
+        96,
+    );
     let body = match flow.step {
         Step::Form => flow.form.rows() as u16,
         Step::Preview => preview_height(flow),
     };
-    let height = (body + 4).clamp(8.min(area.height), area.height * 88 / 100);
-    let area = centered_fixed(area, width, height);
+    let height = crate::tui::layout::fit_between(
+        body + 4,
+        8,
+        crate::tui::layout::percent_of(area.height, 88),
+    );
+    centered_fixed(area, width, height)
+}
+
+/// The rows the body gets: the dialog less its border and its two bottom rows.
+fn flow_body_rows(area: Rect, flow: &Flow) -> usize {
+    // `Block::inner` on an all-borders block is two rows and two columns.
+    let inner = flow_rect(area, flow).height.saturating_sub(2);
+    if inner < 4 {
+        return 0;
+    }
+    (inner - 2) as usize
+}
+
+/// How far the preview can be scrolled before its last line is on screen.
+///
+/// `update` reads this so the cursor can never leave the drawn window, which is
+/// what `layout.rs` exists for everywhere else in the app.
+pub(crate) fn preview_max_scroll(app: &App, flow: &Flow) -> usize {
+    let lines = match &flow.preview {
+        Some(preview) => preview_lines(app, preview).len(),
+        None => 1,
+    };
+    lines.saturating_sub(flow_body_rows(app.area(), flow))
+}
+
+fn render_flow(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<Position> {
+    let theme = &app.theme;
+    let area = flow_rect(area, flow);
     frame.render_widget(Clear, area);
     let title = match flow.step {
         Step::Form => format!(" {} ", flow.kind.title()),
@@ -1096,9 +1158,33 @@ fn render_message(
         .iter()
         .map(|line| Line::from(Span::styled(line.clone(), Style::default().fg(theme.text))))
         .collect();
-    let max_scroll = lines.len().saturating_sub(inner.height as usize);
+    let target = inset(inner);
+    let max_scroll =
+        message_rows(lines, target.width as usize).saturating_sub(inner.height as usize);
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: false })
         .scroll((scroll.min(max_scroll) as u16, 0));
-    frame.render_widget(paragraph, inset(inner));
+    frame.render_widget(paragraph, target);
+}
+
+/// How many rows a message takes once it is wrapped, which is not how many
+/// entries it has.
+///
+/// The journal and metadata views are drawn with `Wrap`, and the scroll limit
+/// counted `lines.len()` — so on the 70 %-wide message box every note longer
+/// than one line counted once and drew twice. Twenty wrapped notes let you
+/// scroll ten rows into a forty-row body and no further: the end of a long
+/// journal was simply unreachable. `Modal::Help` already counted the wrapped
+/// rows (`command::help_line_count`); this is the same sum for the other one.
+pub(crate) fn message_rows(lines: &[String], width: usize) -> usize {
+    lines.iter().map(|line| wrapped_rows(line, width)).sum()
+}
+
+/// The columns a message's text is wrapped at, from the same geometry
+/// `render_message` draws with.
+pub(crate) fn message_text_width(area: Rect) -> usize {
+    // The block's border takes two columns, and `inset` one more.
+    crate::tui::layout::message_box(area)
+        .width
+        .saturating_sub(3) as usize
 }

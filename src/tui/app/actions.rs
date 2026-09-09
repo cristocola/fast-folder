@@ -35,12 +35,23 @@ impl ActionsState {
 /// What a text prompt's answer does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextThen {
-    Rename,
+    /// Rename the project the prompt named, carried by path.
+    ///
+    /// **The dialog carries its target rather than re-reading the selection.**
+    /// The prompt text is built once from the row under the cursor, and the
+    /// action used to be built from whatever was selected when Enter landed —
+    /// so a discovery arriving under an open dialog, which moves the cursor
+    /// when the named row is no longer in the snapshot, could point a
+    /// destructive verb at a different project from the one on screen.
+    Rename(std::path::PathBuf),
     AddTag,
     /// Type the word `delete` to confirm; nothing else deletes. The prompt
     /// names the folder — or the folders, over marks — so what is being
     /// confirmed is on screen, and the word is the same every time.
-    Delete,
+    ///
+    /// Carries the single project's path for the same reason `Rename` does;
+    /// a batch delete goes by the marks, which are kept by path already.
+    Delete(std::path::PathBuf),
     /// Raise the global ID counter to the number typed.
     RaiseCounter,
     /// The folder to copy into. Refused by the engine rather than here, so the
@@ -92,11 +103,19 @@ impl TextPrompt {
 /// What a yes/no confirm answers. A bare `y`/`n` answers without Enter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfirmThen {
-    Unregister,
+    /// Unregister the project the question named, carried by path — see
+    /// [`TextThen::Rename`].
+    Unregister(std::path::PathBuf),
     /// Delete the named template and everything bundled with it.
     DeleteTemplate(String),
     /// Leave the builder, throwing away a template that has been worked on.
-    DiscardTemplate,
+    ///
+    /// `then_quit` is set when the gesture was a quit rather than a close, so
+    /// answering the question does what was asked instead of stopping one
+    /// level short.
+    DiscardTemplate {
+        then_quit: Option<crate::tui::effect::Exit>,
+    },
     /// Delete every marked project (the marks are the batch).
     DeleteBatch,
     /// Unregister every marked project (the marks are the batch).

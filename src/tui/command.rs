@@ -523,7 +523,7 @@ fn builder_list_open(app: &App) -> Availability {
 fn builder_list_closed(app: &App) -> Availability {
     match app.modals.top() {
         Some(crate::tui::app::modal::Modal::Builder(builder))
-            if builder.open.is_none() && !builder.pending && !builder.saving =>
+            if builder.open.is_none() && builder.pending.is_none() && !builder.saving =>
         {
             Availability::Enabled
         }
@@ -720,7 +720,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         FocusNext,
         "Next pane",
-        "move focus: projects → detail → templates",
+        "move focus between the list and the pane beside it",
         G,
         [Key::plain(KeyCode::Tab)],
         Navigate,

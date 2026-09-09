@@ -178,7 +178,20 @@ storage.
 
 Every recursive walk stops at `paths::MAX_WALK_DEPTH` (**64**) and reports
 through `paths::too_deep`; `tree_size` turns it into `None` like any other read
-failure. 64 rather than 256 because a Windows *thread* gets a 1 MiB stack and the
+failure.
+
+**Thread the depth, never re-enter through the wrapper.** Each of these walks
+is a `_at` function that takes `depth` and a zero-initialising entry point that
+calls it. Three of the five recursed back through the *entry point* —
+`tree_size::directory_size_inner`, `transactions::scan_inner`,
+`template_import::scan_dir` — which restarts the counter at every level and
+leaves the check below it unreachable however deep the tree goes.
+`assets::walk_inner` is the one that always got it right. The size scan's own
+workers had no `stack_size` either (`util::size_scan`), so the walk with the
+deadest guard was the one running on the smallest stack, and a stack overflow is
+not an unwind. A template's `structure:` is bounded at the one place every load
+and every save goes through, `template::validate_structure` — which is why the
+five recursions over it elsewhere need no bound of their own. 64 rather than 256 because a Windows *thread* gets a 1 MiB stack and the
 app's size scan runs on worker threads — 256 frames of `read_dir`
 iterator overflowed one, which is the exact failure the limit exists to prevent.
 

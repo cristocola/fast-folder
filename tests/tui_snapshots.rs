@@ -241,6 +241,35 @@ fn batch_delete_confirm() {
     snap("batch_delete_confirm", render_to_string(&app, 100, 30));
 }
 
+/// The same confirmation on a narrow window still names every folder.
+///
+/// It measured its text against a hardcoded 64 columns and *then* let
+/// `centered_fixed` clamp the box to the screen, so at 60 columns — one above
+/// the app's own minimum — the text wrapped wider than had been reserved and
+/// the tail was cut. The row ceiling was a flat eight on top of that, which six
+/// long folder names go past on any width. A destructive confirmation that
+/// hides part of what it is about is the one that must not.
+#[test]
+fn batch_delete_confirm_on_a_narrow_window_still_names_them_all() {
+    let mut app = fixture(12, 60, 20);
+    let mut marked = Vec::new();
+    for _ in 0..6 {
+        if let Some(project) = app.library.selected() {
+            marked.push(project.name.clone());
+        }
+        let _ = update(&mut app, Msg::Key(Key::ch(' ')));
+    }
+    let _ = update(&mut app, Msg::Key(Key::ch('D')));
+    let frame = render_to_string(&app, 60, 20);
+    for name in &marked {
+        assert!(
+            frame.contains(name.as_str()),
+            "the confirmation must name {name}, and it drew:\n{frame}"
+        );
+    }
+    snap("batch_delete_confirm_narrow", frame);
+}
+
 /// The message log: every status line this session set, newest first.
 #[test]
 fn messages_open() {
@@ -868,15 +897,51 @@ mod settings {
     }
 
     /// The base list, open as text — one folder per line.
+    ///
+    /// Eleven rows down, not ten: ten is **Theme**, whose Enter cycles the
+    /// value where it stands and opens nothing. This snapshot was taken over
+    /// that screen for as long as it existed, so a name saying `bases_as_text`
+    /// pinned a frame with no editor in it — and the panic below could not have
+    /// been caught by the test written to look at the thing that panicked.
     #[test]
     fn settings_bases_as_text() {
         let mut app = fixture(12, 100, 30);
         open(&mut app);
-        for _ in 0..10 {
+        for _ in 0..11 {
             press(&mut app, Key::plain(KeyCode::Down));
         }
         press(&mut app, Key::plain(KeyCode::Enter));
-        snap("settings_bases_as_text", render_to_string(&app, 100, 30));
+        let frame = render_to_string(&app, 100, 30);
+        assert!(
+            frame.contains("one base per line"),
+            "the editor has to actually be open:\n{frame}"
+        );
+        snap("settings_bases_as_text", frame);
+    }
+
+    /// The same editor on a short window, where it used to take the app down.
+    ///
+    /// It opens *over* the row it belongs to and grows downward, and its height
+    /// was `clamp(4, body.height - row)` — so once the cursor had scrolled to
+    /// the bottom of the body there was less room below it than the minimum,
+    /// and `Ord::clamp` panics on `min > max` rather than picking one. Any
+    /// window between 16 and 23 rows tall did it; 80×24 survived by exactly one
+    /// row, which is why the manual pass at that size never found it. The box
+    /// slides up now (`layout::box_at_row`).
+    #[test]
+    fn settings_bases_as_text_on_a_short_window() {
+        let mut app = fixture(12, 80, 18);
+        open(&mut app);
+        for _ in 0..11 {
+            press(&mut app, Key::plain(KeyCode::Down));
+        }
+        press(&mut app, Key::plain(KeyCode::Enter));
+        let frame = render_to_string(&app, 80, 18);
+        assert!(
+            frame.contains("one base per line"),
+            "the editor has to actually be open, or this guards nothing:\n{frame}"
+        );
+        snap("settings_bases_as_text_short", frame);
     }
 
     /// The counter, with the floor it cannot go below named in the question.

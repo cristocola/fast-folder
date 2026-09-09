@@ -19,7 +19,7 @@ pub mod studio;
 pub mod wizard;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
@@ -771,7 +771,16 @@ impl App {
                 let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
                     return Vec::new();
                 };
-                builder.pending = false;
+                // A read for a template this builder is no longer waiting on is
+                // an answer to a question nobody is asking any more — the same
+                // guard `on_template_loaded` and `TemplateViewLoaded` make. Esc
+                // out of one pending builder and open another, and on a slow
+                // disk the first read used to arrive and become the second's
+                // contents, wiping anything typed meanwhile.
+                if builder.pending.as_deref() != Some(slug.as_str()) {
+                    return Vec::new();
+                }
+                builder.pending = None;
                 match result {
                     Ok(template) => **builder = Builder::new(Some(*template)),
                     Err(error) => {
@@ -1166,6 +1175,12 @@ impl App {
         let Some(offset_row) = row.checked_sub(regions.table.y + 2) else {
             return Vec::new();
         };
+        // Only the rows that are drawn. `inside` accepts the whole region,
+        // border included, so a click on the bottom edge picked the row one
+        // past the last visible one and scrolled the viewport to reach it.
+        if offset_row as usize >= regions.table_rows() {
+            return Vec::new();
+        }
         let at = self.library.offset + offset_row as usize;
         if at >= self.library.len() {
             return Vec::new();
@@ -1212,14 +1227,11 @@ impl App {
             if key != Key::ch('q') && key != Key::ctrl('c') {
                 return Vec::new();
             }
-            if self.job.is_some() || self.move_progress.is_some() {
-                return self.request_cancel();
-            }
-            return vec![Effect::Quit(if key == Key::ctrl('c') {
+            return self.quit(if key == Key::ctrl('c') {
                 Exit::Interrupted
             } else {
                 Exit::Normal
-            })];
+            });
         }
         if key == Key::ctrl('c') {
             // A job or a move is running: Ctrl-C cancels it rather than
@@ -1380,9 +1392,8 @@ impl App {
             }
             _ => return Vec::new(),
         };
-        let project = self.library.selected().cloned();
         match then {
-            TextThen::Rename => {
+            TextThen::Rename(path) => {
                 if let Err(error) = validators::folder_name(&text) {
                     if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
                         prompt.error = Some(error);
@@ -1390,8 +1401,8 @@ impl App {
                     return Vec::new();
                 }
                 self.modals.pop();
-                let Some(project) = project else {
-                    return Vec::new();
+                let Some(project) = self.project_at(&path) else {
+                    return self.gone_from_the_library();
                 };
                 self.run_action(
                     "renaming…",
@@ -1452,7 +1463,7 @@ impl App {
                     }
                 }
             }
-            TextThen::Delete => {
+            TextThen::Delete(path) => {
                 if !text.trim().eq_ignore_ascii_case(validators::DELETE_WORD) {
                     // The text stays: one Backspace fixes a typo.
                     if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
@@ -1464,12 +1475,33 @@ impl App {
                 if self.batching() {
                     return self.start_job(jobs::JobKind::Delete, None);
                 }
-                let Some(project) = project else {
-                    return Vec::new();
+                let Some(project) = self.project_at(&path) else {
+                    return self.gone_from_the_library();
                 };
                 self.run_action("deleting…", Action::Delete(Box::new(project)))
             }
         }
+    }
+
+    /// The project at `path` in the list as it stands now.
+    ///
+    /// A dialog carries the path it was opened for, and this is how it gets
+    /// back to a project at submit time — by the one thing that is unique
+    /// whatever else has happened, which is what `ListChange::Patched` also
+    /// keys on.
+    fn project_at(&self, path: &Path) -> Option<Project> {
+        self.library
+            .snapshot
+            .iter()
+            .find(|project| project.path == path)
+            .cloned()
+    }
+
+    /// The named project is not in the library any more, so the verb does not
+    /// run — on a neighbour least of all.
+    fn gone_from_the_library(&mut self) -> Vec<Effect> {
+        self.warn("That project is no longer in the library — nothing was done.");
+        Vec::new()
     }
 
     /// Whether a verb acts on the marks rather than the selection.
@@ -1583,20 +1615,23 @@ impl App {
             return Vec::new();
         }
         match then {
-            ConfirmThen::Unregister => {
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
+            ConfirmThen::Unregister(path) => {
+                let Some(project) = self.project_at(&path) else {
+                    return self.gone_from_the_library();
                 };
                 self.run_action("unregistering…", Action::Unregister(Box::new(project)))
             }
             ConfirmThen::DeleteTemplate(slug) => {
                 self.run_action("deleting the template…", Action::DeleteTemplate(slug))
             }
-            ConfirmThen::DiscardTemplate => {
+            ConfirmThen::DiscardTemplate { then_quit } => {
                 // The confirm was popped above; the builder under it goes now.
                 self.modals.pop();
                 self.info("Discarded — the template was not written.");
-                Vec::new()
+                match then_quit {
+                    Some(exit) => vec![Effect::Quit(exit)],
+                    None => Vec::new(),
+                }
             }
             ConfirmThen::DeleteBatch => self.start_job(jobs::JobKind::Delete, None),
             ConfirmThen::UnregisterBatch => self.start_job(jobs::JobKind::Unregister, None),
@@ -1789,7 +1824,13 @@ impl App {
                     }
                     Then::MoveToBase => {
                         let target = PathBuf::from(item.value.clone());
-                        if !self.library.marks.is_empty() {
+                        // `batching()`, not `!marks.is_empty()`: marks are kept
+                        // by path and survive a filter change, so a marked row
+                        // can be off screen while the verb is aimed at it. Every
+                        // other verb asks this question the same way — the raw
+                        // mark set is what "batch tagging does nothing" was, and
+                        // this was the last caller still asking it.
+                        if self.batching() {
                             self.start_job(jobs::JobKind::Move, Some(target))
                         } else {
                             self.run_move(target)
@@ -1869,7 +1910,12 @@ impl App {
 
             Modal::Message { lines, scroll, .. } => (
                 scroll,
-                lines.len(),
+                // Wrapped rows, not entries — the paragraph wraps, and
+                // `Modal::Help` above has always counted them the same way.
+                crate::tui::view::modals::message_rows(
+                    lines,
+                    crate::tui::view::modals::message_text_width(area),
+                ),
                 layout::message_box(area).height.saturating_sub(2) as usize,
             ),
             _ => return Vec::new(),
@@ -1932,13 +1978,7 @@ impl App {
             Availability::Hidden => return Vec::new(),
         }
         match id {
-            CommandId::Quit => {
-                // Quitting under a running move would abandon it mid-write.
-                if self.job.is_some() || self.move_progress.is_some() {
-                    return self.request_cancel();
-                }
-                vec![Effect::Quit(Exit::Normal)]
-            }
+            CommandId::Quit => self.quit(Exit::Normal),
             CommandId::Back => {
                 // Anything running is cancelled first: a batch job and a
                 // single move alike, before a keystroke can clear something
@@ -2051,7 +2091,7 @@ impl App {
                     return self.step_top_modal(delta);
                 }
                 if self.screen == Screen::Templates {
-                    return self.step_templates(delta);
+                    return self.step_templates_or_pane(delta);
                 }
                 match self.focus {
                     Focus::Projects => {
@@ -2078,7 +2118,7 @@ impl App {
                     return self.page_top_modal(delta);
                 }
                 if self.screen == Screen::Templates {
-                    return self.step_templates(delta);
+                    return self.step_templates_or_pane(delta);
                 }
                 match self.focus {
                     Focus::Detail => {
@@ -2098,6 +2138,10 @@ impl App {
                 let first = id == CommandId::First;
                 if !self.modals.is_empty() {
                     return self.page_top_modal(if first { isize::MIN } else { isize::MAX });
+                }
+                if self.screen == Screen::Templates && self.focus == Focus::Detail {
+                    self.studio.scroll = if first { 0 } else { self.studio_scroll_max() };
+                    return Vec::new();
                 }
                 match self.focus {
                     Focus::Detail => {
@@ -2268,7 +2312,10 @@ impl App {
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();
                 };
-                let mut prompt = TextPrompt::new(validators::RENAME_PROMPT, TextThen::Rename);
+                let mut prompt = TextPrompt::new(
+                    validators::RENAME_PROMPT,
+                    TextThen::Rename(project.path.clone()),
+                );
                 prompt.input =
                     crate::tui::widgets::input::LineEdit::with_text(project.name.clone());
                 self.modals.push(Modal::TextPrompt(prompt));
@@ -2291,10 +2338,10 @@ impl App {
                 if names.is_empty() {
                     return Vec::new();
                 }
-                let then = if self.batching() {
-                    ConfirmThen::UnregisterBatch
-                } else {
-                    ConfirmThen::Unregister
+                let then = match self.library.selected() {
+                    _ if self.batching() => ConfirmThen::UnregisterBatch,
+                    Some(project) => ConfirmThen::Unregister(project.path.clone()),
+                    None => return Vec::new(),
                 };
                 self.modals.push(Modal::Confirm(Confirm {
                     prompt: validators::unregister_prompt(&names),
@@ -2309,9 +2356,15 @@ impl App {
                 if names.is_empty() {
                     return Vec::new();
                 }
+                let then = match self.library.selected() {
+                    Some(project) => TextThen::Delete(project.path.clone()),
+                    // A batch still needs a variant; the marks are the target
+                    // and the path is ignored.
+                    None => TextThen::Delete(std::path::PathBuf::new()),
+                };
                 self.modals.push(Modal::TextPrompt(TextPrompt::new(
                     validators::delete_prompt(&names),
-                    TextThen::Delete,
+                    then,
                 )));
                 Vec::new()
             }
@@ -2452,6 +2505,14 @@ impl App {
             FormEvent::Submit => self.submit_flow(),
             FormEvent::Pick => self.open_field_picker(),
             FormEvent::Changed => self.on_form_changed(),
+            // **A form does not fall through to the registry, and the preview
+            // does.** The difference is that a form is a place you type into:
+            // on a choice field every letter is `Ignored`, so handing those to
+            // `lookup_and_run` would make `q` — `Close` in every context — throw
+            // away a form somebody had filled in, with no question and no undo.
+            // Esc is the form's own cancel and its key line says so. The
+            // preview has nothing to type into, which is why `?` and `q` work
+            // there.
             FormEvent::Moved | FormEvent::Ignored => Vec::new(),
         }
     }
@@ -2473,10 +2534,26 @@ impl App {
             KeyCode::PageDown | KeyCode::Char(' ') => 10,
             KeyCode::PageUp => -10,
             KeyCode::Home => isize::MIN / 2,
-            _ => return Vec::new(),
+            KeyCode::End => isize::MAX / 2,
+            // Anything the preview does not consume is whatever the registry
+            // binds where the keys are: `?` for the help, `q` to close. There
+            // is nothing to type into on this step, so swallowing them said
+            // nothing and did nothing.
+            _ => return self.lookup_and_run(key),
+        };
+        // Clamped **here**, against the geometry `view` draws with. Only the
+        // view clamped before, so ten PgDns over a short preview drove `scroll`
+        // to 100 with nothing moving on screen, and the next ten PgUps did
+        // nothing either — a dialog that reads as frozen. `layout.rs`'s whole
+        // job is that a cursor cannot leave the drawn window.
+        let max = match self.modals.top() {
+            Some(Modal::Flow(flow)) => {
+                crate::tui::view::modals::preview_max_scroll(self, flow) as isize
+            }
+            _ => 0,
         };
         if let Some(Modal::Flow(flow)) = self.modals.top_mut() {
-            flow.scroll = (flow.scroll as isize + delta).max(0) as usize;
+            flow.scroll = (flow.scroll as isize + delta).clamp(0, max) as usize;
         }
         Vec::new()
     }
@@ -2734,6 +2811,40 @@ impl App {
     /// Esc on a dialog: one level at a time. A builder section goes back to
     /// the section list; the section list discards the template; everything
     /// else simply closes.
+    /// Leave, from whichever gesture asked to.
+    ///
+    /// **Every quit goes through here**, because there are three of them and
+    /// they used to answer differently: `CommandId::Quit` ran `Effect::Quit`
+    /// on the spot, and it is reachable from the palette (`c`, "quit", Enter)
+    /// and from the too-small-window guard as well as from `q` — so a template
+    /// worked on for ten minutes could be thrown away with no question at all,
+    /// while Esc on the same screen asked. `close_top` owns the question;
+    /// this owns who has to ask it.
+    fn quit(&mut self, exit: Exit) -> Vec<Effect> {
+        // Quitting under a running move would abandon it mid-write.
+        if self.job.is_some() || self.move_progress.is_some() {
+            return self.request_cancel();
+        }
+        let dirty_builder = matches!(
+            self.modals.top(),
+            Some(Modal::Builder(builder)) if !builder.saving && builder.is_dirty()
+        );
+        if dirty_builder {
+            let Some(Modal::Builder(builder)) = self.modals.top() else {
+                return vec![Effect::Quit(exit)];
+            };
+            let prompt = validators::discard_template_prompt(builder.original_slug.is_some());
+            self.modals.push(Modal::Confirm(Confirm {
+                prompt,
+                then: ConfirmThen::DiscardTemplate {
+                    then_quit: Some(exit),
+                },
+            }));
+            return Vec::new();
+        }
+        vec![Effect::Quit(exit)]
+    }
+
     fn close_top(&mut self) -> Vec<Effect> {
         match self.modals.top_mut() {
             Some(Modal::Builder(builder)) => {
@@ -2754,7 +2865,7 @@ impl App {
                         validators::discard_template_prompt(builder.original_slug.is_some());
                     self.modals.push(Modal::Confirm(Confirm {
                         prompt,
-                        then: ConfirmThen::DiscardTemplate,
+                        then: ConfirmThen::DiscardTemplate { then_quit: None },
                     }));
                 } else {
                     self.modals.pop();
@@ -2995,7 +3106,7 @@ impl App {
         match slug {
             Some(slug) => {
                 let mut builder = Builder::new(None);
-                builder.pending = true;
+                builder.pending = Some(slug.clone());
                 self.modals.push(Modal::Builder(Box::new(builder)));
                 vec![Effect::LoadTemplateSource { slug }]
             }
@@ -3013,7 +3124,7 @@ impl App {
         let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
             return Vec::new();
         };
-        if builder.pending {
+        if builder.pending.is_some() {
             if key.code == KeyCode::Esc {
                 self.modals.pop();
             }
@@ -3402,6 +3513,37 @@ impl App {
                 Vec::new()
             }
         }
+    }
+
+    /// Up/Down and the page keys on the templates tab: the card list, or the
+    /// pane beside it when that is what Tab has the focus on.
+    ///
+    /// `Studio::scroll` existed, was clamped by the view, and was set to zero
+    /// in four places and raised in none — so a template whose `template show`
+    /// output was taller than the pane had its tail permanently unreachable,
+    /// which on an 80×24 window is anything past about fifteen lines. Most
+    /// real templates are longer than that.
+    fn step_templates_or_pane(&mut self, delta: isize) -> Vec<Effect> {
+        if self.focus == Focus::Detail {
+            self.studio.scroll = self
+                .studio
+                .scroll
+                .saturating_add_signed(delta)
+                .min(self.studio_scroll_max());
+            return Vec::new();
+        }
+        self.step_templates(delta)
+    }
+
+    /// The last row the pane can be scrolled to, from the geometry `view`
+    /// draws with — so the cursor cannot leave the drawn window.
+    fn studio_scroll_max(&self) -> usize {
+        let rows = self
+            .regions()
+            .detail
+            .map(|pane| pane.height.saturating_sub(2) as usize)
+            .unwrap_or(0);
+        self.studio.lines.len().saturating_sub(rows)
     }
 
     fn next_focus(&self, forward: bool) -> Focus {

@@ -9,7 +9,7 @@ expression: frame
 "│ │                  give the terminal back to the shell, as Ctrl-Z does in  │ │"
 "│▸│                  any program — `fg` brings fastf back                    │ │"
 "│ │   Tab            Next pane                                               │ │"
-"│ │                  move focus: projects → detail → templates               │ │"
+"│ │                  move focus between the list and the pane beside it      │ │"
 "│ │   Shift-Tab      Previous pane                                           │ │"
 "│ │                  move focus the other way                                │ │"
 "│ │   ↓ / j          Down                                                    │ │"

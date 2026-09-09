@@ -73,6 +73,30 @@ throws the offset away and re-derives the window every draw.
 
 ## One registry
 
+**Every quit goes through `App::quit`.** There are three gestures — `q`, the
+palette's own entry, and the too-small-window guard — and `CommandId::Quit` ran
+`Effect::Quit` on the spot, so a template worked on for ten minutes went with
+one keystroke while Esc on the same screen asked first. `close_top` owns the
+question; `quit` owns who has to ask it, and `ConfirmThen::DiscardTemplate`
+carries `then_quit` so answering it does what was asked rather than stopping one
+level short.
+
+**A dialog carries its target, and never re-reads the selection at submit.**
+`TextThen::Rename`/`Delete` and `ConfirmThen::Unregister` hold the project's
+path. The prompt text is built once from the row under the cursor and the action
+used to be built again from whatever was selected when Enter landed — so a
+discovery arriving underneath, which moves the cursor when the named row has
+left the snapshot, pointed a destructive verb at a *different* project from the
+one on screen. `App::project_at` resolves the path in the current snapshot and a
+target that is gone is a refusal, never a neighbour.
+
+**A worker that answers must say which question it is answering.**
+`Msg::TemplateSourceLoaded` replaced whatever builder was on top with whatever
+landed; `Builder::pending` carries the slug now. `on_template_loaded` and
+`TemplateViewLoaded` had always checked — this was the one that did not, and on
+a slow disk Enter, Esc, Enter on a second template let the first read arrive and
+become the second's contents.
+
 **Every command is declared once, in `command.rs`**, with its title, its
 description, the contexts it fires in, its default keys, its category, and
 whether the palette and the hint bar show it. The keymap (`lookup`), the fuzzy
@@ -156,6 +180,19 @@ job, a toast about to expire, a size cell still pending — and otherwise just a
 look at `interrupt::is_set`. A burst of messages (a paste, a batch of sizes) is
 drained and drawn once. On each tick the runtime diffs `SizeScanner::cells_for`
 against what it last reported and hands the app only the news.
+
+**A thread that dies says so.** `spawn_worker` catches a panic and warns, and
+the input thread and the detail reader now do the same in their own shapes —
+they are loops that outlive the requests they serve, so `spawn_worker` cannot be
+reused for them. It matters because the runtime holds its own `Sender`:
+`recv_timeout` never sees a disconnect, so a dead input thread left the main
+loop drawing a live-looking frame that answered nothing, with an external signal
+the only way out and nothing on screen to say why. `InputEnd` distinguishes
+"stop() was called" from "the terminal stopped answering", and only the second
+is reported. The input thread is also spawned **before** the screen is taken,
+which its own doc comment always claimed: on a spawn failure `init` returned
+without reaching `shutdown`, so `SCREEN_OWNED` stayed set and the error printed
+onto an alternate screen nobody would see again.
 
 **Where work runs.** Discovery, the header's summary (probes, indexes,
 templates, `list_incomplete`), on-demand metadata and every `operations::*`
@@ -670,7 +707,43 @@ everything done. Both progress dialogs are sized to the lines they hold.
 **Geometry lives in `layout.rs`**, read by `update` and `view` alike, so a
 cursor can never leave the drawn window and End lands on the last line:
 `actions_box`, `pick_box`, `help_box`, `message_box`, `sized_dialog`,
-`settings_rows`, `studio_rows`. The table/pane split favours the table
+`settings_rows`, `studio_rows`.
+
+**Three of that module's functions exist because the obvious spelling panics or
+wraps**, and none of them may be written out by hand again:
+
+- `fit_between(wanted, min, max)` — `Ord::clamp` **asserts `min <= max`**, and
+  every `max` in a terminal is computed from a window somebody can drag. The
+  settings screen's Bases editor was `clamp(4, body.height - row)` with `row`
+  walking down the body, so Enter on that row in any window 16–23 rows tall took
+  the whole app down with `min > max`. It survived 80×24 by exactly one row,
+  which is why the documented manual pass at that size never found it. The room
+  wins over the wanted minimum: `max` is a hard limit, `min` only a preference.
+- `percent_of(whole, share)` — `area.width * 76 / 100` overflows a `u16` above
+  862 columns. Release has no overflow checks, so it wrapped: a 900-column
+  terminal drew a 46-column create dialog. Debug panics instead. Neither is a
+  size.
+- `box_at_row(body, row, wanted, min)` — an editor that opens over its row
+  slides up when there is no room below, rather than choosing between panicking
+  and drawing a sliver.
+
+**A dialog is measured at the width it will be drawn at.** The confirm and the
+typed prompt asked `wrapped_rows` about a hardcoded 62 or 64 and then let
+`centered_fixed` clamp the box to the screen, so at 60 columns the text wrapped
+wider than had been reserved and the tail was cut — and a flat eight-row ceiling
+cut it again. `view::modals::question_size` is the one answer, and the screen is
+the only ceiling: a destructive confirmation that hides part of what it is about
+is the one that must not.
+
+**A message's scroll counts wrapped rows, not entries.** The journal and
+metadata views are drawn with `Wrap`; `lines.len()` as the limit meant every
+note longer than one line counted once and drew twice, so the end of a long
+journal was unreachable. `Modal::Help` had always counted them properly
+(`command::help_line_count`); `view::modals::message_rows` is the same sum for
+the other one. The flow preview clamps in `update` too now
+(`view::modals::preview_max_scroll`, from `flow_rect`, the geometry `view` draws
+with) — clamping only at draw time let `scroll` run to 200 over a twelve-line
+preview and then take twenty PgUps to come back, reading as a frozen dialog. The table/pane split favours the table
 (`regions` takes the width the names need with the size beside them; the pane
 takes the rest and closes under `DETAIL_PANE_MIN`).
 

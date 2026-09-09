@@ -54,6 +54,57 @@ fn opening_asks_for_the_summary_and_one_discovery() {
     assert!(!app.library.loaded);
 }
 
+/// A destructive verb runs on the project its dialog named, or on nothing.
+///
+/// The prompt text was built once from the row under the cursor and the action
+/// was built again at submit time from whatever was selected *then*. A
+/// discovery landing under an open dialog re-filters the list, and
+/// `clamped_selection` moves the cursor when the named row is no longer in the
+/// snapshot — so a delete or an unregister could point at a different project
+/// from the one the question named. The dialog carries its target by path now,
+/// and a target that is gone is a refusal rather than a neighbour.
+#[test]
+fn a_delete_whose_project_left_the_library_does_not_delete_a_neighbour() {
+    let mut app = fixture(4, 100, 30);
+    let named = app
+        .library
+        .selected()
+        .expect("a row under the cursor")
+        .clone();
+
+    press(&mut app, Key::ch('D'));
+    assert!(
+        matches!(app.modals.top(), Some(Modal::TextPrompt(_))),
+        "the delete prompt is up"
+    );
+
+    // The library moves on underneath: the named project is no longer in the
+    // snapshot, which is what a discovery landing under an open dialog does
+    // when the row it named has been deleted or moved elsewhere.
+    app.library
+        .snapshot
+        .retain(|project| project.path != named.path);
+    let query = app.search.query.clone();
+    app.library.recompute(&query, &mut app.fuzzy);
+    assert!(
+        app.library.selected().is_some_and(|p| p.path != named.path),
+        "the cursor has moved to a different project, which is the hazard"
+    );
+
+    // Typing the word and pressing Enter must not delete whatever the cursor
+    // has landed on instead.
+    for c in "delete".chars() {
+        press(&mut app, Key::ch(c));
+    }
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::Run(_, action) if matches!(**action, Action::Delete(_)))),
+        "nothing may be deleted once the named project is gone: {effects:?}"
+    );
+}
+
 #[test]
 fn a_stale_discovery_is_dropped_and_the_current_one_installs() {
     let mut app = empty_fixture(80, 24);
@@ -1777,7 +1828,11 @@ mod studio {
             matches!(&effects[..], [Effect::LoadTemplateSource { slug }] if slug == "general"),
             "{effects:?}"
         );
-        assert!(builder(&app).pending, "the screen says it is reading");
+        assert_eq!(
+            builder(&app).pending.as_deref(),
+            Some("general"),
+            "the screen says which template it is reading"
+        );
 
         let template = Template {
             name: "General".to_string(),
@@ -1791,8 +1846,105 @@ mod studio {
                 result: Ok(Box::new(template)),
             },
         );
-        assert!(!builder(&app).pending);
+        assert!(builder(&app).pending.is_none());
         assert_eq!(builder(&app).original_slug.as_deref(), Some("general"));
+    }
+
+    /// A read that answers for a template the builder has moved off is dropped.
+    ///
+    /// `TemplateSourceLoaded` replaced whatever builder was on top with
+    /// whatever landed, checking nothing. Enter on one template, Esc while it
+    /// is still reading, Enter on another: on a slow disk or a network share
+    /// the first read arrives and silently becomes the second's contents, and
+    /// the second's own read then wipes anything typed meanwhile.
+    /// `on_template_loaded` and `TemplateViewLoaded` both guard this; the
+    /// builder's own read was the one that did not.
+    #[test]
+    fn a_template_read_for_a_builder_that_moved_on_is_dropped() {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        // Esc out while it is still reading, then open a different one.
+        press(&mut app, Key::plain(KeyCode::Esc));
+        press(&mut app, Key::plain(KeyCode::Down));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        let awaited = builder(&app)
+            .pending
+            .clone()
+            .expect("the second builder is reading");
+
+        // The *first* read lands late.
+        let stale = Template {
+            name: "Stale".to_string(),
+            slug: "not-the-one".to_string(),
+            ..Template::default()
+        };
+        assert_ne!(awaited, "not-the-one");
+        let _ = update(
+            &mut app,
+            Msg::TemplateSourceLoaded {
+                slug: "not-the-one".to_string(),
+                result: Ok(Box::new(stale)),
+            },
+        );
+        assert_eq!(
+            builder(&app).pending.as_deref(),
+            Some(awaited.as_str()),
+            "an answer to a question nobody asked changes nothing"
+        );
+        assert_ne!(builder(&app).template.name, "Stale");
+
+        // And the one it is waiting for still lands.
+        let wanted = Template {
+            name: "Wanted".to_string(),
+            slug: awaited.clone(),
+            ..Template::default()
+        };
+        let _ = update(
+            &mut app,
+            Msg::TemplateSourceLoaded {
+                slug: awaited.clone(),
+                result: Ok(Box::new(wanted)),
+            },
+        );
+        assert!(builder(&app).pending.is_none());
+        assert_eq!(builder(&app).template.name, "Wanted");
+    }
+
+    /// Quitting from the palette asks the same question Esc asks.
+    ///
+    /// `CommandId::Quit` ran `Effect::Quit` on the spot, and it is reachable
+    /// from `c` → "quit" → Enter and from the too-small-window guard as well as
+    /// from `q` — so a template worked on for ten minutes went with one
+    /// keystroke while Esc on the same screen asked first. Every quit goes
+    /// through `App::quit` now, and answering the question still quits.
+    #[test]
+    fn quitting_over_a_worked_on_template_asks_first() {
+        let mut app = fixture(6, 120, 40);
+        open_new(&mut app);
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "Music video");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(builder(&app).is_dirty(), "the fixture has to be dirty");
+
+        let effects = app.run(fastf::tui::command::CommandId::Quit);
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::Quit(_))),
+            "a worked-on template is not thrown away without a question: {effects:?}"
+        );
+        assert!(
+            matches!(app.modals.top(), Some(Modal::Confirm(_))),
+            "and the question is the one Esc asks"
+        );
+
+        // Answering it does what was asked: the template goes *and* so do we.
+        let effects = press(&mut app, Key::ch('y'));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::Quit(Exit::Normal))),
+            "answering the question must still quit: {effects:?}"
+        );
     }
 
     #[test]

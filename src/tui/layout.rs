@@ -176,6 +176,47 @@ pub fn message_box(area: Rect) -> Rect {
 
 /// A rectangle of at most `width` × `height` cells, centred, never larger than
 /// `area`.
+/// `wanted`, kept inside `min..=max` **even when the room is smaller than the
+/// minimum**.
+///
+/// `Ord::clamp` asserts `min <= max` and panics otherwise, and every `max` in a
+/// terminal layout is computed from a window somebody can drag. The settings
+/// screen's Bases editor did exactly that — `clamp(4, body.height - row)`, with
+/// `row` walking down the body — and pressing Enter on that row in a window
+/// between 16 and 23 rows tall took the whole app down with `min > max`. It
+/// survived 80×24 by one row, which is why the manual pass at that size never
+/// found it.
+///
+/// The available room wins over the wanted minimum: `max` is a hard limit and
+/// `min` is only a preference, so a box in a two-row hole is two rows rather
+/// than a panic.
+pub fn fit_between(wanted: u16, min: u16, max: u16) -> u16 {
+    wanted.max(min).min(max)
+}
+
+/// `share` percent of `whole`, computed in `u32`.
+///
+/// `area.width * 76 / 100` is the obvious spelling and overflows a `u16` above
+/// 862 columns — which release builds, with no overflow checks, wrap instead of
+/// reporting: a 900-column terminal drew a 46-column dialog. A debug build
+/// panics there instead. Neither is a size.
+pub fn percent_of(whole: u16, share: u32) -> u16 {
+    ((whole as u32 * share) / 100).min(u16::MAX as u32) as u16
+}
+
+/// A box `wanted` rows tall opening at `row` within `body`.
+///
+/// It sits on its row when there is room below and slides up when there is not,
+/// so an editor that opens over the row it belongs to never has to choose
+/// between panicking and drawing a sliver. Never taller than `body`.
+pub fn box_at_row(body: Rect, row: u16, wanted: u16, min: u16) -> Rect {
+    let height = fit_between(wanted, min, body.height);
+    // `body.height - height` cannot underflow: `fit_between`'s `max` is that
+    // height.
+    let y = body.y + row.min(body.height - height);
+    Rect::new(body.x, y, body.width, height)
+}
+
 pub fn centered_fixed(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
@@ -190,6 +231,37 @@ pub fn centered_fixed(area: Rect, width: u16, height: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_size_survives_a_range_with_no_room_in_it() {
+        assert_eq!(fit_between(6, 4, 10), 6, "inside the range, unchanged");
+        assert_eq!(fit_between(2, 4, 10), 4, "below the minimum, raised");
+        assert_eq!(fit_between(20, 4, 10), 10, "above the maximum, cut");
+        // The case that panicked: less room than the minimum is worth.
+        assert_eq!(fit_between(6, 4, 1), 1, "the room wins over the preference");
+        assert_eq!(fit_between(6, 4, 0), 0);
+    }
+
+    #[test]
+    fn a_percentage_of_a_very_wide_terminal_is_still_a_percentage() {
+        assert_eq!(percent_of(120, 60), 72);
+        // `900 * 76` wraps a u16; in release that made a 46-column dialog on a
+        // 900-column screen, and in debug it panicked.
+        assert_eq!(percent_of(900, 76), 684);
+        assert_eq!(percent_of(u16::MAX, 88), 57670);
+    }
+
+    #[test]
+    fn a_row_editor_slides_up_rather_than_off_the_bottom() {
+        let body = Rect::new(0, 5, 40, 10);
+        // Room below: it opens on its row.
+        assert_eq!(box_at_row(body, 2, 4, 4), Rect::new(0, 7, 40, 4));
+        // No room below: it slides up so its bottom is the body's.
+        assert_eq!(box_at_row(body, 9, 4, 4), Rect::new(0, 11, 40, 4));
+        // A body shorter than the minimum is the whole body, not a panic.
+        let squeezed = Rect::new(0, 0, 40, 2);
+        assert_eq!(box_at_row(squeezed, 1, 4, 4), Rect::new(0, 0, 40, 2));
+    }
 
     #[test]
     fn the_split_favours_the_table_and_closes_the_pane_when_it_must() {

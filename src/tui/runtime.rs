@@ -104,6 +104,14 @@ impl Runtime {
         // sends one on close — exits from the handler, where nothing of
         // ratatui may run; this gives the screen back with raw system calls.
         interrupt::set_restore(restore_on_signal);
+        // **Before the screen**, which is what `InputThread::spawn`'s own doc
+        // comment has always claimed and what the order used to contradict: on
+        // a failure here `init` returned without ever reaching `shutdown`, so
+        // `SCREEN_OWNED` stayed set, the terminal was left in raw mode on the
+        // alternate screen, and the error printed onto a screen nobody would
+        // see again. Spawning touches no terminal state, so there is nothing to
+        // undo if it fails.
+        let input = InputThread::spawn(tx.clone())?;
         let terminal = take_screen()?;
         // The one choke point that replaces `live_select`'s: an interactive
         // surface ran, so a relaunched window closes without a pause.
@@ -112,7 +120,6 @@ impl Runtime {
         diag::set_sink(Box::new(move |level, message| {
             let _ = sink_tx.send(Msg::Diag(level, message.to_string()));
         }));
-        let input = InputThread::spawn(tx.clone())?;
         let detail = DetailWorker::spawn(tx.clone());
         Ok(Self {
             terminal,
@@ -1131,9 +1138,27 @@ impl InputThread {
             changed: Condvar::new(),
         });
         let thread_gate = Arc::clone(&gate);
+        let report = tx.clone();
         std::thread::Builder::new()
             .name("fastf-input".to_string())
-            .spawn(move || input_loop(&thread_gate, &tx))
+            .spawn(move || {
+                // A panic in here, or a terminal that stops answering, used to
+                // end this loop with a bare `return`. The runtime holds its own
+                // `Sender`, so `recv_timeout` never sees a disconnect and the
+                // main loop goes on drawing a live-looking frame that answers
+                // nothing at all, with the only way out an external signal and
+                // nothing on screen to say so.
+                let end = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    input_loop(&thread_gate, &tx)
+                }))
+                .unwrap_or(InputEnd::Failed("the input thread panicked".to_string()));
+                if let InputEnd::Failed(why) = end {
+                    let _ = report.send(Msg::Diag(
+                        diag::Level::Warn,
+                        format!("{why} — fastf can no longer read the keyboard; close this window or interrupt it from another"),
+                    ));
+                }
+            })
             .context("starting the input thread")?;
         Ok(Self { gate })
     }
@@ -1172,7 +1197,15 @@ impl InputThread {
     }
 }
 
-fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
+/// Why [`input_loop`] came back.
+enum InputEnd {
+    /// `stop()`, or the channel closing: the ordinary way out.
+    Asked,
+    /// The terminal stopped answering. There is no keyboard after this.
+    Failed(String),
+}
+
+fn input_loop(gate: &Gate, tx: &Sender<Msg>) -> InputEnd {
     // A key just arrived: poll briskly, so a suspend that follows it (the
     // editor, Ctrl-Z) is answered at once. Nothing for two seconds: poll
     // once a second — `poll` returns the moment a key comes either way, so
@@ -1190,7 +1223,7 @@ fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
                 state.parked = false;
             }
             if state.stop {
-                return;
+                return InputEnd::Asked;
             }
         }
         let poll = if last_event.elapsed() < Duration::from_secs(2) {
@@ -1201,7 +1234,7 @@ fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
         match event::poll(poll) {
             Ok(true) => last_event = std::time::Instant::now(),
             Ok(false) => continue,
-            Err(_) => return,
+            Err(err) => return InputEnd::Failed(format!("the terminal stopped answering ({err})")),
         }
         let msg = match event::read() {
             Ok(Event::Key(key)) => {
@@ -1224,7 +1257,7 @@ fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
                 };
                 for msg in msgs.into_iter().chain(rest.into_iter().map(Msg::Key)) {
                     if tx.send(msg).is_err() {
-                        return;
+                        return InputEnd::Asked;
                     }
                 }
                 continue;
@@ -1248,10 +1281,12 @@ fn input_loop(gate: &Gate, tx: &Sender<Msg>) {
                 })
             }
             Ok(_) => continue,
-            Err(_) => return,
+            Err(err) => {
+                return InputEnd::Failed(format!("the terminal stopped answering ({err})"));
+            }
         };
         if tx.send(msg).is_err() {
-            return;
+            return InputEnd::Asked;
         }
     }
 }
@@ -1335,35 +1370,57 @@ impl DetailWorker {
             .name("fastf-detail".to_string())
             .stack_size(WORKER_STACK)
             .spawn(move || {
-                loop {
-                    let path = {
-                        let (lock, changed) = &*thread_slot;
-                        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
-                        while state.wanted.is_none() && !state.stop {
-                            state = changed.wait(state).unwrap_or_else(|e| e.into_inner());
-                        }
-                        if state.stop {
-                            return;
-                        }
-                        state.wanted.take()
-                    };
-                    if let Some(path) = path {
-                        let detail = loaders::detail(&path);
-                        if tx
-                            .send(Msg::Detail {
-                                path,
-                                detail: Box::new(detail),
-                            })
-                            .is_err()
-                        {
-                            return;
+                // Panics become a warning here for the same reason
+                // `spawn_worker` catches them: this thread is the only reader
+                // of the detail pane, so one panic inside `loaders::detail`
+                // silently stopped the pane updating for the rest of the
+                // session with nothing said anywhere. `spawn_worker` cannot be
+                // reused — that one runs a closure once, and this is a loop
+                // that outlives every request it serves.
+                let report = tx.clone();
+                let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    loop {
+                        let path = {
+                            let (lock, changed) = &*thread_slot;
+                            let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+                            while state.wanted.is_none() && !state.stop {
+                                state = changed.wait(state).unwrap_or_else(|e| e.into_inner());
+                            }
+                            if state.stop {
+                                return;
+                            }
+                            state.wanted.take()
+                        };
+                        if let Some(path) = path {
+                            let detail = loaders::detail(&path);
+                            if tx
+                                .send(Msg::Detail {
+                                    path,
+                                    detail: Box::new(detail),
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
                         }
                     }
+                }));
+                if ended.is_err() {
+                    let _ = report.send(Msg::Diag(
+                        diag::Level::Warn,
+                        "the detail reader failed unexpectedly — the pane beside the list \
+                         will stop filling in until fastf is restarted"
+                            .to_string(),
+                    ));
                 }
             });
         if let Err(err) = spawned {
+            // Not "the pane will stay on reading…": it draws the row's own
+            // fields either way, and only the parts this thread reads — the
+            // variables, the folder listing, the journal — go missing.
             diag::warn(format!(
-                "could not start the detail reader: {err} — the pane will stay on reading…"
+                "could not start the detail reader: {err} — the pane will show only what \
+                 the list already knows"
             ));
         }
         Self { slot }

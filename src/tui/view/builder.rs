@@ -132,7 +132,7 @@ pub fn render_builder(
     };
     let (body, footer, keys) = frame_parts(app, title, frame, area)?;
 
-    if builder.pending {
+    if builder.pending.is_some() {
         footer_line(frame, footer, " reading the template…", theme.dim());
         return None;
     }
@@ -614,8 +614,12 @@ fn render_setting_editor(
         Editing::Bases { area, .. } => {
             // A list needs room, so it opens *over* its row in a frame of its
             // own — an editor with no edges looks like the screen went wrong.
-            let height = (area.lines().len() as u16 + 2).clamp(4, body.height.saturating_sub(row));
-            let box_area = Rect::new(body.x, body.y + row, body.width, height);
+            // `box_at_row` slides it up when the row is near the bottom; this
+            // was a `clamp(4, body.height - row)`, and `Ord::clamp` panics when
+            // the room is smaller than the minimum, which every window between
+            // 16 and 23 rows tall made it.
+            let box_area =
+                crate::tui::layout::box_at_row(body, row, area.lines().len() as u16 + 2, 4);
             // The whole band, not just the box: half a label showing past the
             // edge of an editor reads as a drawing fault.
             frame.render_widget(Clear, box_area);

@@ -285,8 +285,15 @@ pub struct Builder {
     pub open: Option<Open>,
     /// What Save refused, kept on screen until something changes.
     pub error: Option<String>,
-    /// A worker is reading the template being edited.
-    pub pending: bool,
+    /// The slug a worker is reading, while it is reading it.
+    ///
+    /// The slug and not a `bool`, because the answer has to be checked against
+    /// the question. `Msg::TemplateSourceLoaded` replaced whatever builder was
+    /// on top with whatever landed: Enter on one template, Esc, Enter on
+    /// another, and on a slow disk the first read arrived and silently became
+    /// the second's contents. `TemplateViewLoaded` and `on_template_loaded`
+    /// both check; this was the one that did not.
+    pub pending: Option<String>,
     /// A save is in flight. The builder stays up until it lands: a refusal
     /// from under the data lock — an occupied slug, a lock timeout, a full
     /// disk — has to have something to land on, and the work has to still be
@@ -308,7 +315,7 @@ impl Builder {
             selected: 0,
             open: None,
             error: None,
-            pending: false,
+            pending: None,
             saving: false,
         }
     }

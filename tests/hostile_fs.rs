@@ -489,6 +489,64 @@ fn a_very_deep_tree_is_refused_rather_than_overflowing_the_stack() {
     );
 }
 
+/// The same limit, on the walk a cross-device move and every `copy-to` run.
+///
+/// `assets::walk` above was the only one of the crate's five recursive walks
+/// with a *live* guard. Three others checked `depth` in a `_at` function and
+/// then recursed through the wrapper that starts at zero, so the limit could
+/// never be reached: this one, `template_import::scan_dir_at` below, and
+/// `util::tree_size`. Deny-by-default is the manifest's whole contract — it
+/// fails a move rather than omitting anything — so an unbounded recursion here
+/// is a stack overflow in the middle of the one operation that must not be
+/// interrupted.
+#[cfg(unix)]
+#[test]
+fn a_move_manifest_refuses_a_tree_past_the_depth_limit() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let deep = tmp.path().join("Deep");
+    let mut path = deep.clone();
+    for level in 0..100 {
+        path = path.join(format!("l{level}"));
+    }
+    fs::create_dir_all(&path).unwrap();
+    fs::write(path.join("leaf.txt"), b"x").unwrap();
+
+    let scanned = fastf::core::transactions::MoveManifest::scan(&deep);
+    assert!(scanned.is_err(), "a tree past the limit must be refused");
+    let message = format!("{:#}", scanned.unwrap_err());
+    assert!(
+        message.contains("too deep") || message.contains("depth"),
+        "the error should say what happened: {message}"
+    );
+}
+
+/// And on the walk `fastf template from-folder` reads a project with.
+///
+/// This one could *build* the deep tree as well as walk it: the `structure:`
+/// it generates is as deep as the folder it read, which is then recursed over
+/// again by validation, interpolation and the create.
+#[cfg(unix)]
+#[test]
+fn reading_a_template_out_of_a_folder_refuses_a_tree_past_the_depth_limit() {
+    sandbox(|_install, base| {
+        let source = base.join("Deep");
+        let mut path = source.clone();
+        for level in 0..100 {
+            path = path.join(format!("l{level}"));
+        }
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("leaf.txt"), b"x").unwrap();
+
+        let planned = fastf::core::template_import::from_folder(&source, "deep-one", false, false);
+        assert!(planned.is_err(), "a tree past the limit must be refused");
+        let message = format!("{:#}", planned.unwrap_err());
+        assert!(
+            message.contains("too deep") || message.contains("depth"),
+            "the error should say what happened: {message}"
+        );
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Writes never follow a link out of the tree they are meant to fill
 // ---------------------------------------------------------------------------

@@ -199,6 +199,9 @@ impl MoveManifest {
     }
 }
 
+/// The depth-0 entry point. **Nothing else may call it** — the recursive step
+/// goes to `scan_at` with `depth + 1`, which is what it used to do through here
+/// instead, so the limit below was never reached however deep the tree went.
 fn scan_inner(root: &Path, current: &Path, entries: &mut Vec<ManifestEntry>) -> Result<()> {
     scan_at(root, current, 0, entries)
 }
@@ -244,7 +247,7 @@ fn scan_at(
                 bytes: 0,
                 source_modified: ModifiedTime::from_system_time(modified),
             });
-            scan_inner(root, &path, entries)?;
+            scan_at(root, &path, depth + 1, entries)?;
         } else if file_type.is_file() {
             entries.push(ManifestEntry {
                 path: relative,

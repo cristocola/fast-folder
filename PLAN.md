@@ -47,21 +47,34 @@ broken file said so three times in one command.
 Phase 2 begins at `src/tui/view/builder.rs:617`. The repro is in the plan's
 verification section and takes one command.
 
-## Phase 2 — Nothing crashes, nothing corners you  ·  status: not started
+## Phase 2 — Nothing crashes, nothing corners you  ·  status: **done**
 
-- [ ] **2.1** `view/builder.rs` Bases editor: `clamp(4, height - row)` panics
+- [x] **2.1** `view/builder.rs` Bases editor: `clamp(4, height - row)` panics
       (`min > max`) on any window 16–23 rows tall. Reproduced at 80×18/80×20.
-- [ ] **2.2** Three dead depth guards — `tree_size`, `transactions::scan_at`,
+- [x] **2.2** Three dead depth guards — `tree_size`, `transactions::scan_at`,
       `template_import::scan_dir_at` all recurse through the zero-initialising
       wrapper. Plus a real stack for the `size_scan` workers.
-- [ ] **2.3** Bound the `structure:` recursions on `MAX_WALK_DEPTH`.
-- [ ] **2.4** `TextArea` windows its line and its caret from two cursors.
-- [ ] **2.5** `Msg::TemplateSourceLoaded` lands on whatever builder is on top.
-- [ ] **2.6** Quit from the palette bypasses the dirty-builder question.
-- [ ] **2.7** Three scrolls that cannot reach the end.
-- [ ] **2.8** Dialogs measured at a width they may not get.
-- [ ] **2.9** Threads that die quietly; screen taken before the input thread.
-- [ ] **2.10** `u16` overflow in layout arithmetic.
+- [x] **2.3** Bound the `structure:` recursions on `MAX_WALK_DEPTH`.
+- [x] **2.4** `TextArea` windows its line and its caret from two cursors.
+- [x] **2.5** `Msg::TemplateSourceLoaded` lands on whatever builder is on top.
+- [x] **2.6** Quit from the palette bypasses the dirty-builder question.
+- [x] **2.7** Three scrolls that cannot reach the end.
+- [x] **2.8** Dialogs measured at a width they may not get.
+- [x] **2.9** Threads that die quietly; screen taken before the input thread.
+- [x] **2.10** `u16` overflow in layout arithmetic.
+
+Three more landed with them, all the same shape as something already on the
+list: a click on the table's bottom border selected an undrawn row;
+`Then::MoveToBase` asked `!marks.is_empty()` where every other verb asks
+`batching()`; and the rename, delete and unregister dialogs re-read the
+selection at submit time instead of carrying the project they named — which,
+with a discovery landing underneath, deleted the neighbour of the project the
+question was about. That one has a test that fails loudly on the old code.
+
+`tests/tui_snapshots.rs`'s `settings_bases_as_text` had never opened the bases
+editor: ten rows down is **Theme**, whose Enter cycles the value where it
+stands. It asserts the editor is on screen now, so the snapshot named after a
+screen is a snapshot of that screen.
 
 ## Phase 3 — Every surface says one thing  ·  status: not started
 

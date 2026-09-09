@@ -452,12 +452,20 @@ long, so forgetting the second step fails the suite instead of making the flag
 work before the positional and silently do nothing after it. An undeclared
 `--key=value` is a template variable; anything else is an error.
 
-**`trailing_var_arg` also means clap's `requires`/`conflicts_with` only see flags
-typed *before* the positional.** `register --dry-run` after the path lands in
-`extra`, so the attribute never fired — which is how `--dry-run` came to write the
-folder for real. The constraint lives in `RegisterFlags::validate`, run on the
-merged set. Keep the clap attributes for the help text; put the enforcement in
-`validate`.
+**What lands in `extra` is what follows the first token clap cannot parse — not
+everything after the positional.** This used to be written the other way round,
+and it is worth being exact because the enforcement rests on it. Verified
+against the clap in `Cargo.lock` (4.6): a *declared* flag is parsed wherever it
+appears, so `register <path> --dry-run` is caught by clap's own
+`requires`/`conflicts_with` and exits 2; only an *undeclared* token starts the
+trailing bucket, and from there everything latches into it, so `register <path>
+--artist=X --dry-run` reaches `RegisterFlags::validate` and exits 1.
+
+Both layers are needed and they disagree about the exit code for one mistake.
+`validate` is the authority — it runs on the merged set and its message names
+the rule rather than the argument — and the clap attributes stay for the help
+text. If the two are ever unified, unify them onto `validate`: the earlier
+version of this paragraph is why `--dry-run` once wrote the folder for real.
 
 **Do not read a `Config` field raw when a `resolve_*` exists.** `cli::note` passed
 `&cfg.editor` where everything else calls `cfg.resolve_editor()`, so the

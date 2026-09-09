@@ -11,6 +11,19 @@ authors = ["Cristo Cola"]
 readme = "README.md"
 keywords = ["cli", "tui", "template", "scaffolding", "folders"]
 categories = ["command-line-utilities", "filesystem"]
+# What a `cargo package` ships. Without this the crate carries the whole
+# repository — 404 KB of Windows icon, a 72 KB screenshot, thirty-odd terminal
+# snapshots, both AUR PKGBUILDs and the release workflows — none of which a
+# `cargo install` or a dependent needs. `src/`, `Cargo.lock`, `README.md`,
+# `LICENSE` and the two `CLAUDE.md` files under `src/` are what is left, plus
+# `examples/templates/`, which is the gallery the docs point at.
+exclude = [
+    ".github/",
+    "packaging/",
+    "docs/img/",
+    "tests/snapshots/",
+    "PLAN.md",
+]
 
 [[bin]]
 name = "fastf"

@@ -99,8 +99,8 @@ fn clear_readonly_tree(path: &Path) {
 
 /// Best-effort, so the depth limit simply stops descending rather than
 /// reporting: the caller is about to try a delete either way, and an
-/// unreachable read-only attribute past 256 levels is not the reason it will
-/// fail.
+/// unreachable read-only attribute past `paths::MAX_WALK_DEPTH` levels is not
+/// the reason it will fail.
 #[cfg(windows)]
 fn clear_readonly_tree_at(path: &Path, depth: usize) {
     if depth >= crate::util::paths::MAX_WALK_DEPTH {

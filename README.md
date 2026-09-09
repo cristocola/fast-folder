@@ -82,7 +82,7 @@ fastf tag add ID0047 delivered
 fastf note add ID0047 "sent the rough cut"
 ```
 
-The whole tool is one binary under 4 MB that carries everything it needs. Install it from a package manager, or keep it in a folder on a USB stick and take it with you. `fastf paths` tells you where its data lives.
+The whole tool is one binary of a few megabytes that carries everything it needs. Install it from a package manager, or keep it in a folder on a USB stick and take it with you. `fastf paths` tells you where its data lives.
 
 ## Installation
 
@@ -109,7 +109,7 @@ less install.sh
 sh install.sh
 ```
 
-`FASTF_VERSION=v3.2.0` pins a release and `PREFIX=/opt/fastf` chooses where it
+`FASTF_VERSION=vX.Y.Z` pins a release and `PREFIX=/opt/fastf` chooses where it
 goes. To remove it later, delete `fastf` from the `bin` directory it went into,
 the `fast-folder` files under `share`, and the two lines the script marked in
 your shell profile.

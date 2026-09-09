@@ -113,7 +113,6 @@ pub struct Config {
     pub theme: String,
 
     /// What to do when the resolved folder name is already taken:
-
     /// `"suffix"` (default) appends `_2`, `_3`… , `"error"` refuses.
     ///
     /// Rarely reached with the bundled patterns, which end in a unique
@@ -295,7 +294,6 @@ impl Config {
         out
     }
 
-    /// Resolve editor: configured, or $EDITOR, or fallback.
     /// What the `terminal` key means, with `$TERMINAL` folded in.
     ///
     /// The three answers are genuinely different — do not collapse `Disabled`
@@ -316,6 +314,7 @@ impl Config {
         }
     }
 
+    /// The editor to start: the `editor` key, else `$EDITOR`, else a fallback.
     pub fn resolve_editor(&self) -> String {
         if !self.editor.is_empty() {
             return self.editor.clone();

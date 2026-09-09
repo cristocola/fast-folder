@@ -311,10 +311,6 @@ pub fn contained_destination(root: &Path, rel: &Path) -> Result<PathBuf> {
     Ok(current)
 }
 
-/// Require a native relative path with only ordinary components: non-empty,
-/// not absolute, no `.`, `..`, or root/prefix component. Journals and manifests
-/// store paths that later get joined onto a base, so this is what stands
-/// between a recovered record and a write outside the tree it describes.
 /// How deep any of fastf's walkers will descend before refusing.
 ///
 /// Every recursive walk in the tool is plain recursion on the call stack, and
@@ -337,6 +333,12 @@ pub fn too_deep(path: &Path) -> anyhow::Error {
     )
 }
 
+/// Require a native relative path with only ordinary components: non-empty,
+/// not absolute, no `.`, `..`, or root/prefix component.
+///
+/// Journals and manifests store paths that later get joined onto a base, so
+/// this is what stands between a recovered record and a write outside the tree
+/// it describes.
 pub(crate) fn require_native_relative(path: &Path, label: &str) -> Result<()> {
     if path.as_os_str().is_empty() || path.is_absolute() {
         bail!("{label} must be a non-empty relative path");

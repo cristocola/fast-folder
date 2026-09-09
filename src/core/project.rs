@@ -451,15 +451,18 @@ fn create_inner(
     // From here the folder is ours, so any failure rolls it back rather than
     // leaving a half-built project. This covers Ctrl-C (which surfaces as an
     // ordinary error from the copy loop), a full disk, and a template file
-    // vanishing mid-copy. The counter is only saved on the success path, so a
-    // rolled-back create does not burn an ID either.
+    // vanishing mid-copy.
+    //
+    // The counter is saved near the end of `provision_project`, and the two
+    // steps after it — clearing the provisioning flag and the create journal —
+    // can still fail into this rollback. So a rolled-back create can burn an ID
+    // in that window. It is harmless (the counter only rises, and a gap in the
+    // numbering is not a defect) and it is the honest order: the number has to
+    // be recorded before anything can claim the create finished.
     match provision_project(&realized, template, counters, config, run_post) {
         Ok(()) => Ok(realized),
         Err(err) => {
             match crate::util::fs_retry::remove_dir_all(&realized.root_path) {
-                // Say it *here* — this is the only code that knows a folder was
-                // removed. `main` used to claim it on every interrupt, including
-                // a Ctrl-C at the menu with nothing in flight.
                 // Said *here* — this is the only code that knows a folder was
                 // removed. `main` used to claim it on every interrupt, including
                 // a Ctrl-C at the menu with nothing in flight.

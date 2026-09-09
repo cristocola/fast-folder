@@ -208,6 +208,29 @@ jobs:
           fi
           "$bin" completions bash > /dev/null
 
+          # **Every path a consumer reads out of this archive.** The layout is
+          # written once, in the packaging step above, and read independently by
+          # `packaging/aur/fast-folder-bin/PKGBUILD` and
+          # `packaging/linux/install.sh` — neither of which runs here. Renaming
+          # or dropping one of these used to pass the whole workflow green and
+          # break `paru -S fast-folder-bin` and the one-line installer on the
+          # next release, with the first report coming from a user.
+          root="${archive%.tar.gz}"
+          missing=0
+          for path in \
+            fastf LICENSE README.md fastf.desktop \
+            completions/fastf.bash completions/fastf.zsh completions/fastf.fish \
+            icons/fastf-48.png icons/fastf-128.png icons/fastf-256.png
+          do
+            [ -e "$root/$path" ] || { echo "::error::archive is missing $path"; missing=1; }
+          done
+          # The man pages are generated, so assert the shape rather than a list.
+          ls "$root"/man/*.1 >/dev/null 2>&1 || {
+            echo "::error::archive has no man pages under man/"
+            missing=1
+          }
+          [ "$missing" = 0 ] || exit 1
+
 
   smoke-windows:
     name: smoke (windows)

@@ -67,45 +67,56 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- Prepared: **v3.0.0 — the guided app on ratatui**, tagged on `main` when the
-  consolidation PR lands. One full-screen dashboard replaced the
-  menu-of-prompts: the library on screen and acted on, fuzzy search and a
-  command palette, sizes filling in without input, every mutation patching its
-  row rather than rescanning. Delivered in eight PRs (#35–#42) — the runtime,
-  the one command registry, the dashboard, search, sort and filters; the action
-  menu and every single-project verb as a native modal, with a move as a
-  cancellable job; marks, and the destructive verbs over them as jobs with a
-  failure report that leaves the unrun rows marked; the create, register and
-  apply flows as a form, a preview built by the code that commits it, and
-  Enter; the template studio and a builder that is a list of a template's
-  parts with a live folder tree; every setting on one screen, the ID counter,
-  the maintenance verbs and a first-run dialog; the command line's own
-  prompts drawn by the same ratatui, `dialoguer` removed; the mouse and the
-  ASCII alphabet for the legacy Windows console — and a ninth, the
-  consolidation pass (#43): every verb over the marks, delete by the word,
-  the message log, session memory, the theme key, the terminal always given
-  back, `rename`/`unregister`/`delete` on the command line, and the docs
-  brought into line. `.github/release-notes/v3.0.0.md` is the user-facing
-  account.
-
+- In progress: **v3.3.0 — the hardening and polish pass.** Feature work reached
+  a wall at v3.2.0 with every gate green and no `TODO` anywhere, so this release
+  spends itself on what a green gate cannot see: a guard that is written down
+  and dead, an error read as a default, a panic one row below the size anyone
+  tests at, and a message that is never printed. The theme is **silence** —
+  every place fastf did the wrong thing, or nothing, and said so nowhere. Four
+  work phases, each its own PR:
+  - **Nothing vanishes** (#51): a folder holding a `PROJECT_INFO.md` fastf
+    cannot read is named instead of dropped, and a hand-edit that removes a
+    field which is not the project's identity no longer removes the project;
+    the counter floor stops reading an unreadable file as zero;
+    `read_base_readonly` abandons a rejected cache the way discovery does; a
+    note written after a heading the user added stays readable; and `reconcile`
+    finishes a case-only rename killed between its two renames — the one
+    multi-step mutation in the crate that had no recovery story.
+  - **Nothing crashes, nothing corners you** (#52): the settings screen's base
+    editor panicked on any window 16–23 rows tall; three depth guards were
+    written down and unreachable, one of them on the walk running on the
+    smallest stack; a destructive verb could act on a project nobody had named;
+    and a worked-on template could be thrown away by a quit with no question.
+  - **Every surface says one thing** (#53): the `recent_limit` key the file did
+    not hold; Esc as an error at one prompt and a cancel at the next; a
+    recursive register reporting success over total failure; an editor's
+    discarded exit status; eight sentences that spelled a key into prose; and
+    widths measured in bytes and characters where columns were meant.
+  - **The record**: this file, the docs, the packaging, and the dead weight
+    v2.0.0 left behind.
+- Released: **v3.2.0, published 2026-09-08** — what a preview promises is what a
+  create writes, and a template is addressed by the folder it lives in: eight
+  findings a Windows pass reproduced, none of them Windows-specific.
+- Released: **v3.1.4, v3.1.3, v3.1.2** — the relaunch flag off every surface a
+  user reads, "I am the rerun" as a flag on argv rather than an inherited
+  variable, and a fastf-opened terminal carrying none of fastf's own
+  bookkeeping.
+- Released: **v3.1.1** — one command installs fastf on any Linux, checksum
+  verified, and puts it on PATH.
+- Released: **v3.1.0** — the dashboard says each thing once, templates are a
+  tab, batch verbs land, and `copy-to` puts a project on a backup drive keeping
+  its ID.
+- Released: **v3.0.0, published 2026-09-04** — the guided app on ratatui: one
+  dashboard over the whole library, every flow native, the command line's
+  prompts in the same palette, and `dialoguer` gone. Delivered in nine PRs
+  (#35–#43); `.github/release-notes/v3.0.0.md` is the user-facing account.
   **Breaking:** `show-banner` and `show-frame` are gone (accepted and ignored,
   so nothing that sets them starts failing); `recent-default-limit` is now
-  `recent-limit`, with the old key still parsing. Search stopped guessing at
-  two kinds of word: a number means an ID, not the digits scattered through a
-  date, and a word containing `/` is a literal tag path.
-- Released: **v2.2.1, published 2026-09-03** — the text prompts show where you
-  are typing. `prompt::text` draws its line with `write_line`, which ends the
-  block a row *below* the text, and it hid the caret for the repaint and never
-  showed it again, so **Rename folder** — and every other typed field — offered
-  no insertion point at all. The line editor now parks the caret in the line it
-  is editing and shows it there, at the cursor's offset **within the visible
-  window** rather than its index into the whole string, which are different
-  numbers once a long line has scrolled.
-- Released: **v2.2.0, published 2026-09-01** — `fastf term` opens a terminal at
-  a project's folder, the fourth verb (with `open`, `copy`, `path`) that
-  resolves a query and hands the result to another program.
-- The v2.1.x guarantees are in the release train below; the current design is
-  `CLAUDE.md`.
+  `recent-limit`. Search stopped guessing at two kinds of word: a number means
+  an ID, not the digits scattered through a date, and a word containing `/` is a
+  literal tag path.
+- The earlier releases are in the train below; the current design is
+  `CLAUDE.md`, `src/core/CLAUDE.md` and `src/tui/CLAUDE.md`.
 - Verified by hand, 2026-08-31: the launcher smoke test on a desktop session,
   plus a Windows pass. Neither is reachable from CI.
 - Outstanding manual passes, needing the maintainer (none is reachable from
@@ -126,7 +137,7 @@ responsibility of the filesystem and backups.
     terminal that reports it.
   - Ctrl-Z and `fg`; `kill -INT` twice against the app leaves the shell
     cooked; `ssh localhost -t fastf` picks a theme and `o` says "no display".
-- Last reviewed: **2026-09-04** (v3.0.0 consolidated)
+- Last reviewed: **2026-09-09** (v3.3.0 in progress)
 
 ## Release train
 
@@ -185,7 +196,10 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
   runner (CI's "fmt + clippy (windows-latest)" leg), so `#[cfg(windows)]` code is
   linted rather than merely compiled
 - [x] `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --locked` (CI's "docs build
-  clean"; a `pub` item's docs may not link to a `pub(crate)` one)
+  clean"; a `pub` item's docs may not link to a `pub(crate)` one). **Locally,
+  `rm -rf target/doc` first**: `cargo doc` is incremental and reports a clean
+  run without rebuilding, so a fresh `private_intra_doc_links` error can pass on
+  a developer's machine and fail on the runner, which starts from nothing.
 - [x] Existing Linux CI target ([main run 32631534113](https://github.com/cristocola/fast-folder/actions/runs/32631534113))
 - [x] Existing Windows CI targets, debug and release ([main run 32631534113](https://github.com/cristocola/fast-folder/actions/runs/32631534113))
 - [x] GitHub Release workflow built Linux GNU/musl archives, the Windows ZIP,
@@ -195,6 +209,12 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
 
 Regression coverage grows with the relevant release:
 
+- [x] A first run that failed between the two bundled templates is finished by
+  the next one, and the first-run banner is on stderr so it cannot land inside
+  `$(fastf path …)` (v3.3.0).
+- [x] `tag reauto` re-derives the template's tags and keeps the free-form ones;
+  a same-filesystem move preserves a symlink inside the project, on unix as well
+  as on the two Windows suites CI never runs (v3.3.0).
 - [x] The key `config set` takes is the key `config.toml` holds is the key
   `config show` prints; Esc at the template picker is a cancel and not an error;
   a recursive register that onboarded nothing exits non-zero and says what it

@@ -106,12 +106,32 @@ is deferred to Phase 4's documentation pass: the *code* is right in both cases,
 and what is wrong is `CLAUDE.md`'s model of what `trailing_var_arg` does in
 clap 4.6.
 
-## Phase 4 — The record  ·  status: not started
+## Phase 4 — The record  ·  status: **done**
 
-`ROADMAP.md`'s Current phase (two releases stale); doc drift; the release
-archive layout nothing asserts; bootstrap's half-populated data dir and its
-banner on stdout; the browser-UI doc comments and dead `pub` API left from
-v2.0.0; three tests that cannot fail.
+`ROADMAP.md`'s Current phase, which described v3.0.0 as unreleased while v3.2.0
+was tagged. Doc drift: `preview-lines` documented nowhere, `copy-to` in neither
+of the picker lists, a `from-folder` skip list of nine where the code has twelve
+(read from the list itself now, so it cannot drift again), a README pinned to
+`v3.2.0` and claiming a size the binary passed. The release archive's layout,
+written in one place and read by two consumers and asserted by nobody — the
+smoke job checks every path now. Bootstrap: a first run that failed between the
+two bundled templates left the data dir permanently half-populated, and the
+banner went to stdout, so it landed inside `$(fastf path …)`. The browser-UI
+doc comments and the `swept` field left over from v2.0.0, two dead `pub`
+functions, a comment pasted twice, `fs_retry`'s 256 where the constant is 64,
+and two doc comments attached to the wrong item. `Cargo.toml` had no `exclude`,
+so `cargo package` shipped the whole repository.
+
+Three tests that could not fail now assert what they are named for, and
+`tests/CLAUDE.md` has the three shapes written down. The `recent`/`tag reauto`
+and unix-symlink coverage gaps are closed.
+
+**Deferred, with the reasoning written down rather than the code changed:** the
+AUR *source* package pins a checksum over GitHub's auto-generated tarball, which
+is not byte-stable. `update.sh` re-checksums on every bump, so it can only ever
+affect an already-published version; `packaging/aur/PUBLISHING.md` says what to
+do when it happens. Restructuring the release to upload a stable source asset is
+a bigger change than the exposure warrants.
 
 ## Phase 5 — Release  ·  status: not started
 

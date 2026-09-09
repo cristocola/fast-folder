@@ -55,7 +55,7 @@ gh attestation verify fastf-v<version>-x86_64-unknown-linux-musl.tar.gz \
 
 ```bash
 cd <repo>/packaging/aur
-./update.sh 1.0.0                 # bumps pkgver, fills sha256sums, regenerates .SRCINFO
+./update.sh X.Y.Z                 # bumps pkgver, fills sha256sums, regenerates .SRCINFO
 
 # Validate locally before pushing (per package):
 cd fast-folder
@@ -67,7 +67,7 @@ cd ..
 # Publish (per package):
 cp fast-folder/{PKGBUILD,.SRCINFO} ~/aur/fast-folder/
 cd ~/aur/fast-folder
-git add -A && git commit -m "fast-folder 1.0.0-1" && git push   # first push goes to master
+git add -A && git commit -m "fast-folder X.Y.Z-1" && git push   # first push goes to master
 
 # Repeat for fast-folder-bin.
 ```
@@ -82,3 +82,20 @@ Notes:
   opens the guided TUI, `man fastf` works, and tab completion works.
 - Clean-chroot validation (optional, gold standard): if `devtools` is already
   installed, run `pkgctl build` inside the package directory.
+
+## If `fast-folder` starts failing its checksum
+
+`fast-folder` (the source package) builds from
+`$url/archive/refs/tags/v$pkgver.tar.gz`, which GitHub generates on the fly
+rather than storing. Those bytes are **not** guaranteed stable across GitHub's
+own git and compression changes, so a `sha256sums` pinned months ago can stop
+matching without anything on this side moving.
+
+It only ever affects a version that is already published — `update.sh` runs
+`updpkgsums`, which re-downloads and re-computes on every bump, so the current
+version is always freshly checksummed. If a user reports a validation failure on
+an older one, re-run `updpkgsums` in `packaging/aur/fast-folder`, bump `pkgrel`,
+and push.
+
+`fast-folder-bin` has no such exposure: it downloads a real uploaded release
+asset, and those bytes never change.

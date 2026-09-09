@@ -564,17 +564,7 @@ enum TemplateAction {
     },
     /// Generate a template from an existing folder tree (structure + file contents, opt-in assets)
     #[command(
-        after_help = "Walks the folder, turning every directory into a FolderNode and every\n\
-            text file ≤ 64 KB into a reproduced file. Binary and large files are\n\
-            skipped by default; pass --bundle-assets to copy them byte-for-byte into\n\
-            the template (it confirms the total size first). Common noise dirs\n\
-            (.git, node_modules, target, __pycache__, .venv, dist, build, .idea, .vscode)\n\
-            are skipped automatically.\n\n\
-            Examples:\n  \
-                fastf template from-folder ./my-crate rust-project\n  \
-                fastf template from-folder ./delivery-kit client-kit --bundle-assets\n  \
-                fastf template from-folder ./delivery-kit client-kit --dry-run\n  \
-                fastf template from-folder ./existing-video video-project --force"
+        after_help = from_folder_help()
     )]
     FromFolder {
         /// Source folder to scan
@@ -713,6 +703,29 @@ enum IdAction {
     /// Removed — the counter cannot be reset. Use `fastf id sync`.
     #[command(hide = true)]
     Reset,
+}
+
+/// `template from-folder`'s long help, with the skipped directories read from
+/// the list itself.
+///
+/// The list was written out here by hand and had drifted: nine of the twelve
+/// were named, so a source tree with a `venv/`, a `.next/` or a `.DS_Store` had
+/// them vanish from the generated template with nothing in the help or the docs
+/// accounting for it.
+fn from_folder_help() -> String {
+    format!(
+        "Walks the folder, turning every directory into a FolderNode and every\n\
+         text file ≤ 64 KB into a reproduced file. Binary and large files are\n\
+         skipped by default; pass --bundle-assets to copy them byte-for-byte into\n\
+         the template (it confirms the total size first). Common noise dirs\n\
+         ({}) are skipped automatically.\n\n\
+         Examples:\n  \
+             fastf template from-folder ./my-crate rust-project\n  \
+             fastf template from-folder ./delivery-kit client-kit --bundle-assets\n  \
+             fastf template from-folder ./delivery-kit client-kit --dry-run\n  \
+             fastf template from-folder ./existing-video video-project --force",
+        fastf::cli::template::from_folder_ignored()
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -67,7 +67,7 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- In progress: **v3.3.0 — the hardening and polish pass.** Feature work reached
+- Released: **v3.3.0 — the hardening and polish pass.** Feature work reached
   a wall at v3.2.0 with every gate green and no `TODO` anywhere, so this release
   spends itself on what a green gate cannot see: a guard that is written down
   and dead, an error read as a default, a panic one row below the size anyone
@@ -92,8 +92,12 @@ responsibility of the filesystem and backups.
     recursive register reporting success over total failure; an editor's
     discarded exit status; eight sentences that spelled a key into prose; and
     widths measured in bytes and characters where columns were meant.
-  - **The record**: this file, the docs, the packaging, and the dead weight
-    v2.0.0 left behind.
+  - **The record** (#54): this file, the docs, the packaging, and the dead
+    weight v2.0.0 left behind — plus three tests that could not fail.
+
+  `.github/release-notes/v3.3.0.md` is the user-facing account. Nothing changed
+  about a flag, a config key or a file format: every `config.toml` and
+  `PROJECT_INFO.md` an earlier fastf wrote still works.
 - Released: **v3.2.0, published 2026-09-08** — what a preview promises is what a
   create writes, and a template is addressed by the folder it lives in: eight
   findings a Windows pass reproduced, none of them Windows-specific.
@@ -137,7 +141,7 @@ responsibility of the filesystem and backups.
     terminal that reports it.
   - Ctrl-Z and `fg`; `kill -INT` twice against the app leaves the shell
     cooked; `ssh localhost -t fastf` picks a theme and `o` says "no display".
-- Last reviewed: **2026-09-09** (v3.3.0 in progress)
+- Last reviewed: **2026-09-09** (v3.3.0)
 
 ## Release train
 
@@ -163,6 +167,7 @@ responsibility of the filesystem and backups.
 | v3.1.3 | "I am the rerun" is a flag on the rerun's own command line, so nothing a fastf window starts can inherit the claim — a package build no longer stops for a keypress | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.3) |
 | v3.1.4 | that flag is off every surface a user reads: `hide` never kept it out of the generated shell completions | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.1.4) |
 | v3.2.0 | what a preview promises is what a create writes, and a template is addressed by the folder it lives in: eight findings the Windows pass reproduced, none of them Windows-specific | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.2.0) |
+| v3.3.0 | nothing fails quietly: a project fastf cannot read is named rather than dropped, the app cannot be crashed or made to act on the wrong project, guards that were written down are enforced, and every surface says one thing | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.3.0) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find

@@ -175,13 +175,21 @@ the file to start fresh; a file that cannot be read is skipped with a note.
 dialog, where it lists that dialog's own keys. `c` (or `:`, or Ctrl-P) opens the
 **command palette**, which lists every command with its key and filters as you
 type — `open` finds *Open project folder*, `#lull` jumps to the project. The
-keys that matter most:
+keys that matter most.
+
+**Every list moves the same way** — the project table, the detail pane, the
+templates tab, the action menu, the template builder, the settings, and any
+dialog with more in it than fits. The eight movement keys below work in all of
+them, and so do `→` and `←`.
 
 | Key | What it does |
 |---|---|
 | ↑ / ↓, `k` / `j` | move the highlight, wrapping at the ends |
 | PageUp / PageDown | move by a screenful, stopping at the ends |
+| Ctrl-D / Ctrl-U | half a screenful, stopping at the ends |
 | Home / End, `g` / `G` | first row, last row |
+| → / `l` | **go in**: open the row under the cursor — whatever Enter does where you are |
+| ← / `h` | **go back**: one level out of a dialog, out of the detail pane, off the templates tab. It never quits: on the project list there is nothing above it, so it does nothing |
 | `T` | the templates tab, and `T` again (or Esc) back to the library |
 | Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
@@ -198,6 +206,7 @@ keys that matter most:
 | Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
 | `,` | the settings |
+| `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
 | `!` | check and recover — what `⚠ n needs attention` means |
 | `L` | the session's messages, newest first with the time each arrived — a warning that flashed under a dialog is counted on the status line until you read them |
 | F5, `R` | reload the library, reindex every base from its folders |
@@ -297,11 +306,12 @@ comes back when you press Enter.
 
 `T` opens the **templates tab**: every template on the left, the selected one's
 details on the right, and the verbs on it — `n` a new one, Enter or `e` to edit,
-`g` to generate one from a folder that already has the shape you want, `D` to
+`I` to generate one from a folder that already has the shape you want, `H` for
+the guide to templates, `D` to
 delete (it asks first). `f` shows that template's projects: it sets the library
 filter and takes you back to the library, which is where the answer is. `/`
-searches the list — a plain substring over the slug and the name. `T` again, or
-Esc, returns to the library. The builder is described in
+searches the list — a plain substring over the slug and the name. `T` again,
+Esc or `←`, returns to the library. The builder is described in
 [templates.md](templates.md#the-builder).
 
 Real templates come first, then alphabetically; after them, dimmed, come the

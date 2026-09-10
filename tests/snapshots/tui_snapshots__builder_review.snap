@@ -20,7 +20,7 @@ expression: frame
 "│       │  Save        write the template                                                  │       │"
 "│       │  Discard     leave without writing                                               │       │"
 "│       │ the folders every new project starts with                                        │       │"
-"│       │ ↑↓ choose   G guide   Enter open   s save   Esc close   ? help   c commands      │       │"
+"│       │ ↑↓ choose   H guide   Enter open   s save   Esc close   ? help   c commands      │       │"
 "│       └──────────────────────────────────────────────────────────────────────────────────┘       │"
 "│                                    ││                                                            │"
 "│                                    ││                                                            │"

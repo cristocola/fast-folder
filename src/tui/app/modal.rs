@@ -204,6 +204,7 @@ impl Modal {
                 Some(_) => Context::Modal,
             },
             Modal::Settings(state) if state.editing.is_none() => Context::Settings,
+            Modal::Guide(_) => Context::Guide,
             _ => Context::Modal,
         }
     }

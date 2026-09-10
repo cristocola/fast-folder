@@ -121,6 +121,9 @@ pub enum Context {
     SearchEdit,
     /// The command palette is open.
     Palette,
+    /// The template guide: a reader of seven pages, which owns its own
+    /// left and right the way a text field owns its caret.
+    Guide,
     /// Any other dialog: a confirmation, a picker, help, a message.
     Modal,
 }
@@ -137,12 +140,13 @@ impl Context {
             Context::Settings => "settings",
             Context::SearchEdit => "search bar",
             Context::Palette => "command palette",
+            Context::Guide => "template guide",
             Context::Modal => "dialogs",
         }
     }
 
     /// Every context, for the invariants and the help.
-    pub const ALL: [Context; 10] = [
+    pub const ALL: [Context; 11] = [
         Context::Global,
         Context::Projects,
         Context::Detail,
@@ -152,6 +156,7 @@ impl Context {
         Context::Settings,
         Context::SearchEdit,
         Context::Palette,
+        Context::Guide,
         Context::Modal,
     ];
 }
@@ -210,17 +215,34 @@ pub enum CommandId {
     Close,
     Help,
     Palette,
+    PaletteRun,
+    PaletteNext,
+    PalettePrevious,
+    PaletteClose,
+    SearchAccept,
     Reload,
     Reindex,
     FocusNext,
     FocusPrevious,
+    /// Ctrl-C, declared so the key that cancels a running job is in the help.
+    Interrupt,
     // Navigation in the focused list
     Down,
     Up,
     PageDown,
     PageUp,
+    HalfDown,
+    HalfUp,
     First,
     Last,
+    /// The horizontal axis, on the pane: one step back to the list.
+    FocusTable,
+    /// The horizontal axis, on the templates tab: back where you came from.
+    BackToLibrary,
+    /// The horizontal axis, in a dialog: one level out.
+    Ascend,
+    /// The horizontal axis, on a list: one step into the row under the cursor.
+    Descend,
     // Search and filters
     Search,
     ClearSearch,
@@ -270,6 +292,8 @@ pub enum CommandId {
     StudioDelete,
     /// The template guide — the one surface that teaches rather than does.
     Guide,
+    GuideNext,
+    GuidePrevious,
     // The template builder's lists
     BuilderOpen,
     BuilderAdd,
@@ -287,22 +311,34 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 66] = [
+    pub const ALL: [CommandId; 80] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
         CommandId::Help,
         CommandId::Palette,
+        CommandId::PaletteRun,
+        CommandId::PaletteNext,
+        CommandId::PalettePrevious,
+        CommandId::PaletteClose,
+        CommandId::SearchAccept,
         CommandId::Reload,
         CommandId::Reindex,
         CommandId::FocusNext,
         CommandId::FocusPrevious,
+        CommandId::Interrupt,
         CommandId::Down,
         CommandId::Up,
         CommandId::PageDown,
         CommandId::PageUp,
+        CommandId::HalfDown,
+        CommandId::HalfUp,
         CommandId::First,
         CommandId::Last,
+        CommandId::FocusTable,
+        CommandId::BackToLibrary,
+        CommandId::Ascend,
+        CommandId::Descend,
         CommandId::Search,
         CommandId::ClearSearch,
         CommandId::SortCycle,
@@ -344,6 +380,8 @@ impl CommandId {
         CommandId::StudioFromFolder,
         CommandId::StudioDelete,
         CommandId::Guide,
+        CommandId::GuideNext,
+        CommandId::GuidePrevious,
         CommandId::BuilderOpen,
         CommandId::BuilderAdd,
         CommandId::BuilderRemove,
@@ -589,7 +627,20 @@ const TEMPLATES: &[Context] = &[Context::Templates];
 /// Both tabs: the switch itself, the search bar, and the app-wide verbs that
 /// mean the same thing wherever you are.
 const TABS: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
-/// Every list and every scrollable dialog: where the arrow keys go.
+/// Esc's ladder. The search bar is on it: Esc there clears the query and then
+/// leaves the bar, which is two of the same rungs.
+const BACKSTEP: &[Context] = &[
+    Context::Projects,
+    Context::Detail,
+    Context::Templates,
+    Context::SearchEdit,
+];
+/// Every list and every scrollable dialog: where the arrow keys go — and,
+/// since one grammar is the whole point, where the page keys and the jumps to
+/// the ends go too. The pages and the jumps used to have narrower lists of
+/// their own that stopped short of the action menu and the builder, the two
+/// lists that cannot be searched, so eighteen verbs could only be walked a row
+/// at a time.
 const SCROLLERS: &[Context] = &[
     Context::Projects,
     Context::Detail,
@@ -597,36 +648,61 @@ const SCROLLERS: &[Context] = &[
     Context::Actions,
     Context::Builder,
     Context::Settings,
+    Context::Guide,
     Context::Modal,
 ];
-/// The pages: the project list, and the dialogs with a body to scroll.
-const PAGERS: &[Context] = &[
+/// Every dialog that closes with Esc — the guide included.
+const DIALOGS: &[Context] = &[
+    Context::Actions,
+    Context::Builder,
+    Context::Settings,
+    Context::Guide,
+    Context::Modal,
+];
+/// Where the horizontal axis means "one step in": every list with something
+/// under the cursor to enter. Not the search bar, not the palette, not a form
+/// — a text field owns its own arrows.
+const DESCEND: &[Context] = &[
     Context::Projects,
     Context::Detail,
     Context::Templates,
+    Context::Actions,
+    Context::Builder,
     Context::Settings,
-    Context::Modal,
 ];
-/// The jumps to the ends. Not the templates tab: `g` is its "from a folder"
-/// there, and its list is a handful of rows.
-const JUMPERS: &[Context] = &[
-    Context::Projects,
-    Context::Detail,
-    Context::Settings,
-    Context::Modal,
-];
-/// Every dialog that closes with Esc.
-const DIALOGS: &[Context] = &[
+/// Where the horizontal axis means "one level out". Everywhere `Close` does,
+/// **except the guide**: a reader owns its own left and right, so `←` there
+/// turns a page and `Esc` is the way out.
+const BACKOUT: &[Context] = &[
     Context::Actions,
     Context::Builder,
     Context::Settings,
     Context::Modal,
 ];
 const STUDIO: &[Context] = &[Context::Templates];
+/// The guide overlay itself — the reader, not the key that opens it.
+const READER: &[Context] = &[Context::Guide];
+/// The palette itself. Everything printable there is the query, so these are
+/// the only keys it can declare — which is exactly why it had none before, and
+/// why `?` in the palette described a screen it was not on.
+const IN_PALETTE: &[Context] = &[Context::Palette];
+/// Everywhere the palette can be *opened* from — which is everywhere except
+/// the palette, so `Ctrl-p` inside it is free to mean the previous entry.
+const OPENS_PALETTE: &[Context] = &[
+    Context::Projects,
+    Context::Detail,
+    Context::Templates,
+    Context::Actions,
+    Context::Builder,
+    Context::Settings,
+    Context::SearchEdit,
+    Context::Guide,
+    Context::Modal,
+];
 const BUILDER: &[Context] = &[Context::Builder];
-/// The guide answers wherever templates are the subject: the tab and the
-/// editor. Deliberately not `Global` — `G` is already the jump to the last row
-/// on every list that has one, and one key means one thing per context.
+/// The key that opens the guide answers wherever templates are the subject:
+/// the tab and the editor. Deliberately not `Global` — the guide is about one
+/// thing, and a key that opens it from the project list would say otherwise.
 const GUIDE: &[Context] = &[Context::Templates, Context::Builder];
 const SETTINGS: &[Context] = &[Context::Settings];
 
@@ -686,9 +762,64 @@ pub static COMMANDS: &[Command] = &[
         Palette,
         "Command palette",
         "type to find any command, project or template",
-        G,
+        OPENS_PALETTE,
         [Key::ch('c'), Key::ch(':'), Key::ctrl('p')],
         Help,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        SearchAccept,
+        "Keep the query",
+        "leave the search bar with what is typed still filtering the list",
+        &[Context::SearchEdit],
+        [Key::plain(KeyCode::Enter)],
+        Search,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        PaletteRun,
+        "Run",
+        "the command, project or template under the cursor",
+        IN_PALETTE,
+        [Key::plain(KeyCode::Enter)],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        PaletteNext,
+        "Next entry",
+        "down the palette's list",
+        IN_PALETTE,
+        [Key::plain(KeyCode::Down), Key::ctrl('n')],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        PalettePrevious,
+        "Previous entry",
+        "up the palette's list",
+        IN_PALETTE,
+        [Key::plain(KeyCode::Up), Key::ctrl('p')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
+        PaletteClose,
+        "Close the palette",
+        "leave it, with the list exactly as it was",
+        IN_PALETTE,
+        [Key::plain(KeyCode::Esc)],
+        Navigate,
         palette = false,
         hint = true,
         always
@@ -775,7 +906,7 @@ pub static COMMANDS: &[Command] = &[
         PageDown,
         "Page down",
         "a screenful down (stops at the end)",
-        PAGERS,
+        SCROLLERS,
         [Key::plain(KeyCode::PageDown)],
         Navigate,
         palette = false,
@@ -786,8 +917,30 @@ pub static COMMANDS: &[Command] = &[
         PageUp,
         "Page up",
         "a screenful up (stops at the top)",
-        PAGERS,
+        SCROLLERS,
         [Key::plain(KeyCode::PageUp)],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
+        HalfDown,
+        "Half a page down",
+        "half a screenful down (stops at the end)",
+        SCROLLERS,
+        [Key::ctrl('d')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
+        HalfUp,
+        "Half a page up",
+        "half a screenful up (stops at the top)",
+        SCROLLERS,
+        [Key::ctrl('u')],
         Navigate,
         palette = false,
         hint = false,
@@ -797,7 +950,7 @@ pub static COMMANDS: &[Command] = &[
         First,
         "First row",
         "jump to the top",
-        JUMPERS,
+        SCROLLERS,
         [Key::plain(KeyCode::Home), Key::ch('g')],
         Navigate,
         palette = false,
@@ -808,7 +961,7 @@ pub static COMMANDS: &[Command] = &[
         Last,
         "Last row",
         "jump to the bottom",
-        JUMPERS,
+        SCROLLERS,
         [Key::plain(KeyCode::End), Key::ch('G')],
         Navigate,
         palette = false,
@@ -816,6 +969,28 @@ pub static COMMANDS: &[Command] = &[
         always
     ),
     // --- search and filters ----------------------------------------------
+    cmd!(
+        FocusTable,
+        "Back to the list",
+        "leave the detail pane and put the cursor back on the table",
+        &[Context::Detail],
+        [Key::plain(KeyCode::Left), Key::ch('h')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
+        BackToLibrary,
+        "Back to the library",
+        "leave the templates tab for the projects you came from",
+        TEMPLATES,
+        [Key::plain(KeyCode::Left), Key::ch('h')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
     cmd!(
         Search,
         "Search",
@@ -832,7 +1007,7 @@ pub static COMMANDS: &[Command] = &[
         "Clear the search",
         "show every project again",
         TABS,
-        [Key::ctrl('u')],
+        [],
         Search,
         palette = true,
         hint = false,
@@ -1244,9 +1419,35 @@ pub static COMMANDS: &[Command] = &[
         "Template guide",
         "how templates work, and a walkthrough that builds your first one",
         GUIDE,
-        [Key::ch('G')],
+        [Key::ch('H')],
         Templates,
         palette = true,
+        hint = true,
+        always
+    ),
+    cmd!(
+        GuideNext,
+        "Next page",
+        "forward through the guide — and out of it at the last page",
+        READER,
+        [
+            Key::plain(KeyCode::Right),
+            Key::ch('l'),
+            Key::plain(KeyCode::Enter)
+        ],
+        Templates,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        GuidePrevious,
+        "Previous page",
+        "back one page",
+        READER,
+        [Key::plain(KeyCode::Left), Key::ch('h')],
+        Templates,
+        palette = false,
         hint = true,
         always
     ),
@@ -1255,7 +1456,7 @@ pub static COMMANDS: &[Command] = &[
         "Template from a folder",
         "generate a template out of a folder that already has the shape you want",
         STUDIO,
-        [Key::ch('g')],
+        [Key::ch('I')],
         Templates,
         palette = true,
         hint = true,
@@ -1364,6 +1565,17 @@ pub static COMMANDS: &[Command] = &[
     ),
     // --- leaving: declared last so their hints come last --------------------
     cmd!(
+        Interrupt,
+        "Interrupt",
+        "cancel a running job, else close what is open, else leave at once",
+        G,
+        [Key::ctrl('c')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
         Quit,
         "Quit",
         "leave fastf",
@@ -1378,7 +1590,7 @@ pub static COMMANDS: &[Command] = &[
         Back,
         "Back",
         "one step back: cancel a running job, clear the search, the filter, the marks — then quit",
-        TABS,
+        BACKSTEP,
         [Key::plain(KeyCode::Esc)],
         Navigate,
         palette = false,
@@ -1386,6 +1598,28 @@ pub static COMMANDS: &[Command] = &[
         always
     ),
     // --- closing a dialog ---------------------------------------------------
+    cmd!(
+        Descend,
+        "Open",
+        "go into whatever is under the cursor — what Enter does, on the horizontal axis",
+        DESCEND,
+        [Key::plain(KeyCode::Right), Key::ch('l')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
+        Ascend,
+        "Back out",
+        "leave this dialog, one level — what Esc does, on the horizontal axis",
+        BACKOUT,
+        [Key::plain(KeyCode::Left), Key::ch('h')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
     cmd!(
         Close,
         "Close",
@@ -1430,18 +1664,26 @@ pub fn lookup(ctx: Context, key: Key, app: &App) -> Option<CommandId> {
 pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str)> {
     let mut out = Vec::new();
     let mut used = 0usize;
-    // The context's own commands first — they are what the bar is for — and
-    // the global ones (help, the palette, quit) after them.
-    let own = COMMANDS
+    // What the bar is for comes first: the verbs you can use where you are.
+    // Then the ways to ask — help, the palette — which are the same everywhere
+    // and are therefore the ones a narrow window can afford to lose.
+    //
+    // The rule is stated on the category rather than on "is it global",
+    // because the palette stopped being a global command the day it stopped
+    // opening itself, and a bar that led with `c commands` on every screen was
+    // the whole of that change showing through.
+    let mut ranked: Vec<&Command> = COMMANDS
         .iter()
-        .filter(|c| c.hint && c.contexts.contains(&ctx));
-    let global = COMMANDS
-        .iter()
-        .filter(|c| c.hint && !c.contexts.contains(&ctx) && c.contexts.contains(&Context::Global));
-    for c in own
-        .chain(global)
+        .filter(|c| c.hint && (c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global)))
         .filter(|c| (c.available)(app) != Availability::Hidden)
-    {
+        .collect();
+    // A stable sort, so declaration order decides within each group — which
+    // is why `? help` still comes before `c commands`, as it always has.
+    ranked.sort_by_key(|c| {
+        let asking = c.category == Category::Help;
+        (asking, !asking && !c.contexts.contains(&ctx))
+    });
+    for c in ranked {
         let Some(key) = c.keys.first() else {
             continue;
         };

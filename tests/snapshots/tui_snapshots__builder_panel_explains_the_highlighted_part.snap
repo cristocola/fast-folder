@@ -30,7 +30,7 @@ expression: frame
 "│         │                                                     │                                            │         │"
 "│         │                                                     │                                            │         │"
 "│         │ {artist} matches no variable — it stays in the folder name as written                            │         │"
-"│         │ ↑↓ choose   G guide   Enter open   s save   Esc close   ? help   c commands                      │         │"
+"│         │ ↑↓ choose   H guide   Enter open   s save   Esc close   ? help   c commands                      │         │"
 "│         └──────────────────────────────────────────────────────────────────────────────────────────────────┘         │"
 "│                                            ││                                                                        │"
 "│                                            ││                                                                        │"

@@ -1266,36 +1266,11 @@ impl App {
             });
         }
         if key == Key::ctrl('c') {
-            // A job or a move is running: Ctrl-C cancels it rather than
-            // quitting under a worker that is still mutating the filesystem.
-            if self.job.is_some() || self.move_progress.is_some() {
-                return self.request_cancel();
-            }
-            // Here Ctrl-C is a close, and a close may not throw away a
-            // template that has been worked on — the one gesture that reached
-            // past the question Esc and `q` now ask, and the quietest, since
-            // it did not even leave a status line behind.
-            //
-            // **A save in flight is deliberately not part of this.** Esc and
-            // `q` are ignored while one runs, because it is about to land and
-            // its refusal needs the list to land on. Ctrl-C is the opposite
-            // case: `DataLock::acquire` waits up to thirty seconds when
-            // another fastf holds it, so routing Ctrl-C into the same guard
-            // left the only way out of a half-minute wait doing nothing at
-            // all. It keeps its ordinary meaning instead — the write is a
-            // single atomic publish on a worker, and interrupting the app
-            // over it is exactly what the interrupt key is for.
-            if matches!(
-                self.modals.top(),
-                Some(Modal::Builder(builder)) if builder.is_dirty() && !builder.saving
-            ) {
-                return self.close_top();
-            }
-            return if self.modals.pop().is_some() {
-                Vec::new()
-            } else {
-                vec![Effect::Quit(Exit::Interrupted)]
-            };
+            // Declared in the registry so it is in the help, but dispatched
+            // here rather than through `lookup`: the interrupt key answers
+            // from inside a text field and from under a modal that consumes
+            // every key, and no availability state may swallow it.
+            return self.run(CommandId::Interrupt);
         }
         // A move that is running turns the other quit gestures — `q`, and Esc
         // once it has closed whatever was open — into cancels too (`run`); see
@@ -1312,23 +1287,20 @@ impl App {
         }
     }
 
+    /// **Everything printable is the query.** Only a key a field cannot hold —
+    /// Esc, Enter, an arrow, a chord — is offered to the registry, which is
+    /// what lets `Ctrl-p` open the palette from the bar while `c` types a `c`,
+    /// and what keeps `Context::SearchEdit`'s help honest: it lists the keys
+    /// that actually fire here and no others.
     fn on_search_key(&mut self, key: Key) -> Vec<Effect> {
-        match key.code {
-            KeyCode::Esc if !key.ctrl => {
-                // The first Esc clears, the second leaves: a query can hide the
-                // row the user was looking for, so clearing comes first.
-                if self.search.input.is_empty() {
-                    self.search.editing = false;
-                    Vec::new()
-                } else {
-                    self.search.input.clear();
-                    self.after_query_change()
-                }
-            }
-            KeyCode::Enter => {
-                self.search.editing = false;
+        if key.typed().is_some() {
+            return if self.search.input.apply(&key) {
+                self.after_query_change()
+            } else {
                 Vec::new()
-            }
+            };
+        }
+        match key.code {
             KeyCode::Up | KeyCode::Down if !key.ctrl => {
                 self.library
                     .step(if key.code == KeyCode::Down { 1 } else { -1 });
@@ -1343,13 +1315,18 @@ impl App {
                 });
                 self.after_selection_change()
             }
-            _ => {
-                if self.search.input.apply(&key) {
-                    self.after_query_change()
-                } else {
-                    Vec::new()
+            // The caret's own keys — Backspace, Left, Home — belong to the
+            // field; everything else the registry binds here answers.
+            _ => match command::lookup(self.context(), key, self) {
+                Some(id) => self.run(id),
+                None => {
+                    if self.search.input.apply(&key) {
+                        self.after_query_change()
+                    } else {
+                        Vec::new()
+                    }
                 }
-            }
+            },
         }
     }
 
@@ -1720,76 +1697,72 @@ impl App {
         }
     }
 
+    /// The palette is a query with a list under it, so the same rule the
+    /// search bar follows applies: everything printable is the query, and only
+    /// a key a field cannot hold reaches the registry. `Ctrl-p` is the
+    /// previous entry here rather than "open the palette", which is why the
+    /// opener is bound in every context **except** this one.
     fn on_palette_key(&mut self, key: Key) -> Vec<Effect> {
-        match key.code {
-            KeyCode::Esc => {
-                self.modals.pop();
-                Vec::new()
-            }
-            KeyCode::Enter => {
-                let chosen = match self.modals.top() {
-                    Some(Modal::Palette(palette)) => palette.chosen().cloned(),
-                    _ => None,
-                };
-                self.modals.pop();
-                let Some(entry) = chosen else {
-                    return Vec::new();
-                };
-                if !entry.enabled {
-                    self.warn(format!(
-                        "{}: {}",
-                        entry.title,
-                        entry.reason.unwrap_or("not available right now")
-                    ));
-                    return Vec::new();
+        if key.typed().is_none()
+            && let Some(id) = command::lookup(Context::Palette, key, self)
+        {
+            return self.run(id);
+        }
+        let changed = match self.modals.top_mut() {
+            Some(Modal::Palette(palette)) => palette.input.apply(&key),
+            _ => false,
+        };
+        if changed {
+            self.refresh_palette();
+        }
+        Vec::new()
+    }
+
+    /// Move the palette's cursor, keeping its window around it.
+    fn step_palette(&mut self, delta: isize) -> Vec<Effect> {
+        let rows = self.palette_rows();
+        if let Some(Modal::Palette(palette)) = self.modals.top_mut() {
+            palette.step(delta);
+            palette.clamp_viewport(rows);
+        }
+        Vec::new()
+    }
+
+    /// Run whatever is under the palette's cursor: a command dispatches
+    /// exactly the `CommandId` its key would, a project selects its row, a
+    /// template filters by it.
+    fn run_palette_entry(&mut self) -> Vec<Effect> {
+        let chosen = match self.modals.top() {
+            Some(Modal::Palette(palette)) => palette.chosen().cloned(),
+            _ => None,
+        };
+        self.modals.pop();
+        let Some(entry) = chosen else {
+            return Vec::new();
+        };
+        if !entry.enabled {
+            self.warn(format!(
+                "{}: {}",
+                entry.title,
+                entry.reason.unwrap_or("not available right now")
+            ));
+            return Vec::new();
+        }
+        match entry.target {
+            PaletteTarget::Command(id) => self.run(id),
+            PaletteTarget::Project(path) => {
+                self.focus = Focus::Projects;
+                if !self.library.select_path(&path) {
+                    // Hidden by the query or the filter: show everything.
+                    self.search.input.clear();
+                    self.search.sync();
+                    self.library.template_filter = None;
+                    self.recompute();
+                    self.library.select_path(&path);
                 }
-                match entry.target {
-                    PaletteTarget::Command(id) => self.run(id),
-                    PaletteTarget::Project(path) => {
-                        self.focus = Focus::Projects;
-                        if !self.library.select_path(&path) {
-                            // Hidden by the query or the filter: show everything.
-                            self.search.input.clear();
-                            self.search.sync();
-                            self.library.template_filter = None;
-                            self.recompute();
-                            self.library.select_path(&path);
-                        }
-                        self.after_selection_change()
-                    }
-                    PaletteTarget::Template(slug) => self.set_template_filter(Some(slug)),
-                }
+                self.after_selection_change()
             }
-            KeyCode::Up | KeyCode::Down if !key.ctrl => {
-                let rows = self.palette_rows();
-                if let Some(Modal::Palette(palette)) = self.modals.top_mut() {
-                    palette.step(if key.code == KeyCode::Down { 1 } else { -1 });
-                    palette.clamp_viewport(rows);
-                }
-                Vec::new()
-            }
-            KeyCode::Char('n') | KeyCode::Char('p') if key.ctrl => {
-                let rows = self.palette_rows();
-                if let Some(Modal::Palette(palette)) = self.modals.top_mut() {
-                    palette.step(if key.code == KeyCode::Char('n') {
-                        1
-                    } else {
-                        -1
-                    });
-                    palette.clamp_viewport(rows);
-                }
-                Vec::new()
-            }
-            _ => {
-                let changed = match self.modals.top_mut() {
-                    Some(Modal::Palette(palette)) => palette.input.apply(&key),
-                    _ => false,
-                };
-                if changed {
-                    self.refresh_palette();
-                }
-                Vec::new()
-            }
+            PaletteTarget::Template(slug) => self.set_template_filter(Some(slug)),
         }
     }
 
@@ -1932,40 +1905,31 @@ impl App {
 
     /// The guide's own keys.
     ///
-    /// `←`/`→` turn the page and Enter goes forward — the gestures a document
-    /// has — and they are hand-written here rather than declared in the
-    /// registry for the reason a text area's `Ctrl-S` is: they are the
-    /// surface's own, not commands, and the guide's key line names them where
-    /// they are consumed. Everything else falls through, so `?` still opens the
-    /// help and the palette is still one keystroke away.
+    /// A reader owns its own left and right, which is why the guide has a
+    /// `Context` to itself: `←` turns a page here and backs out of a dialog
+    /// everywhere else, and both can be declared. Space is the pager's own key
+    /// and stays here — `PageDown` cannot carry it, because Space is the mark
+    /// on the list `PageDown` also answers on.
     fn on_guide_key(&mut self, key: Key) -> Vec<Effect> {
-        let last = matches!(self.modals.top(), Some(Modal::Guide(state)) if state.is_last());
-        let Some(Modal::Guide(state)) = self.modals.top_mut() else {
-            return Vec::new();
-        };
-        match key.code {
-            KeyCode::Right | KeyCode::Char('l') if !key.ctrl => {
-                state.turn(1);
-                Vec::new()
-            }
-            KeyCode::Left | KeyCode::Char('h') if !key.ctrl => {
-                state.turn(-1);
-                Vec::new()
-            }
-            // Forward through the guide, and out of it at the end: a reader who
-            // keeps pressing the same key reaches the end and is let go, rather
-            // than pressing it against the last page.
-            KeyCode::Enter if !key.ctrl => {
-                if last {
-                    self.modals.pop();
-                } else {
-                    state.turn(1);
-                }
-                Vec::new()
-            }
-            KeyCode::Char(' ') if !key.ctrl => self.scroll_top_modal(self.page_rows() as isize),
-            _ => self.lookup_and_run(key),
+        if key == Key::ch(' ') {
+            return self.scroll_top_modal(self.page_rows() as isize);
         }
+        self.lookup_and_run(key)
+    }
+
+    /// Turn a page of the guide. Forward from the last page leaves it: a
+    /// reader who keeps pressing the same key reaches the end and is let go,
+    /// rather than pressing it against the last page.
+    fn turn_guide(&mut self, delta: isize) -> Vec<Effect> {
+        let last = matches!(self.modals.top(), Some(Modal::Guide(state)) if state.is_last());
+        if delta > 0 && last {
+            self.modals.pop();
+            return Vec::new();
+        }
+        if let Some(Modal::Guide(state)) = self.modals.top_mut() {
+            state.turn(delta);
+        }
+        Vec::new()
     }
 
     /// Scroll whatever dialog is on top by `delta` rows, clamped to its
@@ -2074,6 +2038,15 @@ impl App {
                 if self.job.is_some() || self.move_progress.is_some() {
                     return self.request_cancel();
                 }
+                // The search bar's own rung, and it comes first: an empty bar
+                // is left, a bar with something in it is cleared by the rungs
+                // below and stays open to be retyped. Placed above the tab
+                // switch because the templates tab has a bar too, and leaving
+                // it must not change tabs.
+                if self.search.editing && self.search.input.is_empty() {
+                    self.search.editing = false;
+                    return Vec::new();
+                }
                 // On the templates tab, the first step back is to the library:
                 // Esc is "one level out", and a tab is a level.
                 if self.screen == Screen::Templates {
@@ -2115,7 +2088,60 @@ impl App {
                 self.modals.push(Modal::Help { ctx, scroll: 0 });
                 Vec::new()
             }
-            CommandId::Close => self.close_top(),
+            CommandId::Close | CommandId::Ascend => self.close_top(),
+            CommandId::Interrupt => {
+                // A job or a move is running: Ctrl-C cancels it rather than
+                // quitting under a worker that is still mutating the
+                // filesystem.
+                if self.job.is_some() || self.move_progress.is_some() {
+                    return self.request_cancel();
+                }
+                // Here Ctrl-C is a close, and a close may not throw away a
+                // template that has been worked on — the one gesture that
+                // reached past the question Esc and `q` now ask, and the
+                // quietest, since it did not even leave a status line behind.
+                //
+                // **A save in flight is deliberately not part of this.** Esc
+                // and `q` are ignored while one runs, because it is about to
+                // land and its refusal needs the list to land on. Ctrl-C is
+                // the opposite case: `DataLock::acquire` waits up to thirty
+                // seconds when another fastf holds it, so routing Ctrl-C into
+                // the same guard left the only way out of a half-minute wait
+                // doing nothing at all. It keeps its ordinary meaning instead
+                // — the write is a single atomic publish on a worker, and
+                // interrupting the app over it is exactly what the interrupt
+                // key is for.
+                if matches!(
+                    self.modals.top(),
+                    Some(Modal::Builder(builder)) if builder.is_dirty() && !builder.saving
+                ) {
+                    return self.close_top();
+                }
+                if self.modals.pop().is_some() {
+                    Vec::new()
+                } else {
+                    vec![Effect::Quit(Exit::Interrupted)]
+                }
+            }
+            // One rule, six lists: `→` runs whatever Enter runs where you are.
+            // Dispatched on the context rather than declared six times, so the
+            // help states the axis once instead of hanging two more keys off
+            // every opener's row.
+            CommandId::Descend => match self.context() {
+                Context::Projects | Context::Detail => self.run(CommandId::Actions),
+                Context::Templates => self.run(CommandId::StudioEdit),
+                Context::Actions => self.run(CommandId::ActionsRun),
+                Context::Builder => self.run(CommandId::BuilderOpen),
+                Context::Settings => self.run(CommandId::SettingsChange),
+                _ => Vec::new(),
+            },
+            CommandId::GuideNext => self.turn_guide(1),
+            CommandId::GuidePrevious => self.turn_guide(-1),
+            CommandId::FocusTable => {
+                self.focus = Focus::Projects;
+                Vec::new()
+            }
+            CommandId::BackToLibrary => self.toggle_templates(),
             CommandId::ShowLog => self.open_log(),
             CommandId::Suspend => vec![Effect::Suspend(Suspended::Shell)],
 
@@ -2217,12 +2243,19 @@ impl App {
                     }
                 }
             }
-            CommandId::PageDown | CommandId::PageUp => {
+            CommandId::PageDown | CommandId::PageUp | CommandId::HalfDown | CommandId::HalfUp => {
                 let rows = self.page_rows() as isize;
-                let delta = if id == CommandId::PageDown {
-                    rows
+                // Half a page is at least one row: on a window short enough
+                // for `page_rows` to be 1, a half of it rounds to nothing and
+                // the key would do nothing at all.
+                let step = match id {
+                    CommandId::HalfDown | CommandId::HalfUp => (rows / 2).max(1),
+                    _ => rows,
+                };
+                let delta = if matches!(id, CommandId::PageDown | CommandId::HalfDown) {
+                    step
                 } else {
-                    -rows
+                    -step
                 };
                 if !self.modals.is_empty() {
                     return self.page_top_modal(delta);
@@ -2249,9 +2282,12 @@ impl App {
                 if !self.modals.is_empty() {
                     return self.page_top_modal(if first { isize::MIN } else { isize::MAX });
                 }
-                if self.screen == Screen::Templates && self.focus == Focus::Detail {
-                    self.studio.scroll = if first { 0 } else { self.studio_scroll_max() };
-                    return Vec::new();
+                if self.screen == Screen::Templates {
+                    if self.focus == Focus::Detail {
+                        self.studio.scroll = if first { 0 } else { self.studio_scroll_max() };
+                        return Vec::new();
+                    }
+                    return self.jump_templates(first);
                 }
                 match self.focus {
                     Focus::Detail => {
@@ -2269,6 +2305,17 @@ impl App {
                 }
             }
 
+            CommandId::PaletteRun => self.run_palette_entry(),
+            CommandId::PaletteNext => self.step_palette(1),
+            CommandId::PalettePrevious => self.step_palette(-1),
+            CommandId::PaletteClose => {
+                self.modals.pop();
+                Vec::new()
+            }
+            CommandId::SearchAccept => {
+                self.search.editing = false;
+                Vec::new()
+            }
             CommandId::Search => {
                 self.search.editing = true;
                 self.focus = Focus::Projects;
@@ -2908,6 +2955,19 @@ impl App {
     }
 
     /// The templates tab's arrows, over the rows its own query keeps.
+    /// The ends of the templates list. `Studio::jump` keeps the selection on
+    /// a row the current filter shows, exactly as `step` does.
+    fn jump_templates(&mut self, first: bool) -> Vec<Effect> {
+        let rows = self.studio.rows(self.search.input.text());
+        self.studio.jump(first, &rows);
+        self.studio
+            .clamp_viewport(&rows, layout::template_rows(self.area()));
+        self.studio
+            .selected_slug()
+            .map(|slug| vec![Effect::LoadTemplateView { slug }])
+            .unwrap_or_default()
+    }
+
     fn step_templates(&mut self, delta: isize) -> Vec<Effect> {
         let rows = self.studio.rows(self.search.input.text());
         self.studio.step(delta, &rows);

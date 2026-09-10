@@ -115,7 +115,8 @@ verb's own letter runs it from inside the action menu. `Close` (Esc, `q`) is
 one command for every dialog, one level at a time; `Quit` and `Back` are the
 dashboard's own, because the one-key-one-meaning invariant counts global
 bindings in every context — it is what caught `g` meaning both "first row"
-and "template from a folder" in the studio. The keys a text widget consumes
+and "template from a folder" in the studio, which is the collision the
+horizontal axis and the movement grammar finally took apart. The keys a text widget consumes
 (Ctrl-S in a text area, Tab in a form) are the one honest exception: the
 widget's key line names them.
 
@@ -143,6 +144,86 @@ runs on a worker with no theme to ask.
 An `Availability` is a function of the app: `Disabled(reason)` is listed dimmed
 and pressing its key shows the reason; `Hidden` is not bound at all (Move with
 no other mounted base, Clear-filter with no filter).
+
+## The movement grammar, and the horizontal axis
+
+**One set of movement keys, and every list has all of it.** `SCROLLERS` is the
+single context list the arrows, the page keys, the halves and the jumps to the
+ends are all declared over, because three narrower lists is how they drifted:
+`PgUp`/`PgDn` stopped short of the action menu and the builder and `Home`/`End`
+stopped short of the templates tab as well — so the two lists that cannot be
+searched were the two that could only be walked a row at a time, and
+`page_top_modal`'s `Modal::Actions` arm sat there as dead code proving it.
+`tests/tui_commands::every_list_binds_the_whole_movement_grammar` is the guard:
+a context that binds one of the eight binds all eight.
+
+**An arrow and its vim letter are one key**, never bound apart
+(`an_arrow_and_its_vim_letter_are_bound_together`). The exception is a
+text-entry context, where every printable character is the text: the palette
+binds `↓` and cannot bind `j`.
+
+**`g` and `G` are first row and last row, with no exception to remember.** They
+were the templates tab's "from a folder" and "the guide", which is why that tab
+had no jump keys at all; the two verbs are `I` and `H` now. `H` rather than
+`Ctrl-g` because a hint bar is a fixed width and five extra columns pushed
+`c commands` off the end of it — the key that costs the least is the one that
+reads the same length as what it replaced.
+
+**The horizontal axis is depth: `→`/`l` go in, `←`/`h` come out.**
+`CommandId::Descend` is declared once and dispatches on the context, rather
+than hanging two more keys off each of the five openers: `Actions`,
+`StudioEdit`, `ActionsRun`, `BuilderOpen` and `SettingsChange` each carried
+`a / Enter / → / l` for one frame of this work, and the help's key column —
+sized to the widest label — pushed every description four columns right.
+Coming out is a small family that each name where they go: `Ascend` (a dialog,
+one level), `FocusTable` (the pane, back to the list), `BackToLibrary` (the
+templates tab). **The axis never quits**: `←` is not bound on the project list,
+because there is nothing above it, and Esc's ladder is the only thing that ends
+in leaving.
+
+Two surfaces own their own left and right, and both are the same exception a
+text area's `Ctrl-S` is:
+
+- **A field.** `LineEdit`, `TextArea` and a `Form`'s choices take the arrows as
+  a caret or an option.
+- **A reader.** The guide has `Context::Guide` for exactly this — with the
+  pages declared (`GuideNext`, `GuidePrevious`) rather than hand-written in
+  `on_guide_key`, `←` can turn a page there and back out of a dialog
+  everywhere else, and the help can say so in both places. `Ascend` is
+  therefore declared over `BACKOUT`, which is `DIALOGS` without the guide.
+  Forward off the last page leaves the guide, whichever key is being pressed;
+  the alternative is a reader pressing a key against the end of a document.
+
+**Ctrl-C is a command** (`CommandId::Interrupt`), so the key that cancels a
+running job is in the help — it was in no help, no hint bar and no palette. It
+is still dispatched from `on_key` directly rather than through `lookup`: it has
+to answer from inside a text field and from under a modal that consumes every
+key, and no availability state may swallow it.
+
+**In a text-entry context, everything printable is the text, and only a key a
+field cannot hold reaches the registry.** That one rule is what gave
+`Context::SearchEdit` and `Context::Palette` a help that is true — they had no
+commands at all, so `?` there described a screen you were not on — and it is
+why `Ctrl-p` opens the palette from the search bar while `c` types a `c`.
+Inside the palette `Ctrl-p` is the previous entry, which is possible because
+the opener is declared over every context **except** `Palette`: a palette that
+opens the palette is the one context where that key had something better to do.
+Esc is the way out of every context, whichever command owns it there
+(`every_context_has_help_and_a_way_out` checks the key, not the id), and the
+search bar is a rung of Esc's own ladder — an empty bar is left, a bar with
+something in it is cleared and stays open to be retyped.
+
+**The hint bar's order is stated on the category, not on "is it global".** The
+verbs you can use here come first and the ways to ask — `? help`, `c commands`
+— come last, because they are the same everywhere and are what a narrow window
+can afford to lose. It read "own commands, then global ones" until the palette
+stopped being global, at which point `c commands` led every bar on every
+screen.
+
+`ClearSearch` has no key. It gave `Ctrl-u` up to `HalfUp`, and it is the one
+command that could afford to: Esc's first rung already clears the query, and
+inside the bar `Ctrl-u` has always been `LineEdit`'s kill-to-start — the same
+physical key meaning two things one keystroke apart.
 
 Keys are normalised into `Key` (`Char` with the Ctrl and Alt flags; shift
 folded into the character; Ctrl-letters lower-cased) by the input thread, which
@@ -467,7 +548,7 @@ parked the cursor on `(registered)` for the rest of the run.
 Enter or `e` on the tab opens it: every template on disk with the selected
 one's details beside it, read on a worker (`loaders::template_view`, which
 renders `cli::template::describe` — the same lines `template show` prints, so
-the two cannot drift). Its verbs are `n`, Enter, `g` and `D`.
+the two cannot drift). Its verbs are `n`, Enter, `I` and `D`.
 
 **The builder is a list of a template's five parts, not a sequence of steps.**
 The old one walked six steps and *then* offered a review menu to go back into

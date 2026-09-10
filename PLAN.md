@@ -42,7 +42,7 @@ Left behind: `every_list_binds_the_whole_movement_grammar`,
 `every_context_has_help_and_a_way_out`, a `movement` module in
 `tests/tui_update.rs`, and the grammar written down in `src/tui/CLAUDE.md`.
 
-## Phase 2 — every key line comes from the registry  ☐
+## Phase 2 — every key line comes from the registry  ☑
 
 - A movement summary in `command::hints`; the six hand-written `↑↓` copies go.
 - `Context::SearchEdit` and `Context::Palette` get declared commands, and their
@@ -51,7 +51,16 @@ Left behind: `every_list_binds_the_whole_movement_grammar`,
   registry. `SPINNER` moves into `Theme::glyphs` with an ASCII twin.
 - `inline.rs`'s picker speaks the same vocabulary.
 
-Leaves behind: `no_key_line_is_written_by_hand` in `tests/layering.rs`.
+Beyond the plan: `Context::Prompt` and `Context::Pick` had to exist before the
+bar could read anything for a prompt or a picker, and `command::keys_in` had to
+exist before it could read anything true — a bar that offered `? help` over a
+rename prompt, where `?` types a question mark, is worse than one that spells
+its keys. The search bar joined `SCROLLERS` on the back of it.
+
+Left behind: `no_key_line_is_written_by_hand` in `tests/layering.rs` (proven
+against a planted literal), `a_text_entry_context_advertises_only_the_keys_that_fire_there`
+and `the_arrows_are_spelled_once_and_read_everywhere` in `tests/tui_commands.rs`,
+and a `key_lines` module in `tests/tui_update.rs`.
 
 ## Phase 3 — four things the app could not do  ☐
 

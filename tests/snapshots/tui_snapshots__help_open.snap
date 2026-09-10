@@ -31,4 +31,4 @@ expression: frame
 "│       │                                                    the list                      │       │"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 "                                                                                                    "
-" Esc close  ↑↓ scroll                                                                               "
+" ↑↓ scroll  Esc close  ? help  c commands                                                           "

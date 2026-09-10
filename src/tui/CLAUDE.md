@@ -220,6 +220,65 @@ can afford to lose. It read "own commands, then global ones" until the palette
 stopped being global, at which point `c commands` led every bar on every
 screen.
 
+## Every key line is read, and the field goes first
+
+**Seven surfaces used to write `↑↓` into a key line by hand** — the palette's,
+the picker's, the pager's, the search bar's, the preview's, the guide's and the
+one every list on a dialog shares. `command::movement_pair(ctx)` is the one
+place the arrows are spelled now; it reads the labels off whichever command
+binds them in that context, so a rebinding reaches every line, and it carries
+the surface's own verb — you *choose* from a list of things to do, *move*
+through a list of things to pick, *scroll* a body of text.
+
+`Down` and `Up` stay `hint = false` and the pair is prepended only where
+`Context::hints_movement()` says so: **a dialog says how to move in it and the
+dashboard does not**, because a table with a highlighted row and a scrollbar
+beside it already says which way the arrows go, and the bar's width is better
+spent on the verbs. The search bar is the exception that proves it — there the
+arrows move the list *underneath* what is being typed, which nothing on screen
+says.
+
+**The hint bar spells nothing at all.** It hand-wrote six pairs, which is
+exactly why four dialogs had a `Context` with no commands in it: nothing needed
+them, because the bar already knew. `Context::Prompt` (a one-line prompt, a
+quick note, the first-run question) and `Context::Pick` (a picker of one or of
+several) exist so those keys can be declared, and `Availability` does the rest —
+`PromptNewline` is `Hidden` outside a note, `PickToggle` outside a multi-pick.
+The bar reads `command::hints` for every dialog that does not draw its own key
+line inside its frame.
+
+**A field has first refusal, and `keys_in` is the other half of that rule.**
+In a text-entry context every printable key is a letter of what is being typed
+and the caret's chords are the field's (`LineEdit::CLAIMED`, which is where
+they are listed once). Neither ever reaches the registry — so
+`command::keys_in(ctx, command)` takes them back out of what that context
+advertises, and `? help` no longer appears over a rename prompt where `?` types
+a question mark. What is left is true: `F1 help`, `Ctrl-p commands`.
+
+That rule is what lets the search bar be on `SCROLLERS` like every other list.
+Its arrows are `CommandId::Down` and `Up` themselves; `Ctrl-u` there is
+`LineEdit`'s kill-to-start because the field claims it, and `keys_in` keeps
+`HalfUp` off that context's help for the same reason. `on_search_key` is three
+lines now: the field, then the registry, then the field again for the caret
+keys nothing binds.
+
+**`tests/layering.rs::no_key_line_is_written_by_hand`** holds it — a source
+scan, because a string literal is not something a runtime test can see. No
+module under `src/tui/view/` may write an arrow as a key, and
+`view/dashboard.rs` may write no key label at all. The key lines a widget draws
+inside its own frame keep their literals: `Ctrl-S` in a text area and `Tab` in
+a form are the widget's, not the registry's.
+
+**The activity indicator is the theme's.** `const SPINNER` sat in
+`view/dashboard.rs`, the one glyph in the app outside `Glyphs` and therefore
+outside the ASCII alphabet everything else answers to. It is `Glyphs::spinner`
+with `spin(ticks)` as its one expression, and `dashboard_ascii_80x24` checks
+its frames alongside the other ten.
+
+**What to type is not a key.** The palette's `#` prefix moved off the hint bar
+— where every pair is a command and `#` is nothing the registry knows — onto
+the palette's own blank row, under the query, while the query is empty.
+
 `ClearSearch` has no key. It gave `Ctrl-u` up to `HalfUp`, and it is the one
 command that could afford to: Esc's first rung already clears the query, and
 inside the bar `Ctrl-u` has always been `LineEdit`'s kill-to-start — the same

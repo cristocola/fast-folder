@@ -25,4 +25,4 @@ expression: frame
 "│                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────┘"
 "                                                                                "
-" ↑↓ move  Enter run  Esc close                                                  "
+" ↑↓ move  Enter choose  Esc cancel  F1 help  Ctrl-p commands                    "

@@ -37,7 +37,7 @@ expression: frame
 "│         │ The editor names both as you type, and marks the Metadata row. Neither stops a save — both are   │         │"
 "│         │ legal templates, they are just almost never what was meant.                                      │         │"
 "│         │ page 3 of 7                                                                                      │         │"
-"│         │ Esc close   → next page   ← back   Enter next   ↑↓ scroll                                        │         │"
+"│         │ Esc close   → next page   ← back   ↑↓ scroll                                                     │         │"
 "│         └──────────────────────────────────────────────────────────────────────────────────────────────────┘         │"
 "└────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────┘"
 "                                                                                                                        "

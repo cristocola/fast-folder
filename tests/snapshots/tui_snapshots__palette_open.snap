@@ -31,4 +31,4 @@ expression: frame
 "│                                                              ││                                  │"
 "└──────────────────────────────────────────────────────────────┘└──────────────────────────────────┘"
 "                                                                                                    "
-" ↑↓ move  Enter run  Esc close  # projects only                                                     "
+" ↑↓ move  Enter run  Esc close  F1 help                                                             "

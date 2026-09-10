@@ -26,6 +26,28 @@ pub struct LineEdit {
 }
 
 impl LineEdit {
+    /// **The chords a field takes, so nothing else may name them.** Every
+    /// printable key in a text-entry context is obviously the text; these are
+    /// the ones that are not obvious, and `command::keys_in` reads this list
+    /// to keep them out of that context's help and hint bar — `Ctrl-u` in the
+    /// search bar is kill-to-start, whatever it means on a list.
+    ///
+    /// The caret keys (`←`, `→`, Home, End, Backspace, Delete) are here for
+    /// the same reason.
+    pub const CLAIMED: &'static [Key] = &[
+        Key::ctrl('a'),
+        Key::ctrl('e'),
+        Key::ctrl('u'),
+        Key::ctrl('w'),
+        Key::ctrl('k'),
+        Key::plain(KeyCode::Left),
+        Key::plain(KeyCode::Right),
+        Key::plain(KeyCode::Home),
+        Key::plain(KeyCode::End),
+        Key::plain(KeyCode::Backspace),
+        Key::plain(KeyCode::Delete),
+    ];
+
     pub fn new() -> Self {
         Self::default()
     }

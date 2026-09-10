@@ -12,7 +12,7 @@ use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, TextPrompt};
 use crate::tui::app::modal::{MessageLevel, Modal, PickState};
 use crate::tui::app::palette::PaletteState;
 use crate::tui::app::wizard::{Flow, Preview, Step};
-use crate::tui::command::{self, Availability};
+use crate::tui::command::{self, Availability, CommandId, Context};
 use crate::tui::layout::{centered, centered_fixed};
 use crate::tui::view::{fit, highlighted, pad, split_line};
 
@@ -237,6 +237,17 @@ fn render_palette(app: &App, palette: &PaletteState, frame: &mut Frame, area: Re
         )
         .unwrap_or(Position::new(inner.x, inner.y));
 
+    // What to *type*, not a key — which is why it lives on the palette's own
+    // blank row rather than on the hint bar, where every pair is read from the
+    // registry and `#` is nothing the registry knows. Only while the query is
+    // empty: once there is one, the list below is the answer.
+    if palette.input.text().is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(" # or @ for projects only", theme.dim())),
+            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+        );
+    }
+
     let list_area = Rect::new(
         inner.x,
         inner.y + 2,
@@ -394,7 +405,7 @@ fn render_actions(
                 .keys
                 .first()
                 .map(|k| k.label())
-                .unwrap_or_else(|| "Enter".to_string());
+                .unwrap_or_else(|| command::key_of(CommandId::ActionsRun));
             let (title_style, detail) = match availability {
                 Availability::Enabled => (theme.text(), command.description),
                 Availability::Disabled(reason) => (theme.dim(), *reason),
@@ -777,12 +788,19 @@ fn render_flow(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<
             ),
             Span::styled("Esc ", theme.key()),
             Span::styled("back to the answers   ", theme.dim()),
-            Span::styled("↑ ↓ ", theme.key()),
+            Span::styled(format!("{} ", scroll_keys()), theme.key()),
             Span::styled("scroll", theme.dim()),
         ],
     };
     frame.render_widget(Paragraph::new(Line::from(key_line)), keys);
     caret
+}
+
+/// The arrows, as the preview's key line prints them — read, never written.
+fn scroll_keys() -> String {
+    command::movement_pair(Context::Modal)
+        .map(|(keys, _)| keys)
+        .unwrap_or_default()
 }
 
 /// How many lines the preview wants, so a short one gets a short box.
@@ -1215,17 +1233,25 @@ fn render_guide(
         theme.dim(),
     );
 
-    // The guide's own gestures, named where they are consumed — the same
-    // honest exception a text area's `Ctrl-S` makes. The way out comes first,
-    // because `key_line` drops from the end.
+    // Every key on this line is a declared command now — the guide has a
+    // `Context` of its own precisely so its pages could be — so every label
+    // is read rather than written. The way out comes first, because
+    // `key_line` drops from the end.
     let last = state.is_last();
-    let pairs = crate::tui::view::builder::pairs(&[
-        ("Esc", "close"),
-        ("→", if last { "—" } else { "next page" }),
-        ("←", "back"),
-        ("Enter", if last { "close" } else { "next" }),
-        ("↑↓", "scroll"),
-    ]);
+    let pairs: Vec<(String, String)> = vec![
+        (command::key_of(CommandId::Close), "close".to_string()),
+        (
+            command::key_of(CommandId::GuideNext),
+            if last { "close" } else { "next page" }.to_string(),
+        ),
+        (
+            command::key_of(CommandId::GuidePrevious),
+            "back".to_string(),
+        ),
+    ]
+    .into_iter()
+    .chain(command::movement_pair(Context::Guide).map(|(keys, what)| (keys, what.to_string())))
+    .collect();
     frame.render_widget(
         Paragraph::new(crate::tui::view::builder::key_line(
             theme,

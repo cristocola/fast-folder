@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use fastf::tui::command::{COMMANDS, Category, CommandId, Context, Key, find, help_lines};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-const CONTEXTS: [Context; 11] = Context::ALL;
+const CONTEXTS: [Context; 13] = Context::ALL;
 
 #[test]
 fn every_command_id_is_declared_exactly_once() {
@@ -211,7 +211,12 @@ fn an_arrow_and_its_vim_letter_are_bound_together() {
         (KeyCode::Left, 'h'),
         (KeyCode::Right, 'l'),
     ];
-    const TYPING: [Context; 2] = [Context::SearchEdit, Context::Palette];
+    const TYPING: [Context; 4] = [
+        Context::SearchEdit,
+        Context::Palette,
+        Context::Prompt,
+        Context::Pick,
+    ];
     for command in COMMANDS
         .iter()
         .filter(|c| !c.contexts.iter().any(|ctx| TYPING.contains(ctx)))
@@ -252,5 +257,61 @@ fn every_context_has_help_and_a_way_out() {
             .iter()
             .any(|c| c.contexts.contains(&ctx) && c.keys.contains(&Key::plain(KeyCode::Esc)));
         assert!(leaves, "{ctx:?} has no way out");
+    }
+}
+
+/// **A context's help never names a key that context swallows.** In a text
+/// field every printable key is a letter of what is being typed and the
+/// caret's chords are the field's; a hint bar offering `? help` over a rename
+/// prompt, where `?` types a question mark, is the registry telling a lie
+/// about itself.
+#[test]
+fn a_text_entry_context_advertises_only_the_keys_that_fire_there() {
+    use fastf::tui::command::keys_in;
+    use fastf::tui::widgets::input::LineEdit;
+
+    for ctx in CONTEXTS.into_iter().filter(|c| c.is_text_entry()) {
+        for command in COMMANDS
+            .iter()
+            .filter(|c| c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global))
+        {
+            for key in keys_in(ctx, command) {
+                assert!(
+                    key.typed().is_none(),
+                    "{:?} advertises {} in {ctx:?}, where it is a letter of the text",
+                    command.id,
+                    key.label()
+                );
+                assert!(
+                    !LineEdit::CLAIMED.contains(&key),
+                    "{:?} advertises {} in {ctx:?}, where the field takes it first",
+                    command.id,
+                    key.label()
+                );
+            }
+        }
+    }
+}
+
+/// Every context that binds the arrows can say so, and says it the same way.
+#[test]
+fn the_arrows_are_spelled_once_and_read_everywhere() {
+    use fastf::tui::command::movement_pair;
+
+    let up = Key::plain(KeyCode::Up).label();
+    let down = Key::plain(KeyCode::Down).label();
+    for ctx in CONTEXTS {
+        let binds = COMMANDS.iter().any(|c| {
+            (c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global))
+                && c.keys.contains(&Key::plain(KeyCode::Down))
+        });
+        match movement_pair(ctx) {
+            Some((keys, what)) => {
+                assert!(binds, "{ctx:?} has no arrows but movement_pair answered");
+                assert_eq!(keys, format!("{up}{down}"));
+                assert!(!what.is_empty());
+            }
+            None => assert!(!binds, "{ctx:?} binds the arrows but cannot say so"),
+        }
     }
 }

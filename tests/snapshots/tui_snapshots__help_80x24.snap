@@ -25,4 +25,4 @@ expression: frame
 "│ │   Ctrl-u         Half a page up                                          │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
 "                                                                                "
-" Esc close  ↑↓ scroll                                                           "
+" ↑↓ scroll  Esc close  ? help  c commands                                       "

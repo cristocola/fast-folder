@@ -31,4 +31,4 @@ expression: frame
 "│                                                              ││                                  │"
 "└──────────────────────────────────────────────────────────────┘└──────────────────────────────────┘"
 " 3 marked · a verb acts on them instead of the row under the cursor                                 "
-" Enter confirm  Esc cancel                                                                          "
+" Enter confirm  Esc cancel  F1 help  Ctrl-p commands                                                "

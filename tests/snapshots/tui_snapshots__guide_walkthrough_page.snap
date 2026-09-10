@@ -37,7 +37,7 @@ expression: frame
 "│         │ One folder per line. The tree beside it redraws as you type.                                     │         │"
 "│         │ 01_Assets/Audio                                                                                  │         │"
 "│         │ page 6 of 7                                                                                      │         │"
-"│         │ Esc close   → next page   ← back   Enter next   ↑↓ scroll                                        │         │"
+"│         │ Esc close   → next page   ← back   ↑↓ scroll                                                     │         │"
 "│         └──────────────────────────────────────────────────────────────────────────────────────────────────┘         │"
 "└────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────┘"
 "                                                                                                                        "

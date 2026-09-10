@@ -1287,46 +1287,35 @@ impl App {
         }
     }
 
-    /// **Everything printable is the query.** Only a key a field cannot hold —
-    /// Esc, Enter, an arrow, a chord — is offered to the registry, which is
-    /// what lets `Ctrl-p` open the palette from the bar while `c` types a `c`,
-    /// and what keeps `Context::SearchEdit`'s help honest: it lists the keys
-    /// that actually fire here and no others.
+    /// **The field has first refusal; the registry answers the rest.** Every
+    /// printable key is a letter of the query and every caret chord is the
+    /// field's — `Ctrl-u` here is kill-to-start, whatever it means on a list —
+    /// and what is left is exactly what `Context::SearchEdit` declares. That
+    /// is why the arrows can be `CommandId::Down` and `Up` themselves, moving
+    /// the library under the query, rather than a second pair written out
+    /// here; and it is what lets `Ctrl-p` open the palette from the bar while
+    /// `c` types a `c`.
+    ///
+    /// `command::keys_in` is the other half of the same rule: it takes what
+    /// the field claims back out of what this context advertises, so the help
+    /// never names a key the bar will swallow.
     fn on_search_key(&mut self, key: Key) -> Vec<Effect> {
-        if key.typed().is_some() {
+        if key.typed().is_some() || command::field_claims(&key) {
             return if self.search.input.apply(&key) {
                 self.after_query_change()
             } else {
                 Vec::new()
             };
         }
-        match key.code {
-            KeyCode::Up | KeyCode::Down if !key.ctrl => {
-                self.library
-                    .step(if key.code == KeyCode::Down { 1 } else { -1 });
-                self.after_selection_change()
-            }
-            KeyCode::PageUp | KeyCode::PageDown if !key.ctrl => {
-                let rows = self.rows_on_screen() as isize;
-                self.library.jump(if key.code == KeyCode::PageDown {
-                    rows
+        match command::lookup(self.context(), key, self) {
+            Some(id) => self.run(id),
+            None => {
+                if self.search.input.apply(&key) {
+                    self.after_query_change()
                 } else {
-                    -rows
-                });
-                self.after_selection_change()
-            }
-            // The caret's own keys — Backspace, Left, Home — belong to the
-            // field; everything else the registry binds here answers.
-            _ => match command::lookup(self.context(), key, self) {
-                Some(id) => self.run(id),
-                None => {
-                    if self.search.input.apply(&key) {
-                        self.after_query_change()
-                    } else {
-                        Vec::new()
-                    }
+                    Vec::new()
                 }
-            },
+            }
         }
     }
 
@@ -1376,23 +1365,19 @@ impl App {
     }
 
     fn on_text_prompt_key(&mut self, key: Key) -> Vec<Effect> {
-        match key.code {
-            KeyCode::Esc if !key.ctrl => {
-                self.modals.pop();
-                Vec::new()
-            }
-            KeyCode::Enter => self.submit_text_prompt(),
-            _ => {
-                let changed = match self.modals.top_mut() {
-                    Some(Modal::TextPrompt(prompt)) => prompt.input.apply(&key),
-                    _ => false,
-                };
-                if changed && let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                    prompt.error = None;
-                }
-                Vec::new()
-            }
+        if key.typed().is_none()
+            && let Some(id) = command::lookup(Context::Prompt, key, self)
+        {
+            return self.run(id);
         }
+        let changed = match self.modals.top_mut() {
+            Some(Modal::TextPrompt(prompt)) => prompt.input.apply(&key),
+            _ => false,
+        };
+        if changed && let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+            prompt.error = None;
+        }
+        Vec::new()
     }
 
     fn submit_text_prompt(&mut self) -> Vec<Effect> {
@@ -1573,35 +1558,28 @@ impl App {
     /// The quick note: Enter saves, Alt-Enter breaks a line, Esc cancels;
     /// everything else is the text area's.
     fn on_note_key(&mut self, key: Key) -> Vec<Effect> {
-        match key.code {
-            KeyCode::Esc if !key.ctrl => {
-                self.modals.pop();
-                Vec::new()
-            }
-            KeyCode::Enter if !key.alt && !key.ctrl => {
-                let Some(Modal::Note(note)) = self.modals.pop() else {
-                    return Vec::new();
-                };
-                let text = note.area.text().trim().to_string();
-                if text.is_empty() {
-                    self.info("no note written");
-                    return Vec::new();
-                }
-                self.add_note(text)
-            }
-            KeyCode::Enter => {
-                if let Some(Modal::Note(note)) = self.modals.top_mut() {
-                    note.area.apply(&Key::plain(KeyCode::Enter));
-                }
-                Vec::new()
-            }
-            _ => {
-                if let Some(Modal::Note(note)) = self.modals.top_mut() {
-                    note.area.apply(&key);
-                }
-                Vec::new()
-            }
+        if key.typed().is_none()
+            && let Some(id) = command::lookup(Context::Prompt, key, self)
+        {
+            return self.run(id);
         }
+        if let Some(Modal::Note(note)) = self.modals.top_mut() {
+            note.area.apply(&key);
+        }
+        Vec::new()
+    }
+
+    /// Enter on a quick note: keep it, or say nothing was written.
+    fn save_note(&mut self) -> Vec<Effect> {
+        let Some(Modal::Note(note)) = self.modals.pop() else {
+            return Vec::new();
+        };
+        let text = note.area.text().trim().to_string();
+        if text.is_empty() {
+            self.info("no note written");
+            return Vec::new();
+        }
+        self.add_note(text)
     }
 
     fn on_confirm_key(&mut self, key: Key) -> Vec<Effect> {
@@ -1654,19 +1632,21 @@ impl App {
         }
     }
 
+    /// A multi-pick holds no query, so every key is the registry's — Space
+    /// included, which is why `PickToggle` is `Hidden` in the picker that does
+    /// have one.
     fn on_multi_pick_key(&mut self, key: Key) -> Vec<Effect> {
-        match key.code {
-            KeyCode::Enter => self.submit_multi_pick(),
-            KeyCode::Char(' ') => {
-                if let Some(Modal::MultiPick(pick)) = self.modals.top_mut()
-                    && let Some(flag) = pick.picked.get_mut(pick.selected)
-                {
-                    *flag = !*flag;
-                }
-                Vec::new()
-            }
-            _ => self.lookup_and_run(key),
+        self.lookup_and_run(key)
+    }
+
+    /// Space on a multi-pick: put the row in the set, or take it out.
+    fn toggle_multi_pick(&mut self) -> Vec<Effect> {
+        if let Some(Modal::MultiPick(pick)) = self.modals.top_mut()
+            && let Some(flag) = pick.picked.get_mut(pick.selected)
+        {
+            *flag = !*flag;
         }
+        Vec::new()
     }
 
     fn submit_multi_pick(&mut self) -> Vec<Effect> {
@@ -1796,95 +1776,105 @@ impl App {
         self.refresh_palette();
     }
 
+    /// Everything printable is the query, exactly as in the palette; the rows
+    /// and the way out are commands.
     fn on_pick_key(&mut self, key: Key) -> Vec<Effect> {
+        if key.typed().is_none()
+            && let Some(id) = command::lookup(Context::Pick, key, self)
+        {
+            return self.run(id);
+        }
+        if let Some(Modal::Pick(pick)) = self.modals.top_mut()
+            && pick.query.apply(&key)
+        {
+            pick.rank(&mut self.fuzzy);
+        }
+        Vec::new()
+    }
+
+    /// Move a picker's cursor, whichever kind it is.
+    fn step_pick(&mut self, delta: isize) -> Vec<Effect> {
         let area = self.area();
-        match key.code {
-            KeyCode::Esc => {
-                self.modals.pop();
-                Vec::new()
+        match self.modals.top_mut() {
+            Some(Modal::Pick(pick)) => {
+                pick.step(delta);
+                pick.clamp_viewport(layout::list_rows(
+                    layout::pick_box(area, pick.ranked.len()),
+                    2,
+                ));
             }
-            KeyCode::Enter => {
-                let Some(Modal::Pick(pick)) = self.modals.pop() else {
+            // A multi-pick has no viewport of its own to keep — the box is
+            // sized to its rows — so it is `step_top_modal`'s arm verbatim.
+            Some(Modal::MultiPick(_)) => return self.step_top_modal(delta),
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    /// Take the row under a single picker's cursor and do what it was opened
+    /// for.
+    fn choose_pick(&mut self) -> Vec<Effect> {
+        let Some(Modal::Pick(pick)) = self.modals.pop() else {
+            return Vec::new();
+        };
+        let Some(item) = pick.chosen().cloned() else {
+            return Vec::new();
+        };
+        match pick.then {
+            Then::SortPick => {
+                self.library.explicit_sort = Order::CYCLE
+                    .iter()
+                    .copied()
+                    .find(|s| s.label() == item.value);
+                self.recompute();
+                self.after_rows_changed()
+            }
+            Then::TemplateFilter => self.set_template_filter(Some(item.value.clone())),
+            Then::BaseFilter => {
+                let base = (!item.value.is_empty()).then(|| PathBuf::from(&item.value));
+                self.set_base_filter(base)
+            }
+            Then::AddTag => {
+                if item.value == crate::tui::app::actions::NEW_TAG {
+                    self.modals.push(Modal::TextPrompt(TextPrompt::new(
+                        validators::ADD_TAG_PROMPT,
+                        TextThen::AddTag,
+                    )));
+                    return Vec::new();
+                }
+                self.add_tag(item.value.clone())
+            }
+            Then::MoveToBase => {
+                let target = PathBuf::from(item.value.clone());
+                // `batching()`, not `!marks.is_empty()`: marks are kept
+                // by path and survive a filter change, so a marked row
+                // can be off screen while the verb is aimed at it. Every
+                // other verb asks this question the same way — the raw
+                // mark set is what "batch tagging does nothing" was, and
+                // this was the last caller still asking it.
+                if self.batching() {
+                    self.start_job(jobs::JobKind::Move, Some(target))
+                } else {
+                    self.run_move(target)
+                }
+            }
+            Then::FormField(key) => {
+                let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
                     return Vec::new();
                 };
-                let Some(item) = pick.chosen().cloned() else {
+                let Some(field) = flow.form.field_mut(&key) else {
                     return Vec::new();
                 };
-                match pick.then {
-                    Then::SortPick => {
-                        self.library.explicit_sort = Order::CYCLE
-                            .iter()
-                            .copied()
-                            .find(|s| s.label() == item.value);
-                        self.recompute();
-                        self.after_rows_changed()
-                    }
-                    Then::TemplateFilter => self.set_template_filter(Some(item.value.clone())),
-                    Then::BaseFilter => {
-                        let base = (!item.value.is_empty()).then(|| PathBuf::from(&item.value));
-                        self.set_base_filter(base)
-                    }
-                    Then::AddTag => {
-                        if item.value == crate::tui::app::actions::NEW_TAG {
-                            self.modals.push(Modal::TextPrompt(TextPrompt::new(
-                                validators::ADD_TAG_PROMPT,
-                                TextThen::AddTag,
-                            )));
-                            return Vec::new();
-                        }
-                        self.add_tag(item.value.clone())
-                    }
-                    Then::MoveToBase => {
-                        let target = PathBuf::from(item.value.clone());
-                        // `batching()`, not `!marks.is_empty()`: marks are kept
-                        // by path and survive a filter change, so a marked row
-                        // can be off screen while the verb is aimed at it. Every
-                        // other verb asks this question the same way — the raw
-                        // mark set is what "batch tagging does nothing" was, and
-                        // this was the last caller still asking it.
-                        if self.batching() {
-                            self.start_job(jobs::JobKind::Move, Some(target))
-                        } else {
-                            self.run_move(target)
-                        }
-                    }
-                    Then::FormField(key) => {
-                        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
-                            return Vec::new();
-                        };
-                        let Some(field) = flow.form.field_mut(&key) else {
-                            return Vec::new();
-                        };
-                        if !field.select(&item.value) {
-                            return Vec::new();
-                        }
-                        flow.form.selected = flow
-                            .form
-                            .fields
-                            .iter()
-                            .position(|field| field.key == key)
-                            .unwrap_or(flow.form.selected);
-                        self.on_form_changed()
-                    }
+                if !field.select(&item.value) {
+                    return Vec::new();
                 }
-            }
-            KeyCode::Up | KeyCode::Down if !key.ctrl => {
-                if let Some(Modal::Pick(pick)) = self.modals.top_mut() {
-                    pick.step(if key.code == KeyCode::Down { 1 } else { -1 });
-                    pick.clamp_viewport(layout::list_rows(
-                        layout::pick_box(area, pick.ranked.len()),
-                        2,
-                    ));
-                }
-                Vec::new()
-            }
-            _ => {
-                if let Some(Modal::Pick(pick)) = self.modals.top_mut()
-                    && pick.query.apply(&key)
-                {
-                    pick.rank(&mut self.fuzzy);
-                }
-                Vec::new()
+                flow.form.selected = flow
+                    .form
+                    .fields
+                    .iter()
+                    .position(|field| field.key == key)
+                    .unwrap_or(flow.form.selected);
+                self.on_form_changed()
             }
         }
     }
@@ -2037,15 +2027,6 @@ impl App {
                 // the user was looking at.
                 if self.job.is_some() || self.move_progress.is_some() {
                     return self.request_cancel();
-                }
-                // The search bar's own rung, and it comes first: an empty bar
-                // is left, a bar with something in it is cleared by the rungs
-                // below and stays open to be retyped. Placed above the tab
-                // switch because the templates tab has a bar too, and leaving
-                // it must not change tabs.
-                if self.search.editing && self.search.input.is_empty() {
-                    self.search.editing = false;
-                    return Vec::new();
                 }
                 // On the templates tab, the first step back is to the library:
                 // Esc is "one level out", and a tab is a level.
@@ -2305,6 +2286,40 @@ impl App {
                 }
             }
 
+            // Each of these dispatches on which dialog is on top, the way
+            // `Close` always has: one key, one meaning, three shapes of
+            // prompt under it.
+            CommandId::PromptConfirm => match self.modals.top() {
+                Some(Modal::TextPrompt(_)) => self.submit_text_prompt(),
+                Some(Modal::Note(_)) => self.save_note(),
+                Some(Modal::Onboarding(_)) => self.submit_onboarding(),
+                _ => Vec::new(),
+            },
+            CommandId::PromptNewline => {
+                if let Some(Modal::Note(note)) = self.modals.top_mut() {
+                    note.area.apply(&Key::plain(KeyCode::Enter));
+                }
+                Vec::new()
+            }
+            CommandId::PromptCancel => {
+                let skipped = matches!(self.modals.top(), Some(Modal::Onboarding(_)));
+                self.modals.pop();
+                if skipped {
+                    self.info(validators::ONBOARDING_SKIPPED);
+                }
+                Vec::new()
+            }
+            CommandId::PickChoose => match self.modals.top() {
+                Some(Modal::MultiPick(_)) => self.submit_multi_pick(),
+                _ => self.choose_pick(),
+            },
+            CommandId::PickToggle => self.toggle_multi_pick(),
+            CommandId::PickNext => self.step_pick(1),
+            CommandId::PickPrevious => self.step_pick(-1),
+            CommandId::PickCancel => {
+                self.modals.pop();
+                Vec::new()
+            }
             CommandId::PaletteRun => self.run_palette_entry(),
             CommandId::PaletteNext => self.step_palette(1),
             CommandId::PalettePrevious => self.step_palette(-1),
@@ -2315,6 +2330,17 @@ impl App {
             CommandId::SearchAccept => {
                 self.search.editing = false;
                 Vec::new()
+            }
+            // The bar's own Esc, rather than a rung bolted onto `Back`'s
+            // ladder: it is the same family as `PickCancel` and
+            // `PromptCancel`, each naming what it leaves.
+            CommandId::SearchCancel => {
+                if self.search.input.is_empty() {
+                    self.search.editing = false;
+                    return Vec::new();
+                }
+                self.search.input.clear();
+                self.after_query_change()
             }
             CommandId::Search => {
                 self.search.editing = true;
@@ -3685,37 +3711,37 @@ impl App {
     }
 
     fn on_onboarding_key(&mut self, key: Key) -> Vec<Effect> {
+        if key.typed().is_none()
+            && let Some(id) = command::lookup(Context::Prompt, key, self)
+        {
+            return self.run(id);
+        }
+        if let Some(Modal::Onboarding(state)) = self.modals.top_mut()
+            && state.input.apply(&key)
+        {
+            state.error = None;
+        }
+        Vec::new()
+    }
+
+    /// Enter on the first-run question.
+    fn submit_onboarding(&mut self) -> Vec<Effect> {
         let Some(Modal::Onboarding(state)) = self.modals.top_mut() else {
             return Vec::new();
         };
-        match key.code {
-            KeyCode::Esc => {
-                self.modals.pop();
-                self.info(validators::ONBOARDING_SKIPPED);
-                Vec::new()
-            }
-            KeyCode::Enter => {
-                let answer = state.input.text().trim().to_string();
-                if answer.is_empty() {
-                    self.modals.pop();
-                    self.info(validators::ONBOARDING_SKIPPED);
-                    return Vec::new();
-                }
-                // The dialog stays up until the folder exists: a path that
-                // cannot be created is refused here, with the text still on the
-                // line, rather than dropping a first-time user onto an empty
-                // dashboard with an error and no question.
-                state.pending = true;
-                state.error = None;
-                self.run_action("creating the base…", Action::InitBaseDir(answer))
-            }
-            _ => {
-                if state.input.apply(&key) {
-                    state.error = None;
-                }
-                Vec::new()
-            }
+        let answer = state.input.text().trim().to_string();
+        if answer.is_empty() {
+            self.modals.pop();
+            self.info(validators::ONBOARDING_SKIPPED);
+            return Vec::new();
         }
+        // The dialog stays up until the folder exists: a path that cannot be
+        // created is refused here, with the text still on the line, rather
+        // than dropping a first-time user onto an empty dashboard with an
+        // error and no question.
+        state.pending = true;
+        state.error = None;
+        self.run_action("creating the base…", Action::InitBaseDir(answer))
     }
 
     /// Up/Down and the page keys on the templates tab: the card list, or the

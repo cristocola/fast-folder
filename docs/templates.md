@@ -144,6 +144,23 @@ Two interpolation rules are worth knowing:
 
 Templates always use `/` as the path separator, on every platform. fastf translates to `\` on Windows at runtime. Path escape guards reject empty and dot components, `..`, absolute paths, and drive letters when a template loads, after tokens are interpolated, and again at the write boundary. That means a safe-looking declaration cannot escape through a variable or custom date format that renders as `..`.
 
+## The guide
+
+Press `G` on the templates tab or anywhere in the builder and Fast Folder
+explains itself: seven pages on what a template is, the five parts of one, how
+projects get their names, the questions to ask, folders and files — and a
+walkthrough that builds a real template from nothing, with the exact values to
+type. `←` and `→` turn the page, Enter goes forward, Esc closes it.
+
+Opened from inside the builder it lands on the page for the part under the
+cursor, so it answers the question you actually have rather than starting at the
+beginning.
+
+It **offers itself once**, unasked, the first time you open the templates tab or
+the builder — whichever happens first, and never again on that machine. Esc
+leaves you exactly where you were going. It is also in the command palette, and
+the first-run welcome points at it.
+
 ## The builder
 
 `fastf template new`, `fastf template edit <slug>`, or `T` in the guided app —
@@ -155,9 +172,23 @@ that part currently holds, so the list is the summary. Enter opens a part;
 Esc closes it and comes back. There is no order to follow and no step to get
 past.
 
-The line under the list says what the highlighted part is for, so the five
-nouns are not the only thing to go on. `s` saves from anywhere on the list, and
-Enter on the Save row does the same.
+Beside the list is a panel that explains whatever the cursor is on, and shows
+what this template would produce **right now**: the folder name a project made
+from it would get, the first two IDs it would mint, the questions it asks, the
+tree its folders make, the files it writes. Open a part and the panel follows
+the field you are editing. It is on by default; `i` hides it and the choice is
+remembered, and a window too narrow for both keeps the list and falls back to
+the one-line hint under it.
+
+The line under the list is where a refusal and a warning go — the naming-pattern
+mistakes below, and anything Save would not accept. `s` saves from anywhere on
+the list, and Enter on the Save row does the same.
+
+The Save row also counts whatever is still worth a look — a template with no
+name, a pattern that ignores its own variables, a template that declares nothing
+at all. **None of it stops a save**: each one is a template that loads and saves
+perfectly well, and they are listed because they are almost never what was
+meant.
 
 Nothing throws work away. Esc inside a part returns to the list with that part
 unchanged, not with the template gone, and nothing is written until Save. Save

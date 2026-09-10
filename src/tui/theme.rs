@@ -206,6 +206,18 @@ pub struct Glyphs {
 }
 
 impl Glyphs {
+    /// Whether this is the ASCII alphabet — what `widgets::tree` and anything
+    /// else that draws its own box characters has to ask before it draws one.
+    ///
+    /// A method rather than the `rule == "-"` comparison it replaces: that
+    /// spelling was written out where the folder tree is drawn, and a second
+    /// caller copying it is how one of the two comes to be wrong.
+    pub fn is_ascii(&self) -> bool {
+        self.rule == "-"
+    }
+}
+
+impl Glyphs {
     pub const fn unicode() -> Self {
         Self {
             cursor: "▸",

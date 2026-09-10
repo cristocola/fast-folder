@@ -292,6 +292,9 @@ fn maintenance_runs_reindex_recover_and_data_locations() {
 #[test]
 fn the_builder_saves_a_template_built_section_by_section() {
     let sb = Sandbox::new();
+    // The guide offers itself the first time templates come up; this test
+    // is about the editor, not the offer.
+    sb.guide_seen();
 
     let script = pty::Script::new()
         .key(KEY_TEMPLATES)
@@ -341,6 +344,9 @@ fn the_builder_saves_a_template_built_section_by_section() {
 #[test]
 fn the_builder_refuses_to_save_a_template_that_would_not_load() {
     let sb = Sandbox::new();
+    // The guide offers itself the first time templates come up; this test
+    // is about the editor, not the offer.
+    sb.guide_seen();
 
     let script = pty::Script::new()
         .key(KEY_TEMPLATES)
@@ -369,6 +375,9 @@ fn the_builder_refuses_to_save_a_template_that_would_not_load() {
 #[test]
 fn the_builder_can_declare_an_empty_file() {
     let sb = Sandbox::new();
+    // The guide offers itself the first time templates come up; this test
+    // is about the editor, not the offer.
+    sb.guide_seen();
 
     let script = pty::Script::new()
         .key(KEY_TEMPLATES)
@@ -415,6 +424,9 @@ fn the_builder_can_declare_an_empty_file() {
 #[test]
 fn deleting_a_template_asks_first() {
     let sb = Sandbox::new();
+    // The guide offers itself the first time templates come up; this test
+    // is about the editor, not the offer.
+    sb.guide_seen();
     sb.write_template("doomed");
 
     let script = pty::Script::new()
@@ -881,5 +893,72 @@ fn a_command_line_prompt_refuses_an_empty_required_answer_in_place() {
     assert!(
         screen.contains("Lullaby") && !screen.contains("a value is required"),
         "the prompt is still there to answer, and the refusal is gone:\n{screen}"
+    );
+}
+
+/// The guide offers itself the first time templates come up, takes the key
+/// that would have opened the editor, and hands it back on the way out.
+///
+/// **The one test in the suite that does not pin `guide_seen`**, because the
+/// offer is what it is for. Through a real terminal rather than the state
+/// machine, because what is being checked is that a dialog arriving unasked —
+/// before a key is pressed — does not eat the flow underneath it.
+#[test]
+fn the_guide_offers_itself_once_and_leaves_the_editor_underneath() {
+    use std::time::Duration;
+
+    let sb = Sandbox::new();
+    let env: Vec<(&str, &std::path::Path)> = vec![
+        ("FASTF_INSTALL_DIR", sb.install.as_path()),
+        ("HOME", sb.tmp.path()),
+    ];
+
+    // Every step carries its own gap (`key` 600 ms, `esc` 700), so the moments
+    // below are when each key lands:
+    //   800 T · 2100 n · 3000 Esc · 4000 n · 5000 Esc · 6000 q
+    let script = pty::Script::new()
+        .key(KEY_TEMPLATES)
+        .pause(700)
+        .key("n") // taken by the guide, not by the tab
+        .pause(300)
+        .esc() // out of the guide, still on the tab
+        .pause(300)
+        .key("n") // now the editor
+        .pause(400)
+        .esc() // an untouched template closes with no question
+        .pause(300)
+        .key(KEY_QUIT)
+        .build();
+    let (chunks, code) = pty::run_chunked(common::FASTF, &[], &env, &script, DEADLINE);
+
+    let offered = screen_at_sized(&chunks, Duration::from_millis(2900), 120, 40);
+    assert!(
+        offered.contains("template guide"),
+        "the guide is offered on the first visit to the tab:\n{offered}"
+    );
+
+    let after = screen_at_sized(&chunks, Duration::from_millis(4900), 120, 40);
+    assert!(
+        after.contains("new template"),
+        "and the editor opens once it is dismissed:\n{after}"
+    );
+    assert!(
+        !after.contains("template guide"),
+        "with the guide gone, not stacked under it:\n{after}"
+    );
+    assert_eq!(code, 0, "the run ends cleanly");
+
+    // Read once, remembered: the next run goes straight to the editor.
+    let script = pty::Script::new()
+        .key(KEY_TEMPLATES)
+        .pause(700)
+        .key("n")
+        .pause(400)
+        .build();
+    let (out, _) = launch(&sb, script);
+    let screen = app_screen(&out);
+    assert!(
+        screen.contains("new template") && !screen.contains("template guide"),
+        "the offer is made once on a machine, not once a run:\n{screen}"
     );
 }

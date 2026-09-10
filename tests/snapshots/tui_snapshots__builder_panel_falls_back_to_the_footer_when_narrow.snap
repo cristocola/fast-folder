@@ -1,0 +1,28 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fast-folder   library │ templates   2 bases                     highest ID0248 "
+" → projects 12   archive not mounted                        ⚠ 1 needs attention "
+" ⌕ / to search the templates                                                3/3 "
+"┌ templates ─────────────────┐┌ client-project ────────────────────────────────┐"
+"│  client-project    4       ││ reading…                                       │"
+"│  general           4       ││                                                │"
+"│  mus┌ new template ────────────────────────────────────────────────────┐     │"
+"│     │▸ Metadata    (not set)                                           │     │"
+"│     │  ID          ID0001, ID0002 …                                    │     │"
+"│     │  Variables   (none)                                              │     │"
+"│     │  Structure   (none)                                              │     │"
+"│     │  Files       (none)                                              │     │"
+"│     │  Save        4 to look at first                                  │     │"
+"│     │  Discard     leave without writing                               │     │"
+"│     │ what the template is called, and how its projects are named      │     │"
+"│     │ ↑↓ choose   G guide   Enter open   s save   Esc close   ? help   │     │"
+"│     └──────────────────────────────────────────────────────────────────┘     │"
+"│                            ││                                                │"
+"│                            ││                                                │"
+"│                            ││                                                │"
+"│                            ││                                                │"
+"└────────────────────────────┘└────────────────────────────────────────────────┘"
+"                                                                                "
+"                                                                                "

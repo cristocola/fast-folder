@@ -40,6 +40,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         Modal::Onboarding(state) => {
             crate::tui::view::builder::render_onboarding(app, state, frame, area)
         }
+        Modal::Guide(state) => {
+            render_guide(app, state, frame, area);
+            None
+        }
         Modal::Message {
             title,
             lines,
@@ -1141,6 +1145,95 @@ fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Fram
 
     let paragraph = Paragraph::new(lines).scroll((scroll.min(max_scroll) as u16, 0));
     frame.render_widget(paragraph, inner);
+}
+
+// ---------------------------------------------------------------------------
+// The guide
+// ---------------------------------------------------------------------------
+
+/// The columns a guide page's text is wrapped at: the box, less its border and
+/// a column of padding on each side.
+fn guide_text_width(box_: Rect) -> usize {
+    box_.width.saturating_sub(4) as usize
+}
+
+/// How many rows a page takes once wrapped, at the width the view draws it.
+///
+/// `update` clamps the scroll with exactly this — the same function and the
+/// same `Rect` — because a ceiling derived from anything else is how the end of
+/// a long body became unreachable once already (`message_rows`).
+pub(crate) fn guide_rows(page: usize, box_: Rect) -> usize {
+    crate::tui::guide::note_rows(&crate::tui::guide::page_notes(page), guide_text_width(box_))
+}
+
+/// The template guide: one page of prose at a time, in the same frame every
+/// other dialog wears.
+fn render_guide(
+    app: &App,
+    state: &crate::tui::app::modal::GuideState,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let area = crate::tui::layout::guide_box(area);
+    let total = crate::tui::guide::PAGES.len();
+    let title = format!(
+        " template guide {} {} ",
+        g.sep,
+        crate::tui::guide::page_title(state.page)
+    );
+    let Some((body, footer, keys)) =
+        crate::tui::view::builder::frame_parts(app, title, frame, area)
+    else {
+        return;
+    };
+
+    // A column of padding inside the border, so prose does not sit against the
+    // frame the way a table's measured cells are meant to.
+    let text = Rect::new(
+        body.x + 1,
+        body.y,
+        body.width.saturating_sub(2),
+        body.height,
+    );
+    let lines = crate::tui::view::note_lines(
+        &crate::tui::guide::page_notes(state.page),
+        theme,
+        guide_text_width(area),
+    );
+    let max_scroll = lines.len().saturating_sub(body.height as usize);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((state.scroll.min(max_scroll) as u16, 0)),
+        text,
+    );
+
+    crate::tui::view::builder::footer_line(
+        frame,
+        footer,
+        &format!(" page {} of {total}", state.page + 1),
+        theme.dim(),
+    );
+
+    // The guide's own gestures, named where they are consumed — the same
+    // honest exception a text area's `Ctrl-S` makes. The way out comes first,
+    // because `key_line` drops from the end.
+    let last = state.is_last();
+    let pairs = crate::tui::view::builder::pairs(&[
+        ("Esc", "close"),
+        ("→", if last { "—" } else { "next page" }),
+        ("←", "back"),
+        ("Enter", if last { "close" } else { "next" }),
+        ("↑↓", "scroll"),
+    ]);
+    frame.render_widget(
+        Paragraph::new(crate::tui::view::builder::key_line(
+            theme,
+            &pairs,
+            keys.width as usize,
+        )),
+        keys,
+    );
 }
 
 fn render_message(

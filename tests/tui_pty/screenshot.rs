@@ -105,6 +105,9 @@ fn screenshot() {
     let script = script.ctrl_c().ctrl_c().build();
 
     let sb = Sandbox::new();
+    // A tool for looking at a named screen: it starts where the keys aim,
+    // not behind the one-time guide. `G` still opens it on purpose.
+    sb.guide_seen();
     if !real {
         plant_showcase(&sb, projects);
     }

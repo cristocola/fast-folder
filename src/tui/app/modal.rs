@@ -104,6 +104,43 @@ impl PickState {
     }
 }
 
+/// The template guide: which page, and how far down it.
+///
+/// The one surface in the app that teaches rather than does. Its words live in
+/// [`crate::tui::guide`]; this is only where the reader is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GuideState {
+    pub page: usize,
+    pub scroll: usize,
+}
+
+impl GuideState {
+    pub fn at(page: usize) -> Self {
+        Self {
+            page: page.min(crate::tui::guide::PAGES.len().saturating_sub(1)),
+            scroll: 0,
+        }
+    }
+
+    /// Turn `delta` pages, stopping at either end rather than wrapping — a
+    /// document has a beginning and an end, and wrapping past the last page
+    /// back to the first reads as having lost your place.
+    pub fn turn(&mut self, delta: isize) -> bool {
+        let last = crate::tui::guide::PAGES.len().saturating_sub(1);
+        let next = (self.page as isize + delta).clamp(0, last as isize) as usize;
+        let moved = next != self.page;
+        if moved {
+            self.page = next;
+            self.scroll = 0;
+        }
+        moved
+    }
+
+    pub fn is_last(&self) -> bool {
+        self.page + 1 >= crate::tui::guide::PAGES.len()
+    }
+}
+
 #[derive(Debug)]
 pub enum Modal {
     Palette(PaletteState),
@@ -132,6 +169,8 @@ pub enum Modal {
     Settings(Box<SettingsState>),
     /// First run: where should projects live?
     Onboarding(Onboarding),
+    /// How templates work, and a walkthrough that builds one.
+    Guide(Box<GuideState>),
     Message {
         title: String,
         lines: Vec<String>,

@@ -44,22 +44,35 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
 
     let rows = studio.rows(app.search.input.text());
     if rows.is_empty() {
-        let sentence = if studio.cards.is_empty() {
-            // The registry's sentence, plus the one extra way in that only
-            // this tab offers.
-            &*format!(
-                "{}, or {} reads one out of a folder",
-                crate::tui::command::NO_TEMPLATES,
-                crate::tui::command::key_of(crate::tui::command::CommandId::StudioFromFolder)
-            )
+        // The registry's sentence, plus the two other ways in that only this
+        // tab offers — one of which is the only one that explains anything.
+        let lines: Vec<String> = if studio.cards.is_empty() {
+            vec![
+                format!(
+                    "{}, or {} reads one out of a folder",
+                    crate::tui::command::NO_TEMPLATES,
+                    crate::tui::command::key_of(crate::tui::command::CommandId::StudioFromFolder)
+                ),
+                format!(
+                    "{} explains what a template is and walks through building one",
+                    crate::tui::command::key_of(crate::tui::command::CommandId::Guide)
+                ),
+            ]
         } else {
-            "nothing matches"
+            vec!["nothing matches".to_string()]
         };
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                fit(sentence, inner.width as usize, g.ellipsis),
-                theme.dim(),
-            )),
+            Paragraph::new(
+                lines
+                    .iter()
+                    .map(|line| {
+                        Line::from(Span::styled(
+                            fit(line, inner.width as usize, g.ellipsis),
+                            theme.dim(),
+                        ))
+                    })
+                    .collect::<Vec<_>>(),
+            ),
             inner,
         );
     } else {

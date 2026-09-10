@@ -84,6 +84,23 @@ impl Sandbox {
         Sandbox { tmp, install, base }
     }
 
+    /// Say the template guide has already been read.
+    ///
+    /// The guide offers itself once, unasked, the first time templates come up
+    /// at all — so a fresh sandbox that presses `T` meets a dialog. **Every
+    /// test that drives the templates tab or the builder pins this first**,
+    /// exactly as the relaunch suite pins its terminal: a test about the
+    /// builder that has to dismiss a welcome first is a test about two things,
+    /// and the day the offer changes it fails for the wrong reason.
+    ///
+    /// `flows::the_guide_offers_itself_once` is the one test that leaves it
+    /// alone, because the offer is what it is for.
+    pub fn guide_seen(&self) -> &Self {
+        fs::write(self.install.join("state.toml"), "guide_seen = true\n")
+            .expect("writing state.toml");
+        self
+    }
+
     /// Add extra library bases (`config set bases`), creating each directory.
     /// Returns their paths in the order given.
     pub fn with_bases(&self, names: &[&str]) -> Vec<PathBuf> {

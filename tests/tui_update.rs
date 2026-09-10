@@ -2016,7 +2016,10 @@ mod studio {
 
         press(&mut app, Key::ch('d'));
         assert_eq!(builder(&app).template.variables.len(), 1);
-        assert_eq!(builder(&app).summary(Section::Variables), "1  (artist)");
+        assert_eq!(
+            builder(&app).summary(Section::Variables, app.theme.glyphs),
+            "1  (artist)"
+        );
     }
 
     #[test]
@@ -2036,7 +2039,10 @@ mod studio {
         type_text(&mut app, "01_Assets/raw");
         press(&mut app, Key::ctrl('s'));
         assert!(builder(&app).open.is_none());
-        assert_eq!(builder(&app).summary(Section::Structure), "2 folders");
+        assert_eq!(
+            builder(&app).summary(Section::Structure, app.theme.glyphs),
+            "2 folders"
+        );
         assert_eq!(builder(&app).template.structure.len(), 1, "raw nests");
     }
 

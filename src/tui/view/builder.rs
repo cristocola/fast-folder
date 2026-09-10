@@ -264,9 +264,17 @@ pub fn render_builder(
     footer_line(
         frame,
         footer,
+        // The leading space is part of the line, so the text is fitted to what
+        // is left after it. Fitting to the whole width and then adding the
+        // space put the line one column over, and the column that fell off the
+        // end was the ellipsis — so a cut sentence did not look cut.
         &format!(
             " {}",
-            fit(&text, footer.width as usize, theme.glyphs.ellipsis)
+            fit(
+                &text,
+                (footer.width as usize).saturating_sub(1),
+                theme.glyphs.ellipsis
+            )
         ),
         style,
     );
@@ -376,11 +384,13 @@ fn render_sections(
                 {
                     (
                         Section::Metadata.label(),
-                        format!("{}   {}", builder.summary(Section::Metadata), g.warn),
+                        format!("{}   {}", builder.summary(Section::Metadata, g), g.warn),
                         theme.warn(),
                     )
                 }
-                Row::Section(section) => (section.label(), builder.summary(*section), theme.dim()),
+                Row::Section(section) => {
+                    (section.label(), builder.summary(*section, g), theme.dim())
+                }
                 // The row counts what is still worth a look, so the coach
                 // works with the panel closed too. It is **advice and never a
                 // refusal** — `Template::validate` and `operations` keep all of

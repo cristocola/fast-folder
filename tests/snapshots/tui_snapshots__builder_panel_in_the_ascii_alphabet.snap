@@ -14,7 +14,7 @@ expression: frame
 "│                                            ││                                                                        │"
 "│         ┌ new template ────────────────────────────────────────────────────────────────────────────────────┐         │"
 "│         │  Metadata    (not set)                              │ Structure                                  │         │"
-"│         │  ID          ID0001, ID0002 …                       │                                            │         │"
+"│         │  ID          ID0001, ID0002 ...                     │                                            │         │"
 "│         │  Variables   (none)                                 │ The empty folders every new project starts │         │"
 "│         │> Structure   2 folders                              │ with.                                      │         │"
 "│         │  Files       (none)                                 │                                            │         │"

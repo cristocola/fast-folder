@@ -451,7 +451,7 @@ pub static PAGES: &[Page] = &[
         body: &[
             Block::Para(
                 "The template is a folder in fastf's data directory, beside the two that were \
-                 installed for you. `fastf paths` prints where that is.",
+                 installed for you. The command fastf paths prints where that is.",
             ),
             Block::Blank,
             Block::Code(&[

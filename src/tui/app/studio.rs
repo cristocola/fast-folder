@@ -16,6 +16,7 @@ use crate::core::template::{
     FileEntry, FolderNode, MAX_ID_DIGITS, Template, Transform, VarType, Variable,
 };
 use crate::tui::app::data::TemplateCard;
+use crate::tui::theme::Glyphs;
 use crate::tui::widgets::form::{Field, FieldKind, Form};
 use crate::tui::widgets::input::LineEdit;
 use crate::tui::widgets::nav;
@@ -355,21 +356,30 @@ impl Builder {
 
     /// What each row says on the right, so the list *is* the summary the old
     /// builder printed after every step.
-    pub fn summary(&self, section: Section) -> String {
+    ///
+    /// Takes the alphabet because two of its rows draw one: the separator
+    /// between a template's three names, and the "and so on" after the first
+    /// two IDs. Both were literals, and both are a replacement box on a console
+    /// that has no `·` or `…` — the same defect the theme's tick was rescued
+    /// from, one screen over.
+    pub fn summary(&self, section: Section, g: Glyphs) -> String {
         let t = &self.template;
         match section {
             Section::Metadata => {
                 if t.name.is_empty() && t.slug.is_empty() {
                     "(not set)".to_string()
                 } else {
-                    format!("{} · {} · {}", t.name, t.slug, t.naming_pattern)
+                    format!(
+                        "{} {} {} {} {}",
+                        t.name, g.sep, t.slug, g.sep, t.naming_pattern
+                    )
                 }
             }
             // Two real ones rather than `ID0000`, which is not an ID any
             // project will ever carry and reads as a value already set wrong.
             Section::Id => {
                 let show = |n: u64| Counters::format_id(&t.id.prefix, t.id.digits, n);
-                format!("{}, {} …", show(1), show(2))
+                format!("{}, {} {}", show(1), show(2), g.ellipsis)
             }
             Section::Variables => {
                 if t.variables.is_empty() {
@@ -590,11 +600,11 @@ pub fn variable_form(existing: Option<&Variable>) -> Form {
 
 /// Show the options line only for a select — a text variable has none — and
 /// let the transform row show what it would do to an answer.
-pub fn sync_variable_form(form: &mut Form) {
+pub fn sync_variable_form(form: &mut Form, g: Glyphs) {
     let is_select = form.value("type") == "select";
     form.set_hidden("options", !is_select);
 
-    let shown = transform_example(&form.value("transform"));
+    let shown = transform_example(&form.value("transform"), g);
     if let Some(field) = form.field_mut("transform") {
         field.hint = shown;
     }
@@ -606,14 +616,17 @@ pub fn sync_variable_form(form: &mut Form) {
 /// the YAML says — but nothing about it tells you that a space becomes an
 /// underscore, and the four names differ from each other only in ways you have
 /// to already know to read.
-pub fn transform_example(label: &str) -> String {
-    let shown = match label {
-        "TitleUnderscore" => "Ariana Grande → Ariana_Grande",
-        "UpperUnderscore" => "Ariana Grande → ARIANA_GRANDE",
-        "LowerUnderscore" => "Ariana Grande → ariana_grande",
-        _ => "Ariana Grande → Ariana Grande (left exactly as typed)",
+pub fn transform_example(label: &str, g: Glyphs) -> String {
+    let after = match label {
+        "TitleUnderscore" => "Ariana_Grande",
+        "UpperUnderscore" => "ARIANA_GRANDE",
+        "LowerUnderscore" => "ariana_grande",
+        _ => "Ariana Grande (left exactly as typed)",
     };
-    format!("how the answer is reshaped for the folder name: {shown}")
+    format!(
+        "how the answer is reshaped for the folder name: Ariana Grande {} {after}",
+        g.arrow
+    )
 }
 
 /// Keep the metadata form's own advice current as it is typed: the slug
@@ -1033,18 +1046,38 @@ mod tests {
 
     #[test]
     fn the_section_summaries_are_what_the_list_shows() {
+        let g = Glyphs::unicode();
         let mut builder = Builder::new(None);
-        assert_eq!(builder.summary(Section::Variables), "(none)");
-        assert_eq!(builder.summary(Section::Structure), "(none)");
+        assert_eq!(builder.summary(Section::Variables, g), "(none)");
+        assert_eq!(builder.summary(Section::Structure, g), "(none)");
         builder.template.name = "Music video".to_string();
         builder.template.slug = "music-video".to_string();
         builder.template.naming_pattern = "{date}_{id}".to_string();
         assert_eq!(
-            builder.summary(Section::Metadata),
+            builder.summary(Section::Metadata, g),
             "Music video · music-video · {date}_{id}"
         );
         builder.template.structure = parse_paths_to_tree(&["a".into(), "a/b".into()]);
-        assert_eq!(builder.summary(Section::Structure), "2 folders");
+        assert_eq!(builder.summary(Section::Structure, g), "2 folders");
+    }
+
+    /// Every character the list draws comes from the alphabet it was handed,
+    /// so a console with no `·` or `…` gets the ASCII spellings rather than
+    /// two replacement boxes.
+    #[test]
+    fn the_summaries_draw_in_the_alphabet_they_are_given() {
+        let mut builder = Builder::new(None);
+        builder.template.name = "Music video".to_string();
+        builder.template.slug = "music-video".to_string();
+        builder.template.naming_pattern = "{date}_{id}".to_string();
+        assert_eq!(
+            builder.summary(Section::Metadata, Glyphs::ascii()),
+            "Music video - music-video - {date}_{id}"
+        );
+        assert_eq!(
+            builder.summary(Section::Id, Glyphs::ascii()),
+            "ID0001, ID0002 ..."
+        );
     }
 
     #[test]
@@ -1083,7 +1116,7 @@ mod tests {
         form.field_mut("slug").unwrap().set_text("tier");
         assert!(form.field("options").unwrap().hidden);
         form.field_mut("type").unwrap().select("select");
-        sync_variable_form(&mut form);
+        sync_variable_form(&mut form, Glyphs::unicode());
         assert!(!form.field("options").unwrap().hidden);
         assert_eq!(variable_from(&form).unwrap_err().0, "options");
         form.field_mut("options")
@@ -1230,9 +1263,14 @@ mod tests {
         form.field_mut("transform")
             .unwrap()
             .select("TitleUnderscore");
-        sync_variable_form(&mut form);
+        sync_variable_form(&mut form, Glyphs::unicode());
         let hint = &form.field("transform").unwrap().hint;
         assert!(hint.contains("Ariana_Grande"), "{hint}");
+        assert!(hint.contains('→'), "{hint}");
+
+        sync_variable_form(&mut form, Glyphs::ascii());
+        let hint = &form.field("transform").unwrap().hint;
+        assert!(hint.contains("->") && !hint.contains('→'), "{hint}");
     }
 
     #[test]

@@ -3426,7 +3426,7 @@ impl App {
         if let Some((index, form)) = &mut list.editing {
             match form.apply(&key) {
                 FormEvent::Cancel => list.editing = None,
-                FormEvent::Changed => studio::sync_variable_form(form),
+                FormEvent::Changed => studio::sync_variable_form(form, self.theme.glyphs),
                 FormEvent::Submit => match studio::variable_from(form) {
                     Ok(variable) => {
                         let index = *index;

@@ -397,6 +397,23 @@ closed plan file:
 - A watchdog for a clipboard tool that does not fork — the `wl-copy --foreground`
   shape. `clipboard::feed`'s `wait()` has no timeout.
 
+The ASCII alphabet, finished. v3.3.0 rescued the theme's tick from twelve
+literal `✓`s and the template editor's own separators followed with the guide;
+the same defect is still spelled out on four other screens, where a console with
+no `·`, `…` or `→` draws a replacement box:
+
+- `app/jobs.rs` — `busy()`'s eight `…` labels and the report's `·` separator.
+- `runtime.rs` — the session lines (`renamed X → Y`, `moved`, `applied`) and
+  `run_action`'s `·`-joined warning.
+- `app/actions.rs` — `NEW_TAG` (`"New tag…"`), a picker row.
+- `rows.rs` — `PENDING_LABEL`, which duplicates `Glyphs::pending` rather than
+  reading it; `view::projects` already asks the theme, so the two can disagree.
+
+Each is a function that builds a display string with no theme in reach, so the
+fix is the one `Builder::summary` and `transform_example` just took: hand it the
+`Glyphs`. Worth one phase, with the guard test `guide.rs` already has extended
+over `src/tui/`.
+
 Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 
 - `query::resolve_field` clones per field access and `Predicate::Free`

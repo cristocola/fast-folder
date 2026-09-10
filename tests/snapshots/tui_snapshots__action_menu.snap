@@ -31,4 +31,4 @@ expression: frame
 "│                                                              ││                                  │"
 "└──────────────────────────────────────────────────────────────┘└──────────────────────────────────┘"
 "                                                                                                    "
-" Enter run  o open  t terminal  y copy path  Esc close  ? help  c commands                          "
+" ↑↓ choose  Enter run  o open  t terminal  y copy path  Esc close  ? help  c commands               "

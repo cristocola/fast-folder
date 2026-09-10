@@ -346,8 +346,11 @@ pub fn select(prompt: &str, items: &[String], default: usize) -> Result<Option<u
             KeyCode::Down | KeyCode::Char('j') => {
                 selected = nav::wrap_step(Some(selected), items.len(), 1).unwrap_or(0);
             }
-            KeyCode::Home => selected = 0,
-            KeyCode::End => selected = items.len() - 1,
+            // `g` and `G` are the app's jump letters, and a picker the command
+            // line puts up should answer the same vocabulary as the list it
+            // interrupted — a person does not switch hands between them.
+            KeyCode::Home | KeyCode::Char('g') => selected = 0,
+            KeyCode::End | KeyCode::Char('G') => selected = items.len() - 1,
             KeyCode::PageUp => {
                 selected =
                     nav::clamp_jump(Some(selected), items.len(), -(rows as isize)).unwrap_or(0);

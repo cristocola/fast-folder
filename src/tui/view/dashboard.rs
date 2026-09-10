@@ -10,8 +10,6 @@ use crate::tui::app::{App, Screen, StatusLevel};
 use crate::tui::command;
 use crate::tui::view::{fit, plural, split_line};
 
-const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
-
 pub fn header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let g = theme.glyphs;
@@ -135,7 +133,7 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
     // one.
     if !app.library.loaded {
         right.push(Span::styled(
-            format!(" (from index) {}", SPINNER[(app.ticks % 4) as usize]),
+            format!(" (from index) {}", theme.glyphs.spin(app.ticks)),
             theme.dim(),
         ));
     }
@@ -230,7 +228,7 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
     let line = if let Some(what) = app.busy {
         Line::from(vec![
             Span::styled(
-                format!(" {} ", SPINNER[(app.ticks % 4) as usize]),
+                format!(" {} ", theme.glyphs.spin(app.ticks)),
                 theme.accent(),
             ),
             Span::styled(what, theme.text()),
@@ -318,64 +316,40 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
 
     let theme = &app.theme;
     let mut spans = vec![Span::raw(" ")];
+    let width = area.width.saturating_sub(2) as usize;
+    // **Every pair on this bar is read, not written.** It used to hand-write
+    // six of them — the palette's, the prompt's, the multi-pick's, the
+    // picker's, the pager's and the search bar's — which is why four of those
+    // dialogs had a `Context` with no commands in it: nothing needed them,
+    // because the bar already knew. A key spelled here is a key that drifts.
     let pairs = match app.modals.top() {
-        Some(Modal::Palette(_)) => vec![
-            ("↑↓".to_string(), "move"),
-            ("Enter".to_string(), "run"),
-            ("Esc".to_string(), "close"),
-            ("#".to_string(), "projects only"),
-        ],
-        // The menu's own keys, from the registry: the verbs' letters work
-        // here exactly as they do on the list.
-        Some(Modal::Actions(_)) => command::hints(
-            crate::tui::command::Context::Actions,
-            app,
-            area.width.saturating_sub(2) as usize,
-        ),
-
-        Some(Modal::TextPrompt(_)) => {
-            vec![
-                ("Enter".to_string(), "confirm"),
-                ("Esc".to_string(), "cancel"),
-            ]
+        // A flow, the studio, the builder, the guide, a note, a confirmation
+        // and the welcome dialog each draw their own key line inside their
+        // frame, beside what the keys act on; repeating it down here would say
+        // it twice.
+        Some(Modal::Note(_))
+        | Some(Modal::Confirm(_))
+        | Some(Modal::Flow(_))
+        | Some(Modal::Builder(_))
+        | Some(Modal::Settings(_))
+        | Some(Modal::Guide(_))
+        | Some(Modal::Onboarding(_)) => Vec::new(),
+        _ => {
+            let ctx = app.context();
+            let mut pairs: Vec<(String, &'static str)> = command::movement_pair(ctx)
+                .into_iter()
+                .filter(|_| ctx.hints_movement())
+                .collect();
+            // Only what the movement pair actually costs comes off the width
+            // the rest is measured against — a flat allowance dropped a verb
+            // from every bar that never showed the arrows at all.
+            let spent: usize = pairs
+                .iter()
+                .map(|(key, what)| key.chars().count() + 1 + what.chars().count() + 2)
+                .sum();
+            pairs.extend(command::hints(ctx, app, width.saturating_sub(spent)));
+            pairs
         }
-        // Note and Confirm draw their own key line inside the box, beside the
-        // question, for the same reason a flow does — and these two repeated it
-        // down here word for word. The hint bar is the one place a key is
-        // advertised; when a dialog has already advertised its own, that place
-        // is inside the dialog.
-        Some(Modal::Note(_)) | Some(Modal::Confirm(_)) => Vec::new(),
-        Some(Modal::MultiPick(_)) => vec![
-            ("Space".to_string(), "toggle"),
-            ("Enter".to_string(), "confirm"),
-            ("Esc".to_string(), "cancel"),
-        ],
-        Some(Modal::Pick(_)) => vec![
-            ("↑↓".to_string(), "move"),
-            ("Enter".to_string(), "run"),
-            ("Esc".to_string(), "close"),
-        ],
-        Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => {
-            vec![("Esc".to_string(), "close"), ("↑↓".to_string(), "scroll")]
-        }
-        // A flow, the studio and the builder draw their own key line inside
-        // their frame, beside what the keys act on; repeating it down here
-        // would say it twice. Note, Confirm and Onboarding above are the same
-        // case — they were the three that had been missed.
-        Some(Modal::Flow(_)) | Some(Modal::Builder(_)) | Some(Modal::Settings(_)) => Vec::new(),
-        // The guide's own keys are its own — a document's `←`/`→`, which no
-        // command declares — so it names them inside its frame, where they act.
-        Some(Modal::Guide(_)) => Vec::new(),
-        // Same again: the welcome dialog carries its own.
-        Some(Modal::Onboarding(_)) => Vec::new(),
-        None => match app.context() {
-            crate::tui::command::Context::SearchEdit => vec![
-                ("Enter".to_string(), "keep"),
-                ("Esc".to_string(), "clear / leave"),
-                ("↑↓".to_string(), "move"),
-            ],
-            other => command::hints(other, app, area.width.saturating_sub(2) as usize),
-        },
     };
     for (key, title) in pairs {
         spans.push(Span::styled(key, theme.key()));

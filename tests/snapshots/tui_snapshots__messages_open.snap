@@ -31,4 +31,4 @@ expression: frame
 "│                                                              ││                                  │"
 "└──────────────────────────────────────────────────────────────┘└──────────────────────────────────┘"
 " warning: the archive base is not mounted                                                           "
-" Esc close  ↑↓ scroll                                                                               "
+" ↑↓ scroll  Esc close  ? help  c commands                                                           "

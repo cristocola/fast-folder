@@ -418,3 +418,64 @@ fn environment_mutation_goes_through_one_guard_per_binary() {
         offenders.join("\n  ")
     );
 }
+
+/// **The arrows are spelled in one place, and the hint bar spells nothing.**
+///
+/// Seven surfaces used to write `↑↓` into a key line by hand — the palette's,
+/// the picker's, the pager's, the search bar's, the preview's, the guide's and
+/// the one every list on a dialog shares. They were all correct on the day
+/// they were written, which is the drift `command.rs` exists to prevent, and a
+/// runtime test cannot see a string literal.
+///
+/// Two rules, and they differ because the surfaces do:
+///
+/// - **No view module writes an arrow as a key.** An arrow is always a
+///   command, so `command::movement_pair` and `command::key_of` can always
+///   answer for it.
+/// - **`view/dashboard.rs` writes no key label at all.** It draws the hint
+///   bar, which is the one place a key is advertised, and every pair on it is
+///   a command.
+///
+/// The key lines a widget draws inside its own frame keep their literals:
+/// `Ctrl-S` in a text area and `Tab` in a form are the widget's, not the
+/// registry's, and naming them where they are consumed is the honest
+/// exception `src/tui/CLAUDE.md` has always made for them.
+#[test]
+fn no_key_line_is_written_by_hand() {
+    const ARROWS: [&str; 5] = ["↑↓", "↑ ↓", "\"↑\"", "\"↓\"", "\"←\""];
+    // What `Key::label()` can produce for a key no widget consumes.
+    const LABELS: [&str; 8] = [
+        "\"Esc", "\"Enter", "\"Space", "\"PgUp", "\"PgDn", "\"Home", "\"End", "\"Ctrl-",
+    ];
+
+    let mut offenders = Vec::new();
+    for path in sources("tui") {
+        let in_view = path
+            .parent()
+            .is_some_and(|d| d.file_name().is_some_and(|n| n == "view"));
+        if !in_view {
+            continue;
+        }
+        let dashboard = path.file_name().is_some_and(|n| n == "dashboard.rs");
+        let text = fs::read_to_string(&path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with("///") {
+                continue;
+            }
+            let banned = ARROWS
+                .iter()
+                .chain(dashboard.then_some(LABELS.iter()).into_iter().flatten());
+            for needle in banned {
+                if line.contains(needle) {
+                    offenders.push(format!("{}:{}  {}", path.display(), n + 1, code.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a key line is written by hand — read it from `command.rs` instead:\n  {}",
+        offenders.join("\n  ")
+    );
+}

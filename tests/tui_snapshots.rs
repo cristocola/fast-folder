@@ -69,7 +69,13 @@ fn dashboard_ascii_80x24() {
         unicode.arrow,
         unicode.check,
         unicode.cross,
-    ] {
+    ]
+    .into_iter()
+    // The activity indicator's frames are part of the alphabet too — they
+    // were a `const SPINNER` in a view module until v3.5.0, which is exactly
+    // how a glyph comes to have no ASCII spelling.
+    .chain(unicode.spinner.iter().copied())
+    {
         assert!(
             !frame.contains(glyph),
             "the ASCII theme still drew {glyph:?}:\n{frame}"

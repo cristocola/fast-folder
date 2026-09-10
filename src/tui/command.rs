@@ -124,6 +124,12 @@ pub enum Context {
     /// The template guide: a reader of seven pages, which owns its own
     /// left and right the way a text field owns its caret.
     Guide,
+    /// A one-line prompt, a quick note, the first-run question: a field with
+    /// Enter under it. Everything printable is the text.
+    Prompt,
+    /// A picker — one choice or several. `Pick` carries a query, so it is a
+    /// text-entry context too; `MultiPick` does not, and Space ticks a row.
+    Pick,
     /// Any other dialog: a confirmation, a picker, help, a message.
     Modal,
 }
@@ -141,12 +147,46 @@ impl Context {
             Context::SearchEdit => "search bar",
             Context::Palette => "command palette",
             Context::Guide => "template guide",
+            Context::Prompt => "a prompt",
+            Context::Pick => "a picker",
             Context::Modal => "dialogs",
         }
     }
 
+    /// A context where a field has the keys: everything printable is the
+    /// text, and the caret's own chords are the field's.
+    pub fn is_text_entry(self) -> bool {
+        matches!(
+            self,
+            Context::SearchEdit | Context::Palette | Context::Prompt | Context::Pick
+        )
+    }
+
+    /// Whether the hint bar should say how to move here.
+    ///
+    /// Not on the dashboard: a table with a highlighted row and a scrollbar
+    /// beside it already says which way the arrows go, and the bar's width is
+    /// better spent on the verbs. In a dialog that has just opened over it,
+    /// and in the search bar — where the arrows move the list *underneath*
+    /// what is being typed, which nothing on screen says — they are worth the
+    /// eight columns.
+    pub fn hints_movement(self) -> bool {
+        matches!(
+            self,
+            Context::SearchEdit
+                | Context::Actions
+                | Context::Builder
+                | Context::Settings
+                | Context::Palette
+                | Context::Guide
+                | Context::Prompt
+                | Context::Pick
+                | Context::Modal
+        )
+    }
+
     /// Every context, for the invariants and the help.
-    pub const ALL: [Context; 11] = [
+    pub const ALL: [Context; 13] = [
         Context::Global,
         Context::Projects,
         Context::Detail,
@@ -157,6 +197,8 @@ impl Context {
         Context::SearchEdit,
         Context::Palette,
         Context::Guide,
+        Context::Prompt,
+        Context::Pick,
         Context::Modal,
     ];
 }
@@ -219,7 +261,16 @@ pub enum CommandId {
     PaletteNext,
     PalettePrevious,
     PaletteClose,
+    PromptConfirm,
+    PromptNewline,
+    PromptCancel,
+    PickChoose,
+    PickToggle,
+    PickNext,
+    PickPrevious,
+    PickCancel,
     SearchAccept,
+    SearchCancel,
     Reload,
     Reindex,
     FocusNext,
@@ -311,7 +362,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 80] = [
+    pub const ALL: [CommandId; 89] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -321,7 +372,16 @@ impl CommandId {
         CommandId::PaletteNext,
         CommandId::PalettePrevious,
         CommandId::PaletteClose,
+        CommandId::PromptConfirm,
+        CommandId::PromptNewline,
+        CommandId::PromptCancel,
+        CommandId::PickChoose,
+        CommandId::PickToggle,
+        CommandId::PickNext,
+        CommandId::PickPrevious,
+        CommandId::PickCancel,
         CommandId::SearchAccept,
+        CommandId::SearchCancel,
         CommandId::Reload,
         CommandId::Reindex,
         CommandId::FocusNext,
@@ -416,6 +476,31 @@ pub struct Command {
 
 fn always(_: &App) -> Availability {
     Availability::Enabled
+}
+
+/// Alt-Enter breaks a line, and only a quick note has lines to break: in a
+/// one-line prompt or the first-run question the key is not bound at all.
+fn in_a_note(app: &App) -> Availability {
+    if matches!(
+        app.modals.top(),
+        Some(crate::tui::app::modal::Modal::Note(_))
+    ) {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
+}
+
+/// Space ticks a row, and only a picker that takes several has rows to tick.
+fn in_a_multi_pick(app: &App) -> Availability {
+    if matches!(
+        app.modals.top(),
+        Some(crate::tui::app::modal::Modal::MultiPick(_))
+    ) {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
 }
 
 /// Job control is a unix thing; on Windows the key is not bound at all.
@@ -627,14 +712,7 @@ const TEMPLATES: &[Context] = &[Context::Templates];
 /// Both tabs: the switch itself, the search bar, and the app-wide verbs that
 /// mean the same thing wherever you are.
 const TABS: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
-/// Esc's ladder. The search bar is on it: Esc there clears the query and then
-/// leaves the bar, which is two of the same rungs.
-const BACKSTEP: &[Context] = &[
-    Context::Projects,
-    Context::Detail,
-    Context::Templates,
-    Context::SearchEdit,
-];
+const BACKSTEP: &[Context] = TABS;
 /// Every list and every scrollable dialog: where the arrow keys go — and,
 /// since one grammar is the whole point, where the page keys and the jumps to
 /// the ends go too. The pages and the jumps used to have narrower lists of
@@ -649,6 +727,11 @@ const SCROLLERS: &[Context] = &[
     Context::Builder,
     Context::Settings,
     Context::Guide,
+    // The search bar is on this list because the arrows there move the
+    // library under the query, which is the same command they are everywhere
+    // else. `keys_in` takes `j`, `g`, `Ctrl-u` and the rest back out of what
+    // that context advertises, because the field claims them first.
+    Context::SearchEdit,
     Context::Modal,
 ];
 /// Every dialog that closes with Esc — the guide included.
@@ -686,6 +769,8 @@ const READER: &[Context] = &[Context::Guide];
 /// the only keys it can declare — which is exactly why it had none before, and
 /// why `?` in the palette described a screen it was not on.
 const IN_PALETTE: &[Context] = &[Context::Palette];
+const IN_PROMPT: &[Context] = &[Context::Prompt];
+const IN_PICK: &[Context] = &[Context::Pick];
 /// Everywhere the palette can be *opened* from — which is everywhere except
 /// the palette, so `Ctrl-p` inside it is free to mean the previous entry.
 const OPENS_PALETTE: &[Context] = &[
@@ -697,8 +782,11 @@ const OPENS_PALETTE: &[Context] = &[
     Context::Settings,
     Context::SearchEdit,
     Context::Guide,
+    Context::Prompt,
+    Context::Pick,
     Context::Modal,
 ];
+
 const BUILDER: &[Context] = &[Context::Builder];
 /// The key that opens the guide answers wherever templates are the subject:
 /// the tab and the editor. Deliberately not `Global` — the guide is about one
@@ -799,7 +887,7 @@ pub static COMMANDS: &[Command] = &[
         [Key::plain(KeyCode::Down), Key::ctrl('n')],
         Navigate,
         palette = false,
-        hint = true,
+        hint = false,
         always
     ),
     cmd!(
@@ -818,6 +906,109 @@ pub static COMMANDS: &[Command] = &[
         "Close the palette",
         "leave it, with the list exactly as it was",
         IN_PALETTE,
+        [Key::plain(KeyCode::Esc)],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        SearchCancel,
+        "Clear, then leave",
+        "the first Esc clears the query, the second leaves the bar",
+        &[Context::SearchEdit],
+        [Key::plain(KeyCode::Esc)],
+        Search,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        PromptConfirm,
+        "Confirm",
+        "take what is typed and act on it",
+        IN_PROMPT,
+        [Key::plain(KeyCode::Enter)],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        PromptNewline,
+        "New line",
+        "break the line without saving the note",
+        IN_PROMPT,
+        [Key {
+            code: KeyCode::Enter,
+            ctrl: false,
+            alt: true,
+        }],
+        Navigate,
+        palette = false,
+        hint = true,
+        in_a_note
+    ),
+    cmd!(
+        PromptCancel,
+        "Cancel",
+        "leave it, with nothing changed",
+        IN_PROMPT,
+        [Key::plain(KeyCode::Esc)],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        PickChoose,
+        "Choose",
+        "take the row under the cursor — or every row ticked",
+        IN_PICK,
+        [Key::plain(KeyCode::Enter)],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        PickToggle,
+        "Tick",
+        "put the row under the cursor in the set, or take it out",
+        IN_PICK,
+        [Key::ch(' ')],
+        Navigate,
+        palette = false,
+        hint = true,
+        in_a_multi_pick
+    ),
+    cmd!(
+        PickNext,
+        "Next row",
+        "down the picker's list",
+        IN_PICK,
+        [Key::plain(KeyCode::Down)],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
+        PickPrevious,
+        "Previous row",
+        "up the picker's list",
+        IN_PICK,
+        [Key::plain(KeyCode::Up)],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
+        PickCancel,
+        "Cancel",
+        "leave the picker, with nothing chosen",
+        IN_PICK,
         [Key::plain(KeyCode::Esc)],
         Navigate,
         palette = false,
@@ -1534,7 +1725,7 @@ pub static COMMANDS: &[Command] = &[
         "Save the template",
         "write it to the templates folder, from anywhere on the section list",
         BUILDER,
-        [Key::ch('s')],
+        [Key::ch('s'), Key::ctrl('s')],
         Templates,
         palette = false,
         hint = true,
@@ -1684,7 +1875,7 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
         (asking, !asking && !c.contexts.contains(&ctx))
     });
     for c in ranked {
-        let Some(key) = c.keys.first() else {
+        let Some(key) = keys_in(ctx, c).first().copied() else {
             continue;
         };
         let label = key.label();
@@ -1697,6 +1888,60 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
         out.push((label, title));
     }
     out
+}
+
+/// **The keys of `command` that actually fire in `ctx`.** In a text-entry
+/// context a field has first refusal: every printable key is a letter of what
+/// is being typed, and the caret's chords are the field's
+/// (`LineEdit::CLAIMED`). Neither ever reaches the registry, so neither may
+/// appear in that context's help or on its hint bar — `? help` over a rename
+/// prompt where `?` types a question mark is the registry telling a lie about
+/// itself, which is the one thing it exists not to do.
+pub fn keys_in(ctx: Context, command: &Command) -> Vec<Key> {
+    if !ctx.is_text_entry() {
+        return command.keys.to_vec();
+    }
+    command
+        .keys
+        .iter()
+        .copied()
+        .filter(|k| {
+            k.typed().is_none() && !crate::tui::widgets::input::LineEdit::CLAIMED.contains(k)
+        })
+        .collect()
+}
+
+/// Whether a field takes this key before the registry ever sees it.
+pub fn field_claims(key: &Key) -> bool {
+    crate::tui::widgets::input::LineEdit::CLAIMED.contains(key)
+}
+
+/// **The one place the arrows are spelled.** Seven surfaces used to write
+/// `↑↓` into a key line by hand — the palette's, the picker's, the pager's,
+/// the search bar's, the preview's, the guide's and the one every list on a
+/// dialog shares — which is six copies more than a registry exists to allow,
+/// and the reason `Down` and `Up` are `hint = false`: a bar that led with the
+/// arrows on every screen would spend its width saying what a highlighted row
+/// already says.
+///
+/// The labels come from whichever command binds the arrows in `ctx`, so a
+/// rebinding reaches every line. The verb is the surface's own: you *choose*
+/// from a list of things to do, you *move* through a list of things to pick,
+/// and you *scroll* a body of text.
+pub fn movement_pair(ctx: Context) -> Option<(String, &'static str)> {
+    let by = |code: KeyCode| {
+        COMMANDS
+            .iter()
+            .filter(|c| c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global))
+            .find_map(|c| keys_in(ctx, c).into_iter().find(|k| *k == Key::plain(code)))
+    };
+    let (up, down) = (by(KeyCode::Up)?, by(KeyCode::Down)?);
+    let what = match ctx {
+        Context::Modal | Context::Guide => "scroll",
+        Context::Palette | Context::Pick | Context::SearchEdit => "move",
+        _ => "choose",
+    };
+    Some((format!("{}{}", up.label(), down.label()), what))
 }
 
 /// The hint bar has one line, so a few titles get a shorter form there.
@@ -1730,6 +1975,16 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::BuilderSave => "save",
         CommandId::BuilderExplain => "explain",
         CommandId::SettingsChange => "change / run",
+        CommandId::PaletteRun => "run",
+        CommandId::PaletteClose => "close",
+        CommandId::PromptConfirm => "confirm",
+        CommandId::PromptNewline => "new line",
+        CommandId::PromptCancel => "cancel",
+        CommandId::PickChoose => "choose",
+        CommandId::PickToggle => "toggle",
+        CommandId::PickCancel => "cancel",
+        CommandId::SearchAccept => "keep",
+        CommandId::SearchCancel => "clear / leave",
         _ => title,
     }
 }
@@ -1786,7 +2041,7 @@ pub fn help_columns(ctx: Context, inner_width: usize) -> (usize, usize, usize) {
         .collect();
     let keys_width = commands
         .iter()
-        .map(|c| key_labels(c).chars().count())
+        .map(|c| key_labels(ctx, c).chars().count())
         .max()
         .unwrap_or(0)
         .clamp(8, 18);
@@ -1825,9 +2080,8 @@ pub fn key_of(id: CommandId) -> String {
         .unwrap_or_default()
 }
 
-pub fn key_labels(command: &Command) -> String {
-    command
-        .keys
+pub fn key_labels(ctx: Context, command: &Command) -> String {
+    keys_in(ctx, command)
         .iter()
         .map(|k| k.label())
         .collect::<Vec<_>>()
@@ -1854,7 +2108,7 @@ pub fn help_lines(ctx: Context, inner_width: usize) -> Vec<HelpLine> {
         for c in commands {
             let mut parts = wrap_words(c.description, width).into_iter();
             lines.push(HelpLine::Command {
-                keys: key_labels(c),
+                keys: key_labels(ctx, c),
                 title: c.title,
                 description: if beside {
                     parts.next().unwrap_or_default()

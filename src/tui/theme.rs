@@ -203,6 +203,11 @@ pub struct Glyphs {
     /// terminal that draws no block elements.
     pub bar_full: &'static str,
     pub bar_empty: &'static str,
+    /// The frames of the indicator that says something is still happening.
+    /// The one glyph in the app that used to live in a view module — a
+    /// `const SPINNER` in `view::dashboard`, outside the theme and therefore
+    /// outside the ASCII alphabet everything else answers to.
+    pub spinner: &'static [&'static str],
 }
 
 impl Glyphs {
@@ -214,6 +219,12 @@ impl Glyphs {
     /// caller copying it is how one of the two comes to be wrong.
     pub fn is_ascii(&self) -> bool {
         self.rule == "-"
+    }
+
+    /// The indicator's frame at `ticks`. One expression, so the header's
+    /// spinner and the status line's cannot fall out of step.
+    pub fn spin(&self, ticks: u64) -> &'static str {
+        self.spinner[(ticks as usize) % self.spinner.len()]
     }
 }
 
@@ -235,6 +246,9 @@ impl Glyphs {
             pending: "scanning…",
             bar_full: "█",
             bar_empty: "░",
+            // Quarter-circles: they turn where a slash flickers, and every
+            // frame is one column wide in every font that has them.
+            spinner: &["◜", "◝", "◞", "◟"],
         }
     }
 
@@ -255,6 +269,7 @@ impl Glyphs {
             pending: "scanning...",
             bar_full: "#",
             bar_empty: "-",
+            spinner: &["|", "/", "-", "\\"],
         }
     }
 }

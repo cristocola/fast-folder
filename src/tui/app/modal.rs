@@ -205,6 +205,8 @@ impl Modal {
             },
             Modal::Settings(state) if state.editing.is_none() => Context::Settings,
             Modal::Guide(_) => Context::Guide,
+            Modal::TextPrompt(_) | Modal::Note(_) | Modal::Onboarding(_) => Context::Prompt,
+            Modal::Pick(_) | Modal::MultiPick(_) => Context::Pick,
             _ => Context::Modal,
         }
     }

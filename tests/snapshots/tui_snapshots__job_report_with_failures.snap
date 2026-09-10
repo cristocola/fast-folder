@@ -31,4 +31,4 @@ expression: frame
 "│                                                              ││                                  │"
 "└──────────────────────────────────────────────────────────────┘└──────────────────────────────────┘"
 " 1 deleted, 1 failed                                                                                "
-" Esc close  ↑↓ scroll                                                                               "
+" ↑↓ scroll  Esc close  ? help  c commands                                                           "

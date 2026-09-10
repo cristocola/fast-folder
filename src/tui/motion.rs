@@ -6,8 +6,9 @@
 //!
 //! - a **pulse** on a row a verb just changed — *which* rows did that batch
 //!   touch, when the cursor is somewhere else;
-//! - a **pulse** on a size cell as its number lands — is that number new, or
-//!   did the table reflow;
+//! - a **pulse** on a size cell whose number *changed* — is the figure the one
+//!   that was there a moment ago (never on a first fill: a page of sizes
+//!   arrives at once, and lighting every visible row together is a flash);
 //! - one **activity indicator** wherever something is pending — is it working,
 //!   or is it stuck (that one is `Glyphs::spin`, and older than this module);
 //! - a **fade** on a status message about to expire — it is going, and you can

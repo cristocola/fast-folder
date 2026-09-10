@@ -29,6 +29,18 @@ pub struct Session {
     /// or a move between runs must not lose it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
+    /// Whether the template guide has ever been shown. It offers itself once,
+    /// unasked — the first time somebody reaches the templates tab or opens the
+    /// editor, whichever happens first — and one flag for both doors is what
+    /// keeps it from appearing twice on one afternoon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guide_seen: Option<bool>,
+    /// Whether the editor's explanation panel is open. On until it is turned
+    /// off, which is the opposite default from every other pane here and
+    /// deliberate: somebody meeting the template editor has more to gain from
+    /// the panel than from the width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explain_open: Option<bool>,
 }
 
 /// `state.toml` in the data directory.
@@ -90,6 +102,10 @@ impl Session {
     pub fn capture(app: &App, previous: &Session) -> Self {
         let mut session = previous.clone();
         session.detail_open = Some(app.detail_open);
+        session.explain_open = Some(app.explain_open);
+        if app.guide_seen {
+            session.guide_seen = Some(true);
+        }
         if app.is_menu {
             session.sort = app
                 .library
@@ -124,6 +140,8 @@ mod tests {
             sort: Some("name".to_string()),
             detail_open: Some(false),
             selected: Some("ID0240".to_string()),
+            guide_seen: Some(true),
+            explain_open: Some(false),
         };
         let text = toml::to_string(&session).unwrap();
         assert_eq!(Session::parse(&text).unwrap(), session);
@@ -160,6 +178,8 @@ mod tests {
             sort: Some("id".to_string()),
             detail_open: Some(true),
             selected: None,
+            guide_seen: None,
+            explain_open: Some(true),
         };
         session.save_to(&path).unwrap();
         assert_eq!(Session::load_from(&path), session);

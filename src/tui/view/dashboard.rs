@@ -363,6 +363,9 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
         // would say it twice. Note, Confirm and Onboarding above are the same
         // case — they were the three that had been missed.
         Some(Modal::Flow(_)) | Some(Modal::Builder(_)) | Some(Modal::Settings(_)) => Vec::new(),
+        // The guide's own keys are its own — a document's `←`/`→`, which no
+        // command declares — so it names them inside its frame, where they act.
+        Some(Modal::Guide(_)) => Vec::new(),
         // Same again: the welcome dialog carries its own.
         Some(Modal::Onboarding(_)) => Vec::new(),
         None => match app.context() {

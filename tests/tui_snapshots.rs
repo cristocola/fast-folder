@@ -353,6 +353,8 @@ fn templates_tab_with_orphans() {
     );
     app.is_menu = true;
     app.clock = || "10:00:00".to_string();
+    // Past the one-time guide, which otherwise takes the tab's first keys.
+    app.guide_seen = true;
     let _ = app.start();
     let _ = update(&mut app, Msg::Summary(Box::new(sample_summary(12))));
     // To the templates tab, then down past the real templates to an orphan.
@@ -768,6 +770,111 @@ mod studio {
             "builder_asks_before_discarding",
             render_to_string(&app, 100, 30),
         );
+    }
+
+    /// The explanation panel, on a window wide enough for it: what the
+    /// highlighted part is, and what this template would actually produce.
+    /// The whole teaching budget of this editor used to be the one footer line
+    /// below, cut with an ellipsis.
+    #[test]
+    fn builder_panel_explains_the_highlighted_part() {
+        let mut app = fixture(12, 120, 40);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('n'));
+        press(&mut app, Key::plain(KeyCode::Enter)); // → Metadata
+        typed(&mut app, "Music video");
+        press(&mut app, Key::plain(KeyCode::Tab));
+        press(&mut app, Key::plain(KeyCode::Tab));
+        press(&mut app, Key::plain(KeyCode::Tab)); // → the naming pattern
+        typed(&mut app, "_{artist}");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        snap(
+            "builder_panel_explains_the_highlighted_part",
+            render_to_string(&app, 120, 40),
+        );
+    }
+
+    /// The same builder in a window too narrow for a panel: the list keeps the
+    /// whole body and the footer carries the one-line hint exactly as it always
+    /// did, so nothing is lost — only nothing is gained.
+    #[test]
+    fn builder_panel_falls_back_to_the_footer_when_narrow() {
+        let mut app = fixture(12, 80, 24);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('n'));
+        snap(
+            "builder_panel_falls_back_to_the_footer_when_narrow",
+            render_to_string(&app, 80, 24),
+        );
+    }
+
+    /// The Save row, with the panel naming everything still worth a look.
+    /// **None of it stops a save** — every one of these is a template that
+    /// loads and saves perfectly well.
+    #[test]
+    fn builder_panel_names_what_is_still_missing() {
+        let mut app = fixture(12, 120, 40);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('n'));
+        for _ in 0..5 {
+            press(&mut app, Key::plain(KeyCode::Down)); // → Save
+        }
+        snap(
+            "builder_panel_names_what_is_still_missing",
+            render_to_string(&app, 120, 40),
+        );
+    }
+
+    /// The panel in the ASCII alphabet: its live folder tree is drawn by the
+    /// same `widgets::tree` the editor uses, so it has to ask the theme which
+    /// characters it may draw rather than writing `├` into the prose.
+    #[test]
+    fn builder_panel_in_the_ascii_alphabet() {
+        use fastf::tui::theme::Glyphs;
+
+        let mut app = fixture(12, 120, 40);
+        app.theme = Theme::mono().with_glyphs(Glyphs::ascii());
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('n'));
+        for _ in 0..3 {
+            press(&mut app, Key::plain(KeyCode::Down)); // → Structure
+        }
+        press(&mut app, Key::plain(KeyCode::Enter));
+        typed(&mut app, "01_Assets");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        typed(&mut app, "01_Assets/Audio");
+        press(&mut app, Key::ctrl('s'));
+        snap(
+            "builder_panel_in_the_ascii_alphabet",
+            render_to_string(&app, 120, 40),
+        );
+    }
+
+    /// The guide, offered unasked the first time templates come up at all.
+    #[test]
+    fn the_guide_offers_itself_on_the_first_visit() {
+        let mut app = fastf::tui::testing::guide_fixture(12, 120, 40);
+        press(&mut app, Key::ch('T'));
+        snap(
+            "guide_offered_on_the_first_visit",
+            render_to_string(&app, 120, 40),
+        );
+    }
+
+    /// The page a reader is sent to from the naming pattern, and the one the
+    /// walkthrough lives on.
+    #[test]
+    fn the_guide_pages() {
+        let mut app = fixture(12, 120, 40);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::ch('G'));
+        press(&mut app, Key::plain(KeyCode::Right));
+        press(&mut app, Key::plain(KeyCode::Right));
+        snap("guide_naming_page", render_to_string(&app, 120, 40));
+        press(&mut app, Key::plain(KeyCode::Right));
+        press(&mut app, Key::plain(KeyCode::Right));
+        press(&mut app, Key::plain(KeyCode::Right));
+        snap("guide_walkthrough_page", render_to_string(&app, 120, 40));
     }
 
     /// One variable's form, with the options line a select needs.

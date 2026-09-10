@@ -793,6 +793,65 @@ pub fn pattern_warning_of(pattern: &str, declared: &[&str]) -> Option<String> {
     None
 }
 
+/// The folder name this template would produce, with an illustrative answer
+/// for every question it asks.
+///
+/// **Pure, and deliberately not "now".** `naming::RenderContext`'s four fields
+/// are the whole of its state, so a sample context is a struct literal — no
+/// clock, which is what lets `update` and a snapshot test both call this. The
+/// date is a fixed 31 January because it is the one day of the year where
+/// `{YYYY}`, `{MM}` and `{DD}` are three visibly different numbers, so a person
+/// reading the example can tell which token produced which digits.
+///
+/// An answer is the variable's own default when it has one, else its slug in
+/// the shape its transform would give it — so the example shows the transform
+/// working rather than describing it.
+pub fn sample_folder_name(template: &Template) -> String {
+    let ctx = crate::core::naming::RenderContext {
+        date: "2026-01-31".to_string(),
+        yyyy: "2026".to_string(),
+        mm: "01".to_string(),
+        dd: "31".to_string(),
+    };
+    let mut vars: std::collections::HashMap<String, String> = template
+        .variables
+        .iter()
+        .map(|v| {
+            let raw = if v.default.trim().is_empty() {
+                sample_answer(&v.slug)
+            } else {
+                v.default.clone()
+            };
+            (
+                v.slug.clone(),
+                crate::core::template::apply_transform(&raw, &v.transform),
+            )
+        })
+        .collect();
+    vars.insert(
+        "id".to_string(),
+        Counters::format_id(&template.id.prefix, template.id.digits, 1),
+    );
+    crate::core::naming::interpolate_name_with(&template.naming_pattern, &vars, &ctx)
+}
+
+/// A plausible answer to a question nobody has answered: the slug as words.
+/// `client_name` reads back as `Client Name`, which is what a transform is
+/// then visibly applied to.
+fn sample_answer(slug: &str) -> String {
+    slug.split(['_', '-'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The `{token}`s a template understands: its own variables, then the built-ins.
 pub fn tokens(template: &Template) -> Vec<String> {
     template

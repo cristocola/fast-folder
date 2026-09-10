@@ -118,6 +118,54 @@ pub fn fit(text: &str, width: usize, ellipsis: &str) -> String {
     out
 }
 
+/// One [`crate::tui::guide::Note`] as the lines it draws, wrapped to `width`.
+///
+/// The guide overlay and the editor's explanation panel both render through
+/// this, so there is one styling vocabulary for explanatory text rather than
+/// two that drift. Prose wraps; a literal block never does — a wrapped folder
+/// tree is not a folder tree, so it is cut at the edge instead.
+///
+/// **A list item wears no glyph.** The five the theme has each mean one thing
+/// already, and a sixth invented for decoration is the thing this app's look
+/// rules out. An item starts two columns in and its continuations four, so
+/// where one ends and the next begins is visible from the alignment alone.
+pub fn note_lines<'a>(
+    notes: &[crate::tui::guide::Note],
+    theme: &crate::tui::theme::Theme,
+    width: usize,
+) -> Vec<Line<'a>> {
+    use crate::tui::command::wrap_words;
+    use crate::tui::guide::Note;
+
+    let width = width.max(1);
+    let mut out: Vec<Line> = Vec::new();
+    let prose = |out: &mut Vec<Line>, text: &str, style: Style, first: usize, rest: usize| {
+        let room = width.saturating_sub(rest).max(1);
+        for (at, part) in wrap_words(text, room).into_iter().enumerate() {
+            let indent = if at == 0 { first } else { rest };
+            out.push(Line::from(Span::styled(
+                format!("{}{part}", " ".repeat(indent)),
+                style,
+            )));
+        }
+    };
+    for note in notes {
+        match note {
+            Note::Head(text) => prose(&mut out, text, theme.accent(), 0, 0),
+            Note::Text(text) => prose(&mut out, text, theme.text(), 0, 0),
+            Note::Aside(text) => prose(&mut out, text, theme.dim(), 0, 0),
+            Note::Warn(text) => prose(&mut out, text, theme.warn(), 0, 0),
+            Note::Bullet(text) => prose(&mut out, text, theme.text(), 2, 4),
+            Note::Code(text) => out.push(Line::from(Span::styled(
+                fit(text, width, theme.glyphs.ellipsis),
+                theme.dim(),
+            ))),
+            Note::Blank => out.push(Line::from("")),
+        }
+    }
+    out
+}
+
 /// `1 base`, `2 bases`: a count with its noun.
 pub fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })

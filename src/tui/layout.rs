@@ -169,6 +169,58 @@ pub fn help_box(area: Rect) -> Rect {
     }
 }
 
+/// Where the template guide is drawn: the same room the help overlay takes,
+/// and for the same reason — it is a document, and a document cut into a
+/// quarter of the window is a document nobody finishes.
+pub fn guide_box(area: Rect) -> Rect {
+    help_box(area)
+}
+
+/// The builder's body, split into the list and the panel that explains it —
+/// or `None` when there is not enough width for both, where the list keeps the
+/// whole body and the footer carries the one-line hint it always did.
+///
+/// `fit_between` and `percent_of`, never `Ord::clamp` and never `w * n / 100`:
+/// both of those are documented crashes in this file, and every `max` here is
+/// computed from a window somebody can drag.
+pub fn builder_panel(body: Rect) -> Option<(Rect, Rect)> {
+    if body.width < PANEL_MIN_TOTAL || body.height < PANEL_MIN_HEIGHT {
+        return None;
+    }
+    let panel = fit_between(
+        percent_of(body.width, 46),
+        PANEL_MIN_WIDTH,
+        body.width.saturating_sub(LIST_MIN_WIDTH),
+    );
+    let list_width = body.width.saturating_sub(panel);
+    Some((
+        Rect::new(body.x, body.y, list_width, body.height),
+        Rect::new(body.x + list_width, body.y, panel, body.height),
+    ))
+}
+
+/// Whether a body this wide would be split into a list and a panel.
+///
+/// The dialog's *height* is chosen before its body exists — a panel wants more
+/// rows than a seven-row list — and its width does not depend on its height, so
+/// this is the half of `builder_panel`'s question that can be asked first. Ask
+/// it with anything else and the box grows for a panel that is never drawn.
+pub fn panel_fits_width(body_width: u16) -> bool {
+    body_width >= PANEL_MIN_TOTAL
+}
+
+/// The panel is worth its width only when both halves are still usable. Below
+/// this the list wins: a column of two-word lines explains nothing, and the
+/// summary beside each row is the part you cannot do without.
+const PANEL_MIN_TOTAL: u16 = 84;
+/// Its own minimum, and the list's. `LIST_MIN_WIDTH` is what a row needs: the
+/// cursor, a twelve-column label and enough summary to be worth reading.
+const PANEL_MIN_WIDTH: u16 = 34;
+const LIST_MIN_WIDTH: u16 = 40;
+/// Below this the panel would show two lines of a paragraph, which reads as a
+/// sentence that has been cut rather than as an explanation.
+const PANEL_MIN_HEIGHT: u16 = 8;
+
 /// Where a read-only message (metadata, a journal, a report) is drawn.
 pub fn message_box(area: Rect) -> Rect {
     centered(area, 70, 50)

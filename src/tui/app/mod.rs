@@ -45,7 +45,7 @@ use crate::util::diag::Level;
 use crate::util::size_scan::SizeCell;
 use data::{Prefs, ProjectDetail, Summary, TemplateCard};
 use library::{LibraryState, Order};
-use modal::{MessageLevel, Modal, ModalStack, PickItem, PickState, Then};
+use modal::{GuideState, MessageLevel, Modal, ModalStack, PickItem, PickState, Then};
 use palette::{PaletteState, PaletteTarget};
 use search::SearchState;
 use settings::{Editing, Kind, Onboarding, SettingsState};
@@ -247,6 +247,19 @@ pub struct App {
     /// answered for the first time — by id, since a rename between runs must
     /// not lose it.
     pub select_id_when_found: Option<String>,
+    /// Whether the editor's explanation panel is open. **On by default**, and
+    /// the opposite of every other pane here on purpose: somebody meeting the
+    /// template editor has more to gain from the panel than from the width, and
+    /// the person who does not want it turns it off once and is remembered.
+    pub explain_open: bool,
+    /// Whether the template guide has ever been shown, on this machine.
+    ///
+    /// It offers itself once, unasked — the first time the templates tab is
+    /// opened or the editor is, whichever comes first. **One flag for both
+    /// doors**: two would show it twice in one afternoon to the person who
+    /// looked at the tab and then pressed new, which is exactly the reader it
+    /// is trying not to annoy.
+    pub guide_seen: bool,
     pub ticks: u64,
     pub fuzzy: Fuzzy,
     next_action: u64,
@@ -285,6 +298,8 @@ impl App {
             studio_entry: None,
             select_when_found: None,
             select_id_when_found: None,
+            explain_open: true,
+            guide_seen: false,
             ticks: 0,
             fuzzy: Fuzzy::new(),
             next_action: 0,
@@ -316,6 +331,10 @@ impl App {
         if let Some(open) = session.detail_open {
             self.detail_open = open;
         }
+        if let Some(open) = session.explain_open {
+            self.explain_open = open;
+        }
+        self.guide_seen = session.guide_seen.unwrap_or(false);
         if !self.is_menu {
             return;
         }
@@ -1347,6 +1366,7 @@ impl App {
             Some(Modal::Builder(_)) => self.on_builder_key(key),
             Some(Modal::Settings(_)) => self.on_settings_key(key),
             Some(Modal::Onboarding(_)) => self.on_onboarding_key(key),
+            Some(Modal::Guide(_)) => self.on_guide_key(key),
             Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.on_scroll_modal_key(key),
             None => Vec::new(),
         }
@@ -1910,6 +1930,44 @@ impl App {
         }
     }
 
+    /// The guide's own keys.
+    ///
+    /// `←`/`→` turn the page and Enter goes forward — the gestures a document
+    /// has — and they are hand-written here rather than declared in the
+    /// registry for the reason a text area's `Ctrl-S` is: they are the
+    /// surface's own, not commands, and the guide's key line names them where
+    /// they are consumed. Everything else falls through, so `?` still opens the
+    /// help and the palette is still one keystroke away.
+    fn on_guide_key(&mut self, key: Key) -> Vec<Effect> {
+        let last = matches!(self.modals.top(), Some(Modal::Guide(state)) if state.is_last());
+        let Some(Modal::Guide(state)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        match key.code {
+            KeyCode::Right | KeyCode::Char('l') if !key.ctrl => {
+                state.turn(1);
+                Vec::new()
+            }
+            KeyCode::Left | KeyCode::Char('h') if !key.ctrl => {
+                state.turn(-1);
+                Vec::new()
+            }
+            // Forward through the guide, and out of it at the end: a reader who
+            // keeps pressing the same key reaches the end and is let go, rather
+            // than pressing it against the last page.
+            KeyCode::Enter if !key.ctrl => {
+                if last {
+                    self.modals.pop();
+                } else {
+                    state.turn(1);
+                }
+                Vec::new()
+            }
+            KeyCode::Char(' ') if !key.ctrl => self.scroll_top_modal(self.page_rows() as isize),
+            _ => self.lookup_and_run(key),
+        }
+    }
+
     /// Scroll whatever dialog is on top by `delta` rows, clamped to its
     /// content. `isize::MIN` and `isize::MAX` are the ends.
     fn scroll_top_modal(&mut self, delta: isize) -> Vec<Effect> {
@@ -1927,6 +1985,17 @@ impl App {
                 )
             }
 
+            Modal::Guide(state) => {
+                let box_ = layout::guide_box(area);
+                (
+                    &mut state.scroll,
+                    crate::tui::view::modals::guide_rows(state.page, box_),
+                    // The border, the footer and the key line: what
+                    // `view::builder::frame_parts` takes off the top and the
+                    // bottom before the body is drawn.
+                    box_.height.saturating_sub(4) as usize,
+                )
+            }
             Modal::Message { lines, scroll, .. } => (
                 scroll,
                 // Wrapped rows, not entries — the paragraph wraps, and
@@ -2062,6 +2131,28 @@ impl App {
                 };
                 self.modals.pop();
                 self.run(id)
+            }
+            CommandId::Guide => {
+                // The page for what is under the cursor: opened from a part of
+                // the editor it lands on that part, opened from the tab it
+                // starts at the beginning. A guide that always opens at page
+                // one is a guide nobody opens twice.
+                let page = match self.modals.top() {
+                    Some(Modal::Builder(builder)) if builder.pending.is_none() => {
+                        crate::tui::guide::page_for_row(builder.row())
+                    }
+                    _ => 0,
+                };
+                self.open_guide(page)
+            }
+            CommandId::BuilderExplain => {
+                self.explain_open = !self.explain_open;
+                self.info(if self.explain_open {
+                    "explanation panel shown"
+                } else {
+                    "explanation panel hidden"
+                });
+                Vec::new()
             }
             CommandId::StudioNew => self.open_builder(None),
             CommandId::StudioEdit => match self.studio.selected_slug() {
@@ -2811,6 +2902,7 @@ impl App {
             {
                 effects.push(Effect::LoadTemplateView { slug });
             }
+            self.offer_guide_once();
         }
         effects
     }
@@ -2979,7 +3071,9 @@ impl App {
                 state.clamp_viewport(layout::settings_rows(area));
                 Vec::new()
             }
-            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.scroll_top_modal(delta),
+            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) | Some(Modal::Guide(_)) => {
+                self.scroll_top_modal(delta)
+            }
             _ => Vec::new(),
         }
     }
@@ -3121,8 +3215,37 @@ impl App {
         Vec::new()
     }
 
+    /// Put the guide up, at `page`, and remember that it has been seen.
+    ///
+    /// Every door goes through here — the key, the palette and both automatic
+    /// offers — so the flag is set wherever the guide is actually read, and a
+    /// person who found it themselves is never offered it afterwards.
+    fn open_guide(&mut self, page: usize) -> Vec<Effect> {
+        self.guide_seen = true;
+        self.modals
+            .push(Modal::Guide(Box::new(GuideState::at(page))));
+        Vec::new()
+    }
+
+    /// The guide, offered once, the first time templates come up at all.
+    ///
+    /// It goes **on top of** whatever asked for it rather than instead of it,
+    /// so Esc leaves the reader exactly where they were going — on the tab, or
+    /// in the editor with an untouched template under the dialog.
+    fn offer_guide_once(&mut self) {
+        if !self.guide_seen {
+            self.open_guide(0);
+        }
+    }
+
     /// New (`slug` is `None`) or edit: the builder over a scratch template.
     fn open_builder(&mut self, slug: Option<String>) -> Vec<Effect> {
+        let effects = self.open_builder_inner(slug);
+        self.offer_guide_once();
+        effects
+    }
+
+    fn open_builder_inner(&mut self, slug: Option<String>) -> Vec<Effect> {
         match slug {
             Some(slug) => {
                 let mut builder = Builder::new(None);

@@ -67,6 +67,25 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
+- In progress: **the template editor explains itself.** The one surface that
+  asked people to learn a vocabulary before they could use it — five nouns in
+  the manifest's own words, and a single footer line cut with an ellipsis as the
+  whole teaching budget. Three things, one PR:
+  - **An explanation panel** beside the builder's list and every form in it:
+    what the highlighted part is, and what this template would produce *right
+    now* — the folder name a project would get, the first two IDs, the tree its
+    folders make. On by default, `i` hides it, and a window too narrow for both
+    keeps today's shape exactly.
+  - **A seven-page guide** (`G`, the palette, or offered once unasked the first
+    time templates come up), written for somebody who has never opened the TUI,
+    ending in a walkthrough that builds a real template from nothing. Opened
+    from a part of the editor it lands on that part's page.
+  - **A coach**: the Save row counts what is still worth a look, and the panel
+    names it. Advice and never a refusal — `Template::validate` keeps all of
+    the authority, and every gap it names is a template that loads and saves.
+
+  Nothing changed about a flag, a config key or a file format. `state.toml`
+  gains two remembered preferences and files written before this still parse.
 - Released: **v3.3.0 — the hardening and polish pass.** Feature work reached
   a wall at v3.2.0 with every gate green and no `TODO` anywhere, so this release
   spends itself on what a green gate cannot see: a guard that is written down
@@ -136,7 +155,8 @@ responsibility of the filesystem and backups.
     template, and a register of a folder that already holds a
     `PROJECT_INFO.md`.
   - Build a real template end to end and create a project from it; edit one
-    of the gallery templates.
+    of the gallery templates — following the guide's own walkthrough, which is
+    the one test of it that matters.
   - The legacy Windows console pass for the ASCII alphabet, and the mouse in a
     terminal that reports it.
   - Ctrl-Z and `fg`; `kill -INT` twice against the app leaves the shell
@@ -213,6 +233,15 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
   package's release test suite passed before both AUR repositories were pushed.
 
 Regression coverage grows with the relevant release:
+
+- [ ] Every explanatory sentence in the template editor is declared once, in
+  `tui::guide`, names its keys through `command::key_of`, and writes no
+  character the theme owns an ASCII spelling for; the sample folder name is a
+  pure function of the scratch template with no clock in it; the panel falls
+  back to today's footer on a window too narrow for it, and the ASCII alphabet
+  reaches its live folder tree. The guide offers itself once across **both**
+  automatic doors, lands on the page for the row it was opened from, stops at
+  both ends, and clamps its scroll at the width the view draws it (unreleased).
 
 - [x] A first run that failed between the two bundled templates is finished by
   the next one, and the first-run banner is on stderr so it cannot land inside

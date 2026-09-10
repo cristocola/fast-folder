@@ -536,6 +536,76 @@ inside it (`command::builder_list_closed`).
 `Entry::Studio` — the templates tab, or the builder straight away — so the
 command line and `T` are one editor.
 
+## The panel, the guide, and where the words live
+
+**`guide.rs` is to explanations what `command.rs` is to keys: the one place any
+of them are written.** The builder's explanation panel, the seven-page guide
+overlay and the coach all read it, so the sentence about what a naming pattern
+is exists once and cannot drift from the sentence two columns away. It is pure —
+no I/O, no clock, no `Config` — and its one dynamic input is the scratch
+`Template` the builder is already holding, which is what lets `update` call into
+it.
+
+Two rules that module enforces on itself, both because the first draft broke
+them:
+
+- **A key is never spelled in its prose.** A block writes `{key:BuilderSave}`
+  and `resolve` substitutes `command::key_of`.
+  `every_key_placeholder_names_a_command` walks every block and proves it — and
+  it is what caught the two commands this feature adds before they existed.
+- **A character the theme owns a glyph for is never written into its prose.**
+  The first draft drew a folder tree out of `├──` and headed its walkthrough
+  steps with `·`; both render as a replacement box in the ASCII alphabet, and
+  prose has no theme to ask. `no_glyph_the_theme_owns_is_written_into_the_prose`
+  is the guard, and `Glyphs::is_ascii()` is how the live tree in the panel asks.
+  Prose punctuation — an em dash — is not a glyph and is fine.
+
+**The panel explains; the footer refuses and warns.** Each has one job, which is
+this app's "say each thing once" applied to a box that now has two places to put
+a sentence. It is also the only split that cannot lose: the footer is a fixed row
+of the dialog, so a warning can never be pushed off the end of it the way it can
+off the bottom of a panel that ran out of rows. `pattern_warning` is therefore in
+the footer and deliberately *not* repeated in the panel — the panel shows the
+sample folder name the warning is about, which is the same fact from the other
+side.
+
+**The panel never repeats what the editor beside it is already showing.** From
+the section list it carries the live half — the sample name, the next two IDs,
+the tree, the file list; with a section *open*, its own editor is drawing that,
+so the panel is `explain_section` (prose only).
+
+**Whether the panel is coming is settled before the dialog is sized.** A panel
+wants sixteen rows where the list wants seven, and `sized_dialog`'s width does
+not depend on its height — so `layout::panel_fits_width` answers the width half
+first. Asking afterwards grew the box on every window too narrow to draw one.
+
+**`studio::sample_folder_name` is pure and deliberately not "now".**
+`naming::RenderContext`'s four fields are the whole of its state, so a sample
+context is a struct literal — no clock, which is what lets `update` and a
+snapshot test both call it. The date is a fixed 31 January: the one day where
+`{YYYY}`, `{MM}` and `{DD}` are three visibly different numbers, so a reader can
+tell which token produced which digits.
+
+**The guide offers itself once, and both doors share one flag.**
+`Session::guide_seen`, set in `open_guide` — so every route sets it, including
+the key and the palette, and somebody who found it themselves is never offered
+it. Two flags would show it twice in one afternoon to the person who looked at
+the tab and then pressed `n`, which is exactly the reader it is for. It goes **on
+top of** whatever asked for it, so Esc leaves you where you were going.
+
+**The coach is advice and never a refusal.** `guide::gaps` counts what is still
+worth a look and the Save row says how many; `Template::validate` and
+`operations::save_template` keep every bit of the authority. Two of the gaps are
+templates that load and save perfectly well.
+
+**Every suite that drives the templates tab starts past the offer** —
+`Sandbox::guide_seen()` in the pty tests, `App.guide_seen` in
+`tui::testing::fixture` — for the reason `relaunch.rs` pins its terminal: a test
+about the editor that has to dismiss a welcome first is a test about two things.
+`tui::testing::guide_fixture` and
+`flows::the_guide_offers_itself_once_and_leaves_the_editor_underneath` are the
+two that meet it on purpose.
+
 Two sections are more than a form. **Structure** is `widgets::text_area::TextArea`
 — one folder path per line, with the tree they make drawn beside them and
 redrawn on every keystroke; Enter is a newline there, so **Ctrl-S commits** and

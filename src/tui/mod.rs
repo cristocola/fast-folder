@@ -13,6 +13,7 @@ pub mod effect;
 pub mod entry;
 pub mod frame;
 pub mod fuzzy;
+pub mod guide;
 pub mod inline;
 pub mod layout;
 pub mod loaders;

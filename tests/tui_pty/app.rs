@@ -468,6 +468,9 @@ fn esc_in_a_settings_field_leaves_the_value_unchanged() {
 #[test]
 fn a_bad_template_slug_is_refused_at_its_own_prompt() {
     let sb = Sandbox::new();
+    // The guide offers itself the first time templates come up; this test
+    // is about the editor, not the offer.
+    sb.guide_seen();
     let source = sb.base.join("Source");
     fs::create_dir_all(source.join("01_Assets")).unwrap();
 

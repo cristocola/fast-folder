@@ -268,6 +268,8 @@ pub enum CommandId {
     StudioEdit,
     StudioFromFolder,
     StudioDelete,
+    /// The template guide — the one surface that teaches rather than does.
+    Guide,
     // The template builder's lists
     BuilderOpen,
     BuilderAdd,
@@ -275,6 +277,7 @@ pub enum CommandId {
     BuilderMoveUp,
     BuilderMoveDown,
     BuilderSave,
+    BuilderExplain,
     // The settings list
     SettingsChange,
     // The message log
@@ -284,7 +287,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 64] = [
+    pub const ALL: [CommandId; 66] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -340,12 +343,14 @@ impl CommandId {
         CommandId::StudioEdit,
         CommandId::StudioFromFolder,
         CommandId::StudioDelete,
+        CommandId::Guide,
         CommandId::BuilderOpen,
         CommandId::BuilderAdd,
         CommandId::BuilderRemove,
         CommandId::BuilderMoveUp,
         CommandId::BuilderMoveDown,
         CommandId::BuilderSave,
+        CommandId::BuilderExplain,
         CommandId::SettingsChange,
         CommandId::ShowLog,
         CommandId::Suspend,
@@ -619,6 +624,10 @@ const DIALOGS: &[Context] = &[
 ];
 const STUDIO: &[Context] = &[Context::Templates];
 const BUILDER: &[Context] = &[Context::Builder];
+/// The guide answers wherever templates are the subject: the tab and the
+/// editor. Deliberately not `Global` — `G` is already the jump to the last row
+/// on every list that has one, and one key means one thing per context.
+const GUIDE: &[Context] = &[Context::Templates, Context::Builder];
 const SETTINGS: &[Context] = &[Context::Settings];
 
 macro_rules! cmd {
@@ -1231,6 +1240,17 @@ pub static COMMANDS: &[Command] = &[
         not_busy
     ),
     cmd!(
+        Guide,
+        "Template guide",
+        "how templates work, and a walkthrough that builds your first one",
+        GUIDE,
+        [Key::ch('G')],
+        Templates,
+        palette = true,
+        hint = true,
+        always
+    ),
+    cmd!(
         StudioFromFolder,
         "Template from a folder",
         "generate a template out of a folder that already has the shape you want",
@@ -1318,6 +1338,17 @@ pub static COMMANDS: &[Command] = &[
         palette = false,
         hint = true,
         builder_list_closed
+    ),
+    cmd!(
+        BuilderExplain,
+        "Toggle the explanation panel",
+        "show or hide the panel that explains the highlighted part and shows what it would produce",
+        BUILDER,
+        [Key::ch('i')],
+        Navigate,
+        palette = true,
+        hint = false,
+        always
     ),
     // --- the settings list -------------------------------------------------
     cmd!(
@@ -1448,12 +1479,14 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::StudioNew => "new",
         CommandId::StudioFromFolder => "from a folder",
         CommandId::StudioDelete => "delete",
+        CommandId::Guide => "guide",
         CommandId::BuilderOpen => "open",
         CommandId::BuilderAdd => "add",
         CommandId::BuilderRemove => "remove",
         CommandId::BuilderMoveUp => "up",
         CommandId::BuilderMoveDown => "down",
         CommandId::BuilderSave => "save",
+        CommandId::BuilderExplain => "explain",
         CommandId::SettingsChange => "change / run",
         _ => title,
     }

@@ -134,6 +134,11 @@ pub fn fixture(n: usize, width: u16, height: u16) -> App {
     );
     app.is_menu = true;
     app.clock = || "10:00:00".to_string();
+    // **Past the one-time guide.** It offers itself the first time templates
+    // come up at all, so without this a fixture that opens the tab gets the
+    // guide on top and every key after it turns a page instead of driving the
+    // thing under test. `guide_fixture` is the one that meets the offer.
+    app.guide_seen = true;
     let _ = app.start();
 
     let _ = crate::tui::app::update(
@@ -145,7 +150,17 @@ pub fn fixture(n: usize, width: u16, height: u16) -> App {
 
 /// An app whose discovery is still in flight.
 pub fn empty_fixture(width: u16, height: u16) -> App {
-    App::new(Entry::Menu, Theme::mono(), (width, height))
+    let mut app = App::new(Entry::Menu, Theme::mono(), (width, height));
+    app.guide_seen = true;
+    app
+}
+
+/// A fixture that has **not** read the template guide, for the one thing that
+/// is about meeting it: the offer the first time templates come up.
+pub fn guide_fixture(n: usize, width: u16, height: u16) -> App {
+    let mut app = fixture(n, width, height);
+    app.guide_seen = false;
+    app
 }
 
 /// `sample_summary` with the second base mounted, so `Move` is available: the

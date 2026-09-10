@@ -28,7 +28,24 @@ fn sized(area: Rect, body: u16) -> Rect {
 }
 
 /// How many rows the builder's open face wants.
-fn body_height(builder: &Builder) -> u16 {
+///
+/// With the panel open this is also how much room the *explanation* gets, and
+/// a seven-row list would otherwise cut every paragraph beside it to three
+/// lines. The list keeps its own height; the dialog takes the taller of the
+/// two, so opening a part and coming back never moves the box.
+fn body_height(explaining: bool, builder: &Builder) -> u16 {
+    let wanted = face_height(builder);
+    if explaining {
+        wanted.max(PANEL_ROWS)
+    } else {
+        wanted
+    }
+}
+
+/// The rows a panel needs before it is worth the width it costs.
+const PANEL_ROWS: u16 = 16;
+
+fn face_height(builder: &Builder) -> u16 {
     match &builder.open {
         None => Row::ALL.len() as u16,
         Some(Open::Metadata(form)) | Some(Open::Id(form)) => form.rows() as u16,
@@ -55,7 +72,7 @@ fn block<'a>(app: &App, title: String) -> Block<'a> {
 
 /// The dialog's chrome: a bordered box with a footer line and a key line, and
 /// the body between them. Returns the body and the two lines.
-fn frame_parts(
+pub(crate) fn frame_parts(
     app: &App,
     title: String,
     frame: &mut Frame,
@@ -74,7 +91,7 @@ fn frame_parts(
     Some((body, footer, keys))
 }
 
-fn footer_line(frame: &mut Frame, area: Rect, text: &str, style: ratatui::style::Style) {
+pub(crate) fn footer_line(frame: &mut Frame, area: Rect, text: &str, style: ratatui::style::Style) {
     frame.render_widget(Paragraph::new(Span::styled(text.to_string(), style)), area);
 }
 
@@ -86,7 +103,7 @@ fn footer_line(frame: &mut Frame, area: Rect, text: &str, style: ratatui::style:
 /// `Esc leave i`, which is a key line saying something that is not a key. Half
 /// an entry is worse than none: the entries are ordered, so the ones that fit
 /// are the ones that matter most.
-fn key_line<K: AsRef<str>, V: AsRef<str>>(
+pub(crate) fn key_line<K: AsRef<str>, V: AsRef<str>>(
     theme: &Theme,
     pairs: &[(K, V)],
     width: usize,
@@ -110,7 +127,7 @@ fn key_line<K: AsRef<str>, V: AsRef<str>>(
 
 /// Owned pairs, for the key lines a widget writes itself — a form, a text
 /// area — whose keys the widget consumes and the registry does not see.
-fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+pub(crate) fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
     list.iter()
         .map(|(key, what)| ((*key).to_string(), (*what).to_string()))
         .collect()
@@ -141,7 +158,12 @@ pub fn render_builder(
     area: Rect,
 ) -> Option<Position> {
     let theme = &app.theme;
-    let area = sized(area, body_height(builder));
+    // Whether the panel is coming has to be settled before the box is sized,
+    // because a panel wants more rows than a seven-row list — and asking after
+    // the fact grew the dialog on every window too narrow to draw one.
+    let explaining = app.explain_open
+        && crate::tui::layout::panel_fits_width(sized(area, 0).width.saturating_sub(2));
+    let area = sized(area, body_height(explaining, builder));
     let title = match &builder.open {
         None => format!(" {} ", builder.title()),
         Some(open) => format!(
@@ -165,6 +187,21 @@ pub fn render_builder(
         return None;
     }
 
+    // The explanation, beside what it explains. In a window too narrow for
+    // both, the list keeps the whole body and the footer carries the one-line
+    // hint it always did — which is the 80x24 path, and the reason the footer
+    // is still built below whether or not the panel is drawn.
+    let (body, explaining) = match explaining
+        .then(|| crate::tui::layout::builder_panel(body))
+        .flatten()
+    {
+        Some((list, panel)) => {
+            render_panel(app, builder, frame, panel);
+            (list, true)
+        }
+        None => (body, false),
+    };
+
     let width = keys.width as usize;
     let (caret, hint, key_pairs) = match &builder.open {
         None => (
@@ -173,11 +210,21 @@ pub fn render_builder(
             // what the highlighted row is for. The line was empty until a save
             // was refused, which is a whole interface's worth of unused space
             // over a list of five nouns.
+            // A refusal, then a warning, then what the highlighted row is
+            // for — and the last of those only when the panel is not already
+            // saying it two columns across.
+            //
+            // **The warning is always here and never there.** The panel
+            // explains; this line refuses and warns. Splitting them that way
+            // gives each one place — the rule the whole app is built on — and
+            // it is also the only one that cannot lose: the footer is a fixed
+            // row of the box, so a warning can never be pushed off the end of
+            // it the way it can off the bottom of a panel.
             builder
                 .error
                 .clone()
                 .or_else(|| row_note(builder))
-                .or_else(|| Some(builder.row().hint().to_string())),
+                .or_else(|| (!explaining).then(|| builder.row().hint().to_string())),
             // Esc asks before it discards now, so the registry's own word for
             // the key — "close" — is the true one and the rewrite is gone.
             registry_keys(app, Context::Builder, width),
@@ -186,15 +233,19 @@ pub fn render_builder(
             render_form(app, form, frame, body),
             form.error()
                 .map(str::to_string)
-                .or_else(|| form.focused().map(|field| field.hint.clone())),
+                .or_else(|| field_hint(form, explaining)),
             pairs(&[("Tab", "next field"), ("Enter", "keep"), ("Esc", "back")]),
         ),
-        Some(Open::Variables(list)) => render_variables(app, builder, list, frame, body, width),
+        Some(Open::Variables(list)) => {
+            render_variables(app, builder, list, frame, body, width, explaining)
+        }
         Some(Open::Structure(area_state)) => {
             let caret = render_structure(app, area_state, frame, body);
             (
                 caret,
-                Some("one folder path per line — use / to nest on every platform".to_string()),
+                (!explaining).then(|| {
+                    "one folder path per line — use / to nest on every platform".to_string()
+                }),
                 // Same order as the base list's, and for the same reason.
                 pairs(&[
                     ("Ctrl-S", "keep"),
@@ -204,15 +255,11 @@ pub fn render_builder(
                 ]),
             )
         }
-        Some(Open::Files(list)) => render_files(app, builder, list, frame, body, width),
+        Some(Open::Files(list)) => render_files(app, builder, list, frame, body, width, explaining),
     };
 
-    let style =
-        if builder.error.is_some() || (builder.open.is_none() && row_note(builder).is_some()) {
-            theme.warn()
-        } else {
-            theme.dim()
-        };
+    let warned = builder.error.is_some() || (builder.open.is_none() && row_note(builder).is_some());
+    let style = if warned { theme.warn() } else { theme.dim() };
     let text = hint.unwrap_or_default();
     footer_line(
         frame,
@@ -228,6 +275,54 @@ pub fn render_builder(
         keys,
     );
     caret
+}
+
+/// The panel: what the highlighted row or field is, and — on the section list,
+/// where no editor is showing it — what this template would produce.
+///
+/// It exists because the whole teaching budget of this editor used to be one
+/// footer line cut with an ellipsis, over a list of five nouns in the
+/// manifest's own vocabulary. Its words come from `guide`, which is the one
+/// place any of them are written.
+fn render_panel(app: &App, builder: &Builder, frame: &mut Frame, area: Rect) {
+    let theme = &app.theme;
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(theme.border(false));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    // A column of padding off the rule, so the prose is not against it.
+    let text = Rect::new(
+        inner.x + 1,
+        inner.y,
+        inner.width.saturating_sub(2),
+        inner.height,
+    );
+    let notes = panel_notes(builder, theme.glyphs.is_ascii());
+    let lines = crate::tui::view::note_lines(&notes, theme, text.width as usize);
+    frame.render_widget(Paragraph::new(lines), text);
+}
+
+/// Which explanation belongs beside the face that is open.
+fn panel_notes(builder: &Builder, ascii: bool) -> Vec<crate::tui::guide::Note> {
+    use crate::tui::guide;
+
+    let field_or_section = |section: Section, form: &Form| {
+        form.focused()
+            .and_then(|field| guide::panel_for_field(section, &field.key))
+            .unwrap_or_else(|| guide::explain_section(section))
+    };
+    match &builder.open {
+        None => guide::panel_for_row(builder.row(), &builder.template, ascii),
+        Some(Open::Metadata(form)) => field_or_section(Section::Metadata, form),
+        Some(Open::Id(form)) => field_or_section(Section::Id, form),
+        Some(Open::Variables(list)) => match &list.editing {
+            Some((_, form)) => field_or_section(Section::Variables, form),
+            None => guide::explain_section(Section::Variables),
+        },
+        Some(Open::Structure(_)) => guide::explain_section(Section::Structure),
+        Some(Open::Files(_)) => guide::explain_section(Section::Files),
+    }
 }
 
 /// What the highlighted row has to say beyond its own hint: for Metadata,
@@ -286,18 +381,21 @@ fn render_sections(
                     )
                 }
                 Row::Section(section) => (section.label(), builder.summary(*section), theme.dim()),
-                Row::Save => (
-                    "Save",
-                    match builder.error.as_deref() {
-                        Some(_) => "refused — see below".to_string(),
-                        None => "write the template".to_string(),
-                    },
-                    if builder.error.is_some() {
-                        theme.warn()
-                    } else {
-                        theme.good()
-                    },
-                ),
+                // The row counts what is still worth a look, so the coach
+                // works with the panel closed too. It is **advice and never a
+                // refusal** — `Template::validate` and `operations` keep all of
+                // the authority, and every one of these saves perfectly well.
+                Row::Save => {
+                    let gaps = crate::tui::guide::gaps(&builder.template).len();
+                    match (builder.error.as_deref(), gaps) {
+                        (Some(_), _) => ("Save", "refused — see below".to_string(), theme.warn()),
+                        (None, 0) => ("Save", "write the template".to_string(), theme.good()),
+                        // Just the count: the row's own footer hint and the
+                        // panel both already say what Save does, and a summary
+                        // cut at the column edge says neither.
+                        (None, n) => ("Save", format!("{n} to look at first"), theme.dim()),
+                    }
+                }
                 Row::Discard => ("Discard", "leave without writing".to_string(), theme.dim()),
             };
             ListItem::new(Line::from(vec![
@@ -313,6 +411,14 @@ fn render_sections(
     None
 }
 
+/// The focused field's one-line hint, unless the panel is already explaining
+/// that field at length beside it.
+fn field_hint(form: &Form, explaining: bool) -> Option<String> {
+    (!explaining)
+        .then(|| form.focused().map(|field| field.hint.clone()))
+        .flatten()
+}
+
 fn render_form(app: &App, form: &Form, frame: &mut Frame, area: Rect) -> Option<Position> {
     form.render(area, frame.buffer_mut(), &app.theme, LABEL)
 }
@@ -326,6 +432,7 @@ fn render_variables(
     frame: &mut Frame,
     area: Rect,
     width: usize,
+    explaining: bool,
 ) -> Face {
     let theme = &app.theme;
     if let Some((_, form)) = &list.editing {
@@ -333,7 +440,7 @@ fn render_variables(
             render_form(app, form, frame, area),
             form.error()
                 .map(str::to_string)
-                .or_else(|| form.focused().map(|field| field.hint.clone())),
+                .or_else(|| field_hint(form, explaining)),
             pairs(&[("Tab", "next field"), ("Enter", "keep"), ("Esc", "back")]),
         );
     }
@@ -369,7 +476,7 @@ fn render_variables(
     }
     (
         None,
-        Some("a variable's slug is its token: {artist}".to_string()),
+        (!explaining).then(|| "a variable's slug is its token: {artist}".to_string()),
         registry_keys(app, Context::Builder, width),
     )
 }
@@ -390,7 +497,7 @@ fn render_structure(
         .split(area);
 
     let tree = crate::tui::app::studio::parse_paths_to_tree(&area_state.entries());
-    let ascii = theme.glyphs.rule == "-";
+    let ascii = theme.glyphs.is_ascii();
     let lines: Vec<Line> = crate::tui::widgets::tree::lines(&tree, ascii)
         .into_iter()
         .map(|line| Line::from(Span::styled(format!(" {line}"), theme.dim())))
@@ -413,10 +520,11 @@ fn render_files(
     frame: &mut Frame,
     area: Rect,
     width: usize,
+    explaining: bool,
 ) -> Face {
     let theme = &app.theme;
     if let Some(edit) = &list.editing {
-        return render_file_edit(app, builder, edit, frame, area);
+        return render_file_edit(app, builder, edit, frame, area, explaining);
     }
     let items: Vec<ListItem> = builder
         .template
@@ -453,7 +561,7 @@ fn render_files(
     }
     (
         None,
-        Some("a file's text is interpolated at create time".to_string()),
+        (!explaining).then(|| "a file's text is interpolated at create time".to_string()),
         registry_keys(app, Context::Builder, width),
     )
 }
@@ -464,6 +572,7 @@ fn render_file_edit(
     edit: &FileEdit,
     frame: &mut Frame,
     area: Rect,
+    explaining: bool,
 ) -> Face {
     let theme = &app.theme;
     let path_area = Rect::new(area.x, area.y, area.width, 1);
@@ -510,7 +619,9 @@ fn render_file_edit(
     (
         if edit.in_body { caret_body } else { caret_path },
         edit.error.clone().or_else(|| {
-            Some("Tab moves between the path and the text; an empty text is a marker file".into())
+            (!explaining).then(|| {
+                "Tab moves between the path and the text; an empty text is a marker file".into()
+            })
         }),
         pairs(&[("Ctrl-S", "keep"), ("Tab", "path / text"), ("Esc", "back")]),
     )
@@ -702,7 +813,7 @@ pub fn render_onboarding(
     area: Rect,
 ) -> Option<Position> {
     let theme = &app.theme;
-    let area = crate::tui::layout::centered_fixed(area, 68.min(area.width), 9);
+    let area = crate::tui::layout::centered_fixed(area, 68.min(area.width), 10);
     let (body, footer, keys) = frame_parts(app, " welcome ".to_string(), frame, area)?;
 
     frame.render_widget(
@@ -719,10 +830,21 @@ pub fn render_onboarding(
                 " Add more later (a second drive, a network share) under Settings.",
                 theme.dim(),
             )),
+            // The one thing a first run cannot discover for itself: that
+            // templates are what shape a project, and that there is a guide to
+            // them. Both keys read from the registry, never spelled here.
+            Line::from(Span::styled(
+                format!(
+                    " Templates shape every project: {} opens them, {} explains them.",
+                    crate::tui::command::key_of(command::CommandId::Templates),
+                    crate::tui::command::key_of(command::CommandId::Guide),
+                ),
+                theme.dim(),
+            )),
         ]),
-        Rect::new(body.x, body.y, body.width, 3),
+        Rect::new(body.x, body.y, body.width, 4),
     );
-    let line = Rect::new(body.x, body.y + 4, body.width, 1);
+    let line = Rect::new(body.x, body.y + 5, body.width, 1);
     let caret = state
         .input
         .render_line(line, frame.buffer_mut(), Span::raw(" "), theme.text());

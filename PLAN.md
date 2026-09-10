@@ -62,12 +62,16 @@ against a planted literal), `a_text_entry_context_advertises_only_the_keys_that_
 and `the_arrows_are_spelled_once_and_read_everywhere` in `tests/tui_commands.rs`,
 and a `key_lines` module in `tests/tui_update.rs`.
 
-## Phase 3 — four things the app could not do  ☐
+## Phase 3 — four things the app could not do  ☑
 
 - `v` marks from the last mark to the cursor.
 - `/` filters the settings list.
 - Every sort runs both ways.
 - `FilterTag`, palette-only, writes `tag:<x>` into the bar.
+
+Left behind: a `more_options` module in `tests/tui_update.rs`, and a
+`session.rs` unit test that a sort label written before there was a direction
+still names an order.
 
 ## Phase 4 — motion, and only where it answers a question  ☐
 

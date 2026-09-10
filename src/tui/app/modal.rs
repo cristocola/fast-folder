@@ -32,6 +32,10 @@ pub enum Then {
     MoveToBase,
     /// The picked value is a base path to restrict the list to.
     BaseFilter,
+    /// The picked value is a tag; it goes into the search bar as `tag:x`,
+    /// because that is what a tag filter *is* here — the grammar already had
+    /// it, and this is a way to find it without typing it.
+    TagFilter,
     /// The picked value answers the named field of the open flow's form —
     /// what Space on a choice opens, so a twenty-template list is one fuzzy
     /// search rather than twenty presses of `→`.

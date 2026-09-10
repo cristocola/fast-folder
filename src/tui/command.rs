@@ -301,6 +301,7 @@ pub enum CommandId {
     SortPick,
     FilterTemplate,
     FilterBase,
+    FilterTag,
     ClearFilters,
     // The selected project
     Actions,
@@ -324,6 +325,7 @@ pub enum CommandId {
     ShowJournal,
     // Marks, batch targets
     MarkToggle,
+    MarkToHere,
     MarkAll,
     MarkNone,
     // Flows that open their own screen
@@ -355,6 +357,7 @@ pub enum CommandId {
     BuilderExplain,
     // The settings list
     SettingsChange,
+    SettingsFilter,
     // The message log
     ShowLog,
     // Ctrl-Z
@@ -362,7 +365,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 89] = [
+    pub const ALL: [CommandId; 92] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -405,6 +408,7 @@ impl CommandId {
         CommandId::SortPick,
         CommandId::FilterTemplate,
         CommandId::FilterBase,
+        CommandId::FilterTag,
         CommandId::ClearFilters,
         CommandId::Actions,
         CommandId::OpenFolder,
@@ -425,6 +429,7 @@ impl CommandId {
         CommandId::ShowMetadata,
         CommandId::ShowJournal,
         CommandId::MarkToggle,
+        CommandId::MarkToHere,
         CommandId::MarkAll,
         CommandId::MarkNone,
         CommandId::NewProject,
@@ -450,6 +455,7 @@ impl CommandId {
         CommandId::BuilderSave,
         CommandId::BuilderExplain,
         CommandId::SettingsChange,
+        CommandId::SettingsFilter,
         CommandId::ShowLog,
         CommandId::Suspend,
     ];
@@ -604,6 +610,25 @@ fn has_any_rows(app: &App) -> Availability {
         Availability::Disabled("no projects")
     } else {
         Availability::Enabled
+    }
+}
+
+/// `v` reaches from the last row Space touched to the cursor, so it needs one
+/// — and needs it to still be on the list the filter is showing.
+/// A tag filter needs a tag to filter by.
+fn has_any_tags(app: &App) -> Availability {
+    if app.library.known_tags.is_empty() {
+        Availability::Hidden
+    } else {
+        Availability::Enabled
+    }
+}
+
+fn has_anchor(app: &App) -> Availability {
+    if app.library.has_anchor() {
+        Availability::Enabled
+    } else {
+        Availability::Disabled("mark a row with Space first, then move and press this")
     }
 }
 
@@ -1238,6 +1263,17 @@ pub static COMMANDS: &[Command] = &[
         needs_selection
     ),
     cmd!(
+        FilterTag,
+        "Filter by tag",
+        "show only the projects carrying one tag — the search bar's `tag:` in a list",
+        PD,
+        [],
+        Search,
+        palette = true,
+        hint = false,
+        has_any_tags
+    ),
+    cmd!(
         FilterBase,
         "Filter by base",
         "show only the projects in one base",
@@ -1479,6 +1515,17 @@ pub static COMMANDS: &[Command] = &[
         palette = true,
         hint = true,
         needs_selection
+    ),
+    cmd!(
+        MarkToHere,
+        "Mark to here",
+        "mark every row between the last one you marked and the cursor",
+        PD,
+        [Key::ch('v')],
+        Library,
+        palette = true,
+        hint = false,
+        has_anchor
     ),
     cmd!(
         MarkAll,
@@ -1744,6 +1791,17 @@ pub static COMMANDS: &[Command] = &[
     ),
     // --- the settings list -------------------------------------------------
     cmd!(
+        SettingsFilter,
+        "Filter the settings",
+        "type to narrow this screen to the settings you are looking for",
+        SETTINGS,
+        [Key::ch('/')],
+        Settings,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
         SettingsChange,
         "Change / run",
         "flip a yes/no or cycle a choice where it stands, open a value on its line, or run the maintenance verb",
@@ -1975,6 +2033,8 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::BuilderSave => "save",
         CommandId::BuilderExplain => "explain",
         CommandId::SettingsChange => "change / run",
+        CommandId::SettingsFilter => "filter",
+        CommandId::MarkToHere => "mark to here",
         CommandId::PaletteRun => "run",
         CommandId::PaletteClose => "close",
         CommandId::PromptConfirm => "confirm",

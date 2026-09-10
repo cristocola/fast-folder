@@ -80,12 +80,82 @@ impl Order {
     }
 
     /// The order a label names — one of the cycle's, never `Relevance`,
-    /// which is chosen by the query and not by a person.
+    /// which is chosen by the query and not by a person. A trailing
+    /// `reversed` is the direction and belongs to `Sort`, so it is ignored
+    /// here; `Sort::from_label` reads both halves.
     pub fn from_label(label: &str) -> Option<Order> {
+        let label = label.trim().trim_end_matches(Sort::REVERSED).trim();
         Self::CYCLE
             .iter()
             .copied()
-            .find(|order| order.label() == label.trim())
+            .find(|order| order.label() == label)
+    }
+
+    /// Whether running this order backwards says anything the cycle does not.
+    ///
+    /// `newest` and `oldest` are already the two directions of one order, and
+    /// relevance is the query's answer rather than a person's choice — so
+    /// offering "newest reversed" beside "oldest" would be one list with two
+    /// names for the same row.
+    pub fn reversible(self) -> bool {
+        matches!(
+            self,
+            Order::Name | Order::Id | Order::Template | Order::Base | Order::Size
+        )
+    }
+
+    /// What running it backwards actually does, for the picker's second
+    /// column — "reversed" says which way, not what you get.
+    pub fn reversed_detail(self) -> &'static str {
+        match self {
+            Order::Name => "z to a",
+            Order::Id => "the highest ID first",
+            Order::Template => "z to a",
+            Order::Base => "z to a",
+            Order::Size => "the smallest first",
+            _ => "",
+        }
+    }
+}
+
+/// An order and the direction it runs in.
+///
+/// The direction is not a second `Order` variant because every order that has
+/// one has the *same* one, and five more variants is five more rows in a
+/// picker, five more labels to persist and five more arms in `compare`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sort {
+    pub order: Order,
+    pub reversed: bool,
+}
+
+impl Sort {
+    /// The word a reversed label ends in — one spelling, read by the session
+    /// file, the picker and the search bar alike.
+    pub const REVERSED: &'static str = "reversed";
+
+    pub fn new(order: Order) -> Self {
+        Self {
+            order,
+            reversed: false,
+        }
+    }
+
+    pub fn label(self) -> String {
+        if self.reversed {
+            format!("{} {}", self.order.label(), Self::REVERSED)
+        } else {
+            self.order.label().to_string()
+        }
+    }
+
+    /// Reads what `label` writes — **and every label written before there was
+    /// a direction to write**, so a `state.toml` from an earlier version still
+    /// names an order.
+    pub fn from_label(label: &str) -> Option<Self> {
+        let order = Order::from_label(label)?;
+        let reversed = label.trim().ends_with(Self::REVERSED) && order.reversible();
+        Some(Self { order, reversed })
     }
 }
 
@@ -121,8 +191,11 @@ pub struct LibraryState {
     /// First visible row of `filtered`.
     pub offset: usize,
     pub marks: BTreeSet<PathBuf>,
+    /// The row Space last acted on, so `v` has somewhere to reach from. Kept
+    /// by path like the marks themselves, and dropped when that row leaves.
+    pub last_mark: Option<PathBuf>,
     /// What the user chose with `s`/`S`; `None` follows the query.
-    pub explicit_sort: Option<Order>,
+    pub explicit_sort: Option<Sort>,
     pub template_filter: Option<String>,
     /// The one base the list is restricted to, by its full path. A path rather
     /// than a label, because two bases can share a basename and the label is
@@ -168,6 +241,7 @@ impl LibraryState {
             selected: None,
             offset: 0,
             marks: BTreeSet::new(),
+            last_mark: None,
             explicit_sort: None,
             template_filter: None,
             base_filter: None,
@@ -205,6 +279,7 @@ impl LibraryState {
     fn replace_snapshot(&mut self, projects: Vec<Project>) {
         let present: BTreeSet<PathBuf> = projects.iter().map(|p| p.path.clone()).collect();
         self.marks.retain(|path| present.contains(path));
+        self.last_mark = self.last_mark.take().filter(|p| present.contains(p));
         self.meta.retain(|path, _| present.contains(path));
         self.snapshot = projects;
         self.rebuild_haystacks();
@@ -248,6 +323,9 @@ impl LibraryState {
             // longer this project's.
             let old_path = self.snapshot[index].path.clone();
             self.marks.remove(&old_path);
+            if self.last_mark.as_deref() == Some(was) {
+                self.last_mark = Some(project.path.clone());
+            }
             self.meta.remove(&old_path);
         }
         self.snapshot[index] = project;
@@ -264,6 +342,9 @@ impl LibraryState {
             self.snapshot.remove(index);
             self.haystacks.remove(index);
             self.marks.remove(path);
+            if self.last_mark.as_deref() == Some(path) {
+                self.last_mark = None;
+            }
             self.meta.remove(path);
             self.sizes.remove(path);
             self.known_tags = known_tags(&self.snapshot);
@@ -292,11 +373,11 @@ impl LibraryState {
     }
 
     /// The order the rows are in right now.
-    pub fn effective_sort(&self, query: &Query) -> Order {
+    pub fn effective_sort(&self, query: &Query) -> Sort {
         match self.explicit_sort {
             Some(sort) => sort,
-            None if !query.free.is_empty() => Order::Relevance,
-            None => Order::Newest,
+            None if !query.free.is_empty() => Sort::new(Order::Relevance),
+            None => Sort::new(Order::Newest),
         }
     }
 
@@ -393,6 +474,23 @@ impl LibraryState {
     }
 
     fn compare(
+        &self,
+        sort: Sort,
+        a: &(usize, Option<MatchInfo>),
+        b: &(usize, Option<MatchInfo>),
+    ) -> std::cmp::Ordering {
+        // **The tie-break never turns round.** Two rows that the order cannot
+        // tell apart are settled by date, and running that backwards too would
+        // shuffle every group of equals as well as the groups themselves.
+        let out = self.compare_by(sort.order, a, b);
+        if sort.reversed && sort.order.reversible() {
+            out.reverse()
+        } else {
+            out
+        }
+    }
+
+    fn compare_by(
         &self,
         sort: Order,
         a: &(usize, Option<MatchInfo>),
@@ -538,6 +636,52 @@ impl LibraryState {
         self.visible_paths(rows)
             .iter()
             .any(|path| !self.sizes.contains_key(path))
+    }
+
+    /// Mark every row between the last one Space touched and the cursor,
+    /// inclusive, in the order the list is showing. A run of twenty is three
+    /// keystrokes instead of twenty.
+    ///
+    /// **In view order, not in the snapshot's.** The rows between two rows are
+    /// the rows a person can see between them; sorting by size and reaching
+    /// from the first to the fourth means those four, whatever order they were
+    /// discovered in.
+    pub fn mark_to_here(&mut self) -> usize {
+        let (Some(anchor), Some(cursor)) = (self.last_mark.clone(), self.selected) else {
+            return 0;
+        };
+        let Some(from) = self
+            .filtered
+            .iter()
+            .position(|&index| self.snapshot[index].path == anchor)
+        else {
+            return 0;
+        };
+        let (lo, hi) = if from <= cursor {
+            (from, cursor)
+        } else {
+            (cursor, from)
+        };
+        let mut added = 0;
+        for row in lo..=hi {
+            let Some(project) = self.row(row) else {
+                continue;
+            };
+            if self.marks.insert(project.path.clone()) {
+                added += 1;
+            }
+        }
+        self.last_mark = self.selected().map(|p| p.path.clone());
+        added
+    }
+
+    /// Whether `v` has an anchor to reach from.
+    pub fn has_anchor(&self) -> bool {
+        self.last_mark.as_ref().is_some_and(|path| {
+            self.filtered
+                .iter()
+                .any(|&i| self.snapshot[i].path == *path)
+        })
     }
 
     /// What a verb acts on: the marks when there are any, else the selection.

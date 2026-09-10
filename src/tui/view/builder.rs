@@ -656,7 +656,15 @@ pub fn render_settings(
     let theme = &app.theme;
     let g = theme.glyphs;
     let area = sized(area, 22);
-    let (body, footer, keys) = frame_parts(app, " settings ".to_string(), frame, area)?;
+    // **The filter is in the title, where a screen showing fewer rows than it
+    // has says why.** Not on a line of its own: the list is what the box is
+    // for, and a filter that costs a row is a filter that shows you less of
+    // what you were looking for.
+    let title = match state.filter.text().trim() {
+        "" => " settings ".to_string(),
+        query => format!(" settings {} {} {query} ", g.sep, g.search),
+    };
+    let (body, footer, keys) = frame_parts(app, title, frame, area)?;
     if state.rows.is_empty() {
         footer_line(frame, footer, " reading the settings…", theme.dim());
         frame.render_widget(
@@ -735,6 +743,28 @@ pub fn render_settings(
         render_setting_editor(app, editing, frame, body, row, label_width)
     });
 
+    // While the filter is open it takes the footer: a caret belongs where the
+    // text is, the footer is a fixed row that nothing can push off the end,
+    // and the list stays whole underneath so you can watch it narrow.
+    if matches!(state.editing, Some(Editing::Filter)) {
+        frame.render_widget(Clear, footer);
+        let caret = state.filter.render_line(
+            footer,
+            frame.buffer_mut(),
+            Span::styled(format!(" {} ", g.search), theme.accent()),
+            theme.text(),
+        );
+        frame.render_widget(
+            Paragraph::new(key_line(
+                theme,
+                &pairs(&[("Esc", "clear and close"), ("Enter", "keep it")]),
+                keys.width as usize,
+            )),
+            keys,
+        );
+        return caret;
+    }
+
     let (text, style) = match (state.error(), state.pending) {
         (Some(error), _) => (format!(" {} {error}", g.warn), theme.warn()),
         (None, true) => (" working…".to_string(), theme.dim()),
@@ -750,6 +780,8 @@ pub fn render_settings(
         style,
     );
     let key_pairs: Vec<(String, String)> = match &state.editing {
+        // Handled above, where it takes the footer.
+        Some(Editing::Filter) => Vec::new(),
         // `Ctrl-K` too: the same widget answers it, the Structure editor's
         // key line names it, and dropping a line is exactly what somebody
         // opens this box to do.
@@ -786,6 +818,9 @@ fn render_setting_editor(
         return None;
     }
     match editing {
+        // Drawn on the footer by `render_settings`, not over a row: it is not
+        // a value, so it belongs to no row.
+        Editing::Filter => None,
         Editing::Value { label, input, .. } => {
             let line = Rect::new(body.x, body.y + row, body.width, 1);
             frame.render_widget(Clear, line);

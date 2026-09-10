@@ -193,8 +193,8 @@ them, and so do `→` and `←`.
 | `T` | the templates tab, and `T` again (or Esc) back to the library |
 | Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
-| `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size |
-| `f` / `b` / `F` | show only the selected project's template / show only one base's projects / clear both filters |
+| `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size — and every one of those but the dates runs **both ways**, so `size reversed` is the smallest first and `id reversed` is the highest ID first |
+| `f` / `b` / `F` | show only the selected project's template / show only one base's projects / clear both filters. *Filter by tag* is in the command palette; it writes `tag:x` into the search bar, which is what a tag filter is |
 | `i` | show or hide the detail pane |
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
@@ -203,9 +203,9 @@ them, and so do `→` and `←`.
 | `C` | copy the project to a folder outside your bases, keeping its ID |
 | `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good — it names the folder and asks you to type `delete` |
 | `M`, `J` | the selected project's metadata (its frontmatter); its journal |
-| Space, `*`, `-` | mark the row and step on; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
+| Space, `v`, `*`, `-` | mark the row and step on; mark every row **between the last one you marked and the cursor**; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
-| `,` | the settings |
+| `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
 | `!` | check and recover — what `⚠ n needs attention` means |
 | `L` | the session's messages, newest first with the time each arrived — a warning that flashed under a dialog is counted on the status line until you read them |

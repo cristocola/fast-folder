@@ -34,6 +34,18 @@ pub enum Kind {
     Run(Job),
 }
 
+impl Kind {
+    /// The configuration key this row is, if it is one — what `config set`
+    /// takes, and therefore the other name a person may search for it by.
+    pub fn key(&self) -> Option<&'static str> {
+        match self {
+            Kind::Text(key) | Kind::Bool(key) | Kind::Choice(key, _) => Some(key),
+            Kind::Bases => Some("bases"),
+            Kind::Heading | Kind::Run(_) => None,
+        }
+    }
+}
+
 /// The maintenance verbs, which the command line had and the menu reached only
 /// by leaving it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +112,9 @@ impl Onboarding {
 /// What is being edited over the list, if anything.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Editing {
+    /// The list's own filter. Not a value: it changes what is shown rather
+    /// than what is stored, so it commits nothing and refuses nothing.
+    Filter,
     /// One value on a line, with the refusal it earned.
     Value {
         key: &'static str,
@@ -121,6 +136,9 @@ pub struct SettingsState {
     pub selected: usize,
     pub offset: usize,
     pub editing: Option<Editing>,
+    /// What the list is narrowed to. Kept after the editor closes, so a
+    /// filtered screen stays filtered while you act on it.
+    pub filter: LineEdit,
     /// A worker is reading the settings back.
     pub pending: bool,
 }
@@ -135,6 +153,7 @@ impl SettingsState {
             selected,
             offset: 0,
             editing: None,
+            filter: LineEdit::default(),
             pending: false,
         }
     }
@@ -148,12 +167,62 @@ impl SettingsState {
             selected: 0,
             offset: 0,
             editing: None,
+            filter: LineEdit::default(),
             pending: true,
         }
     }
 
     /// Rebuild after a write, keeping the cursor on the row it was on — or,
     /// for the first read, on the first row there is.
+    /// Open the list's filter.
+    pub fn begin_filter(&mut self) {
+        self.editing = Some(Editing::Filter);
+    }
+
+    /// Rebuild the list against the filter. **A plain case-insensitive
+    /// substring over the label and the key**, not a fuzzy match, for the
+    /// reason the templates tab gives: this is tens of rows with known names,
+    /// and a fuzzy hit over tens of rows says yes to almost all of them.
+    ///
+    /// A heading survives only if something under it did — a screen of
+    /// headings with nothing beneath them is a list that looks broken.
+    pub fn apply_filter(&mut self) {
+        let all = rows(&self.settings);
+        let needle = self.filter.text().trim().to_lowercase();
+        self.rows = if needle.is_empty() {
+            all
+        } else {
+            let keeps = |row: &Row| {
+                row.label.to_lowercase().contains(&needle)
+                    || row.kind.key().is_some_and(|k| k.contains(&needle))
+                    || row.value.to_lowercase().contains(&needle)
+            };
+            let mut kept: Vec<Row> = Vec::new();
+            for row in all {
+                if row.selectable() {
+                    if keeps(&row) {
+                        kept.push(row);
+                    }
+                } else {
+                    // A heading, held back until something under it is kept.
+                    while kept.last().is_some_and(|last| !last.selectable()) {
+                        kept.pop();
+                    }
+                    kept.push(row);
+                }
+            }
+            while kept.last().is_some_and(|last| !last.selectable()) {
+                kept.pop();
+            }
+            kept
+        };
+        self.selected = self.selected.min(self.rows.len().saturating_sub(1));
+        if !self.rows.get(self.selected).is_some_and(Row::selectable) {
+            self.selected = self.rows.iter().position(Row::selectable).unwrap_or(0);
+        }
+        self.offset = 0;
+    }
+
     pub fn refresh(&mut self, settings: Settings) {
         let first = self.rows.is_empty();
         let keep = self.selected;
@@ -164,6 +233,9 @@ impl SettingsState {
         } else {
             keep.min(self.rows.len().saturating_sub(1))
         };
+        if !self.filter.text().trim().is_empty() {
+            self.apply_filter();
+        }
         if !self.rows.get(self.selected).is_some_and(Row::selectable) {
             self.step(1);
         }
@@ -262,6 +334,8 @@ impl SettingsState {
             // `config set bases` takes the comma-separated list, which is what
             // the lines are once the blank ones are dropped.
             Editing::Bases { area, .. } => Some(("bases", area.entries().join(","))),
+            // The filter changes what is shown, never what is stored.
+            Editing::Filter => None,
         }
     }
 
@@ -272,13 +346,14 @@ impl SettingsState {
             Some(Editing::Value { error, .. }) | Some(Editing::Bases { error, .. }) => {
                 *error = Some(message);
             }
-            None => {}
+            Some(Editing::Filter) | None => {}
         }
     }
 
     pub fn error(&self) -> Option<&str> {
         match self.editing.as_ref()? {
             Editing::Value { error, .. } | Editing::Bases { error, .. } => error.as_deref(),
+            Editing::Filter => None,
         }
     }
 }

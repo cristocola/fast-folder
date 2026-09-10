@@ -44,7 +44,7 @@ use crate::tui::widgets::form::FormEvent;
 use crate::util::diag::Level;
 use crate::util::size_scan::SizeCell;
 use data::{Prefs, ProjectDetail, Summary, TemplateCard};
-use library::{LibraryState, Order};
+use library::{LibraryState, Order, Sort};
 use modal::{GuideState, MessageLevel, Modal, ModalStack, PickItem, PickState, Then};
 use palette::{PaletteState, PaletteTarget};
 use search::SearchState;
@@ -715,7 +715,7 @@ impl App {
                 for (path, size) in cells {
                     self.library.sizes.insert(path, size);
                 }
-                if self.library.effective_sort(&self.search.query) == Order::Size {
+                if self.library.effective_sort(&self.search.query).order == Order::Size {
                     self.recompute();
                     let rows = self.rows_on_screen();
                     self.library.clamp_viewport(rows);
@@ -1111,6 +1111,11 @@ impl App {
                         kept_first = true;
                     }
                     Some(Editing::Bases { area, .. }) => area.paste(text),
+                    Some(Editing::Filter) => {
+                        state.filter.paste(&first);
+                        state.apply_filter();
+                        kept_first = true;
+                    }
                     None => {}
                 }
                 Vec::new()
@@ -1822,14 +1827,20 @@ impl App {
         };
         match pick.then {
             Then::SortPick => {
-                self.library.explicit_sort = Order::CYCLE
-                    .iter()
-                    .copied()
-                    .find(|s| s.label() == item.value);
+                self.library.explicit_sort = Sort::from_label(&item.value);
                 self.recompute();
                 self.after_rows_changed()
             }
             Then::TemplateFilter => self.set_template_filter(Some(item.value.clone())),
+            // A tag filter is `tag:x` in the bar and nothing else — one
+            // mechanism, so clearing it is the same Esc rung as clearing any
+            // other query and the bar goes on reporting what is filtering the
+            // list.
+            Then::TagFilter => {
+                self.search.input.set_text(format!("tag:{}", item.value));
+                self.search.sync();
+                self.after_query_change()
+            }
             Then::BaseFilter => {
                 let base = (!item.value.is_empty()).then(|| PathBuf::from(&item.value));
                 self.set_base_filter(base)
@@ -2191,6 +2202,12 @@ impl App {
             }
             CommandId::BuilderSave => self.save_template(),
             CommandId::SettingsChange => self.settings_change(),
+            CommandId::SettingsFilter => {
+                if let Some(Modal::Settings(state)) = self.modals.top_mut() {
+                    state.begin_filter();
+                }
+                Vec::new()
+            }
             CommandId::Palette => {
                 self.open_palette();
                 Vec::new()
@@ -2352,20 +2369,40 @@ impl App {
                 self.after_query_change()
             }
             CommandId::SortCycle => {
+                // The cycle walks the orders forwards. A direction is the
+                // picker's to choose, so `s` from a reversed order lands on
+                // the next one the right way up rather than staying upside
+                // down for the rest of the session.
                 let current = self.library.effective_sort(&self.search.query);
-                self.library.explicit_sort = Some(current.next());
+                self.library.explicit_sort = Some(Sort::new(current.order.next()));
                 self.recompute();
                 let sort = self.library.effective_sort(&self.search.query);
                 self.info(format!("sorted by {}", sort.label()));
                 self.after_rows_changed()
             }
             CommandId::SortPick => {
+                // Both directions of every order that has two, each beside the
+                // other: a person looking for the biggest folder and a person
+                // looking for the smallest are reading the same list.
                 let items = Order::CYCLE
                     .iter()
+                    .flat_map(|order| {
+                        let forwards = Sort::new(*order);
+                        let backwards = Sort {
+                            order: *order,
+                            reversed: true,
+                        };
+                        [Some(forwards), order.reversible().then_some(backwards)]
+                    })
+                    .flatten()
                     .map(|sort| PickItem {
-                        label: sort.label().to_string(),
-                        detail: String::new(),
-                        value: sort.label().to_string(),
+                        label: sort.label(),
+                        detail: if sort.reversed {
+                            sort.order.reversed_detail().to_string()
+                        } else {
+                            String::new()
+                        },
+                        value: sort.label(),
                     })
                     .collect();
                 self.modals.push(Modal::Pick(PickState::new(
@@ -2380,6 +2417,24 @@ impl App {
                 self.set_template_filter(slug)
             }
             CommandId::FilterBase => self.open_base_filter(),
+            CommandId::FilterTag => {
+                let items = self
+                    .library
+                    .known_tags
+                    .iter()
+                    .map(|tag| PickItem {
+                        label: tag.clone(),
+                        detail: String::new(),
+                        value: tag.clone(),
+                    })
+                    .collect();
+                self.modals.push(Modal::Pick(PickState::new(
+                    "Filter by tag",
+                    items,
+                    Then::TagFilter,
+                )));
+                Vec::new()
+            }
             CommandId::ClearFilters => self.clear_filters(),
             CommandId::Actions => {
                 self.modals.push(Modal::Actions(
@@ -2416,9 +2471,22 @@ impl App {
                     return Vec::new();
                 };
                 if !self.library.marks.remove(&path) {
-                    self.library.marks.insert(path);
+                    self.library.marks.insert(path.clone());
                 }
+                // Where `v` reaches from. Set on a mark *and* on an unmark:
+                // the anchor is "the row Space last acted on", so changing
+                // your mind about a row does not leave the anchor on it.
+                self.library.last_mark = Some(path);
                 self.library.step(1);
+                Vec::new()
+            }
+            CommandId::MarkToHere => {
+                let added = self.library.mark_to_here();
+                let total = self.library.marks.len();
+                self.info(format!(
+                    "{added} more marked {} {total} in all",
+                    self.theme.glyphs.sep
+                ));
                 Vec::new()
             }
             CommandId::MarkAll => {
@@ -3627,12 +3695,28 @@ impl App {
             return Vec::new();
         };
         // Esc leaves the value alone, which is what "Esc in a settings field →
-        // the value unchanged" has always meant.
+        // the value unchanged" has always meant. On the filter it means the
+        // whole screen back, since a filter left behind is a screen missing
+        // rows for a reason nobody can see.
         if key.code == KeyCode::Esc && !key.ctrl {
+            if matches!(state.editing, Some(Editing::Filter)) {
+                state.filter.clear();
+                state.apply_filter();
+            }
             state.editing = None;
             return Vec::new();
         }
         let commit = match &mut state.editing {
+            // Enter keeps the filter and hands the keys back to the list; the
+            // rows stay narrowed, and the title says so.
+            Some(Editing::Filter) => {
+                if key.code == KeyCode::Enter {
+                    state.editing = None;
+                } else if state.filter.apply(&key) {
+                    state.apply_filter();
+                }
+                false
+            }
             Some(Editing::Value { input, error, .. }) => {
                 if key.code == KeyCode::Enter {
                     true

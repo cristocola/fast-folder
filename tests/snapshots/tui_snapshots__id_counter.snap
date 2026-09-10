@@ -28,7 +28,7 @@ expression: frame
 "│       │   Open in the editor          no                                                 │       │"
 "│       │▸  Print the path              no                                                 │       │"
 "│       │ print the absolute path on its own line, for `cd \"$(fastf new …)\"`             │       │"
-"│       │ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │       │"
+"│       │ ↑↓ choose   / filter   Enter change / run   Esc close   ? help   c commands      │       │"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 " ◜ saving…                                                                                          "
 "                                                                                                    "

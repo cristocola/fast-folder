@@ -432,6 +432,7 @@ fn run(label: &'static str, job: Job, value: String, hint: &'static str) -> Row 
 
 const COLLISION: &[&str] = &["suffix", "error"];
 const THEMES: &[&str] = &crate::tui::theme::ThemeChoice::NAMES;
+const MOTION: &[&str] = &["on", "off"];
 
 /// Every setting fastf has, grouped, with what it is set to now.
 pub fn rows(s: &Settings) -> Vec<Row> {
@@ -504,6 +505,12 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             value: or(&s.theme, "auto (follows the terminal)"),
             hint: "auto follows what the terminal announces; mono, ansi or rich force a palette — FASTF_THEME overrides for one run",
             kind: Kind::Choice("theme", THEMES),
+        },
+        Row {
+            label: "Motion",
+            value: or(&s.motion, "on"),
+            hint: "a row a verb just changed lights up as it does, and a message dims on its way out — off makes every frame a hard cut; a theme with no colour is always off",
+            kind: Kind::Choice("motion", MOTION),
         },
         heading("Library bases"),
         Row {

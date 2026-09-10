@@ -592,9 +592,11 @@ fn the_status_toast_expires_on_its_own() {
     press(&mut app, Key::ch('p'));
     assert!(!app.status.text.is_empty());
     assert!(app.needs_tick(), "a toast keeps the clock running");
-    for _ in 0..31 {
-        update(&mut app, Msg::Tick);
-    }
+    app.elapsed_ms = 5_999;
+    update(&mut app, Msg::Tick);
+    assert!(!app.status.text.is_empty(), "not a moment early");
+    app.elapsed_ms = 6_000;
+    update(&mut app, Msg::Tick);
     assert!(app.status.text.is_empty());
 }
 
@@ -4004,5 +4006,134 @@ mod more_options {
             }
             other => panic!("Esc closed the settings instead: {other:?}"),
         }
+    }
+}
+
+/// Motion, which only ever appears where a still frame could not answer a
+/// question: what changed, what is working, what is going away.
+mod motion {
+    use super::*;
+    use fastf::tui::motion::{self, Motion};
+    use fastf::tui::testing::render_to_buffer;
+    use fastf::tui::theme::Theme;
+
+    fn row_of(app: &App, name: &str) -> u16 {
+        let row = (0..app.library.len())
+            .find(|&row| app.library.row(row).is_some_and(|p| p.name == name))
+            .expect("the row is on the list");
+        // Two for the block's border and the header row above the first.
+        app.regions().table.y + 2 + row as u16
+    }
+
+    /// **What changed, said on the row it changed.** A batch touches rows the
+    /// cursor is nowhere near; without this the frame after is identical to
+    /// the frame before except for cells nobody was looking at.
+    #[test]
+    fn a_changed_row_lights_up_and_lets_go() {
+        let mut app = fixture(6, 100, 30);
+        app.theme = Theme::rich();
+        app.motion = Motion::On;
+        let project = app.library.row(2).unwrap().clone();
+        let name = project.name.clone();
+
+        app.elapsed_ms = 1_000;
+        let _ = app.apply_change(ListChange::Patched {
+            project: Box::new(project.clone()),
+            was: project.path.clone(),
+            stale: Vec::new(),
+        });
+
+        let lit = render_to_buffer(&app, 100, 30);
+        let at = row_of(&app, &name);
+        let column = app.regions().table.x + 3;
+        assert_eq!(
+            lit[(column, at)].bg,
+            app.theme.pulse,
+            "the row a verb just changed wears the wash"
+        );
+        assert_eq!(
+            lit[(column, at)].fg,
+            app.theme.accent,
+            "and its own colours are left alone — the id is still the id"
+        );
+
+        // …and lets go: the whole pulse is over at its duration.
+        app.elapsed_ms = 1_000 + motion::PULSE_MS;
+        let _ = update(&mut app, Msg::Tick);
+        let gone = render_to_buffer(&app, 100, 30);
+        assert_ne!(gone[(column, at)].bg, app.theme.pulse);
+        assert!(app.pulses.is_empty(), "and nothing is left in flight");
+    }
+
+    /// A size landing where `scanning…` was is a change on that row too.
+    #[test]
+    fn a_size_that_lands_pulses_its_row() {
+        let mut app = fixture(6, 100, 30);
+        app.theme = Theme::rich();
+        let path = app.library.row(1).unwrap().path.clone();
+        app.elapsed_ms = 500;
+        let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+        assert!(
+            app.pulses
+                .style_for(&path, 500, &app.theme, Motion::On)
+                .is_some()
+        );
+        // The same size again is not news.
+        app.pulses.clear();
+        let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+        assert!(
+            app.pulses
+                .style_for(&path, 500, &app.theme, Motion::On)
+                .is_none()
+        );
+    }
+
+    /// **The app still costs nothing while idle.** A pulse asks for twenty
+    /// frames a second while it is in flight and nothing at all once it is
+    /// over — a claim `docs/cli.md` makes and this holds it to.
+    #[test]
+    fn the_faster_wake_ends_with_the_pulse() {
+        let mut app = fixture(6, 100, 30);
+        // Nothing pending: the fixture's sizes are all known.
+        for row in 0..app.library.len() {
+            let path = app.library.row(row).unwrap().path.clone();
+            app.library.sizes.insert(path, Some(1));
+        }
+        app.status = Default::default();
+        assert_eq!(app.tick_interval(), None, "a still app asks for no wake");
+
+        app.elapsed_ms = 100;
+        app.pulses
+            .start(app.library.row(0).unwrap().path.clone(), 100);
+        assert_eq!(
+            app.tick_interval(),
+            Some(std::time::Duration::from_millis(motion::FRAME_MS))
+        );
+        app.elapsed_ms = 100 + motion::PULSE_MS;
+        let _ = update(&mut app, Msg::Tick);
+        assert_eq!(app.tick_interval(), None, "and it stops with the pulse");
+    }
+
+    /// Off is a first-class state, and a theme with no colour is always off:
+    /// a colour wash on a mono terminal is a flicker rather than a cue.
+    #[test]
+    fn motion_off_and_mono_draw_the_same_frame_as_before() {
+        let mut app = fixture(6, 100, 30);
+        app.theme = Theme::rich();
+        app.motion = Motion::Off;
+        let path = app.library.row(2).unwrap().path.clone();
+        app.pulses.start(path.clone(), 0);
+        assert!(
+            app.pulses
+                .style_for(&path, 0, &app.theme, app.motion)
+                .is_none()
+        );
+        app.motion = Motion::On;
+        app.theme = Theme::mono();
+        assert!(
+            app.pulses
+                .style_for(&path, 0, &app.theme, app.motion)
+                .is_none()
+        );
     }
 }

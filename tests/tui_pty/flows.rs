@@ -252,15 +252,28 @@ fn maintenance_runs_reindex_recover_and_data_locations() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(900)
-        // The settings list has 22 selectable rows; Reindex is the twentieth.
-        .down(19) // → Reindex
-        .enter()
+        // **Named, not counted.** These used to be `.down(19)` and two more
+        // steps, so inserting one row anywhere above Maintenance broke three
+        // assertions about something else entirely. `/` narrows the list to
+        // the row this is about, which is what the screen is for.
+        .key("/")
+        .key("reindex")
+        .enter() // keep the filter, back on the list
+        .enter() // → run it
         .pause(1200)
-        .down(1) // → Check and recover
+        // `/` reopens the filter on what is already in it, so refining a
+        // search is typing rather than retyping; Ctrl-U starts again.
+        .key("/")
+        .key("\x15")
+        .key("check")
         .enter()
+        .enter() // → Check and recover
         .pause(1200)
-        .down(1) // → Data locations
+        .key("/")
+        .key("\x15")
+        .key("locations")
         .enter()
+        .enter() // → Data locations
         .pause(1000)
         .build();
     let (out, _) = launch(&sb, script);
@@ -722,7 +735,9 @@ fn the_counter_is_raised_from_the_settings_screen() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(900)
-        .down(17) // → Counter
+        .key("/")
+        .key("counter")
+        .enter() // keep the filter, back on the list
         .enter() // → the number
         .pause(500)
         .key("\x15")

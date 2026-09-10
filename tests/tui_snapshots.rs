@@ -966,6 +966,7 @@ mod settings {
     use super::*;
     use fastf::tui::app::App;
     use fastf::tui::app::data::Settings;
+    use fastf::tui::app::modal::Modal;
 
     fn press(app: &mut App, key: Key) {
         let _ = update(app, Msg::Key(key));
@@ -1002,6 +1003,24 @@ mod settings {
         let _ = update(app, Msg::SettingsLoaded(Box::new(sample())));
     }
 
+    /// **Walk to a row by name.** These counted `Down`s, so every setting
+    /// added anywhere above one of them silently pointed four snapshots at a
+    /// different row — which is the defect `tests/CLAUDE.md` records against
+    /// this very test, and which counting could only ever repeat.
+    fn go_to(app: &mut App, label: &str) {
+        for _ in 0..60 {
+            let here = match app.modals.top() {
+                Some(Modal::Settings(state)) => state.row().map(|row| row.label),
+                other => panic!("expected the settings, got {other:?}"),
+            };
+            if here == Some(label) {
+                return;
+            }
+            press(app, Key::plain(KeyCode::Down));
+        }
+        panic!("no settings row called {label:?}");
+    }
+
     #[test]
     fn settings_basics() {
         let mut app = fixture(12, 100, 30);
@@ -1020,9 +1039,7 @@ mod settings {
     fn settings_bases_as_text() {
         let mut app = fixture(12, 100, 30);
         open(&mut app);
-        for _ in 0..11 {
-            press(&mut app, Key::plain(KeyCode::Down));
-        }
+        go_to(&mut app, "Bases");
         press(&mut app, Key::plain(KeyCode::Enter));
         let frame = render_to_string(&app, 100, 30);
         assert!(
@@ -1045,9 +1062,7 @@ mod settings {
     fn settings_bases_as_text_on_a_short_window() {
         let mut app = fixture(12, 80, 18);
         open(&mut app);
-        for _ in 0..11 {
-            press(&mut app, Key::plain(KeyCode::Down));
-        }
+        go_to(&mut app, "Bases");
         press(&mut app, Key::plain(KeyCode::Enter));
         let frame = render_to_string(&app, 80, 18);
         assert!(
@@ -1062,9 +1077,7 @@ mod settings {
     fn id_counter() {
         let mut app = fixture(12, 100, 30);
         open(&mut app);
-        for _ in 0..16 {
-            press(&mut app, Key::plain(KeyCode::Down));
-        }
+        go_to(&mut app, "Counter");
         press(&mut app, Key::plain(KeyCode::Enter));
         snap("id_counter", render_to_string(&app, 100, 30));
     }
@@ -1081,9 +1094,7 @@ mod settings {
     fn reconcile_report() {
         let mut app = fixture(12, 100, 30);
         open(&mut app);
-        for _ in 0..19 {
-            press(&mut app, Key::plain(KeyCode::Down));
-        }
+        go_to(&mut app, "Check and recover");
         let effects = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
         let id = match &effects[..] {
             [fastf::tui::effect::Effect::Run(id, _)] => *id,

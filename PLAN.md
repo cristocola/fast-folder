@@ -73,7 +73,7 @@ Left behind: a `more_options` module in `tests/tui_update.rs`, and a
 `session.rs` unit test that a sort label written before there was a direction
 still names an order.
 
-## Phase 4 — motion, and only where it answers a question  ☐
+## Phase 4 — motion, and only where it answers a question  ☑
 
 - `Msg::Tick(u64)` carries milliseconds; `App.ticks` becomes `App.elapsed_ms`.
 - `Runtime::wait` keeps a deadline that survives a message burst — today the
@@ -82,6 +82,20 @@ still names an order.
 - `src/tui/motion.rs`: the change pulse, the resolve pulse, one activity
   indicator, the toast fade. Nothing else moves.
 - `motion` config key, a settings row, `FASTF_MOTION=0`; off under mono.
+
+What the plan did not know: the clock has to be stamped on **every** message,
+not carried by the tick — a clock that only advances on a tick is stale the
+moment nothing is moving, and a status message set against a stale one expires
+instantly. And the pulse has to be a **background**: every cell in a row sets
+its own foreground, so a foreground set on the row is invisible in a real frame
+while passing a test that asked the wrong question.
+
+Left behind: `testing::render_to_buffer` — the one place a frame's colours are
+asserted, since snapshots record symbols and render in `mono` where motion is
+off by rule — plus a `motion` module in `tests/tui_update.rs` and six unit
+tests in `src/tui/motion.rs`. The settings-navigating tests in the pty and
+snapshot suites now walk to a row **by name**, because counting `Down`s meant
+one new setting broke six assertions about something else.
 
 ## Phase 5 — the record, and the release  ☐
 

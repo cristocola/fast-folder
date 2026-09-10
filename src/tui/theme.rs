@@ -85,6 +85,8 @@ pub struct Env {
     pub wt_session: bool,
     pub fastf_theme: Option<String>,
     pub fastf_ascii: Option<String>,
+    /// `FASTF_MOTION`, the per-session escape hatch for the `motion` setting.
+    pub fastf_motion: Option<String>,
     /// Alacritty, WezTerm and ConEmu each leave a variable of their own.
     pub alacritty: bool,
     pub wezterm: bool,
@@ -103,6 +105,7 @@ impl Env {
             wt_session: set("WT_SESSION"),
             fastf_theme: std::env::var("FASTF_THEME").ok(),
             fastf_ascii: std::env::var("FASTF_ASCII").ok(),
+            fastf_motion: std::env::var("FASTF_MOTION").ok(),
             alacritty: set("ALACRITTY_WINDOW_ID") || set("ALACRITTY_SOCKET"),
             wezterm: set("WEZTERM_PANE") || set("WEZTERM_EXECUTABLE"),
             conemu: set("ConEmuANSI"),
@@ -117,6 +120,30 @@ impl Env {
 /// the config key; then what the terminal announces — `COLORTERM`, a `TERM`
 /// that names a truecolor emulator, a `TERM_PROGRAM` known to be one, or
 /// Windows Terminal — and the sixteen colours for everything else.
+/// Whether the app moves, resolved the way the palette is: the session's
+/// escape hatch first, then a theme with no colour (where a wash is a flicker
+/// rather than a cue), then the `motion` setting, else on.
+///
+/// Here rather than in `App` for the reason `choose` is here: `update` reads no
+/// environment, and a setting written on the settings screen has to take
+/// effect on the frame that shows it was written.
+pub fn choose_motion(
+    env: &Env,
+    kind: ThemeKind,
+    preference: Option<&str>,
+) -> crate::tui::motion::Motion {
+    use crate::tui::motion::Motion;
+    if let Some(forced) = env.fastf_motion.as_deref()
+        && let Some(choice) = Motion::parse(forced)
+    {
+        return choice;
+    }
+    if kind == ThemeKind::Mono {
+        return Motion::Off;
+    }
+    preference.and_then(Motion::parse).unwrap_or(Motion::On)
+}
+
 pub fn choose(env: &Env, preference: Option<&str>) -> (ThemeKind, Glyphs) {
     let glyphs = if ascii_wanted(env) {
         Glyphs::ascii()
@@ -221,10 +248,13 @@ impl Glyphs {
         self.rule == "-"
     }
 
-    /// The indicator's frame at `ticks`. One expression, so the header's
-    /// spinner and the status line's cannot fall out of step.
-    pub fn spin(&self, ticks: u64) -> &'static str {
-        self.spinner[(ticks as usize) % self.spinner.len()]
+    /// The indicator's frame at `elapsed_ms`. One expression, so the header's
+    /// spinner and the status line's cannot fall out of step — and one that
+    /// takes a clock rather than a count, so it turns at the same speed
+    /// whatever the app happens to be waking at.
+    pub fn spin(&self, elapsed_ms: u64) -> &'static str {
+        const FRAME_MS: u64 = 200;
+        self.spinner[(elapsed_ms / FRAME_MS) as usize % self.spinner.len()]
     }
 }
 
@@ -288,6 +318,13 @@ pub struct Theme {
     pub border: Color,
     pub border_focus: Color,
     pub mark: Color,
+    /// The wash a row wears for half a second after a verb changed it.
+    ///
+    /// A **background**, and it has to be: every cell in a row sets its own
+    /// foreground — the id is accent, the size is dim, a tag is its own colour
+    /// — so a foreground set on the row loses to all of them and shows almost
+    /// nowhere. A background is the one thing the cells leave alone.
+    pub pulse: Color,
     /// The highlighted row.
     pub selection: Style,
     /// Colours a tag hashes onto.
@@ -340,6 +377,8 @@ impl Theme {
             border: Color::Reset,
             border_focus: Color::Reset,
             mark: Color::Reset,
+            // Never drawn: motion is off wherever there is no colour.
+            pulse: Color::Reset,
             selection: Style::default().add_modifier(Modifier::REVERSED),
             tags: [Color::Reset; 6],
         }
@@ -361,6 +400,9 @@ impl Theme {
             warn: Color::Yellow,
             border: Color::DarkGray,
             border_focus: Color::Blue,
+            // The sixteen have no quiet wash in them; the darkest grey is the
+            // one that lifts a row without shouting on a dark terminal.
+            pulse: Color::DarkGray,
             mark: Color::Yellow,
             selection: Style::default().add_modifier(Modifier::REVERSED),
             tags: [
@@ -388,6 +430,9 @@ impl Theme {
             warn: Color::Rgb(204, 168, 108),
             border: Color::Rgb(70, 76, 84),
             border_focus: Color::Rgb(122, 162, 196),
+            // A shade off the selection's own, and bluer: lit, next to it,
+            // without competing with the cursor for "you are here".
+            pulse: Color::Rgb(38, 54, 70),
             mark: Color::Rgb(204, 168, 108),
             selection: Style::default()
                 .bg(Color::Rgb(44, 52, 62))

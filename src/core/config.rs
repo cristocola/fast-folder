@@ -112,6 +112,16 @@ pub struct Config {
     #[serde(default)]
     pub theme: String,
 
+    /// Whether the guided app moves: `on` (default) or `off`. Empty reads as
+    /// `on`. `FASTF_MOTION=0` turns it off for one session, and a theme with
+    /// no colour turns it off whatever this says — a colour wash on a mono
+    /// terminal is a flicker rather than a cue.
+    ///
+    /// Parsed leniently for the reason `theme` is: a typo sitting in a config
+    /// file must not stop every command.
+    #[serde(default)]
+    pub motion: String,
+
     /// What to do when the resolved folder name is already taken:
     /// `"suffix"` (default) appends `_2`, `_3`… , `"error"` refuses.
     ///
@@ -190,6 +200,7 @@ impl Default for Config {
             editor: String::new(),
             terminal: String::new(),
             theme: String::new(),
+            motion: String::new(),
             default_template: String::new(),
             date_format: default_date_format(),
             preview_lines: default_preview_lines(),

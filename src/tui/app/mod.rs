@@ -37,6 +37,7 @@ use crate::tui::effect::{
 use crate::tui::entry::Entry;
 use crate::tui::fuzzy::Fuzzy;
 use crate::tui::layout;
+use crate::tui::motion;
 use crate::tui::msg::{Mouse, MouseKind, Msg, Resumed};
 use crate::tui::theme::Theme;
 use crate::tui::validators;
@@ -52,8 +53,10 @@ use settings::{Editing, Kind, Onboarding, SettingsState};
 use studio::{Builder, Open, Row, Studio};
 use wizard::{Flow, FlowKind, Step};
 
-/// How long a status message stays, in ticks of 200 ms.
-const STATUS_TICKS: u64 = 30;
+/// How long a status message stays.
+const STATUS_MS: u64 = 6_000;
+/// The wake a spinner and a countdown want: five frames a second.
+const SLOW_FRAME_MS: u64 = 200;
 /// How many project details the pane remembers.
 const DETAIL_CACHE: usize = 64;
 
@@ -260,7 +263,20 @@ pub struct App {
     /// looked at the tab and then pressed new, which is exactly the reader it
     /// is trying not to annoy.
     pub guide_seen: bool,
-    pub ticks: u64,
+    /// Milliseconds since the app opened, carried by every `Msg::Tick`.
+    ///
+    /// **A clock rather than a count.** It was a tick counter, which made
+    /// every duration a multiple of whatever the wake interval happened to be
+    /// — and the interval is not one number any more, because a fade wants
+    /// twenty frames a second and a spinner wants five. A fixture's clock is
+    /// whatever the test sets, which is what makes a frame mid-pulse
+    /// assertable.
+    pub elapsed_ms: u64,
+    /// Whether the app moves at all: the `motion` setting, resolved where the
+    /// theme is so `update` still reads no environment.
+    pub motion: motion::Motion,
+    /// The rows a verb has just changed, and when.
+    pub pulses: motion::Pulses,
     pub fuzzy: Fuzzy,
     next_action: u64,
     next_generation: u64,
@@ -300,7 +316,9 @@ impl App {
             select_id_when_found: None,
             explain_open: true,
             guide_seen: false,
-            ticks: 0,
+            elapsed_ms: 0,
+            motion: motion::Motion::default(),
+            pulses: motion::Pulses::default(),
             fuzzy: Fuzzy::new(),
             next_action: 0,
             next_generation: 0,
@@ -434,13 +452,31 @@ impl App {
         }
     }
 
-    /// Whether something on screen is moving, so the runtime should wake the
-    /// app without input: a spinner, a toast about to expire, a size cell
-    /// still being measured.
-    pub fn needs_tick(&self) -> bool {
-        self.busy.is_some()
+    /// How soon the runtime should wake the app with nothing to say, or
+    /// `None` while nothing on screen is moving at all.
+    ///
+    /// Two speeds, because two kinds of thing move. A spinner turning and a
+    /// toast counting down want five frames a second — five is enough to read
+    /// as motion, and the wake is not free on a laptop. A pulse fading out
+    /// wants twenty, because a fade drawn five times is a flicker. Asking for
+    /// the faster one only while a pulse is in flight is what keeps the
+    /// documented claim true: **the app costs nothing while idle.**
+    pub fn tick_interval(&self) -> Option<std::time::Duration> {
+        if !self.pulses.is_empty() {
+            return Some(std::time::Duration::from_millis(motion::FRAME_MS));
+        }
+        // A message about to go dims on its way out, which is a fade too — but
+        // only for its last half second, so the slow wake is asked to cover it
+        // rather than the fast one being held for six seconds.
+        let slow = self.busy.is_some()
             || self.status.expires_at.is_some()
-            || (self.library.loaded && self.library.sizes_pending(self.rows_on_screen()))
+            || (self.library.loaded && self.library.sizes_pending(self.rows_on_screen()));
+        slow.then(|| std::time::Duration::from_millis(SLOW_FRAME_MS))
+    }
+
+    /// Whether anything on screen is moving at all.
+    pub fn needs_tick(&self) -> bool {
+        self.tick_interval().is_some()
     }
 
     /// The detail cached for the selected row.
@@ -477,7 +513,7 @@ impl App {
         self.status = Status {
             text,
             level,
-            expires_at: Some(self.ticks + STATUS_TICKS),
+            expires_at: Some(self.elapsed_ms + STATUS_MS),
         };
     }
 
@@ -658,7 +694,12 @@ impl App {
         self.after_rows_changed()
     }
 
-    fn apply_change(&mut self, change: ListChange) -> Vec<Effect> {
+    /// What a finished verb does to the list, without the worker that finished
+    /// it. Public because it is the one step a test about the *list* wants to
+    /// drive — and **not** behind `cfg(debug_assertions)`: the suites are
+    /// separate crates, so a seam hidden that way is missing from
+    /// `cargo test --release`, which is a gate.
+    pub fn apply_change(&mut self, change: ListChange) -> Vec<Effect> {
         let mut effects = Vec::new();
         match change {
             ListChange::Patched {
@@ -666,6 +707,11 @@ impl App {
                 was,
                 stale,
             } => {
+                // **What changed, said on the row it changed.** A batch tags
+                // ten rows and the cursor is on one of them; without this the
+                // frame after is identical to the frame before except for ten
+                // cells nobody was looking at.
+                self.pulses.start(project.path.clone(), self.elapsed_ms);
                 if !self.library.patch(&was, *project) {
                     effects.push(self.discover());
                 }
@@ -705,15 +751,25 @@ impl App {
                 self.after_selection_change()
             }
             Msg::Tick => {
-                self.ticks += 1;
-                if self.status.expires_at.is_some_and(|at| at <= self.ticks) {
+                if self
+                    .status
+                    .expires_at
+                    .is_some_and(|at| at <= self.elapsed_ms)
+                {
                     self.status = Status::default();
                 }
+                self.pulses.retire(self.elapsed_ms);
                 Vec::new()
             }
             Msg::Sizes(cells) => {
                 for (path, size) in cells {
-                    self.library.sizes.insert(path, size);
+                    // A number appearing where `scanning…` was is a change on
+                    // that row, and the table is measured so nothing reflows
+                    // around it — without a pulse the only sign is a word
+                    // becoming a number while you were reading a different row.
+                    if self.library.sizes.insert(path.clone(), size).is_none() {
+                        self.pulses.start(path, self.elapsed_ms);
+                    }
                 }
                 if self.library.effective_sort(&self.search.query).order == Order::Size {
                     self.recompute();
@@ -834,16 +890,17 @@ impl App {
                 // The screen went up when `,` was pressed, saying it was
                 // reading; a read that lands after it was closed has nothing
                 // to fill in and is dropped.
-                let theme = loaded.theme.clone();
+                let (theme, motion) = (loaded.theme.clone(), loaded.motion.clone());
                 if let Some(Modal::Settings(state)) = self.modals.top_mut() {
                     state.refresh(*loaded);
                 }
-                // A theme written on this screen takes effect on the frame
-                // that shows it was written.
-                vec![Effect::Retheme(theme)]
+                // A theme — or a motion setting — written on this screen takes
+                // effect on the frame that shows it was written.
+                vec![Effect::Retheme { theme, motion }]
             }
-            Msg::Themed(theme) => {
+            Msg::Themed { theme, motion } => {
                 self.theme = *theme;
+                self.motion = motion;
                 Vec::new()
             }
 

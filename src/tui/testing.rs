@@ -172,6 +172,18 @@ pub fn sample_summary_moveable(projects: usize) -> Summary {
     summary
 }
 
+/// The frame with its colours, for the one thing `render_to_string` cannot
+/// show: motion is a style and the test backend records symbols. A snapshot
+/// stays a snapshot of the layout; this is how a pulse is asserted.
+pub fn render_to_buffer(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("a test terminal");
+    terminal
+        .draw(|frame| crate::tui::view::view(app, frame))
+        .expect("a frame");
+    terminal.backend().buffer().clone()
+}
+
 /// One frame, as the text a terminal would show.
 pub fn render_to_string(app: &App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);

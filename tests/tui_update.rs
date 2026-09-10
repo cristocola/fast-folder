@@ -4065,27 +4065,85 @@ mod motion {
         assert!(app.pulses.is_empty(), "and nothing is left in flight");
     }
 
-    /// A size landing where `scanning…` was is a change on that row too.
+    /// **A page filling in is not a change, and lighting it up is a flash.**
+    /// Every visible row's size lands at once — on the first screenful, and
+    /// again on every scroll — so pulsing on arrival washed the whole list at
+    /// a stroke, twenty rows together, several times in the first seconds of
+    /// a run. It read as a fault, which is how it was reported.
     #[test]
-    fn a_size_that_lands_pulses_its_row() {
+    fn a_page_of_sizes_arriving_for_the_first_time_does_not_pulse() {
         let mut app = fixture(6, 100, 30);
         app.theme = Theme::rich();
-        let path = app.library.row(1).unwrap().path.clone();
         app.elapsed_ms = 500;
+        let paths: Vec<_> = (0..app.library.len())
+            .map(|row| app.library.row(row).unwrap().path.clone())
+            .collect();
+        let cells = paths.iter().map(|p| (p.clone(), Some(4096))).collect();
+        let _ = update(&mut app, Msg::Sizes(cells));
+        assert!(
+            app.pulses.is_empty(),
+            "the first fill of a page is the page arriving, not a row changing"
+        );
+
+        // And the same size again is still not news.
+        let _ = update(&mut app, Msg::Sizes(vec![(paths[1].clone(), Some(4096))]));
+        assert!(app.pulses.is_empty());
+    }
+
+    /// A number replacing a *different* number is a change on that row: the
+    /// table is measured from the rows and never from the sizes, so nothing
+    /// reflows around it and the figure would otherwise change under your eyes
+    /// in silence.
+    #[test]
+    fn a_size_that_changes_pulses_its_row() {
+        let mut app = fixture(6, 100, 30);
+        app.theme = Theme::rich();
+        app.elapsed_ms = 500;
+        let path = app.library.row(1).unwrap().path.clone();
+        let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+        assert!(app.pulses.is_empty(), "the first one is an arrival");
+        let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(8192))]));
+        assert!(
+            app.pulses
+                .style_for(&path, 500, &app.theme, Motion::On)
+                .is_some(),
+            "the second one is a change"
+        );
+    }
+
+    /// A size a verb threw away, coming back, is a change too — and it comes
+    /// back looking exactly like a first arrival, because the old number was
+    /// discarded with the row's other stale reads. `ListChange::Patched`'s
+    /// `stale` set is what tells the two apart.
+    #[test]
+    fn a_size_rescanned_after_a_verb_pulses_its_row() {
+        let mut app = fixture(6, 100, 30);
+        app.theme = Theme::rich();
+        app.elapsed_ms = 500;
+        let project = app.library.row(1).unwrap().clone();
+        let path = project.path.clone();
+        let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+
+        let _ = app.apply_change(ListChange::Patched {
+            project: Box::new(project.clone()),
+            was: path.clone(),
+            stale: vec![path.clone()],
+        });
+        // The verb's own row pulse is not what this test is about.
+        app.pulses.clear();
+
         let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
         assert!(
             app.pulses
                 .style_for(&path, 500, &app.theme, Motion::On)
-                .is_some()
+                .is_some(),
+            "the rescan that answers a verb is news even at the same number"
         );
-        // The same size again is not news.
+
+        // And it is spent: the next arrival is an arrival again.
         app.pulses.clear();
         let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
-        assert!(
-            app.pulses
-                .style_for(&path, 500, &app.theme, Motion::On)
-                .is_none()
-        );
+        assert!(app.pulses.is_empty());
     }
 
     /// **The app still costs nothing while idle.** A pulse asks for twenty

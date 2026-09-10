@@ -67,6 +67,20 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
+- In flight: **two things that looked like faults.** The size pulse fired on
+  arrival, and every visible row's size arrives at once — so the first
+  screenful of a run washed twenty rows together, and so did every scroll after
+  it. A pulse is a cue; a page lighting up is a flash. It answers nothing there
+  either, because the table is measured from the rows and never from the sizes,
+  so a landing number cannot reflow anything: it now pulses on a number that
+  replaced a *different* number, and on a size a verb threw away coming back.
+  And `tag reauto` removed every tag under a `tag_from` slug's namespace, which
+  is wider than the set it derived — a template's own `tags: ["tier/legacy"]`
+  and a `tier/manual` somebody typed both matched, and a command whose job is to
+  refresh the derived tags deleted them. `PROJECT_INFO.md` records which tags
+  were derived (`auto_tags`), so re-deriving replaces exactly those; a project
+  written before the record reconstructs what it can from its own variables,
+  and nothing is migrated.
 - Released: **v3.5.0 — the app answers the keys you try.** The terminal app had
   a key for everything and a grammar for nothing: some lists paged and some did
   not, `g` meant "first row" on one screen and "template from a folder" on the
@@ -268,6 +282,12 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
   package's release test suite passed before both AUR repositories were pushed.
 
 Regression coverage grows with the relevant release:
+
+- [x] A page of sizes filling in for the first time does not pulse, a size that
+  changed does, and a size a verb threw away pulses once when it comes back;
+  `tag reauto` keeps every tag it did not derive — the template's own literal
+  tags and anyone's hand-typed `slug/value` alike — on a project with the
+  record and on one written before it existed.
 
 - [x] The app moves only where a still frame could not answer a question, and
   stops the moment it has: the clock is stamped on every message rather than

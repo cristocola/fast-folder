@@ -123,6 +123,24 @@ pub struct Metadata {
     /// written before tagging was introduced valid — they simply get no tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Which of `tags` this project's template derived from `tag_from`.
+    ///
+    /// **Written down rather than re-derived**, for the same reason
+    /// `id_number` is: the derivation is not invertible. `tag reauto` has to
+    /// know which tags it wrote last time so it can replace exactly those, and
+    /// the only thing it could ask before this field existed was "does this
+    /// tag start with a `tag_from` slug and a slash" — which is also true of
+    /// a literal tag the template declares (`tags: ["tier/legacy"]`) and of
+    /// any tag a user typed (`fastf tag add ID0001 tier/manual`). Re-deriving
+    /// deleted both.
+    ///
+    /// Empty for a project written before this field existed;
+    /// [`Metadata::previous_auto_tags`] reconstructs what it can for those.
+    /// `Vec::is_empty`
+    /// skips the key, so a project whose template derives nothing writes a
+    /// frontmatter byte-identical to what earlier versions wrote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_tags: Vec<String>,
     /// `true` while the project is still being built.
     ///
     /// Metadata is written *first* now, immediately after the folder is claimed,
@@ -158,8 +176,34 @@ impl Metadata {
         "path",
         "variables",
         "tags",
+        "auto_tags",
         "provisioning",
     ];
+
+    /// The tags a previous fastf wrote into `tags` by derivation — the set
+    /// `tag reauto` is licensed to remove.
+    ///
+    /// The record itself when there is one. For a project written before the
+    /// record existed, the derivation is replayed against the variables the
+    /// file holds and only the results that are *actually in* `tags` are
+    /// claimed: `slug/<value of slug>` is what fastf would have written, so a
+    /// tag matching it is one it wrote, and every other tag under that
+    /// namespace — a template's own literal `tags: ["tier/legacy"]`, a
+    /// `tier/manual` somebody typed — belongs to whoever put it there.
+    ///
+    /// This is the whole of the compatibility story: no migration, no rewrite.
+    /// The first `tag reauto` on such a project writes the record.
+    pub fn previous_auto_tags(&self) -> Vec<String> {
+        if !self.auto_tags.is_empty() {
+            return self.auto_tags.clone();
+        }
+        self.variables
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .map(|(slug, value)| format!("{slug}/{value}"))
+            .filter(|tag| self.tags.contains(tag))
+            .collect()
+    }
 
     /// Build the typed metadata for a freshly-planned project.
     /// `tags` is the combined literal + auto-derived tag list computed in
@@ -208,6 +252,7 @@ impl Metadata {
             // forever. This field is display-truth only — discovery never reads
             // it — so the readable form is the correct one to store.
             path: crate::util::paths::display_path(&plan.root_path),
+            auto_tags: tmpl.auto_tags(|slug| plan.vars.get(slug).map(String::as_str)),
             variables,
             tags,
             provisioning: false,
@@ -598,8 +643,8 @@ mod tests {
     /// to succeed and changes nothing. Catch it here rather than in a bug report.
     #[test]
     fn owned_keys_covers_every_serialized_field() {
-        // `provisioning: true` and `id_number: Some` so nothing is skipped and
-        // every key is emitted.
+        // `provisioning: true`, `id_number: Some` and a non-empty `auto_tags`
+        // so nothing is skipped and every key is emitted.
         let meta = Metadata {
             id: "ID0001".to_string(),
             id_number: Some(1),
@@ -609,7 +654,8 @@ mod tests {
             folder: "f".to_string(),
             path: "/p".to_string(),
             variables: BTreeMap::new(),
-            tags: vec![],
+            tags: vec!["tier/Indie".to_string()],
+            auto_tags: vec!["tier/Indie".to_string()],
             provisioning: true,
         };
         assert_eq!(

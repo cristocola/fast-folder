@@ -354,14 +354,12 @@ fn configured_parent(config: &Config, canonical: &Path) -> Result<PathBuf> {
     )
 }
 
+/// A template's literal tags followed by the ones it derives — the full list a
+/// new project starts with. The derivation itself is `Template::auto_tags`, the
+/// one definition; this only says what order they go in.
 fn derived_tags(template: &Template, variables: &HashMap<String, String>) -> Vec<String> {
     let mut tags = template.tags.clone();
-    for slug in &template.tag_from {
-        let value = variables.get(slug).map(String::as_str).unwrap_or("");
-        if !value.is_empty() {
-            tags.push(format!("{slug}/{value}"));
-        }
-    }
+    tags.extend(template.auto_tags(|slug| variables.get(slug).map(String::as_str)));
     tags
 }
 
@@ -462,13 +460,30 @@ fn mutate_tags(project: &Project, mutate: impl FnOnce(&mut Vec<String>)) -> Resu
     let config = Config::load()?;
     let project = library::revalidate_project(&config, project)?;
     let pinfo = project_info::pinfo_path(&project.path);
-    project_info::write_frontmatter(&pinfo, |metadata| mutate(&mut metadata.tags))?;
+    project_info::write_frontmatter(&pinfo, |metadata| {
+        mutate(&mut metadata.tags);
+        // The record says which tags fastf derived, so it may not keep naming
+        // one the user has just removed — `tag reauto` would otherwise treat a
+        // tag that is no longer there as its own to delete when it comes back.
+        metadata.auto_tags.retain(|tag| metadata.tags.contains(tag));
+    })?;
     library::refresh_cache(&project.path);
     Ok(project_info::read_metadata(&project.path)?
         .map(|metadata| metadata.tags)
         .unwrap_or_default())
 }
 
+/// Re-derive this project's auto-tags, replacing **only** the tags fastf
+/// derived last time.
+///
+/// It used to remove every tag under a `tag_from` slug's namespace, which is a
+/// wider set than the one it wrote: a template declaring `tags: ["tier/legacy"]`
+/// lost that tag, and so did anyone who typed `fastf tag add ID0001
+/// tier/manual`. Re-deriving is a refresh, not a reset — nothing it did not
+/// write is its to delete.
+///
+/// A derived tag that has not changed keeps its place in the list, so a reauto
+/// that changes nothing rewrites nothing.
 pub fn replace_auto_tags(project: &Project) -> Result<Vec<String>> {
     let _mutation_lock = DataLock::acquire()?;
     let config = Config::load()?;
@@ -477,27 +492,26 @@ pub fn replace_auto_tags(project: &Project) -> Result<Vec<String>> {
         bail!("registered projects have no auto-derived tags");
     }
     let template = template::find_by_slug(&project.template)?;
-    let metadata = project_info::read_metadata(&project.path)?
-        .ok_or_else(|| anyhow::anyhow!("project has no readable metadata"))?;
-    let prefixes: Vec<String> = template
-        .tag_from
-        .iter()
-        .map(|slug| format!("{slug}/"))
-        .collect();
-    let derived: Vec<String> = template
-        .tag_from
-        .iter()
-        .filter_map(|slug| {
-            let value = metadata.variables.get(slug)?;
-            (!value.is_empty()).then(|| format!("{slug}/{value}"))
-        })
-        .collect();
+    if project_info::read_metadata(&project.path)?.is_none() {
+        bail!("project has no readable metadata");
+    }
     let pinfo = project_info::pinfo_path(&project.path);
+    // Derived from the frontmatter the write is about to replace, not from a
+    // separate read: the variables the tags come from live in the same file.
+    let mut derived = Vec::new();
     project_info::write_frontmatter(&pinfo, |metadata| {
+        let fresh = template.auto_tags(|slug| metadata.variables.get(slug).map(String::as_str));
+        let previous = metadata.previous_auto_tags();
         metadata
             .tags
-            .retain(|tag| !prefixes.iter().any(|prefix| tag.starts_with(prefix)));
-        metadata.tags.extend(derived.iter().cloned());
+            .retain(|tag| fresh.contains(tag) || !previous.contains(tag));
+        for tag in &fresh {
+            if !metadata.tags.contains(tag) {
+                metadata.tags.push(tag.clone());
+            }
+        }
+        metadata.auto_tags = fresh.clone();
+        derived = fresh;
     })?;
     library::refresh_cache(&project.path);
     Ok(derived)

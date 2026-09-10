@@ -622,7 +622,9 @@ fastf tag list ID0047
 fastf tag reauto ID0047          # re-derive auto tags from the template's tag_from
 ```
 
-Tags come in two flavors. Free-form tags are arbitrary strings you add yourself. Auto-derived tags are generated at creation from template variables (`tag_from: ["client_type"]` plus the value `Indie` produces `client_type/Indie`). `reauto` refreshes the derived ones and leaves free-form tags untouched.
+Tags come in two flavors. Free-form tags are arbitrary strings you add yourself. Auto-derived tags are generated at creation from template variables (`tag_from: ["client_type"]` plus the value `Indie` produces `client_type/Indie`). `reauto` refreshes the derived ones and leaves everything else alone.
+
+`reauto` removes only the tags fastf derived last time — which ones those were is recorded in the project's `PROJECT_INFO.md`, under `auto_tags`. A tag that merely *looks* derived is not its to remove: a literal `tags: ["client_type/legacy"]` in the template, or a `client_type/mine` you typed yourself, both survive. A project created before fastf recorded this reconstructs what it can from its own variables; the first `reauto` writes the record.
 
 ## Journal
 

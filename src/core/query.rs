@@ -340,6 +340,7 @@ mod tests {
             path: "/projects/ID0001_My_Project".to_string(),
             variables: BTreeMap::new(),
             tags: tags.iter().map(|s| s.to_string()).collect(),
+            auto_tags: Vec::new(),
             provisioning: false,
         }
     }
@@ -474,6 +475,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect::<BTreeMap<_, _>>(),
             tags: tags.iter().map(|s| s.to_string()).collect(),
+            auto_tags: Vec::new(),
             provisioning: false,
         }
     }

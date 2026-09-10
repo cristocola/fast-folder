@@ -44,6 +44,7 @@ fn query_predicates_each_operator() {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect::<BTreeMap<_, _>>(),
             tags: tags.iter().map(|s| s.to_string()).collect(),
+            auto_tags: Vec::new(),
             provisioning: false,
         }
     };
@@ -378,6 +379,7 @@ fn a_wildcard_may_lead_or_trail_or_both() {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect::<BTreeMap<_, _>>(),
         tags: tags.iter().map(|s| s.to_string()).collect(),
+        auto_tags: Vec::new(),
         provisioning: false,
     };
     let m = meta(&[("artist", "Ariana Grande")], &["client/Acme", "draft"]);

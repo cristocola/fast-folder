@@ -179,6 +179,7 @@ proptest! {
             path: "/p".to_string(),
             variables: Default::default(),
             tags: vec![],
+            auto_tags: Vec::new(),
             provisioning: false,
         };
         let _ = query::evaluate(&preds, &meta);

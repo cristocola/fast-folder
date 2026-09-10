@@ -924,6 +924,123 @@ fn tag_reauto_re_derives_the_automatic_tags_and_keeps_the_free_form_ones() {
     );
 }
 
+/// `tag reauto` removes **only** the tags it derived.
+///
+/// It used to remove every tag under a `tag_from` slug's namespace, which is a
+/// wider set than the one it wrote: a literal `tags: ["tier/legacy"]` the
+/// template declares matches that shape, and so does a `tier/manual` somebody
+/// typed. Both were deleted by a command whose whole job is to *refresh* the
+/// derived ones. The test above could not see it — its free-form tag was
+/// `urgent`, which is in nobody's namespace.
+#[test]
+fn tag_reauto_keeps_every_tag_it_did_not_derive() {
+    let sb = Sandbox::new();
+    let dir = sb.install.join("templates").join("client");
+    fs::create_dir_all(dir.join("files")).unwrap();
+    let manifest = |tag_from: &str| {
+        format!(
+            "name: Client\nslug: client\nnaming_pattern: \"{{id}}_{{name}}\"\n\
+             id:\n  prefix: C\n  digits: 4\n\
+             variables:\n  - slug: name\n    label: Name\n    type: text\n    required: true\n\
+             \x20   transform: none\n  - slug: tier\n    label: Tier\n    type: text\n\
+             \x20   transform: none\n\
+             tags: [\"client\", \"tier/legacy\"]\ntag_from: {tag_from}\n"
+        )
+    };
+    fs::write(dir.join("template.yaml"), manifest("[\"tier\"]")).unwrap();
+
+    sb.ok(&[
+        "new",
+        "client",
+        "--name=One",
+        "--tier=Indie",
+        "--yes",
+        "--no-preview",
+    ]);
+    sb.ok(&["tag", "add", "C0001", "tier/manual"]);
+
+    sb.ok(&["tag", "reauto", "C0001"]);
+    let after = sb.ok(&["tag", "list", "C0001"]);
+    for kept in ["client", "tier/legacy", "tier/Indie", "tier/manual"] {
+        assert!(
+            after.contains(kept),
+            "reauto removed {kept}, which it did not write:\n{after}"
+        );
+    }
+
+    // And it still does its job: the slug retires, and the one tag it derived
+    // goes with it while the three it did not stay.
+    fs::write(dir.join("template.yaml"), manifest("[]")).unwrap();
+    sb.ok(&["tag", "reauto", "C0001"]);
+    let retired = sb.ok(&["tag", "list", "C0001"]);
+    assert!(
+        !retired.contains("tier/Indie"),
+        "a slug dropped from tag_from takes its derived tag with it:\n{retired}"
+    );
+    for kept in ["client", "tier/legacy", "tier/manual"] {
+        assert!(retired.contains(kept), "{kept} is still there:\n{retired}");
+    }
+}
+
+/// A project written before fastf recorded which tags it derived still
+/// re-derives correctly, and nothing has to be migrated for it to.
+///
+/// `Metadata::previous_auto_tags` replays the derivation against the variables
+/// in the file and claims only the results that are actually in `tags` — which
+/// is exactly the set fastf would have written — so the namespace's other
+/// occupants are as safe on an old file as on a new one.
+#[test]
+fn tag_reauto_reads_a_project_written_before_the_record_existed() {
+    let sb = Sandbox::new();
+    let dir = sb.install.join("templates").join("client");
+    fs::create_dir_all(dir.join("files")).unwrap();
+    fs::write(
+        dir.join("template.yaml"),
+        "name: Client\nslug: client\nnaming_pattern: \"{id}_{name}\"\n\
+         id:\n  prefix: C\n  digits: 4\n\
+         variables:\n  - slug: name\n    label: Name\n    type: text\n    required: true\n\
+         \x20   transform: none\n  - slug: tier\n    label: Tier\n    type: text\n\
+         \x20   transform: none\n\
+         tags: [\"tier/legacy\"]\ntag_from: [\"tier\"]\n",
+    )
+    .unwrap();
+
+    sb.ok(&[
+        "new",
+        "client",
+        "--name=One",
+        "--tier=Indie",
+        "--yes",
+        "--no-preview",
+    ]);
+
+    // Take the record back out, leaving the file an older fastf would have
+    // written.
+    let pinfo = sb.base.join("C0001_One").join("PROJECT_INFO.md");
+    let text = fs::read_to_string(&pinfo).unwrap();
+    let stripped: String = text
+        .lines()
+        .filter(|line| *line != "auto_tags:" && *line != "- tier/Indie")
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert!(
+        stripped.len() < text.len(),
+        "the record was there to remove"
+    );
+    fs::write(&pinfo, &stripped).unwrap();
+
+    sb.ok(&["tag", "reauto", "C0001"]);
+    let after = sb.ok(&["tag", "list", "C0001"]);
+    assert!(
+        after.contains("tier/legacy"),
+        "the template's own literal tag survives an old file too:\n{after}"
+    );
+    assert!(
+        fs::read_to_string(&pinfo).unwrap().contains("auto_tags:"),
+        "and the first reauto writes the record"
+    );
+}
+
 /// `fastf reconcile` on a library with nothing outstanding says so and exits 0.
 /// Reporting "nothing to do" is the common case and the one that must be quiet.
 #[test]

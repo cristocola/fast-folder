@@ -858,10 +858,21 @@ than a state. The status line is the one thing that really does fade, because
 `DIM` is a modifier every terminal honours.
 
 **Four things move, and nothing else.** A row a verb changed (*which* rows did
-that batch touch, when the cursor is elsewhere); a size cell as its number lands
-(is that number new, or did the table reflow); one activity indicator wherever
-something is pending (is it working, or stuck); a message on its way out (it is
-going, and you can still read it). Deliberately **not** built: eased scrolling,
+that batch touch, when the cursor is elsewhere); a size cell whose number
+*changed* (is the figure the one that was there a moment ago); one activity
+indicator wherever something is pending (is it working, or stuck); a message on
+its way out (it is going, and you can still read it).
+
+**A page filling in is not a change.** The size pulse fired on arrival at
+first, which is every visible row at once on the first screenful and again on
+every scroll — twenty rows washing together several times in the opening
+seconds of a run, which reads as a fault and was reported as one. There is
+nothing for it to answer either: the table is measured from the rows and never
+from the sizes (`view/projects.rs`), so a landing number cannot reflow
+anything. `Msg::Sizes` now pulses on a number that replaced a *different*
+number, and on the one arrival that is a change rather than a first fill — a
+size a verb threw away coming back, which `ListChange::Patched` records in
+`App.rescanning` on its way past and the answering size spends. Deliberately **not** built: eased scrolling,
 dialog transitions, cursor trails. They answer nothing, and this app's rule for
 motion is the rule it already had for colour — it appears where it *means*
 something and never as decoration.

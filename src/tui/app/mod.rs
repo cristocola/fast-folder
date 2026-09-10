@@ -277,6 +277,20 @@ pub struct App {
     pub motion: motion::Motion,
     /// The rows a verb has just changed, and when.
     pub pulses: motion::Pulses,
+    /// Rows whose size a verb just invalidated, waiting for the rescan.
+    ///
+    /// A size cell pulses because the number under your eyes *changed*, and
+    /// there are only two ways that happens: a number replaced a different
+    /// number, or a verb touched the folder and the old number was thrown away
+    /// (`ListChange::Patched`'s `stale`), so the one that comes back reads as a
+    /// first arrival with nothing to compare it to. This set is the second
+    /// case, and it is emptied by the size that answers it.
+    ///
+    /// Everything else is a page filling in — the first screenful at startup,
+    /// the next screenful after a scroll — and a page filling in is not a
+    /// change. Pulsing there lit every visible row at once, twenty at a time,
+    /// which is a flash rather than a cue and reads as a fault.
+    rescanning: std::collections::BTreeSet<PathBuf>,
     pub fuzzy: Fuzzy,
     next_action: u64,
     next_generation: u64,
@@ -319,6 +333,7 @@ impl App {
             elapsed_ms: 0,
             motion: motion::Motion::default(),
             pulses: motion::Pulses::default(),
+            rescanning: std::collections::BTreeSet::new(),
             fuzzy: Fuzzy::new(),
             next_action: 0,
             next_generation: 0,
@@ -719,11 +734,13 @@ impl App {
                     self.library.sizes.remove(path);
                     self.details.remove(path);
                 }
+                self.rescanning.extend(stale.iter().cloned());
                 effects.push(Effect::ForgetSizes(stale));
             }
             ListChange::Removed { path } => {
                 self.library.remove(&path);
                 self.details.remove(&path);
+                self.rescanning.remove(&path);
                 effects.push(Effect::ForgetSizes(vec![path]));
             }
             ListChange::Reload => {
@@ -763,11 +780,18 @@ impl App {
             }
             Msg::Sizes(cells) => {
                 for (path, size) in cells {
-                    // A number appearing where `scanning…` was is a change on
-                    // that row, and the table is measured so nothing reflows
-                    // around it — without a pulse the only sign is a word
-                    // becoming a number while you were reading a different row.
-                    if self.library.sizes.insert(path.clone(), size).is_none() {
+                    // **A number that changed, not a number that arrived.** The
+                    // table is measured from the rows, never from the sizes, so
+                    // a landing number cannot reflow anything — the only
+                    // question a pulse answers here is whether the figure you
+                    // are looking at is the one that was there a moment ago.
+                    // The first fill of a row cannot be that, and every visible
+                    // row fills at once on the first screenful and on every
+                    // scroll: `rescanning` is the one arrival that *is* a
+                    // change, a size a verb threw away coming back.
+                    let previous = self.library.sizes.insert(path.clone(), size);
+                    let rescanned = self.rescanning.remove(&path);
+                    if rescanned || previous.is_some_and(|had| had != size) {
                         self.pulses.start(path, self.elapsed_ms);
                     }
                 }

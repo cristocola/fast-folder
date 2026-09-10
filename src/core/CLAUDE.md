@@ -198,7 +198,8 @@ iterator overflowed one, which is the exact failure the limit exists to prevent.
 ## `PROJECT_INFO.md`
 
 Two layers. **YAML frontmatter** — the typed `Metadata`: `id`, `template`,
-`template_name`, `created`, `folder`, `path`, `tags`, and `variables:
+`template_name`, `created`, `folder`, `path`, `tags`, `auto_tags` (which of
+`tags` the template derived — see *Tags* below), and `variables:
 BTreeMap` holding **every** template variable whether or not it appears in the
 naming pattern (a `BTreeMap` for diff-stable ordering). Then a **human body** —
 a variables table plus a `## Notes` section the user owns, and a `## Journal`
@@ -511,8 +512,33 @@ violations from Defender or the indexer, plus read-only attribute clearing).
 `Template.tag_from`: slug `client_type` with value `Indie` becomes
 `client_type/Indie`, and empty values are skipped so there are no orphan `slug/`
 tags. `Template::validate()` rejects a `tag_from` entry that is not a declared
-variable. `fastf tag reauto` is the safety valve: it removes tags whose prefix
-matches a `tag_from` slug and re-derives them, leaving free-form tags untouched.
+variable. **`Template::auto_tags` is the one definition of the derived half** —
+`project::provision_project`, `operations::derived_tags` and
+`operations::replace_auto_tags` each had their own, and the third had it
+backwards.
+
+`fastf tag reauto` is the safety valve, and **it removes only the tags it
+wrote**. Which ones those were is `Metadata.auto_tags`, written down for the
+same reason `id_number` is: the derivation cannot be inverted. It used to ask
+instead whether a tag started with a `tag_from` slug and a slash, which is a
+wider set than the one it derived — a template's own literal `tags:
+["tier/legacy"]` matches it, and so does a `tier/manual` somebody typed — so
+re-deriving deleted both. Nothing fastf did not write is fastf's to delete.
+
+`auto_tags` is `skip_serializing_if = "Vec::is_empty"`, so a project whose
+template derives nothing writes the frontmatter earlier versions wrote. For a
+project written before the field existed, `Metadata::previous_auto_tags`
+replays the derivation against the variables in the file and claims only the
+results that are actually in `tags` — no migration, no rewrite, and the first
+reauto records the answer. The one thing it cannot recover is a *hand-edited*
+variable on such a project: the tag derived from the old value is
+unidentifiable, so it is left alone rather than guessed at.
+
+A derived tag that has not changed keeps its position in `tags`, so a reauto
+that changes nothing writes the same bytes back.
+
+`remove_tags` prunes the record to what `tags` still holds, so it can never
+name a tag that is no longer there.
 
 **Search** (`core/query.rs`) ANDs its predicates; no OR, no parens. Operators:
 bare term (free-text substring fallthrough), `key=value`, `key=prefix*`,

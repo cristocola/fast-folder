@@ -193,6 +193,26 @@ pub struct FileEntry {
 // ---------------------------------------------------------------------------
 
 impl Template {
+    /// The `slug/value` tags this template derives from a project's variables.
+    ///
+    /// **The one definition.** `project::provision_project` had one and
+    /// `operations::derived_tags` had another, and `operations::replace_auto_tags`
+    /// had a third written backwards — as "every tag under a `tag_from`
+    /// namespace", which is not the same set and is why re-deriving used to
+    /// delete tags nobody asked it to touch.
+    ///
+    /// `lookup` answers with the project's value for a slug. A slug with no
+    /// value, or an empty one, derives nothing: a bare `slug/` is not a tag.
+    pub fn auto_tags<'a>(&self, lookup: impl Fn(&str) -> Option<&'a str>) -> Vec<String> {
+        self.tag_from
+            .iter()
+            .filter_map(|slug| {
+                let value = lookup(slug)?;
+                (!value.is_empty()).then(|| format!("{slug}/{value}"))
+            })
+            .collect()
+    }
+
     /// Every top-level `template.yaml` key this struct is authoritative for.
     ///
     /// Two of them are never serialized and are listed anyway. `files` is a

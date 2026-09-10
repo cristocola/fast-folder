@@ -91,6 +91,7 @@ pub fn settings() -> Result<crate::tui::app::data::Settings> {
         editor: cfg.editor.clone(),
         terminal: cfg.terminal.clone(),
         theme: cfg.theme.clone(),
+        motion: cfg.motion.clone(),
         default_template: cfg.default_template.clone(),
         date_preview: chrono::Local::now().format(&cfg.date_format).to_string(),
         date_format: cfg.date_format.clone(),

@@ -82,6 +82,13 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
+        "motion:".green(),
+        crate::tui::motion::Motion::parse(&config.motion)
+            .unwrap_or_default()
+            .name()
+    );
+    println!(
+        "  {:<26} {}",
         "default_template:".green(),
         if config.default_template.is_empty() {
             "(always prompt)".to_string()
@@ -261,6 +268,20 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
             "terminal" => {
                 config.terminal = value.to_string();
                 format!("Set terminal = {}", value)
+            }
+            "motion" => {
+                let Some(choice) = crate::tui::motion::Motion::parse(value) else {
+                    bail!("expected on or off; got '{}'", value.trim());
+                };
+                config.motion = choice.name().to_string();
+                format!(
+                    "Set motion = {}  ({})",
+                    choice.name(),
+                    match choice {
+                        crate::tui::motion::Motion::On => "a row that changed lights up as it does",
+                        crate::tui::motion::Motion::Off => "every frame is a hard cut",
+                    }
+                )
             }
             "theme" => {
                 let Some(choice) = crate::tui::theme::ThemeChoice::parse(value) else {

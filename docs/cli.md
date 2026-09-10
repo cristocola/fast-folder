@@ -382,6 +382,34 @@ paste is ignored and said so. A terminal that cannot announce a paste delivers
 it as keystrokes; a run of them faster than a hand can type is taken as a paste
 all the same, so a paragraph pasted onto the dashboard never runs as commands.
 
+#### What moves, and why
+
+Four things on the screen move, and each one answers a question a still frame
+could not:
+
+- **A row a verb just changed lights up** for about half a second. A batch tags
+  ten projects while the cursor is on one of them; without this the frame after
+  is the same as the frame before, except for ten cells nobody was watching.
+- **A size cell lights up as its number lands**, so a table filling in reads as
+  news rather than as a reflow. (Nothing ever moves as a size arrives — the
+  columns are measured before the first row is drawn.)
+- **One spinner** wherever something is pending — reading the index, running a
+  verb, reading a project — so "it is working" looks the same everywhere.
+- **A message dims for the last half second** before it expires, so it reads as
+  going rather than as a line that was there one frame and gone the next.
+
+Nothing else moves: no sliding dialogs, no eased scrolling, no cursor trails.
+
+`config set motion off` turns all of it off and every frame becomes a hard cut;
+`FASTF_MOTION=0` does the same for one run. A palette with no colour (`mono`,
+or `NO_COLOR`) is always off — a colour wash with no colour is a flicker rather
+than a cue.
+
+The app still costs nothing while idle. It wakes twenty times a second only
+while something is actually fading, five times a second while a spinner is
+turning, and once a second when nothing is moving at all — and that last wake
+draws nothing.
+
 #### On a bare terminal
 
 Nothing in the app needs a desktop: it draws with the sixteen colours where
@@ -399,8 +427,7 @@ a running job, closes a dialog, or quits); a second `kill -INT`, a `kill
 -TERM`, a closed window (SIGHUP) or a panic each restore the screen and cooked
 mode before the process ends, and an interrupted create rolls its folder back.
 `fastf 2>/dev/null` — a refusal with nowhere to go — is repeated on stdout when
-that is still a terminal. The app costs nothing while idle: two wakeups a
-second, none of them drawing.
+that is still a terminal.
 
 #### The mouse
 
@@ -814,6 +841,11 @@ fastf config set terminal none                   # never relaunch (fastf term st
 # lies. NO_COLOR still wins; FASTF_THEME overrides for one run.
 fastf config set theme rich                      # auto | mono | ansi | rich
 
+# Whether the app moves. A row a verb just changed lights up, and a message
+# dims on its way out; off makes every frame a hard cut. A palette with no
+# colour is always off. FASTF_MOTION=0 turns it off for one run.
+fastf config set motion off                      # on | off
+
 # Extra folders to index beyond base-dir, comma separated
 fastf config set bases "/mnt/projects/clients,/srv/archive"
 fastf config set bases ""                        # clear the list
@@ -843,6 +875,7 @@ Run `fastf config set --help` for the complete key list with descriptions.
 | `FASTF_NO_RELAUNCH` | Set to anything to stop fastf ever opening a terminal for itself |
 | `FASTF_THEME` | `mono`, `ansi` or `rich`: the app's palette for this run, above the `theme` setting and `NO_COLOR` |
 | `FASTF_ASCII` | `1` draws the app with plain ASCII glyphs; `0` keeps the Unicode ones even in the legacy Windows console |
+| `FASTF_MOTION` | `0` stops the app moving for this run, above the `motion` setting |
 | `NO_COLOR` | Set to anything non-empty: no colour anywhere, in the app and on the command line |
 | `COLORTERM` | `truecolor` or `24bit` picks the muted RGB palette; a `TERM`/`TERM_PROGRAM` naming kitty, foot, Alacritty, WezTerm, Ghostty, iTerm2, VS Code or Windows Terminal does the same |
 | `FASTF_PROJECT_PATH` | Set by fastf for a template's post-create commands: the new project's absolute path |

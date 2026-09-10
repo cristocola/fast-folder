@@ -23,7 +23,14 @@ pub enum Msg {
     /// Bracketed paste, straight into whichever text field has the caret.
     Paste(String),
     Resize(u16, u16),
-    /// Sent only while `App::needs_tick` says something on screen is moving.
+    /// A wake with nothing to say, sent only while `App::tick_interval` says
+    /// something on screen is moving.
+    ///
+    /// It carries no clock: `App.elapsed_ms` is stamped by the runtime before
+    /// **every** message, not only this one. A clock that only advanced on a
+    /// tick was a stale clock the moment nothing was moving — and a status
+    /// message set against a stale one is a message whose expiry is already in
+    /// the past.
     Tick,
     /// Folder sizes that landed since the last tick.
     Sizes(Vec<(PathBuf, Option<u64>)>),
@@ -62,8 +69,14 @@ pub enum Msg {
     },
     /// The settings, read back.
     SettingsLoaded(Box<crate::tui::app::data::Settings>),
-    /// The palette chosen for the `theme` setting just read back.
-    Themed(Box<crate::tui::theme::Theme>),
+    /// The palette and the motion chosen for the settings just read back.
+    /// They travel together because they are resolved together — both are a
+    /// pure function of the environment and one config key, and both must
+    /// take effect on the frame that shows they were written.
+    Themed {
+        theme: Box<crate::tui::theme::Theme>,
+        motion: crate::tui::motion::Motion,
+    },
     SettingsFailed(String),
     /// A flow's preview is ready.
     Previewed(Box<Preview>),

@@ -69,6 +69,8 @@ pub struct Settings {
     pub terminal: String,
     /// `auto`, `mono`, `ansi` or `rich` — empty reads as `auto`.
     pub theme: String,
+    /// `on` or `off` — empty reads as `on`.
+    pub motion: String,
     pub default_template: String,
 
     pub date_format: String,

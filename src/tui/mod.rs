@@ -17,6 +17,7 @@ pub mod guide;
 pub mod inline;
 pub mod layout;
 pub mod loaders;
+pub mod motion;
 pub mod msg;
 pub mod pickers;
 pub mod prompt;
@@ -58,11 +59,10 @@ pub fn run(entry: Entry) -> Result<()> {
             .map(|path| path.display().to_string())
             .unwrap_or_default()
     });
-    match runtime::run(
-        entry,
-        onboarding,
-        theme::Theme::detect_with(Some(&cfg.theme)),
-    )? {
+    let env = theme::Env::read();
+    let palette = theme::Theme::detect_with(Some(&cfg.theme));
+    let motion = theme::choose_motion(&env, palette.kind, Some(&cfg.motion));
+    match runtime::run(entry, onboarding, palette, motion)? {
         effect::Exit::Normal => {
             if is_menu {
                 println!("Goodbye.");

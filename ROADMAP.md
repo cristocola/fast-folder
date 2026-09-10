@@ -240,6 +240,12 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
 
 Regression coverage grows with the relevant release:
 
+- [x] The app moves only where a still frame could not answer a question, and
+  stops the moment it has: the clock is stamped on every message rather than
+  counted on the tick, a tick is due at a moment so a burst cannot starve the
+  spinner, the faster wake ends with the pulse, and `motion = off` or a palette
+  with no colour draws the frame that was drawn before (v3.5.0).
+
 - [x] `v` reaches from the last mark to the cursor in view order and refuses
   without an anchor; every one-way sort runs both ways with its tie-break the
   right way up, and a sort label written before there was a direction still

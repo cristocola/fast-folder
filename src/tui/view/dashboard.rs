@@ -133,7 +133,7 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
     // one.
     if !app.library.loaded {
         right.push(Span::styled(
-            format!(" (from index) {}", theme.glyphs.spin(app.ticks)),
+            format!(" (from index) {}", theme.glyphs.spin(app.elapsed_ms)),
             theme.dim(),
         ));
     }
@@ -228,17 +228,27 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
     let line = if let Some(what) = app.busy {
         Line::from(vec![
             Span::styled(
-                format!(" {} ", theme.glyphs.spin(app.ticks)),
+                format!(" {} ", theme.glyphs.spin(app.elapsed_ms)),
                 theme.accent(),
             ),
             Span::styled(what, theme.text()),
         ])
     } else if !app.status.text.is_empty() {
-        let style = match app.status.level {
-            StatusLevel::Info => theme.text(),
-            StatusLevel::Good => theme.good(),
-            StatusLevel::Warn => theme.warn(),
-            StatusLevel::Error => theme.bad(),
+        // On its way out it dims, so it reads as expiring rather than as a
+        // line that was there one frame and gone the next.
+        let style = match crate::tui::motion::expiring_style(
+            app.status.expires_at,
+            app.elapsed_ms,
+            theme,
+            app.motion,
+        ) {
+            Some(fading) => fading,
+            None => match app.status.level {
+                StatusLevel::Info => theme.text(),
+                StatusLevel::Good => theme.good(),
+                StatusLevel::Warn => theme.warn(),
+                StatusLevel::Error => theme.bad(),
+            },
         };
         Line::from(Span::styled(
             format!(

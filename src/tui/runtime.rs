@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow};
 use ratatui::Terminal;
@@ -42,8 +42,9 @@ use crate::tui::view;
 use crate::util::size_scan::{SizeCell, SizeScanner};
 use crate::util::{diag, interrupt, tty};
 
-/// How often the app is woken while something on screen is moving.
-const TICK: Duration = Duration::from_millis(200);
+// How often the app is woken while something is moving is the **app's**
+// answer now, not a constant here: a spinner wants five frames a second and a
+// fade wants twenty, and `App::tick_interval` says which is due.
 /// How often an idle app looks for an external interrupt. A second: the
 /// signal is rare and the wake is not free on a laptop.
 const IDLE_WAKE: Duration = Duration::from_millis(1000);
@@ -59,10 +60,15 @@ static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// suggest on a first run, and `None` on every other one; `theme` is what the
 /// caller chose from the environment and the config before the screen was
 /// taken.
-pub fn run(entry: Entry, onboarding: Option<String>, theme: Theme) -> Result<Exit> {
+pub fn run(
+    entry: Entry,
+    onboarding: Option<String>,
+    theme: Theme,
+    motion: crate::tui::motion::Motion,
+) -> Result<Exit> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut runtime = Runtime::init(tx, rx)?;
-    let outcome = runtime.main_loop(entry, onboarding, theme);
+    let outcome = runtime.main_loop(entry, onboarding, theme, motion);
     runtime.shutdown();
     let (exit, session) = outcome?;
     // After the screen is given back and the sink is gone, so a refusal is
@@ -88,6 +94,13 @@ struct Runtime {
     /// The move job in flight, if any: its progress to snapshot per tick and
     /// its cancel flag.
     moving: Option<MovingJob>,
+    /// **The one clock in the app.** `update` reads no environment and asks no
+    /// clock; every duration on screen is measured against the milliseconds
+    /// this hands the app on each tick.
+    started: Instant,
+    /// When the next tick is due. A deadline rather than an interval, so a
+    /// burst of messages cannot starve it.
+    next_tick: Option<Instant>,
 }
 
 /// The runtime's half of a running move: the progress handle it snapshots and
@@ -130,6 +143,8 @@ impl Runtime {
             reported: HashMap::new(),
             detail,
             moving: None,
+            started: Instant::now(),
+            next_tick: None,
         })
     }
 
@@ -156,12 +171,14 @@ impl Runtime {
         entry: Entry,
         onboarding: Option<String>,
         theme: Theme,
+        motion: crate::tui::motion::Motion,
     ) -> Result<(Exit, Session)> {
         // Read before the first frame: a note about a file that could not be
         // read goes through the sink into the channel and lands as a status
         // line, like any other.
         let remembered = Session::load();
         let mut app = App::new(entry, theme, self.size());
+        app.motion = motion;
         app.data_dir = Some(crate::util::paths::display_path(
             &crate::util::paths::install_dir(),
         ));
@@ -181,31 +198,75 @@ impl Runtime {
             let Some(first) = self.wait(&app) else {
                 continue;
             };
-            effects = app::update(&mut app, first);
+            effects = self.dispatch(&mut app, first);
             // Drain the burst — a paste, a batch of sizes — and draw once.
             while let Ok(msg) = self.rx.try_recv() {
-                effects.extend(app::update(&mut app, msg));
+                let more = self.dispatch(&mut app, msg);
+                effects.extend(more);
             }
         }
     }
 
+    /// **The one place the clock is read.** Every message is stamped with the
+    /// milliseconds since the app opened before `update` sees it, so `update`
+    /// still asks no clock of its own and every duration on screen is measured
+    /// against the same one. Stamping only on the tick left it stale whenever
+    /// nothing was moving, and a status message set against a stale clock has
+    /// an expiry already in the past.
+    fn dispatch(&mut self, app: &mut App, msg: Msg) -> Vec<Effect> {
+        app.elapsed_ms = self.started.elapsed().as_millis() as u64;
+        app::update(app, msg)
+    }
+
     /// Block for the next message. `None` means a wake with nothing to do.
+    ///
+    /// **A tick is due at a moment, not after a quiet interval.** It used to
+    /// be the `recv_timeout` expiry and nothing else, so every message
+    /// restarted the wait — and a stream of them (a batch of sizes, a paste, a
+    /// run of `MetaLoaded` chunks) starved the tick entirely. The spinner
+    /// stopped turning exactly when there was most to wait for, which is the
+    /// one moment it exists for. `next_tick` is the deadline; a burst is still
+    /// drained and drawn once, and the tick that came due during it is
+    /// delivered after.
     fn wait(&mut self, app: &App) -> Option<Msg> {
-        let wait = if app.needs_tick() { TICK } else { IDLE_WAKE };
-        match self.rx.recv_timeout(wait) {
+        let Some(interval) = app.tick_interval() else {
+            self.next_tick = None;
+            return self.idle_wait();
+        };
+        let now = Instant::now();
+        let due = *self.next_tick.get_or_insert(now + interval);
+        // A tick already due — the burst above ran past it — is delivered now
+        // rather than after another whole interval.
+        if due <= now {
+            return Some(self.emit_tick(app, interval));
+        }
+        match self.rx.recv_timeout(due - now) {
             Ok(msg) => Some(msg),
             Err(RecvTimeoutError::Disconnected) => Some(Msg::Interrupted),
             Err(RecvTimeoutError::Timeout) => {
                 if interrupt::is_set() {
                     return Some(Msg::Interrupted);
                 }
-                if !app.needs_tick() {
-                    return None;
-                }
-                self.report_sizes(app);
-                self.report_move_progress();
-                Some(Msg::Tick)
+                Some(self.emit_tick(app, interval))
             }
+        }
+    }
+
+    /// The tick itself: the workers' news, then the clock.
+    fn emit_tick(&mut self, app: &App, interval: Duration) -> Msg {
+        self.next_tick = Some(Instant::now() + interval);
+        self.report_sizes(app);
+        self.report_move_progress();
+        Msg::Tick
+    }
+
+    /// Nothing is moving: wake once a second to look for a signal from
+    /// outside, and draw nothing.
+    fn idle_wait(&mut self) -> Option<Msg> {
+        match self.rx.recv_timeout(IDLE_WAKE) {
+            Ok(msg) => Some(msg),
+            Err(RecvTimeoutError::Disconnected) => Some(Msg::Interrupted),
+            Err(RecvTimeoutError::Timeout) => interrupt::is_set().then_some(Msg::Interrupted),
         }
     }
 
@@ -357,9 +418,14 @@ impl Runtime {
                         let _ = tx.send(Msg::TemplateSourceLoaded { slug, result });
                     });
                 }
-                Effect::Retheme(preference) => {
-                    let theme = Theme::detect_with(Some(&preference));
-                    let _ = self.tx.send(Msg::Themed(Box::new(theme)));
+                Effect::Retheme { theme, motion } => {
+                    let env = crate::tui::theme::Env::read();
+                    let chosen = Theme::detect_with(Some(&theme));
+                    let motion = crate::tui::theme::choose_motion(&env, chosen.kind, Some(&motion));
+                    let _ = self.tx.send(Msg::Themed {
+                        theme: Box::new(chosen),
+                        motion,
+                    });
                 }
                 Effect::LoadSettings => {
                     let tx = self.tx.clone();

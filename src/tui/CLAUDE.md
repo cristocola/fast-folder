@@ -814,6 +814,71 @@ fixed row nothing can push off the end and leaves the list whole underneath so
 you can watch it narrow. Esc gives the whole screen back: a filter left behind
 is a screen missing rows for a reason nobody can see.
 
+## Motion, and only where it answers a question
+
+**`src/tui/motion.rs` is pure.** No clock, no environment, no I/O: every
+function takes the milliseconds it should reason about, which is what lets
+`update` start a pulse and a test assert on the frame that pulse produces at a
+millisecond it chose. It is the same bargain `guide.rs` makes with prose and
+`layout.rs` with geometry.
+
+**The clock is stamped on every message, not counted on the tick.** `App.ticks`
+was a counter incremented by `Msg::Tick`, which made every duration a multiple
+of whatever the wake interval happened to be — and the interval is not one
+number any more. `App.elapsed_ms` is set by `Runtime::dispatch` before `update`
+sees *any* message, because a clock that only advanced on a tick was stale the
+moment nothing was moving: a status message set against a stale clock has an
+expiry already in the past, which is exactly what the pty suite caught.
+
+**A tick is due at a moment, not after a quiet interval.** `wait` kept only a
+`recv_timeout`, so every message restarted it and a stream of them — a batch of
+sizes, a paste, a run of `MetaLoaded` chunks — starved the tick entirely. The
+spinner stopped turning exactly when there was most to wait for, which is the
+one moment it exists for. `Runtime.next_tick` is the deadline; a burst is still
+drained and drawn once, and the tick that came due during it is delivered after.
+
+**`App::tick_interval` replaces `needs_tick`**, because two kinds of thing move
+at two speeds: a spinner and a countdown want five frames a second, a pulse
+fading wants twenty. Asking for the faster one **only while a pulse is in
+flight** is what keeps the documented claim true — the app costs nothing while
+idle — and `the_faster_wake_ends_with_the_pulse` holds it to that.
+
+**The pulse is a background, and it has to be.** Every cell in a row sets its
+own foreground — the id is accent, the size is dim, a tag is its own colour — so
+a foreground set on the `Row` loses to all of them and shows almost nowhere.
+That was the first draft, and it was invisible in a real frame while passing a
+test that asked the wrong question. A background is the one thing the cells
+leave alone.
+
+**One step, not a fade.** A terminal cell has no alpha and this theme defines no
+page background — `Color::Reset` has no RGB — so there is nothing to interpolate
+*towards*. What a terminal can do honestly is hold the row lit for as long as an
+eye needs to find it and then let go, which at 450 ms reads as a pulse rather
+than a state. The status line is the one thing that really does fade, because
+`DIM` is a modifier every terminal honours.
+
+**Four things move, and nothing else.** A row a verb changed (*which* rows did
+that batch touch, when the cursor is elsewhere); a size cell as its number lands
+(is that number new, or did the table reflow); one activity indicator wherever
+something is pending (is it working, or stuck); a message on its way out (it is
+going, and you can still read it). Deliberately **not** built: eased scrolling,
+dialog transitions, cursor trails. They answer nothing, and this app's rule for
+motion is the rule it already had for colour — it appears where it *means*
+something and never as decoration.
+
+**Off is a first-class state.** `theme::choose_motion` resolves it beside the
+palette, from an `Env` and one config key, so `update` still reads no
+environment and a setting written on the settings screen takes effect on the
+frame that shows it was written — which is why `Effect::Retheme` and
+`Msg::Themed` carry both. `Mono` is always off: a colour wash with no colour is
+a flicker rather than a cue.
+
+**A snapshot cannot see any of this** — `TestBackend` records symbols, and the
+snapshots render in `Theme::mono` where motion is off by rule. That is a feature
+(the layout snapshots do not churn) and it is why
+`testing::render_to_buffer` exists: the one place a frame's *colours* are
+asserted, for the one thing `render_to_string` cannot show.
+
 ## Settings, the counter, maintenance, the first run
 
 `,` opens `Modal::Settings`: every setting fastf has on one screen, grouped by

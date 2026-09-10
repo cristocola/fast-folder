@@ -307,7 +307,18 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
                 }
                 cells.push(Cell::from(Line::from(spans)));
             }
-            Row::new(cells)
+            // A row a verb has just changed wears the second accent for
+            // half a second. It is a `Row` style rather than a per-cell one so
+            // the whole row lights, and it sits **under** the selection
+            // highlight, which ratatui draws over it — the cursor still says
+            // where you are while the pulse says what moved.
+            match app
+                .pulses
+                .style_for(&p.path, app.elapsed_ms, theme, app.motion)
+            {
+                Some(style) => Row::new(cells).style(style),
+                None => Row::new(cells),
+            }
         })
         .collect();
 

@@ -28,7 +28,7 @@ expression: frame
 "│       │ Maintenance                                                                      │       │"
 "│       │▸  Reindex                                                                        │       │"
 "│       │ rescan every base from its folders and rebuild the caches                        │       │"
-"│       │ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │       │"
+"│       │ ↑↓ choose   / filter   Enter change / run   Esc close   ? help   c commands      │       │"
 "└───────└──────────────────────────────────────────────────────────────────────────────────┘───────┘"
 " ✓  Reconciled: 1 resumed, 0 committed, 1 rolled back  —  warning: 1 project(s) were never finished…"
 "                                                                                                    "

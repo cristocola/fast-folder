@@ -240,6 +240,12 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
 
 Regression coverage grows with the relevant release:
 
+- [x] `v` reaches from the last mark to the cursor in view order and refuses
+  without an anchor; every one-way sort runs both ways with its tie-break the
+  right way up, and a sort label written before there was a direction still
+  names an order; `/` narrows the settings and Esc gives the screen back
+  (v3.5.0).
+
 - [x] One movement grammar reaches every list — the action menu and the builder
   page and jump like the rest — an arrow and its vim letter are never bound
   apart, `→`/`←` go in and back out without ever quitting, every context has a

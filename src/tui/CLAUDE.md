@@ -769,6 +769,51 @@ the strip change, and not one folder moved, so re-reading every base would be a
 walk to answer a question none of them were asked. The landing summary also
 refreshes an open studio's list, keeping its selection by slug.
 
+## Four things the app could not do
+
+**`v` marks from the last mark to the cursor.** `LibraryState.last_mark` is set
+by Space on a mark *and* on an unmark — the anchor is "the row Space last acted
+on", so changing your mind about a row does not leave the anchor on it — and it
+is kept by path, so it survives a re-filter and a re-sort and is dropped when
+that row leaves, exactly as a mark is. The range is taken **in view order**:
+the rows between two rows are the rows a person can see between them, whatever
+order they were discovered in. With no anchor the key is `Disabled` with the
+sentence that says what to press first, rather than silently doing nothing —
+which is what a `return` on an empty anchor would have been.
+
+**Every one-way order runs both ways.** `Sort { order, reversed }`, because the
+direction is not a second `Order` variant: every order that has one has the
+*same* one, and five more variants is five more rows in a picker, five more
+labels to persist and five more arms in `compare`. `newest`/`oldest` are
+already the two directions of one order and `Order::reversible()` says so, so
+the picker never offers "newest reversed" beside "oldest". **The tie-break does
+not turn round with the order** — two rows the order cannot tell apart are
+settled by date either way, and reversing that as well would shuffle every
+group of equals. `s` cycles the orders the right way up; a direction is the
+picker's to choose. `Sort::from_label` reads `"size reversed"` **and every
+label written before there was a direction to write**, so a `state.toml` from
+an earlier version still names an order.
+
+**The tag filter writes the query the grammar already had.** `Then::TagFilter`
+puts `tag:x` in the search bar rather than adding a fourth filter field beside
+the template and the base: one mechanism, so clearing it is the same Esc rung
+as clearing any other query and the bar goes on reporting what is filtering the
+list. It is palette-only and takes no key — the search bar could always do it;
+what was missing was a way to find it without knowing the grammar.
+
+**`/` narrows the settings.** `Editing::Filter` rather than a mode of its own,
+so it is the machinery the value editors already use and `Modal::context()`
+needs no new answer. It is a plain case-insensitive substring over the label,
+the value and the **configuration key** — the same argument the templates tab
+makes: tens of rows with known names, where a fuzzy hit says yes to almost all
+of them. A heading survives only if something under it did; a screen of
+headings with nothing beneath them is a list that looks broken. The filter is
+drawn in the **title** while it is set, because a filter that costs a row shows
+you less of what you were looking for, and edited on the **footer**, which is a
+fixed row nothing can push off the end and leaves the list whole underneath so
+you can watch it narrow. Esc gives the whole screen back: a filter left behind
+is a screen missing rows for a reason nobody can see.
+
 ## Settings, the counter, maintenance, the first run
 
 `,` opens `Modal::Settings`: every setting fastf has on one screen, grouped by

@@ -24,5 +24,5 @@ expression: frame
 "│       │   Check and recover                                                              │       │"
 "│       │▸  Data locations              /home/user/.config/fastf                           │       │"
 "└───────│ where the config, the counter and the templates live, and how that was decided   │───────┘"
-"        │ ↑↓ choose   Enter change / run   Esc close   ? help   c commands                 │        "
+"        │ ↑↓ choose   / filter   Enter change / run   Esc close   ? help   c commands      │        "
 "        └──────────────────────────────────────────────────────────────────────────────────┘        "

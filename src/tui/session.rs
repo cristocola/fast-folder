@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::tui::app::App;
-use crate::tui::app::library::Order;
+use crate::tui::app::library::{Order, Sort};
 use crate::util::paths::display_path;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,10 +107,7 @@ impl Session {
             session.guide_seen = Some(true);
         }
         if app.is_menu {
-            session.sort = app
-                .library
-                .explicit_sort
-                .map(|order| order.label().to_string());
+            session.sort = app.library.explicit_sort.map(|sort| sort.label());
             session.selected = app.library.selected().map(|project| project.id.clone());
         }
         session
@@ -120,18 +117,18 @@ impl Session {
     /// the default and reads as no explicit choice, so a query still sorts by
     /// relevance after a restart, exactly as it does before `s` was ever
     /// pressed.
-    pub fn sort_order(&self) -> Option<Order> {
+    pub fn sort_order(&self) -> Option<Sort> {
         self.sort
             .as_deref()
-            .and_then(Order::from_label)
-            .filter(|order| *order != Order::Newest)
+            .and_then(Sort::from_label)
+            .filter(|sort| sort.order != Order::Newest || sort.reversed)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Session;
-    use crate::tui::app::library::Order;
+    use crate::tui::app::library::{Order, Sort};
     use crate::util::test_env::EnvGuard;
 
     #[test]
@@ -145,11 +142,43 @@ mod tests {
         };
         let text = toml::to_string(&session).unwrap();
         assert_eq!(Session::parse(&text).unwrap(), session);
-        assert_eq!(session.sort_order(), Some(Order::Name));
+        assert_eq!(session.sort_order(), Some(Sort::new(Order::Name)));
         assert_eq!(Session::parse("").unwrap(), Session::default());
         // A key from a later version is not a reason to forget the rest.
         let newer = Session::parse("sort = \"size\"\nfuture = 1\n").unwrap();
-        assert_eq!(newer.sort_order(), Some(Order::Size));
+        assert_eq!(newer.sort_order(), Some(Sort::new(Order::Size)));
+    }
+
+    /// **A label written before there was a direction still names an order**,
+    /// and one written with a direction reads back with it. `state.toml` is a
+    /// convenience, but a convenience that silently forgets the order you
+    /// chose is worse than none.
+    #[test]
+    fn a_direction_round_trips_and_the_old_spelling_still_parses() {
+        let reversed = Session {
+            sort: Some(
+                Sort {
+                    order: Order::Size,
+                    reversed: true,
+                }
+                .label(),
+            ),
+            ..Session::default()
+        };
+        assert_eq!(reversed.sort, Some("size reversed".to_string()));
+        assert_eq!(
+            reversed.sort_order(),
+            Some(Sort {
+                order: Order::Size,
+                reversed: true
+            })
+        );
+        // An order with only one direction cannot be reversed into one.
+        let odd = Session {
+            sort: Some("newest reversed".to_string()),
+            ..Session::default()
+        };
+        assert_eq!(odd.sort_order(), None);
     }
 
     #[test]

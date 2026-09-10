@@ -20,7 +20,7 @@ expression: frame
 "│       │  Save        1 to look at first                                                  │       │"
 "│       │  Discard     leave without writing                                               │       │"
 "│       │ {artist} not in the pattern — every project gets the same folder name            │       │"
-"│       │ ↑↓ choose   G guide   Enter open   s save   Esc close   ? help   c commands      │       │"
+"│       │ ↑↓ choose   H guide   Enter open   s save   Esc close   ? help   c commands      │       │"
 "│       └──────────────────────────────────────────────────────────────────────────────────┘       │"
 "│                                    ││                                                            │"
 "│                                    ││                                                            │"

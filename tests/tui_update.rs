@@ -2333,7 +2333,7 @@ mod studio {
 
         let mut app = fixture(6, 120, 40);
         press(&mut app, Key::ch('T'));
-        press(&mut app, Key::ch('g'));
+        press(&mut app, Key::ch('I'));
         match app.modals.top() {
             Some(Modal::Flow(flow)) => assert_eq!(flow.kind, FlowKind::FromFolder),
             other => panic!("expected the from-folder flow, got {other:?}"),
@@ -3463,7 +3463,7 @@ mod guide {
         let _ = press(&mut app, Key::ch('n'));
         let _ = press(&mut app, Key::plain(KeyCode::Down)); // → ID
         let _ = press(&mut app, Key::plain(KeyCode::Down)); // → Variables
-        let _ = press(&mut app, Key::ch('G'));
+        let _ = press(&mut app, Key::ch('H'));
         assert_eq!(page(&app), Some(guide::page_for(Section::Variables)));
         let _ = press(&mut app, Key::plain(KeyCode::Esc));
         assert!(
@@ -3473,12 +3473,13 @@ mod guide {
     }
 
     /// A document has a beginning and an end: turning past either stays put
-    /// rather than wrapping, which reads as having lost your place.
+    /// rather than wrapping, which reads as having lost your place. Forward
+    /// off the end is the one direction that leaves.
     #[test]
     fn the_pages_stop_at_both_ends_and_enter_walks_out_of_the_last() {
         let mut app = fixture(3, 120, 40);
         let _ = press(&mut app, Key::ch('T'));
-        let _ = press(&mut app, Key::ch('G'));
+        let _ = press(&mut app, Key::ch('H'));
         let _ = press(&mut app, Key::plain(KeyCode::Left));
         assert_eq!(
             page(&app),
@@ -3486,15 +3487,32 @@ mod guide {
             "the first page does not wrap to the last"
         );
 
-        for _ in 0..guide::PAGES.len() + 3 {
+        for _ in 0..guide::PAGES.len() - 1 {
             let _ = press(&mut app, Key::plain(KeyCode::Right));
         }
         assert_eq!(page(&app), Some(guide::PAGES.len() - 1));
-        let _ = press(&mut app, Key::plain(KeyCode::Enter));
+        // Forward off the last page lets the reader go, whichever key they
+        // have been pressing — `→` is Enter's twin here as everywhere else,
+        // and the alternative is pressing a key against the end of a document.
+        let _ = press(&mut app, Key::plain(KeyCode::Right));
         assert!(
             app.modals.is_empty(),
             "a reader who keeps pressing the same key is let go at the end"
         );
+    }
+
+    /// Enter is the other half of the same command, and leaves the same way.
+    #[test]
+    fn enter_walks_forward_and_out_of_the_last_page() {
+        let mut app = fixture(3, 120, 40);
+        let _ = press(&mut app, Key::ch('T'));
+        let _ = press(&mut app, Key::ch('H'));
+        for _ in 0..guide::PAGES.len() - 1 {
+            let _ = press(&mut app, Key::plain(KeyCode::Enter));
+        }
+        assert_eq!(page(&app), Some(guide::PAGES.len() - 1));
+        let _ = press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(app.modals.is_empty());
     }
 
     /// Scrolling stops where the page does, at the width the view draws it —
@@ -3503,7 +3521,7 @@ mod guide {
     fn the_scroll_stops_at_the_end_of_the_page() {
         let mut app = fixture(3, 120, 40);
         let _ = press(&mut app, Key::ch('T'));
-        let _ = press(&mut app, Key::ch('G'));
+        let _ = press(&mut app, Key::ch('H'));
         for _ in 0..200 {
             let _ = press(&mut app, Key::plain(KeyCode::Down));
         }
@@ -3566,5 +3584,201 @@ mod guide {
         let gaps = guide::gaps(&builder.template);
         assert!(!gaps.is_empty(), "a blank template has plenty to say");
         assert_eq!(guide::next_step(&builder.template).as_ref(), gaps.first());
+    }
+}
+
+/// The movement grammar and the horizontal axis, which arrived together at
+/// v3.5.0: one set of movement keys in every list, and `→`/`←` as Enter's and
+/// Esc's twins wherever there is something to go into.
+mod movement {
+    use super::*;
+    use fastf::tui::app::Screen;
+
+    /// Half a page is half of what a page key moves, and it stops at the ends
+    /// rather than wrapping — the same bargain the page keys make.
+    #[test]
+    fn ctrl_d_and_ctrl_u_move_half_a_page_and_clamp() {
+        let mut app = fixture(40, 80, 24);
+        let page = app.rows_on_screen();
+        assert!(page >= 4, "the fixture needs a page worth of rows");
+        press(&mut app, Key::ctrl('d'));
+        assert_eq!(app.library.selected, Some(page / 2));
+        press(&mut app, Key::ctrl('u'));
+        assert_eq!(app.library.selected, Some(0));
+        press(&mut app, Key::ctrl('u'));
+        assert_eq!(
+            app.library.selected,
+            Some(0),
+            "a half page clamps at the top"
+        );
+        for _ in 0..40 {
+            press(&mut app, Key::ctrl('d'));
+        }
+        assert_eq!(app.library.selected, Some(app.library.len() - 1));
+    }
+
+    /// The action menu is a list of eighteen verbs that cannot be searched.
+    /// Before this it was the one list that could only be walked a row at a
+    /// time: neither the page keys nor the jumps reached it.
+    #[test]
+    fn the_action_menu_pages_and_jumps() {
+        let mut app = fixture(6, 80, 24);
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(
+            matches!(app.modals.top(), Some(Modal::Actions(_))),
+            "the action menu should be open"
+        );
+        let rows = fastf::tui::app::actions::action_entries(&app).len();
+        assert!(rows > 3, "the menu has more rows than a step");
+        let at = |app: &App| match app.modals.top() {
+            Some(Modal::Actions(state)) => state.selected,
+            _ => panic!("the action menu closed"),
+        };
+        press(&mut app, Key::ch('G'));
+        assert_eq!(at(&app), rows - 1, "G is the last row here too");
+        press(&mut app, Key::ch('g'));
+        assert_eq!(at(&app), 0);
+        press(&mut app, Key::plain(KeyCode::PageDown));
+        assert!(at(&app) > 0, "PgDn moves in the action menu");
+        press(&mut app, Key::plain(KeyCode::Home));
+        assert_eq!(at(&app), 0);
+    }
+
+    /// `g` and `G` used to mean "template from a folder" and "the guide" on the
+    /// templates tab, so the one list of arbitrary length had no jump keys at
+    /// all. The two verbs moved to `I` and `H`.
+    #[test]
+    fn the_templates_tab_jumps_to_its_ends() {
+        let mut app = fixture(3, 100, 30);
+        press(&mut app, Key::ch('T'));
+        assert_eq!(app.screen, Screen::Templates);
+        press(&mut app, Key::ch('G'));
+        let last = app.studio.selected;
+        press(&mut app, Key::ch('g'));
+        assert_eq!(app.studio.selected, 0);
+        assert!(last > 0, "the fixture has more than one template");
+        assert!(app.modals.is_empty(), "neither key opened a dialog");
+    }
+
+    /// `→` is Enter's twin: one step into whatever is under the cursor. `←` is
+    /// Esc's: one level back out.
+    #[test]
+    fn the_right_arrow_goes_in_and_the_left_arrow_comes_out() {
+        let mut app = fixture(3, 80, 24);
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert!(
+            matches!(app.modals.top(), Some(Modal::Actions(_))),
+            "→ opens the row's action menu"
+        );
+        press(&mut app, Key::plain(KeyCode::Left));
+        assert!(app.modals.is_empty(), "← leaves one level");
+        press(&mut app, Key::ch('l'));
+        assert!(matches!(app.modals.top(), Some(Modal::Actions(_))));
+        press(&mut app, Key::ch('h'));
+        assert!(app.modals.is_empty());
+    }
+
+    /// **The horizontal axis never quits.** Esc's ladder ends in leaving; `←`
+    /// on the library is not bound at all, because there is nothing above it.
+    #[test]
+    fn the_left_arrow_on_the_library_does_nothing() {
+        let mut app = fixture(3, 80, 24);
+        for key in [Key::plain(KeyCode::Left), Key::ch('h')] {
+            assert!(
+                press(&mut app, key).is_empty(),
+                "{} did something",
+                key.label()
+            );
+            assert!(app.modals.is_empty());
+        }
+    }
+
+    /// From the pane, back is the list; from the templates tab, back is the
+    /// library. Each names where it goes rather than being a second Esc.
+    #[test]
+    fn the_left_arrow_backs_out_of_the_pane_and_the_tab() {
+        let mut app = fixture(3, 120, 40);
+        press(&mut app, Key::plain(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Detail);
+        press(&mut app, Key::plain(KeyCode::Left));
+        assert_eq!(app.focus, Focus::Projects);
+
+        press(&mut app, Key::ch('T'));
+        assert_eq!(app.screen, Screen::Templates);
+        press(&mut app, Key::ch('h'));
+        assert_eq!(app.screen, Screen::Library, "← is the way back from a tab");
+    }
+
+    /// Ctrl-C is a declared command now, so it is in the help — and it still
+    /// answers before anything else, from under a dialog that takes every key.
+    #[test]
+    fn ctrl_c_is_a_command_and_still_answers_first() {
+        use fastf::tui::command::{CommandId, Context, find};
+        assert!(
+            find(CommandId::Interrupt)
+                .contexts
+                .contains(&Context::Global)
+        );
+        let mut app = fixture(3, 80, 24);
+        press(&mut app, Key::ch('?'));
+        assert!(
+            press(&mut app, Key::ctrl('c')).is_empty(),
+            "it closed the help"
+        );
+        assert!(app.modals.is_empty());
+        assert_eq!(
+            press(&mut app, Key::ctrl('c')),
+            vec![Effect::Quit(Exit::Interrupted)]
+        );
+    }
+
+    /// Everything printable in the search bar is the query — `c` types a `c`
+    /// rather than opening the palette — and everything else is offered to the
+    /// registry, which is what makes `Context::SearchEdit`'s help true.
+    #[test]
+    fn the_search_bar_types_letters_and_lets_chords_through() {
+        let mut app = fixture(3, 80, 24);
+        press(&mut app, Key::ch('/'));
+        type_text(&mut app, "cq?");
+        assert_eq!(app.search.input.text(), "cq?");
+        assert!(app.modals.is_empty(), "not one of those opened a dialog");
+
+        press(&mut app, Key::ctrl('p'));
+        assert!(
+            matches!(app.modals.top(), Some(Modal::Palette(_))),
+            "a chord still reaches the registry from the bar"
+        );
+        press(&mut app, Key::plain(KeyCode::Esc));
+
+        // Esc's ladder: the first clears the query, the second leaves the bar.
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(app.search.input.is_empty());
+        assert!(app.search.editing, "still in the bar, ready to retype");
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(!app.search.editing);
+    }
+
+    /// The palette's own keys are declared too, so `Ctrl-p` means the previous
+    /// entry there and the opener is bound in every context but this one.
+    #[test]
+    fn the_palette_moves_with_its_own_keys() {
+        let mut app = fixture(6, 100, 30);
+        press(&mut app, Key::ch('c'));
+        let at = |app: &App| match app.modals.top() {
+            Some(Modal::Palette(state)) => state.selected,
+            _ => panic!("the palette closed"),
+        };
+        assert_eq!(at(&app), Some(0));
+        press(&mut app, Key::ctrl('n'));
+        assert_eq!(at(&app), Some(1));
+        press(&mut app, Key::ctrl('p'));
+        assert_eq!(at(&app), Some(0), "Ctrl-p is back up, not a second palette");
+        type_text(&mut app, "q");
+        assert!(
+            matches!(app.modals.top(), Some(Modal::Palette(_))),
+            "`q` is a letter of the query, not the quit key"
+        );
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(app.modals.is_empty());
     }
 }

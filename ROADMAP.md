@@ -240,6 +240,12 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
 
 Regression coverage grows with the relevant release:
 
+- [x] One movement grammar reaches every list — the action menu and the builder
+  page and jump like the rest — an arrow and its vim letter are never bound
+  apart, `→`/`←` go in and back out without ever quitting, every context has a
+  help that is true and an Esc that leaves it, and Ctrl-C is a declared command
+  (v3.5.0).
+
 - [x] Every explanatory sentence in the template editor is declared once, in
   `tui::guide`, names its keys through `command::key_of`, and writes no
   character the theme owns an ASCII spelling for; the sample folder name is a

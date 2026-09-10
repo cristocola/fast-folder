@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use fastf::tui::command::{COMMANDS, Category, CommandId, Context, Key, find, help_lines};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-const CONTEXTS: [Context; 10] = Context::ALL;
+const CONTEXTS: [Context; 11] = Context::ALL;
 
 #[test]
 fn every_command_id_is_declared_exactly_once() {
@@ -154,4 +154,103 @@ fn key_normalisation_folds_ctrl_case_and_labels_read_well() {
     assert_eq!(Key::plain(KeyCode::F(5)).label(), "F5");
     assert_eq!(Key::ch('a').typed(), Some('a'));
     assert_eq!(Key::ctrl('a').typed(), None);
+}
+
+/// **Every list moves the same way.** The grammar is eight commands wide, and
+/// a list that binds the arrows binds all of it — the page keys, the halves and
+/// the jumps to the ends. It used to stop short: `PgUp`/`PgDn` skipped the
+/// action menu and the builder and `Home`/`End` skipped the templates tab as
+/// well, so the two lists that cannot be searched were the two that could only
+/// be walked one row at a time.
+#[test]
+fn every_list_binds_the_whole_movement_grammar() {
+    const GRAMMAR: [CommandId; 8] = [
+        CommandId::Down,
+        CommandId::Up,
+        CommandId::PageDown,
+        CommandId::PageUp,
+        CommandId::HalfDown,
+        CommandId::HalfUp,
+        CommandId::First,
+        CommandId::Last,
+    ];
+    // A list is a context something in the grammar answers in at all.
+    let lists: HashSet<Context> = GRAMMAR
+        .iter()
+        .flat_map(|id| find(*id).contexts.iter().copied())
+        .collect();
+    assert!(
+        lists.contains(&Context::Actions) && lists.contains(&Context::Builder),
+        "the action menu and the builder are lists"
+    );
+    for ctx in lists {
+        for id in GRAMMAR {
+            assert!(
+                find(id).contexts.contains(&ctx),
+                "{:?} moves with {:?} but not with {:?} — one grammar, every list",
+                ctx,
+                GRAMMAR[0],
+                id
+            );
+        }
+    }
+}
+
+/// **An arrow and its vim letter are the same key.** Both are first-class here,
+/// so neither may be bound without the other: `↓` without `j` is a list that
+/// answers half the hands that reach for it.
+///
+/// The exception is a command that answers in a text-entry context, where
+/// every printable character is the text: the palette's `↓` cannot also be
+/// `j`, because `j` there is a letter of the query.
+#[test]
+fn an_arrow_and_its_vim_letter_are_bound_together() {
+    const PAIRS: [(KeyCode, char); 4] = [
+        (KeyCode::Down, 'j'),
+        (KeyCode::Up, 'k'),
+        (KeyCode::Left, 'h'),
+        (KeyCode::Right, 'l'),
+    ];
+    const TYPING: [Context; 2] = [Context::SearchEdit, Context::Palette];
+    for command in COMMANDS
+        .iter()
+        .filter(|c| !c.contexts.iter().any(|ctx| TYPING.contains(ctx)))
+    {
+        for (arrow, letter) in PAIRS {
+            let has_arrow = command.keys.contains(&Key::plain(arrow));
+            let has_letter = command.keys.contains(&Key::ch(letter));
+            assert_eq!(
+                has_arrow,
+                has_letter,
+                "{:?} binds {} and {} apart — they are one key",
+                command.id,
+                Key::plain(arrow).label(),
+                letter
+            );
+        }
+    }
+}
+
+/// **Every context has a way out and a way to ask.** A context whose help is
+/// empty is one the registry cannot describe, which is how `SearchEdit` and
+/// `Palette` came to have no help at all; a context with no `Close`, `Back` or
+/// `Quit` is a corner.
+#[test]
+fn every_context_has_help_and_a_way_out() {
+    for ctx in CONTEXTS {
+        assert!(
+            !help_lines(ctx, 100).is_empty(),
+            "{ctx:?} has no help to show"
+        );
+        if ctx == Context::Global {
+            continue;
+        }
+        // Esc is the way out, whichever command owns it here — `Close` in a
+        // dialog, `Back` on a tab or in the search bar, `PaletteClose` in the
+        // palette. The property is the key, not the id.
+        let leaves = COMMANDS
+            .iter()
+            .any(|c| c.contexts.contains(&ctx) && c.keys.contains(&Key::plain(KeyCode::Esc)));
+        assert!(leaves, "{ctx:?} has no way out");
+    }
 }

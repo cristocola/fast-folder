@@ -53,6 +53,8 @@ pub(crate) const KEY_SETTINGS: &str = ",";
 pub(crate) const KEY_SEARCH: &str = "/";
 #[allow(dead_code)]
 pub(crate) const KEY_COPY_PATH: &str = "y";
+#[allow(dead_code)]
+pub(crate) const KEY_FROM_FOLDER: &str = "I";
 
 pub(crate) fn launch(sb: &Sandbox, script: Vec<pty::Keystroke>) -> (String, i32) {
     pty::run(

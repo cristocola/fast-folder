@@ -867,7 +867,7 @@ mod studio {
     fn the_guide_pages() {
         let mut app = fixture(12, 120, 40);
         press(&mut app, Key::ch('T'));
-        press(&mut app, Key::ch('G'));
+        press(&mut app, Key::ch('H'));
         press(&mut app, Key::plain(KeyCode::Right));
         press(&mut app, Key::plain(KeyCode::Right));
         snap("guide_naming_page", render_to_string(&app, 120, 40));
@@ -924,7 +924,7 @@ mod studio {
 
         let mut app = fixture(12, 100, 30);
         press(&mut app, Key::ch('T'));
-        press(&mut app, Key::ch('g'));
+        press(&mut app, Key::ch('I'));
         typed(&mut app, "/mnt/projects/Reference_Shoot");
         press(&mut app, Key::plain(KeyCode::Tab));
         typed(&mut app, "reference");

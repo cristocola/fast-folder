@@ -477,7 +477,7 @@ fn a_bad_template_slug_is_refused_at_its_own_prompt() {
     let script = pty::Script::new()
         .key(KEY_TEMPLATES)
         .pause(700)
-        .key("g") // → generate from a folder
+        .key(KEY_FROM_FOLDER) // → generate from a folder
         .pause(400)
         .key(&source.display().to_string())
         .tab()

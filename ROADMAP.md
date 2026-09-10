@@ -67,6 +67,34 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
+- Released: **v3.5.0 — the app answers the keys you try.** The terminal app had
+  a key for everything and a grammar for nothing: some lists paged and some did
+  not, `g` meant "first row" on one screen and "template from a folder" on the
+  next, `←`/`→` did nothing anywhere, and a batch that changed ten rows left a
+  frame identical to the one before it. Five phases, each its own PR (#60–#64):
+  - **One movement grammar** over every list — the arrows, the page keys, half
+    a page (`Ctrl-D`/`Ctrl-U`) and the jumps to the ends, declared over one
+    context set instead of three that had drifted. `g`/`G` are the ends
+    everywhere; the templates tab's two verbs moved to `I` and `H`.
+  - **A horizontal axis that means one thing**: `→`/`l` goes into whatever is
+    under the cursor, `←`/`h` comes back out one level, and it never quits.
+  - **Every key line read from the registry.** Seven surfaces wrote `↑↓` by
+    hand; `Context::Prompt` and `Context::Pick` exist so the hint bar can read
+    a prompt's and a picker's keys, and `command::keys_in` takes back out what
+    a text field swallows — `? help` over a rename prompt was the registry
+    telling a lie about itself. Ctrl-C is a declared command now.
+  - **Four things the app could not do**: `v` marks to the cursor, every
+    one-way sort runs both ways, `FilterTag` writes the grammar's own clause,
+    and `/` narrows the settings screen.
+  - **Motion, only where it answers a question**: a row a verb changed, a size
+    cell as it lands, one activity indicator, a message on its way out.
+    Nothing else moves. It also fixed a real defect — a tick was a quiet
+    interval rather than a deadline, so a burst of work stopped the spinner
+    exactly when there was most to wait for.
+
+  `.github/release-notes/v3.5.0.md` is the user-facing account. No flag, config
+  format or template format changed; `state.toml` records a sort direction and
+  older files still parse, and there is one new setting, `motion`.
 - Released: **v3.4.0 — the template editor explains itself.** The one surface
   that asked people to learn a vocabulary before they could use it: five nouns
   in the manifest's own words, and a single footer line cut with an ellipsis as
@@ -166,7 +194,7 @@ responsibility of the filesystem and backups.
     terminal that reports it.
   - Ctrl-Z and `fg`; `kill -INT` twice against the app leaves the shell
     cooked; `ssh localhost -t fastf` picks a theme and `o` says "no display".
-- Last reviewed: **2026-09-10** (v3.4.0)
+- Last reviewed: **2026-09-10** (v3.5.0)
 
 ## Release train
 
@@ -194,6 +222,7 @@ responsibility of the filesystem and backups.
 | v3.2.0 | what a preview promises is what a create writes, and a template is addressed by the folder it lives in: eight findings the Windows pass reproduced, none of them Windows-specific | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.2.0) |
 | v3.3.0 | nothing fails quietly: a project fastf cannot read is named rather than dropped, the app cannot be crashed or made to act on the wrong project, guards that were written down are enforced, and every surface says one thing | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.3.0) |
 | v3.4.0 | the template editor explains itself: a panel that says what each part is and what the template would produce, a seven-page guide with a walkthrough that builds one, and a Save row that counts what is still worth a look | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.4.0) |
+| v3.5.0 | the app answers the keys you try: one movement grammar in every list, `→`/`←` to go in and come back, every key line read from the registry, four things it could not do, and motion only where it answers a question | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.5.0) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find

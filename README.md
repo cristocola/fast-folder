@@ -56,13 +56,15 @@ fast-folder is a tool for one person, working on ordinary files and directories 
 
 Running `fastf` on its own opens the app. It is one full screen dashboard over the whole library: every base, every project, folder sizes measured in the background and filling in as they arrive.
 
-Typing into the search bar narrows the list. A word matches a name, an ID, a template or a tag, and a typo still finds the project. A number is read as an ID. Operators match exactly: `tag:draft`, `template=music-video`, `created>2026-01-01`. Sort by date, name, ID, template, base or size, filter to one template or one base, and mark a run of rows with Space so the next verb runs over all of them.
+Typing into the search bar narrows the list. A word matches a name, an ID, a template or a tag, and a typo still finds the project. A number is read as an ID. Operators match exactly: `tag:draft`, `template=music-video`, `created>2026-01-01`. Sort by date, name, ID, template, base or size — each of those both ways — filter to one template, one base or one tag, and mark a run of rows with Space, or `v` to mark everything between the last mark and the cursor, so the next verb runs over all of them.
 
 Each verb has a key. `o` opens the folder, `t` opens a terminal there, `y` copies the path, `Enter` opens the action menu for the selected project, and `c` opens a command palette that finds any command or any project by name. `?` lists every key that works where you are.
 
+Every list moves the same way — the arrows or `j`/`k`, a page at a time, half a page, or straight to either end — and `→` goes into whatever is under the cursor while `←` comes back out, so the whole app can be driven with the arrow keys alone.
+
 Creating a project, adopting an existing folder and applying a template follow the same three steps: a form with every question on it, a preview built by the same code that commits it, then Enter. Templates have a tab of their own, with a builder that draws the folder tree beside the paths as you type them, a panel that explains whatever the cursor is on and shows the folder name your template would produce, and a built-in guide that walks you through building your first one. Every setting fast-folder has is on one screen with its current value beside it. Esc goes back one step at a time, and an answer the app refuses comes back editable with your text still in it.
 
-The app needs a terminal of at least 60x16, and the detail pane appears from 100 columns. It draws in truecolor where the terminal announces it, in the sixteen ANSI colours otherwise, and in plain ASCII when you ask for it with `FASTF_ASCII=1`. `fastf config set theme` pins a palette for a terminal that announces its colours differently, such as an ssh session. Details in [docs/cli.md](docs/cli.md#the-guided-app).
+The app needs a terminal of at least 60x16, and the detail pane appears from 100 columns. It draws in truecolor where the terminal announces it, in the sixteen ANSI colours otherwise, and in plain ASCII when you ask for it with `FASTF_ASCII=1`. A row a verb has just changed lights up for half a second so a batch says which rows it touched; `fastf config set motion off` turns that off. `fastf config set theme` pins a palette for a terminal that announces its colours differently, such as an ssh session. Details in [docs/cli.md](docs/cli.md#the-guided-app).
 
 ## The command line
 

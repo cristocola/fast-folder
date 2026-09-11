@@ -12,6 +12,8 @@
 //! - **Attribution.** The maintainer's name and contact belong in `LICENSE`,
 //!   `Cargo.toml`, the PKGBUILDs, and the installer. AUR *requires* a
 //!   `# Maintainer:` line. Removing those would be less professional, not more.
+//!   Its address is `hello@argyrolabs.com`, the one email address a tracked
+//!   file may carry: a personal address is personal in any file.
 //! - **Placeholder paths.** `/home/user`, `/home/you`, `C:\Users\user` are how
 //!   documentation shows a path. It is the *real* names that are the problem.
 
@@ -121,6 +123,55 @@ fn real_home_paths(text: &str) -> Vec<String> {
     hits
 }
 
+/// The attribution files' contact address.
+const ATTRIBUTION_EMAIL: &str = "hello@argyrolabs.com";
+
+/// Email addresses on a line other than the attribution address and the
+/// reserved documentation domains. A login in a URL (`ssh://aur@host/…`) or an
+/// scp-style remote (`git@host:path`) is not an address; neither is a version
+/// pin (`crate@1.2.3`) or an action pin (`checkout@<sha>`).
+fn personal_emails(line: &str) -> Vec<String> {
+    let is_local = |c: char| c.is_ascii_alphanumeric() || "._%+-".contains(c);
+    let is_domain = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
+    let mut hits = Vec::new();
+    for (at, _) in line.match_indices('@') {
+        let before = &line[..at];
+        let local_start = before
+            .char_indices()
+            .rev()
+            .take_while(|&(_, c)| is_local(c))
+            .last()
+            .map_or(at, |(i, _)| i);
+        let local = &line[local_start..at];
+        if local.is_empty() || before[..local_start].ends_with("://") {
+            continue;
+        }
+        let after = &line[at + 1..];
+        let end = after.find(|c: char| !is_domain(c)).unwrap_or(after.len());
+        let domain = after[..end].trim_end_matches(['.', '-']);
+        let rest = &after[domain.len()..];
+        if rest.starts_with(':') && rest[1..].starts_with(|c: char| !c.is_whitespace()) {
+            continue;
+        }
+        let Some((_, tld)) = domain.rsplit_once('.') else {
+            continue;
+        };
+        if tld.len() < 2 || !tld.chars().all(|c| c.is_ascii_alphabetic()) {
+            continue;
+        }
+        let domain = domain.to_ascii_lowercase();
+        let reserved = ["example.com", "example.org", "example.net"].contains(&domain.as_str())
+            || [".example", ".invalid", ".test", ".localhost"]
+                .iter()
+                .any(|suffix| domain.ends_with(suffix));
+        let address = format!("{local}@{domain}");
+        if !reserved && !address.eq_ignore_ascii_case(ATTRIBUTION_EMAIL) {
+            hits.push(address);
+        }
+    }
+    hits
+}
+
 /// `needle` as a whole path component: `/mnt/proj` matches `/mnt/proj/01` but
 /// not `/mnt/projects/clients`.
 fn mentions_exact_path(line: &str, needle: &str) -> bool {
@@ -169,6 +220,9 @@ fn no_tracked_file_describes_the_maintainers_machine() {
             for hit in real_home_paths(line) {
                 complain(&format!("home directory of a named person ({hit})"));
             }
+            for address in personal_emails(line) {
+                complain(&format!("a personal email address ({address})"));
+            }
             // The maintainer's own drives. A published example must use a path
             // any reader could plausibly have. Matched on a word boundary, so
             // the generic `/mnt/projects/...` used in the docs is fine.
@@ -197,8 +251,28 @@ fn no_tracked_file_describes_the_maintainers_machine() {
         findings.is_empty(),
         "the repository is public; these lines describe the machine it was written on \
          rather than the project:\n\n{}\n\nUse a placeholder path (/home/user, \
-         /mnt/projects/...) or say \"the maintainer\". Attribution belongs in {:?}.",
+         /mnt/projects/...) or say \"the maintainer\". Attribution belongs in {:?}, \
+         and its address is {ATTRIBUTION_EMAIL}.",
         findings.join("\n"),
         ATTRIBUTION_FILES,
+    );
+}
+
+#[test]
+fn the_email_rule_tells_an_address_from_a_login_or_a_pin() {
+    assert_eq!(
+        personal_emails("# Maintainer: Some Name <jane.doe@personal-mail.net>"),
+        ["jane.doe@personal-mail.net"]
+    );
+    assert!(personal_emails("# Maintainer: Some Name <hello@argyrolabs.com>").is_empty());
+    assert!(personal_emails("author_email: someone@example.com").is_empty());
+    assert!(personal_emails("git clone ssh://aur@aur.archlinux.org/fast-folder.git").is_empty());
+    assert!(personal_emails("git remote add origin git@github.com:owner/repo.git").is_empty());
+    assert!(personal_emails("- uses: actions/checkout@3d3c42e5aac5 # v7.0.1").is_empty());
+    assert!(personal_emails("cargo install ratatui@0.29.0").is_empty());
+    assert_eq!(
+        personal_emails("write to jane@mail.org: she answers"),
+        ["jane@mail.org"],
+        "a colon ending a sentence is not an scp-style remote"
     );
 }

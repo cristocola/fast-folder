@@ -267,7 +267,8 @@ fn write_template(install: &Path, slug: &str) {
 /// suite it was exercised by a synthetic `io::Error` and a failpoint, never
 /// by two filesystems.
 ///
-/// This is half of the ROADMAP's outstanding Windows validation item.
+/// One half of the Windows move validation; the same-volume rename below is
+/// the other.
 #[test]
 fn a_move_to_the_share_copies_verifies_and_publishes() {
     let Some(live) = live("move-to-share") else {
@@ -329,7 +330,7 @@ fn a_move_to_the_share_copies_verifies_and_publishes() {
     );
 }
 
-/// The other half of the ROADMAP item: two bases on the **same** volume take
+/// The other half of the Windows move validation: two bases on the **same** volume take
 /// the rename path, which copies nothing however large the folder is.
 #[test]
 fn a_move_within_one_volume_renames_and_copies_nothing() {

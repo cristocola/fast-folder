@@ -6,10 +6,14 @@ Two packages live here, both installing the `fastf` command:
 - **`fast-folder-bin`** — repackages the prebuilt static (musl) binary from GitHub Releases. `provides=(fast-folder)`, so it satisfies anything depending on `fast-folder`.
 
 The PKGBUILDs in this directory are the **source of truth**; the AUR git repos are
-separate clones you copy them into. `update.sh <version>` refreshes both for a new
-release (pkgver bump + checksums + .SRCINFO).
+separate clones you copy them into. This file is the AUR mechanics only. When to
+run them, and what has to be green first, is the release routine in
+`.claude/skills/release/SKILL.md`.
 
-## One-time setup (first publish)
+The clones live in `$FASTF_AUR_DIR`, which defaults to an `aur` directory beside
+the repository root — the same default `update.sh` uses.
+
+## One-time setup
 
 1. **Create an AUR account** at <https://aur.archlinux.org/register> and verify the email.
 
@@ -25,62 +29,46 @@ release (pkgver bump + checksums + .SRCINFO).
      IdentityFile ~/.ssh/aur
    ```
 
-3. **Claim the package names** (cloning a non-existent package creates an empty
-   repo you may push to):
+3. **Clone the package repositories** (cloning a package that does not exist yet
+   creates an empty repo you may push to, which claims the name). From the
+   repository root:
    ```bash
-   mkdir -p ~/aur
-   git clone ssh://aur@aur.archlinux.org/fast-folder.git     ~/aur/fast-folder
-   git clone ssh://aur@aur.archlinux.org/fast-folder-bin.git ~/aur/fast-folder-bin
+   aur=${FASTF_AUR_DIR:-$(pwd)/../aur}
+   mkdir -p "$aur"
+   git clone ssh://aur@aur.archlinux.org/fast-folder.git     "$aur/fast-folder"
+   git clone ssh://aur@aur.archlinux.org/fast-folder-bin.git "$aur/fast-folder-bin"
    ```
 
-## Per-release flow (also for the first release)
+## Per release
 
-Prerequisite: the GitHub release `v<version>` exists (the Release workflow ran on the tag).
-
-The workflow gates itself now, so a release that exists has already passed the
-whole of CI on both platforms, had its tag checked against `Cargo.toml` **and**
-against `main`, and had its archives unpacked and run (`fastf --version` must
-equal the tag; the MSI's payload is extracted with an administrative install and
-run too). Every asset also carries a signed build-provenance attestation.
-
-That is a guarantee about the *artifact*, not about the tag going up cleanly:
-because the gate is the whole of CI, any platform-specific test failure is a
-failed release. Get a green PR run on both platforms before tagging — the
-`release` skill's "Why the first tag fails" lists the patterns.
+Run once the GitHub release `v<version>` exists: `updpkgsums` downloads its
+assets to compute the checksums.
 
 ```bash
-gh attestation verify fastf-v<version>-x86_64-unknown-linux-musl.tar.gz \
-  --repo cristocola/fast-folder
-```
+cd packaging/aur
+./update.sh X.Y.Z        # bumps pkgver, resets pkgrel, fills sha256sums, regenerates .SRCINFO
 
-```bash
-cd <repo>/packaging/aur
-./update.sh X.Y.Z                 # bumps pkgver, fills sha256sums, regenerates .SRCINFO
+# Validate each package. This builds (the source package also runs the release
+# test suite in check()) and installs nothing.
+(cd fast-folder && makepkg -f)
+(cd fast-folder-bin && makepkg -f)
+# If namcap is already installed: namcap PKGBUILD, then namcap on the built package.
 
-# Validate locally before pushing (per package):
-cd fast-folder
-makepkg -f                        # full build + check; does not install
-namcap PKGBUILD                   # lint if namcap is already installed
-namcap fast-folder-*.pkg.tar.zst  # lint the built package
-cd ..
+# Publish each package.
+aur=${FASTF_AUR_DIR:-$(pwd)/../../../aur}
+cp fast-folder/{PKGBUILD,.SRCINFO} "$aur/fast-folder/"
+(cd "$aur/fast-folder" && git add -A && git commit -m "fast-folder X.Y.Z-1" && git push)
+cp fast-folder-bin/{PKGBUILD,.SRCINFO} "$aur/fast-folder-bin/"
+(cd "$aur/fast-folder-bin" && git add -A && git commit -m "fast-folder-bin X.Y.Z-1" && git push)
 
-# Publish (per package):
-cp fast-folder/{PKGBUILD,.SRCINFO} ~/aur/fast-folder/
-cd ~/aur/fast-folder
-git add -A && git commit -m "fast-folder X.Y.Z-1" && git push   # first push goes to master
-
-# Repeat for fast-folder-bin.
+# makepkg's output is ignored by git; remove it so the next bump starts clean.
+git clean -fdX .
 ```
 
 Notes:
 - **Never hand-edit `.SRCINFO`** — always regenerate with `makepkg --printsrcinfo > .SRCINFO`.
-- The AUR repo must contain PKGBUILD + .SRCINFO at its root; don't push anything else.
-- **Release automation must not mutate installed packages.** Do not run `paru -S...`,
-  `pacman -S...`, `yay -S...`, or `makepkg -i`/`makepkg -s`. The maintainer
-  installs the released package and performs smoke tests manually.
-- Manual final sanity check: first run bootstraps `~/.config/fastf`, `fastf`
-  opens the guided TUI, `man fastf` works, and tab completion works.
-- Clean-chroot validation (optional, gold standard): if `devtools` is already
+- An AUR repo holds `PKGBUILD` and `.SRCINFO` at its root and nothing else.
+- Clean-chroot validation (optional, the gold standard): if `devtools` is already
   installed, run `pkgctl build` inside the package directory.
 
 ## If `fast-folder` starts failing its checksum

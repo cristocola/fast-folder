@@ -57,7 +57,8 @@ FASTF_TRACE_FILE=/tmp/counts cargo test           # one line per traced operatio
 Both `FASTF_FAULT` and `FASTF_TRACE_FILE` are compiled out of release builds, so
 their tests are `#[cfg(debug_assertions)]` and debug and release test counts
 differ. Several Windows cases are Windows-only and the pty suite is Unix-only.
-Do not hard-code a total here; run the gates in [`ROADMAP.md`](ROADMAP.md).
+Do not hard-code a total here; the gates are listed in the `release` skill
+(`.claude/skills/release/SKILL.md`).
 
 ## Project layout
 
@@ -152,9 +153,11 @@ and `tui::inline` take the terminal.
 
 Nothing tracked here may describe the machine it was written on: no real home
 directory (`/home/<name>`, `C:\Users\<name>`), no personal mount point, no local
-project-folder path, no maintainer's name in prose. Write `/home/user`,
-`/mnt/projects/...`, "the maintainer". Attribution is the exception and belongs
-in `LICENSE`, `Cargo.toml`, `README.md`, the PKGBUILDs and the installer.
+project-folder path, no maintainer's name in prose, and no personal email
+address in any file. Write `/home/user`, `/mnt/projects/...`, "the maintainer".
+Attribution is the exception and belongs in `LICENSE`, `Cargo.toml`,
+`README.md`, the PKGBUILDs and the installer; its address is
+`hello@argyrolabs.com`.
 
 `tests/repo_hygiene.rs` enforces this over `git ls-files`, so the rule fails the
 build rather than relying on anyone remembering it. It runs only when the crate

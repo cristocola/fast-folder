@@ -471,6 +471,40 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
     crate::util::atomic::write(path, new_content.as_bytes())
 }
 
+/// Where a `## Heading` section is in a `PROJECT_INFO.md` body: the byte range
+/// from the heading to the start of the next `##`, or to the end. The one
+/// rule for every section fastf reads or writes — the journal's and the
+/// notes' — so a writer and a reader can never disagree about where one ends.
+///
+/// `None` when the heading is not there. The end index is always a `char`
+/// boundary: it is either the length, or the offset of a `\n`.
+fn section_span(content: &str, heading: &str) -> Option<std::ops::Range<usize>> {
+    let start = content.find(heading)?;
+    // Search past the heading's own `##` so it cannot match itself.
+    let end = content[start + 2..]
+        .find("\n##")
+        .map(|offset| start + 2 + offset)
+        .unwrap_or(content.len());
+    Some(start..end)
+}
+
+/// The `## Notes` heading, spelled once.
+pub const NOTES_HEADING: &str = "## Notes";
+
+/// The text of the `## Notes` section — everything under the heading up to
+/// the next section — without the heading line and without the blank lines
+/// that frame it. `None` when the file has no notes section at all; `Some("")`
+/// when it has an empty one, which is what every new project starts with.
+pub fn notes_body(content: &str) -> Option<&str> {
+    let body = split_frontmatter_body(content)
+        .map(|(_, body)| body)
+        .unwrap_or(content);
+    let span = section_span(body, NOTES_HEADING)?;
+    let section = &body[span];
+    let after_heading = section.find('\n').map_or("", |at| &section[at + 1..]);
+    Some(after_heading.trim_matches(['\n', '\r']))
+}
+
 /// Where the `## Journal` section is in a `PROJECT_INFO.md` body: the byte
 /// range from the heading to the start of the next `##`, or to the end.
 ///
@@ -486,13 +520,7 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
 /// `None` when there is no journal at all. The end index is always a `char`
 /// boundary: it is either the length, or the offset of a `\n`.
 fn journal_span(content: &str) -> Option<std::ops::Range<usize>> {
-    let start = content.find(JOURNAL_HEADING)?;
-    // Search past the heading's own `##` so it cannot match itself.
-    let end = content[start + 2..]
-        .find("\n##")
-        .map(|offset| start + 2 + offset)
-        .unwrap_or(content.len());
-    Some(start..end)
+    section_span(content, JOURNAL_HEADING)
 }
 
 /// The `## Journal` heading, spelled once.

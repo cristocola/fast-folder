@@ -571,6 +571,15 @@ pub fn detail(path: &Path) -> ProjectDetail {
         Ok(meta) => detail.meta = meta,
         Err(err) => problems.push(format!("{err:#}")),
     }
+    // The template's variables give the pane's variable rows their type. A
+    // template that cannot be read is not a problem worth a warning here —
+    // the project is whole without it — every variable is simply free text.
+    if let Some(meta) = &detail.meta
+        && meta.template != crate::core::operations::REGISTERED_SLUG
+        && let Ok(template) = crate::core::template::find_by_slug(&meta.template)
+    {
+        detail.variables = template.variables;
+    }
 
     match project_info::read_journal_entries(path) {
         Ok(entries) => {
@@ -598,7 +607,12 @@ pub fn detail(path: &Path) -> ProjectDetail {
     }
 
     match project_info::read(path) {
-        Ok(content) => detail.notes = notes_section(&content),
+        Ok(content) => {
+            detail.notes_text = project_info::notes_body(&content)
+                .unwrap_or_default()
+                .to_string();
+            detail.notes = notes_preview(&detail.notes_text);
+        }
         Err(err) => problems.push(format!("notes: {err:#}")),
     }
 
@@ -610,18 +624,11 @@ pub fn detail(path: &Path) -> ProjectDetail {
     detail
 }
 
-/// The first lines of `## Notes`, up to the next heading.
-fn notes_section(content: &str) -> Vec<String> {
-    let body = project_info::split_frontmatter_body(content)
-        .map(|(_, body)| body)
-        .unwrap_or(content);
-    let Some(start) = body.find("## Notes") else {
-        return Vec::new();
-    };
-    body[start..]
+/// The first lines of the notes, blanks dropped: the pane's preview of the
+/// section `project_info::notes_body` found.
+fn notes_preview(notes: &str) -> Vec<String> {
+    notes
         .lines()
-        .skip(1)
-        .take_while(|line| !line.starts_with("## "))
         .map(str::trim_end)
         .filter(|line| !line.trim().is_empty())
         .take(NOTES_LIMIT)
@@ -651,15 +658,18 @@ fn listing(path: &Path) -> std::io::Result<Vec<Entry>> {
 
 #[cfg(test)]
 mod tests {
-    use super::notes_section;
+    use super::notes_preview;
+    use crate::core::project_info::notes_body;
 
     #[test]
-    fn the_notes_section_stops_at_the_next_heading() {
+    fn the_notes_preview_is_the_section_without_its_blank_lines() {
         let content = "---\nid: ID0001\n---\n# Project Info\n\n## Notes\n\nfirst cut due Friday\n\n## Journal\n- entry\n";
+        assert_eq!(notes_body(content), Some("first cut due Friday"));
         assert_eq!(
-            notes_section(content),
+            notes_preview(notes_body(content).unwrap()),
             vec!["first cut due Friday".to_string()]
         );
-        assert!(notes_section("# nothing").is_empty());
+        assert_eq!(notes_body("# nothing"), None);
+        assert!(notes_preview("").is_empty());
     }
 }

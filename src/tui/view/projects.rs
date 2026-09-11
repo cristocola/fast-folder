@@ -6,11 +6,12 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
-    TableState, Wrap,
+    TableState,
 };
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::library;
+use crate::tui::app::pane::PaneRow;
 use crate::tui::app::{App, Focus};
 use crate::tui::rows::{SIZE_CELL, date_cell, size_label};
 use crate::tui::view::{fit, highlighted};
@@ -409,141 +410,123 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
         ))
     };
 
-    let mut lines: Vec<Line> = vec![
-        Line::from(Span::styled(project.name.clone(), theme.bold())),
-        Line::from(vec![
-            Span::styled(project.template.clone(), theme.dim()),
-            Span::styled(format!(" {} ", g.sep), theme.dim()),
-            Span::styled(
-                library::base_label(&project.base),
-                Style::default().fg(theme.accent),
-            ),
-            Span::styled(format!(" {} created ", g.sep), theme.dim()),
-            Span::styled(date_cell(&project.created).to_string(), theme.text()),
-        ]),
-    ];
-
     let detail = app.details.get(&project.path);
-    let size = match app.size_cell(&project.path) {
-        SizeCell::Pending => g.pending.to_string(),
-        SizeCell::Known(size) => size_label(size),
-    };
-    let journal = detail.map(|d| d.journal_count).unwrap_or(0);
-    lines.push(Line::from(vec![
-        Span::styled(size, theme.text()),
-        Span::styled(
-            format!(
-                "   {}   {journal} journal entr{}",
-                g.sep,
-                if journal == 1 { "y" } else { "ies" }
-            ),
-            theme.dim(),
-        ),
-    ]));
+    let rows = app.pane_rows();
+    let key_w = rows
+        .iter()
+        .filter_map(|row| match row {
+            PaneRow::Variable { label, .. } => Some(label.width()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .min(18);
 
-    if !project.tags.is_empty() {
-        let mut spans = vec![Span::styled("tags  ", theme.dim())];
-        for tag in &project.tags {
-            spans.push(Span::styled(
-                format!("{} {tag}  ", g.dot),
-                Style::default().fg(theme.tag_color(tag)),
-            ));
-        }
-        lines.push(Line::from(spans));
-    }
-
-    match detail {
-        None => {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("reading…", theme.dim())));
-        }
-        Some(detail) => {
-            if let Some(error) = &detail.error {
-                lines.push(Line::from(Span::styled(
-                    format!("warning: {error}"),
-                    theme.warn(),
-                )));
-            }
-            if let Some(meta) = &detail.meta
-                && !meta.variables.is_empty()
-            {
-                lines.push(rule("variables"));
-                let key_w = meta
-                    .variables
-                    .keys()
-                    .map(|k| k.width())
-                    .max()
-                    .unwrap_or(0)
-                    .min(18);
-                for (key, value) in meta.variables.iter().take(8) {
-                    let shown = if value.is_empty() {
-                        "(empty)"
-                    } else {
-                        value.as_str()
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{:<key_w$} ", fit(key, key_w, g.ellipsis)),
-                            theme.dim(),
+    // One line per row, and no wrapping: the cursor is an index into the
+    // rows, and `detail_scroll` counts rows, so a row that took two lines
+    // would put both off by one from there down.
+    let mut lines: Vec<Line> = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        let mut line = match row {
+            PaneRow::Name => Line::from(Span::styled(project.name.clone(), theme.bold())),
+            PaneRow::Facts => Line::from(vec![
+                Span::styled(project.template.clone(), theme.dim()),
+                Span::styled(format!(" {} ", g.sep), theme.dim()),
+                Span::styled(
+                    library::base_label(&project.base),
+                    Style::default().fg(theme.accent),
+                ),
+                Span::styled(format!(" {} created ", g.sep), theme.dim()),
+                Span::styled(date_cell(&project.created).to_string(), theme.text()),
+            ]),
+            PaneRow::Figures => {
+                let size = match app.size_cell(&project.path) {
+                    SizeCell::Pending => g.pending.to_string(),
+                    SizeCell::Known(size) => size_label(size),
+                };
+                let journal = detail.map(|d| d.journal_count).unwrap_or(0);
+                Line::from(vec![
+                    Span::styled(size, theme.text()),
+                    Span::styled(
+                        format!(
+                            "   {}   {journal} journal entr{}",
+                            g.sep,
+                            if journal == 1 { "y" } else { "ies" }
                         ),
-                        Span::styled(
-                            fit(shown, width.saturating_sub(key_w + 1), g.ellipsis),
-                            theme.text(),
-                        ),
-                    ]));
-                }
-            }
-            if !detail.listing.is_empty() {
-                lines.push(rule("inside"));
-                for entry in detail.listing.iter().take(8) {
-                    let shown = if entry.is_dir {
-                        format!("{}/", entry.name)
-                    } else {
-                        entry.name.clone()
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{} ", if entry.is_dir { g.folder } else { g.sep }),
-                            theme.dim(),
-                        ),
-                        Span::styled(
-                            fit(&shown, width.saturating_sub(2), g.ellipsis),
-                            if entry.is_dir {
-                                theme.text()
-                            } else {
-                                theme.dim()
-                            },
-                        ),
-                    ]));
-                }
-                if detail.listing.len() > 8 {
-                    lines.push(Line::from(Span::styled(
-                        format!("  {} {} more", g.ellipsis, detail.listing.len() - 8),
                         theme.dim(),
-                    )));
-                }
+                    ),
+                ])
             }
-            if !detail.notes.is_empty() {
-                lines.push(rule("notes"));
-                for note in &detail.notes {
-                    lines.push(Line::from(Span::styled(note.clone(), theme.text())));
-                }
+            PaneRow::Rule(label) => rule(label),
+            PaneRow::Tag(tag) => Line::from(Span::styled(
+                format!("{} {tag}", g.dot),
+                Style::default().fg(theme.tag_color(tag)),
+            )),
+            PaneRow::AddTag => {
+                Line::from(Span::styled(format!("{} add a tag", g.sep), theme.dim()))
             }
-            if !detail.journal.is_empty() {
-                lines.push(rule("journal"));
-                for (date, message) in &detail.journal {
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{date} "), theme.dim()),
-                        Span::styled(message.clone(), theme.text()),
-                    ]));
-                }
+            PaneRow::Reading => Line::from(Span::styled("reading…", theme.dim())),
+            PaneRow::Warning(error) => {
+                Line::from(Span::styled(format!("warning: {error}"), theme.warn()))
             }
+            PaneRow::Variable { label, value, .. } => {
+                let shown = if value.is_empty() {
+                    "(empty)"
+                } else {
+                    value.as_str()
+                };
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:<key_w$} ", fit(label, key_w, g.ellipsis)),
+                        theme.dim(),
+                    ),
+                    Span::styled(
+                        fit(shown, width.saturating_sub(key_w + 1), g.ellipsis),
+                        theme.text(),
+                    ),
+                ])
+            }
+            PaneRow::Entry(entry) => {
+                let shown = if entry.is_dir {
+                    format!("{}/", entry.name)
+                } else {
+                    entry.name.clone()
+                };
+                Line::from(vec![
+                    Span::styled(
+                        format!("{} ", if entry.is_dir { g.folder } else { g.sep }),
+                        theme.dim(),
+                    ),
+                    Span::styled(
+                        fit(&shown, width.saturating_sub(2), g.ellipsis),
+                        if entry.is_dir {
+                            theme.text()
+                        } else {
+                            theme.dim()
+                        },
+                    ),
+                ])
+            }
+            PaneRow::More(more) => Line::from(Span::styled(
+                format!("  {} {more} more", g.ellipsis),
+                theme.dim(),
+            )),
+            PaneRow::Note(note) => Line::from(Span::styled(note.clone(), theme.text())),
+            PaneRow::Journal(date, message) => Line::from(vec![
+                Span::styled(format!("{date} "), theme.dim()),
+                Span::styled(message.clone(), theme.text()),
+            ]),
+        };
+        // The cursor: the selection's own highlight, and only while the pane
+        // has the focus — a lit row in a pane you are not in would say the
+        // next key goes there when it does not.
+        if focused && index == app.pane_cursor && row.selectable() {
+            line = line.style(theme.selection);
         }
+        lines.push(line);
     }
 
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((app.detail_scroll as u16, 0));
+    let paragraph = Paragraph::new(lines).scroll((app.detail_scroll as u16, 0));
     frame.render_widget(paragraph, inner);
 }
 

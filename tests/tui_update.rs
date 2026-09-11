@@ -2709,32 +2709,28 @@ mod mouse {
         wheel(&mut app, false);
         assert_eq!(app.library.selected, Some(0));
 
-        // In the detail pane it scrolls the pane, because that is what ↓ does
-        // there — as far as the pane's text goes, and no further.
+        // In the detail pane it moves the pane's cursor, because that is what
+        // ↓ does there — over the rows Enter can act on, and no further than
+        // the last of them.
         let path = app.library.selected().unwrap().path.clone();
-        let long = fastf::tui::app::data::ProjectDetail {
-            listing: (0..80)
-                .map(|i| fastf::tui::app::data::Entry {
-                    name: format!("file_{i:02}.mov"),
-                    is_dir: false,
-                })
-                .collect(),
-            ..Default::default()
-        };
-        app.details.insert(path, long);
+        app.details
+            .insert(path, fastf::tui::app::data::ProjectDetail::default());
         press(&mut app, Key::plain(KeyCode::Tab));
         assert_eq!(app.focus, Focus::Detail);
+        let rows = app.pane_rows();
         wheel(&mut app, true);
-        assert_eq!(app.detail_scroll, 3);
+        assert!(app.pane_cursor > 0, "the wheel moved the pane's cursor");
+        assert!(rows[app.pane_cursor].selectable());
         assert_eq!(app.library.selected, Some(0), "the list did not move");
         press(&mut app, Key::plain(KeyCode::End));
-        let at_end = app.detail_scroll;
-        assert!(
-            at_end > 3 && at_end < 90,
-            "End stops where the text does: {at_end}"
+        let at_end = app.pane_cursor;
+        assert_eq!(
+            rows[at_end],
+            fastf::tui::app::pane::PaneRow::Rule("journal"),
+            "End is the last row Enter can act on"
         );
         wheel(&mut app, true);
-        assert_eq!(app.detail_scroll, at_end, "nothing past the end");
+        assert_eq!(app.pane_cursor, at_end, "nothing past the end");
     }
 
     #[test]
@@ -4075,6 +4071,118 @@ mod more_options {
             }
             other => panic!("Esc closed the settings instead: {other:?}"),
         }
+    }
+}
+
+/// The detail pane's own cursor: it rests only on rows Enter can act on, it
+/// stops at the ends, and the pane scrolls to keep it in view.
+mod pane_cursor {
+    use super::*;
+    use fastf::tui::app::data::ProjectDetail;
+    use fastf::tui::app::pane::PaneRow;
+
+    fn with_detail(app: &mut App, detail: ProjectDetail) {
+        let path = app.library.selected().unwrap().path.clone();
+        update(
+            app,
+            Msg::Detail {
+                path,
+                detail: Box::new(detail),
+            },
+        );
+    }
+
+    #[test]
+    fn the_cursor_walks_selectable_rows_and_stops_at_the_ends() {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('j'));
+        // Row 1 of the fixture carries two tags.
+        assert_eq!(app.library.selected().unwrap().tags.len(), 2);
+        with_detail(&mut app, ProjectDetail::default());
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Detail);
+        assert_eq!(app.pane_cursor, 0, "the cursor starts on the name");
+
+        let rows = app.pane_rows();
+        press(&mut app, Key::ch('j'));
+        assert!(
+            matches!(rows[app.pane_cursor], PaneRow::Tag(_)),
+            "down from the name is the first tag, over the facts: {:?}",
+            rows[app.pane_cursor]
+        );
+        press(&mut app, Key::ch('G'));
+        assert_eq!(rows[app.pane_cursor], PaneRow::Rule("journal"));
+        press(&mut app, Key::ch('j'));
+        assert_eq!(
+            rows[app.pane_cursor],
+            PaneRow::Rule("journal"),
+            "the last row is the last row"
+        );
+        press(&mut app, Key::ch('g'));
+        assert_eq!(app.pane_cursor, 0);
+        press(&mut app, Key::ch('k'));
+        assert_eq!(app.pane_cursor, 0, "and the first is the first");
+        assert!(
+            rows.iter().all(|row| !matches!(row, PaneRow::Reading)),
+            "a read detail leaves no reading row"
+        );
+    }
+
+    #[test]
+    fn the_pane_scrolls_to_keep_its_cursor_in_view_and_a_new_row_resets_it() {
+        let mut app = fixture(6, 120, 24);
+        let detail = ProjectDetail {
+            notes: (0..30).map(|n| format!("note {n}")).collect(),
+            ..Default::default()
+        };
+        with_detail(&mut app, detail);
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.detail_scroll, 0);
+        press(&mut app, Key::ch('G'));
+        let rows = app.pane_rows();
+        assert_eq!(rows[app.pane_cursor], PaneRow::Rule("journal"));
+        assert!(
+            app.detail_scroll > 0,
+            "the journal rule sits under thirty notes, so the pane scrolled"
+        );
+        assert!(
+            app.pane_cursor >= app.detail_scroll,
+            "and the cursor is inside the window it scrolled to"
+        );
+        press(&mut app, Key::plain(KeyCode::Left));
+        press(&mut app, Key::ch('j'));
+        assert_eq!(
+            app.pane_cursor, 0,
+            "another project, the cursor starts again"
+        );
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn the_cursor_is_drawn_only_while_the_pane_has_the_focus() {
+        let mut app = fixture(6, 120, 40);
+        with_detail(&mut app, ProjectDetail::default());
+        press(&mut app, Key::plain(KeyCode::Right));
+        // The cursor is a style, not a glyph — the pane's text does not move
+        // when the focus arrives — so it is the buffer that shows it: mono
+        // draws the selection reversed.
+        let lit = fastf::tui::testing::render_to_buffer(&app, 120, 40);
+        let pane = app.regions().detail.expect("a pane at 120 columns");
+        let name_row = &lit[(pane.x + 1, pane.y + 1)];
+        assert!(
+            name_row
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+            "the name row wears the selection while the pane has the focus"
+        );
+        press(&mut app, Key::plain(KeyCode::Left));
+        let dark = fastf::tui::testing::render_to_buffer(&app, 120, 40);
+        assert!(
+            !dark[(pane.x + 1, pane.y + 1)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+            "and not while the list has it"
+        );
     }
 }
 

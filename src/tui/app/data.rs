@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use crate::core::project_info::Metadata;
+use crate::core::template::Variable;
 use crate::util::paths::Probe;
 
 /// One configured base, as the header shows it.
@@ -148,6 +149,13 @@ pub struct ProjectDetail {
     pub listing: Vec<Entry>,
     /// The first lines of the `## Notes` section.
     pub notes: Vec<String>,
+    /// The whole `## Notes` section, for the editor; `notes` is its preview.
+    pub notes_text: String,
+    /// The template's variables, in its order and with their types, so the
+    /// pane can offer a `select` its options and nothing else. Empty for a
+    /// registered project or a template that is gone: every variable is
+    /// free text then.
+    pub variables: Vec<Variable>,
     /// The read that failed, if one did.
     pub error: Option<String>,
 }

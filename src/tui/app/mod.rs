@@ -12,6 +12,7 @@ pub mod jobs;
 pub mod library;
 pub mod modal;
 pub mod palette;
+pub mod pane;
 pub mod register;
 pub mod search;
 pub mod settings;
@@ -204,6 +205,10 @@ pub struct App {
     pub details: HashMap<PathBuf, ProjectDetail>,
     pub detail_open: bool,
     pub detail_scroll: usize,
+    /// The pane's own cursor: the index into `pane_rows` of the row Enter
+    /// would edit. Drawn only while the pane has the focus, which is what
+    /// makes the focus unmistakable even with no colour to say it.
+    pub pane_cursor: usize,
     pub focus: Focus,
     pub screen: Screen,
     pub templates: TemplatesState,
@@ -312,6 +317,7 @@ impl App {
             details: HashMap::new(),
             detail_open: true,
             detail_scroll: 0,
+            pane_cursor: 0,
             focus: Focus::Projects,
             screen: Screen::Library,
             templates: TemplatesState::default(),
@@ -612,6 +618,7 @@ impl App {
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
         self.detail_scroll = 0;
+        self.pane_cursor = 0;
 
         let mut effects = self.selection_effects();
         if self.search.query.needs_metadata() {
@@ -628,6 +635,7 @@ impl App {
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
         self.detail_scroll = 0;
+        self.pane_cursor = 0;
         self.selection_effects()
     }
 
@@ -2066,38 +2074,35 @@ impl App {
         Vec::new()
     }
 
-    /// An upper bound on how far the detail pane can scroll: the lines it
-    /// draws for the selected row, less the rows it has — so scrolling stops
-    /// about where the text does, a blank line or two past the end at worst
-    /// and never a screenful of nothing.
-    fn detail_scroll_max(&self) -> usize {
+    /// The pane's rows for the selected project — `pane::pane_rows` over what
+    /// has been read of it. Empty with nothing selected.
+    pub fn pane_rows(&self) -> Vec<pane::PaneRow> {
         let Some(project) = self.library.selected() else {
-            return 0;
+            return Vec::new();
         };
-        let mut lines = 4 + usize::from(!project.tags.is_empty());
-        if let Some(detail) = self.details.get(&project.path) {
-            lines += usize::from(detail.error.is_some());
-            if let Some(meta) = &detail.meta
-                && !meta.variables.is_empty()
-            {
-                lines += 1 + meta.variables.len();
-            }
-            if !detail.listing.is_empty() {
-                lines += 2 + detail.listing.len();
-            }
-            if !detail.journal.is_empty() {
-                lines += 1 + detail.journal.len();
-            }
-            if !detail.notes.is_empty() {
-                lines += 1 + detail.notes.len();
-            }
-        }
-        let rows = self
-            .regions()
+        pane::pane_rows(project, self.details.get(&project.path))
+    }
+
+    /// How many rows the pane shows at once: its height inside the border.
+    fn pane_rows_on_screen(&self) -> usize {
+        self.regions()
             .detail
             .map(|pane| pane.height.saturating_sub(2) as usize)
-            .unwrap_or(0);
-        lines.saturating_sub(rows)
+            .unwrap_or(0)
+    }
+
+    /// Move the pane's cursor by `delta` selectable rows (`isize::MIN` and
+    /// `isize::MAX` are the ends) and scroll the pane so it stays in view —
+    /// the same bargain the table makes with its viewport.
+    fn move_pane_cursor(&mut self, delta: isize) {
+        let rows = self.pane_rows();
+        self.pane_cursor = pane::step_cursor(&rows, self.pane_cursor, delta);
+        self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
+            self.detail_scroll,
+            Some(self.pane_cursor),
+            rows.len(),
+            self.pane_rows_on_screen(),
+        );
     }
 
     /// A screenful, for the pagers: the height of the list on screen.
@@ -2318,10 +2323,7 @@ impl App {
                         self.after_selection_change()
                     }
                     Focus::Detail => {
-                        self.detail_scroll = self
-                            .detail_scroll
-                            .saturating_add_signed(delta)
-                            .min(self.detail_scroll_max());
+                        self.move_pane_cursor(delta);
                         Vec::new()
                     }
                 }
@@ -2348,10 +2350,7 @@ impl App {
                 }
                 match self.focus {
                     Focus::Detail => {
-                        self.detail_scroll = self
-                            .detail_scroll
-                            .saturating_add_signed(delta)
-                            .min(self.detail_scroll_max());
+                        self.move_pane_cursor(delta);
                         Vec::new()
                     }
                     _ => {
@@ -2374,7 +2373,7 @@ impl App {
                 }
                 match self.focus {
                     Focus::Detail => {
-                        self.detail_scroll = if first { 0 } else { self.detail_scroll_max() };
+                        self.move_pane_cursor(if first { isize::MIN } else { isize::MAX });
                         Vec::new()
                     }
                     Focus::Projects => {

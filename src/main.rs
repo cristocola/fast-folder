@@ -597,6 +597,7 @@ enum ConfigAction {
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             terminal                    Terminal emulator to open when launched without one\n                              (default: $TERMINAL, else probe; \"none\" disables)\n  \
             theme                       The app's palette: auto, mono, ansi or rich (default: auto — follow the terminal)\n  \
+            motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \
             date-format                 strftime format for the {date} token (default: %Y-%m-%d)\n  \
             preview-lines               Lines per file in dry-run preview (default: 8, 0 = none)\n  \

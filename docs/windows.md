@@ -51,17 +51,13 @@ Open a new terminal afterwards.
 
 ## Where your data lives
 
-With a normal install, config and templates live in:
-
-```
-%APPDATA%\fastf
-```
-
-Run `fastf paths` at any time to see the resolved location and why it was chosen.
-
-The ID counter is **not** kept there. Each base directory carries its own `.fastf-counter.toml` next to the projects it numbers, which is what lets a dual-boot machine hand out the same next ID from either operating system — the project drive is already mounted by both. `fastf id show` lists every base and the number it records.
-
-**Portable mode:** if you want everything in one folder (USB stick, network share), put an empty `config.toml` next to `fastf.exe` before first run. fastf then keeps all data beside the binary, and the whole folder moves as a unit.
+With a normal install, config and templates live in `%APPDATA%\fastf`; `fastf
+paths` shows the resolved location and why it was chosen. The ID counter is
+**not** kept there: each base directory carries its own `.fastf-counter.toml`
+next to the projects it numbers, which is what lets a dual-boot machine hand
+out the same next ID from either operating system. For portable mode — every
+file beside `fastf.exe` on a USB stick — put an empty `config.toml` next to the
+binary before the first run. The details are in [config.md](config.md).
 
 ## Paths in templates and config
 
@@ -137,31 +133,10 @@ the arrow keys and PageUp/PageDown.
 
 ## "VCRUNTIME140.dll was not found"
 
-Releases up to and including v2.0.0 linked the Microsoft C runtime dynamically, so `fastf.exe` needed the Visual C++ Redistributable. Most developer machines already have it and most clean installs do not, and where it was missing Windows refused to start the program and named that DLL.
-
-Download a newer release. Nothing needs uninstalling first: the MSI upgrades in place, and for the portable zip, replacing `fastf.exe` is the whole update. Installing the redistributable also works, but is no longer necessary.
-
-## The live filesystem tests
-
-Most of the suite runs anywhere. Two things cannot: moving a project between
-two **different** filesystems, and sharing the ID counter across a drive that
-two machines mount. Both need real infrastructure, so `tests/windows_live.rs`
-is opt-in and reads its two bases from the environment:
-
-```powershell
-$env:FASTF_WIN_LOCAL_BASE = "D:\fastf-sandbox"                  # a local NTFS folder
-$env:FASTF_WIN_SHARE_BASE = "\\yourserver\share\fastf-sandbox"  # on an SMB share
-cargo test --test windows_live -- --test-threads=1
-```
-
-The two must be on different volumes, or the cross-device cases prove nothing.
-With either variable unset the suite skips every case and passes, so a normal
-`cargo test` — on Windows, on Linux or in CI — is unaffected.
-
-It creates one `run-<pid>-<case>` folder per test under each base and removes
-it afterwards. Nothing else in either base is touched, and every run redirects
-its data directory into a temporary folder, so an installed fastf's config,
-templates and counters are never involved.
+A `fastf.exe` that asks for that DLL is from an old release that needed the
+Visual C++ Redistributable. Every current release carries its own C runtime:
+download a newer one and run the MSI over the old install, or replace the
+portable `fastf.exe`.
 
 ## Building from source on Windows
 

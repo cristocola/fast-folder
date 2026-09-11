@@ -71,6 +71,8 @@ variables:
 structure:                 # empty dirs to guarantee (archive safe)
   - name: "00_Inbox"
   - name: "01_Working"
+    children:              # nest with children, or write the path: "01_Working/drafts"
+      - name: "drafts"
   - name: "02_Delivery"
 
 # Optional globs, relative to files/:
@@ -92,8 +94,10 @@ Non-empty folders are implied by the paths of files in `files/`. Only truly empt
 A dry run lists and previews exactly what a create will write, and nothing else: an excluded file appears nowhere, and a `verbatim` file is previewed with its `{braces}` intact — marked as verbatim — because that is what lands in the project. The preview and the copy make one decision per file, in one place, so they cannot disagree.
 
 The template `slug` is one directory component and may contain only ASCII
-letters, digits, `-`, and `_`. A `structure` name may use safe nested syntax
-such as `src/components`; it is not limited to one component.
+letters, digits, `-`, and `_`. A `structure` entry nests either way: a `name`
+with a `children` list under it, or a path such as `src/components` in the
+name. The gallery templates use `children`; the builder writes one path per
+line.
 
 **The folder's name *is* the slug.** Every command addresses a template by the folder it lives in, so if you copy one (`cp -r templates/general templates/my-kit`) and forget to change `slug:` in the manifest, Fast Folder reads it as `my-kit` — the name that works — and `fastf template show` says the manifest disagrees. Saving that template through the builder rewrites `slug:` to match. A folder whose name is not a valid slug cannot be addressed by any command, so it is skipped with a warning naming its manifest.
 
@@ -199,10 +203,8 @@ another fastf leaves every answer on screen. Leaving a template you have
 changed asks first, whether you press Esc, `q` or Ctrl-C; a builder you have
 typed nothing into just closes.
 
-A new template may not take a slug some template already answers to. Renaming
-one onto an occupied slug has always been refused, and creating one onto it is
-the same collision through the other door — it used to overwrite the template
-that was there.
+A new template may not take a slug some template already answers to, and
+neither may a rename; both are refused with the slug named.
 
 - **Metadata** and **ID** are forms; every rule is checked on the field that
   broke it. On a *new* template the slug follows the name until you type one of

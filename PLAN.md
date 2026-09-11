@@ -29,7 +29,7 @@ Ctrl-R reload versus `R` reindex; five remembered things in `state.toml`;
 `structure[].children` documented; `motion` added to `config set --help`
 (`src/main.rs`). Release archaeology purged from every user doc.
 
-## Phase 2 — the release record and the release routine ✔ (this PR)
+## Phase 2 — the release record and the release routine ✔ (#76)
 
 `ROADMAP.md` is the manual passes (the Windows Reveal/open/term item folded
 in), the backlog and its two sub-lists, and a pointer to the release notes;
@@ -45,31 +45,24 @@ Pointers to deleted ROADMAP sections were fixed in root `CLAUDE.md` (gates →
 skill, and the hygiene line), `src/core/CLAUDE.md` (threat model →
 `docs/projects.md`), `tests/CLAUDE.md` and `tests/windows_live.rs`.
 
-## Phase 3 — the four CLAUDE.md files
+## Phase 3 — the four CLAUDE.md files ✔ (this PR)
 
-Rewrite each as current state. Targets: root 503→~330, core 748→~480, tui
-1321→~650, tests 180→~140.
-
-- Root: module lists gain `app/pane.rs`, `tui/motion.rs`, `tui/guide.rs`,
-  `util/term_open.rs`; "three CLAUDE.md files" → four; retired keys are three
-  (`mouse`); the test-harness paragraphs (processes not threads, one env
-  guard, lock order, HOME) become one pointer to `tests/CLAUDE.md`; history
-  blocks go.
-- Core: `ActionLoop` no longer exists; the builder's reserved-name refusal
-  does not offer `NOTES.md`; collapse each history passage into the rule it
-  guards; the Windows-stack / `MAX_WALK_DEPTH` note lives here only.
-- TUI: dissolve "What the consolidation pass added" into the topic sections;
-  fold "Every flow is native, and dialoguer is gone" into the runtime section;
-  one cursor-query paragraph, not two; no "strip" (it is gone — orphan slugs
-  are on the templates tab); `needs_tick` and `tick_interval` both exist;
-  `Glyphs::spin(elapsed_ms)`; `DELETE_MISMATCH` reads "type delete to confirm
-  — nothing deleted"; drop the PR numbers; the testing section is a pointer;
-  name the six keys the file never mentions (`R`, `C`, `p`, `i`, `*`, `-`).
-- Tests: add `term_cmd.rs` and its recorder rule; add the `windows_live.rs`
-  invocation (from the old `docs/windows.md`); keep "Three ways a test passes
-  over the thing it is for", two sentences per example.
-- Verify: `cargo test --test layering --test repo_hygiene`, then grep every
-  backticked identifier in the four files against `src/` + `tests/`.
+All four rewritten as current state, 2 750 → 1 779 lines: root 385, core
+493, tui 761, tests 140. Every rule kept with its one-line why; PR numbers,
+release numbers and before-states gone. Root: the module lists carry
+`copy_engine.rs`, `body.rs`, `term_open`, `guide.rs`, `motion.rs`,
+`app/pane`; four CLAUDE.md files; three retired keys; the harness rules are
+one pointer. Core: no `ActionLoop`; the builder refuses the reserved name
+without offering an example; walk depth and the Windows stack live here.
+TUI: the consolidation section dissolved into Layout, the runtime, marks and
+batches, two tabs; one cursor-query rule; no strip; both tick functions;
+`spin(elapsed_ms)`; the real `DELETE_MISMATCH`; the six keys named. Tests:
+`term_cmd.rs`, the `windows_live.rs` invocation (without `--test-threads=1`,
+which the harness rule forbids and the per-case `live-…` folders make
+unnecessary), the three ways at two sentences each. Verified: layering and
+repo_hygiene pass, and a script extracting every backticked identifier finds
+all of them in `src/`/`tests/` except `IndexMap`, `RUSTFLAGS`, `_unlocked`
+and serde's `ContentDeserializer`, which are external or a suffix.
 
 ## Phase 4 — source: dead weight and the two oversized files
 

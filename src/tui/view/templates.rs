@@ -40,7 +40,7 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
             " templates ",
             crate::tui::view::projects::title_style(app, focused),
         ))
-        .border_style(theme.border(focused));
+        .border_style(crate::tui::view::projects::border_style(app, focused));
     let inner = block.inner(panes[0]);
     frame.render_widget(block, panes[0]);
 
@@ -131,7 +131,7 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
             title,
             crate::tui::view::projects::title_style(app, pane_focused),
         ))
-        .border_style(theme.border(pane_focused));
+        .border_style(crate::tui::view::projects::border_style(app, pane_focused));
     let inner = block.inner(panes[1]);
     frame.render_widget(block, panes[1]);
 

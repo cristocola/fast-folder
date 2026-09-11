@@ -414,31 +414,44 @@ all the same, so a paragraph pasted onto the dashboard never runs as commands.
 
 #### What moves, and why
 
-Four things on the screen move, and each one answers a question a still frame
-could not:
+Motion here has one job: to take the eye to the one thing that just changed,
+and then to let go. Nothing is decoration, and nothing snaps — a change is
+seen at once and fades, or eases from one resting state to the other.
 
-- **A row a verb just changed lights up** for about half a second. A batch tags
-  ten projects while the cursor is on one of them; without this the frame after
-  is the same as the frame before, except for ten cells nobody was watching.
-- **A size cell lights up as its number lands**, so a table filling in reads as
-  news rather than as a reflow. (Nothing ever moves as a size arrives — the
-  columns are measured before the first row is drawn.)
+- **A row a verb just changed lights up and fades.** A batch tags ten projects
+  while the cursor is on one of them; without this the frame after is the same
+  as the frame before, except for ten cells nobody was watching. The same
+  wash lands on a pane row an edit just went into, a note just added, a todo
+  just ticked.
+- **A size cell lights up as its number changes**, so a figure replaced under
+  your eyes reads as news. (Nothing ever moves as a size arrives — the columns
+  are measured before the first row is drawn — and a page filling in for the
+  first time does not light up: that is the page arriving, not a row changing.)
+- **The row you were on pulses after a sort or a filter.** The selection is
+  kept, so it is somewhere else on the screen now; the pulse says where.
+- **The focus eases between the panes.** Border and title move from their
+  resting colour to their focused one, and the pane you left goes the other
+  way at the same moment — a transition, not a flash.
+- **A message arrives under a wash** on the status line, where what just
+  happened is said, and **dims for its last half second** before it expires,
+  so it reads as going rather than as a line that was there one frame and
+  gone the next.
 - **One spinner** wherever something is pending — reading the index, running a
   verb, reading a project — so "it is working" looks the same everywhere.
-- **A message dims for the last half second** before it expires, so it reads as
-  going rather than as a line that was there one frame and gone the next.
 
 Nothing else moves: no sliding dialogs, no eased scrolling, no cursor trails.
 
-`config set motion off` turns all of it off and every frame becomes a hard cut;
-`FASTF_MOTION=0` does the same for one run. A palette with no colour (`mono`,
-or `NO_COLOR`) is always off — a colour wash with no colour is a flicker rather
-than a cue.
+In truecolor the fades are real: the wash mixes toward the dark the palette is
+drawn on. In the sixteen ANSI colours there is no ramp, so a wash is held for a
+moment and let go, and the focus lands at once. `config set motion off` turns
+all of it off and every frame becomes a hard cut; `FASTF_MOTION=0` does the
+same for one run. A palette with no colour (`mono`, or `NO_COLOR`) is always
+off — a colour wash with no colour is a flicker rather than a cue.
 
 The app still costs nothing while idle. It wakes twenty times a second only
 while something is actually fading, five times a second while a spinner is
 turning, and once a second when nothing is moving at all — and that last wake
-draws nothing.
+draws nothing but a glance at the selected project's file.
 
 #### On a bare terminal
 

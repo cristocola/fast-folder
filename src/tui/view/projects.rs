@@ -122,7 +122,7 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(title, title_style(app, focused)))
-        .border_style(theme.border(focused));
+        .border_style(border_style(app, focused));
     let full_inner = block.inner(area);
     frame.render_widget(block, area);
     if full_inner.height < 2 || full_inner.width < 4 {
@@ -346,27 +346,29 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
-/// A pane's title: accent while it has the focus, dim otherwise — and, for
-/// the moment after the focus arrived, the pulse wash underneath, so the move
-/// is seen where it landed and not only inferred from a border.
+/// A pane's title: accent while it has the focus, dim otherwise — easing
+/// between the two for the moment after the focus moved, so the move is seen
+/// where it landed and not only inferred from a border.
 pub(crate) fn title_style(app: &App, focused: bool) -> ratatui::style::Style {
-    let base = if focused {
-        app.theme.accent()
-    } else {
-        app.theme.dim()
-    };
-    if !focused {
-        return base;
-    }
-    match crate::tui::motion::focus_style(
+    crate::tui::motion::title_style(
+        &app.theme,
+        focused,
         app.focus_moved_at,
         app.elapsed_ms,
-        &app.theme,
         app.motion,
-    ) {
-        Some(wash) => base.patch(wash),
-        None => base,
-    }
+    )
+}
+
+/// A pane's border: the focus colour while it has the focus, the plain one
+/// otherwise, easing between the two as the title does.
+pub(crate) fn border_style(app: &App, focused: bool) -> ratatui::style::Style {
+    crate::tui::motion::border_style(
+        &app.theme,
+        focused,
+        app.focus_moved_at,
+        app.elapsed_ms,
+        app.motion,
+    )
 }
 
 /// The detail pane. Returns where the caret is while a row is being edited,
@@ -380,7 +382,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(Span::styled(" detail ", title_style(app, focused)))
-            .border_style(theme.border(focused));
+            .border_style(border_style(app, focused));
         let inner = block.inner(area);
         frame.render_widget(block, area);
         frame.render_widget(
@@ -396,7 +398,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             format!(" {} ", project.id),
             title_style(app, focused),
         ))
-        .border_style(theme.border(focused));
+        .border_style(border_style(app, focused));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let width = inner.width as usize;

@@ -318,7 +318,20 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
         };
         Line::from(Span::styled(format!(" {idle}"), theme.dim()))
     };
-    frame.render_widget(Paragraph::new(line), area);
+    // A message that just arrived wears the wash under the whole line, so
+    // the eye is drawn to where what just happened is said; it lets go as a
+    // row's does.
+    let paragraph = Paragraph::new(line);
+    let paragraph = match crate::tui::motion::arriving_style(
+        app.status.shown_at,
+        app.elapsed_ms,
+        theme,
+        app.motion,
+    ) {
+        Some(wash) if !app.status.text.is_empty() && app.busy.is_none() => paragraph.style(wash),
+        _ => paragraph,
+    };
+    frame.render_widget(paragraph, area);
 }
 
 pub fn hints(app: &App, frame: &mut Frame, area: Rect) {

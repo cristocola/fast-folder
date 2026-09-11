@@ -318,13 +318,21 @@ pub struct Theme {
     pub border: Color,
     pub border_focus: Color,
     pub mark: Color,
-    /// The wash a row wears for half a second after a verb changed it.
+    /// The wash a row wears the moment a verb changed it.
     ///
     /// A **background**, and it has to be: every cell in a row sets its own
     /// foreground — the id is accent, the size is dim, a tag is its own colour
     /// — so a foreground set on the row loses to all of them and shows almost
     /// nowhere. A background is the one thing the cells leave alone.
     pub pulse: Color,
+    /// What a wash fades *toward*: the dark the rich palette is drawn on.
+    ///
+    /// A terminal cell has no alpha and `Color::Reset` has no RGB, so a fade
+    /// needs a colour to end near. The rich palette presumes a dark terminal
+    /// — its selection and its wash already do — and this is that dark; a
+    /// pulse spends the end of its fade close to it, so the last step to
+    /// nothing is not seen. `Reset` on the palettes that cannot fade.
+    pub ground: Color,
     /// The highlighted row.
     pub selection: Style,
     /// Colours a tag hashes onto.
@@ -379,6 +387,7 @@ impl Theme {
             mark: Color::Reset,
             // Never drawn: motion is off wherever there is no colour.
             pulse: Color::Reset,
+            ground: Color::Reset,
             selection: Style::default().add_modifier(Modifier::REVERSED),
             tags: [Color::Reset; 6],
         }
@@ -401,8 +410,10 @@ impl Theme {
             border: Color::DarkGray,
             border_focus: Color::Blue,
             // The sixteen have no quiet wash in them; the darkest grey is the
-            // one that lifts a row without shouting on a dark terminal.
+            // one that lifts a row without shouting on a dark terminal. And
+            // no ramp between them, so a wash is held and let go, never faded.
             pulse: Color::DarkGray,
+            ground: Color::Reset,
             mark: Color::Yellow,
             selection: Style::default().add_modifier(Modifier::REVERSED),
             tags: [
@@ -419,6 +430,8 @@ impl Theme {
     /// Truecolor: the same restraint with a muted, cool palette. Slate greys
     /// for what recedes, steel blue for focus, amber for a warning, and a set
     /// of desaturated tag colours that sit beside each other without shouting.
+    /// **A dark palette**: the selection, the wash and the ground it fades to
+    /// all presume a dark terminal, as the greys it is built from do.
     pub fn rich() -> Self {
         Self {
             kind: ThemeKind::Rich,
@@ -433,6 +446,7 @@ impl Theme {
             // A shade off the selection's own, and bluer: lit, next to it,
             // without competing with the cursor for "you are here".
             pulse: Color::Rgb(38, 54, 70),
+            ground: Color::Rgb(22, 25, 30),
             mark: Color::Rgb(204, 168, 108),
             selection: Style::default()
                 .bg(Color::Rgb(44, 52, 62))

@@ -112,6 +112,73 @@ impl fmt::Display for ProjectFolderName {
     }
 }
 
+/// A tag: one word, or a `namespace/value` path of words.
+///
+/// **The one validator for what a tag may be**, at the one door every tag
+/// comes through (`operations::add_tags`, and so the CLI, the app's prompt
+/// and the pane alike). Tags were "arbitrary strings you add yourself", which
+/// admitted a paragraph, a newline — which is a second YAML list item on the
+/// way back in — and a tag that was only spaces. A tag is something you filter
+/// by and something `tag:x` has to be able to spell in the search bar, so:
+/// trimmed, non-empty, one line, no whitespace, at most [`Tag::MAX_LEN`]
+/// characters, letters and digits and `- _ . /`, and a `/` only *between*
+/// parts — `client/Acme` is the convention `tag_from` writes, and a bare
+/// `client/` is what it refuses to write.
+///
+/// Every refusal names the rule, because the person who typed it is looking
+/// at a field they can correct.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Tag(String);
+
+impl Tag {
+    /// Long enough for `department/sub-project/2026-q3`, short enough that
+    /// a tag stays a tag and not a sentence.
+    pub const MAX_LEN: usize = 64;
+
+    pub fn parse(raw: &str) -> Result<Self> {
+        let tag = raw.trim();
+        if tag.is_empty() {
+            bail!("a tag cannot be empty");
+        }
+        if tag.chars().any(char::is_whitespace) {
+            bail!("a tag is one word — use '-' or '_' instead of a space (got '{tag}')");
+        }
+        if tag.chars().count() > Self::MAX_LEN {
+            bail!(
+                "a tag is at most {} characters (got {})",
+                Self::MAX_LEN,
+                tag.chars().count()
+            );
+        }
+        if let Some(bad) = tag
+            .chars()
+            .find(|c| !(c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/')))
+        {
+            bail!(
+                "a tag may use letters, digits, '-', '_', '.' and '/' — not '{bad}' (got '{tag}')"
+            );
+        }
+        if tag.starts_with('/') || tag.ends_with('/') || tag.contains("//") {
+            bail!("a '/' in a tag goes between two parts, as in client/Acme (got '{tag}')");
+        }
+        Ok(Self(tag.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for Tag {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// A non-empty relative path whose components cannot escape its eventual root.
 ///
 /// Both slash styles are accepted at the boundary. The stored representation
@@ -177,6 +244,35 @@ impl fmt::Display for SafeRelativePath {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tag_is_one_word_of_letters_digits_and_a_few_marks() {
+        for ok in ["draft", "client/Acme", "v2.1", "a-b_c", "Ärger", "x/y/z"] {
+            assert_eq!(Tag::parse(&format!("  {ok} ")).unwrap().as_str(), ok);
+        }
+        for (bad, names) in [
+            ("", "empty"),
+            ("   ", "empty"),
+            ("two words", "one word"),
+            ("a\nb", "one word"),
+            ("client/", "between two parts"),
+            ("/client", "between two parts"),
+            ("a//b", "between two parts"),
+            ("no,commas", "not ','"),
+            ("quote\"d", "not '\"'"),
+        ] {
+            let err = Tag::parse(bad).unwrap_err().to_string();
+            assert!(err.contains(names), "{bad:?}: {err}");
+        }
+        let long = "x".repeat(Tag::MAX_LEN + 1);
+        assert!(
+            Tag::parse(&long)
+                .unwrap_err()
+                .to_string()
+                .contains("at most")
+        );
+        assert!(Tag::parse(&"x".repeat(Tag::MAX_LEN)).is_ok());
+    }
 
     #[test]
     fn a_project_folder_name_survives_sanitizing_and_stays_visible() {

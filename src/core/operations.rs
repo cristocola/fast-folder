@@ -21,6 +21,7 @@ use crate::core::naming::{interpolate_name, parse_id_token, sanitize_name};
 use crate::core::project::{self, ApplyAction, ProjectPlan};
 use crate::core::project_info;
 use crate::core::template::{self, IdConfig, Template};
+use crate::core::validated::Tag;
 use crate::util::lockfile::DataLock;
 
 pub const REGISTERED_SLUG: &str = "(registered)";
@@ -441,14 +442,56 @@ fn slugify_folder_name(name: &str) -> String {
 // Project metadata and destructive operations
 // ---------------------------------------------------------------------------
 
+/// Add tags, each checked by `validated::Tag` **before** the lock: the one
+/// door every tag comes through, so the command line, the app's prompt and
+/// the pane refuse the same things with the same sentence.
 pub fn add_tags(project: &Project, tags: &[String]) -> Result<Vec<String>> {
+    let tags = tags
+        .iter()
+        .map(|tag| crate::core::validated::Tag::parse(tag).map(Tag::into_string))
+        .collect::<Result<Vec<String>>>()?;
     mutate_tags(project, |current| {
         for tag in tags {
-            if !current.contains(tag) {
-                current.push(tag.clone());
+            if !current.contains(&tag) {
+                current.push(tag);
             }
         }
     })
+}
+
+/// Replace one tag with another — or with nothing, when `to` is `None`, which
+/// is what a tag edited down to empty means. The pane's one edit on a tag row.
+/// A tag that is not there is nothing to replace, and says so.
+pub fn replace_tag(
+    project: &Project,
+    from: &str,
+    to: Option<&crate::core::validated::Tag>,
+) -> Result<Vec<String>> {
+    let to = to.map(|tag| tag.as_str().to_string());
+    let mut found = false;
+    let tags = mutate_tags(project, |current| {
+        let Some(at) = current.iter().position(|tag| tag == from) else {
+            return;
+        };
+        found = true;
+        match to {
+            Some(tag) if current.contains(&tag) && tag != from => {
+                // Renaming onto a tag already there: one of them goes.
+                current.remove(at);
+            }
+            Some(tag) => current[at] = tag,
+            None => {
+                current.remove(at);
+            }
+        }
+    })?;
+    if !found {
+        bail!(
+            "{} has no tag '{from}' — it may have been removed meanwhile",
+            project.id
+        );
+    }
+    Ok(tags)
 }
 
 pub fn remove_tags(project: &Project, tags: &[String]) -> Result<Vec<String>> {
@@ -500,21 +543,126 @@ pub fn replace_auto_tags(project: &Project) -> Result<Vec<String>> {
     // separate read: the variables the tags come from live in the same file.
     let mut derived = Vec::new();
     project_info::write_frontmatter(&pinfo, |metadata| {
-        let fresh = template.auto_tags(|slug| metadata.variables.get(slug).map(String::as_str));
-        let previous = metadata.previous_auto_tags();
-        metadata
-            .tags
-            .retain(|tag| fresh.contains(tag) || !previous.contains(tag));
-        for tag in &fresh {
-            if !metadata.tags.contains(tag) {
-                metadata.tags.push(tag.clone());
-            }
-        }
-        metadata.auto_tags = fresh.clone();
-        derived = fresh;
+        derived = rederive_auto_tags(metadata, &template);
     })?;
     library::refresh_cache(&project.path);
     Ok(derived)
+}
+
+/// Re-derive `metadata`'s auto-tags from its variables in place, replacing
+/// only the tags fastf derived last time, and record what it derived. The one
+/// body `replace_auto_tags` and `set_variable` share, so a variable changed in
+/// the app keeps its `slug/value` tag as honest as `tag reauto` would.
+fn rederive_auto_tags(metadata: &mut project_info::Metadata, template: &Template) -> Vec<String> {
+    let fresh = template.auto_tags(|slug| metadata.variables.get(slug).map(String::as_str));
+    let previous = metadata.previous_auto_tags();
+    let namespace = |tag: &str| tag.split_once('/').map(|(slug, _)| slug.to_string());
+    // A derived tag whose value changed takes the place of the one it
+    // replaces, rather than leaving from the middle of the list and arriving
+    // at the end: `client/Indie` becoming `client/Major` is one tag changing,
+    // and the file should read that way.
+    let mut tags = Vec::with_capacity(metadata.tags.len() + fresh.len());
+    let mut placed: Vec<&String> = Vec::new();
+    for tag in &metadata.tags {
+        if fresh.contains(tag) || !previous.contains(tag) {
+            tags.push(tag.clone());
+            continue;
+        }
+        if let Some(replacement) = fresh.iter().find(|candidate| {
+            !placed.contains(candidate)
+                && !metadata.tags.contains(candidate)
+                && namespace(candidate) == namespace(tag)
+        }) {
+            tags.push(replacement.clone());
+            placed.push(replacement);
+        }
+    }
+    for tag in &fresh {
+        if !tags.contains(tag) {
+            tags.push(tag.clone());
+        }
+    }
+    metadata.tags = tags;
+    metadata.auto_tags = fresh.clone();
+    fresh
+}
+
+/// Set one template variable of a project, as the pane's edit does.
+///
+/// The value lands the way a create would have stored it: through
+/// `vars::validated_raw_values` (required, a `select`'s options) and
+/// `rendered_values` (the variable's transform, then the filesystem
+/// sanitizer) over the project's current variables with this one replaced —
+/// so the file cannot hold a value the template would have refused, and a
+/// `select` cannot hold anything outside its options. A variable the template
+/// no longer declares, or any variable of a registered project (which has no
+/// template), is free text: one line, trimmed.
+///
+/// One atomic write does three things that must agree: the variable in the
+/// frontmatter, the `slug/value` auto-tag derived from it, and the variables
+/// table in the body — rewritten only while it is still the table fastf wrote
+/// (`project_info::sync_variables_table`). Returns the metadata as written.
+pub fn set_variable(project: &Project, slug: &str, value: &str) -> Result<project_info::Metadata> {
+    if value.contains(['\n', '\r']) {
+        bail!("a variable is one line");
+    }
+    let value = value.trim();
+    let _mutation_lock = DataLock::acquire()?;
+    let config = Config::load()?;
+    let project = library::revalidate_project(&config, project)?;
+    let template = if project.template == REGISTERED_SLUG {
+        None
+    } else {
+        Some(template::find_by_slug(&project.template)?)
+    };
+    let current = project_info::read_metadata(&project.path)?
+        .ok_or_else(|| anyhow::anyhow!("project has no readable metadata"))?;
+    let declared = template
+        .as_ref()
+        .filter(|t| t.variables.iter().any(|v| v.slug == slug));
+    let stored = match declared {
+        Some(template) => {
+            let mut supplied: HashMap<String, String> = current.variables.into_iter().collect();
+            supplied.insert(slug.to_string(), value.to_string());
+            let rendered = crate::core::vars::rendered_values(template, &supplied)?;
+            rendered.get(slug).cloned().unwrap_or_default()
+        }
+        None => value.to_string(),
+    };
+    let pinfo = project_info::pinfo_path(&project.path);
+    project_info::write_document(&pinfo, |metadata, body| {
+        metadata.variables.insert(slug.to_string(), stored.clone());
+        if let Some(template) = &template {
+            rederive_auto_tags(metadata, template);
+            project_info::sync_variables_table(body, template, &metadata.variables);
+        }
+    })?;
+    library::refresh_cache(&project.path);
+    project_info::read_metadata(&project.path)?
+        .ok_or_else(|| anyhow::anyhow!("project has no readable metadata"))
+}
+
+/// Replace the `## Notes` section of a project's `PROJECT_INFO.md`.
+///
+/// Refuses a line beginning with `##`: a second-level heading is how the file
+/// marks where a section ends, so one inside the notes would end them there —
+/// the rest of the text would be a section of its own, unreadable as notes
+/// and, if it happened to say `## Journal`, a second journal. Everything else
+/// is the user's to write.
+pub fn set_notes(project: &Project, text: &str) -> Result<()> {
+    if let Some(line) = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("##"))
+    {
+        bail!(
+            "a line beginning with ## would end the notes section there (\"{}\") — use a single # or plain text",
+            line.trim()
+        );
+    }
+    let _mutation_lock = DataLock::acquire()?;
+    let config = Config::load()?;
+    let project = library::revalidate_project(&config, project)?;
+    project_info::replace_notes(&project_info::pinfo_path(&project.path), text)
 }
 
 pub fn append_note(project: &Project, message: &str) -> Result<Vec<project_info::JournalEntry>> {

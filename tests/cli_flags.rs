@@ -431,6 +431,24 @@ fn search_refuses_a_clause_it_cannot_read() {
     assert!(out.contains("ID0001"), "{out}");
 }
 
+/// **`notes --since` refuses what `recent --since` refuses**, in the same
+/// words: both compare the value as text against an ISO-8601 timestamp, so
+/// `2026-6-1` sorted after every note of the year and silently hid them all.
+#[test]
+fn notes_refuses_a_since_that_is_not_a_date() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+    sb.ok(&["note", "add", "ID0001", "began"]);
+
+    let err = sb.fails(&["notes", "ID0001", "--since", "2026-6-1"]);
+    assert!(
+        err.contains("2026-01-01") && err.contains("2026-6-1"),
+        "the refusal shows the shape and what was typed:\n{err}"
+    );
+    let out = sb.ok(&["notes", "ID0001", "--since", "2026"]);
+    assert!(out.contains("began"), "{out}");
+}
+
 /// **`recent` validates its filters, as `--limit 0` already did.**
 ///
 /// A `--since` that is not a date, or a `--base`/`--template` that names

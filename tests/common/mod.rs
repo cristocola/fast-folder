@@ -276,6 +276,17 @@ impl Sandbox {
             .expect("spawning fastf")
     }
 
+    /// `spawn`, with stdin open for the caller to write — `fastf note add
+    /// <id> -` reads its message from it.
+    pub fn spawn_with_stdin(&self, args: &[&str]) -> std::io::Result<Child> {
+        self.command()
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+    }
+
     /// Every project's id in the primary base, read straight from metadata.
     pub fn ids_on_disk(&self) -> Vec<String> {
         ids_in(&self.base)

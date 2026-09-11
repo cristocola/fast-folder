@@ -202,9 +202,10 @@ Two layers. **YAML frontmatter** — the typed `Metadata`: `id`, `template`,
 `tags` the template derived — see *Tags* below), and `variables:
 BTreeMap` holding **every** template variable whether or not it appears in the
 naming pattern (a `BTreeMap` for diff-stable ordering). Then a **human body** —
-a variables table plus a `## Notes` section the user owns, and a `## Journal`
-section from the first `append_journal_entry`. Outside those helpers fastf never
-touches the file after creation.
+a variables table, a `## Notes` section of dated notes, and a `## Todo` list
+from the first `add_todo`. The body's grammar is `core/body.rs` — see *Notes
+and todos* below — and outside its helpers fastf never touches the file after
+creation.
 
 `write_frontmatter(path, |meta| …)` reads → splits → parses → applies → writes
 atomically. Body **and** frontmatter bytes are byte-identical after a no-op
@@ -224,13 +225,14 @@ the user reshaped, a renamed header, no table — is left byte for byte, because
 the body is theirs and rewriting the wrong block would be worse than a table
 that drifted. `docs/projects.md` promises exactly this.
 
-**Sections are found by one rule.** `section_span(content, heading)` is the
-byte range from a `## Heading` to the `\n` before the next `##` or the end;
-`journal_span` and `notes_body` are both it. `replace_notes` rewrites the notes
-section and nothing outside it — `## Notes`, a blank line, the text, and the
-blank line under it that the next heading expects; empty text writes
-`render_at`'s own `## Notes\n\n`, so emptied notes read as never written; a
-file with no section gets one before the journal, else at the end.
+**Sections are found by one rule.** `body::section_span(content, Section)` is
+the byte range from a `##` heading line to the `\n` before the next `##` line,
+or the end; every reader and every writer of the body goes through it. It walks
+the body after `split_frontmatter_body` — a frontmatter value can never be
+taken for a heading — and returns whole-file offsets, so a writer can splice
+with them. The heading is matched where it starts a line, in any case, with or
+without a trailing colon (`## notes:`), and `###` is neither a start nor an
+end. Every writer changes the bytes it is about and no others.
 
 **Unknown keys survive every mutation.** The re-serialize step is
 `util::yaml::to_string_preserving_unknown(&meta, frontmatter, Metadata::OWNED_KEYS)`,
@@ -528,7 +530,7 @@ lock file to take, and only into a templates directory it has just found empty.
 `util::fs_retry` wraps the destructive filesystem calls (Windows sharing
 violations from Defender or the indexer, plus read-only attribute clearing).
 
-## Tags, search, journal
+## Tags, search
 
 **Tags** live in `Metadata.tags`. Free-form strings, plus auto-derived ones from
 `Template.tag_from`: slug `client_type` with value `Indie` becomes
@@ -562,20 +564,20 @@ that changes nothing writes the same bytes back.
 `remove_tags` prunes the record to what `tags` still holds, so it can never
 name a tag that is no longer there.
 
-**The pane's edits.** `operations::set_variable`, `replace_tag` and
-`set_notes` are the detail pane's three writes, each the same five steps every
-mutation here takes. `set_variable` lands a value the way a create would have
-stored it — `vars::validated_raw_values` and `rendered_values` over the
-project's current variables with this one replaced, so a `select` cannot hold
-anything outside its options and a `text` gets its transform; a variable the
-template no longer declares, or any variable of a registered project, is free
-text, one line — then writes the variable, re-derives the auto-tags
-(`rederive_auto_tags`, the body `replace_auto_tags` shares) and syncs the body
-table in one `write_document`. A derived tag whose value changed **takes the
-place of the one it replaces** rather than leaving from the middle and
-arriving at the end. `replace_tag` renames in place, or removes when `to` is
-`None`. `set_notes` refuses a line beginning with `##` — it would end the
-section there — and otherwise the text is the user's.
+**The pane's edits.** `operations::set_variable`, `replace_tag`, `set_notes`,
+`replace_note`, `toggle_todo` and `add_todo` are the detail pane's writes,
+each the same five steps every mutation here takes. `set_variable` lands a
+value the way a create would have stored it — `vars::validated_raw_values`
+and `rendered_values` over the project's current variables with this one
+replaced, so a `select` cannot hold anything outside its options and a `text`
+gets its transform; a variable the template no longer declares, or any
+variable of a registered project, is free text, one line — then writes the
+variable, re-derives the auto-tags (`rederive_auto_tags`, the body
+`replace_auto_tags` shares) and syncs the body table in one `write_document`.
+A derived tag whose value changed **takes the place of the one it replaces**
+rather than leaving from the middle and arriving at the end. `replace_tag`
+renames in place, or removes when `to` is `None`. The note and todo verbs are
+`body`'s, under the lock — see *Notes and todos*.
 
 **A tag is one word.** `validated::Tag`: trimmed, non-empty, no whitespace, at
 most 64 characters, letters and digits and `- _ . /`, a `/` only between parts.
@@ -596,19 +598,67 @@ variable values, folder, template, template name and id. **`path` is deliberatel
 excluded**, with a regression test: home-directory text must never produce
 phantom matches.
 
-**Journal** entries are append-only markdown lines under `## Journal`:
-`- 2026-04-20T14:32:11Z — message`. **`project_info::journal_span` is the one
-definition of where that section is**, read by the writer and the reader alike.
-They had one each: `append_journal_entry` wrote at the end of the *file* whenever
-a `## Journal` heading existed anywhere, and `parse_journal_entries` stopped at
-the next `##`. The body is the user's own — `docs/projects.md` says so — so a
-heading of their own underneath the journal put every later note past the point
-the reader stops at: written, `Ok`, printed, and never seen again. The
-no-section-yet branch still emits exactly the bytes it always did; these files
-are diffed and committed. `notes --since` compares timestamps
-lexicographically, which is cheap and correct because ISO-8601 sorts as text.
-**Slice a timestamp with `.get(..10)`, never `[..10]`** — a hand-edited file can
-put anything there, and byte-slicing panicked on the first multi-byte character.
+## Notes and todos
+
+**`core/body.rs` is the body's grammar, and the journal is the notes.** A
+note is a dated entry under `## Notes` — `- 2026-04-20T14:32:11Z — text`, and
+every further line of it under two spaces — and `body::notes_span` is **the
+one definition of where those live, read by the writer and the reader
+alike**: the `## Journal` section when a file written before v3.6.0 has one,
+else `## Notes`. They had one each once: `append_journal_entry` wrote at the
+end of the *file* whenever a `## Journal` heading existed anywhere, and the
+reader stopped at the next `##`, so a heading of the user's own underneath
+put every later note past the point the reader stopped at — written, `Ok`,
+printed, never seen again. New files never get a `## Journal`; a legacy file
+keeps its shape, and a note appended to it is the only line that changes.
+
+**A note is several lines, and the writer is what makes that safe.** The old
+writer put the whole message on one line, so a message with a newline —
+stdin, the editor, the app's quick note with Alt-Enter — landed lines 2+ with
+no prefix, and the reader dropped every one of them: the pane, `fastf notes`
+and the count showed the first line, a continuation holding ` — ` parsed as a
+bogus entry, one starting `##` ended the section. `render_entry` indents every
+line after the first by two spaces, so nothing inside a note can start an
+entry or a section, and a one-line note writes the bytes every earlier version
+wrote. `render_preamble`, for the undated note, refuses a `##` line by name,
+because those lines are not indented.
+
+**The reader never fails and never drops a line it could show.** Under the
+heading, a column-0 `- `/`* ` line whose rest holds ` — `, or whose first
+word is `YYYY-MM-DD…` (a trailing `:` allowed), starts an entry; every line up
+to the next start is its text, with the two-space indent taken back off and
+trailing blank lines trimmed — so the files the old writer corrupted read
+correctly now. Text above the first entry is one **undated** note
+(`Note { timestamp: None }`), which is how the legacy free-text `## Notes`
+shows up. `notes_in` walks the Notes section and then the Journal section, so
+a dated line somebody typed under `## Notes` in a legacy file is a note too.
+There is no validation of what a timestamp *is*: it is whatever was typed.
+**Slice a timestamp with `.get(..10)`, never `[..10]`** — a hand-edited file
+can put anything there, and byte-slicing panicked on the first multi-byte
+character. `notes --since` compares the timestamp as text, which is cheap and
+correct because ISO-8601 sorts as text — and it refuses a value that is not a
+date fastf writes, through `cli::recent::check_since`, for the reason
+`recent --since` does: `2026-6-1` sorts after every `2026-0…`.
+
+**Edits name the text they read.** `replace_note(path, ordinal, expected,
+text)` and `toggle_todo(path, ordinal, expected)` refuse when the note or task
+at `ordinal` no longer reads `expected` ("changed meanwhile"), because the
+ordinal alone cannot tell an edit of *this* note from an edit of whatever now
+sits where it was. `replace_note` splices over the note's own span (a dated
+note keeps its timestamp; empty text removes it, and the blank line removal
+would leave doubled); `set_preamble` sets the undated note where it was, or
+under the heading, or takes it out — a file with no notes section gets one
+before the journal, else at the end, which is `replace_notes`' old contract.
+`toggle_todo` rewrites the one character inside the brackets and nothing
+else; `add_todo` appends `- [ ] text` at the end of `## Todo`, opening the
+section at the end of the file when there is none, and is one line.
+
+**A list is opened under a blank line.** `append_in_section` puts `\n\n`
+before the first item of a section that holds no item yet — only its heading,
+or only prose — and a single `\n` before every later one, so the shape stays
+`## Notes`, a blank line, the list, whether the section was empty, mid-file,
+or at the end. The reader decides "holds an item" (a dated note; a task), so
+the writer and the reader agree about that too.
 
 **`library::resolve_matches(cfg, query) -> Resolution` is the shared resolver**,
 and `resolve` is a thin wrapper over it plus three `pub(crate)` error builders,
@@ -632,7 +682,7 @@ ID0040 to ID0049. A digit run too long for `u64` is not a number and falls
 through — `numeric_query` returns `None` rather than saturating.
 
 Tag mutations call `library::refresh_cache` so lists stay fresh without a
-rescan; `note` does not, because the cache stores no journal.
+rescan; the note and todo verbs do not, because the cache stores neither.
 
 ## Post-create actions
 

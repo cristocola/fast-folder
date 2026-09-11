@@ -8,8 +8,10 @@
 //!    `fastf search` to query projects after the fact.
 //!
 //! 2. **Human-readable body** — a markdown table of variables (so the file
-//!    reads nicely in any editor) plus a `## Notes` section the user owns,
-//!    and a `## Journal` section that grows with timestamped entries.
+//!    reads nicely in any editor) plus a `## Notes` section of dated notes
+//!    and, once one is added, a `## Todo` list. The body's grammar — where a
+//!    section is, what a note or a task is — lives in [`crate::core::body`];
+//!    this module is the frontmatter and the document as a whole.
 //!
 //! Generation is best-effort: a write failure logs a warning but never fails
 //! project creation.
@@ -23,8 +25,9 @@
 //! Mutation helpers:
 //!   - [`write_frontmatter`] reads the file, applies a closure to the parsed
 //!     [`Metadata`], re-serialises, and writes back atomically.
-//!   - [`append_journal_entry`] appends a timestamped entry to `## Journal`,
-//!     creating the section if it doesn't exist yet.
+//!   - [`append_journal_entry`] appends a dated note to `## Notes`, creating
+//!     the section if it doesn't exist yet — re-exported from `body`, with
+//!     the reader, so every `project_info::…` path still resolves.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -34,6 +37,8 @@ use std::path::Path;
 
 use crate::core::project::ProjectPlan;
 use crate::core::template::Template;
+
+pub use crate::core::body::{NOTES_HEADING, Note, append_journal_entry, read_journal_entries};
 
 /// Canonical filename for the per-project metadata file.
 ///
@@ -420,58 +425,6 @@ pub(crate) fn sync_variables_table(
     true
 }
 
-/// Replace the text of the `## Notes` section with `text`, touching nothing
-/// else in the file.
-///
-/// The section becomes `## Notes`, a blank line, the text, a blank line —
-/// and for empty text just `## Notes` and the blank line, which is what
-/// `render_at` writes, so a project whose notes were emptied reads as one that
-/// never had any. A file with no notes section gets one: before the journal if
-/// there is a journal, else at the end, with the blank line
-/// `append_journal_entry` puts before a section it opens. The bytes on either
-/// side of the section are the bytes that were there.
-pub fn replace_notes(path: &Path, text: &str) -> Result<()> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    split_frontmatter_body(&content).ok_or_else(|| {
-        anyhow::anyhow!(
-            "{} has no YAML frontmatter — cannot write notes",
-            path.display()
-        )
-    })?;
-    let text = text.trim_matches(['\n', '\r']);
-    // Up to and including the newline that ends the section's last line; the
-    // blank line before whatever follows is added by whoever knows what does.
-    let section = if text.is_empty() {
-        format!("{NOTES_HEADING}\n")
-    } else {
-        format!("{NOTES_HEADING}\n\n{text}\n")
-    };
-    let new_content = match section_span(&content, NOTES_HEADING) {
-        // The span stops at the `\n` before the next heading, which stays
-        // where it is and becomes the blank line under the notes; at the end
-        // of the file the blank line is written here.
-        Some(span) if span.end < content.len() => {
-            format!(
-                "{}{section}{}",
-                &content[..span.start],
-                &content[span.end..]
-            )
-        }
-        Some(span) => format!("{}{section}\n", &content[..span.start]),
-        None => match section_span(&content, JOURNAL_HEADING) {
-            Some(journal) => format!(
-                "{}{section}\n{}",
-                &content[..journal.start],
-                &content[journal.start..]
-            ),
-            None if content.ends_with('\n') => format!("{content}{section}\n"),
-            None => format!("{content}\n\n{section}\n"),
-        },
-    };
-    crate::util::atomic::write(path, new_content.as_bytes())
-}
-
 /// Write `<root>/PROJECT_INFO.md`. Metadata is mandatory (the file is
 /// the project's identity), so there is no "disabled" path.
 pub fn write(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<()> {
@@ -602,152 +555,6 @@ pub fn write_document(path: &Path, mutator: impl FnOnce(&mut Metadata, &mut Stri
     crate::util::atomic::write(path, new_content.as_bytes())
 }
 
-/// Where a `## Heading` section is in a `PROJECT_INFO.md` body: the byte range
-/// from the heading to the start of the next `##`, or to the end. The one
-/// rule for every section fastf reads or writes — the journal's and the
-/// notes' — so a writer and a reader can never disagree about where one ends.
-///
-/// `None` when the heading is not there. The end index is always a `char`
-/// boundary: it is either the length, or the offset of a `\n`.
-fn section_span(content: &str, heading: &str) -> Option<std::ops::Range<usize>> {
-    let start = content.find(heading)?;
-    // Search past the heading's own `##` so it cannot match itself.
-    let end = content[start + 2..]
-        .find("\n##")
-        .map(|offset| start + 2 + offset)
-        .unwrap_or(content.len());
-    Some(start..end)
-}
-
-/// The `## Notes` heading, spelled once.
-pub const NOTES_HEADING: &str = "## Notes";
-
-/// The text of the `## Notes` section — everything under the heading up to
-/// the next section — without the heading line and without the blank lines
-/// that frame it. `None` when the file has no notes section at all; `Some("")`
-/// when it has an empty one, which is what every new project starts with.
-pub fn notes_body(content: &str) -> Option<&str> {
-    let body = split_frontmatter_body(content)
-        .map(|(_, body)| body)
-        .unwrap_or(content);
-    let span = section_span(body, NOTES_HEADING)?;
-    let section = &body[span];
-    let after_heading = section.find('\n').map_or("", |at| &section[at + 1..]);
-    Some(after_heading.trim_matches(['\n', '\r']))
-}
-
-/// Where the `## Journal` section is in a `PROJECT_INFO.md` body: the byte
-/// range from the heading to the start of the next `##`, or to the end.
-///
-/// **The one definition, read by the writer and the reader alike.** They had
-/// one each: `append_journal_entry` wrote at the end of the *file* whenever a
-/// `## Journal` heading existed anywhere, and `parse_journal_entries` stopped
-/// reading at the next `##`. The body below the frontmatter is documented as
-/// the user's own — `docs/projects.md` says so — so adding any heading of your
-/// own underneath the journal put every later `fastf note` past the readable
-/// region: the note was written, `Ok` was returned, the entry was printed, and
-/// `fastf notes` never showed it again.
-///
-/// `None` when there is no journal at all. The end index is always a `char`
-/// boundary: it is either the length, or the offset of a `\n`.
-fn journal_span(content: &str) -> Option<std::ops::Range<usize>> {
-    section_span(content, JOURNAL_HEADING)
-}
-
-/// The `## Journal` heading, spelled once.
-const JOURNAL_HEADING: &str = "## Journal";
-
-/// Append a timestamped journal entry to `## Journal` in the file.
-///
-/// If the file has no `## Journal` section one is created before EOF.
-/// Entries are appended in chronological order (oldest first), at the end of
-/// **the section** rather than the end of the file — see `journal_span`, which
-/// the reader shares.
-/// The write is atomic: unique temp file + rename.
-pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-
-    // Require frontmatter — this is a structured project file.
-    split_frontmatter_body(&content).ok_or_else(|| {
-        anyhow::anyhow!(
-            "{} has no YAML frontmatter — cannot append journal entry",
-            path.display()
-        )
-    })?;
-
-    let timestamp = crate::util::time::now_iso8601();
-    let entry_line = format!("- {} — {}\n", timestamp, message);
-
-    // With the journal last — which is every file fastf wrote itself — the
-    // insertion point is the end of the file and these bytes are exactly what
-    // the old end-of-file append produced.
-    let insert_at = match journal_span(&content) {
-        Some(span) => span.end,
-        // No section yet: open one at the end of the file. These are the bytes
-        // this branch has always written — the body is diffed and committed by
-        // users, so it does not move for a fix that is about somewhere else.
-        None => {
-            let opened = if content.ends_with('\n') {
-                format!("{content}{JOURNAL_HEADING}\n\n{entry_line}")
-            } else {
-                format!("{content}\n\n{JOURNAL_HEADING}\n\n{entry_line}")
-            };
-            return crate::util::atomic::write(path, opened.as_bytes());
-        }
-    };
-
-    let mut new_content = String::with_capacity(content.len() + entry_line.len() + 1);
-    new_content.push_str(&content[..insert_at]);
-    if !new_content.is_empty() && !new_content.ends_with('\n') {
-        new_content.push('\n');
-    }
-    new_content.push_str(&entry_line);
-    new_content.push_str(&content[insert_at..]);
-
-    crate::util::atomic::write(path, new_content.as_bytes())
-}
-
-/// Read back only the journal lines from the metadata file.
-///
-/// Parses entries of the form `- <timestamp> — <message>` from the
-/// `## Journal` section of the body.  Returns an empty vec when there is no
-/// journal section.
-pub fn read_journal_entries(project_root: &Path) -> Result<Vec<JournalEntry>> {
-    let body = read(project_root)?;
-    Ok(parse_journal_entries(&body))
-}
-
-/// A single timestamped journal entry.
-pub struct JournalEntry {
-    pub timestamp: String,
-    pub message: String,
-}
-
-fn parse_journal_entries(content: &str) -> Vec<JournalEntry> {
-    // The same span the writer appends into — see `journal_span`.
-    let Some(span) = journal_span(content) else {
-        return vec![];
-    };
-    let section_body = &content[span];
-
-    let mut entries = Vec::new();
-    for line in section_body.lines() {
-        let line = line.trim();
-        if !line.starts_with("- ") {
-            continue;
-        }
-        let rest = &line[2..];
-        if let Some((ts, msg)) = rest.split_once(" — ") {
-            entries.push(JournalEntry {
-                timestamp: ts.to_string(),
-                message: msg.to_string(),
-            });
-        }
-    }
-    entries
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -866,30 +673,6 @@ mod tests {
         let (fm, _) = split_frontmatter_body(body).expect("frontmatter present");
         assert!(fm.contains("id: ID0001"));
         assert!(fm.contains("template: foo"));
-    }
-
-    #[test]
-    fn parse_journal_entries_basic() {
-        let content = "---\nid: x\n---\n\n## Notes\n\n## Journal\n\n- 2026-01-01T00:00:00Z — first entry\n- 2026-01-02T00:00:00Z — second entry\n";
-        let entries = parse_journal_entries(content);
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].timestamp, "2026-01-01T00:00:00Z");
-        assert_eq!(entries[0].message, "first entry");
-        assert_eq!(entries[1].message, "second entry");
-    }
-
-    #[test]
-    fn parse_journal_entries_no_section() {
-        let content = "---\nid: x\n---\n\n## Notes\n\nSome notes.\n";
-        let entries = parse_journal_entries(content);
-        assert!(entries.is_empty());
-    }
-
-    #[test]
-    fn parse_journal_entries_stops_at_next_section() {
-        let content = "---\nid: x\n---\n\n## Journal\n\n- 2026-01-01T00:00:00Z — entry\n\n## Notes\n\nNot a journal entry.\n";
-        let entries = parse_journal_entries(content);
-        assert_eq!(entries.len(), 1);
     }
 
     #[test]

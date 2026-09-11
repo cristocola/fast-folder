@@ -291,6 +291,9 @@ pub struct App {
     /// change. Pulsing there lit every visible row at once, twenty at a time,
     /// which is a flash rather than a cue and reads as a fault.
     rescanning: std::collections::BTreeSet<PathBuf>,
+    /// When the focus last moved, for the pulse on the pane it moved to.
+    /// `None` once that pulse has let go, so an idle app asks for no wake.
+    pub focus_moved_at: Option<u64>,
     pub fuzzy: Fuzzy,
     next_action: u64,
     next_generation: u64,
@@ -334,6 +337,7 @@ impl App {
             motion: motion::Motion::default(),
             pulses: motion::Pulses::default(),
             rescanning: std::collections::BTreeSet::new(),
+            focus_moved_at: None,
             fuzzy: Fuzzy::new(),
             next_action: 0,
             next_generation: 0,
@@ -477,7 +481,7 @@ impl App {
     /// the faster one only while a pulse is in flight is what keeps the
     /// documented claim true: **the app costs nothing while idle.**
     pub fn tick_interval(&self) -> Option<std::time::Duration> {
-        if !self.pulses.is_empty() {
+        if !self.pulses.is_empty() || motion::focus_pulsing(self.focus_moved_at, self.elapsed_ms) {
             return Some(std::time::Duration::from_millis(motion::FRAME_MS));
         }
         // A message about to go dims on its way out, which is a fade too — but
@@ -602,8 +606,8 @@ impl App {
     fn after_rows_changed(&mut self) -> Vec<Effect> {
         // Long names can close the pane (`layout::regions`); the focus cannot
         // stay on a pane that is not drawn.
-        if self.focus == Focus::Detail && !self.detail_visible() {
-            self.focus = Focus::Projects;
+        if self.focus == Focus::Detail && !self.pane_present() {
+            self.set_focus(Focus::Projects);
         }
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
@@ -776,6 +780,9 @@ impl App {
                     self.status = Status::default();
                 }
                 self.pulses.retire(self.elapsed_ms);
+                if !motion::focus_pulsing(self.focus_moved_at, self.elapsed_ms) {
+                    self.focus_moved_at = None;
+                }
                 Vec::new()
             }
             Msg::Sizes(cells) => {
@@ -1275,19 +1282,19 @@ impl App {
         let regions = self.regions();
         if inside(regions.search, column, row) {
             self.search.editing = true;
-            self.focus = Focus::Projects;
+            self.set_focus(Focus::Projects);
             return Vec::new();
         }
         if let Some(detail) = regions.detail
             && inside(detail, column, row)
         {
-            self.focus = Focus::Detail;
+            self.set_focus(Focus::Detail);
             return Vec::new();
         }
         if !inside(regions.table, column, row) {
             return Vec::new();
         }
-        self.focus = Focus::Projects;
+        self.set_focus(Focus::Projects);
         // The table's border and its header row: the first project sits two
         // rows below the top of the region.
         let Some(offset_row) = row.checked_sub(regions.table.y + 2) else {
@@ -1817,7 +1824,7 @@ impl App {
         match entry.target {
             PaletteTarget::Command(id) => self.run(id),
             PaletteTarget::Project(path) => {
-                self.focus = Focus::Projects;
+                self.set_focus(Focus::Projects);
                 if !self.library.select_path(&path) {
                     // Hidden by the query or the filter: show everything.
                     self.search.input.clear();
@@ -2161,7 +2168,7 @@ impl App {
                 self.modals.push(Modal::Help { ctx, scroll: 0 });
                 Vec::new()
             }
-            CommandId::Close | CommandId::Ascend => self.close_top(),
+            CommandId::Close => self.close_top(),
             CommandId::Interrupt => {
                 // A job or a move is running: Ctrl-C cancels it rather than
                 // quitting under a worker that is still mutating the
@@ -2200,18 +2207,14 @@ impl App {
             // Dispatched on the context rather than declared six times, so the
             // help states the axis once instead of hanging two more keys off
             // every opener's row.
-            CommandId::Descend => match self.context() {
-                Context::Projects | Context::Detail => self.run(CommandId::Actions),
-                Context::Templates => self.run(CommandId::StudioEdit),
-                Context::Actions => self.run(CommandId::ActionsRun),
-                Context::Builder => self.run(CommandId::BuilderOpen),
-                Context::Settings => self.run(CommandId::SettingsChange),
-                _ => Vec::new(),
-            },
             CommandId::GuideNext => self.turn_guide(1),
             CommandId::GuidePrevious => self.turn_guide(-1),
-            CommandId::FocusTable => {
-                self.focus = Focus::Projects;
+            CommandId::FocusList => {
+                self.set_focus(Focus::Projects);
+                Vec::new()
+            }
+            CommandId::FocusDetail => {
+                self.set_focus(Focus::Detail);
                 Vec::new()
             }
             CommandId::BackToLibrary => self.toggle_templates(),
@@ -2297,7 +2300,8 @@ impl App {
             CommandId::Reindex => self.run_action("reindexing…", Action::Reindex),
             CommandId::FocusNext | CommandId::FocusPrevious => {
                 let forward = id == CommandId::FocusNext;
-                self.focus = self.next_focus(forward);
+                let next = self.next_focus(forward);
+                self.set_focus(next);
                 Vec::new()
             }
             CommandId::Down | CommandId::Up => {
@@ -2442,7 +2446,7 @@ impl App {
             }
             CommandId::Search => {
                 self.search.editing = true;
-                self.focus = Focus::Projects;
+                self.set_focus(Focus::Projects);
                 Vec::new()
             }
             CommandId::ClearSearch => {
@@ -2540,8 +2544,8 @@ impl App {
             }
             CommandId::ToggleDetail => {
                 self.detail_open = !self.detail_open;
-                if !self.detail_visible() && self.focus == Focus::Detail {
-                    self.focus = Focus::Projects;
+                if !self.pane_present() && self.focus == Focus::Detail {
+                    self.set_focus(Focus::Projects);
                 }
                 self.after_selection_change()
             }
@@ -3925,19 +3929,36 @@ impl App {
 
     /// The last row the pane can be scrolled to, from the geometry `view`
     /// draws with — so the cursor cannot leave the drawn window.
+    ///
+    /// **The templates tab's own split**, not the library's: it measured
+    /// `regions().detail` before, which is the library pane — closed under a
+    /// hundred columns while the template pane is always drawn — so on a
+    /// narrow window Tab could not reach a pane that was right there.
     fn studio_scroll_max(&self) -> usize {
-        let rows = self
-            .regions()
-            .detail
-            .map(|pane| pane.height.saturating_sub(2) as usize)
-            .unwrap_or(0);
+        let (_, pane) = layout::templates_panes(layout::templates_body(&self.regions()));
+        let rows = pane.height.saturating_sub(2) as usize;
         self.studio.lines.len().saturating_sub(rows)
     }
 
+    /// Whether there is a pane beside the list right now: the library's
+    /// closes under `layout::DETAIL_MIN_WIDTH` or on `i`, the templates tab's
+    /// is always drawn.
+    pub fn pane_present(&self) -> bool {
+        self.screen == Screen::Templates || self.detail_visible()
+    }
+
+    /// The one way focus moves, so every mover leaves the same trace: the
+    /// pane it moved to pulses, once, and only when it really moved.
+    pub fn set_focus(&mut self, focus: Focus) {
+        if self.focus != focus {
+            self.focus_moved_at = Some(self.elapsed_ms);
+        }
+        self.focus = focus;
+    }
+
     fn next_focus(&self, forward: bool) -> Focus {
-        let regions = self.regions();
         let mut ring = vec![Focus::Projects];
-        if regions.detail.is_some() {
+        if self.pane_present() {
             ring.push(Focus::Detail);
         }
         let at = ring.iter().position(|f| *f == self.focus).unwrap_or(0);

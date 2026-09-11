@@ -236,6 +236,37 @@ fn an_arrow_and_its_vim_letter_are_bound_together() {
     }
 }
 
+/// **The horizontal axis only moves focus or turns a page.** `→` used to be
+/// "whatever Enter does here" and `←` "whatever Esc does", which made two
+/// arrows that ran verbs and closed dialogs; the keys a person leans on to
+/// look around must never act. The guide is the one reader, and a reader's
+/// pages are horizontal.
+#[test]
+fn the_horizontal_axis_only_moves_focus_or_turns_a_page() {
+    const AXIS: [Key; 4] = [
+        Key::plain(KeyCode::Left),
+        Key::plain(KeyCode::Right),
+        Key::ch('h'),
+        Key::ch('l'),
+    ];
+    const ALLOWED: [CommandId; 4] = [
+        CommandId::FocusList,
+        CommandId::FocusDetail,
+        CommandId::GuideNext,
+        CommandId::GuidePrevious,
+    ];
+    for command in COMMANDS
+        .iter()
+        .filter(|c| c.keys.iter().any(|k| AXIS.contains(k)))
+    {
+        assert!(
+            ALLOWED.contains(&command.id),
+            "{:?} binds an arrow of the horizontal axis and is not a focus move or a page turn",
+            command.id
+        );
+    }
+}
+
 /// **Every context has a way out and a way to ask.** A context whose help is
 /// empty is one the registry cannot describe, which is how `SearchEdit` and
 /// `Palette` came to have no help at all; a context with no `Close`, `Back` or

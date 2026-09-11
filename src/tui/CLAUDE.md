@@ -169,17 +169,25 @@ had no jump keys at all; the two verbs are `I` and `H` now. `H` rather than
 `c commands` off the end of it — the key that costs the least is the one that
 reads the same length as what it replaced.
 
-**The horizontal axis is depth: `→`/`l` go in, `←`/`h` come out.**
-`CommandId::Descend` is declared once and dispatches on the context, rather
-than hanging two more keys off each of the five openers: `Actions`,
-`StudioEdit`, `ActionsRun`, `BuilderOpen` and `SettingsChange` each carried
-`a / Enter / → / l` for one frame of this work, and the help's key column —
-sized to the widest label — pushed every description four columns right.
-Coming out is a small family that each name where they go: `Ascend` (a dialog,
-one level), `FocusTable` (the pane, back to the list), `BackToLibrary` (the
-templates tab). **The axis never quits**: `←` is not bound on the project list,
-because there is nothing above it, and Esc's ladder is the only thing that ends
-in leaving.
+**The horizontal axis is focus: `→`/`l` go into the pane beside the list,
+`←`/`h` come back to the list. They never run anything.** For one release
+`→` was `Descend` — "whatever Enter does here", so it opened the action menu,
+edited a template, ran a verb, changed a setting — and `←` was `Ascend`,
+closing a dialog. An arrow that executes is an arrow you cannot lean on to
+look around, and it made the pane's own Enter impossible: the pane is an
+editor now, and Enter there has to mean *edit this row*. Both are gone;
+Enter and Esc are the confirm and the back, and the arrows only ever move the
+cursor. `FocusList` and `FocusDetail` are declared over `PANED` (both tabs)
+and dispatch on `screen`; each is **hidden rather than a no-op** where it has
+nowhere to go (`pane_has_focus`, `pane_can_take_focus`), so the help never
+lists a key that does nothing. **The axis never quits**: leaving a tab is
+Esc's ladder and `T`; `BackToLibrary` is palette-only. The templates tab's
+pane takes focus too, at any width — its split lives in
+`layout::templates_panes` so `studio_scroll_max` and the view measure the
+same box; it measured the *library's* pane before, which is closed under a
+hundred columns while the template pane is always drawn, and Tab could not
+reach a pane that was right there. `tests/tui_commands::
+the_horizontal_axis_only_moves_focus_or_turns_a_page` holds all of it.
 
 Two surfaces own their own left and right, and both are the same exception a
 text area's `Ctrl-S` is:
@@ -188,11 +196,11 @@ text area's `Ctrl-S` is:
   a caret or an option.
 - **A reader.** The guide has `Context::Guide` for exactly this — with the
   pages declared (`GuideNext`, `GuidePrevious`) rather than hand-written in
-  `on_guide_key`, `←` can turn a page there and back out of a dialog
-  everywhere else, and the help can say so in both places. `Ascend` is
-  therefore declared over `BACKOUT`, which is `DIALOGS` without the guide.
-  Forward off the last page leaves the guide, whichever key is being pressed;
-  the alternative is a reader pressing a key against the end of a document.
+  `on_guide_key`, `←` turns a page there and the help can say so. A page is
+  horizontal; that is the one place the axis means something other than
+  focus. Forward off the last page leaves the guide, whichever key is being
+  pressed; the alternative is a reader pressing a key against the end of a
+  document.
 
 **Ctrl-C is a command** (`CommandId::Interrupt`), so the key that cancels a
 running job is in the help — it was in no help, no hint bar and no palette. It

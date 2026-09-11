@@ -31,4 +31,4 @@ expression: frame
 "│                                                              ││                                  │"
 "└──────────────────────────────────────────────────────────────┘└──────────────────────────────────┘"
 " ◜ moving…                                                                                          "
-" / search  a actions  o open  t terminal  y copy path  Space mark  n new  T templates  ? help       "
+" / search  a actions  o open  t terminal  y copy path  Space mark  n new  T templates  → pane       "

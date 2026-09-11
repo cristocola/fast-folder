@@ -3692,53 +3692,92 @@ mod movement {
         assert_eq!(app.studio.selected, 0, "the top is the top");
     }
 
-    /// `→` is Enter's twin: one step into whatever is under the cursor. `←` is
-    /// Esc's: one level back out.
+    /// **The horizontal axis is focus.** `→` puts the cursor in the pane
+    /// beside the list, `←` puts it back — and neither runs anything. `→`
+    /// used to open the action menu, which is what Enter is for; an arrow
+    /// that executes a verb is an arrow you cannot lean on.
     #[test]
-    fn the_right_arrow_goes_in_and_the_left_arrow_comes_out() {
-        let mut app = fixture(3, 80, 24);
+    fn the_right_arrow_focuses_the_pane_and_the_left_arrow_the_list() {
+        let mut app = fixture(3, 120, 40);
+        assert!(app.detail_visible());
         press(&mut app, Key::plain(KeyCode::Right));
-        assert!(
-            matches!(app.modals.top(), Some(Modal::Actions(_))),
-            "→ opens the row's action menu"
-        );
+        assert_eq!(app.focus, Focus::Detail, "→ moves into the pane");
+        assert!(app.modals.is_empty(), "and opens nothing");
         press(&mut app, Key::plain(KeyCode::Left));
-        assert!(app.modals.is_empty(), "← leaves one level");
+        assert_eq!(app.focus, Focus::Projects, "← comes back to the list");
         press(&mut app, Key::ch('l'));
-        assert!(matches!(app.modals.top(), Some(Modal::Actions(_))));
+        assert_eq!(app.focus, Focus::Detail);
         press(&mut app, Key::ch('h'));
+        assert_eq!(app.focus, Focus::Projects);
         assert!(app.modals.is_empty());
     }
 
-    /// **The horizontal axis never quits.** Esc's ladder ends in leaving; `←`
-    /// on the library is not bound at all, because there is nothing above it.
+    /// **The horizontal axis never quits, and never runs.** On the list `←`
+    /// has nothing to its left and is not bound; without a pane — the window
+    /// is under a hundred columns — `→` has nothing to its right either.
     #[test]
-    fn the_left_arrow_on_the_library_does_nothing() {
+    fn the_arrows_are_unbound_where_there_is_nowhere_to_go() {
         let mut app = fixture(3, 80, 24);
-        for key in [Key::plain(KeyCode::Left), Key::ch('h')] {
+        assert!(
+            !app.detail_visible(),
+            "the fixture is too narrow for a pane"
+        );
+        for key in [
+            Key::plain(KeyCode::Left),
+            Key::ch('h'),
+            Key::plain(KeyCode::Right),
+            Key::ch('l'),
+        ] {
             assert!(
                 press(&mut app, key).is_empty(),
                 "{} did something",
                 key.label()
             );
             assert!(app.modals.is_empty());
+            assert_eq!(app.focus, Focus::Projects);
         }
     }
 
-    /// From the pane, back is the list; from the templates tab, back is the
-    /// library. Each names where it goes rather than being a second Esc.
+    /// The templates tab has a pane too, and it is always drawn — so `→`
+    /// reaches it at any width, and `←` from it is the card list, never the
+    /// library: leaving a tab is Esc's ladder and `T`, not an arrow.
     #[test]
-    fn the_left_arrow_backs_out_of_the_pane_and_the_tab() {
-        let mut app = fixture(3, 120, 40);
-        press(&mut app, Key::plain(KeyCode::Tab));
-        assert_eq!(app.focus, Focus::Detail);
-        press(&mut app, Key::plain(KeyCode::Left));
-        assert_eq!(app.focus, Focus::Projects);
-
+    fn the_left_arrow_leaves_the_pane_but_never_the_tab() {
+        let mut app = fixture(3, 80, 24);
         press(&mut app, Key::ch('T'));
         assert_eq!(app.screen, Screen::Templates);
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Detail, "→ reaches the template pane");
         press(&mut app, Key::ch('h'));
-        assert_eq!(app.screen, Screen::Library, "← is the way back from a tab");
+        assert_eq!(app.focus, Focus::Projects);
+        assert_eq!(app.screen, Screen::Templates, "← is not the way off a tab");
+        assert!(press(&mut app, Key::ch('h')).is_empty());
+        assert_eq!(
+            app.screen,
+            Screen::Templates,
+            "and a second ← is not either"
+        );
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert_eq!(app.screen, Screen::Library, "Esc is");
+    }
+
+    /// Tab reaches the template pane on a window too narrow for the library's
+    /// pane. It measured the library's geometry before, so on an 80-column
+    /// window the ring had one member and the template pane's tail — a
+    /// `template show` taller than the box — was unreachable.
+    #[test]
+    fn tab_reaches_the_template_pane_on_a_narrow_window() {
+        let mut app = fixture(3, 80, 24);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::plain(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Detail);
+        app.studio.lines = (0..60).map(|n| format!("line {n}")).collect();
+        press(&mut app, Key::ch('j'));
+        assert_eq!(app.studio.scroll, 1, "and the arrows scroll the pane");
+        press(&mut app, Key::ch('G'));
+        assert!(app.studio.scroll > 1, "G reaches the end of the pane");
+        press(&mut app, Key::plain(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Projects, "Tab comes round");
     }
 
     /// Ctrl-C is a declared command now, so it is in the help — and it still
@@ -4174,6 +4213,51 @@ mod motion {
         app.pulses.clear();
         let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
         assert!(app.pulses.is_empty());
+    }
+
+    /// **Focus that moved is seen where it landed.** A border changing colour
+    /// on a line nobody was reading is not seen; the pane the focus arrived
+    /// in wears the wash for a moment, then lets go — and the app asks for
+    /// the fast wake only for that moment.
+    #[test]
+    fn moving_focus_pulses_the_pane_it_landed_in_and_lets_go() {
+        let mut app = fixture(6, 120, 40);
+        app.theme = Theme::rich();
+        app.motion = Motion::On;
+        for row in 0..app.library.len() {
+            let path = app.library.row(row).unwrap().path.clone();
+            app.library.sizes.insert(path, Some(1));
+        }
+        app.status = Default::default();
+        assert_eq!(app.tick_interval(), None, "a still app asks for no wake");
+
+        app.elapsed_ms = 1_000;
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Detail);
+        assert_eq!(
+            app.tick_interval(),
+            Some(std::time::Duration::from_millis(motion::FRAME_MS))
+        );
+        let lit = render_to_buffer(&app, 120, 40);
+        let pane = app.regions().detail.expect("a pane at 120 columns");
+        // The title sits on the top border, two cells in.
+        let cell = &lit[(pane.x + 2, pane.y)];
+        assert_eq!(cell.bg, app.theme.pulse, "the pane's title wears the wash");
+        let table = app.regions().table;
+        assert_ne!(
+            lit[(table.x + 2, table.y)].bg,
+            app.theme.pulse,
+            "and the pane it left does not"
+        );
+
+        // The same focus again is not a move.
+        press(&mut app, Key::plain(KeyCode::Right));
+        app.elapsed_ms = 1_000 + motion::PULSE_MS;
+        let _ = update(&mut app, Msg::Tick);
+        assert_eq!(app.tick_interval(), None, "it lets go with the pulse");
+        assert!(app.focus_moved_at.is_none());
+        let gone = render_to_buffer(&app, 120, 40);
+        assert_ne!(gone[(pane.x + 2, pane.y)].bg, app.theme.pulse);
     }
 
     /// **The app still costs nothing while idle.** A pulse asks for twenty

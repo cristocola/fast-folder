@@ -41,13 +41,7 @@ pub fn view(app: &App, frame: &mut Frame) {
         }
         crate::tui::app::Screen::Templates => {
             let caret = templates::bar(app, frame, regions.search);
-            let body = Rect::new(
-                regions.table.x,
-                regions.table.y,
-                area.width,
-                regions.table.height,
-            );
-            templates::screen(app, frame, body);
+            templates::screen(app, frame, layout::templates_body(&regions));
             caret
         }
     };

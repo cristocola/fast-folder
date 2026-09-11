@@ -87,6 +87,28 @@ pub fn regions(area: Rect, detail_open: bool, table_min: u16) -> Regions {
     }
 }
 
+/// The templates tab's body: the table band, full width — the tab has no
+/// detail pane to give up columns to, so it takes the whole row.
+pub fn templates_body(regions: &Regions) -> Rect {
+    Rect::new(
+        regions.table.x,
+        regions.table.y,
+        regions.table.width + regions.detail.map_or(0, |pane| pane.width),
+        regions.table.height,
+    )
+}
+
+/// The templates tab's split: the card list, and the pane beside it. Read by
+/// the view that draws it and by `update` when it clamps the pane's scroll,
+/// so the cursor cannot leave the drawn window.
+pub fn templates_panes(body: Rect) -> (Rect, Rect) {
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .split(body);
+    (panes[0], panes[1])
+}
+
 /// A rectangle of `percent_x` × `percent_y` of `area`, centred.
 pub fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
     let vertical = Layout::default()

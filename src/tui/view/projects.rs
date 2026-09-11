@@ -120,10 +120,7 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     let title = " projects ".to_string();
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(
-            title,
-            if focused { theme.accent() } else { theme.dim() },
-        ))
+        .title(Span::styled(title, title_style(app, focused)))
         .border_style(theme.border(focused));
     let full_inner = block.inner(area);
     frame.render_widget(block, area);
@@ -348,6 +345,29 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
+/// A pane's title: accent while it has the focus, dim otherwise — and, for
+/// the moment after the focus arrived, the pulse wash underneath, so the move
+/// is seen where it landed and not only inferred from a border.
+pub(crate) fn title_style(app: &App, focused: bool) -> ratatui::style::Style {
+    let base = if focused {
+        app.theme.accent()
+    } else {
+        app.theme.dim()
+    };
+    if !focused {
+        return base;
+    }
+    match crate::tui::motion::focus_style(
+        app.focus_moved_at,
+        app.elapsed_ms,
+        &app.theme,
+        app.motion,
+    ) {
+        Some(wash) => base.patch(wash),
+        None => base,
+    }
+}
+
 pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let g = theme.glyphs;
@@ -371,7 +391,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .title(Span::styled(
             format!(" {} ", project.id),
-            if focused { theme.accent() } else { theme.dim() },
+            title_style(app, focused),
         ))
         .border_style(theme.border(focused));
     let inner = block.inner(area);

@@ -180,7 +180,8 @@ keys that matter most.
 **Every list moves the same way** — the project table, the detail pane, the
 templates tab, the action menu, the template builder, the settings, and any
 dialog with more in it than fits. The eight movement keys below work in all of
-them, and so do `→` and `←`.
+them. `→` and `←` never run anything: they move the cursor between the list
+and the pane beside it, and nothing else.
 
 | Key | What it does |
 |---|---|
@@ -188,8 +189,8 @@ them, and so do `→` and `←`.
 | PageUp / PageDown | move by a screenful, stopping at the ends |
 | Ctrl-D / Ctrl-U | half a screenful, stopping at the ends |
 | Home / End, `g` / `G` | first row, last row |
-| → / `l` | **go in**: open the row under the cursor — whatever Enter does where you are |
-| ← / `h` | **go back**: one level out of a dialog, out of the detail pane, off the templates tab. It never quits: on the project list there is nothing above it, so it does nothing |
+| → / `l` | put the cursor in the pane beside the list — the project's detail on the library, the template's on the templates tab. Unbound when there is no pane |
+| ← / `h` | put the cursor back on the list. It never quits and never closes anything: leaving is Esc's job |
 | `T` | the templates tab, and `T` again (or Esc) back to the library |
 | Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
@@ -310,8 +311,8 @@ details on the right, and the verbs on it — `n` a new one, Enter or `e` to edi
 the guide to templates, `D` to
 delete (it asks first). `f` shows that template's projects: it sets the library
 filter and takes you back to the library, which is where the answer is. `/`
-searches the list — a plain substring over the slug and the name. `T` again,
-Esc or `←`, returns to the library. The builder is described in
+searches the list — a plain substring over the slug and the name. `T` again or
+Esc returns to the library. The builder is described in
 [templates.md](templates.md#the-builder).
 
 Real templates come first, then alphabetically; after them, dimmed, come the

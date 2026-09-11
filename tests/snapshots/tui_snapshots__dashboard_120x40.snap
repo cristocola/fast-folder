@@ -41,4 +41,4 @@ expression: frame
 "│                                                                      ││                                              │"
 "└──────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────┘"
 "                                                                                                                        "
-" / search  a actions  o open  t terminal  y copy path  Space mark  n new  T templates  ? help  c commands               "
+" / search  a actions  o open  t terminal  y copy path  Space mark  n new  T templates  → pane  ? help  c commands       "

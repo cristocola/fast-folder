@@ -13,7 +13,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::tui::app::App;
+use crate::tui::app::{App, Focus};
 
 /// One keystroke, normalised: shift is folded into the character, Ctrl and Alt
 /// are flags. `KeyCode::Char('c')` with the control flag is Ctrl-C.
@@ -286,14 +286,13 @@ pub enum CommandId {
     HalfUp,
     First,
     Last,
-    /// The horizontal axis, on the pane: one step back to the list.
-    FocusTable,
-    /// The horizontal axis, on the templates tab: back where you came from.
+    /// The horizontal axis, leftwards: the list beside the pane.
+    FocusList,
+    /// The horizontal axis, rightwards: the pane beside the list.
+    FocusDetail,
+    /// Back to the library from the templates tab — palette only; `T` and
+    /// Esc are the keys.
     BackToLibrary,
-    /// The horizontal axis, in a dialog: one level out.
-    Ascend,
-    /// The horizontal axis, on a list: one step into the row under the cursor.
-    Descend,
     // Search and filters
     Search,
     ClearSearch,
@@ -365,7 +364,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 92] = [
+    pub const ALL: [CommandId; 91] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -398,10 +397,9 @@ impl CommandId {
         CommandId::HalfUp,
         CommandId::First,
         CommandId::Last,
-        CommandId::FocusTable,
+        CommandId::FocusList,
+        CommandId::FocusDetail,
         CommandId::BackToLibrary,
-        CommandId::Ascend,
-        CommandId::Descend,
         CommandId::Search,
         CommandId::ClearSearch,
         CommandId::SortCycle,
@@ -482,6 +480,28 @@ pub struct Command {
 
 fn always(_: &App) -> Availability {
     Availability::Enabled
+}
+
+/// `←` is bound only while the pane has the focus: on the list there is
+/// nothing to its left, and a key that does nothing should not be in the help
+/// saying it does. **The axis never quits** — leaving a tab is Esc's ladder.
+fn pane_has_focus(app: &App) -> Availability {
+    if app.focus == Focus::Detail {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
+}
+
+/// `→` is bound only while there is a pane to go to and the cursor is not
+/// already in it. The library's pane closes under `layout::DETAIL_MIN_WIDTH`,
+/// and then the key is unbound rather than a no-op advertised on the bar.
+fn pane_can_take_focus(app: &App) -> Availability {
+    if app.focus == Focus::Projects && app.pane_present() {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
 }
 
 /// Alt-Enter breaks a line, and only a quick note has lines to break: in a
@@ -767,26 +787,10 @@ const DIALOGS: &[Context] = &[
     Context::Guide,
     Context::Modal,
 ];
-/// Where the horizontal axis means "one step in": every list with something
-/// under the cursor to enter. Not the search bar, not the palette, not a form
-/// — a text field owns its own arrows.
-const DESCEND: &[Context] = &[
-    Context::Projects,
-    Context::Detail,
-    Context::Templates,
-    Context::Actions,
-    Context::Builder,
-    Context::Settings,
-];
-/// Where the horizontal axis means "one level out". Everywhere `Close` does,
-/// **except the guide**: a reader owns its own left and right, so `←` there
-/// turns a page and `Esc` is the way out.
-const BACKOUT: &[Context] = &[
-    Context::Actions,
-    Context::Builder,
-    Context::Settings,
-    Context::Modal,
-];
+/// Where the horizontal axis moves focus: both tabs, each a list with a pane
+/// beside it. Nowhere else — a dialog has no second pane, and a text field
+/// owns its own arrows.
+const PANED: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
 const STUDIO: &[Context] = &[Context::Templates];
 /// The guide overlay itself — the reader, not the key that opens it.
 const READER: &[Context] = &[Context::Guide];
@@ -1186,24 +1190,13 @@ pub static COMMANDS: &[Command] = &[
     ),
     // --- search and filters ----------------------------------------------
     cmd!(
-        FocusTable,
-        "Back to the list",
-        "leave the detail pane and put the cursor back on the table",
-        &[Context::Detail],
-        [Key::plain(KeyCode::Left), Key::ch('h')],
-        Navigate,
-        palette = false,
-        hint = false,
-        always
-    ),
-    cmd!(
         BackToLibrary,
         "Back to the library",
         "leave the templates tab for the projects you came from",
         TEMPLATES,
-        [Key::plain(KeyCode::Left), Key::ch('h')],
+        [],
         Navigate,
-        palette = false,
+        palette = true,
         hint = false,
         always
     ),
@@ -1596,6 +1589,32 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         not_busy
     ),
+    // --- the horizontal axis: focus ------------------------------------------
+    // Declared after the tab switch so the bar reads verbs first, then the
+    // ways to look around, then the ways to ask: `→ pane` ahead of the verbs
+    // pushed `? help` off an 80-column bar.
+    cmd!(
+        FocusList,
+        "Back to the list",
+        "put the cursor back on the list beside the pane",
+        PANED,
+        [Key::plain(KeyCode::Left), Key::ch('h')],
+        Navigate,
+        palette = false,
+        hint = true,
+        pane_has_focus
+    ),
+    cmd!(
+        FocusDetail,
+        "Into the pane",
+        "put the cursor in the pane beside the list — the project's detail, or the template's",
+        PANED,
+        [Key::plain(KeyCode::Right), Key::ch('l')],
+        Navigate,
+        palette = false,
+        hint = true,
+        pane_can_take_focus
+    ),
     cmd!(
         Settings,
         "Settings",
@@ -1848,28 +1867,6 @@ pub static COMMANDS: &[Command] = &[
     ),
     // --- closing a dialog ---------------------------------------------------
     cmd!(
-        Descend,
-        "Open",
-        "go into whatever is under the cursor — what Enter does, on the horizontal axis",
-        DESCEND,
-        [Key::plain(KeyCode::Right), Key::ch('l')],
-        Navigate,
-        palette = false,
-        hint = false,
-        always
-    ),
-    cmd!(
-        Ascend,
-        "Back out",
-        "leave this dialog, one level — what Esc does, on the horizontal axis",
-        BACKOUT,
-        [Key::plain(KeyCode::Left), Key::ch('h')],
-        Navigate,
-        palette = false,
-        hint = false,
-        always
-    ),
-    cmd!(
         Close,
         "Close",
         "close this dialog — one level at a time, nothing already answered is lost",
@@ -2007,6 +2004,8 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
     match id {
         CommandId::Palette => "commands",
         CommandId::Actions => "actions",
+        CommandId::FocusList => "list",
+        CommandId::FocusDetail => "pane",
         CommandId::OpenFolder => "open",
         CommandId::OpenTerminal => "terminal",
         CommandId::CopyPath => "copy path",

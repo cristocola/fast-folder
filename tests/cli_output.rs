@@ -835,6 +835,30 @@ fn the_recent_limit_key_is_one_word_everywhere() {
     );
 }
 
+/// **The mouse is a setting, off by default.** `config show` names it,
+/// `config set mouse on|off` writes the word every surface reads, and any
+/// other word is refused in the words the other on/off settings use.
+#[test]
+fn the_mouse_setting_is_shown_set_and_refused_like_any_other() {
+    let sb = Sandbox::new();
+    let shown = sb.ok(&["config", "show"]);
+    assert!(
+        shown.contains("mouse:") && shown.contains("off (text selects as usual)"),
+        "{shown}"
+    );
+    let out = sb.ok(&["config", "set", "mouse", "on"]);
+    assert!(out.contains("Set mouse = on"), "{out}");
+    let shown = sb.ok(&["config", "show"]);
+    assert!(
+        shown.contains("mouse:") && shown.contains("on ("),
+        "{shown}"
+    );
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    assert!(config.contains("mouse = \"on\""), "{config}");
+    let err = sb.fails(&["config", "set", "mouse", "sideways"]);
+    assert!(err.contains("expected on or off"), "{err}");
+}
+
 /// A recursive register that registered nothing is not a success.
 ///
 /// Each failure was an `eprintln!` on stderr and the tail printed

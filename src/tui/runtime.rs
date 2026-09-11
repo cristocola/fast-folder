@@ -48,6 +48,8 @@ use crate::util::{diag, interrupt, tty};
 /// How often an idle app looks for an external interrupt. A second: the
 /// signal is rare and the wake is not free on a laptop.
 const IDLE_WAKE: Duration = Duration::from_millis(1000);
+/// How often the selected project's detail is checked against the disk.
+const WATCH_EVERY: Duration = Duration::from_millis(1000);
 /// Worker stack: a Windows thread gets 1 MiB by default, and the walks and
 /// discovery below run under `MAX_WALK_DEPTH` recursion.
 const WORKER_STACK: usize = 4 << 20;
@@ -65,9 +67,10 @@ pub fn run(
     onboarding: Option<String>,
     theme: Theme,
     motion: crate::tui::motion::Motion,
+    mouse: bool,
 ) -> Result<Exit> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut runtime = Runtime::init(tx, rx)?;
+    let mut runtime = Runtime::init(tx, rx, mouse)?;
     let outcome = runtime.main_loop(entry, onboarding, theme, motion);
     runtime.shutdown();
     let (exit, session) = outcome?;
@@ -101,6 +104,12 @@ struct Runtime {
     /// When the next tick is due. A deadline rather than an interval, so a
     /// burst of messages cannot starve it.
     next_tick: Option<Instant>,
+    /// When the selected project's detail was last checked against the disk
+    /// — once a second at most, whatever the wake.
+    last_watch: Option<Instant>,
+    /// Whether the terminal reports the mouse: the `mouse` setting, and
+    /// what every retake of the screen asks for again.
+    mouse: bool,
 }
 
 /// The runtime's half of a running move: the progress handle it snapshots and
@@ -111,7 +120,7 @@ struct MovingJob {
 }
 
 impl Runtime {
-    fn init(tx: Sender<Msg>, rx: Receiver<Msg>) -> Result<Self> {
+    fn init(tx: Sender<Msg>, rx: Receiver<Msg>, mouse: bool) -> Result<Self> {
         install_panic_hook();
         // The second Ctrl-C from outside — `kill -INT` twice, a terminal that
         // sends one on close — exits from the handler, where nothing of
@@ -125,7 +134,7 @@ impl Runtime {
         // see again. Spawning touches no terminal state, so there is nothing to
         // undo if it fails.
         let input = InputThread::spawn(tx.clone())?;
-        let terminal = take_screen()?;
+        let terminal = take_screen(mouse)?;
         // The one choke point that replaces `live_select`'s: an interactive
         // surface ran, so a relaunched window closes without a pause.
         tty::mark_interactive_surface();
@@ -145,6 +154,8 @@ impl Runtime {
             moving: None,
             started: Instant::now(),
             next_tick: None,
+            last_watch: None,
+            mouse,
         })
     }
 
@@ -179,6 +190,7 @@ impl Runtime {
         let remembered = Session::load();
         let mut app = App::new(entry, theme, self.size());
         app.motion = motion;
+        app.mouse = self.mouse;
         app.data_dir = Some(crate::util::paths::display_path(
             &crate::util::paths::install_dir(),
         ));
@@ -229,6 +241,7 @@ impl Runtime {
     /// drained and drawn once, and the tick that came due during it is
     /// delivered after.
     fn wait(&mut self, app: &App) -> Option<Msg> {
+        self.watch_detail(app);
         let Some(interval) = app.tick_interval() else {
             self.next_tick = None;
             return self.idle_wait();
@@ -258,6 +271,28 @@ impl Runtime {
         self.report_sizes(app);
         self.report_move_progress();
         Msg::Tick
+    }
+
+    /// Once a second, ask the detail worker whether the selected project's
+    /// file still is what the pane read — a stat, and a read only when it is
+    /// not. This is what makes a `PROJECT_INFO.md` edited in another window
+    /// show up without a keypress; the idle wake is a second already, so it
+    /// costs no extra frame.
+    fn watch_detail(&mut self, app: &App) {
+        if self.last_watch.is_some_and(|at| at.elapsed() < WATCH_EVERY) {
+            return;
+        }
+        if !app.detail_visible() {
+            return;
+        }
+        let Some(project) = app.library.selected() else {
+            return;
+        };
+        let Some(detail) = app.details.get(&project.path) else {
+            return;
+        };
+        self.last_watch = Some(Instant::now());
+        self.detail.check(project.path.clone(), detail.stamp);
     }
 
     /// Nothing is moving: wake once a second to look for a signal from
@@ -344,6 +379,22 @@ impl Runtime {
                     });
                 }
                 Effect::LoadDetail(path) => self.detail.request(path),
+                Effect::RefreshDetail { path, stamp } => self.detail.check(path, stamp),
+                // Lock-free by design: the index is disposable, written
+                // atomically, and self-healing — the same call discovery's own
+                // rescan makes from this app. Against a `tag add` in another
+                // process the last writer wins and the other's entry is
+                // stale until the next rescan, which is the state a hand edit
+                // (the thing that got us here) already leaves it in.
+                Effect::RefreshCache(path) => {
+                    spawn_worker("fastf-cache", move || {
+                        crate::core::library::refresh_cache(&path);
+                    });
+                }
+                Effect::Mouse(on) => {
+                    self.mouse = on;
+                    set_mouse(&mut self.terminal, on);
+                }
                 Effect::LoadMeta(paths) => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-metadata", move || {
@@ -512,7 +563,7 @@ impl Runtime {
         }
         pause_for_enter();
 
-        self.terminal = take_screen()?;
+        self.terminal = take_screen(self.mouse)?;
         self.input.resume();
         Ok(())
     }
@@ -531,7 +582,7 @@ impl Runtime {
         unsafe {
             libc::raise(libc::SIGTSTP);
         }
-        self.terminal = take_screen()?;
+        self.terminal = take_screen(self.mouse)?;
         self.input.resume();
         Ok(())
     }
@@ -571,7 +622,7 @@ impl Runtime {
             pause_for_enter();
         }
 
-        self.terminal = take_screen()?;
+        self.terminal = take_screen(self.mouse)?;
         self.input.resume();
         self.announce_size();
         Ok(Resumed::Note {
@@ -616,8 +667,16 @@ fn restore_on_signal() {
     tty::restore_cooked_mode();
 }
 
-/// Raw mode, the alternate screen, bracketed paste — on stderr.
-fn take_screen() -> Result<Screen> {
+/// Raw mode, the alternate screen, bracketed paste — on stderr — and mouse
+/// reporting when the setting asks for it.
+///
+/// **Off by default.** With reporting on, the terminal hands every click and
+/// drag to the app and selecting text needs the modifier the terminal keeps
+/// for it (Shift, or Option on macOS), which nobody finds by themselves. Off,
+/// text selects as in any program, and the wheel still scrolls the list:
+/// every modern terminal turns it into arrow keys on the alternate screen.
+/// `mouse = on` buys a click on a row, and a wheel that moves three.
+fn take_screen(mouse: bool) -> Result<Screen> {
     #[cfg(unix)]
     tty::remember_cooked_mode();
     enable_raw_mode().context("putting the terminal into raw mode")?;
@@ -626,14 +685,13 @@ fn take_screen() -> Result<Screen> {
         stderr,
         EnterAlternateScreen,
         EnableBracketedPaste,
-        // The wheel and a click on a row. Text selection still works with the
-        // modifier every terminal keeps for it (Shift, or Option on macOS),
-        // which is why capture is worth having at all.
-        EnableMouseCapture,
         cursor::Hide
     ) {
         let _ = disable_raw_mode();
         return Err(anyhow!("switching to the alternate screen: {err}"));
+    }
+    if mouse {
+        let _ = execute!(stderr, EnableMouseCapture);
     }
     SCREEN_OWNED.store(true, Ordering::SeqCst);
     // A fresh `Terminal` draws its first frame against an empty back buffer,
@@ -641,6 +699,17 @@ fn take_screen() -> Result<Screen> {
     // not `Terminal::clear`: that asks the terminal where its cursor is and
     // waits for the answer, which a pty under test never sends.
     Terminal::new(CrosstermBackend::new(stderr)).context("opening the terminal")
+}
+
+/// Mouse reporting on or off, live — the `mouse` setting flipped from the
+/// palette or the settings screen. Disabling what was never enabled is a
+/// no-op on every terminal.
+fn set_mouse(terminal: &mut Screen, on: bool) {
+    let _ = if on {
+        execute!(terminal.backend_mut(), EnableMouseCapture)
+    } else {
+        execute!(terminal.backend_mut(), DisableMouseCapture)
+    };
 }
 
 /// Back to the main screen in cooked mode with the cursor shown. Idempotent.
@@ -799,16 +868,44 @@ fn run_action(
                 message,
             ))
         }
-        Action::SetNotes { project, text } => {
-            crate::core::operations::set_notes(&project, &text)?;
-            let path = project.path.clone();
+        Action::ReplaceNote {
+            project,
+            ordinal,
+            was,
+            text,
+        } => {
+            crate::core::operations::replace_note(&project, ordinal, &was, &text)?;
             Ok(ActionOutcome::new(
-                ListChange::Patched {
-                    project,
-                    was: path.clone(),
-                    stale: vec![path],
+                ListChange::DetailOnly {
+                    path: project.path.clone(),
                 },
-                "Notes saved.",
+                if text.trim().is_empty() {
+                    "Note removed."
+                } else {
+                    "Note saved."
+                },
+            ))
+        }
+        Action::ToggleTodo {
+            project,
+            ordinal,
+            was,
+        } => {
+            let done = crate::core::operations::toggle_todo(&project, ordinal, &was)?;
+            Ok(ActionOutcome::new(
+                ListChange::DetailOnly {
+                    path: project.path.clone(),
+                },
+                if done { "Done." } else { "Open again." },
+            ))
+        }
+        Action::AddTodo { project, text } => {
+            crate::core::operations::add_todo(&project, &text)?;
+            Ok(ActionOutcome::new(
+                ListChange::DetailOnly {
+                    path: project.path.clone(),
+                },
+                "Todo added.",
             ))
         }
         Action::ReautoTags(project) => {
@@ -1163,17 +1260,13 @@ fn run_action(
         }
         Action::AppendNote { project, text } => {
             crate::core::operations::append_note(&project, &text)?;
-            let id = project.id.clone();
-            let path = project.path.clone();
             Ok(ActionOutcome::new(
-                ListChange::Patched {
-                    project,
-                    was: path.clone(),
-                    stale: vec![path],
+                ListChange::DetailOnly {
+                    path: project.path.clone(),
                 },
                 "Note added.",
             )
-            .session(format!("noted {id}")))
+            .session(format!("noted {}", project.id)))
         }
     }
 }
@@ -1480,6 +1573,9 @@ struct DetailWorker {
 #[derive(Default)]
 struct DetailSlot {
     wanted: Option<PathBuf>,
+    /// A project to check rather than read: its detail is read again only
+    /// when the file or the folder no longer match the stamp.
+    check: Option<(PathBuf, Option<crate::tui::app::data::Stamp>)>,
     stop: bool,
 }
 
@@ -1501,28 +1597,39 @@ impl DetailWorker {
                 let report = tx.clone();
                 let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                     loop {
-                        let path = {
+                        // A read wanted comes first; a check waits behind
+                        // it, and is answered only when the disk disagrees.
+                        let (path, only_if_changed) = {
                             let (lock, changed) = &*thread_slot;
                             let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
-                            while state.wanted.is_none() && !state.stop {
+                            while state.wanted.is_none() && state.check.is_none() && !state.stop {
                                 state = changed.wait(state).unwrap_or_else(|e| e.into_inner());
                             }
                             if state.stop {
                                 return;
                             }
-                            state.wanted.take()
-                        };
-                        if let Some(path) = path {
-                            let detail = loaders::detail(&path);
-                            if tx
-                                .send(Msg::Detail {
-                                    path,
-                                    detail: Box::new(detail),
-                                })
-                                .is_err()
-                            {
-                                return;
+                            match state.wanted.take() {
+                                Some(path) => (path, None),
+                                None => match state.check.take() {
+                                    Some((path, stamp)) => (path, Some(stamp)),
+                                    None => continue,
+                                },
                             }
+                        };
+                        if let Some(stamp) = only_if_changed
+                            && loaders::stamp_of(&path) == stamp
+                        {
+                            continue;
+                        }
+                        let detail = loaders::detail(&path);
+                        if tx
+                            .send(Msg::Detail {
+                                path,
+                                detail: Box::new(detail),
+                            })
+                            .is_err()
+                        {
+                            return;
                         }
                     }
                 }));
@@ -1551,6 +1658,15 @@ impl DetailWorker {
         let (lock, changed) = &*self.slot;
         let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
         state.wanted = Some(path);
+        changed.notify_one();
+    }
+
+    /// Read `path` again only if its file or folder no longer match `stamp`.
+    /// Latest wins here too.
+    fn check(&self, path: PathBuf, stamp: Option<crate::tui::app::data::Stamp>) {
+        let (lock, changed) = &*self.slot;
+        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        state.check = Some((path, stamp));
         changed.notify_one();
     }
 

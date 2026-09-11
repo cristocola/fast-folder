@@ -437,6 +437,7 @@ fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: R
     let verb = match prompt.then {
         TextThen::Rename(_) => "rename",
         TextThen::AddTag => "add a tag",
+        TextThen::AddTodo => "add a todo",
         TextThen::Delete(_) => "delete",
         TextThen::RaiseCounter => "ID counter",
         TextThen::CopyTo => "copy to",

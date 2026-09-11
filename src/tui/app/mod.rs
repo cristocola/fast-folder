@@ -218,6 +218,13 @@ pub struct App {
     /// What the last landed edit was about, until the detail it invalidated
     /// has been read again and the cursor has found that row.
     pane_return: Option<pane::PaneTarget>,
+    /// A pane write on its way with no edit open for it — a todo toggled, a
+    /// note or a todo added — so the answer lands on the row it was about:
+    /// the cursor settles there and it pulses, as an edit's does.
+    pane_pending: Option<pane::PaneTarget>,
+    /// Whether the terminal reports the mouse: the `mouse` setting, carried
+    /// here so the palette can flip it and the settings screen can see it.
+    pub mouse: bool,
     pub focus: Focus,
     pub screen: Screen,
     pub templates: TemplatesState,
@@ -330,6 +337,8 @@ impl App {
             pane_edit: None,
             pane_pulses: motion::Pulses::default(),
             pane_return: None,
+            pane_pending: None,
+            mouse: false,
             focus: Focus::Projects,
             screen: Screen::Library,
             templates: TemplatesState::default(),
@@ -656,6 +665,7 @@ impl App {
         self.pane_cursor = 0;
         self.pane_edit = None;
         self.pane_return = None;
+        self.pane_pending = None;
         self.selection_effects()
     }
 
@@ -669,11 +679,24 @@ impl App {
         }
         if self.detail_visible()
             && let Some(project) = self.library.selected()
-            && !self.details.contains_key(&project.path)
         {
-            effects.push(Effect::LoadDetail(project.path.clone()));
+            effects.push(self.detail_effect(&project.path));
         }
         effects
+    }
+
+    /// Read the project's detail, or — when one is cached — check it is
+    /// still what is on disk: a stat, and a read only if the file changed.
+    /// The pane used to trust its cache until a verb inside the app dropped
+    /// it, so a line added to `PROJECT_INFO.md` in an editor never showed.
+    fn detail_effect(&self, path: &Path) -> Effect {
+        match self.details.get(path) {
+            Some(detail) => Effect::RefreshDetail {
+                path: path.to_path_buf(),
+                stamp: detail.stamp,
+            },
+            None => Effect::LoadDetail(path.to_path_buf()),
+        }
     }
 
     fn after_query_change(&mut self) -> Vec<Effect> {
@@ -774,6 +797,20 @@ impl App {
                 self.details.remove(&path);
                 self.rescanning.remove(&path);
                 effects.push(Effect::ForgetSizes(vec![path]));
+            }
+            // Nothing on the row changed, so nothing on the row lights up
+            // and the cursor stays where it is. The pane keeps what it shows
+            // until the re-read lands — dropping the detail first would put a
+            // `reading…` frame between the keypress and the answer — and the
+            // pane's own pulse says what landed.
+            ListChange::DetailOnly { path } => {
+                if self.detail_visible() && self.library.selected().is_some_and(|p| p.path == path)
+                {
+                    effects.push(Effect::LoadDetail(path));
+                } else {
+                    self.details.remove(&path);
+                }
+                return effects;
             }
             ListChange::Reload => {
                 effects.push(self.discover());
@@ -900,12 +937,58 @@ impl App {
                 if self.details.len() >= DETAIL_CACHE {
                     self.details.clear();
                 }
+                let mut effects = Vec::new();
+                // The file is the truth, and the pane just read it: a row
+                // whose tags or names disagree with the metadata — edited
+                // outside the app, or an index that went stale — takes the
+                // file's, and the base's index entry is written to match.
+                if let Some(meta) = &detail.meta
+                    && let Some(mut row) = self.project_at(&path)
+                {
+                    let mut changed = false;
+                    if row.tags != meta.tags {
+                        row.tags = meta.tags.clone();
+                        changed = true;
+                    }
+                    if !meta.template_name.is_empty() && row.template_name != meta.template_name {
+                        row.template_name = meta.template_name.clone();
+                        changed = true;
+                    }
+                    if !meta.created.is_empty() && row.created != meta.created {
+                        row.created = meta.created.clone();
+                        changed = true;
+                    }
+                    if changed && self.library.patch(&path, row) {
+                        self.recompute();
+                        let rows = self.rows_on_screen();
+                        self.library.clamp_viewport(rows);
+                        effects.push(Effect::RefreshCache(path.clone()));
+                    }
+                }
                 let selected = self.library.selected().is_some_and(|p| p.path == path);
                 self.details.insert(path, *detail);
-                if selected && let Some(target) = self.pane_return.take() {
-                    self.settle_pane_cursor(&target);
+                if selected {
+                    if let Some(target) = self.pane_return.take() {
+                        self.settle_pane_cursor(&target);
+                    }
+                    // An edit open on a row keeps its row: the rows were
+                    // rebuilt under it, and its note may have moved.
+                    if let Some(edit) = &self.pane_edit
+                        && let Some(row) = pane::find_row(&self.pane_rows(), &edit.target())
+                        && let Some(edit) = &mut self.pane_edit
+                    {
+                        edit.set_row(row);
+                    }
+                    let rows = self.pane_rows();
+                    self.pane_cursor = pane::step_cursor(&rows, self.pane_cursor, 0);
+                    self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
+                        self.detail_scroll,
+                        Some(self.pane_cursor),
+                        rows.len(),
+                        self.pane_rows_on_screen(),
+                    );
                 }
-                Vec::new()
+                effects
             }
             Msg::MetaLoaded(loaded) => {
                 self.library.absorb_meta(loaded);
@@ -955,12 +1038,18 @@ impl App {
                 // reading; a read that lands after it was closed has nothing
                 // to fill in and is dropped.
                 let (theme, motion) = (loaded.theme.clone(), loaded.motion.clone());
+                let mouse = crate::core::config::on_off(&loaded.mouse).unwrap_or(false);
                 if let Some(Modal::Settings(state)) = self.modals.top_mut() {
                     state.refresh(*loaded);
                 }
-                // A theme — or a motion setting — written on this screen takes
-                // effect on the frame that shows it was written.
-                vec![Effect::Retheme { theme, motion }]
+                // A theme — or a motion or mouse setting — written on this
+                // screen takes effect on the frame that shows it was written.
+                let mut effects = vec![Effect::Retheme { theme, motion }];
+                if mouse != self.mouse {
+                    self.mouse = mouse;
+                    effects.push(Effect::Mouse(mouse));
+                }
+                effects
             }
             Msg::Themed { theme, motion } => {
                 self.theme = *theme;
@@ -1086,7 +1175,8 @@ impl App {
                 let landed = self
                     .pane_edit
                     .take_if(|edit| edit.pending())
-                    .map(|edit| edit.target());
+                    .map(|edit| edit.target())
+                    .or_else(|| self.pane_pending.take());
                 let mut effects = self.apply_change(outcome.change);
                 if let Some(target) = landed {
                     self.settle_pane_cursor(&target);
@@ -1455,7 +1545,7 @@ impl App {
         }
         let changed = match edit {
             pane::PaneEdit::Line { input, .. } => input.apply(&key),
-            pane::PaneEdit::Notes { area, .. } => area.apply(&key),
+            pane::PaneEdit::Note { area, .. } => area.apply(&key),
         };
         if changed {
             edit.clear_error();
@@ -1463,7 +1553,8 @@ impl App {
         Vec::new()
     }
 
-    /// Enter on a pane row: what the row is decides what opens.
+    /// Enter on a pane row: what the row is decides what opens — or, for a
+    /// todo, what is written at once, since a toggle has nothing to type.
     fn pane_edit_start(&mut self) -> Vec<Effect> {
         let rows = self.pane_rows();
         let Some(row) = rows.get(self.pane_cursor).cloned() else {
@@ -1473,7 +1564,32 @@ impl App {
         match row {
             pane::PaneRow::Name => self.run(CommandId::Rename),
             pane::PaneRow::AddTag => self.open_add_tag(),
-            pane::PaneRow::Rule("journal") => self.run(CommandId::NoteInline),
+            pane::PaneRow::AddNote => self.run(CommandId::NoteInline),
+            pane::PaneRow::EarlierNotes(_) => self.run(CommandId::ShowJournal),
+            pane::PaneRow::AddTodo => {
+                self.modals.push(Modal::TextPrompt(TextPrompt::new(
+                    validators::ADD_TODO_PROMPT,
+                    TextThen::AddTodo,
+                )));
+                Vec::new()
+            }
+            pane::PaneRow::Todo { ordinal, text, .. } => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                let effects = self.run_action(
+                    "writing…",
+                    Action::ToggleTodo {
+                        project: Box::new(project),
+                        ordinal,
+                        was: text,
+                    },
+                );
+                if !effects.is_empty() {
+                    self.pane_pending = Some(pane::PaneTarget::Todo(ordinal));
+                }
+                effects
+            }
             pane::PaneRow::Tag(tag) => {
                 self.pane_edit = Some(pane::PaneEdit::Line {
                     row: at,
@@ -1526,15 +1642,18 @@ impl App {
                 });
                 Vec::new()
             }
-            pane::PaneRow::Rule("notes") => {
+            pane::PaneRow::Note { ordinal, .. } => {
                 let text = self
                     .library
                     .selected()
                     .and_then(|project| self.details.get(&project.path))
-                    .map(|detail| detail.notes_text.clone())
+                    .and_then(|detail| detail.notes.get(ordinal))
+                    .map(|note| note.text.clone())
                     .unwrap_or_default();
-                self.pane_edit = Some(pane::PaneEdit::Notes {
+                self.pane_edit = Some(pane::PaneEdit::Note {
                     row: at,
+                    ordinal,
+                    was: text.clone(),
                     area: Box::new(crate::tui::widgets::text_area::TextArea::with_text(&text)),
                     error: None,
                     pending: false,
@@ -1591,18 +1710,29 @@ impl App {
         self.send_pane_edit(action)
     }
 
-    /// `Ctrl-S` on the pane's notes editor.
+    /// `Ctrl-S` on the pane's note editor: the note, rewritten — or, emptied,
+    /// removed. Unchanged text is a cancel.
     fn pane_edit_save(&mut self) -> Vec<Effect> {
-        let Some(pane::PaneEdit::Notes { area, .. }) = &self.pane_edit else {
+        let Some(pane::PaneEdit::Note {
+            area, ordinal, was, ..
+        }) = &self.pane_edit
+        else {
             return Vec::new();
         };
         let text = area.text();
+        if text.trim() == was.trim() {
+            self.pane_edit = None;
+            return Vec::new();
+        }
+        let (ordinal, was) = (*ordinal, was.clone());
         let Some(project) = self.library.selected().cloned() else {
             self.pane_edit = None;
             return Vec::new();
         };
-        self.send_pane_edit(Action::SetNotes {
+        self.send_pane_edit(Action::ReplaceNote {
             project: Box::new(project),
+            ordinal,
+            was,
             text,
         })
     }
@@ -1742,6 +1872,31 @@ impl App {
                         name: text,
                     },
                 )
+            }
+            TextThen::AddTodo => {
+                self.modals.pop();
+                if text.trim().is_empty() {
+                    return Vec::new();
+                }
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                let next = self
+                    .details
+                    .get(&project.path)
+                    .map(|detail| detail.todos.len())
+                    .unwrap_or(0);
+                let effects = self.run_action(
+                    "writing…",
+                    Action::AddTodo {
+                        project: Box::new(project),
+                        text,
+                    },
+                );
+                if !effects.is_empty() {
+                    self.pane_pending = Some(pane::PaneTarget::Todo(next));
+                }
+                effects
             }
             TextThen::AddTag => {
                 if text.trim().is_empty() {
@@ -1894,13 +2049,24 @@ impl App {
         let Some(project) = self.library.selected().cloned() else {
             return Vec::new();
         };
-        self.run_action(
+        // From the pane, the cursor follows the note to where it lands: the
+        // end of the list. From the list, the pane's cursor is not in play.
+        let next = self
+            .details
+            .get(&project.path)
+            .map(|detail| detail.notes.len())
+            .unwrap_or(0);
+        let effects = self.run_action(
             "adding a note…",
             Action::AppendNote {
                 project: Box::new(project),
                 text,
             },
-        )
+        );
+        if !effects.is_empty() && self.focus == Focus::Detail {
+            self.pane_pending = Some(pane::PaneTarget::Note(next));
+        }
+        effects
     }
 
     /// The quick note: Enter saves, Alt-Enter breaks a line, Esc cancels;
@@ -2584,8 +2750,37 @@ impl App {
                 self.open_palette();
                 Vec::new()
             }
-            CommandId::Reload => vec![self.discover(), Effect::LoadSummary],
+            CommandId::Reload => {
+                let mut effects = vec![self.discover(), Effect::LoadSummary];
+                // And the pane: F5 is the key a person presses after editing
+                // the file in another window.
+                if self.detail_visible()
+                    && let Some(project) = self.library.selected()
+                {
+                    effects.push(self.detail_effect(&project.path));
+                }
+                effects
+            }
             CommandId::Reindex => self.run_action("reindexing…", Action::Reindex),
+            // Flip the setting through `config set`, so the word on disk is
+            // the word every surface reads, and switch the terminal the
+            // moment the write is on its way — waiting for the settings
+            // screen to re-read would leave the mouse as it was until `,`.
+            CommandId::ToggleMouse => {
+                let wanted = !self.mouse;
+                let mut effects = self.run_action(
+                    "saving…",
+                    Action::SetConfig {
+                        key: "mouse",
+                        value: if wanted { "on" } else { "off" }.to_string(),
+                    },
+                );
+                if !effects.is_empty() {
+                    self.mouse = wanted;
+                    effects.push(Effect::Mouse(wanted));
+                }
+                effects
+            }
             CommandId::FocusNext | CommandId::FocusPrevious => {
                 let forward = id == CommandId::FocusNext;
                 let next = self.next_focus(forward);
@@ -4244,6 +4439,7 @@ impl App {
             // An edit belongs to the row it was opened on; leaving the pane
             // leaves the row as it was.
             self.pane_edit = None;
+            self.pane_pending = None;
         }
         self.focus = focus;
     }
@@ -4569,7 +4765,7 @@ impl App {
             if kind == ViewKind::Metadata {
                 "metadata"
             } else {
-                "journal"
+                "notes"
             }
         );
         self.load_view(title, project.path.clone(), kind)

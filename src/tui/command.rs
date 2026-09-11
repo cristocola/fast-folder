@@ -381,10 +381,12 @@ pub enum CommandId {
     ShowLog,
     // Ctrl-Z
     Suspend,
+    // Mouse reporting on or off, live
+    ToggleMouse,
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 96] = [
+    pub const ALL: [CommandId; 97] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -481,6 +483,7 @@ impl CommandId {
         CommandId::SettingsFilter,
         CommandId::ShowLog,
         CommandId::Suspend,
+        CommandId::ToggleMouse,
     ];
 }
 
@@ -627,20 +630,20 @@ fn pane_row_and_not_busy(app: &App) -> Availability {
 }
 
 /// The pane's line editor is open and not yet sent: Enter keeps. Hidden in
-/// the notes editor, where Enter is a new line and `Ctrl-S` is the keep.
+/// the note editor, where Enter is a new line and `Ctrl-S` is the keep.
 fn pane_line_editing(app: &App) -> Availability {
     match &app.pane_edit {
-        Some(edit) if edit.is_notes() => Availability::Hidden,
+        Some(edit) if edit.is_note() => Availability::Hidden,
         Some(edit) if edit.pending() => Availability::Disabled("writing…"),
         Some(_) => Availability::Enabled,
         None => Availability::Hidden,
     }
 }
 
-/// The pane's notes editor is open and not yet sent: `Ctrl-S` saves.
-fn pane_notes_editing(app: &App) -> Availability {
+/// The pane's note editor is open and not yet sent: `Ctrl-S` saves.
+fn pane_note_editing(app: &App) -> Availability {
     match &app.pane_edit {
-        Some(edit) if !edit.is_notes() => Availability::Hidden,
+        Some(edit) if !edit.is_note() => Availability::Hidden,
         Some(edit) if edit.pending() => Availability::Disabled("writing…"),
         Some(_) => Availability::Enabled,
         None => Availability::Hidden,
@@ -1266,6 +1269,19 @@ pub static COMMANDS: &[Command] = &[
         hint = false,
         always
     ),
+    // Palette-only, like `BackToLibrary`: a setting flipped from wherever
+    // you are, written through `config set` and switched at once.
+    cmd!(
+        ToggleMouse,
+        "Mouse capture on or off",
+        "off, text selects as usual and the wheel is the terminal's; on, a click selects a row and the wheel scrolls three — hold Shift to select text",
+        G,
+        [],
+        Settings,
+        palette = true,
+        hint = false,
+        always
+    ),
     cmd!(
         Search,
         "Search",
@@ -1384,7 +1400,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         PaneEdit,
         "Edit",
-        "edit what is under the cursor: the name, a tag, a variable, the notes — or add a tag, or a journal entry",
+        "act on what is under the cursor: edit the name, a tag, a variable or a note, toggle a todo, or add one",
         &[Context::Detail],
         [Key::plain(KeyCode::Enter)],
         Project,
@@ -1405,14 +1421,14 @@ pub static COMMANDS: &[Command] = &[
     ),
     cmd!(
         PaneEditSave,
-        "Save the notes",
-        "write the notes to the project (Enter is a new line here)",
+        "Save the note",
+        "write the note to the project (Enter is a new line here); emptied, the note is removed",
         IN_PANE_EDIT,
         [Key::ctrl('s')],
         Navigate,
         palette = false,
         hint = true,
-        pane_notes_editing
+        pane_note_editing
     ),
     cmd!(
         PaneEditCancel,
@@ -1522,7 +1538,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         AddNote,
         "New note",
-        "write a journal note in your editor — the same note on every marked project, if any",
+        "write a note in your editor — the same note on every marked project, if any",
         ACTIONS,
         [Key::ch('N')],
         Project,
@@ -1533,7 +1549,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         NoteInline,
         "Quick note",
-        "type a short journal note where you are (Alt-Enter for a new line) — on every mark, if any",
+        "type a note where you are (Alt-Enter for a new line) — on every mark, if any",
         ACTIONS,
         [Key::ctrl('n')],
         Project,
@@ -1609,7 +1625,7 @@ pub static COMMANDS: &[Command] = &[
     ),
     cmd!(
         ShowJournal,
-        "Show journal",
+        "Show notes",
         "every note ever added to this project",
         ACTIONS,
         [Key::ch('J')],
@@ -2059,7 +2075,7 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
             continue;
         };
         let label = key.label();
-        let title = hint_title(c.id, c.title);
+        let title = hint_title(c.id, c.title, app);
         let cost = label.chars().count() + 1 + title.chars().count() + 2;
         if used + cost > width && !out.is_empty() {
             break;
@@ -2068,6 +2084,17 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
         out.push((label, title));
     }
     out
+}
+
+/// What Enter does on the pane row under the cursor, in one word.
+fn pane_verb(app: &App) -> &'static str {
+    use crate::tui::app::pane::PaneRow;
+    match app.pane_rows().get(app.pane_cursor) {
+        Some(PaneRow::Todo { .. }) => "toggle",
+        Some(PaneRow::AddTag | PaneRow::AddNote | PaneRow::AddTodo) => "add",
+        Some(PaneRow::EarlierNotes(_)) => "show",
+        _ => "edit",
+    }
 }
 
 /// **The keys of `command` that actually fire in `ctx`.** In a text-entry
@@ -2124,14 +2151,15 @@ pub fn movement_pair(ctx: Context) -> Option<(String, &'static str)> {
     Some((format!("{}{}", up.label(), down.label()), what))
 }
 
-/// The hint bar has one line, so a few titles get a shorter form there.
-pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
+/// The hint bar has one line, so a few titles get a shorter form there —
+/// and Enter in the pane says what it will do to the row under the cursor.
+pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str {
     match id {
         CommandId::Palette => "commands",
         CommandId::Actions => "actions",
         CommandId::FocusList => "list",
         CommandId::FocusDetail => "pane",
-        CommandId::PaneEdit => "edit",
+        CommandId::PaneEdit => pane_verb(app),
         CommandId::PaneEditConfirm => "keep",
         CommandId::PaneEditSave => "save",
         CommandId::PaneEditCancel => "cancel",

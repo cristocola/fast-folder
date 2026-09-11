@@ -204,7 +204,7 @@ fn journal_view_open() {
     let _ = update(
         &mut app,
         Msg::ViewLoaded {
-            title: "ID0248 · journal".to_string(),
+            title: "ID0248 · notes".to_string(),
             lines,
         },
     );
@@ -1181,10 +1181,26 @@ fn detail_pane_editing_a_variable_120x40() {
                 transform: Transform::None,
             },
         ],
-        notes: vec!["first cut due Friday".to_string()],
-        notes_text: "first cut due Friday".to_string(),
-        journal: vec![("2026-08-28".to_string(), "began the edit".to_string())],
-        journal_count: 1,
+        notes: vec![
+            fastf::core::body::Note {
+                timestamp: None,
+                text: "first cut due Friday".to_string(),
+            },
+            fastf::core::body::Note {
+                timestamp: Some("2026-08-28T10:00:00Z".to_string()),
+                text: "began the edit\nrough cut by Friday, then colour".to_string(),
+            },
+        ],
+        todos: vec![
+            fastf::core::body::Todo {
+                done: true,
+                text: "ingested the footage".to_string(),
+            },
+            fastf::core::body::Todo {
+                done: false,
+                text: "deliver the video".to_string(),
+            },
+        ],
         ..Default::default()
     };
     let _ = update(

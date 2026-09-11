@@ -11,7 +11,7 @@ use crate::core::library::{self, Project};
 use crate::core::project_info::{self, Metadata};
 use crate::core::{provisioning, template};
 use crate::tui::app::data::{
-    BaseInfo, Entry, Prefs, ProjectDetail, Summary, TemplateCard, TemplateInfo, VarInfo,
+    BaseInfo, Entry, Prefs, ProjectDetail, Stamp, Summary, TemplateCard, TemplateInfo, VarInfo,
 };
 use crate::tui::app::wizard::{
     ApplyPreview, FromFolderPreview, Preview, RecursivePreview, RegisterPreview,
@@ -92,6 +92,7 @@ pub fn settings() -> Result<crate::tui::app::data::Settings> {
         terminal: cfg.terminal.clone(),
         theme: cfg.theme.clone(),
         motion: cfg.motion.clone(),
+        mouse: cfg.mouse.clone(),
         default_template: cfg.default_template.clone(),
         date_preview: chrono::Local::now().format(&cfg.date_format).to_string(),
         date_format: cfg.date_format.clone(),
@@ -439,10 +440,6 @@ pub fn metadata(paths: &[PathBuf]) -> Vec<(PathBuf, Option<Metadata>)> {
 
 /// How many entries of a folder the pane lists.
 const LISTING_LIMIT: usize = 200;
-/// How many journal entries the pane keeps.
-const JOURNAL_LIMIT: usize = 5;
-/// How many lines of the notes section the pane keeps.
-const NOTES_LIMIT: usize = 8;
 
 /// A read-only view's content, as lines for a scrollable dialog.
 pub fn view(path: &Path, kind: crate::tui::effect::ViewKind) -> Vec<String> {
@@ -553,7 +550,7 @@ fn journal_view(path: &Path) -> Vec<String> {
         Ok(notes) => notes
             .iter()
             .flat_map(|note| {
-                let date = note_date(note);
+                let date = note.day().unwrap_or("");
                 let mut lines = note.text.lines();
                 let first = format!("{date:<10}  {}", lines.next().unwrap_or(""));
                 std::iter::once(first)
@@ -565,19 +562,28 @@ fn journal_view(path: &Path) -> Vec<String> {
     }
 }
 
-/// The day a note was written, for a column ten wide: the first ten
-/// characters of its timestamp — by `get`, never a byte slice, because a
-/// hand-edited file can put anything there — or nothing for an undated note.
-pub(crate) fn note_date(note: &project_info::Note) -> &str {
-    note.timestamp
-        .as_deref()
-        .map(|ts| ts.get(..10).unwrap_or(ts))
-        .unwrap_or("")
+/// What the project's file and folder look like right now, for the pane's
+/// cache to compare against. `None` when the metadata file cannot be
+/// stat'ed — a folder that vanished reads as changed, and the read that
+/// follows says so in the pane.
+pub fn stamp_of(path: &Path) -> Option<Stamp> {
+    let info = std::fs::metadata(project_info::pinfo_path(path)).ok()?;
+    let dir = std::fs::metadata(path).ok();
+    Some(Stamp {
+        info_modified: info.modified().ok(),
+        info_len: info.len(),
+        dir_modified: dir.and_then(|meta| meta.modified().ok()),
+    })
 }
 
 /// The detail pane's reads for one project.
 pub fn detail(path: &Path) -> ProjectDetail {
-    let mut detail = ProjectDetail::default();
+    // The stamp before the reads: a write that lands between the two is
+    // caught by the next check rather than hidden behind a newer stamp.
+    let mut detail = ProjectDetail {
+        stamp: stamp_of(path),
+        ..ProjectDetail::default()
+    };
 
     // Every read that fails says so in the pane; the first failure is the
     // one shown, and the rest of the pane is whatever could be read.
@@ -596,34 +602,13 @@ pub fn detail(path: &Path) -> ProjectDetail {
         detail.variables = template.variables;
     }
 
-    // Until the pane draws a note as its own rows, a dated note is one row —
-    // its first line — and the undated one is the notes editor's text.
     match project_info::read_journal_entries(path) {
-        Ok(notes) => {
-            let (undated, dated): (Vec<_>, Vec<_>) =
-                notes.iter().partition(|note| note.timestamp.is_none());
-            detail.journal_count = dated.len();
-            detail.journal = dated
-                .iter()
-                .rev()
-                .take(JOURNAL_LIMIT)
-                .map(|note| {
-                    (
-                        note_date(note).to_string(),
-                        note.text.lines().next().unwrap_or("").to_string(),
-                    )
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            detail.notes_text = undated
-                .first()
-                .map(|note| note.text.clone())
-                .unwrap_or_default();
-            detail.notes = notes_preview(&detail.notes_text);
-        }
+        Ok(notes) => detail.notes = notes,
         Err(err) => problems.push(format!("notes: {err:#}")),
+    }
+    match crate::core::body::read_todos(path) {
+        Ok(todos) => detail.todos = todos,
+        Err(err) => problems.push(format!("todos: {err:#}")),
     }
 
     match listing(path) {
@@ -632,17 +617,6 @@ pub fn detail(path: &Path) -> ProjectDetail {
     }
     detail.error = problems.into_iter().next();
     detail
-}
-
-/// The first lines of the undated note, blanks dropped: the pane's preview.
-fn notes_preview(notes: &str) -> Vec<String> {
-    notes
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.trim().is_empty())
-        .take(NOTES_LIMIT)
-        .map(str::to_string)
-        .collect()
 }
 
 /// Directories first, then files, both sorted; the metadata file hidden. A
@@ -663,21 +637,4 @@ fn listing(path: &Path) -> std::io::Result<Vec<Entry>> {
         .collect();
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
     Ok(entries)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::notes_preview;
-
-    #[test]
-    fn the_notes_preview_is_the_text_without_its_blank_lines() {
-        assert_eq!(
-            notes_preview("first cut due Friday\n\nthen colour\n"),
-            vec![
-                "first cut due Friday".to_string(),
-                "then colour".to_string()
-            ]
-        );
-        assert!(notes_preview("").is_empty());
-    }
 }

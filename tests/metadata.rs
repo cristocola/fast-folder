@@ -429,8 +429,8 @@ variables:
 }
 
 // ---------------------------------------------------------------------------
-// The pane's edits: set_variable, replace_tag, set_notes, replace_note, the
-// todos — and the tag rule
+// The pane's edits: set_variable, replace_tag, replace_note, the todos — and
+// the tag rule
 // ---------------------------------------------------------------------------
 
 mod pane_edits {
@@ -627,116 +627,61 @@ tag_from: ["tier"]
         });
     }
 
-    /// The undated text of the notes section is rewritten in place and
-    /// everything around it stays byte for byte — the dated notes under it
-    /// included.
+    /// The undated note — the free text a file written before v3.6.0 kept
+    /// under `## Notes` — is edited in place like any other note, with the
+    /// entries under it untouched, and a heading in it is refused by name.
     #[test]
-    fn set_notes_replaces_the_preamble_and_keeps_every_other_byte() {
-        sandboxed(|install| {
-            let (_cfg, project) = planted(install);
-            operations::append_note(&project, "began").unwrap();
-            let before = file(&project);
-            assert!(before.contains("## Notes\n\n- "), "{before}");
-
-            operations::set_notes(&project, "first cut due Friday\nthen colour").unwrap();
-            let after = file(&project);
-            assert_eq!(
-                after,
-                before.replace(
-                    "## Notes\n\n- ",
-                    "## Notes\n\nfirst cut due Friday\nthen colour\n\n- "
-                ),
-                "the notes and only the notes"
-            );
-            let notes = project_info::read_journal_entries(&project.path).unwrap();
-            assert_eq!(notes.len(), 2);
-            assert_eq!(notes[0].timestamp, None);
-            assert_eq!(notes[0].text, "first cut due Friday\nthen colour");
-            assert_eq!(notes[1].text, "began");
-
-            operations::set_notes(&project, "").unwrap();
-            assert_eq!(
-                file(&project),
-                before,
-                "emptied notes read as never written"
-            );
-        });
-    }
-
-    /// Notes at the end of the file — no entry yet — keep the blank line a
-    /// fresh file has, so the first entry lands under one.
-    #[test]
-    fn set_notes_at_the_end_of_the_file_keeps_the_shape_a_note_expects() {
-        sandboxed(|install| {
-            let (_cfg, project) = planted(install);
-            let before = file(&project);
-            assert!(before.ends_with("## Notes\n\n"), "{before:?}");
-            operations::set_notes(&project, "remember the invoice").unwrap();
-            assert!(file(&project).ends_with("## Notes\n\nremember the invoice\n\n"));
-            operations::append_note(&project, "sent").unwrap();
-            assert!(
-                file(&project).contains("remember the invoice\n\n- "),
-                "{}",
-                file(&project)
-            );
-            operations::set_notes(&project, "").unwrap();
-            assert!(
-                file(&project).contains("## Notes\n\n- "),
-                "{}",
-                file(&project)
-            );
-        });
-    }
-
-    /// A file written before v3.6.0 that lost its notes section gets one back
-    /// where it belongs: before the journal, which keeps holding the entries.
-    #[test]
-    fn set_notes_creates_the_section_before_the_journal() {
+    fn replace_note_edits_the_undated_note_in_place_and_refuses_a_heading() {
         sandboxed(|install| {
             let (_cfg, project) = planted(install);
             operations::append_note(&project, "began").unwrap();
             let pinfo = project_info::pinfo_path(&project.path);
-            let legacy = file(&project).replace("## Notes\n\n- ", "## Journal\n\n- ");
+            let legacy = file(&project).replace(
+                "## Notes\n\n- ",
+                "## Notes\n\nfirst cut due Friday\n\n## Journal\n\n- ",
+            );
             fs::write(&pinfo, &legacy).unwrap();
-            assert_eq!(
-                project_info::read_journal_entries(&project.path)
-                    .unwrap()
-                    .len(),
-                1
-            );
-            operations::set_notes(&project, "back").unwrap();
-            let after = file(&project);
-            assert_eq!(
-                after,
-                legacy.replace("## Journal\n\n- ", "## Notes\n\nback\n\n## Journal\n\n- "),
-                "{after}"
-            );
             let notes = project_info::read_journal_entries(&project.path).unwrap();
             assert_eq!(notes.len(), 2);
             assert_eq!(
                 (notes[0].timestamp.as_deref(), notes[0].text.as_str()),
-                (None, "back")
+                (None, "first cut due Friday")
             );
-            assert_eq!(notes[1].text, "began");
-        });
-    }
 
-    /// A second-level heading inside the notes would end them: refused, with
-    /// the line named.
-    #[test]
-    fn set_notes_refuses_a_heading_that_would_end_the_section() {
-        sandboxed(|install| {
-            let (_cfg, project) = planted(install);
-            let before = file(&project);
-            let err = operations::set_notes(&project, "fine\n## Journal\nnot fine")
-                .unwrap_err()
-                .to_string();
+            operations::replace_note(
+                &project,
+                0,
+                "first cut due Friday",
+                "first cut due Friday\nthen colour",
+            )
+            .unwrap();
+            assert_eq!(
+                file(&project),
+                legacy.replace(
+                    "first cut due Friday\n",
+                    "first cut due Friday\nthen colour\n"
+                ),
+                "the note and only the note"
+            );
+            let err = operations::replace_note(
+                &project,
+                0,
+                "first cut due Friday\nthen colour",
+                "fine\n## Journal\nnot fine",
+            )
+            .unwrap_err()
+            .to_string();
             assert!(
                 err.contains("## Journal") && err.contains("end the notes"),
                 "{err}"
             );
-            assert_eq!(file(&project), before);
-            operations::set_notes(&project, "# a title is fine\n- and a list").unwrap();
+            operations::replace_note(&project, 0, "first cut due Friday\nthen colour", "").unwrap();
+            assert_eq!(
+                file(&project),
+                legacy.replace("first cut due Friday\n\n", ""),
+                "emptied reads as never written: {}",
+                file(&project)
+            );
         });
     }
 

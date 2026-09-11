@@ -89,6 +89,15 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
+        "mouse:".green(),
+        if config.mouse_on() {
+            "on (click a row, wheel scrolls; Shift-drag selects text)"
+        } else {
+            "off (text selects as usual)"
+        }
+    );
+    println!(
+        "  {:<26} {}",
         "default_template:".green(),
         if config.default_template.is_empty() {
             "(always prompt)".to_string()
@@ -280,6 +289,21 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                     match choice {
                         crate::tui::motion::Motion::On => "a row that changed lights up as it does",
                         crate::tui::motion::Motion::Off => "every frame is a hard cut",
+                    }
+                )
+            }
+            "mouse" => {
+                let Some(on) = crate::core::config::on_off(value) else {
+                    bail!("expected on or off; got '{}'", value.trim());
+                };
+                config.mouse = if on { "on" } else { "off" }.to_string();
+                format!(
+                    "Set mouse = {}  ({})",
+                    config.mouse,
+                    if on {
+                        "a click selects a row and the wheel scrolls; hold Shift to select text"
+                    } else {
+                        "text selects as usual; the wheel is the terminal's"
                     }
                 )
             }

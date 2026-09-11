@@ -19,8 +19,22 @@ pub enum Effect {
     Discover {
         generation: u64,
     },
-    /// Metadata, journal and listing for the detail pane. Latest request wins.
+    /// Metadata, notes, todos and listing for the detail pane. Latest
+    /// request wins.
     LoadDetail(PathBuf),
+    /// Read the detail again **only if** the file or the folder changed since
+    /// `stamp` was taken — a stat, not a read, when nothing did. What keeps
+    /// the pane true to a file edited outside the app.
+    RefreshDetail {
+        path: PathBuf,
+        stamp: Option<crate::tui::app::data::Stamp>,
+    },
+    /// The index entry for one project, from its metadata, on a worker: what
+    /// the pane just found changed under it, so the base's disposable cache
+    /// agrees with the file.
+    RefreshCache(PathBuf),
+    /// Switch mouse reporting on or off, live.
+    Mouse(bool),
     /// Metadata for rows whose variables a query needs.
     LoadMeta(Vec<PathBuf>),
     /// What the size scanner should measure next, most important first.
@@ -163,8 +177,21 @@ pub enum Action {
         from: String,
         to: Option<String>,
     },
-    /// Replace the `## Notes` section.
-    SetNotes {
+    /// Rewrite one note — `ordinal` in the file's notes, whose text was
+    /// `was` when the edit opened — or remove it when `text` is empty.
+    ReplaceNote {
+        project: Box<Project>,
+        ordinal: usize,
+        was: String,
+        text: String,
+    },
+    /// Flip one todo between open and done.
+    ToggleTodo {
+        project: Box<Project>,
+        ordinal: usize,
+        was: String,
+    },
+    AddTodo {
         project: Box<Project>,
         text: String,
     },
@@ -256,6 +283,12 @@ pub enum ListChange {
         stale: Vec<PathBuf>,
     },
     Removed {
+        path: PathBuf,
+    },
+    /// The row is as it was; only what the pane reads changed — a note, a
+    /// todo. The cached detail is dropped and read again, and no row lights
+    /// up, because no row changed.
+    DetailOnly {
         path: PathBuf,
     },
     Reload,

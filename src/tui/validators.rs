@@ -11,17 +11,20 @@ pub const RENAME_PROMPT: &str = "New folder name";
 /// `Tag to add (e.g. draft  or  client/Acme)`.
 pub const ADD_TAG_PROMPT: &str = "Tag to add (e.g. draft  or  client/Acme)";
 
+/// `Todo to add`. One line; the pane toggles it once it is there.
+pub const ADD_TODO_PROMPT: &str = "Todo to add";
+
 /// The copy destination. It names the rule rather than leaving it to be
 /// discovered by refusal: a folder inside a base is the one answer that cannot
 /// work, and it is the first one a reader reaches for.
 pub const COPY_TO_PROMPT: &str = "Copy to which folder? (must exist, outside every base)";
 
-/// `Journal note`, for one project or for every marked one.
+/// `Note`, for one project or for every marked one.
 pub fn note_prompt(count: usize) -> String {
     if count <= 1 {
-        "Journal note".to_string()
+        "Note".to_string()
     } else {
-        format!("Journal note, appended to {count} projects")
+        format!("Note, added to {count} projects")
     }
 }
 

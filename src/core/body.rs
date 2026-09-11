@@ -51,6 +51,18 @@ pub struct Note {
     pub text: String,
 }
 
+impl Note {
+    /// The day the note was written, for a column ten wide: the first ten
+    /// characters of its timestamp — by `get`, never a byte slice, because a
+    /// hand-edited file can put anything there — or `None` for an undated
+    /// note.
+    pub fn day(&self) -> Option<&str> {
+        self.timestamp
+            .as_deref()
+            .map(|ts| ts.get(..10).unwrap_or(ts))
+    }
+}
+
 /// One task under `## Todo`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Todo {
@@ -472,69 +484,6 @@ fn remove_lines(content: &str, span: Range<usize>) -> String {
     out
 }
 
-/// Set the undated note — the free text above the first entry of the notes
-/// section — to `text`: written where it was, or under the heading when
-/// there was none, or taken out when `text` is empty. Every other byte stays.
-/// A file with no notes section gets one at the end. What the pane's notes
-/// editor wrote before notes had dates, kept for the file shape it produces.
-pub fn set_preamble(path: &Path, text: &str) -> Result<()> {
-    let content = read_document(path, "write the notes")?;
-    let text = text.trim_matches(['\n', '\r']);
-    // The `## Notes` section and not the journal's: in a file with both, the
-    // free text was always the notes' and the entries the journal's.
-    let new_content = match section_span(&content, Section::Notes) {
-        Some(span) => {
-            let lines = section_lines(&content, &span);
-            let preamble = notes_in_section(&content, &span)
-                .into_iter()
-                .find(|placed| placed.note.timestamp.is_none());
-            // The end of the heading line: where the section's own text
-            // begins.
-            let after_heading = lines
-                .first()
-                .map(|(range, _)| range.start)
-                .unwrap_or(span.end);
-            match (preamble, text.is_empty()) {
-                (Some(current), true) => {
-                    // Out with the blank line above it too, then a blank
-                    // line back unless one is already there.
-                    let mut out = splice(&content, after_heading..current.span.end, "");
-                    if !out[after_heading..].starts_with('\n') {
-                        out.insert(after_heading, '\n');
-                    }
-                    out
-                }
-                (Some(current), false) => {
-                    splice(&content, current.span.clone(), &render_preamble(text)?)
-                }
-                (None, true) => content.clone(),
-                (None, false) => {
-                    let mut block = String::from("\n");
-                    block.push_str(&render_preamble(text)?);
-                    let mut out = splice(&content, after_heading..after_heading, &block);
-                    let resume = after_heading + block.len();
-                    if !out[resume..].starts_with('\n') {
-                        out.insert(resume, '\n');
-                    }
-                    out
-                }
-            }
-        }
-        None if text.is_empty() => content.clone(),
-        // A file that lost its notes section gets one back where it belongs:
-        // before the journal, with the blank line the journal expects under
-        // it, else at the end.
-        None => match section_span(&content, Section::Journal) {
-            Some(journal) => {
-                let block = format!("{NOTES_HEADING}\n\n{}\n", render_preamble(text)?);
-                splice(&content, journal.start..journal.start, &block)
-            }
-            None => open_section(&content, NOTES_HEADING, &render_preamble(text)?),
-        },
-    };
-    crate::util::atomic::write(path, new_content.as_bytes())
-}
-
 // ---------------------------------------------------------------------------
 // Todos
 // ---------------------------------------------------------------------------
@@ -930,85 +879,6 @@ mod tests {
     }
 
     #[test]
-    fn the_preamble_is_set_where_it_was_or_under_the_heading_and_emptied_away() {
-        // The legacy shape: an empty notes section over a journal.
-        let before = doc("## Notes\n\n## Journal\n\n- 2026-01-01T00:00:00Z — began\n");
-        let (_dir, path) = file(&before);
-        set_preamble(&path, "first cut due Friday\nthen colour").unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            before.replace(
-                "## Notes\n\n## Journal\n",
-                "## Notes\n\nfirst cut due Friday\nthen colour\n\n## Journal\n"
-            )
-        );
-        set_preamble(&path, "").unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            before,
-            "emptied reads as never written"
-        );
-
-        // A fresh file, then entries under the preamble, then emptied again.
-        let (_dir, path) = file(&doc("## Notes\n\n"));
-        set_preamble(&path, "remember the invoice").unwrap();
-        assert!(
-            fs::read_to_string(&path)
-                .unwrap()
-                .ends_with("## Notes\n\nremember the invoice\n\n")
-        );
-        append_journal_entry(&path, "sent").unwrap();
-        assert!(
-            fs::read_to_string(&path)
-                .unwrap()
-                .contains("remember the invoice\n\n- ")
-        );
-        set_preamble(&path, "").unwrap();
-        let after = fs::read_to_string(&path).unwrap();
-        assert!(after.contains("## Notes\n\n- "), "{after:?}");
-        assert!(!after.contains("invoice"));
-
-        // Entries with no blank line under the heading: the preamble goes
-        // between, with a blank line on each side.
-        let (_dir, path) = file(&doc("## Notes\n- 2026-01-01 — a\n"));
-        set_preamble(&path, "above").unwrap();
-        assert!(
-            fs::read_to_string(&path)
-                .unwrap()
-                .contains("## Notes\n\nabove\n\n- 2026-01-01 — a\n")
-        );
-
-        // A file that lost its notes section gets one back before the
-        // journal; with no journal either, at the end. A heading is refused.
-        let (_dir, path) = file(&doc("## Journal\n\n- 2026-01-01T00:00:00Z — began\n"));
-        set_preamble(&path, "back").unwrap();
-        let after = fs::read_to_string(&path).unwrap();
-        assert!(
-            after.contains("# Project Info\n\n## Notes\n\nback\n\n## Journal\n\n- "),
-            "{after:?}"
-        );
-        assert_eq!(
-            notes_in(&after),
-            vec![undated("back"), dated("2026-01-01T00:00:00Z", "began")]
-        );
-        let (_dir, path) = file(&doc("# Project Info\n"));
-        set_preamble(&path, "back").unwrap();
-        assert!(
-            fs::read_to_string(&path)
-                .unwrap()
-                .ends_with("# Project Info\n\n## Notes\n\nback\n")
-        );
-        let err = set_preamble(&path, "fine\n## Journal\nnot")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("## Journal") && err.contains("end the notes"),
-            "{err}"
-        );
-        set_preamble(&path, "# a title is fine\n- and a list").unwrap();
-    }
-
-    #[test]
     fn a_task_is_read_in_any_indent_and_toggled_by_one_byte() {
         let before = doc(
             "## Notes\n\n- 2026-01-01 — a\n\n## TODO:\n\nsome prose\n- [x] ingested\n  * [ ] edited\n- [] delivered\n- not a task\n- [y] nor this\n",
@@ -1087,7 +957,6 @@ mod tests {
         for err in [
             append_journal_entry(&path, "x").unwrap_err(),
             replace_note(&path, 0, "a", "b").unwrap_err(),
-            set_preamble(&path, "x").unwrap_err(),
             toggle_todo(&path, 0, "").unwrap_err(),
             add_todo(&path, "x").unwrap_err(),
         ] {

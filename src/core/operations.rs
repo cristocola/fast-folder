@@ -643,31 +643,6 @@ pub fn set_variable(project: &Project, slug: &str, value: &str) -> Result<projec
         .ok_or_else(|| anyhow::anyhow!("project has no readable metadata"))
 }
 
-/// Set the notes section's undated text — the free text above its first
-/// entry, which is what the pane's notes editor edits.
-///
-/// Refuses a line beginning with `##`: a second-level heading is how the file
-/// marks where a section ends, so one inside the notes would end them there —
-/// the rest of the text would be a section of its own, unreadable as notes
-/// and, if it happened to say `## Journal`, a second journal. The rule is
-/// `body::set_preamble`'s; it is checked here first so a refusal costs no
-/// lock.
-pub fn set_notes(project: &Project, text: &str) -> Result<()> {
-    if let Some(line) = text
-        .lines()
-        .find(|line| line.trim_start().starts_with("##"))
-    {
-        bail!(
-            "a line beginning with ## would end the notes section there (\"{}\") — use a single # or plain text",
-            line.trim()
-        );
-    }
-    let _mutation_lock = DataLock::acquire()?;
-    let config = Config::load()?;
-    let project = library::revalidate_project(&config, project)?;
-    body::set_preamble(&project_info::pinfo_path(&project.path), text)
-}
-
 /// Append a note, dated now. The text may span lines; every line is kept.
 /// No cache refresh: the index stores no notes.
 pub fn append_note(project: &Project, message: &str) -> Result<()> {

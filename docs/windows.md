@@ -130,10 +130,12 @@ for a single run.
 
 ## The mouse
 
-Clicking a row selects it, clicking a pane focuses it, and the wheel scrolls
-whatever the arrow keys would. Mouse reporting is on while the app is open,
-which means a plain drag no longer selects text — hold **Shift** while dragging
-to select, as in every other full-screen terminal program.
+Off by default: text selects as in any program, and the wheel scrolls the
+list, because Windows Terminal turns it into arrow keys on the alternate
+screen. `fastf config set mouse on` makes a click select a row and a pane
+focus, and the wheel scroll three at a time — and a plain drag then no longer
+selects text: hold **Shift** while dragging, as in every full-screen program
+that reports the mouse.
 
 ## "VCRUNTIME140.dll was not found"
 

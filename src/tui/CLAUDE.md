@@ -324,7 +324,7 @@ that is still running.
 -INT` twice, a terminal that sends one on close, SIGHUP) exits from the
 handler, where nothing of ratatui may run: `Runtime::init` registers
 `restore_on_signal` with `interrupt::set_restore`, which writes the escapes
-that undo the mouse, the paste reports and the alternate screen with raw
+that undo the mouse (whether it was on or not), the paste reports and the alternate screen with raw
 system calls and puts back the terminal settings `tty::remember_cooked_mode`
 captured before raw mode was ever enabled. `inline.rs` registers its own for
 its rows, and installs a panic hook of its own. Ctrl-Z is a command
@@ -399,8 +399,32 @@ worker; a pty test asserts opening the app over a fresh index performs one
 project, stale }` replaces the row **by id** (a rename or a move changes the
 path), drops the size snapshots in `stale`, and lets `recompute` decide whether
 the row still satisfies the query; `Removed { path }` drops it; `Reload`
-discovers again. Adding one tag must never re-read every `PROJECT_INFO.md` in
-the library, and the pty suite traces that it does not.
+discovers again; `DetailOnly { path }` touches no row at all — a note or a
+todo lives only in the pane, so the pane is read again and nothing on the list
+lights up. Adding one tag must never re-read every `PROJECT_INFO.md` in the
+library, and the pty suite traces that it does not.
+
+**The pane reads the file, and keeps reading it.** `App.details` is a cache
+of what the pane showed, and a cache only a verb inside the app invalidated
+was a pane that lied the moment the file was edited anywhere else: a line
+added in an editor never showed, and F5 reloaded the list and not the pane.
+Every `ProjectDetail` carries a `Stamp` — the metadata file's mtime and
+length, the folder's mtime, taken **before** the reads so a write landing
+between stat and read is caught next time rather than hidden — and a cached
+detail is *checked* rather than trusted: `Effect::RefreshDetail { path,
+stamp }` is a stat on the worker, and a read only when the disk disagrees.
+`selection_effects` asks for it on every visit to a cached row, `Reload`
+(F5) asks for the selected one, and `Runtime::watch_detail` asks once a
+second from the wake the idle loop already has (`WATCH_EVERY`), so an edit
+in another window shows within a second with no keypress. `DetailWorker`
+serves `wanted` before `check`, latest wins on both. A `Msg::Detail` whose
+metadata disagrees with the row — tags, the template's name, the date —
+patches the row from the file and pushes `Effect::RefreshCache`, which
+rewrites that project's index entry on a worker (`library::refresh_cache`:
+lock-free by design, atomic, disposable, self-healing; against a `tag add`
+in another process the last writer wins, which is the state a hand edit
+already leaves the index in). The pane cannot disagree with the table it
+sits beside.
 
 `LibraryState.generation`/`inflight`: a discovery answers with the generation it
 was sent with and is installed only if it is the one in flight. A patch or
@@ -501,7 +525,7 @@ The verbs on a selected project are native modals, not bridges.
 `MultiPick`); `command.rs` binds `Enter` and `a` to the action menu, `A` /
 `Ctrl-T` to add / remove tags, `N` / `Ctrl-N` to the editor and inline notes,
 `r m u D` to rename / move / unregister / delete, and `M` / `J` to the
-read-only metadata and journal views. The action menu's rows come from the one
+read-only metadata and notes views. The action menu's rows come from the one
 registry, ordered by display (`action_entries`); an entry that cannot run right
 now is listed dimmed with the reason on the key, not hidden — pressing it says
 why. Prompt texts and validators live in `validators.rs`, byte-identical to
@@ -518,8 +542,8 @@ job on a worker (`spawn_worker`) with a `Progress` shared with the runtime and
 a cancel flag: Ctrl-C during a move cancels the job instead of quitting. The
 `$EDITOR` note flow suspends the screen (`Suspended::Note`) into the same
 scratch-file flow as the CLI (`cli::note::note_from_editor`, made public for
-it). Metadata and journal views load on a worker (`loaders.rs`) and render
-read-only, the journal in the order the file holds it.
+it). Metadata and notes views load on a worker (`loaders.rs`) and render
+read-only, the notes in the order the file holds them.
 
 ## The flows that build something
 
@@ -927,6 +951,20 @@ on (`PaneRow::selectable`) had to be one pure function. One line per row and
 no `Wrap`: the cursor is an index into the rows and `detail_scroll` counts
 rows, so a row that took two lines would put both off by one from there down.
 
+**A note is several rows, never one wrapped row.** `PaneRow::Note` is its
+first line, with the day it was written in a column ten wide (blank for the
+undated note a file from before v3.6.0 may carry); every further line is a
+`NoteLine` under it in the text column, up to `NOTE_LINES_SHOWN`, then
+`NoteMore`. Only the first row is selectable — the note is one thing, and
+Enter on that row edits all of it. The latest `NOTES_SHOWN` notes are shown,
+under `EarlierNotes(n)` when there are more, whose Enter is `ShowJournal` —
+the `J` view, every note in full. Todos are one `PaneRow::Todo` each, drawn
+with the markdown's own `[x]`/`[ ]` (every terminal can draw them; a done one
+recedes with its text). **Rules are never selectable; every section that can
+grow ends in a row that adds to it** — `AddTag`, `AddNote`, `AddTodo` — so
+the three sections work the same way and the cursor's ends are add rows, not
+headings. `Figures` counts the notes and the todos done.
+
 **Nothing edits until Enter, and Esc leaves the row as it was.** The cursor
 walks the selectable rows (`pane::step_cursor`, clamped like every list) and
 Enter on one is `CommandId::PaneEdit`, which dispatches on the row: the name
@@ -934,9 +972,21 @@ is the rename prompt, a tag opens on its own line (emptied, it is removed —
 `operations::replace_tag`), "add a tag" is `open_add_tag`, a text variable
 opens on its line, a `select` variable opens `Modal::Pick` over its options
 with `Then::PaneVariable` — the picker is the one shape that cannot hold a
-value outside the options — the notes rule opens a `TextArea` over the section
-(`Ctrl-S` saves; `PaneEditConfirm` is *hidden* there so Enter reaches the
-widget as a new line), the journal rule is `NoteInline`. The edit lives in
+value outside the options — a note opens a `TextArea` over its own rows
+(`PaneEdit::Note`, carrying the note's ordinal and the text it had; `Ctrl-S`
+saves through `operations::replace_note`, emptied it removes; unchanged, it
+is a cancel; `PaneEditConfirm` is *hidden* there so Enter reaches the widget
+as a new line), "add a note" is `NoteInline`, "add a todo" is a `TextPrompt`
+with `TextThen::AddTodo`. **A todo is toggled at once**, with nothing to
+type: Enter sends `Action::ToggleTodo` and records `App.pane_pending` — the
+target of a write with no edit open for it, which `on_action_done` lands
+exactly as an edit's — rather than a `PaneEdit` variant, because
+`App::context()` answers `Context::PaneEdit` whenever `pane_edit` is `Some`,
+and a toggle would have made the app a text-entry context with no field.
+Adds set `pane_pending` too, to the ordinal the new item will have, so the
+cursor follows it to the end of its list. The hint bar's Enter says what it
+will do to the row under the cursor — `edit`, `toggle`, `add`, `show` —
+through `command::hint_title`'s one caller. The edit lives in
 `App.pane_edit` beside the rows rather than in a dialog over them, so what is
 being changed stays in view with everything around it.
 
@@ -956,20 +1006,41 @@ correct — the builder's `saving` and a settings row's edit already worked this
 way, and a refusal in a dialog over a field you can no longer see is worse
 than none. Moving the focus or the selection drops an open edit untouched.
 
-**The cursor follows the thing, not its index.** A landed edit returns
-`ListChange::Patched`, which patches the row and drops the cached detail, so
-the pane's rows are rebuilt — with a tag more or less above the variable that
-changed, and with the variables gone until the re-read lands. `PaneEdit::target`
-says what the edit was about (`PaneTarget`), `settle_pane_cursor` finds that
-row after `apply_change`, and `App.pane_return` keeps the target so
-`Msg::Detail` finds it again once the detail is back. Keeping the old index
+**The cursor follows the thing, not its index.** A landed tag or variable
+edit returns `ListChange::Patched`, which patches the row and drops the cached
+detail, so the pane's rows are rebuilt — with a tag more or less above the
+variable that changed, and with the variables gone until the re-read lands. A
+note or a todo returns `DetailOnly`, which keeps what the pane shows until the
+re-read lands: dropping the detail first put a `reading…` frame between the
+keypress and the answer, and nothing on the list changed, so nothing on the
+list pulses. `PaneEdit::target` says what the edit was about (`PaneTarget`,
+by tag text, variable slug or note/todo ordinal), `settle_pane_cursor` finds
+that row after `apply_change`, and `App.pane_return` keeps the target so
+`Msg::Detail` finds it again once the detail is back — and a landing detail
+re-anchors an edit that is still open (`PaneEdit::set_row`) and re-clamps
+the cursor, because the rows under it may have moved. Keeping the old index
 put the cursor one row off the moment a tag arrived.
 
 **What the pane admits is what the file can hold**, and the rule lives in
 `core`, once: `validated::Tag` at `operations::add_tags`, `vars::rendered_values`
-inside `set_variable`, the `##` refusal in `set_notes`. `validators::tag` is
-the same rule for the prompts that want to refuse under the line before a
-worker is asked. See `src/core/CLAUDE.md`, "The pane's edits".
+inside `set_variable`, `body`'s grammar under `replace_note`, `toggle_todo`
+and `add_todo` — a note or todo that changed on disk since the pane read it
+is refused rather than overwritten. `validators::tag` is the same rule for
+the prompts that want to refuse under the line before a worker is asked. See
+`src/core/CLAUDE.md`, "The pane's edits" and "Notes and todos".
+
+**The mouse is a setting, and off.** `take_screen(mouse)` asks the terminal
+to report the mouse only when `Config::mouse_on()`; every retake after a
+suspend asks again with `Runtime.mouse`, and `Effect::Mouse` switches it live
+— from the palette's `ToggleMouse`, which writes the word through
+`Action::SetConfig` and flips the terminal the moment the write is on its
+way, and from the settings screen, whose re-read (`Msg::SettingsLoaded`)
+pushes the effect when the value differs from `App.mouse`. Off by default
+because reporting on means a plain drag no longer selects text, which nobody
+finds the modifier for by themselves, while the wheel keeps scrolling either
+way: every modern terminal turns it into arrow keys on the alternate screen.
+`release_screen`, the panic hook and `restore_on_signal` disable reporting
+unconditionally — disabling what was never enabled is a no-op everywhere.
 
 ## Settings, the counter, maintenance, the first run
 

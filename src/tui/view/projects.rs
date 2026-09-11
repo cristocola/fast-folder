@@ -446,14 +446,27 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                     SizeCell::Pending => g.pending.to_string(),
                     SizeCell::Known(size) => size_label(size),
                 };
-                let journal = detail.map(|d| d.journal_count).unwrap_or(0);
+                let notes = detail.map(|d| d.notes.len()).unwrap_or(0);
+                let (done, todos) = detail
+                    .map(|d| (d.todos.iter().filter(|t| t.done).count(), d.todos.len()))
+                    .unwrap_or((0, 0));
                 Line::from(vec![
                     Span::styled(size, theme.text()),
                     Span::styled(
                         format!(
-                            "   {}   {journal} journal entr{}",
+                            "   {}   {}   {}   {}",
                             g.sep,
-                            if journal == 1 { "y" } else { "ies" }
+                            match notes {
+                                0 => "no notes".to_string(),
+                                1 => "1 note".to_string(),
+                                n => format!("{n} notes"),
+                            },
+                            g.sep,
+                            if todos == 0 {
+                                "no todos".to_string()
+                            } else {
+                                format!("{done}/{todos} todos done")
+                            }
                         ),
                         theme.dim(),
                     ),
@@ -513,11 +526,57 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                 format!("  {} {more} more", g.ellipsis),
                 theme.dim(),
             )),
-            PaneRow::Note(note) => Line::from(Span::styled(note.clone(), theme.text())),
-            PaneRow::Journal(date, message) => Line::from(vec![
-                Span::styled(format!("{date} "), theme.dim()),
-                Span::styled(message.clone(), theme.text()),
+            PaneRow::EarlierNotes(earlier) => Line::from(Span::styled(
+                format!("  {} {earlier} earlier", g.ellipsis),
+                theme.dim(),
+            )),
+            // A note's day in a column ten wide — blank for the undated
+            // note — and its first line; its other lines under the text,
+            // in the text column, so a note reads as one block.
+            PaneRow::Note { date, first, .. } => Line::from(vec![
+                Span::styled(
+                    format!("{:<10} ", date.as_deref().unwrap_or("")),
+                    theme.dim(),
+                ),
+                Span::styled(
+                    fit(first, width.saturating_sub(11), g.ellipsis),
+                    theme.text(),
+                ),
             ]),
+            PaneRow::NoteLine(line) => Line::from(vec![
+                Span::raw(format!("{:<10} ", "")),
+                Span::styled(
+                    fit(line, width.saturating_sub(11), g.ellipsis),
+                    theme.text(),
+                ),
+            ]),
+            PaneRow::NoteMore(more) => Line::from(Span::styled(
+                format!(
+                    "{:<10} {} {more} more line{}",
+                    "",
+                    g.ellipsis,
+                    if *more == 1 { "" } else { "s" }
+                ),
+                theme.dim(),
+            )),
+            PaneRow::AddNote => {
+                Line::from(Span::styled(format!("{} add a note", g.sep), theme.dim()))
+            }
+            // The markdown's own marker, which every terminal can draw: a
+            // done todo recedes with its text, an open one is lit.
+            PaneRow::Todo { done, text, .. } => Line::from(vec![
+                Span::styled(
+                    if *done { "[x] " } else { "[ ] " },
+                    if *done { theme.dim() } else { theme.accent() },
+                ),
+                Span::styled(
+                    fit(text, width.saturating_sub(4), g.ellipsis),
+                    if *done { theme.dim() } else { theme.text() },
+                ),
+            ]),
+            PaneRow::AddTodo => {
+                Line::from(Span::styled(format!("{} add a todo", g.sep), theme.dim()))
+            }
         };
         // A row an edit just landed on wears the wash, under the cursor —
         // the cursor still says where you are while the pulse says what
@@ -541,9 +600,9 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
     frame.render_widget(paragraph, inner);
 
     // An open edit is drawn over its row, in place: the field where the value
-    // was, the refusal on the line under it. The notes take the rest of the
-    // pane below their rule, with their own key line at the bottom — a text
-    // area is the one widget whose Enter is not the registry's.
+    // was, the refusal on the line under it. A note takes the rest of the
+    // pane from its own row down, with its own key line at the bottom — a
+    // text area is the one widget whose Enter is not the registry's.
     let edit = app.pane_edit.as_ref()?;
     let row_y = (edit.row().checked_sub(app.detail_scroll)? as u16).checked_add(inner.y)?;
     if row_y >= inner.y + inner.height {
@@ -591,11 +650,11 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             }
             caret
         }
-        PaneEdit::Notes {
+        PaneEdit::Note {
             area: text, error, ..
         } => {
-            // From under the rule to the key line at the bottom.
-            let top = row_y + 1;
+            // From the note's own row to the key line at the bottom.
+            let top = row_y;
             let bottom = inner.y + inner.height;
             if top + 2 > bottom {
                 return None;

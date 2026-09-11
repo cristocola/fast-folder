@@ -9,7 +9,7 @@ expression: frame
 "┌ projec│   Ctrl-z         Suspend                           give the terminal back to the │───────┐"
 "│  ID   │                                                    shell, as Ctrl-Z does in any  │0248   │"
 "│▸ ID024│                                                    program — `fg` brings fastf   │eated 2│"
-"│  ID024│                                                    back                          │ntries │"
+"│  ID024│                                                    back                          │·   no │"
 "│  ID024│   Tab            Next pane                         move focus between the list   │───────│"
 "│  ID024│                                                    and the pane beside it        │       │"
 "│  ID024│   Shift-Tab      Previous pane                     move focus the other way      │       │"

@@ -72,8 +72,6 @@ pub struct Settings {
     pub theme: String,
     /// `on` or `off` — empty reads as `on`.
     pub motion: String,
-    /// `on` or `off` — empty reads as `off`.
-    pub mouse: String,
     pub default_template: String,
 
     pub date_format: String,

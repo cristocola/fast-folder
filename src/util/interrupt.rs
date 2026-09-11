@@ -130,8 +130,8 @@ pub fn restore_terminal() {
 }
 
 /// Register what the second signal must undo before the process exits. The
-/// guided app registers its screen (raw mode, the alternate screen, the mouse
-/// and paste reports); an inline prompt registers its rows. Whatever it is,
+/// guided app registers its screen (raw mode, the alternate screen, the paste
+/// reports); an inline prompt registers its rows. Whatever it is,
 /// it runs from a signal handler and must be async-signal-safe: `write`,
 /// `tcsetattr`, an atomic — never a lock or an allocation.
 pub fn set_restore(restore: fn()) {

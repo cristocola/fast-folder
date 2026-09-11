@@ -89,15 +89,6 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
-        "mouse:".green(),
-        if config.mouse_on() {
-            "on (click a row, wheel scrolls; Shift-drag selects text)"
-        } else {
-            "off (text selects as usual)"
-        }
-    );
-    println!(
-        "  {:<26} {}",
         "default_template:".green(),
         if config.default_template.is_empty() {
             "(always prompt)".to_string()
@@ -293,21 +284,12 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                     }
                 )
             }
-            "mouse" => {
-                let Some(on) = crate::core::config::on_off(value) else {
-                    bail!("expected on or off; got '{}'", value.trim());
-                };
-                config.mouse = if on { "on" } else { "off" }.to_string();
-                format!(
-                    "Set mouse = {}  ({})",
-                    config.mouse,
-                    if on {
-                        "a click selects a row and the wheel scrolls; hold Shift to select text"
-                    } else {
-                        "text selects as usual; the wheel is the terminal's"
-                    }
-                )
-            }
+            // A setting in v3.6.0, retired when the app stopped asking the
+            // terminal for the mouse at all. Accepted and ignored for the
+            // reason `show_banner` and `show_frame` are.
+            "mouse" => format!(
+                "{normalized} is no longer used — the app never takes the mouse, so text selects as usual and the wheel scrolls"
+            ),
             "theme" => {
                 let Some(choice) = crate::tui::theme::ThemeChoice::parse(value) else {
                     bail!(

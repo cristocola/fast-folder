@@ -62,7 +62,7 @@ pub fn run(entry: Entry) -> Result<()> {
     let env = theme::Env::read();
     let palette = theme::Theme::detect_with(Some(&cfg.theme));
     let motion = theme::choose_motion(&env, palette.kind, Some(&cfg.motion));
-    match runtime::run(entry, onboarding, palette, motion, cfg.mouse_on())? {
+    match runtime::run(entry, onboarding, palette, motion)? {
         effect::Exit::Normal => {
             if is_menu {
                 println!("Goodbye.");

@@ -835,28 +835,21 @@ fn the_recent_limit_key_is_one_word_everywhere() {
     );
 }
 
-/// **The mouse is a setting, off by default.** `config show` names it,
-/// `config set mouse on|off` writes the word every surface reads, and any
-/// other word is refused in the words the other on/off settings use.
+/// **`mouse` is a retired key.** It was a setting in v3.6.0; the app never
+/// takes the mouse now. `config set mouse` is accepted and says so rather than
+/// failing a script that still sets it, a `config.toml` that still names it
+/// parses, and `config show` no longer lists it.
 #[test]
-fn the_mouse_setting_is_shown_set_and_refused_like_any_other() {
+fn the_retired_mouse_key_is_accepted_and_ignored() {
     let sb = Sandbox::new();
-    let shown = sb.ok(&["config", "show"]);
-    assert!(
-        shown.contains("mouse:") && shown.contains("off (text selects as usual)"),
-        "{shown}"
-    );
     let out = sb.ok(&["config", "set", "mouse", "on"]);
-    assert!(out.contains("Set mouse = on"), "{out}");
+    assert!(out.contains("mouse is no longer used"), "{out}");
+
+    let config_path = sb.install.join("config.toml");
+    let raw = fs::read_to_string(&config_path).unwrap();
+    fs::write(&config_path, format!("mouse = \"on\"\n{raw}")).unwrap();
     let shown = sb.ok(&["config", "show"]);
-    assert!(
-        shown.contains("mouse:") && shown.contains("on ("),
-        "{shown}"
-    );
-    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
-    assert!(config.contains("mouse = \"on\""), "{config}");
-    let err = sb.fails(&["config", "set", "mouse", "sideways"]);
-    assert!(err.contains("expected on or off"), "{err}");
+    assert!(!shown.contains("mouse:"), "{shown}");
 }
 
 /// A recursive register that registered nothing is not a success.

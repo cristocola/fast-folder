@@ -3,11 +3,11 @@ source: tests/tui_snapshots.rs
 expression: frame
 ---
 " fast-fo┌ settings ────────────────────────────────────────────────────────────────────────┐ ID0248 "
-" → proje│   Name collision              suffix                                             │tention "
-" ⌕ / to │ Appearance                                                                       │ newest "
-"┌ projec│   Theme                       auto (follows the terminal)                        │───────┐"
-"│  ID   │   Motion                      on                                                 │0248   │"
-"│▸ ID024│   Mouse                       off                                                │eated 2│"
+" → proje│   Preview lines               8                                                  │tention "
+" ⌕ / to │   Name collision              suffix                                             │ newest "
+"┌ projec│ Appearance                                                                       │───────┐"
+"│  ID   │   Theme                       auto (follows the terminal)                        │0248   │"
+"│▸ ID024│   Motion                      on                                                 │eated 2│"
 "│  ID024│ Library bases                                                                    │·   no │"
 "│  ID024│   Bases                       (only the base directory)                          │───────│"
 "│  ID024│   Recent limit                20                                                 │       │"

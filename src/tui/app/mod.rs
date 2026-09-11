@@ -39,7 +39,7 @@ use crate::tui::entry::Entry;
 use crate::tui::fuzzy::Fuzzy;
 use crate::tui::layout;
 use crate::tui::motion;
-use crate::tui::msg::{Mouse, MouseKind, Msg, Resumed};
+use crate::tui::msg::{Msg, Resumed};
 use crate::tui::theme::Theme;
 use crate::tui::validators;
 use crate::tui::widgets::form::FormEvent;
@@ -226,9 +226,6 @@ pub struct App {
     /// note or a todo added — so the answer lands on the row it was about:
     /// the cursor settles there and it pulses, as an edit's does.
     pane_pending: Option<pane::PaneTarget>,
-    /// Whether the terminal reports the mouse: the `mouse` setting, carried
-    /// here so the palette can flip it and the settings screen can see it.
-    pub mouse: bool,
     pub focus: Focus,
     pub screen: Screen,
     pub templates: TemplatesState,
@@ -342,7 +339,6 @@ impl App {
             pane_pulses: motion::Pulses::default(),
             pane_return: None,
             pane_pending: None,
-            mouse: false,
             focus: Focus::Projects,
             screen: Screen::Library,
             templates: TemplatesState::default(),
@@ -855,7 +851,6 @@ impl App {
     fn handle(&mut self, msg: Msg) -> Vec<Effect> {
         match msg {
             Msg::Key(key) => self.on_key(key),
-            Msg::Mouse(mouse) => self.on_mouse(mouse),
             Msg::Paste(text) => self.on_paste(&text),
             Msg::Resize(width, height) => {
                 self.size = (width, height);
@@ -1063,18 +1058,12 @@ impl App {
                 // reading; a read that lands after it was closed has nothing
                 // to fill in and is dropped.
                 let (theme, motion) = (loaded.theme.clone(), loaded.motion.clone());
-                let mouse = crate::core::config::on_off(&loaded.mouse).unwrap_or(false);
                 if let Some(Modal::Settings(state)) = self.modals.top_mut() {
                     state.refresh(*loaded);
                 }
-                // A theme — or a motion or mouse setting — written on this
-                // screen takes effect on the frame that shows it was written.
-                let mut effects = vec![Effect::Retheme { theme, motion }];
-                if mouse != self.mouse {
-                    self.mouse = mouse;
-                    effects.push(Effect::Mouse(mouse));
-                }
-                effects
+                // A theme — or a motion setting — written on this screen takes
+                // effect on the frame that shows it was written.
+                vec![Effect::Retheme { theme, motion }]
             }
             Msg::Themed { theme, motion } => {
                 self.theme = *theme;
@@ -1405,110 +1394,6 @@ impl App {
             ));
         }
         effects
-    }
-
-    // --- the mouse --------------------------------------------------------
-
-    /// What a click and a wheel turn mean.
-    ///
-    /// **The wheel needs no geometry at all**: it is `↑`/`↓`, three at a time,
-    /// wherever the keys already go — so it is right in every list, every
-    /// scrollable dialog and the detail pane without a second copy of the
-    /// layout to drift from the first.
-    ///
-    /// A click needs to know what is under it, so it is answered only where
-    /// `layout` already owns the geometry: the dashboard's regions, and the
-    /// palette's centred box (`palette_rows` computes it either way). Anywhere
-    /// else a click does nothing, which is better than a click that guesses.
-    fn on_mouse(&mut self, mouse: Mouse) -> Vec<Effect> {
-        if layout::too_small(self.area()) {
-            return Vec::new();
-        }
-        match mouse.kind {
-            MouseKind::ScrollUp | MouseKind::ScrollDown => {
-                let key = if mouse.kind == MouseKind::ScrollUp {
-                    Key::plain(KeyCode::Up)
-                } else {
-                    Key::plain(KeyCode::Down)
-                };
-                let mut effects = Vec::new();
-                for _ in 0..3 {
-                    effects.extend(self.on_key(key));
-                }
-                effects
-            }
-            MouseKind::Click => self.on_click(mouse.column, mouse.row),
-        }
-    }
-
-    fn on_click(&mut self, column: u16, row: u16) -> Vec<Effect> {
-        if matches!(self.modals.top(), Some(Modal::Palette(_))) {
-            return self.click_palette(column, row);
-        }
-        if !self.modals.is_empty() {
-            return Vec::new();
-        }
-        let regions = self.regions();
-        if inside(regions.search, column, row) {
-            self.search.editing = true;
-            self.set_focus(Focus::Projects);
-            return Vec::new();
-        }
-        if let Some(detail) = regions.detail
-            && inside(detail, column, row)
-        {
-            self.set_focus(Focus::Detail);
-            return Vec::new();
-        }
-        if !inside(regions.table, column, row) {
-            return Vec::new();
-        }
-        self.set_focus(Focus::Projects);
-        // The table's border and its header row: the first project sits two
-        // rows below the top of the region.
-        let Some(offset_row) = row.checked_sub(regions.table.y + 2) else {
-            return Vec::new();
-        };
-        // Only the rows that are drawn. `inside` accepts the whole region,
-        // border included, so a click on the bottom edge picked the row one
-        // past the last visible one and scrolled the viewport to reach it.
-        if offset_row as usize >= regions.table_rows() {
-            return Vec::new();
-        }
-        let at = self.library.offset + offset_row as usize;
-        if at >= self.library.len() {
-            return Vec::new();
-        }
-        self.library.selected = Some(at);
-        self.after_selection_change()
-    }
-
-    /// A click in the palette picks the entry under it and runs it, the way a
-    /// click in a menu does.
-    fn click_palette(&mut self, column: u16, row: u16) -> Vec<Effect> {
-        let box_area = layout::centered(self.area(), 70, 70);
-        if !inside(box_area, column, row) {
-            return Vec::new();
-        }
-        // One border row, the query line, then a blank one.
-        let Some(offset_row) = row.checked_sub(box_area.y + 3) else {
-            return Vec::new();
-        };
-        let at = match self.modals.top() {
-            Some(Modal::Palette(palette)) => palette.offset + offset_row as usize,
-            _ => return Vec::new(),
-        };
-        let picked = match self.modals.top_mut() {
-            Some(Modal::Palette(palette)) if at < palette.entries.len() => {
-                palette.selected = Some(at);
-                true
-            }
-            _ => false,
-        };
-        if !picked {
-            return Vec::new();
-        }
-        self.on_palette_key(Key::plain(KeyCode::Enter))
     }
 
     // --- keys -------------------------------------------------------------
@@ -2788,25 +2673,6 @@ impl App {
                 effects
             }
             CommandId::Reindex => self.run_action("reindexing…", Action::Reindex),
-            // Flip the setting through `config set`, so the word on disk is
-            // the word every surface reads, and switch the terminal the
-            // moment the write is on its way — waiting for the settings
-            // screen to re-read would leave the mouse as it was until `,`.
-            CommandId::ToggleMouse => {
-                let wanted = !self.mouse;
-                let mut effects = self.run_action(
-                    "saving…",
-                    Action::SetConfig {
-                        key: "mouse",
-                        value: if wanted { "on" } else { "off" }.to_string(),
-                    },
-                );
-                if !effects.is_empty() {
-                    self.mouse = wanted;
-                    effects.push(Effect::Mouse(wanted));
-                }
-                effects
-            }
             CommandId::FocusNext | CommandId::FocusPrevious => {
                 let forward = id == CommandId::FocusNext;
                 let next = self.next_focus(forward);
@@ -4807,11 +4673,6 @@ impl App {
         ));
         vec![Effect::LoadView { title, path, kind }]
     }
-}
-
-/// Whether `(column, row)` lands inside `area`.
-fn inside(area: Rect, column: u16, row: u16) -> bool {
-    column >= area.x && column < area.x + area.width && row >= area.y && row < area.y + area.height
 }
 
 /// The state machine: the app and one message in, the effects out.

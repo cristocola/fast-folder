@@ -194,7 +194,7 @@ impl Inline {
     }
 
     /// One keystroke, normalised the way the app normalises them. Anything that
-    /// is not a key press — a resize, a paste, a mouse report — is skipped.
+    /// is not a key press — a resize, a paste — is skipped.
     fn key(&self) -> Result<Key> {
         loop {
             match event::read()? {

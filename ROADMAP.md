@@ -67,6 +67,11 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
+- Released in v3.6.1: **the app never takes the mouse.** v3.6.0 made
+  capture a setting, off by default; the click handling is gone now, and with
+  it the setting. No mouse mode is switched on, so text selects as in any
+  program, and the wheel is the terminal's arrow keys on the alternate screen.
+  `mouse` is a retired `config set` key, accepted and ignored.
 - Released in v3.6.0: **the pane reads the file, and motion guides the eye.**
   **Notes are the journal**: a note is a dated entry under `## Notes` with
   every further line indented under its first, so a message from stdin, the
@@ -243,11 +248,11 @@ responsibility of the filesystem and backups.
   - Build a real template end to end and create a project from it; edit one
     of the gallery templates — following the guide's own walkthrough, which is
     the one test of it that matters.
-  - The legacy Windows console pass for the ASCII alphabet, and the mouse in a
-    terminal that reports it.
+  - The legacy Windows console pass for the ASCII alphabet, and the wheel on
+    a Windows console's alternate screen.
   - Ctrl-Z and `fg`; `kill -INT` twice against the app leaves the shell
     cooked; `ssh localhost -t fastf` picks a theme and `o` says "no display".
-- Last reviewed: **2026-09-11** (v3.6.0)
+- Last reviewed: **2026-09-11** (v3.6.1)
 
 ## Release train
 
@@ -277,6 +282,7 @@ responsibility of the filesystem and backups.
 | v3.4.0 | the template editor explains itself: a panel that says what each part is and what the template would produce, a seven-page guide with a walkthrough that builds one, and a Save row that counts what is still worth a look | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.4.0) |
 | v3.5.0 | the app answers the keys you try: one movement grammar in every list, `→`/`←` to go in and come back, every key line read from the registry, four things it could not do, and motion only where it answers a question | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.5.0) |
 | v3.6.0 | the pane reads the file: notes are the journal and keep every line, todos, a detail cache that checks the disk, the mouse as a setting, and motion that fades and eases instead of flashing | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.6.0) |
+| v3.6.1 | the mouse is the terminal's: no clicks, text selects as in any program, the wheel still scrolls, and `mouse` a retired key | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.6.1) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find
@@ -322,6 +328,10 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
   package's release test suite passed before both AUR repositories were pushed.
 
 Regression coverage grows with the relevant release:
+
+- [x] The app never switches a mouse tracking mode on, whatever an older
+  `config.toml` says, and `config set mouse` is accepted and says it is no
+  longer used (v3.6.1).
 
 - [x] A note of several lines round-trips through `append_journal_entry`,
   `note add -`, the editor and the quick note; the reader takes every entry
@@ -594,6 +604,6 @@ Smaller findings from the v1.7.1 audit, not worth a phase on their own:
 - "Open in `$EDITOR`" as a project verb; the journal's `--since` in the app;
   `fastf new --no-post` parity in the wizard.
 - Windows terminal-layer tests: the pty suite is unix by construction, so raw
-  mode, the mouse and the ASCII alphabet are untested there.
+  mode, the wheel and the ASCII alphabet are untested there.
 - An input thread that truly blocks: it polls once a second when idle because
   crossterm's read cannot be cancelled for the suspend handshake.

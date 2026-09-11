@@ -40,6 +40,10 @@ pub enum Then {
     /// what Space on a choice opens, so a twenty-template list is one fuzzy
     /// search rather than twenty presses of `→`.
     FormField(String),
+    /// The picked value is the new value of the named variable of the
+    /// selected project — a `select` variable edited from the detail pane,
+    /// which offers its options and nothing else.
+    PaneVariable(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

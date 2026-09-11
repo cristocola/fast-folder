@@ -27,7 +27,7 @@
 //! millisecond it chooses. The clock itself is `App.elapsed_ms`, fed by
 //! `Msg::Tick` from the one place that owns a clock, `runtime`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ratatui::style::{Modifier, Style};
 
@@ -96,29 +96,40 @@ pub fn phase(started: u64, now: u64, duration: u64) -> Option<f32> {
     Some(elapsed as f32 / duration as f32)
 }
 
-/// One row that changed, and when.
+/// One thing that changed, and when. `K` is whatever names it — a row's path
+/// in the table, a row's index in the pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Pulse {
-    pub path: PathBuf,
+pub struct Pulse<K = PathBuf> {
+    pub key: K,
     pub started: u64,
 }
 
 /// Every pulse in flight. A `Vec` because there are as many as a batch just
 /// touched — five, ten — and never enough to want a map.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Pulses {
-    live: Vec<Pulse>,
+///
+/// Generic over the key because the table's rows are named by path and the
+/// pane's by index, and the arithmetic — start or restart, retire, one-step
+/// wash — is the same for both. Two structs would have been two copies of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pulses<K = PathBuf> {
+    live: Vec<Pulse<K>>,
 }
 
-impl Pulses {
+impl<K> Default for Pulses<K> {
+    fn default() -> Self {
+        Self { live: Vec::new() }
+    }
+}
+
+impl<K: PartialEq> Pulses<K> {
     /// Start one, or restart the one that is already on this row: a row
     /// touched twice in a batch should pulse from now, not carry on fading.
-    pub fn start(&mut self, path: PathBuf, now: u64) {
-        if let Some(pulse) = self.live.iter_mut().find(|p| p.path == path) {
+    pub fn start(&mut self, key: K, now: u64) {
+        if let Some(pulse) = self.live.iter_mut().find(|p| p.key == key) {
             pulse.started = now;
             return;
         }
-        self.live.push(Pulse { path, started: now });
+        self.live.push(Pulse { key, started: now });
     }
 
     /// Drop what has finished. Called on the tick, so the list cannot grow
@@ -137,8 +148,12 @@ impl Pulses {
     }
 
     /// How far through its pulse this row is, if it is in one.
-    fn at(&self, path: &Path, now: u64) -> Option<f32> {
-        let pulse = self.live.iter().find(|p| p.path == path)?;
+    fn at<Q>(&self, key: &Q, now: u64) -> Option<f32>
+    where
+        K: PartialEq<Q>,
+        Q: ?Sized,
+    {
+        let pulse = self.live.iter().find(|p| p.key == *key)?;
         phase(pulse.started, now, PULSE_MS)
     }
 
@@ -152,11 +167,15 @@ impl Pulses {
     /// interpolate *towards*. What a terminal can do honestly is hold the row
     /// lit for as long as an eye needs to find it and then let go, which at
     /// `PULSE_MS` reads as a pulse rather than a state.
-    pub fn style_for(&self, path: &Path, now: u64, theme: &Theme, motion: Motion) -> Option<Style> {
+    pub fn style_for<Q>(&self, key: &Q, now: u64, theme: &Theme, motion: Motion) -> Option<Style>
+    where
+        K: PartialEq<Q>,
+        Q: ?Sized,
+    {
         if !motion.is_on() || theme.kind == ThemeKind::Mono {
             return None;
         }
-        self.at(path, now)?;
+        self.at(key, now)?;
         Some(Style::default().bg(theme.pulse))
     }
 }

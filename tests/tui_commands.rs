@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use fastf::tui::command::{COMMANDS, Category, CommandId, Context, Key, find, help_lines};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-const CONTEXTS: [Context; 13] = Context::ALL;
+const CONTEXTS: [Context; 14] = Context::ALL;
 
 #[test]
 fn every_command_id_is_declared_exactly_once() {
@@ -211,11 +211,12 @@ fn an_arrow_and_its_vim_letter_are_bound_together() {
         (KeyCode::Left, 'h'),
         (KeyCode::Right, 'l'),
     ];
-    const TYPING: [Context; 4] = [
+    const TYPING: [Context; 5] = [
         Context::SearchEdit,
         Context::Palette,
         Context::Prompt,
         Context::Pick,
+        Context::PaneEdit,
     ];
     for command in COMMANDS
         .iter()

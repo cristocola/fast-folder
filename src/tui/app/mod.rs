@@ -209,6 +209,15 @@ pub struct App {
     /// would edit. Drawn only while the pane has the focus, which is what
     /// makes the focus unmistakable even with no colour to say it.
     pub pane_cursor: usize,
+    /// An edit open on a pane row, if one is. While it is, the field has the
+    /// keys (`Context::PaneEdit`).
+    pub pane_edit: Option<pane::PaneEdit>,
+    /// The pane rows an edit just landed on, and when — the pane's own
+    /// `pulses`, keyed by row rather than by path.
+    pub pane_pulses: motion::Pulses<usize>,
+    /// What the last landed edit was about, until the detail it invalidated
+    /// has been read again and the cursor has found that row.
+    pane_return: Option<pane::PaneTarget>,
     pub focus: Focus,
     pub screen: Screen,
     pub templates: TemplatesState,
@@ -318,6 +327,9 @@ impl App {
             detail_open: true,
             detail_scroll: 0,
             pane_cursor: 0,
+            pane_edit: None,
+            pane_pulses: motion::Pulses::default(),
+            pane_return: None,
             focus: Focus::Projects,
             screen: Screen::Library,
             templates: TemplatesState::default(),
@@ -464,6 +476,9 @@ impl App {
         if self.search.editing {
             return Context::SearchEdit;
         }
+        if self.pane_edit.is_some() {
+            return Context::PaneEdit;
+        }
         self.focus_context()
     }
 
@@ -487,7 +502,10 @@ impl App {
     /// the faster one only while a pulse is in flight is what keeps the
     /// documented claim true: **the app costs nothing while idle.**
     pub fn tick_interval(&self) -> Option<std::time::Duration> {
-        if !self.pulses.is_empty() || motion::focus_pulsing(self.focus_moved_at, self.elapsed_ms) {
+        if !self.pulses.is_empty()
+            || !self.pane_pulses.is_empty()
+            || motion::focus_pulsing(self.focus_moved_at, self.elapsed_ms)
+        {
             return Some(std::time::Duration::from_millis(motion::FRAME_MS));
         }
         // A message about to go dims on its way out, which is a fade too — but
@@ -636,6 +654,8 @@ impl App {
         self.library.clamp_viewport(rows);
         self.detail_scroll = 0;
         self.pane_cursor = 0;
+        self.pane_edit = None;
+        self.pane_return = None;
         self.selection_effects()
     }
 
@@ -788,6 +808,7 @@ impl App {
                     self.status = Status::default();
                 }
                 self.pulses.retire(self.elapsed_ms);
+                self.pane_pulses.retire(self.elapsed_ms);
                 if !motion::focus_pulsing(self.focus_moved_at, self.elapsed_ms) {
                     self.focus_moved_at = None;
                 }
@@ -879,7 +900,11 @@ impl App {
                 if self.details.len() >= DETAIL_CACHE {
                     self.details.clear();
                 }
+                let selected = self.library.selected().is_some_and(|p| p.path == path);
                 self.details.insert(path, *detail);
+                if selected && let Some(target) = self.pane_return.take() {
+                    self.settle_pane_cursor(&target);
+                }
                 Vec::new()
             }
             Msg::MetaLoaded(loaded) => {
@@ -1053,7 +1078,22 @@ impl App {
                 if matches!(self.modals.top(), Some(Modal::Builder(builder)) if builder.saving) {
                     self.modals.pop();
                 }
+                // A pane edit that landed: the edit closes, the row it was on
+                // pulses, and the cursor stays where the edit was made —
+                // `apply_change` would otherwise put it back on the name,
+                // which is the one row nobody who just changed a variable is
+                // looking at.
+                let landed = self
+                    .pane_edit
+                    .take_if(|edit| edit.pending())
+                    .map(|edit| edit.target());
                 let mut effects = self.apply_change(outcome.change);
+                if let Some(target) = landed {
+                    self.settle_pane_cursor(&target);
+                    // The detail was just dropped and will be read again;
+                    // the cursor finds the row once more when it lands.
+                    self.pane_return = Some(target);
+                }
                 if let Some(FollowUp::PostCreate {
                     root,
                     template_slug,
@@ -1077,6 +1117,12 @@ impl App {
                 // A refusal belongs on the field that earned it, wherever one
                 // is open: `config set`'s own message, under the value that is
                 // still there to be corrected.
+                if let Some(edit) = &mut self.pane_edit
+                    && edit.pending()
+                {
+                    edit.fail(error);
+                    return Vec::new();
+                }
                 match self.modals.top_mut() {
                     Some(Modal::Settings(state)) if state.editing.is_some() => {
                         state.pending = false;
@@ -1382,10 +1428,199 @@ impl App {
         if self.search.editing {
             return self.on_search_key(key);
         }
+        if self.pane_edit.is_some() {
+            return self.on_pane_edit_key(key);
+        }
         match command::lookup(self.context(), key, self) {
             Some(id) => self.run(id),
             None => Vec::new(),
         }
+    }
+
+    /// A pane edit is open: the field has first refusal on anything typed,
+    /// the registry answers the rest (`Enter`, `Esc`, `Ctrl-S`), and what
+    /// neither takes goes to the field — which is how Enter in the notes is a
+    /// new line: `PaneEditConfirm` is hidden there, so the text area gets it.
+    fn on_pane_edit_key(&mut self, key: Key) -> Vec<Effect> {
+        if key.typed().is_none()
+            && let Some(id) = command::lookup(Context::PaneEdit, key, self)
+        {
+            return self.run(id);
+        }
+        let Some(edit) = &mut self.pane_edit else {
+            return Vec::new();
+        };
+        if edit.pending() {
+            return Vec::new();
+        }
+        let changed = match edit {
+            pane::PaneEdit::Line { input, .. } => input.apply(&key),
+            pane::PaneEdit::Notes { area, .. } => area.apply(&key),
+        };
+        if changed {
+            edit.clear_error();
+        }
+        Vec::new()
+    }
+
+    /// Enter on a pane row: what the row is decides what opens.
+    fn pane_edit_start(&mut self) -> Vec<Effect> {
+        let rows = self.pane_rows();
+        let Some(row) = rows.get(self.pane_cursor).cloned() else {
+            return Vec::new();
+        };
+        let at = self.pane_cursor;
+        match row {
+            pane::PaneRow::Name => self.run(CommandId::Rename),
+            pane::PaneRow::AddTag => self.open_add_tag(),
+            pane::PaneRow::Rule("journal") => self.run(CommandId::NoteInline),
+            pane::PaneRow::Tag(tag) => {
+                self.pane_edit = Some(pane::PaneEdit::Line {
+                    row: at,
+                    input: crate::tui::widgets::input::LineEdit::with_text(tag.clone()),
+                    target: pane::EditTarget::Tag(tag),
+                    error: None,
+                    pending: false,
+                });
+                Vec::new()
+            }
+            pane::PaneRow::Variable {
+                slug,
+                label,
+                kind: pane::VarKind::Select(options),
+                value,
+            } => {
+                // A select offers its options and nothing else — the picker
+                // is the one shape that cannot hold anything outside them.
+                let items: Vec<PickItem> = options
+                    .into_iter()
+                    .map(|option| PickItem {
+                        detail: if option == value {
+                            "current".to_string()
+                        } else {
+                            String::new()
+                        },
+                        label: option.clone(),
+                        value: option,
+                    })
+                    .collect();
+                self.modals.push(Modal::Pick(PickState::new(
+                    format!(" {label} "),
+                    items,
+                    Then::PaneVariable(slug),
+                )));
+                Vec::new()
+            }
+            pane::PaneRow::Variable {
+                slug,
+                kind: pane::VarKind::Text,
+                value,
+                ..
+            } => {
+                self.pane_edit = Some(pane::PaneEdit::Line {
+                    row: at,
+                    input: crate::tui::widgets::input::LineEdit::with_text(value),
+                    target: pane::EditTarget::Variable(slug),
+                    error: None,
+                    pending: false,
+                });
+                Vec::new()
+            }
+            pane::PaneRow::Rule("notes") => {
+                let text = self
+                    .library
+                    .selected()
+                    .and_then(|project| self.details.get(&project.path))
+                    .map(|detail| detail.notes_text.clone())
+                    .unwrap_or_default();
+                self.pane_edit = Some(pane::PaneEdit::Notes {
+                    row: at,
+                    area: Box::new(crate::tui::widgets::text_area::TextArea::with_text(&text)),
+                    error: None,
+                    pending: false,
+                });
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Enter on the pane's line editor: what was typed goes to the project —
+    /// unless nothing changed, which is a cancel, or a tag is not a tag, which
+    /// is a refusal under the line.
+    fn pane_edit_confirm(&mut self) -> Vec<Effect> {
+        let Some(pane::PaneEdit::Line { target, input, .. }) = &self.pane_edit else {
+            return Vec::new();
+        };
+        let text = input.text().trim().to_string();
+        let Some(project) = self.library.selected().cloned() else {
+            self.pane_edit = None;
+            return Vec::new();
+        };
+        let action = match target {
+            pane::EditTarget::Variable(slug) => Action::SetVariable {
+                project: Box::new(project),
+                slug: slug.clone(),
+                value: text,
+            },
+            pane::EditTarget::Tag(from) => {
+                if text == *from {
+                    self.pane_edit = None;
+                    return Vec::new();
+                }
+                let to = if text.is_empty() {
+                    None
+                } else {
+                    match validators::tag(&text) {
+                        Ok(tag) => Some(tag),
+                        Err(error) => {
+                            if let Some(edit) = &mut self.pane_edit {
+                                edit.fail(error);
+                            }
+                            return Vec::new();
+                        }
+                    }
+                };
+                Action::ReplaceTag {
+                    project: Box::new(project),
+                    from: from.clone(),
+                    to,
+                }
+            }
+        };
+        self.send_pane_edit(action)
+    }
+
+    /// `Ctrl-S` on the pane's notes editor.
+    fn pane_edit_save(&mut self) -> Vec<Effect> {
+        let Some(pane::PaneEdit::Notes { area, .. }) = &self.pane_edit else {
+            return Vec::new();
+        };
+        let text = area.text();
+        let Some(project) = self.library.selected().cloned() else {
+            self.pane_edit = None;
+            return Vec::new();
+        };
+        self.send_pane_edit(Action::SetNotes {
+            project: Box::new(project),
+            text,
+        })
+    }
+
+    /// The edit stays open, marked pending, until the worker answers: an
+    /// `Ok` closes it and pulses the row, an `Err` lands on it.
+    fn send_pane_edit(&mut self, action: Action) -> Vec<Effect> {
+        if let Some(edit) = &mut self.pane_edit {
+            edit.set_pending(true);
+        }
+        let effects = self.run_action("writing…", action);
+        if effects.is_empty()
+            && let Some(edit) = &mut self.pane_edit
+        {
+            // Refused before it left — something else is still running.
+            edit.set_pending(false);
+        }
+        effects
     }
 
     /// **The field has first refusal; the registry answers the rest.** Every
@@ -1509,11 +1744,23 @@ impl App {
                 )
             }
             TextThen::AddTag => {
-                self.modals.pop();
-                let tag = text.trim().to_string();
-                if tag.is_empty() {
+                if text.trim().is_empty() {
+                    self.modals.pop();
                     return Vec::new();
                 }
+                // Refused under the line, with the rule named, while the
+                // text is still there to correct — the same shape a rename
+                // takes.
+                let tag = match validators::tag(&text) {
+                    Ok(tag) => tag,
+                    Err(error) => {
+                        if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                            prompt.error = Some(error);
+                        }
+                        return Vec::new();
+                    }
+                };
+                self.modals.pop();
                 self.add_tag(tag)
             }
             TextThen::CopyTo => {
@@ -1965,6 +2212,25 @@ impl App {
                     self.run_move(target)
                 }
             }
+            Then::PaneVariable(slug) => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                // The picker was the edit; there is no line to keep open, so
+                // the cursor's row is remembered for the pulse by the answer.
+                self.pane_edit = Some(pane::PaneEdit::Line {
+                    row: self.pane_cursor,
+                    target: pane::EditTarget::Variable(slug.clone()),
+                    input: crate::tui::widgets::input::LineEdit::with_text(item.value.clone()),
+                    error: None,
+                    pending: false,
+                });
+                self.send_pane_edit(Action::SetVariable {
+                    project: Box::new(project),
+                    slug,
+                    value: item.value.clone(),
+                })
+            }
             Then::FormField(key) => {
                 let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
                     return Vec::new();
@@ -2089,6 +2355,23 @@ impl App {
             .detail
             .map(|pane| pane.height.saturating_sub(2) as usize)
             .unwrap_or(0)
+    }
+
+    /// Put the pane's cursor back on the row an edit was about, pulse it, and
+    /// keep it in view. Nothing happens when the row is not there (yet).
+    fn settle_pane_cursor(&mut self, target: &pane::PaneTarget) {
+        let rows = self.pane_rows();
+        let Some(row) = pane::find_row(&rows, target) else {
+            return;
+        };
+        self.pane_cursor = row;
+        self.pane_pulses.start(row, self.elapsed_ms);
+        self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
+            self.detail_scroll,
+            Some(row),
+            rows.len(),
+            self.pane_rows_on_screen(),
+        );
     }
 
     /// Move the pane's cursor by `delta` selectable rows (`isize::MIN` and
@@ -2520,10 +2803,17 @@ impl App {
                 Vec::new()
             }
             CommandId::ClearFilters => self.clear_filters(),
-            CommandId::Actions => {
+            CommandId::Actions | CommandId::ActionsEnter => {
                 self.modals.push(Modal::Actions(
                     crate::tui::app::actions::ActionsState::default(),
                 ));
+                Vec::new()
+            }
+            CommandId::PaneEdit => self.pane_edit_start(),
+            CommandId::PaneEditConfirm => self.pane_edit_confirm(),
+            CommandId::PaneEditSave => self.pane_edit_save(),
+            CommandId::PaneEditCancel => {
+                self.pane_edit = None;
                 Vec::new()
             }
             CommandId::OpenFolder => self.spawn_for_selection(SpawnKind::Reveal),
@@ -3951,6 +4241,9 @@ impl App {
     pub fn set_focus(&mut self, focus: Focus) {
         if self.focus != focus {
             self.focus_moved_at = Some(self.elapsed_ms);
+            // An edit belongs to the row it was opened on; leaving the pane
+            // leaves the row as it was.
+            self.pane_edit = None;
         }
         self.focus = focus;
     }

@@ -3,7 +3,7 @@
 //! strings here means a message change is one edit, and the pty suite's anchors
 //! do not drift when a flow moves.
 
-use crate::core::validated::ProjectFolderName;
+use crate::core::validated::{ProjectFolderName, Tag};
 
 /// `New folder name`, as the rename prompt always asked.
 pub const RENAME_PROMPT: &str = "New folder name";
@@ -108,6 +108,14 @@ pub fn folder_name(value: &str) -> Result<(), String> {
     ProjectFolderName::parse(value)
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// The one rule for a tag, as `validated::Tag` states it, for the prompts
+/// that want to refuse under the line before a worker is asked.
+pub fn tag(value: &str) -> Result<String, String> {
+    Tag::parse(value)
+        .map(Tag::into_string)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

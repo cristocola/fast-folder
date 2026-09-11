@@ -756,6 +756,61 @@ fn run_action(
                 ),
             ))
         }
+        Action::SetVariable {
+            project,
+            slug,
+            value,
+        } => {
+            let meta = crate::core::operations::set_variable(&project, &slug, &value)?;
+            let mut patched = (*project).clone();
+            let path = patched.path.clone();
+            // The tag derived from the variable may have changed with it.
+            patched.tags = meta.tags;
+            let stored = meta.variables.get(&slug).cloned().unwrap_or_default();
+            Ok(ActionOutcome::new(
+                ListChange::Patched {
+                    project: Box::new(patched),
+                    was: path.clone(),
+                    stale: vec![path],
+                },
+                format!("Set {slug} to {stored} on {}", project.id),
+            )
+            .session(format!("set {} {slug}", project.id)))
+        }
+        Action::ReplaceTag { project, from, to } => {
+            let tag = to
+                .as_deref()
+                .map(crate::core::validated::Tag::parse)
+                .transpose()?;
+            let tags = crate::core::operations::replace_tag(&project, &from, tag.as_ref())?;
+            let mut patched = (*project).clone();
+            let path = patched.path.clone();
+            patched.tags = tags;
+            let message = match &to {
+                Some(to) => format!("Renamed tag {from} to {to} on {}", project.id),
+                None => format!("Removed tag {from} from {}", project.id),
+            };
+            Ok(ActionOutcome::new(
+                ListChange::Patched {
+                    project: Box::new(patched),
+                    was: path.clone(),
+                    stale: vec![path],
+                },
+                message,
+            ))
+        }
+        Action::SetNotes { project, text } => {
+            crate::core::operations::set_notes(&project, &text)?;
+            let path = project.path.clone();
+            Ok(ActionOutcome::new(
+                ListChange::Patched {
+                    project,
+                    was: path.clone(),
+                    stale: vec![path],
+                },
+                "Notes saved.",
+            ))
+        }
         Action::ReautoTags(project) => {
             let derived = crate::core::operations::replace_auto_tags(&project)?;
             // The free-form tags survive the operation, so the row has to be

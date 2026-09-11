@@ -14,7 +14,9 @@
 use crate::core::library::Project;
 use crate::core::template::VarType;
 use crate::tui::app::data::{Entry, ProjectDetail};
+use crate::tui::widgets::input::LineEdit;
 use crate::tui::widgets::nav;
+use crate::tui::widgets::text_area::TextArea;
 
 /// How many entries of the folder listing the pane shows before `… n more`.
 pub const LISTING_SHOWN: usize = 8;
@@ -171,6 +173,137 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>) -> Vec<PaneR
             .map(|(date, message)| PaneRow::Journal(date.clone(), message.clone())),
     );
     rows
+}
+
+/// What a line edit in the pane is changing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditTarget {
+    /// A template variable, by slug.
+    Variable(String),
+    /// A tag, by the text it had; emptied, it is removed.
+    Tag(String),
+}
+
+/// An edit open on one row of the pane.
+///
+/// **Nothing edits until Enter, and Esc leaves the row as it was.** The edit
+/// lives beside the rows rather than in a dialog over them so what is being
+/// changed stays in view with everything around it; `pending` is set once the
+/// write is on its way and cleared by the answer — an `Ok` closes the edit, an
+/// `Err` lands on it as `error`, with the text still there to correct, the
+/// way the builder's `saving` and a settings row's edit already work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaneEdit {
+    /// One line: a variable's value or a tag's text.
+    Line {
+        row: usize,
+        target: EditTarget,
+        input: LineEdit,
+        error: Option<String>,
+        pending: bool,
+    },
+    /// The notes, as a text area over the section. Boxed: a text area is
+    /// the larger payload by a distance, and the enum travels in `App`.
+    Notes {
+        row: usize,
+        area: Box<TextArea>,
+        error: Option<String>,
+        pending: bool,
+    },
+}
+
+impl PaneEdit {
+    /// The row the edit is on.
+    pub fn row(&self) -> usize {
+        match self {
+            PaneEdit::Line { row, .. } | PaneEdit::Notes { row, .. } => *row,
+        }
+    }
+
+    pub fn is_notes(&self) -> bool {
+        matches!(self, PaneEdit::Notes { .. })
+    }
+
+    pub fn pending(&self) -> bool {
+        match self {
+            PaneEdit::Line { pending, .. } | PaneEdit::Notes { pending, .. } => *pending,
+        }
+    }
+
+    pub fn set_pending(&mut self, on: bool) {
+        match self {
+            PaneEdit::Line { pending, .. } | PaneEdit::Notes { pending, .. } => *pending = on,
+        }
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            PaneEdit::Line { error, .. } | PaneEdit::Notes { error, .. } => error.as_deref(),
+        }
+    }
+
+    /// A refusal, under the field that earned it; the write is no longer
+    /// pending, so the field can be corrected and sent again.
+    pub fn fail(&mut self, message: String) {
+        match self {
+            PaneEdit::Line { error, pending, .. } | PaneEdit::Notes { error, pending, .. } => {
+                *error = Some(message);
+                *pending = false;
+            }
+        }
+    }
+
+    pub fn clear_error(&mut self) {
+        match self {
+            PaneEdit::Line { error, .. } | PaneEdit::Notes { error, .. } => *error = None,
+        }
+    }
+}
+
+/// What an edit was about, for finding its row again after the rows changed.
+///
+/// A landed edit patches the project's row and drops the cached detail, so
+/// the pane's rows are rebuilt — with a tag more or less above the variable
+/// that changed, or with the variables gone until the re-read lands. The
+/// cursor follows the *thing*, not its old index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaneTarget {
+    /// A tag by its text; gone, the cursor settles on the row that adds one.
+    Tag(String),
+    Variable(String),
+    Notes,
+}
+
+impl PaneEdit {
+    /// What this edit is about, with a tag named by the text it is being
+    /// given — which is where it will be once the write lands.
+    pub fn target(&self) -> PaneTarget {
+        match self {
+            PaneEdit::Line {
+                target: EditTarget::Variable(slug),
+                ..
+            } => PaneTarget::Variable(slug.clone()),
+            PaneEdit::Line {
+                target: EditTarget::Tag(_),
+                input,
+                ..
+            } => PaneTarget::Tag(input.text().trim().to_string()),
+            PaneEdit::Notes { .. } => PaneTarget::Notes,
+        }
+    }
+}
+
+/// Where `target` is in `rows`, if it is: the row to put the cursor back on.
+pub fn find_row(rows: &[PaneRow], target: &PaneTarget) -> Option<usize> {
+    let find = |wanted: &dyn Fn(&PaneRow) -> bool| rows.iter().position(wanted);
+    match target {
+        PaneTarget::Tag(text) => find(&|row| matches!(row, PaneRow::Tag(tag) if tag == text))
+            .or_else(|| find(&|row| matches!(row, PaneRow::AddTag))),
+        PaneTarget::Variable(slug) => {
+            find(&|row| matches!(row, PaneRow::Variable { slug: s, .. } if s == slug))
+        }
+        PaneTarget::Notes => find(&|row| matches!(row, PaneRow::Rule("notes"))),
+    }
 }
 
 /// The row the cursor lands on after moving `delta` selectable rows from

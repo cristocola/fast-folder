@@ -130,6 +130,9 @@ pub enum Context {
     /// A picker — one choice or several. `Pick` carries a query, so it is a
     /// text-entry context too; `MultiPick` does not, and Space ticks a row.
     Pick,
+    /// A row of the detail pane is being edited in place — a line for a
+    /// variable or a tag, a text area for the notes. The field has the keys.
+    PaneEdit,
     /// Any other dialog: a confirmation, a picker, help, a message.
     Modal,
 }
@@ -149,6 +152,7 @@ impl Context {
             Context::Guide => "template guide",
             Context::Prompt => "a prompt",
             Context::Pick => "a picker",
+            Context::PaneEdit => "editing in the detail pane",
             Context::Modal => "dialogs",
         }
     }
@@ -158,7 +162,11 @@ impl Context {
     pub fn is_text_entry(self) -> bool {
         matches!(
             self,
-            Context::SearchEdit | Context::Palette | Context::Prompt | Context::Pick
+            Context::SearchEdit
+                | Context::Palette
+                | Context::Prompt
+                | Context::Pick
+                | Context::PaneEdit
         )
     }
 
@@ -186,7 +194,7 @@ impl Context {
     }
 
     /// Every context, for the invariants and the help.
-    pub const ALL: [Context; 13] = [
+    pub const ALL: [Context; 14] = [
         Context::Global,
         Context::Projects,
         Context::Detail,
@@ -199,6 +207,7 @@ impl Context {
         Context::Guide,
         Context::Prompt,
         Context::Pick,
+        Context::PaneEdit,
         Context::Modal,
     ];
 }
@@ -316,6 +325,17 @@ pub enum CommandId {
     AddNote,
     NoteInline,
     Rename,
+    /// Enter on the project list: the action menu, as `a` opens it. Its own
+    /// id because the pane's Enter means something else.
+    ActionsEnter,
+    /// Enter on a row of the detail pane: edit what is under the cursor.
+    PaneEdit,
+    /// The pane's line editor: keep what was typed.
+    PaneEditConfirm,
+    /// The pane's editor: leave the row as it was.
+    PaneEditCancel,
+    /// The pane's notes editor: save the text.
+    PaneEditSave,
     Move,
     CopyTo,
     Unregister,
@@ -364,7 +384,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 91] = [
+    pub const ALL: [CommandId; 96] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -420,6 +440,11 @@ impl CommandId {
         CommandId::AddNote,
         CommandId::NoteInline,
         CommandId::Rename,
+        CommandId::ActionsEnter,
+        CommandId::PaneEdit,
+        CommandId::PaneEditConfirm,
+        CommandId::PaneEditCancel,
+        CommandId::PaneEditSave,
         CommandId::Move,
         CommandId::CopyTo,
         CommandId::Unregister,
@@ -579,6 +604,46 @@ fn not_busy(app: &App) -> Availability {
         Availability::Disabled("working…")
     } else {
         Availability::Enabled
+    }
+}
+
+/// Enter in the pane: only over a row it can act on, and not while a write
+/// is in flight.
+fn pane_row_and_not_busy(app: &App) -> Availability {
+    match selection_and_not_busy(app) {
+        Availability::Enabled => {
+            if app
+                .pane_rows()
+                .get(app.pane_cursor)
+                .is_some_and(|row| row.selectable())
+            {
+                Availability::Enabled
+            } else {
+                Availability::Hidden
+            }
+        }
+        other => other,
+    }
+}
+
+/// The pane's line editor is open and not yet sent: Enter keeps. Hidden in
+/// the notes editor, where Enter is a new line and `Ctrl-S` is the keep.
+fn pane_line_editing(app: &App) -> Availability {
+    match &app.pane_edit {
+        Some(edit) if edit.is_notes() => Availability::Hidden,
+        Some(edit) if edit.pending() => Availability::Disabled("writing…"),
+        Some(_) => Availability::Enabled,
+        None => Availability::Hidden,
+    }
+}
+
+/// The pane's notes editor is open and not yet sent: `Ctrl-S` saves.
+fn pane_notes_editing(app: &App) -> Availability {
+    match &app.pane_edit {
+        Some(edit) if !edit.is_notes() => Availability::Hidden,
+        Some(edit) if edit.pending() => Availability::Disabled("writing…"),
+        Some(_) => Availability::Enabled,
+        None => Availability::Hidden,
     }
 }
 
@@ -799,6 +864,7 @@ const READER: &[Context] = &[Context::Guide];
 /// why `?` in the palette described a screen it was not on.
 const IN_PALETTE: &[Context] = &[Context::Palette];
 const IN_PROMPT: &[Context] = &[Context::Prompt];
+const IN_PANE_EDIT: &[Context] = &[Context::PaneEdit];
 const IN_PICK: &[Context] = &[Context::Pick];
 /// Everywhere the palette can be *opened* from — which is everywhere except
 /// the palette, so `Ctrl-p` inside it is free to mean the previous entry.
@@ -1294,11 +1360,70 @@ pub static COMMANDS: &[Command] = &[
         "Project actions",
         "open the action menu for the selected project",
         PD,
-        [Key::ch('a'), Key::plain(KeyCode::Enter)],
+        [Key::ch('a')],
         Project,
         palette = true,
         hint = true,
         selection_and_not_busy
+    ),
+    // Enter is `a` on the list and `edit` in the pane. One id cannot carry
+    // two keys in two contexts, so the list's Enter is its own id with the
+    // same handler, hidden from the bar and the palette — `a actions` is
+    // the pair that names the verb.
+    cmd!(
+        ActionsEnter,
+        "Project actions",
+        "the action menu — what Enter does on the list",
+        &[Context::Projects],
+        [Key::plain(KeyCode::Enter)],
+        Project,
+        palette = false,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        PaneEdit,
+        "Edit",
+        "edit what is under the cursor: the name, a tag, a variable, the notes — or add a tag, or a journal entry",
+        &[Context::Detail],
+        [Key::plain(KeyCode::Enter)],
+        Project,
+        palette = false,
+        hint = true,
+        pane_row_and_not_busy
+    ),
+    cmd!(
+        PaneEditConfirm,
+        "Keep",
+        "keep what was typed and write it to the project",
+        IN_PANE_EDIT,
+        [Key::plain(KeyCode::Enter)],
+        Navigate,
+        palette = false,
+        hint = true,
+        pane_line_editing
+    ),
+    cmd!(
+        PaneEditSave,
+        "Save the notes",
+        "write the notes to the project (Enter is a new line here)",
+        IN_PANE_EDIT,
+        [Key::ctrl('s')],
+        Navigate,
+        palette = false,
+        hint = true,
+        pane_notes_editing
+    ),
+    cmd!(
+        PaneEditCancel,
+        "Cancel",
+        "leave the row as it was",
+        IN_PANE_EDIT,
+        [Key::plain(KeyCode::Esc)],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
     ),
     cmd!(
         OpenFolder,
@@ -2006,6 +2131,10 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
         CommandId::Actions => "actions",
         CommandId::FocusList => "list",
         CommandId::FocusDetail => "pane",
+        CommandId::PaneEdit => "edit",
+        CommandId::PaneEditConfirm => "keep",
+        CommandId::PaneEditSave => "save",
+        CommandId::PaneEditCancel => "cancel",
         CommandId::OpenFolder => "open",
         CommandId::OpenTerminal => "terminal",
         CommandId::CopyPath => "copy path",

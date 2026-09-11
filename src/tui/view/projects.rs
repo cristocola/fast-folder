@@ -1,7 +1,7 @@
 //! The project table and the detail pane beside it.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -11,7 +11,7 @@ use ratatui::widgets::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::library;
-use crate::tui::app::pane::PaneRow;
+use crate::tui::app::pane::{EditTarget, PaneEdit, PaneRow};
 use crate::tui::app::{App, Focus};
 use crate::tui::rows::{SIZE_CELL, date_cell, size_label};
 use crate::tui::view::{fit, highlighted};
@@ -369,7 +369,9 @@ pub(crate) fn title_style(app: &App, focused: bool) -> ratatui::style::Style {
     }
 }
 
-pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
+/// The detail pane. Returns where the caret is while a row is being edited,
+/// so the terminal cursor sits in the field rather than on the search bar.
+pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
     let theme = &app.theme;
     let g = theme.glyphs;
     let focused = app.focus == Focus::Detail && app.modals.is_empty() && !app.search.editing;
@@ -377,7 +379,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
     let Some(project) = app.library.selected() else {
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(Span::styled(" detail ", theme.dim()))
+            .title(Span::styled(" detail ", title_style(app, focused)))
             .border_style(theme.border(focused));
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -385,7 +387,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
             Paragraph::new(Span::styled("nothing selected", theme.dim())),
             inner,
         );
-        return;
+        return None;
     };
 
     let block = Block::default()
@@ -517,17 +519,122 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
                 Span::styled(message.clone(), theme.text()),
             ]),
         };
+        // A row an edit just landed on wears the wash, under the cursor —
+        // the cursor still says where you are while the pulse says what
+        // changed, the same order the table keeps.
+        if let Some(wash) = app
+            .pane_pulses
+            .style_for(&index, app.elapsed_ms, theme, app.motion)
+        {
+            line = line.style(wash);
+        }
         // The cursor: the selection's own highlight, and only while the pane
         // has the focus — a lit row in a pane you are not in would say the
         // next key goes there when it does not.
         if focused && index == app.pane_cursor && row.selectable() {
-            line = line.style(theme.selection);
+            line = line.patch_style(theme.selection);
         }
         lines.push(line);
     }
 
     let paragraph = Paragraph::new(lines).scroll((app.detail_scroll as u16, 0));
     frame.render_widget(paragraph, inner);
+
+    // An open edit is drawn over its row, in place: the field where the value
+    // was, the refusal on the line under it. The notes take the rest of the
+    // pane below their rule, with their own key line at the bottom — a text
+    // area is the one widget whose Enter is not the registry's.
+    let edit = app.pane_edit.as_ref()?;
+    let row_y = (edit.row().checked_sub(app.detail_scroll)? as u16).checked_add(inner.y)?;
+    if row_y >= inner.y + inner.height {
+        return None;
+    }
+    match edit {
+        PaneEdit::Line {
+            input,
+            error,
+            target,
+            ..
+        } => {
+            let prefix = match target {
+                EditTarget::Variable(slug) => {
+                    let label = rows
+                        .iter()
+                        .find_map(|row| match row {
+                            PaneRow::Variable { slug: s, label, .. } if s == slug => Some(label),
+                            _ => None,
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| slug.clone());
+                    format!("{:<key_w$} ", fit(&label, key_w, g.ellipsis))
+                }
+                EditTarget::Tag(_) => format!("{} ", g.dot),
+            };
+            let line_area = Rect::new(inner.x, row_y, inner.width, 1);
+            frame.render_widget(Paragraph::new(""), line_area);
+            let caret = input.render_line(
+                line_area,
+                frame.buffer_mut(),
+                Span::styled(prefix, theme.dim()),
+                theme.text().patch(theme.selection),
+            );
+            if let Some(error) = error
+                && row_y + 1 < inner.y + inner.height
+            {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        fit(error, inner.width as usize, g.ellipsis),
+                        theme.warn(),
+                    )),
+                    Rect::new(inner.x, row_y + 1, inner.width, 1),
+                );
+            }
+            caret
+        }
+        PaneEdit::Notes {
+            area: text, error, ..
+        } => {
+            // From under the rule to the key line at the bottom.
+            let top = row_y + 1;
+            let bottom = inner.y + inner.height;
+            if top + 2 > bottom {
+                return None;
+            }
+            let text_area = Rect::new(inner.x, top, inner.width, bottom - top - 1);
+            frame.render_widget(ratatui::widgets::Clear, text_area);
+            let caret = text.render(text_area, frame.buffer_mut(), theme.text());
+            let keys = Rect::new(inner.x, bottom - 1, inner.width, 1);
+            frame.render_widget(ratatui::widgets::Clear, keys);
+            match error {
+                Some(error) => frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        fit(error, inner.width as usize, g.ellipsis),
+                        theme.warn(),
+                    )),
+                    keys,
+                ),
+                None => {
+                    let pairs: Vec<(String, String)> = crate::tui::command::hints(
+                        crate::tui::command::Context::PaneEdit,
+                        app,
+                        inner.width as usize,
+                    )
+                    .into_iter()
+                    .map(|(key, what)| (key, what.to_string()))
+                    .collect();
+                    frame.render_widget(
+                        Paragraph::new(crate::tui::view::builder::key_line(
+                            theme,
+                            &pairs,
+                            inner.width as usize,
+                        )),
+                        keys,
+                    );
+                }
+            }
+            caret
+        }
+    }
 }
 
 #[cfg(test)]

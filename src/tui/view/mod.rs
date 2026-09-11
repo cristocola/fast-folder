@@ -34,10 +34,10 @@ pub fn view(app: &App, frame: &mut Frame) {
         crate::tui::app::Screen::Library => {
             let caret = dashboard::search_bar(app, frame, regions.search);
             projects::table(app, frame, regions.table);
-            if let Some(detail) = regions.detail {
-                projects::detail(app, frame, detail);
-            }
-            caret
+            let pane_caret = regions
+                .detail
+                .and_then(|detail| projects::detail(app, frame, detail));
+            caret.or(pane_caret)
         }
         crate::tui::app::Screen::Templates => {
             let caret = templates::bar(app, frame, regions.search);

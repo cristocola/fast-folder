@@ -53,6 +53,12 @@ What each suite guards — the intent, not the case list:
   it would open a shell with. **Same rule: every test pins the recorder first**;
   the recorder logs its working directory too, and a test sets `DISPLAY` itself
   where a window would need one.
+- `cd_cmd.rs` — `fastf cd` and `fastf init`: the binary's half as a process, and
+  the function's half **under real shells** — bash, zsh and fish on unix, `pwsh`
+  anywhere — each evaluating `fastf init` and reporting its own `pwd`, skipping
+  with a word where a shell is absent; plus the picker inside the capture, on a
+  pty. `Sandbox::command_named` is the same environment for a program that is
+  not fastf.
 - `layering.rs` — reads the source: `core`/`util` never prompt or print, only
   `tui::runtime` and `tui::inline` take the terminal, no key line is written by
   hand, the env guards stay single, `dialoguer` stays gone. An import is invisible

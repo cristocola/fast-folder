@@ -96,6 +96,12 @@ exists.
 `fastf term <query>` works here too: it opens Windows Terminal (`wt`) at the
 project's folder when it is installed, and a new `cmd` console there otherwise.
 
+`fastf cd <query>` changes the current PowerShell session's directory once the
+function from `fastf init powershell` is in your `$PROFILE` — see
+[cli.md](cli.md#shell-integration); it works in Windows PowerShell 5.1 and in
+PowerShell 7. It is a PowerShell function, so `cmd.exe` does not get it: there,
+`cd /d` the line `fastf path <query>` prints.
+
 ## The guided app in the old console
 
 The app draws with box-drawing characters and a small alphabet of its own —

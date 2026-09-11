@@ -15,6 +15,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf copy <query>` | Put a project's folder path on the clipboard |
 | `fastf path <query>` | Print a project's folder path, and nothing else |
 | `fastf term <query>` | Open a terminal window at a project's folder |
+| `fastf cd [query]` | Change this shell's directory to a project's folder — with the function from `fastf init` |
 | `fastf search <expr>...` | Search projects by text, field, date, or tag |
 | `fastf register <dir>` | Onboard an existing folder by writing its `PROJECT_INFO.md` |
 | `fastf apply <slug> <dir>` | Add missing template structure to an existing folder |
@@ -33,6 +34,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf id show` / `sync` / `set` | Inspect, synchronize, and raise the [ID counter](config.md#the-id-counter) |
 | `fastf paths` | Show where fastf keeps its data and why |
 | `fastf completions <shell>` | Print shell completions (bash, zsh, fish, PowerShell) |
+| `fastf init <shell>` | Print the shell function that lets `fastf cd` change directory |
 
 ## Keys
 
@@ -83,7 +85,7 @@ prints is read by nobody. Refusing there is the same as doing nothing.
 So when fastf is asked for something interactive and can prove that nothing can
 read its output, it opens a terminal and runs the same command again inside it.
 This applies to the guided app (`fastf` with no arguments), `fastf recent`,
-`fastf search`, and the ambiguous branch of `open`, `copy`, `path`, and `term`.
+`fastf search`, and the ambiguous branch of `open`, `copy`, `path`, `term`, and `cd`.
 A window that only showed text waits for Enter before closing; one that showed
 a picker or a menu closes as soon as you leave it — except `term`'s, which
 *becomes* the shell at the project you picked.
@@ -148,7 +150,7 @@ fastf config set recent-limit 20
 
 ### How a query resolves
 
-Every command that takes a `<query>` — `open`, `copy`, `path`, `term`, `move`,
+Every command that takes a `<query>` — `open`, `copy`, `path`, `term`, `cd`, `move`,
 `tag`, `note`, and `notes` — matches it the same way, taking the first tier
 that finds anything:
 
@@ -216,9 +218,33 @@ second one.
 On Windows it opens Windows Terminal (`wt`) when it is installed, and a new
 `cmd` console otherwise — see [windows.md](windows.md).
 
+### Changing directory there
+
+```bash
+fastf cd ID0047                      # this shell, now in the project
+fastf cd lullaby                     # same query tiers; several matches show the picker
+fastf cd                             # no query at all: pick from every project
+```
+
+`fastf cd` is `cd` with a project query. A program cannot change the working
+directory of the shell that ran it — the directory is the shell's own, and a
+child process only ever holds a copy — so the verb is two parts: the binary
+prints the project's path, exactly as `fastf path` does, and a small function
+inside your shell captures that line and calls the shell's own `cd` on it. The
+function is printed by `fastf init <shell>`, and one line in your shell's
+startup file installs it: see [Shell integration](#shell-integration).
+
+With the function, an unambiguous query changes directory at once; a query
+that matches several projects shows the picker, which draws on stderr and so
+works from inside the capture; Esc leaves you where you were and says so.
+Without the function, `fastf cd lullaby` prints the path and a note on stderr
+saying how to add it, for the shell `$SHELL` says you are in — the path is
+still an answer, and `cd "$(fastf cd lullaby)"` works exactly as it does with
+`path`.
+
 ### Ambiguous queries
 
-When `open`, `copy`, `path`, or `term` matches several projects and there is a
+When `open`, `copy`, `path`, `term`, or `cd` matches several projects and there is a
 terminal to ask on, fastf shows a picker of the candidates. Enter performs the verb you
 typed on the project you chose — the picker serves the verb it interrupted, so
 it never drops into the project action menu; `fastf` and `fastf recent` are how
@@ -534,3 +560,23 @@ fastf completions fish > ~/.config/fish/completions/fastf.fish
 ```
 
 Package installs (AUR) ship completions and man pages already wired up.
+
+## Shell integration
+
+`fastf cd` needs one function in your shell, and `fastf init` prints it. Add
+the line for your shell to its startup file, open a new terminal, and `fastf
+cd` changes directory from then on:
+
+```bash
+eval "$(fastf init bash)"                                  # ~/.bashrc
+eval "$(fastf init zsh)"                                   # ~/.zshrc
+fastf init fish | source                                   # ~/.config/fish/config.fish
+Invoke-Expression (& fastf init powershell | Out-String)   # $PROFILE — PowerShell 5.1 and 7
+```
+
+The function is a dozen lines, and `fastf init bash` shows them. It shadows
+`fastf`, intercepts `cd`, and hands every other command to the binary it finds
+on your `PATH`, so the app, the prompts and every other verb behave exactly as
+they do without it — and `fastf cd --help` still prints help rather than trying
+to enter it. `init` prints nothing but the function and never touches fastf's
+data directory, so it costs a new terminal nothing but one short process.

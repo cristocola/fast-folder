@@ -241,11 +241,11 @@ fn concurrent_tag_and_note_updates_do_not_lose_metadata() {
         assert!(
             notes
                 .iter()
-                .any(|entry| entry.message == format!("note-{index}")),
+                .any(|entry| entry.text == format!("note-{index}")),
             "lost note-{index}; retained messages: {:?}",
             notes
                 .iter()
-                .map(|entry| entry.message.as_str())
+                .map(|entry| entry.text.as_str())
                 .collect::<Vec<_>>()
         );
     }

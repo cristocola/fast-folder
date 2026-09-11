@@ -1,20 +1,22 @@
-//! `fastf note add` and `fastf notes` — per-project journal.
+//! `fastf note add` and `fastf notes` — a project's dated notes.
 //!
-//! Entries are timestamped lines in the `## Journal` section of
-//! `PROJECT_INFO.md`.  They are append-only — fastf never edits or deletes
-//! existing entries.
+//! A note is a dated entry in the `## Notes` section of `PROJECT_INFO.md`
+//! (the `## Journal` section of a project written before v3.6.0), one
+//! `- <timestamp> — <text>` line and as many indented lines under it as the
+//! note has. The command line appends and lists; the app's detail pane is
+//! where a note is edited.
 //!
-//! # Adding entries
+//! # Adding a note
 //! ```bash
 //! fastf note add ID0047 "finished final mix"    # inline message
 //! fastf note add ID0047 -                        # read from stdin
 //! fastf note add ID0047                          # open $EDITOR
 //! ```
 //!
-//! # Viewing entries
+//! # Listing the notes
 //! ```bash
-//! fastf notes ID0047                             # all entries
-//! fastf notes ID0047 --since 2026-04-01          # entries on/after a date
+//! fastf notes ID0047                             # every note
+//! fastf notes ID0047 --since 2026-04-01          # notes on/after a date
 //! ```
 
 use anyhow::{Context, Result, bail};
@@ -26,7 +28,7 @@ use crate::core::library;
 use crate::core::{config::Config, project_info};
 
 // ---------------------------------------------------------------------------
-// Add a journal entry
+// Add a note
 // ---------------------------------------------------------------------------
 
 pub struct NoteAddArgs {
@@ -61,14 +63,14 @@ pub fn add(args: NoteAddArgs) -> Result<()> {
     let message = message.trim().to_string();
 
     if message.is_empty() {
-        bail!("journal entry is empty — nothing written");
+        bail!("the note is empty — nothing written");
     }
 
     crate::core::operations::append_note(&candidate, &message)
-        .with_context(|| format!("appending journal entry to {}", pinfo.display()))?;
+        .with_context(|| format!("appending a note to {}", pinfo.display()))?;
 
     println!(
-        "{}  Journal entry added to {}",
+        "{}  Note added to {}",
         "✓".green().bold(),
         candidate.id.green().bold()
     );
@@ -76,21 +78,26 @@ pub fn add(args: NoteAddArgs) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// List / view journal entries
+// List the notes
 // ---------------------------------------------------------------------------
 
 pub struct NotesArgs {
     /// Project ID, prefix, or name substring.
     pub query: String,
-    /// Only show entries on or after this ISO-8601 date prefix (e.g. `2026-04-01`).
+    /// Only show notes on or after this ISO-8601 date prefix (e.g. `2026-04-01`).
     pub since: Option<String>,
 }
 
 pub fn notes(args: NotesArgs) -> Result<()> {
+    // The same refusal `recent --since` gives, for the same reason: the
+    // comparison is on the text, so a date fastf never wrote hides a year.
+    if let Some(since) = &args.since {
+        crate::cli::recent::check_since(since)?;
+    }
     let cfg = Config::load()?;
     let project = library::resolve(&cfg, &args.query)?;
 
-    let entries = project_info::read_journal_entries(&project.path)?;
+    let notes = project_info::read_journal_entries(&project.path)?;
 
     println!(
         "  {} {} {}",
@@ -99,44 +106,59 @@ pub fn notes(args: NotesArgs) -> Result<()> {
         project.name.bold()
     );
 
-    let filtered: Vec<_> = entries
+    // An undated note has no day to compare, so `--since` leaves it out.
+    let filtered: Vec<_> = notes
         .iter()
-        .filter(|e| {
-            if let Some(since) = &args.since {
-                e.timestamp.as_str() >= since.as_str()
-            } else {
-                true
-            }
+        .filter(|note| match &args.since {
+            Some(since) => note
+                .timestamp
+                .as_deref()
+                .is_some_and(|ts| ts >= since.as_str()),
+            None => true,
         })
         .collect();
 
     if filtered.is_empty() {
         if args.since.is_some() {
-            println!("    {}", "(no entries since that date)".dimmed());
+            println!("    {}", "(no notes since that date)".dimmed());
         } else {
             println!(
                 "    {}",
-                "(no journal entries yet — use `fastf note add` to add one)".dimmed()
+                "(no notes yet — use `fastf note add` to add one)".dimmed()
             );
         }
         return Ok(());
     }
 
     println!();
-    for entry in &filtered {
+    for note in &filtered {
         // `get`, not a byte slice: a hand-edited PROJECT_INFO.md can put any
         // text where the timestamp goes, and slicing to 10 bytes panicked
         // mid-character on the first multi-byte one.
-        let date = entry.timestamp.get(..10).unwrap_or(&entry.timestamp);
-        println!("  {} {}  {}", "•".dimmed(), date.dimmed(), entry.message);
+        let date = note
+            .timestamp
+            .as_deref()
+            .map(|ts| ts.get(..10).unwrap_or(ts))
+            .unwrap_or("");
+        let mut lines = note.text.lines();
+        println!(
+            "  {} {:<10}  {}",
+            "•".dimmed(),
+            date.dimmed(),
+            lines.next().unwrap_or("")
+        );
+        // The rest of the note, in the text column.
+        for line in lines {
+            println!("  {:<12}  {line}", "");
+        }
     }
     println!();
     println!(
         "  {}",
         format!(
-            "{} entr{}",
+            "{} note{}",
             filtered.len(),
-            if filtered.len() == 1 { "y" } else { "ies" }
+            if filtered.len() == 1 { "" } else { "s" }
         )
         .dimmed()
     );
@@ -224,7 +246,7 @@ fn create_scratch_file() -> Result<ScratchFile> {
                 // file it created.
                 let scratch = ScratchFile(path);
                 // A prompt comment so the editor opens with some context.
-                file.write_all(b"# Enter your journal note. Lines starting with # are ignored.\n")
+                file.write_all(b"# Enter your note. Lines starting with # are ignored.\n")
                     .context("writing editor temp file")?;
                 file.flush().context("writing editor temp file")?;
                 drop(file);

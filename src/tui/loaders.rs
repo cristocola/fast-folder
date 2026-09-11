@@ -545,19 +545,34 @@ fn metadata_view(path: &Path) -> Vec<String> {
     lines
 }
 
-/// Every journal entry, oldest first, `date  message`.
+/// Every note, oldest first, `date  text` — a note's further lines under
+/// its first, in the text column; an undated note with the column blank.
 fn journal_view(path: &Path) -> Vec<String> {
     match project_info::read_journal_entries(path) {
-        Ok(entries) if entries.is_empty() => vec!["(no journal entries yet)".to_string()],
-        Ok(entries) => entries
-            .into_iter()
-            .map(|entry| {
-                let date = entry.timestamp.get(..10).unwrap_or(&entry.timestamp);
-                format!("{date}  {}", entry.message)
+        Ok(notes) if notes.is_empty() => vec!["(no notes yet)".to_string()],
+        Ok(notes) => notes
+            .iter()
+            .flat_map(|note| {
+                let date = note_date(note);
+                let mut lines = note.text.lines();
+                let first = format!("{date:<10}  {}", lines.next().unwrap_or(""));
+                std::iter::once(first)
+                    .chain(lines.map(|line| format!("{:<10}  {line}", "")))
+                    .collect::<Vec<_>>()
             })
             .collect(),
         Err(err) => vec![format!("{err:#}")],
     }
+}
+
+/// The day a note was written, for a column ten wide: the first ten
+/// characters of its timestamp — by `get`, never a byte slice, because a
+/// hand-edited file can put anything there — or nothing for an undated note.
+pub(crate) fn note_date(note: &project_info::Note) -> &str {
+    note.timestamp
+        .as_deref()
+        .map(|ts| ts.get(..10).unwrap_or(ts))
+        .unwrap_or("")
 }
 
 /// The detail pane's reads for one project.
@@ -581,36 +596,31 @@ pub fn detail(path: &Path) -> ProjectDetail {
         detail.variables = template.variables;
     }
 
+    // Until the pane draws a note as its own rows, a dated note is one row —
+    // its first line — and the undated one is the notes editor's text.
     match project_info::read_journal_entries(path) {
-        Ok(entries) => {
-            detail.journal_count = entries.len();
-            detail.journal = entries
+        Ok(notes) => {
+            let (undated, dated): (Vec<_>, Vec<_>) =
+                notes.iter().partition(|note| note.timestamp.is_none());
+            detail.journal_count = dated.len();
+            detail.journal = dated
                 .iter()
                 .rev()
                 .take(JOURNAL_LIMIT)
-                .map(|entry| {
+                .map(|note| {
                     (
-                        entry
-                            .timestamp
-                            .get(..10)
-                            .unwrap_or(&entry.timestamp)
-                            .to_string(),
-                        entry.message.clone(),
+                        note_date(note).to_string(),
+                        note.text.lines().next().unwrap_or("").to_string(),
                     )
                 })
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
                 .collect();
-        }
-        Err(err) => problems.push(format!("journal: {err:#}")),
-    }
-
-    match project_info::read(path) {
-        Ok(content) => {
-            detail.notes_text = project_info::notes_body(&content)
-                .unwrap_or_default()
-                .to_string();
+            detail.notes_text = undated
+                .first()
+                .map(|note| note.text.clone())
+                .unwrap_or_default();
             detail.notes = notes_preview(&detail.notes_text);
         }
         Err(err) => problems.push(format!("notes: {err:#}")),
@@ -624,8 +634,7 @@ pub fn detail(path: &Path) -> ProjectDetail {
     detail
 }
 
-/// The first lines of the notes, blanks dropped: the pane's preview of the
-/// section `project_info::notes_body` found.
+/// The first lines of the undated note, blanks dropped: the pane's preview.
 fn notes_preview(notes: &str) -> Vec<String> {
     notes
         .lines()
@@ -659,17 +668,16 @@ fn listing(path: &Path) -> std::io::Result<Vec<Entry>> {
 #[cfg(test)]
 mod tests {
     use super::notes_preview;
-    use crate::core::project_info::notes_body;
 
     #[test]
-    fn the_notes_preview_is_the_section_without_its_blank_lines() {
-        let content = "---\nid: ID0001\n---\n# Project Info\n\n## Notes\n\nfirst cut due Friday\n\n## Journal\n- entry\n";
-        assert_eq!(notes_body(content), Some("first cut due Friday"));
+    fn the_notes_preview_is_the_text_without_its_blank_lines() {
         assert_eq!(
-            notes_preview(notes_body(content).unwrap()),
-            vec!["first cut due Friday".to_string()]
+            notes_preview("first cut due Friday\n\nthen colour\n"),
+            vec![
+                "first cut due Friday".to_string(),
+                "then colour".to_string()
+            ]
         );
-        assert_eq!(notes_body("# nothing"), None);
         assert!(notes_preview("").is_empty());
     }
 }

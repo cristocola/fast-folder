@@ -1171,7 +1171,7 @@ fn run_action(
                     was: path.clone(),
                     stale: vec![path],
                 },
-                "Journal entry added.",
+                "Note added.",
             )
             .session(format!("noted {id}")))
         }

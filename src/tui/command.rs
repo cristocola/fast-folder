@@ -1099,7 +1099,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Down,
         "Down",
-        "next row, or scroll down (a list wraps at the end)",
+        "next row, or scroll down (stops at the end)",
         SCROLLERS,
         [Key::plain(KeyCode::Down), Key::ch('j')],
         Navigate,
@@ -1110,7 +1110,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Up,
         "Up",
-        "previous row, or scroll up (a list wraps at the top)",
+        "previous row, or scroll up (stops at the top)",
         SCROLLERS,
         [Key::plain(KeyCode::Up), Key::ch('k')],
         Navigate,

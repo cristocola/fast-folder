@@ -100,7 +100,7 @@ impl PickState {
     }
 
     pub fn step(&mut self, delta: isize) {
-        self.selected = nav::wrap_step(self.selected, self.ranked.len(), delta);
+        self.selected = nav::step(self.selected, self.ranked.len(), delta);
     }
 
     pub fn clamp_viewport(&mut self, rows: usize) {

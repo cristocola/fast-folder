@@ -3240,30 +3240,24 @@ impl App {
                 Vec::new()
             }
             Some(Modal::MultiPick(pick)) => {
-                pick.selected = crate::tui::widgets::nav::wrap_step(
-                    Some(pick.selected),
-                    pick.items.len(),
-                    delta,
-                )
-                .unwrap_or(0);
+                pick.selected =
+                    crate::tui::widgets::nav::step(Some(pick.selected), pick.items.len(), delta)
+                        .unwrap_or(0);
                 Vec::new()
             }
             Some(Modal::Builder(builder)) => {
-                // `wrap_step`, like every other list in the app —
-                // `CommandId::Down`'s own description says "a list wraps at
-                // the end", and these two clamped instead.
                 match &mut builder.open {
                     None => builder.step(delta),
                     Some(Open::Variables(list)) => {
                         let count = builder.template.variables.len();
                         list.selected =
-                            crate::tui::widgets::nav::wrap_step(Some(list.selected), count, delta)
+                            crate::tui::widgets::nav::step(Some(list.selected), count, delta)
                                 .unwrap_or(0);
                     }
                     Some(Open::Files(list)) => {
                         let count = builder.template.files.len();
                         list.selected =
-                            crate::tui::widgets::nav::wrap_step(Some(list.selected), count, delta)
+                            crate::tui::widgets::nav::step(Some(list.selected), count, delta)
                                 .unwrap_or(0);
                     }
                     Some(_) => {}
@@ -3286,7 +3280,7 @@ impl App {
         let area = self.area();
         let actions_len = crate::tui::app::actions::action_entries(self).len();
         let jump = |selected: usize, len: usize| -> usize {
-            crate::tui::widgets::nav::clamp_jump(Some(selected), len, delta).unwrap_or(0)
+            crate::tui::widgets::nav::step(Some(selected), len, delta).unwrap_or(0)
         };
         match self.modals.top_mut() {
             Some(Modal::Actions(actions)) => {

@@ -341,10 +341,10 @@ pub fn select(prompt: &str, items: &[String], default: usize) -> Result<Option<u
             KeyCode::Enter => break Some(selected),
             KeyCode::Esc | KeyCode::Char('q') => break None,
             KeyCode::Up | KeyCode::Char('k') => {
-                selected = nav::wrap_step(Some(selected), items.len(), -1).unwrap_or(0);
+                selected = nav::step(Some(selected), items.len(), -1).unwrap_or(0);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                selected = nav::wrap_step(Some(selected), items.len(), 1).unwrap_or(0);
+                selected = nav::step(Some(selected), items.len(), 1).unwrap_or(0);
             }
             // `g` and `G` are the app's jump letters, and a picker the command
             // line puts up should answer the same vocabulary as the list it
@@ -352,11 +352,10 @@ pub fn select(prompt: &str, items: &[String], default: usize) -> Result<Option<u
             KeyCode::Home | KeyCode::Char('g') => selected = 0,
             KeyCode::End | KeyCode::Char('G') => selected = items.len() - 1,
             KeyCode::PageUp => {
-                selected =
-                    nav::clamp_jump(Some(selected), items.len(), -(rows as isize)).unwrap_or(0);
+                selected = nav::step(Some(selected), items.len(), -(rows as isize)).unwrap_or(0);
             }
             KeyCode::PageDown => {
-                selected = nav::clamp_jump(Some(selected), items.len(), rows as isize).unwrap_or(0);
+                selected = nav::step(Some(selected), items.len(), rows as isize).unwrap_or(0);
             }
             _ => {}
         }

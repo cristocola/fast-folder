@@ -159,7 +159,7 @@ impl Field {
                 if options.len() < 2 {
                     return false;
                 }
-                let next = nav::wrap_step(Some(*selected), options.len(), delta).unwrap_or(0);
+                let next = nav::cycle(Some(*selected), options.len(), delta).unwrap_or(0);
                 let changed = next != *selected;
                 *selected = next;
                 changed
@@ -308,7 +308,7 @@ impl Form {
             .iter()
             .position(|index| *index == self.selected)
             .unwrap_or(0);
-        let next = nav::wrap_step(Some(at), visible.len(), delta).unwrap_or(0);
+        let next = nav::cycle(Some(at), visible.len(), delta).unwrap_or(0);
         self.selected = visible[next];
     }
 

@@ -168,14 +168,24 @@ fn recent_installs_the_rows_without_a_discovery() {
     );
 }
 
+/// **A list stops at its ends.** It wrapped — one `j` too many at the bottom
+/// of a long table and the cursor was back at the top with nothing to say
+/// why, which reads as the cursor escaping rather than as a feature. Every
+/// list shares `nav::step`, so this holds for all of them.
 #[test]
-fn arrows_wrap_and_page_keys_clamp() {
+fn arrows_and_page_keys_stop_at_the_ends() {
     let mut app = fixture(12, 80, 24);
     assert_eq!(app.library.selected, Some(0));
     press(&mut app, Key::plain(KeyCode::Up));
-    assert_eq!(app.library.selected, Some(11), "up from the top wraps");
+    assert_eq!(app.library.selected, Some(0), "up from the top stays put");
+    press(&mut app, Key::ch('G'));
     press(&mut app, Key::ch('j'));
-    assert_eq!(app.library.selected, Some(0), "down from the bottom wraps");
+    assert_eq!(
+        app.library.selected,
+        Some(11),
+        "down from the bottom stays put"
+    );
+    press(&mut app, Key::ch('g'));
     press(&mut app, Key::plain(KeyCode::PageDown));
     assert_eq!(
         app.library.selected,
@@ -3660,6 +3670,26 @@ mod movement {
         assert_eq!(app.studio.selected, 0);
         assert!(last > 0, "the fixture has more than one template");
         assert!(app.modals.is_empty(), "neither key opened a dialog");
+    }
+
+    /// The templates tab's page keys route through the same step as its
+    /// arrows, so this is where a page used to come round to the top.
+    #[test]
+    fn the_templates_tab_pages_without_wrapping() {
+        let mut app = fixture(3, 100, 30);
+        press(&mut app, Key::ch('T'));
+        assert_eq!(app.screen, Screen::Templates);
+        press(&mut app, Key::plain(KeyCode::PageDown));
+        let last = app.studio.selected;
+        assert!(last > 0, "a page moved the cursor");
+        press(&mut app, Key::plain(KeyCode::PageDown));
+        assert_eq!(
+            app.studio.selected, last,
+            "and a second page stays at the end"
+        );
+        press(&mut app, Key::plain(KeyCode::PageUp));
+        press(&mut app, Key::plain(KeyCode::PageUp));
+        assert_eq!(app.studio.selected, 0, "the top is the top");
     }
 
     /// `→` is Enter's twin: one step into whatever is under the cursor. `←` is

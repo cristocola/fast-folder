@@ -117,7 +117,7 @@ impl Studio {
             return;
         }
         let at = self.row_of(self.selected, rows);
-        if let Some(next) = nav::wrap_step(at.or(Some(0)), rows.len(), delta) {
+        if let Some(next) = nav::step(at.or(Some(0)), rows.len(), delta) {
             self.selected = rows[next];
         }
         self.scroll = 0;
@@ -349,7 +349,7 @@ impl Builder {
     }
 
     pub fn step(&mut self, delta: isize) {
-        if let Some(next) = nav::wrap_step(Some(self.selected), Row::ALL.len(), delta) {
+        if let Some(next) = nav::step(Some(self.selected), Row::ALL.len(), delta) {
             self.selected = next;
         }
     }

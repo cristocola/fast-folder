@@ -262,7 +262,7 @@ impl SettingsState {
             .iter()
             .position(|index| *index >= self.selected)
             .unwrap_or(0);
-        let next = nav::wrap_step(Some(at), selectable.len(), delta).unwrap_or(0);
+        let next = nav::step(Some(at), selectable.len(), delta).unwrap_or(0);
         self.selected = selectable[next];
     }
 
@@ -283,7 +283,7 @@ impl SettingsState {
             .iter()
             .position(|index| *index >= self.selected)
             .unwrap_or(0);
-        let next = nav::clamp_jump(Some(at), selectable.len(), delta).unwrap_or(0);
+        let next = nav::step(Some(at), selectable.len(), delta).unwrap_or(0);
         self.selected = selectable[next];
     }
 

@@ -184,7 +184,7 @@ them, and so do `→` and `←`.
 
 | Key | What it does |
 |---|---|
-| ↑ / ↓, `k` / `j` | move the highlight, wrapping at the ends |
+| ↑ / ↓, `k` / `j` | move the highlight, stopping at the ends — a list never wraps round |
 | PageUp / PageDown | move by a screenful, stopping at the ends |
 | Ctrl-D / Ctrl-U | half a screenful, stopping at the ends |
 | Home / End, `g` / `G` | first row, last row |

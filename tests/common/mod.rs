@@ -141,7 +141,13 @@ impl Sandbox {
     /// [`NOT_INHERITED`] cleared so the developer's own shell cannot answer for
     /// fastf.
     pub fn command(&self) -> Command {
-        let mut cmd = Command::new(FASTF);
+        self.command_named(FASTF)
+    }
+
+    /// `command` for another program that will run fastf itself — a shell
+    /// evaluating the `fastf init` hook — with the same sandbox environment.
+    pub fn command_named(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
+        let mut cmd = Command::new(program);
         cmd.env("FASTF_INSTALL_DIR", &self.install).env(
             if cfg!(windows) { "USERPROFILE" } else { "HOME" },
             self.tmp.path(),

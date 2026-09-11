@@ -215,6 +215,32 @@ enum Commands {
         query: String,
     },
 
+    /// Change directory to a project's folder — with the shell function from `fastf init`
+    #[command(
+        after_help = "A program cannot change the directory of the shell that ran it, so\n\
+        this verb is two parts: the binary prints the project's path, and a\n\
+        small shell function, printed by `fastf init <shell>`, captures that\n\
+        line and enters it. Without the function, `fastf cd` prints the path\n\
+        and says how to add it.\n\n\
+        An unambiguous query changes directory at once. One that matches\n\
+        several projects shows a picker, and no query at all picks from the\n\
+        whole library.\n\n\
+        Setup, once:\n  \
+            eval \"$(fastf init bash)\"                                  # ~/.bashrc\n  \
+            eval \"$(fastf init zsh)\"                                   # ~/.zshrc\n  \
+            fastf init fish | source                                  # ~/.config/fish/config.fish\n  \
+            Invoke-Expression (& fastf init powershell | Out-String)  # $PROFILE\n\n\
+        Examples:\n  \
+            fastf cd ID0047\n  \
+            fastf cd 47                            # the ID number\n  \
+            fastf cd lullaby                       # name substring match\n  \
+            fastf cd                               # pick from every project"
+    )]
+    Cd {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring; omit to pick
+        query: Option<String>,
+    },
+
     /// Move a project folder into another configured base
     #[command(
         name = "move",
@@ -516,6 +542,22 @@ enum Commands {
             fastf completions fish > ~/.config/fish/completions/fastf.fish"
     )]
     Completions {
+        /// Target shell: bash, zsh, fish, or powershell
+        shell: String,
+    },
+
+    /// Print the shell function that lets `fastf cd` change directory
+    #[command(
+        after_help = "Evaluate the output from your shell's startup file, once, and\n\
+        `fastf cd <query>` changes directory from then on. Every other command\n\
+        passes through the function untouched.\n\n\
+        Examples:\n  \
+            eval \"$(fastf init bash)\"                                  # ~/.bashrc\n  \
+            eval \"$(fastf init zsh)\"                                   # ~/.zshrc\n  \
+            fastf init fish | source                                  # ~/.config/fish/config.fish\n  \
+            Invoke-Expression (& fastf init powershell | Out-String)  # $PROFILE"
+    )]
+    Init {
         /// Target shell: bash, zsh, fish, or powershell
         shell: String,
     },
@@ -878,10 +920,13 @@ fn run() -> Result<()> {
     fastf::util::paths::try_install_dir()?;
 
     // Bootstrap on every run (idempotent — no-op after first run). Skipped for
-    // completions/mangen so packaging steps never write to the user's home.
+    // completions/mangen so packaging steps never write to the user's home,
+    // and for init, which every shell runs at startup.
     if !matches!(
         cli.command,
-        Some(Commands::Completions { .. }) | Some(Commands::Mangen { .. })
+        Some(Commands::Completions { .. })
+            | Some(Commands::Mangen { .. })
+            | Some(Commands::Init { .. })
     ) {
         bootstrap::ensure_bootstrapped()?;
     }
@@ -1001,6 +1046,7 @@ fn run() -> Result<()> {
         }),
         Some(Commands::Path { query }) => cli::path_cmd::run(&query),
         Some(Commands::Term { query }) => cli::term_cmd::run(&query),
+        Some(Commands::Cd { query }) => cli::cd_cmd::run(query.as_deref()),
         Some(Commands::Move { query, base, yes }) => {
             cli::move_project::run(cli::move_project::MoveArgs { query, base, yes })
         }
@@ -1104,6 +1150,7 @@ fn run() -> Result<()> {
         }
 
         Some(Commands::Completions { shell }) => generate_completions(&shell),
+        Some(Commands::Init { shell }) => cli::shell_init::run(&shell),
         Some(Commands::Paths) => cli::paths_cmd::run(),
         Some(Commands::Mangen { dir }) => generate_man_pages(&dir),
     }

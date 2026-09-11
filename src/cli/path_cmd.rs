@@ -37,8 +37,9 @@ pub fn run(query: &str) -> Result<()> {
     print_path(&project)
 }
 
-/// Revalidate, then print the bare line.
-fn print_path(project: &library::Project) -> Result<()> {
+/// Revalidate, then print the bare line. `cd` prints through here too, so
+/// the two verbs can never disagree about what a path looks like.
+pub(crate) fn print_path(project: &library::Project) -> Result<()> {
     // Same check as `open` and `copy`: a discovered path is a hint until it has
     // been looked at, and this one is about to be pasted into another command.
     library::revalidate_for_read(project).with_context(|| {

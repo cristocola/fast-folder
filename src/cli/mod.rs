@@ -1,4 +1,5 @@
 pub mod apply;
+pub mod cd_cmd;
 pub mod config;
 pub mod copy;
 pub mod copy_to;
@@ -17,6 +18,7 @@ pub mod register;
 pub mod reindex;
 pub mod render;
 pub mod search;
+pub mod shell_init;
 pub mod tag;
 pub mod target;
 pub mod template;

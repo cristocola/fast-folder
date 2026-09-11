@@ -10,7 +10,10 @@
 
 use std::path::PathBuf;
 
-use crate::tui::app::wizard::{FIELD_TEMPLATE, Flow, NO_TEMPLATE};
+use super::App;
+use crate::tui::app::modal::Modal;
+use crate::tui::app::wizard::{self, FIELD_TEMPLATE, Flow, FlowKind, NO_TEMPLATE};
+use crate::tui::effect::Effect;
 use crate::tui::widgets::form::{Field, Form};
 
 /// One folder, or every unregistered child of one.
@@ -149,6 +152,18 @@ pub struct Request {
     /// A date typed for the record, as `--created` gives one.
     pub created_override: Option<String>,
     pub recursive: bool,
+}
+
+impl App {
+    /// `e`: register a folder fastf did not create, or a whole base of them.
+    pub(super) fn open_register(&mut self) -> Vec<Effect> {
+        let mut options = vec![wizard::NO_TEMPLATE.to_string()];
+        options.extend(self.template_slugs());
+        let mut flow = Flow::new(FlowKind::Register, register_form(&options));
+        sync_visibility(&mut flow);
+        self.modals.push(Modal::Flow(Box::new(flow)));
+        Vec::new()
+    }
 }
 
 #[cfg(test)]

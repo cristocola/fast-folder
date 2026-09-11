@@ -5,11 +5,13 @@ for one data directory, `with_sandbox(&SERIAL, …)` where a base is needed too;
 fixtures live in `common::fixtures`. The rules those helpers enforce are at the
 bottom, stated once.
 
-**A file and a binary per subject — except the pty suite.** `cargo test` runs
-binaries sequentially, and the pty tests' fixed keystroke schedules overlap only
-inside one binary (as three binaries they cost nineteen more seconds), so
-`tui_pty.rs` is one binary with modules under `tests/tui_pty/` (`app`, `list`,
-`flows`), plus the screenshot tool and its SVG renderer.
+**A file and a binary per subject — except the two app suites.** `cargo test`
+runs binaries sequentially and links each one. The pty tests' fixed keystroke
+schedules overlap only inside one binary (as three binaries they cost nineteen
+more seconds), so `tui_pty.rs` is one binary with modules under `tests/tui_pty/`
+(`app`, `list`, `flows`, plus the screenshot tool and its SVG renderer); and
+`tui_update.rs` is one binary with a module per subject under
+`tests/tui_update/`, which share `harness.rs`.
 
 What each suite guards — the intent, not the case list:
 - `create.rs`, `metadata.rs`, `search.rs`, `template_engine.rs`, `register.rs`,

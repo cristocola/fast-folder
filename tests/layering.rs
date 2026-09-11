@@ -170,7 +170,7 @@ fn core_and_util_do_not_import_the_surfaces() {
         for path in sources(layer) {
             let text = fs::read_to_string(&path).unwrap();
             for (number, line) in text.lines().enumerate() {
-                // A doc link is not a dependency: `[crate::tui::browser]` in a
+                // A doc link is not a dependency: `[crate::tui::runtime]` in a
                 // comment tells a reader where something is used, and removing
                 // it would make the documentation worse to satisfy a rule about
                 // code.

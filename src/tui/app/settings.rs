@@ -10,7 +10,17 @@
 //! `cli::config::apply` the command line calls, and a refusal is the refusal
 //! `config set` has always made. Nothing here validates a value itself.
 
+use std::path::PathBuf;
+
+use ratatui::crossterm::event::KeyCode;
+
+use super::App;
+use crate::tui::app::actions::{TextPrompt, TextThen};
 use crate::tui::app::data::Settings;
+use crate::tui::app::modal::Modal;
+use crate::tui::command::{self, Context, Key};
+use crate::tui::effect::{Action, Effect, ViewKind};
+use crate::tui::validators;
 use crate::tui::widgets::input::LineEdit;
 use crate::tui::widgets::nav;
 use crate::tui::widgets::text_area::TextArea;
@@ -591,6 +601,182 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             "where the config, the counter and the templates live, and how that was decided",
         ),
     ]
+}
+
+impl App {
+    /// Enter on the settings list. A yes/no and a two-way choice are written
+    /// where they stand: opening a dialog to answer a question with two
+    /// answers is a keystroke spent on nothing. A maintenance row runs;
+    /// anything else opens on its own line.
+    pub(super) fn settings_change(&mut self) -> Vec<Effect> {
+        let Some(Modal::Settings(state)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if let Some((key, value)) = state.immediate_write() {
+            return self.write_setting(key, value);
+        }
+        if let Some(Kind::Run(job)) = state.row().map(|row| row.kind.clone()) {
+            return self.run_job(job);
+        }
+        state.begin_edit();
+        Vec::new()
+    }
+
+    /// `,`: every setting on one screen. The screen goes up at once, saying
+    /// it is reading, and the rows are filled in when the read lands — so the
+    /// key is seen to have worked, and no value shown is stale.
+    pub(super) fn open_settings(&mut self) -> Vec<Effect> {
+        self.modals
+            .push(Modal::Settings(Box::new(SettingsState::pending())));
+        vec![Effect::LoadSettings]
+    }
+
+    pub(super) fn on_settings_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Settings(state)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if state.editing.is_some() {
+            return self.on_settings_edit_key(key);
+        }
+        // The list itself: every key it answers is in the registry.
+        self.lookup_and_run(key)
+    }
+
+    fn on_settings_edit_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Settings(state)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        // Esc leaves the value alone, which is what "Esc in a settings field →
+        // the value unchanged" has always meant. On the filter it means the
+        // whole screen back, since a filter left behind is a screen missing
+        // rows for a reason nobody can see.
+        if key.code == KeyCode::Esc && !key.ctrl {
+            if matches!(state.editing, Some(Editing::Filter)) {
+                state.filter.clear();
+                state.apply_filter();
+            }
+            state.editing = None;
+            return Vec::new();
+        }
+        let commit = match &mut state.editing {
+            // Enter keeps the filter and hands the keys back to the list; the
+            // rows stay narrowed, and the title says so.
+            Some(Editing::Filter) => {
+                if key.code == KeyCode::Enter {
+                    state.editing = None;
+                } else if state.filter.apply(&key) {
+                    state.apply_filter();
+                }
+                false
+            }
+            Some(Editing::Value { input, error, .. }) => {
+                if key.code == KeyCode::Enter {
+                    true
+                } else {
+                    if input.apply(&key) {
+                        *error = None;
+                    }
+                    false
+                }
+            }
+            // A list is a document: Enter is a newline, so Ctrl-S commits.
+            Some(Editing::Bases { area, error }) => {
+                if key.code == KeyCode::Char('s') && key.ctrl {
+                    true
+                } else {
+                    if area.apply(&key) {
+                        *error = None;
+                    }
+                    false
+                }
+            }
+            None => false,
+        };
+        if !commit {
+            return Vec::new();
+        }
+        let Some((key, value)) = state.pending_write() else {
+            return Vec::new();
+        };
+        self.write_setting(key, value)
+    }
+
+    fn write_setting(&mut self, key: &'static str, value: String) -> Vec<Effect> {
+        self.run_action("saving…", Action::SetConfig { key, value })
+    }
+
+    /// One of the settings screen's verbs.
+    pub(super) fn run_job(&mut self, job: Job) -> Vec<Effect> {
+        match job {
+            Job::RaiseCounter => {
+                let floor = match self.modals.top() {
+                    Some(Modal::Settings(state)) => state.settings.counter_floor,
+                    _ => 0,
+                };
+                let mut prompt = TextPrompt::new(
+                    validators::raise_counter_prompt(floor),
+                    TextThen::RaiseCounter,
+                );
+                prompt.input = crate::tui::widgets::input::LineEdit::with_text(floor.to_string());
+                self.modals.push(Modal::TextPrompt(prompt));
+                Vec::new()
+            }
+            Job::SyncCounters => self.run_action(job.busy(), Action::SyncCounters),
+            Job::Reindex => self.run_action(job.busy(), Action::Reindex),
+            Job::Reconcile => self.run_action(job.busy(), Action::Reconcile),
+            Job::DataLocations => self.load_view(
+                "data locations".to_string(),
+                PathBuf::new(),
+                ViewKind::DataLocations,
+            ),
+        }
+    }
+
+    /// Ask where projects should live, before the first frame.
+    ///
+    /// The old flow asked on the main screen before the app opened, because
+    /// there was no app to ask in. This is a modal over the dashboard: the
+    /// suggestion is editable, Enter creates the folder and records it, and an
+    /// empty answer skips — the question returns next launch until a base is
+    /// set.
+    pub fn request_onboarding(&mut self, suggested: String) {
+        self.modals
+            .push(Modal::Onboarding(Onboarding::new(suggested)));
+    }
+
+    pub(super) fn on_onboarding_key(&mut self, key: Key) -> Vec<Effect> {
+        if key.typed().is_none()
+            && let Some(id) = command::lookup(Context::Prompt, key, self)
+        {
+            return self.run(id);
+        }
+        if let Some(Modal::Onboarding(state)) = self.modals.top_mut()
+            && state.input.apply(&key)
+        {
+            state.error = None;
+        }
+        Vec::new()
+    }
+
+    /// Enter on the first-run question.
+    pub(super) fn submit_onboarding(&mut self) -> Vec<Effect> {
+        let Some(Modal::Onboarding(state)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        let answer = state.input.text().trim().to_string();
+        if answer.is_empty() {
+            self.modals.pop();
+            self.info(validators::ONBOARDING_SKIPPED);
+            return Vec::new();
+        }
+        // The dialog stays up until the folder exists: a path that cannot be
+        // created is refused here, with the text still on the line, rather
+        // than dropping a first-time user onto an empty dashboard with an
+        // error and no question.
+        state.pending = true;
+        state.error = None;
+        self.run_action("creating the base…", Action::InitBaseDir(answer))
+    }
 }
 
 #[cfg(test)]

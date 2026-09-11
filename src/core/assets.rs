@@ -52,16 +52,8 @@ pub struct Progress {
     pub cleanup_pending: bool,
     /// Non-fatal detail accompanying [`Self::cleanup_pending`].
     pub warning: Option<String>,
-    /// Unix-epoch milliseconds of the last observed movement (bytes copied, a
-    /// file finished, or a phase change).
-    ///
-    /// It tells "slow" from "stuck" — a copy to a cloud-synced or network
-    /// destination can legitimately sit for minutes, so there is no wall-clock
-    /// timeout. **Nothing reads it yet:** the "no progress for N minutes" note
-    /// it was written for belonged to the browser UI removed at v2.0.0, and the
-    /// progress dialog has not grown one. It is kept because the field is the
-    /// hard half — every writer already `touch`es it — and because a journal
-    /// written by an older fastf carries it.
+    /// Unix-epoch milliseconds of the last observed movement: written on every
+    /// `touch`, read by nothing yet — it is what a "no progress for N minutes" note would read.
     pub last_progress_at: u64,
 }
 

@@ -210,14 +210,8 @@ impl Metadata {
             .collect()
     }
 
-    /// Build the typed metadata for a freshly-planned project.
-    /// `tags` is the combined literal + auto-derived tag list computed in
-    /// `project::create()` before writing the file.
-    pub fn from_plan(plan: &ProjectPlan, tmpl: &Template, tags: Vec<String>) -> Self {
-        Self::from_plan_at(plan, tmpl, tags, crate::util::time::now_iso8601())
-    }
-
-    /// [`Metadata::from_plan`] with the creation timestamp supplied.
+    /// Build the typed metadata for a freshly-planned project, created at
+    /// `created`. `tags` is the combined literal + auto-derived tag list.
     ///
     /// Register needs this: it claims a folder that already existed, so the
     /// project's `created` is the folder's own date, not now. It used to write

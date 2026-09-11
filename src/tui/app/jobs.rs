@@ -15,8 +15,11 @@
 
 use std::path::PathBuf;
 
+use super::App;
+use crate::core::assets::Progress;
 use crate::core::library::Project;
-use crate::tui::effect::Action;
+use crate::tui::app::modal::{MessageLevel, Modal};
+use crate::tui::effect::{Action, ActionOutcome, Effect};
 
 /// What one batch does to each of its items. The answer the verb needed —
 /// the tag, the note, the base — was asked once and travels with the kind.
@@ -252,6 +255,153 @@ impl Job {
             return None;
         }
         Some((self.kind.report_title(), lines.join("\n")))
+    }
+}
+
+impl App {
+    /// Run the verb over every marked project, one item at a time.
+    pub(super) fn start_job(&mut self, kind: JobKind, target: Option<PathBuf>) -> Vec<Effect> {
+        let targets = self.library.targets();
+        if targets.is_empty() {
+            return Vec::new();
+        }
+        self.job = Some(Job::new(kind, targets, target));
+        self.job_advance()
+    }
+
+    /// Begin the next item of the running job. When nothing is left — every
+    /// item ran, or the job was cancelled — finish it.
+    fn job_advance(&mut self) -> Vec<Effect> {
+        let kind = match self.job.as_ref() {
+            Some(job) => job.kind.clone(),
+            None => return Vec::new(),
+        };
+        let Some(project) = self.job.as_mut().and_then(|job| job.begin_next().cloned()) else {
+            return self.job_finish();
+        };
+        // The progress modal is for a move that is actually running: arming it
+        // here — after an item began — means the final advance, which only
+        // finishes the job, cannot leave a stale modal behind for every later
+        // quit gesture to read as "a move is running".
+        if kind == JobKind::Move {
+            self.move_progress = Some(Progress::new(&[]));
+        }
+        let action = {
+            let job = self.job.as_ref().expect("the job is running");
+            job.action_for(&project)
+        };
+        self.run_action(kind.busy(), action)
+    }
+
+    /// One item's outcome landed: record it, patch the row, and move on.
+    pub(super) fn on_job_item_done(
+        &mut self,
+        outcome: Result<Box<ActionOutcome>, String>,
+    ) -> Vec<Effect> {
+        // The item that was running leaves `inflight`, whatever happened. Its
+        // path is what the mark is keyed by.
+        let finished = self.job.as_mut().and_then(|job| job.take_inflight());
+        let (id, path) = match finished {
+            Some(project) => (project.id, Some(project.path)),
+            None => ("?".to_string(), None),
+        };
+        let mut effects = Vec::new();
+        match outcome {
+            Ok(outcome) => {
+                let outcome = *outcome;
+                if let Some(entry) = outcome.session {
+                    crate::tui::frame::record(entry);
+                    self.session = crate::tui::frame::recent_actions();
+                }
+                if let Some(warning) = outcome.warning
+                    && let Some(job) = &mut self.job
+                {
+                    job.warnings.push(warning);
+                }
+                // **The effects a change asks for are the job's too.** They
+                // were dropped here, where the single-action path returns them,
+                // and `apply_change`'s `Reload` arm calls `discover`, which
+                // sets `library.inflight` *before* handing back the effect that
+                // would answer it. A dropped one left the app waiting on a
+                // generation nothing would ever send, after which every patch
+                // only set `dirty` and the list stopped changing: a batch
+                // re-derive of tags rewrote every file and showed nothing, and
+                // the list stayed frozen for the rest of the session.
+                effects.extend(self.apply_change(outcome.change));
+                // A mark is the retry list. An item that succeeded is not on
+                // it any more, so "3 tagged" and the ✓ glyphs left on screen
+                // cannot disagree — `jobs.rs` has always said so; nothing did
+                // it, because `patch` only drops a mark when the path moved.
+                if let Some(path) = &path {
+                    self.library.marks.remove(path);
+                }
+                if let Some(job) = &mut self.job {
+                    job.done += 1;
+                }
+            }
+            Err(error) => {
+                // A cancellation the user asked for is not a failure to list:
+                // the report says how many were left instead. Either way the
+                // mark stays: it is what a retry would act on.
+                let cancelled = self.job.as_ref().is_some_and(|job| job.cancelled);
+                if !cancelled && let Some(job) = &mut self.job {
+                    job.failed.push((id, error));
+                }
+            }
+        }
+        effects.extend(self.job_advance());
+        effects
+    }
+
+    /// The job has no items left to begin: report and clear it.
+    fn job_finish(&mut self) -> Vec<Effect> {
+        let Some(job) = self.job.take() else {
+            return Vec::new();
+        };
+        self.move_progress = None;
+        let mut headline = job.kind.done(job.done);
+        if !job.failed.is_empty() {
+            headline.push_str(&format!(", {} failed", job.failed.len()));
+        }
+        if job.cancelled {
+            headline.push_str(" — cancelled");
+        }
+        if let Some((title, body)) = job.report() {
+            // The rows the report names are the rows that still hold a mark,
+            // so Esc closes the report straight back onto a consistent list.
+            let level = if job.failed.is_empty() {
+                MessageLevel::Warn
+            } else {
+                MessageLevel::Error
+            };
+            self.modals.push(Modal::message(title, body, level));
+        }
+        if job.failed.is_empty() && !job.cancelled {
+            self.good(headline);
+        } else {
+            self.warn(headline);
+        }
+        Vec::new()
+    }
+
+    /// Stop after the current item: the in-flight move is told to cancel, and
+    /// the job marks itself as cancelled so the rest stay marked. A bare
+    /// single move (no job) just cancels at the runtime.
+    pub(super) fn request_cancel(&mut self) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        if self.move_progress.is_some() {
+            effects.push(Effect::CancelMove);
+        }
+        match &mut self.job {
+            Some(job) => job.cancelled = true,
+            None => return effects,
+        }
+        // Between items nothing is in flight: finish now. Otherwise the
+        // current item's ActionDone finishes the job when it lands.
+        if self.busy.is_none() {
+            effects.extend(self.job_finish());
+        }
+        effects
     }
 }
 

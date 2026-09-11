@@ -22,6 +22,11 @@ variables:
   artist: Ariana_Grande
   client_type: Indie
   title: Lullaby
+tags:
+- music-video
+- client_type/Indie
+auto_tags:
+- client_type/Indie
 ---
 
 # Project Info
@@ -39,7 +44,11 @@ The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming 
 
 `id_number` is the number behind that id, written down rather than parsed back out of it. A template may declare any `id.prefix`, digits included, and `ID0047`, `47` and `2047` cannot all be told apart by reading their trailing digits — so the number is recorded when the project is created. Projects made before fastf stored it have their number read from the id string instead, and `fastf reindex` fills the field in for them.
 
-After creation the file is yours. fastf rewrites the frontmatter when you tag, move, rename, or register a project, and every rewrite leaves the rest of the file byte for byte as it was. That includes **keys fastf does not recognise**: add `obsidian_folder:` or anything else your own tooling needs, and it stays where you put it, in the same position in the file. `fastf note` appends to the body and touches nothing else.
+`auto_tags` names which of `tags` came from the template's `tag_from`, so `fastf tag reauto` can replace exactly those and nothing else. Without it the only question re-deriving could ask was whether a tag started with a `tag_from` slug and a slash, which is also true of a literal tag the template declares and of any tag you typed yourself — so it deleted those too. The key is absent when a project has no derived tags, and a project created before fastf recorded it keeps working: re-deriving reconstructs what it can from the variables in the file, and writes the record as it goes.
+
+After creation the file is yours. fastf rewrites the frontmatter when you tag, move, rename, or register a project, or set a variable from the app's detail pane, and every rewrite leaves the rest of the file byte for byte as it was — with two exceptions that are the point of the verb. Setting a variable also rewrites the variables table under `# Project Info`, so the table stays true, but only while it is still the table fastf wrote: reshape it, rename its header, and fastf leaves it alone. Editing the notes from the pane rewrites the `## Notes` section and nothing outside it. That includes **keys fastf does not recognise**: add `obsidian_folder:` or anything else your own tooling needs, and it stays where you put it, in the same position in the file. `fastf note` appends to the body and touches nothing else.
+
+What the pane lets you type is what the file can hold. A tag is one word; a variable is one line, and a `select` variable is one of its options — the value lands through the same transform a create applies; a note may not begin a line with `##`, because a second-level heading is how the file marks where a section ends, and one inside the notes would end them there. Each refusal names the rule.
 
 This matters most when two machines share one library. A newer fastf can write a key an older one has never heard of, and the older one will not delete it.
 

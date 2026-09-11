@@ -1,16 +1,17 @@
 //! The project table and the detail pane beside it.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
-    TableState, Wrap,
+    TableState,
 };
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::library;
+use crate::tui::app::pane::{EditTarget, PaneEdit, PaneRow};
 use crate::tui::app::{App, Focus};
 use crate::tui::rows::{SIZE_CELL, date_cell, size_label};
 use crate::tui::view::{fit, highlighted};
@@ -120,10 +121,7 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     let title = " projects ".to_string();
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(
-            title,
-            if focused { theme.accent() } else { theme.dim() },
-        ))
+        .title(Span::styled(title, title_style(app, focused)))
         .border_style(theme.border(focused));
     let full_inner = block.inner(area);
     frame.render_widget(block, area);
@@ -348,7 +346,32 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
-pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
+/// A pane's title: accent while it has the focus, dim otherwise — and, for
+/// the moment after the focus arrived, the pulse wash underneath, so the move
+/// is seen where it landed and not only inferred from a border.
+pub(crate) fn title_style(app: &App, focused: bool) -> ratatui::style::Style {
+    let base = if focused {
+        app.theme.accent()
+    } else {
+        app.theme.dim()
+    };
+    if !focused {
+        return base;
+    }
+    match crate::tui::motion::focus_style(
+        app.focus_moved_at,
+        app.elapsed_ms,
+        &app.theme,
+        app.motion,
+    ) {
+        Some(wash) => base.patch(wash),
+        None => base,
+    }
+}
+
+/// The detail pane. Returns where the caret is while a row is being edited,
+/// so the terminal cursor sits in the field rather than on the search bar.
+pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
     let theme = &app.theme;
     let g = theme.glyphs;
     let focused = app.focus == Focus::Detail && app.modals.is_empty() && !app.search.editing;
@@ -356,7 +379,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
     let Some(project) = app.library.selected() else {
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(Span::styled(" detail ", theme.dim()))
+            .title(Span::styled(" detail ", title_style(app, focused)))
             .border_style(theme.border(focused));
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -364,14 +387,14 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
             Paragraph::new(Span::styled("nothing selected", theme.dim())),
             inner,
         );
-        return;
+        return None;
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
             format!(" {} ", project.id),
-            if focused { theme.accent() } else { theme.dim() },
+            title_style(app, focused),
         ))
         .border_style(theme.border(focused));
     let inner = block.inner(area);
@@ -389,142 +412,229 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) {
         ))
     };
 
-    let mut lines: Vec<Line> = vec![
-        Line::from(Span::styled(project.name.clone(), theme.bold())),
-        Line::from(vec![
-            Span::styled(project.template.clone(), theme.dim()),
-            Span::styled(format!(" {} ", g.sep), theme.dim()),
-            Span::styled(
-                library::base_label(&project.base),
-                Style::default().fg(theme.accent),
-            ),
-            Span::styled(format!(" {} created ", g.sep), theme.dim()),
-            Span::styled(date_cell(&project.created).to_string(), theme.text()),
-        ]),
-    ];
-
     let detail = app.details.get(&project.path);
-    let size = match app.size_cell(&project.path) {
-        SizeCell::Pending => g.pending.to_string(),
-        SizeCell::Known(size) => size_label(size),
-    };
-    let journal = detail.map(|d| d.journal_count).unwrap_or(0);
-    lines.push(Line::from(vec![
-        Span::styled(size, theme.text()),
-        Span::styled(
-            format!(
-                "   {}   {journal} journal entr{}",
-                g.sep,
-                if journal == 1 { "y" } else { "ies" }
-            ),
-            theme.dim(),
-        ),
-    ]));
+    let rows = app.pane_rows();
+    let key_w = rows
+        .iter()
+        .filter_map(|row| match row {
+            PaneRow::Variable { label, .. } => Some(label.width()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .min(18);
 
-    if !project.tags.is_empty() {
-        let mut spans = vec![Span::styled("tags  ", theme.dim())];
-        for tag in &project.tags {
-            spans.push(Span::styled(
-                format!("{} {tag}  ", g.dot),
-                Style::default().fg(theme.tag_color(tag)),
-            ));
-        }
-        lines.push(Line::from(spans));
-    }
-
-    match detail {
-        None => {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("reading…", theme.dim())));
-        }
-        Some(detail) => {
-            if let Some(error) = &detail.error {
-                lines.push(Line::from(Span::styled(
-                    format!("warning: {error}"),
-                    theme.warn(),
-                )));
-            }
-            if let Some(meta) = &detail.meta
-                && !meta.variables.is_empty()
-            {
-                lines.push(rule("variables"));
-                let key_w = meta
-                    .variables
-                    .keys()
-                    .map(|k| k.width())
-                    .max()
-                    .unwrap_or(0)
-                    .min(18);
-                for (key, value) in meta.variables.iter().take(8) {
-                    let shown = if value.is_empty() {
-                        "(empty)"
-                    } else {
-                        value.as_str()
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{:<key_w$} ", fit(key, key_w, g.ellipsis)),
-                            theme.dim(),
+    // One line per row, and no wrapping: the cursor is an index into the
+    // rows, and `detail_scroll` counts rows, so a row that took two lines
+    // would put both off by one from there down.
+    let mut lines: Vec<Line> = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        let mut line = match row {
+            PaneRow::Name => Line::from(Span::styled(project.name.clone(), theme.bold())),
+            PaneRow::Facts => Line::from(vec![
+                Span::styled(project.template.clone(), theme.dim()),
+                Span::styled(format!(" {} ", g.sep), theme.dim()),
+                Span::styled(
+                    library::base_label(&project.base),
+                    Style::default().fg(theme.accent),
+                ),
+                Span::styled(format!(" {} created ", g.sep), theme.dim()),
+                Span::styled(date_cell(&project.created).to_string(), theme.text()),
+            ]),
+            PaneRow::Figures => {
+                let size = match app.size_cell(&project.path) {
+                    SizeCell::Pending => g.pending.to_string(),
+                    SizeCell::Known(size) => size_label(size),
+                };
+                let journal = detail.map(|d| d.journal_count).unwrap_or(0);
+                Line::from(vec![
+                    Span::styled(size, theme.text()),
+                    Span::styled(
+                        format!(
+                            "   {}   {journal} journal entr{}",
+                            g.sep,
+                            if journal == 1 { "y" } else { "ies" }
                         ),
-                        Span::styled(
-                            fit(shown, width.saturating_sub(key_w + 1), g.ellipsis),
-                            theme.text(),
-                        ),
-                    ]));
-                }
-            }
-            if !detail.listing.is_empty() {
-                lines.push(rule("inside"));
-                for entry in detail.listing.iter().take(8) {
-                    let shown = if entry.is_dir {
-                        format!("{}/", entry.name)
-                    } else {
-                        entry.name.clone()
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{} ", if entry.is_dir { g.folder } else { g.sep }),
-                            theme.dim(),
-                        ),
-                        Span::styled(
-                            fit(&shown, width.saturating_sub(2), g.ellipsis),
-                            if entry.is_dir {
-                                theme.text()
-                            } else {
-                                theme.dim()
-                            },
-                        ),
-                    ]));
-                }
-                if detail.listing.len() > 8 {
-                    lines.push(Line::from(Span::styled(
-                        format!("  {} {} more", g.ellipsis, detail.listing.len() - 8),
                         theme.dim(),
-                    )));
-                }
+                    ),
+                ])
             }
-            if !detail.notes.is_empty() {
-                lines.push(rule("notes"));
-                for note in &detail.notes {
-                    lines.push(Line::from(Span::styled(note.clone(), theme.text())));
-                }
+            PaneRow::Rule(label) => rule(label),
+            PaneRow::Tag(tag) => Line::from(Span::styled(
+                format!("{} {tag}", g.dot),
+                Style::default().fg(theme.tag_color(tag)),
+            )),
+            PaneRow::AddTag => {
+                Line::from(Span::styled(format!("{} add a tag", g.sep), theme.dim()))
             }
-            if !detail.journal.is_empty() {
-                lines.push(rule("journal"));
-                for (date, message) in &detail.journal {
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{date} "), theme.dim()),
-                        Span::styled(message.clone(), theme.text()),
-                    ]));
-                }
+            PaneRow::Reading => Line::from(Span::styled("reading…", theme.dim())),
+            PaneRow::Warning(error) => {
+                Line::from(Span::styled(format!("warning: {error}"), theme.warn()))
             }
+            PaneRow::Variable { label, value, .. } => {
+                let shown = if value.is_empty() {
+                    "(empty)"
+                } else {
+                    value.as_str()
+                };
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:<key_w$} ", fit(label, key_w, g.ellipsis)),
+                        theme.dim(),
+                    ),
+                    Span::styled(
+                        fit(shown, width.saturating_sub(key_w + 1), g.ellipsis),
+                        theme.text(),
+                    ),
+                ])
+            }
+            PaneRow::Entry(entry) => {
+                let shown = if entry.is_dir {
+                    format!("{}/", entry.name)
+                } else {
+                    entry.name.clone()
+                };
+                Line::from(vec![
+                    Span::styled(
+                        format!("{} ", if entry.is_dir { g.folder } else { g.sep }),
+                        theme.dim(),
+                    ),
+                    Span::styled(
+                        fit(&shown, width.saturating_sub(2), g.ellipsis),
+                        if entry.is_dir {
+                            theme.text()
+                        } else {
+                            theme.dim()
+                        },
+                    ),
+                ])
+            }
+            PaneRow::More(more) => Line::from(Span::styled(
+                format!("  {} {more} more", g.ellipsis),
+                theme.dim(),
+            )),
+            PaneRow::Note(note) => Line::from(Span::styled(note.clone(), theme.text())),
+            PaneRow::Journal(date, message) => Line::from(vec![
+                Span::styled(format!("{date} "), theme.dim()),
+                Span::styled(message.clone(), theme.text()),
+            ]),
+        };
+        // A row an edit just landed on wears the wash, under the cursor —
+        // the cursor still says where you are while the pulse says what
+        // changed, the same order the table keeps.
+        if let Some(wash) = app
+            .pane_pulses
+            .style_for(&index, app.elapsed_ms, theme, app.motion)
+        {
+            line = line.style(wash);
         }
+        // The cursor: the selection's own highlight, and only while the pane
+        // has the focus — a lit row in a pane you are not in would say the
+        // next key goes there when it does not.
+        if focused && index == app.pane_cursor && row.selectable() {
+            line = line.patch_style(theme.selection);
+        }
+        lines.push(line);
     }
 
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((app.detail_scroll as u16, 0));
+    let paragraph = Paragraph::new(lines).scroll((app.detail_scroll as u16, 0));
     frame.render_widget(paragraph, inner);
+
+    // An open edit is drawn over its row, in place: the field where the value
+    // was, the refusal on the line under it. The notes take the rest of the
+    // pane below their rule, with their own key line at the bottom — a text
+    // area is the one widget whose Enter is not the registry's.
+    let edit = app.pane_edit.as_ref()?;
+    let row_y = (edit.row().checked_sub(app.detail_scroll)? as u16).checked_add(inner.y)?;
+    if row_y >= inner.y + inner.height {
+        return None;
+    }
+    match edit {
+        PaneEdit::Line {
+            input,
+            error,
+            target,
+            ..
+        } => {
+            let prefix = match target {
+                EditTarget::Variable(slug) => {
+                    let label = rows
+                        .iter()
+                        .find_map(|row| match row {
+                            PaneRow::Variable { slug: s, label, .. } if s == slug => Some(label),
+                            _ => None,
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| slug.clone());
+                    format!("{:<key_w$} ", fit(&label, key_w, g.ellipsis))
+                }
+                EditTarget::Tag(_) => format!("{} ", g.dot),
+            };
+            let line_area = Rect::new(inner.x, row_y, inner.width, 1);
+            frame.render_widget(Paragraph::new(""), line_area);
+            let caret = input.render_line(
+                line_area,
+                frame.buffer_mut(),
+                Span::styled(prefix, theme.dim()),
+                theme.text().patch(theme.selection),
+            );
+            if let Some(error) = error
+                && row_y + 1 < inner.y + inner.height
+            {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        fit(error, inner.width as usize, g.ellipsis),
+                        theme.warn(),
+                    )),
+                    Rect::new(inner.x, row_y + 1, inner.width, 1),
+                );
+            }
+            caret
+        }
+        PaneEdit::Notes {
+            area: text, error, ..
+        } => {
+            // From under the rule to the key line at the bottom.
+            let top = row_y + 1;
+            let bottom = inner.y + inner.height;
+            if top + 2 > bottom {
+                return None;
+            }
+            let text_area = Rect::new(inner.x, top, inner.width, bottom - top - 1);
+            frame.render_widget(ratatui::widgets::Clear, text_area);
+            let caret = text.render(text_area, frame.buffer_mut(), theme.text());
+            let keys = Rect::new(inner.x, bottom - 1, inner.width, 1);
+            frame.render_widget(ratatui::widgets::Clear, keys);
+            match error {
+                Some(error) => frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        fit(error, inner.width as usize, g.ellipsis),
+                        theme.warn(),
+                    )),
+                    keys,
+                ),
+                None => {
+                    let pairs: Vec<(String, String)> = crate::tui::command::hints(
+                        crate::tui::command::Context::PaneEdit,
+                        app,
+                        inner.width as usize,
+                    )
+                    .into_iter()
+                    .map(|(key, what)| (key, what.to_string()))
+                    .collect();
+                    frame.render_widget(
+                        Paragraph::new(crate::tui::view::builder::key_line(
+                            theme,
+                            &pairs,
+                            inner.width as usize,
+                        )),
+                        keys,
+                    );
+                }
+            }
+            caret
+        }
+    }
 }
 
 #[cfg(test)]

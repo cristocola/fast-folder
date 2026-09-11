@@ -8,12 +8,13 @@
 //! three rows on every screen.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
+use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::tui::app::{App, TemplatesState};
+use crate::tui::app::{App, Focus, TemplatesState};
+use crate::tui::layout;
 use crate::tui::view::{fit, pad};
 
 /// The widest a slug column gets; a longer one is cut with an ellipsis.
@@ -24,19 +25,20 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let g = theme.glyphs;
     let studio = &app.studio;
-    let focused = app.modals.is_empty();
+    // Two panes, one focus: the list has it unless `→` or Tab put it in the
+    // pane, and neither has it under a dialog.
+    let focused = app.modals.is_empty() && app.focus == Focus::Projects;
+    let pane_focused = app.modals.is_empty() && app.focus == Focus::Detail;
 
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(area);
+    let panes = layout::templates_panes(area);
+    let panes = [panes.0, panes.1];
 
     // --- the list ---------------------------------------------------------
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
             " templates ",
-            if focused { theme.accent() } else { theme.dim() },
+            crate::tui::view::projects::title_style(app, focused),
         ))
         .border_style(theme.border(focused));
     let inner = block.inner(panes[0]);
@@ -125,8 +127,11 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(title, theme.dim()))
-        .border_style(theme.border(false));
+        .title(Span::styled(
+            title,
+            crate::tui::view::projects::title_style(app, pane_focused),
+        ))
+        .border_style(theme.border(pane_focused));
     let inner = block.inner(panes[1]);
     frame.render_widget(block, panes[1]);
 

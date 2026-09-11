@@ -23,7 +23,7 @@ pub struct ActionsState {
 impl ActionsState {
     pub fn step(&mut self, len: usize, delta: isize) {
         self.selected =
-            crate::tui::widgets::nav::wrap_step(Some(self.selected), len, delta).unwrap_or(0);
+            crate::tui::widgets::nav::step(Some(self.selected), len, delta).unwrap_or(0);
     }
 
     pub fn clamp_viewport(&mut self, len: usize, rows: usize) {

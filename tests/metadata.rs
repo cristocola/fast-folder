@@ -400,3 +400,333 @@ variables:
         "legacy file should deserialize with empty tags"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The pane's edits: set_variable, replace_tag, set_notes — and the tag rule
+// ---------------------------------------------------------------------------
+
+mod pane_edits {
+    use super::*;
+    use fastf::core::{library, operations, validated::Tag};
+
+    /// A template with a text variable that drives a tag and a select, so an
+    /// edit has a tag to keep honest and an option list to refuse against.
+    const TEMPLATE: &str = r#"name: Client
+slug: client
+naming_pattern: "{id}_{name}"
+id:
+  prefix: C
+  digits: 4
+variables:
+  - slug: name
+    label: Name
+    type: text
+    required: true
+    transform: none
+  - slug: tier
+    label: Client tier
+    type: select
+    options: [Indie, Major]
+    transform: none
+  - slug: city
+    label: City
+    type: text
+    transform: upper_underscore
+tags: ["client"]
+tag_from: ["tier"]
+"#;
+
+    /// One project from `TEMPLATE`, saved config, and the row that names it.
+    fn planted(install: &Path) -> (Config, library::Project) {
+        write_template(install, "client", TEMPLATE);
+        let mut cfg = Config::default();
+        cfg.base_dir = install.join("projects").display().to_string();
+        fs::create_dir_all(&cfg.base_dir).unwrap();
+        cfg.save().unwrap();
+        let tmpl = template::find_by_slug("client").unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "One".to_string());
+        vars.insert("tier".to_string(), "Indie".to_string());
+        vars.insert("city".to_string(), "new york".to_string());
+        let counters = Counters::load().unwrap();
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        let mut counters = counters;
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        let project = library::resolve(&cfg, "C0001").unwrap();
+        (cfg, project)
+    }
+
+    fn file(project: &library::Project) -> String {
+        fs::read_to_string(project_info::pinfo_path(&project.path)).unwrap()
+    }
+
+    /// Setting a variable rewrites exactly three things — the value in the
+    /// frontmatter, the tag derived from it, and the row of the body's table
+    /// that mirrors it — and not one byte more.
+    #[test]
+    fn set_variable_rewrites_the_frontmatter_the_tag_and_the_table_and_nothing_else() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            operations::add_tags(&project, &["urgent".to_string()]).unwrap();
+            let before = file(&project);
+            assert!(before.contains("| Client tier | Indie    |"), "{before}");
+
+            let meta = operations::set_variable(&project, "tier", "Major").unwrap();
+            assert_eq!(meta.variables["tier"], "Major");
+            assert!(
+                meta.tags.contains(&"tier/Major".to_string()),
+                "{:?}",
+                meta.tags
+            );
+            assert!(
+                !meta.tags.contains(&"tier/Indie".to_string()),
+                "{:?}",
+                meta.tags
+            );
+            assert!(meta.tags.contains(&"urgent".to_string()));
+            assert!(meta.tags.contains(&"client".to_string()));
+            assert_eq!(meta.auto_tags, vec!["tier/Major".to_string()]);
+
+            let after = file(&project);
+            assert!(after.contains("| Client tier | Major    |"), "{after}");
+            // Everything that is not the frontmatter's tags/variables and the
+            // table's one row is untouched: compare with those lines swapped.
+            let expected = before
+                .replace("  tier: Indie", "  tier: Major")
+                .replace("- tier/Indie", "- tier/Major")
+                .replace("| Client tier | Indie    |", "| Client tier | Major    |");
+            assert_eq!(
+                after, expected,
+                "only the value, its tag and its table row moved"
+            );
+        });
+    }
+
+    /// A text variable lands the way a create would have stored it: through
+    /// the template's transform and the filesystem sanitizer.
+    #[test]
+    fn set_variable_applies_the_templates_transform() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            let meta = operations::set_variable(&project, "city", " san francisco ").unwrap();
+            assert_eq!(meta.variables["city"], "SAN_FRANCISCO");
+            assert!(
+                file(&project).contains("| City        | SAN_FRANCISCO |"),
+                "{}",
+                file(&project)
+            );
+        });
+    }
+
+    /// A `select` holds one of its options and nothing else, and the refusal
+    /// names them — the same sentence a create would have given.
+    #[test]
+    fn set_variable_refuses_a_select_value_outside_its_options() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            let before = file(&project);
+            let err = operations::set_variable(&project, "tier", "Boutique")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("Indie, Major"), "{err}");
+            assert_eq!(file(&project), before, "a refused edit writes nothing");
+            let err = operations::set_variable(&project, "name", "two\nlines")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("one line"), "{err}");
+            let err = operations::set_variable(&project, "name", "  ")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("required"), "{err}");
+        });
+    }
+
+    /// A table the user reshaped is theirs: the frontmatter still changes, the
+    /// body does not.
+    #[test]
+    fn set_variable_leaves_a_table_that_is_not_fastfs_alone() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            let pinfo = project_info::pinfo_path(&project.path);
+            let reshaped =
+                file(&project).replace("| Variable    | Value    |", "| Field       | Value    |");
+            fs::write(&pinfo, &reshaped).unwrap();
+            let meta = operations::set_variable(&project, "tier", "Major").unwrap();
+            assert_eq!(meta.variables["tier"], "Major");
+            let after = file(&project);
+            let (_, body) = project_info::split_frontmatter_body(&after).unwrap();
+            let (_, body_before) = project_info::split_frontmatter_body(&reshaped).unwrap();
+            assert_eq!(
+                body, body_before,
+                "a table that is not fastf's is not rewritten"
+            );
+        });
+    }
+
+    /// A tag edited on its row: renamed in place, or removed when emptied. The
+    /// record of derived tags follows what is actually there.
+    #[test]
+    fn replace_tag_renames_in_place_and_empty_removes() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            operations::add_tags(&project, &["urgent".to_string(), "later".to_string()]).unwrap();
+            let tags =
+                operations::replace_tag(&project, "urgent", Some(&Tag::parse("soon").unwrap()))
+                    .unwrap();
+            assert_eq!(tags, vec!["client", "tier/Indie", "soon", "later"]);
+            let tags = operations::replace_tag(&project, "later", None).unwrap();
+            assert_eq!(tags, vec!["client", "tier/Indie", "soon"]);
+            let tags =
+                operations::replace_tag(&project, "soon", Some(&Tag::parse("client").unwrap()))
+                    .unwrap();
+            assert_eq!(
+                tags,
+                vec!["client", "tier/Indie"],
+                "renaming onto a tag already there merges"
+            );
+            let tags = operations::replace_tag(&project, "tier/Indie", None).unwrap();
+            assert_eq!(tags, vec!["client"]);
+            let meta = project_info::read_metadata(&project.path).unwrap().unwrap();
+            assert!(
+                meta.auto_tags.is_empty(),
+                "the record follows the tags: {:?}",
+                meta.auto_tags
+            );
+            let err = operations::replace_tag(&project, "gone", None)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("no tag 'gone'"), "{err}");
+        });
+    }
+
+    /// The notes section is rewritten in place and everything around it stays
+    /// byte for byte — the journal underneath included.
+    #[test]
+    fn set_notes_replaces_the_section_and_keeps_every_other_byte() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            operations::append_note(&project, "began").unwrap();
+            let before = file(&project);
+            assert!(before.contains("## Notes\n\n## Journal\n"), "{before}");
+
+            operations::set_notes(&project, "first cut due Friday\nthen colour").unwrap();
+            let after = file(&project);
+            assert_eq!(
+                after,
+                before.replace(
+                    "## Notes\n\n## Journal\n",
+                    "## Notes\n\nfirst cut due Friday\nthen colour\n\n## Journal\n"
+                ),
+                "the notes and only the notes"
+            );
+            assert_eq!(
+                project_info::notes_body(&after),
+                Some("first cut due Friday\nthen colour")
+            );
+
+            operations::set_notes(&project, "").unwrap();
+            assert_eq!(
+                file(&project),
+                before,
+                "emptied notes read as never written"
+            );
+        });
+    }
+
+    /// Notes at the end of the file — no journal yet — keep the blank line a
+    /// fresh file has, so the first journal entry lands under one.
+    #[test]
+    fn set_notes_at_the_end_of_the_file_keeps_the_shape_a_journal_expects() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            let before = file(&project);
+            assert!(before.ends_with("## Notes\n\n"), "{before:?}");
+            operations::set_notes(&project, "remember the invoice").unwrap();
+            assert!(file(&project).ends_with("## Notes\n\nremember the invoice\n\n"));
+            operations::append_note(&project, "sent").unwrap();
+            assert!(
+                file(&project).contains("remember the invoice\n\n## Journal\n\n- "),
+                "{}",
+                file(&project)
+            );
+            operations::set_notes(&project, "").unwrap();
+            assert!(
+                file(&project).contains("## Notes\n\n## Journal\n\n- "),
+                "{}",
+                file(&project)
+            );
+        });
+    }
+
+    /// A file that lost its notes section gets one back where it belongs.
+    #[test]
+    fn set_notes_creates_the_section_before_the_journal() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            operations::append_note(&project, "began").unwrap();
+            let pinfo = project_info::pinfo_path(&project.path);
+            let without = file(&project).replace("## Notes\n\n", "");
+            fs::write(&pinfo, &without).unwrap();
+            assert_eq!(project_info::notes_body(&without), None);
+            operations::set_notes(&project, "back").unwrap();
+            let after = file(&project);
+            assert!(
+                after.contains("## Notes\n\nback\n\n## Journal\n\n- "),
+                "{after}"
+            );
+            assert_eq!(
+                project_info::read_journal_entries(&project.path)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        });
+    }
+
+    /// A second-level heading inside the notes would end them: refused, with
+    /// the line named.
+    #[test]
+    fn set_notes_refuses_a_heading_that_would_end_the_section() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            let before = file(&project);
+            let err = operations::set_notes(&project, "fine\n## Journal\nnot fine")
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("## Journal") && err.contains("end the notes"),
+                "{err}"
+            );
+            assert_eq!(file(&project), before);
+            operations::set_notes(&project, "# a title is fine\n- and a list").unwrap();
+        });
+    }
+
+    /// Every tag comes through one door, and a poem does not fit through it.
+    #[test]
+    fn add_tags_refuses_what_is_not_a_tag() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            for bad in [
+                "a poem about tags",
+                "",
+                "client/",
+                "two\nlines",
+                "no,commas",
+            ] {
+                let err = operations::add_tags(&project, &[bad.to_string()])
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    err.contains("a tag") || err.contains("a '/'"),
+                    "{bad:?}: {err}"
+                );
+            }
+            let tags = operations::add_tags(&project, &["  ok-tag.v2  ".to_string()]).unwrap();
+            assert!(
+                tags.contains(&"ok-tag.v2".to_string()),
+                "trimmed, then kept: {tags:?}"
+            );
+        });
+    }
+}

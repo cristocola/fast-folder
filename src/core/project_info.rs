@@ -123,6 +123,24 @@ pub struct Metadata {
     /// written before tagging was introduced valid — they simply get no tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Which of `tags` this project's template derived from `tag_from`.
+    ///
+    /// **Written down rather than re-derived**, for the same reason
+    /// `id_number` is: the derivation is not invertible. `tag reauto` has to
+    /// know which tags it wrote last time so it can replace exactly those, and
+    /// the only thing it could ask before this field existed was "does this
+    /// tag start with a `tag_from` slug and a slash" — which is also true of
+    /// a literal tag the template declares (`tags: ["tier/legacy"]`) and of
+    /// any tag a user typed (`fastf tag add ID0001 tier/manual`). Re-deriving
+    /// deleted both.
+    ///
+    /// Empty for a project written before this field existed;
+    /// [`Metadata::previous_auto_tags`] reconstructs what it can for those.
+    /// `Vec::is_empty`
+    /// skips the key, so a project whose template derives nothing writes a
+    /// frontmatter byte-identical to what earlier versions wrote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_tags: Vec<String>,
     /// `true` while the project is still being built.
     ///
     /// Metadata is written *first* now, immediately after the folder is claimed,
@@ -158,8 +176,34 @@ impl Metadata {
         "path",
         "variables",
         "tags",
+        "auto_tags",
         "provisioning",
     ];
+
+    /// The tags a previous fastf wrote into `tags` by derivation — the set
+    /// `tag reauto` is licensed to remove.
+    ///
+    /// The record itself when there is one. For a project written before the
+    /// record existed, the derivation is replayed against the variables the
+    /// file holds and only the results that are *actually in* `tags` are
+    /// claimed: `slug/<value of slug>` is what fastf would have written, so a
+    /// tag matching it is one it wrote, and every other tag under that
+    /// namespace — a template's own literal `tags: ["tier/legacy"]`, a
+    /// `tier/manual` somebody typed — belongs to whoever put it there.
+    ///
+    /// This is the whole of the compatibility story: no migration, no rewrite.
+    /// The first `tag reauto` on such a project writes the record.
+    pub fn previous_auto_tags(&self) -> Vec<String> {
+        if !self.auto_tags.is_empty() {
+            return self.auto_tags.clone();
+        }
+        self.variables
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .map(|(slug, value)| format!("{slug}/{value}"))
+            .filter(|tag| self.tags.contains(tag))
+            .collect()
+    }
 
     /// Build the typed metadata for a freshly-planned project.
     /// `tags` is the combined literal + auto-derived tag list computed in
@@ -208,6 +252,7 @@ impl Metadata {
             // forever. This field is display-truth only — discovery never reads
             // it — so the readable form is the correct one to store.
             path: crate::util::paths::display_path(&plan.root_path),
+            auto_tags: tmpl.auto_tags(|slug| plan.vars.get(slug).map(String::as_str)),
             variables,
             tags,
             provisioning: false,
@@ -248,66 +293,183 @@ pub fn render_at(
     out.push_str("# Project Info\n\n");
 
     if !tmpl.variables.is_empty() {
-        // Variables table (labels from template, values from plan — post-transform).
-        // Column widths sized to the longest label / value so it renders cleanly
-        // in any monospace viewer.
-        let label_w = tmpl
-            .variables
-            .iter()
-            .map(|v| v.label.chars().count())
-            .max()
-            .unwrap_or(8)
-            .max("Variable".len());
-        let value_w = tmpl
-            .variables
-            .iter()
-            .map(|v| {
-                let raw = plan.vars.get(&v.slug).cloned().unwrap_or_default();
-                let display = if raw.is_empty() {
-                    "_(empty)_".to_string()
-                } else {
-                    raw
-                };
-                display.chars().count()
-            })
-            .max()
-            .unwrap_or(5)
-            .max("Value".len());
-
-        out.push_str(&format!(
-            "| {:<lw$} | {:<vw$} |\n",
-            "Variable",
-            "Value",
-            lw = label_w,
-            vw = value_w
-        ));
-        out.push_str(&format!(
-            "|{:-<lw$}|{:-<vw$}|\n",
-            "",
-            "",
-            lw = label_w + 2,
-            vw = value_w + 2
-        ));
-        for var in &tmpl.variables {
-            let raw = plan.vars.get(&var.slug).cloned().unwrap_or_default();
-            let display = if raw.is_empty() {
-                "_(empty)_".to_string()
-            } else {
-                raw
-            };
-            out.push_str(&format!(
-                "| {:<lw$} | {:<vw$} |\n",
-                var.label,
-                display,
-                lw = label_w,
-                vw = value_w
-            ));
-        }
+        out.push_str(&variables_table(tmpl, |slug| {
+            plan.vars.get(slug).map(String::as_str)
+        }));
         out.push('\n');
     }
 
     out.push_str("## Notes\n\n");
     Ok(out)
+}
+
+/// The variables table under `# Project Info`: labels from the template,
+/// values from `lookup` (post-transform), columns sized to the longest of
+/// each so it renders cleanly in any monospace viewer. **The one definition**
+/// — `render_at` writes it at creation and `sync_variables_table` rewrites it
+/// when a variable changes, and the two must agree to the byte or the second
+/// cannot recognise the first.
+fn variables_table<'a>(tmpl: &Template, lookup: impl Fn(&str) -> Option<&'a str>) -> String {
+    let display = |slug: &str| -> String {
+        match lookup(slug) {
+            Some(raw) if !raw.is_empty() => raw.to_string(),
+            _ => "_(empty)_".to_string(),
+        }
+    };
+    let label_w = tmpl
+        .variables
+        .iter()
+        .map(|v| v.label.chars().count())
+        .max()
+        .unwrap_or(8)
+        .max("Variable".len());
+    let value_w = tmpl
+        .variables
+        .iter()
+        .map(|v| display(&v.slug).chars().count())
+        .max()
+        .unwrap_or(5)
+        .max("Value".len());
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "| {:<lw$} | {:<vw$} |\n",
+        "Variable",
+        "Value",
+        lw = label_w,
+        vw = value_w
+    ));
+    out.push_str(&format!(
+        "|{:-<lw$}|{:-<vw$}|\n",
+        "",
+        "",
+        lw = label_w + 2,
+        vw = value_w + 2
+    ));
+    for var in &tmpl.variables {
+        out.push_str(&format!(
+            "| {:<lw$} | {:<vw$} |\n",
+            var.label,
+            display(&var.slug),
+            lw = label_w,
+            vw = value_w
+        ));
+    }
+    out
+}
+
+/// The heading `render_at` opens the body with, spelled once.
+const BODY_HEADING: &str = "# Project Info";
+
+/// Rewrite the variables table in `body` from `tmpl` and `values` — **only
+/// when the body still has the table fastf wrote.** That is: the first run of
+/// `|` lines after `# Project Info`, whose first line's cells trim to
+/// `Variable` and `Value` and whose second is the dashes. Anything else — a
+/// table the user reshaped, a heading they renamed, no table at all — is left
+/// exactly as it is, because the body is theirs and a guess that rewrote the
+/// wrong block would be worse than a table that has drifted.
+///
+/// `true` when the table was found and rewritten.
+pub(crate) fn sync_variables_table(
+    body: &mut String,
+    tmpl: &Template,
+    values: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    let Some(heading) = body.find(BODY_HEADING) else {
+        return false;
+    };
+    // The table starts at the first `|` line after the heading, with only
+    // blank lines between.
+    let after_heading = heading + BODY_HEADING.len();
+    let mut at = after_heading;
+    let rest = &body[after_heading..];
+    for line in rest.split_inclusive('\n') {
+        if line.trim().is_empty() {
+            at += line.len();
+            continue;
+        }
+        break;
+    }
+    if !body[at..].starts_with('|') {
+        return false;
+    }
+    let table_end = body[at..]
+        .split_inclusive('\n')
+        .take_while(|line| line.starts_with('|'))
+        .map(str::len)
+        .sum::<usize>()
+        + at;
+    let table = &body[at..table_end];
+    let mut lines = table.lines();
+    let header_ok = lines.next().is_some_and(|line| {
+        let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
+        cells == ["Variable", "Value"]
+    });
+    let rule_ok = lines.next().is_some_and(|line| {
+        let cells: Vec<&str> = line.trim_matches('|').split('|').collect();
+        cells.len() == 2
+            && cells
+                .iter()
+                .all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-'))
+    });
+    if !header_ok || !rule_ok {
+        return false;
+    }
+    let fresh = variables_table(tmpl, |slug| values.get(slug).map(String::as_str));
+    body.replace_range(at..table_end, &fresh);
+    true
+}
+
+/// Replace the text of the `## Notes` section with `text`, touching nothing
+/// else in the file.
+///
+/// The section becomes `## Notes`, a blank line, the text, a blank line —
+/// and for empty text just `## Notes` and the blank line, which is what
+/// `render_at` writes, so a project whose notes were emptied reads as one that
+/// never had any. A file with no notes section gets one: before the journal if
+/// there is a journal, else at the end, with the blank line
+/// `append_journal_entry` puts before a section it opens. The bytes on either
+/// side of the section are the bytes that were there.
+pub fn replace_notes(path: &Path, text: &str) -> Result<()> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    split_frontmatter_body(&content).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no YAML frontmatter — cannot write notes",
+            path.display()
+        )
+    })?;
+    let text = text.trim_matches(['\n', '\r']);
+    // Up to and including the newline that ends the section's last line; the
+    // blank line before whatever follows is added by whoever knows what does.
+    let section = if text.is_empty() {
+        format!("{NOTES_HEADING}\n")
+    } else {
+        format!("{NOTES_HEADING}\n\n{text}\n")
+    };
+    let new_content = match section_span(&content, NOTES_HEADING) {
+        // The span stops at the `\n` before the next heading, which stays
+        // where it is and becomes the blank line under the notes; at the end
+        // of the file the blank line is written here.
+        Some(span) if span.end < content.len() => {
+            format!(
+                "{}{section}{}",
+                &content[..span.start],
+                &content[span.end..]
+            )
+        }
+        Some(span) => format!("{}{section}\n", &content[..span.start]),
+        None => match section_span(&content, JOURNAL_HEADING) {
+            Some(journal) => format!(
+                "{}{section}\n{}",
+                &content[..journal.start],
+                &content[journal.start..]
+            ),
+            None if content.ends_with('\n') => format!("{content}{section}\n"),
+            None => format!("{content}\n\n{section}\n"),
+        },
+    };
+    crate::util::atomic::write(path, new_content.as_bytes())
 }
 
 /// Write `<root>/PROJECT_INFO.md`. Metadata is mandatory (the file is
@@ -396,6 +558,19 @@ pub fn read_metadata(project_root: &Path) -> Result<Option<Metadata>> {
 /// - No YAML frontmatter block is present — the caller gets a named error.
 /// - The frontmatter cannot be parsed or re-serialised.
 pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Result<()> {
+    write_document(path, |meta, _| mutator(meta))
+}
+
+/// [`write_frontmatter`], with the body in reach too.
+///
+/// One read, one mutation over both halves, **one atomic write**. Setting a
+/// variable changes the frontmatter *and* the variables table in the body
+/// that mirrors it; two writes would leave a moment — and, killed there, a
+/// file — where the table disagreed with the frontmatter above it. The body
+/// is handed over as a `String` the mutator may change; a mutator that leaves
+/// it alone writes it back byte for byte, which is the promise every
+/// frontmatter-only verb keeps.
+pub fn write_document(path: &Path, mutator: impl FnOnce(&mut Metadata, &mut String)) -> Result<()> {
     let content =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
 
@@ -409,7 +584,8 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
     let mut meta: Metadata = crate::util::yaml::from_str(frontmatter_yaml)
         .with_context(|| format!("parsing YAML frontmatter in {}", path.display()))?;
 
-    mutator(&mut meta);
+    let mut body = body.to_string();
+    mutator(&mut meta, &mut body);
 
     // Merge rather than re-serialize: a key this build has no field for belongs
     // to whoever wrote it, and rewriting the document from the struct alone is
@@ -424,6 +600,40 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
     let new_content = format!("---\n{}---\n{}", new_yaml, body);
 
     crate::util::atomic::write(path, new_content.as_bytes())
+}
+
+/// Where a `## Heading` section is in a `PROJECT_INFO.md` body: the byte range
+/// from the heading to the start of the next `##`, or to the end. The one
+/// rule for every section fastf reads or writes — the journal's and the
+/// notes' — so a writer and a reader can never disagree about where one ends.
+///
+/// `None` when the heading is not there. The end index is always a `char`
+/// boundary: it is either the length, or the offset of a `\n`.
+fn section_span(content: &str, heading: &str) -> Option<std::ops::Range<usize>> {
+    let start = content.find(heading)?;
+    // Search past the heading's own `##` so it cannot match itself.
+    let end = content[start + 2..]
+        .find("\n##")
+        .map(|offset| start + 2 + offset)
+        .unwrap_or(content.len());
+    Some(start..end)
+}
+
+/// The `## Notes` heading, spelled once.
+pub const NOTES_HEADING: &str = "## Notes";
+
+/// The text of the `## Notes` section — everything under the heading up to
+/// the next section — without the heading line and without the blank lines
+/// that frame it. `None` when the file has no notes section at all; `Some("")`
+/// when it has an empty one, which is what every new project starts with.
+pub fn notes_body(content: &str) -> Option<&str> {
+    let body = split_frontmatter_body(content)
+        .map(|(_, body)| body)
+        .unwrap_or(content);
+    let span = section_span(body, NOTES_HEADING)?;
+    let section = &body[span];
+    let after_heading = section.find('\n').map_or("", |at| &section[at + 1..]);
+    Some(after_heading.trim_matches(['\n', '\r']))
 }
 
 /// Where the `## Journal` section is in a `PROJECT_INFO.md` body: the byte
@@ -441,13 +651,7 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
 /// `None` when there is no journal at all. The end index is always a `char`
 /// boundary: it is either the length, or the offset of a `\n`.
 fn journal_span(content: &str) -> Option<std::ops::Range<usize>> {
-    let start = content.find(JOURNAL_HEADING)?;
-    // Search past the heading's own `##` so it cannot match itself.
-    let end = content[start + 2..]
-        .find("\n##")
-        .map(|offset| start + 2 + offset)
-        .unwrap_or(content.len());
-    Some(start..end)
+    section_span(content, JOURNAL_HEADING)
 }
 
 /// The `## Journal` heading, spelled once.
@@ -598,8 +802,8 @@ mod tests {
     /// to succeed and changes nothing. Catch it here rather than in a bug report.
     #[test]
     fn owned_keys_covers_every_serialized_field() {
-        // `provisioning: true` and `id_number: Some` so nothing is skipped and
-        // every key is emitted.
+        // `provisioning: true`, `id_number: Some` and a non-empty `auto_tags`
+        // so nothing is skipped and every key is emitted.
         let meta = Metadata {
             id: "ID0001".to_string(),
             id_number: Some(1),
@@ -609,7 +813,8 @@ mod tests {
             folder: "f".to_string(),
             path: "/p".to_string(),
             variables: BTreeMap::new(),
-            tags: vec![],
+            tags: vec!["tier/Indie".to_string()],
+            auto_tags: vec!["tier/Indie".to_string()],
             provisioning: true,
         };
         assert_eq!(

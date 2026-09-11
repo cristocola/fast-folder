@@ -151,6 +151,23 @@ pub enum Action {
         tags: Vec<String>,
     },
     ReautoTags(Box<Project>),
+    /// Set one template variable, from the detail pane.
+    SetVariable {
+        project: Box<Project>,
+        slug: String,
+        value: String,
+    },
+    /// Rename one tag in place — or remove it, when `to` is `None`.
+    ReplaceTag {
+        project: Box<Project>,
+        from: String,
+        to: Option<String>,
+    },
+    /// Replace the `## Notes` section.
+    SetNotes {
+        project: Box<Project>,
+        text: String,
+    },
     Rename {
         project: Box<Project>,
         name: String,

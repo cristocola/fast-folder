@@ -657,14 +657,15 @@ fn the_sort_order_and_the_cursor_survive_a_restart() {
     plant_dated_project(&sb, "Mid_Project", "ID0001", "2026-01-01T00:00:00Z", 512);
 
     // newest → oldest → name. The cursor followed Zeta through the re-sorts
-    // (selection is by path), so it sits on the last row; down wraps to Alpha.
+    // (selection is by path), so it sits on the last row; `g` is the first,
+    // Alpha — a list stops at its ends now, so down would stay on Zeta.
     let script = pty::Script::new()
         .pause(1500)
         .key("s")
         .pause(200)
         .key("s")
         .pause(200)
-        .down(1)
+        .key("g")
         .pause(400)
         .key(KEY_QUIT)
         .build();

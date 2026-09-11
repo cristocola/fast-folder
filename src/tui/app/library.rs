@@ -562,14 +562,14 @@ impl LibraryState {
         self.filtered.is_empty()
     }
 
-    /// Arrow keys wrap.
+    /// Arrow keys stop at the ends, like the page keys.
     pub fn step(&mut self, delta: isize) {
-        self.selected = nav::wrap_step(self.selected, self.filtered.len(), delta);
+        self.selected = nav::step(self.selected, self.filtered.len(), delta);
     }
 
-    /// Page keys clamp.
+    /// Page keys, and the ends.
     pub fn jump(&mut self, delta: isize) {
-        self.selected = nav::clamp_jump(self.selected, self.filtered.len(), delta);
+        self.selected = nav::step(self.selected, self.filtered.len(), delta);
     }
 
     pub fn select_first(&mut self) {

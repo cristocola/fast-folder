@@ -40,6 +40,10 @@ pub enum Then {
     /// what Space on a choice opens, so a twenty-template list is one fuzzy
     /// search rather than twenty presses of `→`.
     FormField(String),
+    /// The picked value is the new value of the named variable of the
+    /// selected project — a `select` variable edited from the detail pane,
+    /// which offers its options and nothing else.
+    PaneVariable(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,7 +104,7 @@ impl PickState {
     }
 
     pub fn step(&mut self, delta: isize) {
-        self.selected = nav::wrap_step(self.selected, self.ranked.len(), delta);
+        self.selected = nav::step(self.selected, self.ranked.len(), delta);
     }
 
     pub fn clamp_viewport(&mut self, rows: usize) {

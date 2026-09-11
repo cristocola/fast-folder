@@ -6,12 +6,17 @@
 //!
 //! - a **pulse** on a row a verb just changed — *which* rows did that batch
 //!   touch, when the cursor is somewhere else;
-//! - a **pulse** on a size cell as its number lands — is that number new, or
-//!   did the table reflow;
+//! - a **pulse** on a size cell whose number *changed* — is the figure the one
+//!   that was there a moment ago (never on a first fill: a page of sizes
+//!   arrives at once, and lighting every visible row together is a flash);
 //! - one **activity indicator** wherever something is pending — is it working,
 //!   or is it stuck (that one is `Glyphs::spin`, and older than this module);
 //! - a **fade** on a status message about to expire — it is going, and you can
-//!   still read it.
+//!   still read it;
+//! - a **pulse** on the title of the pane the focus just moved to — which pane
+//!   will the next key go to. The border and the title colour say so at rest,
+//!   but a change of colour on a line nobody was reading is not seen; the
+//!   pulse is the moment of the move, and it lets go.
 //!
 //! Deliberately not built: eased scrolling, dialog transitions, cursor trails.
 //! They answer nothing.
@@ -22,7 +27,7 @@
 //! millisecond it chooses. The clock itself is `App.elapsed_ms`, fed by
 //! `Msg::Tick` from the one place that owns a clock, `runtime`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ratatui::style::{Modifier, Style};
 
@@ -91,29 +96,40 @@ pub fn phase(started: u64, now: u64, duration: u64) -> Option<f32> {
     Some(elapsed as f32 / duration as f32)
 }
 
-/// One row that changed, and when.
+/// One thing that changed, and when. `K` is whatever names it — a row's path
+/// in the table, a row's index in the pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Pulse {
-    pub path: PathBuf,
+pub struct Pulse<K = PathBuf> {
+    pub key: K,
     pub started: u64,
 }
 
 /// Every pulse in flight. A `Vec` because there are as many as a batch just
 /// touched — five, ten — and never enough to want a map.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Pulses {
-    live: Vec<Pulse>,
+///
+/// Generic over the key because the table's rows are named by path and the
+/// pane's by index, and the arithmetic — start or restart, retire, one-step
+/// wash — is the same for both. Two structs would have been two copies of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pulses<K = PathBuf> {
+    live: Vec<Pulse<K>>,
 }
 
-impl Pulses {
+impl<K> Default for Pulses<K> {
+    fn default() -> Self {
+        Self { live: Vec::new() }
+    }
+}
+
+impl<K: PartialEq> Pulses<K> {
     /// Start one, or restart the one that is already on this row: a row
     /// touched twice in a batch should pulse from now, not carry on fading.
-    pub fn start(&mut self, path: PathBuf, now: u64) {
-        if let Some(pulse) = self.live.iter_mut().find(|p| p.path == path) {
+    pub fn start(&mut self, key: K, now: u64) {
+        if let Some(pulse) = self.live.iter_mut().find(|p| p.key == key) {
             pulse.started = now;
             return;
         }
-        self.live.push(Pulse { path, started: now });
+        self.live.push(Pulse { key, started: now });
     }
 
     /// Drop what has finished. Called on the tick, so the list cannot grow
@@ -132,8 +148,12 @@ impl Pulses {
     }
 
     /// How far through its pulse this row is, if it is in one.
-    fn at(&self, path: &Path, now: u64) -> Option<f32> {
-        let pulse = self.live.iter().find(|p| p.path == path)?;
+    fn at<Q>(&self, key: &Q, now: u64) -> Option<f32>
+    where
+        K: PartialEq<Q>,
+        Q: ?Sized,
+    {
+        let pulse = self.live.iter().find(|p| p.key == *key)?;
         phase(pulse.started, now, PULSE_MS)
     }
 
@@ -147,13 +167,39 @@ impl Pulses {
     /// interpolate *towards*. What a terminal can do honestly is hold the row
     /// lit for as long as an eye needs to find it and then let go, which at
     /// `PULSE_MS` reads as a pulse rather than a state.
-    pub fn style_for(&self, path: &Path, now: u64, theme: &Theme, motion: Motion) -> Option<Style> {
+    pub fn style_for<Q>(&self, key: &Q, now: u64, theme: &Theme, motion: Motion) -> Option<Style>
+    where
+        K: PartialEq<Q>,
+        Q: ?Sized,
+    {
         if !motion.is_on() || theme.kind == ThemeKind::Mono {
             return None;
         }
-        self.at(path, now)?;
+        self.at(key, now)?;
         Some(Style::default().bg(theme.pulse))
     }
+}
+
+/// The wash the newly focused pane's title wears for `PULSE_MS` after the
+/// focus moved there. `moved_at` is when; `None` once nothing has moved or
+/// the pulse has let go. The same bargain as a row's: a background, one step,
+/// off under `Motion::Off` and in mono.
+pub fn focus_style(
+    moved_at: Option<u64>,
+    now: u64,
+    theme: &Theme,
+    motion: Motion,
+) -> Option<Style> {
+    if !motion.is_on() || theme.kind == ThemeKind::Mono {
+        return None;
+    }
+    phase(moved_at?, now, PULSE_MS)?;
+    Some(Style::default().bg(theme.pulse))
+}
+
+/// Whether a focus pulse started at `moved_at` is still in flight at `now`.
+pub fn focus_pulsing(moved_at: Option<u64>, now: u64) -> bool {
+    moved_at.is_some_and(|at| phase(at, now, PULSE_MS).is_some())
 }
 
 /// How dim a status message is on its way out: `None` while it is simply
@@ -174,6 +220,25 @@ pub fn expiring_style(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_focus_pulse_is_one_step_and_lets_go() {
+        let theme = Theme::rich();
+        assert!(focus_style(None, 100, &theme, Motion::On).is_none());
+        assert!(focus_style(Some(100), 100, &theme, Motion::On).is_some());
+        assert!(focus_style(Some(100), 100 + PULSE_MS - 1, &theme, Motion::On).is_some());
+        assert!(focus_style(Some(100), 100 + PULSE_MS, &theme, Motion::On).is_none());
+        assert!(focus_pulsing(Some(100), 100 + PULSE_MS - 1));
+        assert!(!focus_pulsing(Some(100), 100 + PULSE_MS));
+        assert!(
+            focus_style(Some(100), 100, &theme, Motion::Off).is_none(),
+            "off is off"
+        );
+        assert!(
+            focus_style(Some(100), 100, &Theme::mono(), Motion::On).is_none(),
+            "a wash with no colour is a flicker"
+        );
+    }
 
     #[test]
     fn a_phase_runs_from_nothing_to_gone() {

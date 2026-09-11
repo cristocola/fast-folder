@@ -13,7 +13,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::tui::app::App;
+use crate::tui::app::{App, Focus};
 
 /// One keystroke, normalised: shift is folded into the character, Ctrl and Alt
 /// are flags. `KeyCode::Char('c')` with the control flag is Ctrl-C.
@@ -130,6 +130,9 @@ pub enum Context {
     /// A picker — one choice or several. `Pick` carries a query, so it is a
     /// text-entry context too; `MultiPick` does not, and Space ticks a row.
     Pick,
+    /// A row of the detail pane is being edited in place — a line for a
+    /// variable or a tag, a text area for the notes. The field has the keys.
+    PaneEdit,
     /// Any other dialog: a confirmation, a picker, help, a message.
     Modal,
 }
@@ -149,6 +152,7 @@ impl Context {
             Context::Guide => "template guide",
             Context::Prompt => "a prompt",
             Context::Pick => "a picker",
+            Context::PaneEdit => "editing in the detail pane",
             Context::Modal => "dialogs",
         }
     }
@@ -158,7 +162,11 @@ impl Context {
     pub fn is_text_entry(self) -> bool {
         matches!(
             self,
-            Context::SearchEdit | Context::Palette | Context::Prompt | Context::Pick
+            Context::SearchEdit
+                | Context::Palette
+                | Context::Prompt
+                | Context::Pick
+                | Context::PaneEdit
         )
     }
 
@@ -186,7 +194,7 @@ impl Context {
     }
 
     /// Every context, for the invariants and the help.
-    pub const ALL: [Context; 13] = [
+    pub const ALL: [Context; 14] = [
         Context::Global,
         Context::Projects,
         Context::Detail,
@@ -199,6 +207,7 @@ impl Context {
         Context::Guide,
         Context::Prompt,
         Context::Pick,
+        Context::PaneEdit,
         Context::Modal,
     ];
 }
@@ -286,14 +295,13 @@ pub enum CommandId {
     HalfUp,
     First,
     Last,
-    /// The horizontal axis, on the pane: one step back to the list.
-    FocusTable,
-    /// The horizontal axis, on the templates tab: back where you came from.
+    /// The horizontal axis, leftwards: the list beside the pane.
+    FocusList,
+    /// The horizontal axis, rightwards: the pane beside the list.
+    FocusDetail,
+    /// Back to the library from the templates tab — palette only; `T` and
+    /// Esc are the keys.
     BackToLibrary,
-    /// The horizontal axis, in a dialog: one level out.
-    Ascend,
-    /// The horizontal axis, on a list: one step into the row under the cursor.
-    Descend,
     // Search and filters
     Search,
     ClearSearch,
@@ -317,6 +325,17 @@ pub enum CommandId {
     AddNote,
     NoteInline,
     Rename,
+    /// Enter on the project list: the action menu, as `a` opens it. Its own
+    /// id because the pane's Enter means something else.
+    ActionsEnter,
+    /// Enter on a row of the detail pane: edit what is under the cursor.
+    PaneEdit,
+    /// The pane's line editor: keep what was typed.
+    PaneEditConfirm,
+    /// The pane's editor: leave the row as it was.
+    PaneEditCancel,
+    /// The pane's notes editor: save the text.
+    PaneEditSave,
     Move,
     CopyTo,
     Unregister,
@@ -365,7 +384,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 92] = [
+    pub const ALL: [CommandId; 96] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -398,10 +417,9 @@ impl CommandId {
         CommandId::HalfUp,
         CommandId::First,
         CommandId::Last,
-        CommandId::FocusTable,
+        CommandId::FocusList,
+        CommandId::FocusDetail,
         CommandId::BackToLibrary,
-        CommandId::Ascend,
-        CommandId::Descend,
         CommandId::Search,
         CommandId::ClearSearch,
         CommandId::SortCycle,
@@ -422,6 +440,11 @@ impl CommandId {
         CommandId::AddNote,
         CommandId::NoteInline,
         CommandId::Rename,
+        CommandId::ActionsEnter,
+        CommandId::PaneEdit,
+        CommandId::PaneEditConfirm,
+        CommandId::PaneEditCancel,
+        CommandId::PaneEditSave,
         CommandId::Move,
         CommandId::CopyTo,
         CommandId::Unregister,
@@ -482,6 +505,28 @@ pub struct Command {
 
 fn always(_: &App) -> Availability {
     Availability::Enabled
+}
+
+/// `←` is bound only while the pane has the focus: on the list there is
+/// nothing to its left, and a key that does nothing should not be in the help
+/// saying it does. **The axis never quits** — leaving a tab is Esc's ladder.
+fn pane_has_focus(app: &App) -> Availability {
+    if app.focus == Focus::Detail {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
+}
+
+/// `→` is bound only while there is a pane to go to and the cursor is not
+/// already in it. The library's pane closes under `layout::DETAIL_MIN_WIDTH`,
+/// and then the key is unbound rather than a no-op advertised on the bar.
+fn pane_can_take_focus(app: &App) -> Availability {
+    if app.focus == Focus::Projects && app.pane_present() {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
 }
 
 /// Alt-Enter breaks a line, and only a quick note has lines to break: in a
@@ -559,6 +604,46 @@ fn not_busy(app: &App) -> Availability {
         Availability::Disabled("working…")
     } else {
         Availability::Enabled
+    }
+}
+
+/// Enter in the pane: only over a row it can act on, and not while a write
+/// is in flight.
+fn pane_row_and_not_busy(app: &App) -> Availability {
+    match selection_and_not_busy(app) {
+        Availability::Enabled => {
+            if app
+                .pane_rows()
+                .get(app.pane_cursor)
+                .is_some_and(|row| row.selectable())
+            {
+                Availability::Enabled
+            } else {
+                Availability::Hidden
+            }
+        }
+        other => other,
+    }
+}
+
+/// The pane's line editor is open and not yet sent: Enter keeps. Hidden in
+/// the notes editor, where Enter is a new line and `Ctrl-S` is the keep.
+fn pane_line_editing(app: &App) -> Availability {
+    match &app.pane_edit {
+        Some(edit) if edit.is_notes() => Availability::Hidden,
+        Some(edit) if edit.pending() => Availability::Disabled("writing…"),
+        Some(_) => Availability::Enabled,
+        None => Availability::Hidden,
+    }
+}
+
+/// The pane's notes editor is open and not yet sent: `Ctrl-S` saves.
+fn pane_notes_editing(app: &App) -> Availability {
+    match &app.pane_edit {
+        Some(edit) if !edit.is_notes() => Availability::Hidden,
+        Some(edit) if edit.pending() => Availability::Disabled("writing…"),
+        Some(_) => Availability::Enabled,
+        None => Availability::Hidden,
     }
 }
 
@@ -767,26 +852,10 @@ const DIALOGS: &[Context] = &[
     Context::Guide,
     Context::Modal,
 ];
-/// Where the horizontal axis means "one step in": every list with something
-/// under the cursor to enter. Not the search bar, not the palette, not a form
-/// — a text field owns its own arrows.
-const DESCEND: &[Context] = &[
-    Context::Projects,
-    Context::Detail,
-    Context::Templates,
-    Context::Actions,
-    Context::Builder,
-    Context::Settings,
-];
-/// Where the horizontal axis means "one level out". Everywhere `Close` does,
-/// **except the guide**: a reader owns its own left and right, so `←` there
-/// turns a page and `Esc` is the way out.
-const BACKOUT: &[Context] = &[
-    Context::Actions,
-    Context::Builder,
-    Context::Settings,
-    Context::Modal,
-];
+/// Where the horizontal axis moves focus: both tabs, each a list with a pane
+/// beside it. Nowhere else — a dialog has no second pane, and a text field
+/// owns its own arrows.
+const PANED: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
 const STUDIO: &[Context] = &[Context::Templates];
 /// The guide overlay itself — the reader, not the key that opens it.
 const READER: &[Context] = &[Context::Guide];
@@ -795,6 +864,7 @@ const READER: &[Context] = &[Context::Guide];
 /// why `?` in the palette described a screen it was not on.
 const IN_PALETTE: &[Context] = &[Context::Palette];
 const IN_PROMPT: &[Context] = &[Context::Prompt];
+const IN_PANE_EDIT: &[Context] = &[Context::PaneEdit];
 const IN_PICK: &[Context] = &[Context::Pick];
 /// Everywhere the palette can be *opened* from — which is everywhere except
 /// the palette, so `Ctrl-p` inside it is free to mean the previous entry.
@@ -1099,7 +1169,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Down,
         "Down",
-        "next row, or scroll down (a list wraps at the end)",
+        "next row, or scroll down (stops at the end)",
         SCROLLERS,
         [Key::plain(KeyCode::Down), Key::ch('j')],
         Navigate,
@@ -1110,7 +1180,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Up,
         "Up",
-        "previous row, or scroll up (a list wraps at the top)",
+        "previous row, or scroll up (stops at the top)",
         SCROLLERS,
         [Key::plain(KeyCode::Up), Key::ch('k')],
         Navigate,
@@ -1186,24 +1256,13 @@ pub static COMMANDS: &[Command] = &[
     ),
     // --- search and filters ----------------------------------------------
     cmd!(
-        FocusTable,
-        "Back to the list",
-        "leave the detail pane and put the cursor back on the table",
-        &[Context::Detail],
-        [Key::plain(KeyCode::Left), Key::ch('h')],
-        Navigate,
-        palette = false,
-        hint = false,
-        always
-    ),
-    cmd!(
         BackToLibrary,
         "Back to the library",
         "leave the templates tab for the projects you came from",
         TEMPLATES,
-        [Key::plain(KeyCode::Left), Key::ch('h')],
+        [],
         Navigate,
-        palette = false,
+        palette = true,
         hint = false,
         always
     ),
@@ -1301,11 +1360,70 @@ pub static COMMANDS: &[Command] = &[
         "Project actions",
         "open the action menu for the selected project",
         PD,
-        [Key::ch('a'), Key::plain(KeyCode::Enter)],
+        [Key::ch('a')],
         Project,
         palette = true,
         hint = true,
         selection_and_not_busy
+    ),
+    // Enter is `a` on the list and `edit` in the pane. One id cannot carry
+    // two keys in two contexts, so the list's Enter is its own id with the
+    // same handler, hidden from the bar and the palette — `a actions` is
+    // the pair that names the verb.
+    cmd!(
+        ActionsEnter,
+        "Project actions",
+        "the action menu — what Enter does on the list",
+        &[Context::Projects],
+        [Key::plain(KeyCode::Enter)],
+        Project,
+        palette = false,
+        hint = false,
+        selection_and_not_busy
+    ),
+    cmd!(
+        PaneEdit,
+        "Edit",
+        "edit what is under the cursor: the name, a tag, a variable, the notes — or add a tag, or a journal entry",
+        &[Context::Detail],
+        [Key::plain(KeyCode::Enter)],
+        Project,
+        palette = false,
+        hint = true,
+        pane_row_and_not_busy
+    ),
+    cmd!(
+        PaneEditConfirm,
+        "Keep",
+        "keep what was typed and write it to the project",
+        IN_PANE_EDIT,
+        [Key::plain(KeyCode::Enter)],
+        Navigate,
+        palette = false,
+        hint = true,
+        pane_line_editing
+    ),
+    cmd!(
+        PaneEditSave,
+        "Save the notes",
+        "write the notes to the project (Enter is a new line here)",
+        IN_PANE_EDIT,
+        [Key::ctrl('s')],
+        Navigate,
+        palette = false,
+        hint = true,
+        pane_notes_editing
+    ),
+    cmd!(
+        PaneEditCancel,
+        "Cancel",
+        "leave the row as it was",
+        IN_PANE_EDIT,
+        [Key::plain(KeyCode::Esc)],
+        Navigate,
+        palette = false,
+        hint = true,
+        always
     ),
     cmd!(
         OpenFolder,
@@ -1596,6 +1714,32 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         not_busy
     ),
+    // --- the horizontal axis: focus ------------------------------------------
+    // Declared after the tab switch so the bar reads verbs first, then the
+    // ways to look around, then the ways to ask: `→ pane` ahead of the verbs
+    // pushed `? help` off an 80-column bar.
+    cmd!(
+        FocusList,
+        "Back to the list",
+        "put the cursor back on the list beside the pane",
+        PANED,
+        [Key::plain(KeyCode::Left), Key::ch('h')],
+        Navigate,
+        palette = false,
+        hint = true,
+        pane_has_focus
+    ),
+    cmd!(
+        FocusDetail,
+        "Into the pane",
+        "put the cursor in the pane beside the list — the project's detail, or the template's",
+        PANED,
+        [Key::plain(KeyCode::Right), Key::ch('l')],
+        Navigate,
+        palette = false,
+        hint = true,
+        pane_can_take_focus
+    ),
     cmd!(
         Settings,
         "Settings",
@@ -1848,28 +1992,6 @@ pub static COMMANDS: &[Command] = &[
     ),
     // --- closing a dialog ---------------------------------------------------
     cmd!(
-        Descend,
-        "Open",
-        "go into whatever is under the cursor — what Enter does, on the horizontal axis",
-        DESCEND,
-        [Key::plain(KeyCode::Right), Key::ch('l')],
-        Navigate,
-        palette = false,
-        hint = false,
-        always
-    ),
-    cmd!(
-        Ascend,
-        "Back out",
-        "leave this dialog, one level — what Esc does, on the horizontal axis",
-        BACKOUT,
-        [Key::plain(KeyCode::Left), Key::ch('h')],
-        Navigate,
-        palette = false,
-        hint = false,
-        always
-    ),
-    cmd!(
         Close,
         "Close",
         "close this dialog — one level at a time, nothing already answered is lost",
@@ -2007,6 +2129,12 @@ pub fn hint_title(id: CommandId, title: &'static str) -> &'static str {
     match id {
         CommandId::Palette => "commands",
         CommandId::Actions => "actions",
+        CommandId::FocusList => "list",
+        CommandId::FocusDetail => "pane",
+        CommandId::PaneEdit => "edit",
+        CommandId::PaneEditConfirm => "keep",
+        CommandId::PaneEditSave => "save",
+        CommandId::PaneEditCancel => "cancel",
         CommandId::OpenFolder => "open",
         CommandId::OpenTerminal => "terminal",
         CommandId::CopyPath => "copy path",

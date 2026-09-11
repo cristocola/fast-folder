@@ -76,6 +76,9 @@ pub fn row_meta(project: &Project) -> Metadata {
         path: project.path.display().to_string(),
         variables: BTreeMap::new(),
         tags: project.tags.clone(),
+        // Not a queryable field — a row does not carry the record, and search
+        // asks about tags, not about which half of them was derived.
+        auto_tags: Vec::new(),
         provisioning: false,
     }
 }

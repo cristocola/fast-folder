@@ -1120,3 +1120,100 @@ mod settings {
         snap("reconcile_report", render_to_string(&app, 100, 30));
     }
 }
+
+/// The detail pane with the focus and an edit open on a variable: the row
+/// cursor, the field in place of the value, and the rest of the pane still
+/// there around it.
+#[test]
+fn detail_pane_editing_a_variable_120x40() {
+    use fastf::core::project_info::Metadata;
+    use fastf::core::template::{Transform, VarType, Variable};
+    use fastf::tui::app::data::ProjectDetail;
+    use fastf::tui::app::pane::PaneRow;
+    use std::collections::BTreeMap;
+
+    let mut app = fixture(12, 120, 40);
+    let project = app.library.selected().unwrap().clone();
+    let detail = ProjectDetail {
+        meta: Some(Metadata {
+            id: project.id.clone(),
+            id_number: project.id_number,
+            template: project.template.clone(),
+            template_name: project.template_name.clone(),
+            created: project.created.clone(),
+            folder: project.name.clone(),
+            path: String::new(),
+            variables: BTreeMap::from([
+                ("artist".to_string(), "Ariana_Grande".to_string()),
+                ("client_type".to_string(), "Indie".to_string()),
+                ("title".to_string(), "Lullaby".to_string()),
+            ]),
+            tags: project.tags.clone(),
+            auto_tags: Vec::new(),
+            provisioning: false,
+        }),
+        variables: vec![
+            Variable {
+                slug: "artist".to_string(),
+                label: "Artist / Band Name".to_string(),
+                var_type: VarType::Text,
+                required: true,
+                options: Vec::new(),
+                default: String::new(),
+                transform: Transform::TitleUnderscore,
+            },
+            Variable {
+                slug: "title".to_string(),
+                label: "Project Title".to_string(),
+                var_type: VarType::Text,
+                required: true,
+                options: Vec::new(),
+                default: String::new(),
+                transform: Transform::TitleUnderscore,
+            },
+            Variable {
+                slug: "client_type".to_string(),
+                label: "Client Type".to_string(),
+                var_type: VarType::Select,
+                required: false,
+                options: vec!["Indie".to_string(), "Major".to_string()],
+                default: String::new(),
+                transform: Transform::None,
+            },
+        ],
+        notes: vec!["first cut due Friday".to_string()],
+        notes_text: "first cut due Friday".to_string(),
+        journal: vec![("2026-08-28".to_string(), "began the edit".to_string())],
+        journal_count: 1,
+        ..Default::default()
+    };
+    let _ = update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(detail),
+        },
+    );
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Right)));
+    let rows = app.pane_rows();
+    let at = rows
+        .iter()
+        .position(|r| matches!(r, PaneRow::Variable { slug, .. } if slug == "title"))
+        .unwrap();
+    while app.pane_cursor < at {
+        let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    }
+    snap(
+        "detail_pane_focused_120x40",
+        render_to_string(&app, 120, 40),
+    );
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+    for c in "_Remix".chars() {
+        let _ = update(&mut app, Msg::Key(Key::ch(c)));
+    }
+    assert!(app.pane_edit.is_some());
+    snap(
+        "detail_pane_editing_a_variable_120x40",
+        render_to_string(&app, 120, 40),
+    );
+}

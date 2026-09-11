@@ -53,7 +53,7 @@ impl PaletteState {
     }
 
     pub fn step(&mut self, delta: isize) {
-        self.selected = nav::wrap_step(self.selected, self.entries.len(), delta);
+        self.selected = nav::step(self.selected, self.entries.len(), delta);
     }
 
     pub fn clamp_viewport(&mut self, rows: usize) {

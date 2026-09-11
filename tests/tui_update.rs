@@ -168,14 +168,24 @@ fn recent_installs_the_rows_without_a_discovery() {
     );
 }
 
+/// **A list stops at its ends.** It wrapped — one `j` too many at the bottom
+/// of a long table and the cursor was back at the top with nothing to say
+/// why, which reads as the cursor escaping rather than as a feature. Every
+/// list shares `nav::step`, so this holds for all of them.
 #[test]
-fn arrows_wrap_and_page_keys_clamp() {
+fn arrows_and_page_keys_stop_at_the_ends() {
     let mut app = fixture(12, 80, 24);
     assert_eq!(app.library.selected, Some(0));
     press(&mut app, Key::plain(KeyCode::Up));
-    assert_eq!(app.library.selected, Some(11), "up from the top wraps");
+    assert_eq!(app.library.selected, Some(0), "up from the top stays put");
+    press(&mut app, Key::ch('G'));
     press(&mut app, Key::ch('j'));
-    assert_eq!(app.library.selected, Some(0), "down from the bottom wraps");
+    assert_eq!(
+        app.library.selected,
+        Some(11),
+        "down from the bottom stays put"
+    );
+    press(&mut app, Key::ch('g'));
     press(&mut app, Key::plain(KeyCode::PageDown));
     assert_eq!(
         app.library.selected,
@@ -2699,32 +2709,28 @@ mod mouse {
         wheel(&mut app, false);
         assert_eq!(app.library.selected, Some(0));
 
-        // In the detail pane it scrolls the pane, because that is what ↓ does
-        // there — as far as the pane's text goes, and no further.
+        // In the detail pane it moves the pane's cursor, because that is what
+        // ↓ does there — over the rows Enter can act on, and no further than
+        // the last of them.
         let path = app.library.selected().unwrap().path.clone();
-        let long = fastf::tui::app::data::ProjectDetail {
-            listing: (0..80)
-                .map(|i| fastf::tui::app::data::Entry {
-                    name: format!("file_{i:02}.mov"),
-                    is_dir: false,
-                })
-                .collect(),
-            ..Default::default()
-        };
-        app.details.insert(path, long);
+        app.details
+            .insert(path, fastf::tui::app::data::ProjectDetail::default());
         press(&mut app, Key::plain(KeyCode::Tab));
         assert_eq!(app.focus, Focus::Detail);
+        let rows = app.pane_rows();
         wheel(&mut app, true);
-        assert_eq!(app.detail_scroll, 3);
+        assert!(app.pane_cursor > 0, "the wheel moved the pane's cursor");
+        assert!(rows[app.pane_cursor].selectable());
         assert_eq!(app.library.selected, Some(0), "the list did not move");
         press(&mut app, Key::plain(KeyCode::End));
-        let at_end = app.detail_scroll;
-        assert!(
-            at_end > 3 && at_end < 90,
-            "End stops where the text does: {at_end}"
+        let at_end = app.pane_cursor;
+        assert_eq!(
+            rows[at_end],
+            fastf::tui::app::pane::PaneRow::Rule("journal"),
+            "End is the last row Enter can act on"
         );
         wheel(&mut app, true);
-        assert_eq!(app.detail_scroll, at_end, "nothing past the end");
+        assert_eq!(app.pane_cursor, at_end, "nothing past the end");
     }
 
     #[test]
@@ -3662,53 +3668,112 @@ mod movement {
         assert!(app.modals.is_empty(), "neither key opened a dialog");
     }
 
-    /// `→` is Enter's twin: one step into whatever is under the cursor. `←` is
-    /// Esc's: one level back out.
+    /// The templates tab's page keys route through the same step as its
+    /// arrows, so this is where a page used to come round to the top.
     #[test]
-    fn the_right_arrow_goes_in_and_the_left_arrow_comes_out() {
-        let mut app = fixture(3, 80, 24);
-        press(&mut app, Key::plain(KeyCode::Right));
-        assert!(
-            matches!(app.modals.top(), Some(Modal::Actions(_))),
-            "→ opens the row's action menu"
+    fn the_templates_tab_pages_without_wrapping() {
+        let mut app = fixture(3, 100, 30);
+        press(&mut app, Key::ch('T'));
+        assert_eq!(app.screen, Screen::Templates);
+        press(&mut app, Key::plain(KeyCode::PageDown));
+        let last = app.studio.selected;
+        assert!(last > 0, "a page moved the cursor");
+        press(&mut app, Key::plain(KeyCode::PageDown));
+        assert_eq!(
+            app.studio.selected, last,
+            "and a second page stays at the end"
         );
+        press(&mut app, Key::plain(KeyCode::PageUp));
+        press(&mut app, Key::plain(KeyCode::PageUp));
+        assert_eq!(app.studio.selected, 0, "the top is the top");
+    }
+
+    /// **The horizontal axis is focus.** `→` puts the cursor in the pane
+    /// beside the list, `←` puts it back — and neither runs anything. `→`
+    /// used to open the action menu, which is what Enter is for; an arrow
+    /// that executes a verb is an arrow you cannot lean on.
+    #[test]
+    fn the_right_arrow_focuses_the_pane_and_the_left_arrow_the_list() {
+        let mut app = fixture(3, 120, 40);
+        assert!(app.detail_visible());
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Detail, "→ moves into the pane");
+        assert!(app.modals.is_empty(), "and opens nothing");
         press(&mut app, Key::plain(KeyCode::Left));
-        assert!(app.modals.is_empty(), "← leaves one level");
+        assert_eq!(app.focus, Focus::Projects, "← comes back to the list");
         press(&mut app, Key::ch('l'));
-        assert!(matches!(app.modals.top(), Some(Modal::Actions(_))));
+        assert_eq!(app.focus, Focus::Detail);
         press(&mut app, Key::ch('h'));
+        assert_eq!(app.focus, Focus::Projects);
         assert!(app.modals.is_empty());
     }
 
-    /// **The horizontal axis never quits.** Esc's ladder ends in leaving; `←`
-    /// on the library is not bound at all, because there is nothing above it.
+    /// **The horizontal axis never quits, and never runs.** On the list `←`
+    /// has nothing to its left and is not bound; without a pane — the window
+    /// is under a hundred columns — `→` has nothing to its right either.
     #[test]
-    fn the_left_arrow_on_the_library_does_nothing() {
+    fn the_arrows_are_unbound_where_there_is_nowhere_to_go() {
         let mut app = fixture(3, 80, 24);
-        for key in [Key::plain(KeyCode::Left), Key::ch('h')] {
+        assert!(
+            !app.detail_visible(),
+            "the fixture is too narrow for a pane"
+        );
+        for key in [
+            Key::plain(KeyCode::Left),
+            Key::ch('h'),
+            Key::plain(KeyCode::Right),
+            Key::ch('l'),
+        ] {
             assert!(
                 press(&mut app, key).is_empty(),
                 "{} did something",
                 key.label()
             );
             assert!(app.modals.is_empty());
+            assert_eq!(app.focus, Focus::Projects);
         }
     }
 
-    /// From the pane, back is the list; from the templates tab, back is the
-    /// library. Each names where it goes rather than being a second Esc.
+    /// The templates tab has a pane too, and it is always drawn — so `→`
+    /// reaches it at any width, and `←` from it is the card list, never the
+    /// library: leaving a tab is Esc's ladder and `T`, not an arrow.
     #[test]
-    fn the_left_arrow_backs_out_of_the_pane_and_the_tab() {
-        let mut app = fixture(3, 120, 40);
-        press(&mut app, Key::plain(KeyCode::Tab));
-        assert_eq!(app.focus, Focus::Detail);
-        press(&mut app, Key::plain(KeyCode::Left));
-        assert_eq!(app.focus, Focus::Projects);
-
+    fn the_left_arrow_leaves_the_pane_but_never_the_tab() {
+        let mut app = fixture(3, 80, 24);
         press(&mut app, Key::ch('T'));
         assert_eq!(app.screen, Screen::Templates);
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Detail, "→ reaches the template pane");
         press(&mut app, Key::ch('h'));
-        assert_eq!(app.screen, Screen::Library, "← is the way back from a tab");
+        assert_eq!(app.focus, Focus::Projects);
+        assert_eq!(app.screen, Screen::Templates, "← is not the way off a tab");
+        assert!(press(&mut app, Key::ch('h')).is_empty());
+        assert_eq!(
+            app.screen,
+            Screen::Templates,
+            "and a second ← is not either"
+        );
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert_eq!(app.screen, Screen::Library, "Esc is");
+    }
+
+    /// Tab reaches the template pane on a window too narrow for the library's
+    /// pane. It measured the library's geometry before, so on an 80-column
+    /// window the ring had one member and the template pane's tail — a
+    /// `template show` taller than the box — was unreachable.
+    #[test]
+    fn tab_reaches_the_template_pane_on_a_narrow_window() {
+        let mut app = fixture(3, 80, 24);
+        press(&mut app, Key::ch('T'));
+        press(&mut app, Key::plain(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Detail);
+        app.studio.lines = (0..60).map(|n| format!("line {n}")).collect();
+        press(&mut app, Key::ch('j'));
+        assert_eq!(app.studio.scroll, 1, "and the arrows scroll the pane");
+        press(&mut app, Key::ch('G'));
+        assert!(app.studio.scroll > 1, "G reaches the end of the pane");
+        press(&mut app, Key::plain(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Projects, "Tab comes round");
     }
 
     /// Ctrl-C is a declared command now, so it is in the help — and it still
@@ -4009,6 +4074,633 @@ mod more_options {
     }
 }
 
+/// The detail pane's own cursor: it rests only on rows Enter can act on, it
+/// stops at the ends, and the pane scrolls to keep it in view.
+mod pane_cursor {
+    use super::*;
+    use fastf::tui::app::data::ProjectDetail;
+    use fastf::tui::app::pane::PaneRow;
+
+    fn with_detail(app: &mut App, detail: ProjectDetail) {
+        let path = app.library.selected().unwrap().path.clone();
+        update(
+            app,
+            Msg::Detail {
+                path,
+                detail: Box::new(detail),
+            },
+        );
+    }
+
+    #[test]
+    fn the_cursor_walks_selectable_rows_and_stops_at_the_ends() {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('j'));
+        // Row 1 of the fixture carries two tags.
+        assert_eq!(app.library.selected().unwrap().tags.len(), 2);
+        with_detail(&mut app, ProjectDetail::default());
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Detail);
+        assert_eq!(app.pane_cursor, 0, "the cursor starts on the name");
+
+        let rows = app.pane_rows();
+        press(&mut app, Key::ch('j'));
+        assert!(
+            matches!(rows[app.pane_cursor], PaneRow::Tag(_)),
+            "down from the name is the first tag, over the facts: {:?}",
+            rows[app.pane_cursor]
+        );
+        press(&mut app, Key::ch('G'));
+        assert_eq!(rows[app.pane_cursor], PaneRow::Rule("journal"));
+        press(&mut app, Key::ch('j'));
+        assert_eq!(
+            rows[app.pane_cursor],
+            PaneRow::Rule("journal"),
+            "the last row is the last row"
+        );
+        press(&mut app, Key::ch('g'));
+        assert_eq!(app.pane_cursor, 0);
+        press(&mut app, Key::ch('k'));
+        assert_eq!(app.pane_cursor, 0, "and the first is the first");
+        assert!(
+            rows.iter().all(|row| !matches!(row, PaneRow::Reading)),
+            "a read detail leaves no reading row"
+        );
+    }
+
+    #[test]
+    fn the_pane_scrolls_to_keep_its_cursor_in_view_and_a_new_row_resets_it() {
+        let mut app = fixture(6, 120, 24);
+        let detail = ProjectDetail {
+            notes: (0..30).map(|n| format!("note {n}")).collect(),
+            ..Default::default()
+        };
+        with_detail(&mut app, detail);
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.detail_scroll, 0);
+        press(&mut app, Key::ch('G'));
+        let rows = app.pane_rows();
+        assert_eq!(rows[app.pane_cursor], PaneRow::Rule("journal"));
+        assert!(
+            app.detail_scroll > 0,
+            "the journal rule sits under thirty notes, so the pane scrolled"
+        );
+        assert!(
+            app.pane_cursor >= app.detail_scroll,
+            "and the cursor is inside the window it scrolled to"
+        );
+        press(&mut app, Key::plain(KeyCode::Left));
+        press(&mut app, Key::ch('j'));
+        assert_eq!(
+            app.pane_cursor, 0,
+            "another project, the cursor starts again"
+        );
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn the_cursor_is_drawn_only_while_the_pane_has_the_focus() {
+        let mut app = fixture(6, 120, 40);
+        with_detail(&mut app, ProjectDetail::default());
+        press(&mut app, Key::plain(KeyCode::Right));
+        // The cursor is a style, not a glyph — the pane's text does not move
+        // when the focus arrives — so it is the buffer that shows it: mono
+        // draws the selection reversed.
+        let lit = fastf::tui::testing::render_to_buffer(&app, 120, 40);
+        let pane = app.regions().detail.expect("a pane at 120 columns");
+        let name_row = &lit[(pane.x + 1, pane.y + 1)];
+        assert!(
+            name_row
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+            "the name row wears the selection while the pane has the focus"
+        );
+        press(&mut app, Key::plain(KeyCode::Left));
+        let dark = fastf::tui::testing::render_to_buffer(&app, 120, 40);
+        assert!(
+            !dark[(pane.x + 1, pane.y + 1)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+            "and not while the list has it"
+        );
+    }
+}
+
+/// The detail pane as an editor you enter on purpose: nothing changes until
+/// Enter on a row, Esc leaves the row as it was, and what can be typed is
+/// what the file can hold.
+mod pane_editor {
+    use super::*;
+    use fastf::core::project_info::Metadata;
+    use fastf::core::template::{Transform, VarType, Variable};
+    use fastf::tui::app::data::ProjectDetail;
+    use fastf::tui::app::pane::{PaneEdit, PaneRow};
+    use fastf::tui::command::Context;
+    use fastf::tui::effect::Action;
+    use std::collections::BTreeMap;
+
+    fn variable(slug: &str, var_type: VarType, options: &[&str]) -> Variable {
+        Variable {
+            slug: slug.to_string(),
+            label: slug.to_uppercase(),
+            var_type,
+            required: false,
+            options: options.iter().map(|o| o.to_string()).collect(),
+            default: String::new(),
+            transform: Transform::None,
+        }
+    }
+
+    /// A pane with a text variable, a select, notes, and the fixture's tags,
+    /// focused and ready.
+    fn editing_fixture() -> App {
+        let mut app = fixture(6, 120, 40);
+        press(&mut app, Key::ch('j'));
+        let project = app.library.selected().unwrap().clone();
+        assert_eq!(project.tags, vec!["client/Acme", "draft"]);
+        let meta = Metadata {
+            id: project.id.clone(),
+            id_number: project.id_number,
+            template: project.template.clone(),
+            template_name: project.template_name.clone(),
+            created: project.created.clone(),
+            folder: project.name.clone(),
+            path: String::new(),
+            variables: BTreeMap::from([
+                ("artist".to_string(), "Ariana".to_string()),
+                ("tier".to_string(), "Indie".to_string()),
+            ]),
+            tags: project.tags.clone(),
+            auto_tags: Vec::new(),
+            provisioning: false,
+        };
+        let detail = ProjectDetail {
+            meta: Some(meta),
+            variables: vec![
+                variable("artist", VarType::Text, &[]),
+                variable("tier", VarType::Select, &["Indie", "Major"]),
+            ],
+            notes_text: "first cut Friday".to_string(),
+            notes: vec!["first cut Friday".to_string()],
+            ..Default::default()
+        };
+        update(
+            &mut app,
+            Msg::Detail {
+                path: project.path.clone(),
+                detail: Box::new(detail),
+            },
+        );
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Detail);
+        app
+    }
+
+    fn go_to(app: &mut App, wanted: impl Fn(&PaneRow) -> bool) {
+        let rows = app.pane_rows();
+        let at = rows
+            .iter()
+            .position(wanted)
+            .expect("the row is in the pane");
+        press(app, Key::ch('g'));
+        while app.pane_cursor < at {
+            let before = app.pane_cursor;
+            press(app, Key::ch('j'));
+            assert!(app.pane_cursor > before, "the cursor cannot reach row {at}");
+        }
+        assert_eq!(app.pane_cursor, at);
+    }
+
+    fn sent(effects: &[Effect]) -> Option<&Action> {
+        effects.iter().find_map(|e| match e {
+            Effect::Run(_, action) => Some(action.as_ref()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn nothing_edits_before_enter_and_esc_leaves_the_row_as_it_was() {
+        let mut app = editing_fixture();
+        go_to(
+            &mut app,
+            |row| matches!(row, PaneRow::Variable { slug, .. } if slug == "artist"),
+        );
+        for key in [Key::ch('x'), Key::ch('a'), Key::plain(KeyCode::Backspace)] {
+            let effects = press(&mut app, key);
+            assert!(
+                !effects.iter().any(|e| matches!(e, Effect::Run(..))),
+                "{} ran something without Enter: {effects:?}",
+                key.label()
+            );
+        }
+        assert!(
+            app.pane_edit.is_none(),
+            "typing on a row does not open an edit"
+        );
+        // `a` opened the action menu — that key still works in the pane.
+        assert!(matches!(app.modals.top(), Some(Modal::Actions(_))));
+        press(&mut app, Key::plain(KeyCode::Esc));
+
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(
+            matches!(&app.pane_edit, Some(PaneEdit::Line { .. })),
+            "Enter opens the line editor: {:?}",
+            app.pane_edit
+        );
+        assert_eq!(app.context(), Context::PaneEdit);
+        type_text(&mut app, " Grande");
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(app.pane_edit.is_none(), "Esc closes the edit");
+        let rows = app.pane_rows();
+        assert!(
+            matches!(&rows[app.pane_cursor], PaneRow::Variable { value, .. } if value == "Ariana"),
+            "and the row is as it was"
+        );
+    }
+
+    #[test]
+    fn enter_on_a_text_variable_edits_in_place_and_enter_again_sends_it() {
+        let mut app = editing_fixture();
+        go_to(
+            &mut app,
+            |row| matches!(row, PaneRow::Variable { slug, .. } if slug == "artist"),
+        );
+        let row = app.pane_cursor;
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "_Grande");
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        let project = app.library.selected().unwrap().clone();
+        assert_eq!(
+            sent(&effects),
+            Some(&Action::SetVariable {
+                project: Box::new(project.clone()),
+                slug: "artist".to_string(),
+                value: "Ariana_Grande".to_string(),
+            })
+        );
+        assert!(
+            app.pane_edit.as_ref().is_some_and(|edit| edit.pending()),
+            "the edit stays open, pending, until the worker answers"
+        );
+        // Typing while pending changes nothing.
+        type_text(&mut app, "zzz");
+        assert!(
+            matches!(&app.pane_edit, Some(PaneEdit::Line { input, .. }) if input.text() == "Ariana_Grande")
+        );
+
+        // The worker answers: the row is patched, the edit closes, the cursor
+        // stays on the row, and the row pulses.
+        app.theme = fastf::tui::theme::Theme::rich();
+        app.motion = fastf::tui::motion::Motion::On;
+        app.elapsed_ms = 2_000;
+        let mut patched = project.clone();
+        patched.tags.push("tier/Indie".to_string());
+        let id = app.busy_id.expect("an action in flight");
+        update(
+            &mut app,
+            Msg::ActionDone {
+                id,
+                outcome: Ok(Box::new(fastf::tui::effect::ActionOutcome::new(
+                    fastf::tui::effect::ListChange::Patched {
+                        project: Box::new(patched),
+                        was: project.path.clone(),
+                        stale: vec![project.path.clone()],
+                    },
+                    "Set artist",
+                ))),
+            },
+        );
+        assert!(app.pane_edit.is_none(), "an Ok closes the edit");
+        // The patch dropped the cached detail, so the variables are gone
+        // until the re-read lands — and a tag row arrived above them. The
+        // cursor follows the variable, not its old index.
+        let rows = app.pane_rows();
+        assert!(
+            rows.iter().all(|r| !matches!(r, PaneRow::Variable { .. })),
+            "the detail is being re-read"
+        );
+        let detail = ProjectDetail {
+            meta: Some(Metadata {
+                id: project.id.clone(),
+                id_number: project.id_number,
+                template: project.template.clone(),
+                template_name: project.template_name.clone(),
+                created: project.created.clone(),
+                folder: project.name.clone(),
+                path: String::new(),
+                variables: BTreeMap::from([
+                    ("artist".to_string(), "Ariana_Grande".to_string()),
+                    ("tier".to_string(), "Indie".to_string()),
+                ]),
+                tags: Vec::new(),
+                auto_tags: Vec::new(),
+                provisioning: false,
+            }),
+            variables: vec![
+                variable("artist", VarType::Text, &[]),
+                variable("tier", VarType::Select, &["Indie", "Major"]),
+            ],
+            ..Default::default()
+        };
+        update(
+            &mut app,
+            Msg::Detail {
+                path: project.path.clone(),
+                detail: Box::new(detail),
+            },
+        );
+        let rows = app.pane_rows();
+        assert!(
+            matches!(&rows[app.pane_cursor], PaneRow::Variable { slug, value, .. } if slug == "artist" && value == "Ariana_Grande"),
+            "the cursor is on the variable that changed, wherever it is now: {:?}",
+            rows[app.pane_cursor]
+        );
+        assert_ne!(
+            app.pane_cursor, row,
+            "which is one row down, under the new tag"
+        );
+        assert!(
+            app.pane_pulses
+                .style_for(&app.pane_cursor, 2_000, &app.theme, app.motion)
+                .is_some(),
+            "and that row pulses"
+        );
+        assert_eq!(
+            app.tick_interval(),
+            Some(std::time::Duration::from_millis(
+                fastf::tui::motion::FRAME_MS
+            ))
+        );
+    }
+
+    #[test]
+    fn a_refusal_lands_on_the_open_edit_with_the_text_still_there() {
+        let mut app = editing_fixture();
+        go_to(
+            &mut app,
+            |row| matches!(row, PaneRow::Variable { slug, .. } if slug == "artist"),
+        );
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "!");
+        press(&mut app, Key::plain(KeyCode::Enter));
+        let id = app.busy_id.expect("an action in flight");
+        update(
+            &mut app,
+            Msg::ActionDone {
+                id,
+                outcome: Err("artist is required".to_string()),
+            },
+        );
+        match &app.pane_edit {
+            Some(PaneEdit::Line {
+                input,
+                error,
+                pending,
+                ..
+            }) => {
+                assert_eq!(
+                    input.text(),
+                    "Ariana!",
+                    "the text is still there to correct"
+                );
+                assert_eq!(error.as_deref(), Some("artist is required"));
+                assert!(!pending, "and it can be sent again");
+            }
+            other => panic!("the edit closed on a refusal: {other:?}"),
+        }
+        assert!(
+            app.modals.is_empty(),
+            "no dialog for a refusal under the field"
+        );
+        // Typing clears the message.
+        press(&mut app, Key::plain(KeyCode::Backspace));
+        assert!(app.pane_edit.as_ref().unwrap().error().is_none());
+    }
+
+    #[test]
+    fn a_tag_is_edited_in_place_and_emptied_it_is_removed() {
+        let mut app = editing_fixture();
+        go_to(
+            &mut app,
+            |row| matches!(row, PaneRow::Tag(tag) if tag == "draft"),
+        );
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(
+            matches!(&app.pane_edit, Some(PaneEdit::Line { input, .. }) if input.text() == "draft")
+        );
+        // Unchanged is a cancel, not a write.
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(sent(&effects).is_none());
+        assert!(app.pane_edit.is_none());
+
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "-v2");
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        let project = app.library.selected().unwrap().clone();
+        assert_eq!(
+            sent(&effects),
+            Some(&Action::ReplaceTag {
+                project: Box::new(project.clone()),
+                from: "draft".to_string(),
+                to: Some("draft-v2".to_string()),
+            })
+        );
+        let id = app.busy_id.unwrap();
+        update(
+            &mut app,
+            Msg::ActionDone {
+                id,
+                outcome: Err("no".to_string()),
+            },
+        );
+        press(&mut app, Key::plain(KeyCode::Esc));
+
+        press(&mut app, Key::plain(KeyCode::Enter));
+        for _ in 0..5 {
+            press(&mut app, Key::plain(KeyCode::Backspace));
+        }
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        assert_eq!(
+            sent(&effects),
+            Some(&Action::ReplaceTag {
+                project: Box::new(project),
+                from: "draft".to_string(),
+                to: None,
+            }),
+            "an emptied tag is removed"
+        );
+    }
+
+    #[test]
+    fn a_tag_that_is_not_a_tag_is_refused_under_the_line() {
+        let mut app = editing_fixture();
+        go_to(
+            &mut app,
+            |row| matches!(row, PaneRow::Tag(tag) if tag == "draft"),
+        );
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, " a poem");
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(sent(&effects).is_none(), "nothing was sent");
+        match &app.pane_edit {
+            Some(PaneEdit::Line { error, .. }) => {
+                assert!(
+                    error.as_deref().is_some_and(|e| e.contains("one word")),
+                    "{error:?}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn enter_on_add_tag_the_name_and_the_journal_open_the_flows_that_exist() {
+        let mut app = editing_fixture();
+        go_to(&mut app, |row| matches!(row, PaneRow::AddTag));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(
+            matches!(
+                app.modals.top(),
+                Some(Modal::Pick(_)) | Some(Modal::TextPrompt(_))
+            ),
+            "add a tag is the tag flow: {:?}",
+            app.modals.top().map(|m| m.context())
+        );
+        press(&mut app, Key::plain(KeyCode::Esc));
+
+        go_to(&mut app, |row| matches!(row, PaneRow::Name));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(
+            matches!(app.modals.top(), Some(Modal::TextPrompt(_))),
+            "the name is the rename prompt"
+        );
+        press(&mut app, Key::plain(KeyCode::Esc));
+
+        go_to(&mut app, |row| matches!(row, PaneRow::Rule("journal")));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(
+            matches!(app.modals.top(), Some(Modal::Note(_))),
+            "the journal rule is a quick note"
+        );
+    }
+
+    #[test]
+    fn a_select_variable_offers_only_its_options_and_the_pick_is_the_edit() {
+        let mut app = editing_fixture();
+        go_to(
+            &mut app,
+            |row| matches!(row, PaneRow::Variable { slug, .. } if slug == "tier"),
+        );
+        press(&mut app, Key::plain(KeyCode::Enter));
+        let labels: Vec<String> = match app.modals.top() {
+            Some(Modal::Pick(pick)) => pick.items.iter().map(|i| i.label.clone()).collect(),
+            other => panic!("a select opens a picker: {other:?}"),
+        };
+        assert_eq!(labels, vec!["Indie", "Major"]);
+        press(&mut app, Key::plain(KeyCode::Down));
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        let project = app.library.selected().unwrap().clone();
+        assert_eq!(
+            sent(&effects),
+            Some(&Action::SetVariable {
+                project: Box::new(project),
+                slug: "tier".to_string(),
+                value: "Major".to_string(),
+            })
+        );
+        assert!(app.modals.is_empty());
+    }
+
+    #[test]
+    fn the_notes_are_a_text_area_saved_with_ctrl_s_and_enter_is_a_new_line() {
+        let mut app = editing_fixture();
+        go_to(&mut app, |row| matches!(row, PaneRow::Rule("notes")));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(matches!(&app.pane_edit, Some(PaneEdit::Notes { .. })));
+        press(&mut app, Key::plain(KeyCode::End));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "then colour");
+        assert!(
+            app.pane_edit.is_some(),
+            "Enter in the notes is a new line, not a send"
+        );
+        let effects = press(&mut app, Key::ctrl('s'));
+        let project = app.library.selected().unwrap().clone();
+        match sent(&effects) {
+            Some(Action::SetNotes { project: p, text }) => {
+                assert_eq!(**p, project);
+                assert_eq!(text, "first cut Friday\nthen colour");
+            }
+            other => panic!("Ctrl-S saves the notes: {other:?}"),
+        }
+        let id = app.busy_id.unwrap();
+        update(
+            &mut app,
+            Msg::ActionDone {
+                id,
+                outcome: Err("a line beginning with ## would end the notes section".to_string()),
+            },
+        );
+        assert!(
+            matches!(&app.pane_edit, Some(PaneEdit::Notes { error: Some(e), .. }) if e.contains("##")),
+            "a refusal lands on the notes editor"
+        );
+    }
+
+    #[test]
+    fn leaving_the_pane_or_the_row_drops_an_open_edit_untouched() {
+        let mut app = editing_fixture();
+        go_to(
+            &mut app,
+            |row| matches!(row, PaneRow::Variable { slug, .. } if slug == "artist"),
+        );
+        press(&mut app, Key::plain(KeyCode::Enter));
+        type_text(&mut app, "x");
+        // `←` is the registry's while a line is being edited? No — the field
+        // has the arrows as its caret, so it is Esc, then ←.
+        press(&mut app, Key::plain(KeyCode::Left));
+        assert!(app.pane_edit.is_some(), "← moves the caret, not the focus");
+        press(&mut app, Key::plain(KeyCode::Esc));
+        assert!(app.pane_edit.is_none());
+        press(&mut app, Key::plain(KeyCode::Enter));
+        press(&mut app, Key::plain(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Projects);
+        assert!(
+            app.pane_edit.is_none(),
+            "leaving the pane leaves the row as it was"
+        );
+    }
+
+    /// The bar says what the pane is for once it has the focus, and what an
+    /// open edit answers to.
+    #[test]
+    fn the_hint_bar_reads_the_pane_and_the_edit() {
+        let mut app = editing_fixture();
+        let hints: Vec<String> = fastf::tui::command::hints(app.context(), &app, 200)
+            .into_iter()
+            .map(|(key, what)| format!("{key} {what}"))
+            .collect();
+        assert!(hints.iter().any(|h| h == "Enter edit"), "{hints:?}");
+        assert!(hints.iter().any(|h| h == "← list"), "{hints:?}");
+        assert!(
+            hints.iter().any(|h| h == "a actions"),
+            "`a` still works in the pane: {hints:?}"
+        );
+        go_to(&mut app, |row| matches!(row, PaneRow::Rule("notes")));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        let hints: Vec<String> = fastf::tui::command::hints(app.context(), &app, 200)
+            .into_iter()
+            .map(|(key, what)| format!("{key} {what}"))
+            .collect();
+        assert!(hints.iter().any(|h| h == "Ctrl-s save"), "{hints:?}");
+        assert!(hints.iter().any(|h| h == "Esc cancel"), "{hints:?}");
+        assert!(
+            !hints.iter().any(|h| h.starts_with("Enter")),
+            "Enter is a new line here: {hints:?}"
+        );
+    }
+}
+
 /// Motion, which only ever appears where a still frame could not answer a
 /// question: what changed, what is working, what is going away.
 mod motion {
@@ -4065,27 +4757,130 @@ mod motion {
         assert!(app.pulses.is_empty(), "and nothing is left in flight");
     }
 
-    /// A size landing where `scanning…` was is a change on that row too.
+    /// **A page filling in is not a change, and lighting it up is a flash.**
+    /// Every visible row's size lands at once — on the first screenful, and
+    /// again on every scroll — so pulsing on arrival washed the whole list at
+    /// a stroke, twenty rows together, several times in the first seconds of
+    /// a run. It read as a fault, which is how it was reported.
     #[test]
-    fn a_size_that_lands_pulses_its_row() {
+    fn a_page_of_sizes_arriving_for_the_first_time_does_not_pulse() {
         let mut app = fixture(6, 100, 30);
         app.theme = Theme::rich();
-        let path = app.library.row(1).unwrap().path.clone();
         app.elapsed_ms = 500;
+        let paths: Vec<_> = (0..app.library.len())
+            .map(|row| app.library.row(row).unwrap().path.clone())
+            .collect();
+        let cells = paths.iter().map(|p| (p.clone(), Some(4096))).collect();
+        let _ = update(&mut app, Msg::Sizes(cells));
+        assert!(
+            app.pulses.is_empty(),
+            "the first fill of a page is the page arriving, not a row changing"
+        );
+
+        // And the same size again is still not news.
+        let _ = update(&mut app, Msg::Sizes(vec![(paths[1].clone(), Some(4096))]));
+        assert!(app.pulses.is_empty());
+    }
+
+    /// A number replacing a *different* number is a change on that row: the
+    /// table is measured from the rows and never from the sizes, so nothing
+    /// reflows around it and the figure would otherwise change under your eyes
+    /// in silence.
+    #[test]
+    fn a_size_that_changes_pulses_its_row() {
+        let mut app = fixture(6, 100, 30);
+        app.theme = Theme::rich();
+        app.elapsed_ms = 500;
+        let path = app.library.row(1).unwrap().path.clone();
+        let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+        assert!(app.pulses.is_empty(), "the first one is an arrival");
+        let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(8192))]));
+        assert!(
+            app.pulses
+                .style_for(&path, 500, &app.theme, Motion::On)
+                .is_some(),
+            "the second one is a change"
+        );
+    }
+
+    /// A size a verb threw away, coming back, is a change too — and it comes
+    /// back looking exactly like a first arrival, because the old number was
+    /// discarded with the row's other stale reads. `ListChange::Patched`'s
+    /// `stale` set is what tells the two apart.
+    #[test]
+    fn a_size_rescanned_after_a_verb_pulses_its_row() {
+        let mut app = fixture(6, 100, 30);
+        app.theme = Theme::rich();
+        app.elapsed_ms = 500;
+        let project = app.library.row(1).unwrap().clone();
+        let path = project.path.clone();
+        let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+
+        let _ = app.apply_change(ListChange::Patched {
+            project: Box::new(project.clone()),
+            was: path.clone(),
+            stale: vec![path.clone()],
+        });
+        // The verb's own row pulse is not what this test is about.
+        app.pulses.clear();
+
         let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
         assert!(
             app.pulses
                 .style_for(&path, 500, &app.theme, Motion::On)
-                .is_some()
+                .is_some(),
+            "the rescan that answers a verb is news even at the same number"
         );
-        // The same size again is not news.
+
+        // And it is spent: the next arrival is an arrival again.
         app.pulses.clear();
         let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
-        assert!(
-            app.pulses
-                .style_for(&path, 500, &app.theme, Motion::On)
-                .is_none()
+        assert!(app.pulses.is_empty());
+    }
+
+    /// **Focus that moved is seen where it landed.** A border changing colour
+    /// on a line nobody was reading is not seen; the pane the focus arrived
+    /// in wears the wash for a moment, then lets go — and the app asks for
+    /// the fast wake only for that moment.
+    #[test]
+    fn moving_focus_pulses_the_pane_it_landed_in_and_lets_go() {
+        let mut app = fixture(6, 120, 40);
+        app.theme = Theme::rich();
+        app.motion = Motion::On;
+        for row in 0..app.library.len() {
+            let path = app.library.row(row).unwrap().path.clone();
+            app.library.sizes.insert(path, Some(1));
+        }
+        app.status = Default::default();
+        assert_eq!(app.tick_interval(), None, "a still app asks for no wake");
+
+        app.elapsed_ms = 1_000;
+        press(&mut app, Key::plain(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Detail);
+        assert_eq!(
+            app.tick_interval(),
+            Some(std::time::Duration::from_millis(motion::FRAME_MS))
         );
+        let lit = render_to_buffer(&app, 120, 40);
+        let pane = app.regions().detail.expect("a pane at 120 columns");
+        // The title sits on the top border, two cells in.
+        let cell = &lit[(pane.x + 2, pane.y)];
+        assert_eq!(cell.bg, app.theme.pulse, "the pane's title wears the wash");
+        let table = app.regions().table;
+        assert_ne!(
+            lit[(table.x + 2, table.y)].bg,
+            app.theme.pulse,
+            "and the pane it left does not"
+        );
+
+        // The same focus again is not a move.
+        press(&mut app, Key::plain(KeyCode::Right));
+        app.elapsed_ms = 1_000 + motion::PULSE_MS;
+        let _ = update(&mut app, Msg::Tick);
+        assert_eq!(app.tick_interval(), None, "it lets go with the pulse");
+        assert!(app.focus_moved_at.is_none());
+        let gone = render_to_buffer(&app, 120, 40);
+        assert_ne!(gone[(pane.x + 2, pane.y)].bg, app.theme.pulse);
     }
 
     /// **The app still costs nothing while idle.** A pulse asks for twenty

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use fastf::tui::command::{COMMANDS, Category, CommandId, Context, Key, find, help_lines};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-const CONTEXTS: [Context; 13] = Context::ALL;
+const CONTEXTS: [Context; 14] = Context::ALL;
 
 #[test]
 fn every_command_id_is_declared_exactly_once() {
@@ -211,11 +211,12 @@ fn an_arrow_and_its_vim_letter_are_bound_together() {
         (KeyCode::Left, 'h'),
         (KeyCode::Right, 'l'),
     ];
-    const TYPING: [Context; 4] = [
+    const TYPING: [Context; 5] = [
         Context::SearchEdit,
         Context::Palette,
         Context::Prompt,
         Context::Pick,
+        Context::PaneEdit,
     ];
     for command in COMMANDS
         .iter()
@@ -233,6 +234,37 @@ fn an_arrow_and_its_vim_letter_are_bound_together() {
                 letter
             );
         }
+    }
+}
+
+/// **The horizontal axis only moves focus or turns a page.** `→` used to be
+/// "whatever Enter does here" and `←` "whatever Esc does", which made two
+/// arrows that ran verbs and closed dialogs; the keys a person leans on to
+/// look around must never act. The guide is the one reader, and a reader's
+/// pages are horizontal.
+#[test]
+fn the_horizontal_axis_only_moves_focus_or_turns_a_page() {
+    const AXIS: [Key; 4] = [
+        Key::plain(KeyCode::Left),
+        Key::plain(KeyCode::Right),
+        Key::ch('h'),
+        Key::ch('l'),
+    ];
+    const ALLOWED: [CommandId; 4] = [
+        CommandId::FocusList,
+        CommandId::FocusDetail,
+        CommandId::GuideNext,
+        CommandId::GuidePrevious,
+    ];
+    for command in COMMANDS
+        .iter()
+        .filter(|c| c.keys.iter().any(|k| AXIS.contains(k)))
+    {
+        assert!(
+            ALLOWED.contains(&command.id),
+            "{:?} binds an arrow of the horizontal axis and is not a focus move or a page turn",
+            command.id
+        );
     }
 }
 

@@ -498,15 +498,12 @@ fn provision_project(
     crate::util::faults::check("create:after-root-dir")?;
 
     // Compute tags: literal template tags + auto-derived tags from tag_from.
-    // Empty variable values are skipped (no "slug/" orphan tags).
+    // `Template::auto_tags` is the one definition of the derived half; which of
+    // the two a tag came from is recorded in the metadata, so `tag reauto` can
+    // replace what it wrote without touching what it did not.
     let tags: Vec<String> = {
         let mut t: Vec<String> = template.tags.clone();
-        for slug in &template.tag_from {
-            let value = plan.vars.get(slug).map(|s| s.as_str()).unwrap_or("");
-            if !value.is_empty() {
-                t.push(format!("{slug}/{value}"));
-            }
-        }
+        t.extend(template.auto_tags(|slug| plan.vars.get(slug).map(String::as_str)));
         t
     };
 

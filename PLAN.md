@@ -17,7 +17,7 @@ Principles for every rewrite:
   nowhere else.
 - Every phase ends with the full gate set green.
 
-## Phase 1 — user documentation ✔ (this PR)
+## Phase 1 — user documentation ✔ (#75)
 
 `docs/` is six guides, one subject each: `app.md` (the guided app, split out
 of `cli.md`), `cli.md` (commands only), `config.md` (settings, environment,
@@ -29,22 +29,21 @@ Ctrl-R reload versus `R` reindex; five remembered things in `state.toml`;
 `structure[].children` documented; `motion` added to `config set --help`
 (`src/main.rs`). Release archaeology purged from every user doc.
 
-## Phase 2 — the release record and the release routine
+## Phase 2 — the release record and the release routine ✔ (this PR)
 
-- `ROADMAP.md` → only what is open: the outstanding manual passes, the one
-  unchecked smoke item, the backlog. Delete "Current phase", the release
-  train, both regression checklists and the gates list.
-- One release routine: `.claude/skills/release/SKILL.md` is the routine,
-  `packaging/aur/PUBLISHING.md` the AUR mechanics only (one-time setup, the
-  commands, the tarball-checksum-drift note). Remove from PUBLISHING.md what
-  the skill also says; use `$FASTF_AUR_DIR` like `update.sh`. In the skill fix
-  the "as executed for 1.1.1" heading, "five patterns" → six, "~150 lines",
-  the docs list (six files). One line on the release-notes convention: a file
-  per v3+ tag, none earlier, a missing file is fine.
-- Both `packaging/aur/*/PKGBUILD` `# Maintainer:` lines → `hello@argyrolabs.com`
-  (`.SRCINFO` does not carry the comment; confirm with a diff). Add to the
-  hygiene rule in the root `CLAUDE.md`: no personal email in a tracked file.
-- Verify: `cargo fmt --check`, `cargo test --test repo_hygiene`.
+`ROADMAP.md` is the manual passes (the Windows Reveal/open/term item folded
+in), the backlog and its two sub-lists, and a pointer to the release notes;
+the product contract's one unported sentence (compatibility within a major)
+went to `docs/projects.md`. The skill is the routine — bump + `Cargo.lock` +
+release notes, green PR, merge, tag, AUR — and now carries the gates list
+and all six failure patterns in one table; `PUBLISHING.md` is setup, the
+commands over `$FASTF_AUR_DIR`, and checksum drift. Both PKGBUILDs say
+`hello@argyrolabs.com` (`.SRCINFO` diffed unchanged). The email rule is
+enforced, not just written: `tests/repo_hygiene.rs` flags any address but
+that one and the reserved example domains, with a unit test for the matcher.
+Pointers to deleted ROADMAP sections were fixed in root `CLAUDE.md` (gates →
+skill, and the hygiene line), `src/core/CLAUDE.md` (threat model →
+`docs/projects.md`), `tests/CLAUDE.md` and `tests/windows_live.rs`.
 
 ## Phase 3 — the four CLAUDE.md files
 

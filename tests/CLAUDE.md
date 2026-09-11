@@ -92,8 +92,8 @@ The suites, and what each guards — the intent, not the case list:
 - `properties.rs` — proptest; above all, that `sanitize_name` output is always
   creatable (verified by creating it).
 - `repo_hygiene.rs` — the repository is published, so no tracked file may name a
-  real home directory, a personal mount point, a local project-folder path, or
-  the maintainer outside an attribution file. Scans `git ls-files`; skips unless
+  real home directory, a personal mount point, a local project-folder path,
+  the maintainer outside an attribution file, or a personal email address. Scans `git ls-files`; skips unless
   the crate directory is itself the root of the checkout. That is stricter than
   "is there a checkout": the AUR source package unpacks the release tarball into
   an ignored directory *inside* a real clone, where `git ls-files` succeeds and

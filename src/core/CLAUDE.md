@@ -165,7 +165,7 @@ the destination through the helper first.
 
 This closes the gap where a link is already sitting in the tree. It is not a
 race-free `openat2` fortress and does not claim to be; the threat model is one
-user's own filesystem, stated in `ROADMAP.md`.
+user's own filesystem, stated in `docs/projects.md` ("What fastf promises").
 
 `paths::is_link_like` is the **one** definition of "link" in the crate, and it is
 the widest one: any Windows reparse point, not only what `FileType::is_symlink()`

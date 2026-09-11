@@ -257,6 +257,10 @@ entries are refused when copying would be required. Process-crash recovery is
 in scope; hardware failure, power loss, bit rot and storage corruption remain
 the job of the filesystem and your backups.
 
+**What stays compatible.** Command-line flags, `config.toml`, templates,
+`PROJECT_INFO.md` and the caches stay compatible within a major version.
+Refusing input that was once accepted but unsafe does not count as a break.
+
 ## Onboarding folders fastf did not create
 
 See `fastf register` in the [CLI reference](cli.md#registering-existing-folders). In short: it writes a `PROJECT_INFO.md` into an existing folder, recovering an `ID####` token from the folder name when present, and `--recursive` onboards a whole base's children in one pass.

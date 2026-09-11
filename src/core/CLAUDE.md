@@ -564,7 +564,7 @@ that changes nothing writes the same bytes back.
 `remove_tags` prunes the record to what `tags` still holds, so it can never
 name a tag that is no longer there.
 
-**The pane's edits.** `operations::set_variable`, `replace_tag`, `set_notes`,
+**The pane's edits.** `operations::set_variable`, `replace_tag`,
 `replace_note`, `toggle_todo` and `add_todo` are the detail pane's writes,
 each the same five steps every mutation here takes. `set_variable` lands a
 value the way a create would have stored it — `vars::validated_raw_values`
@@ -644,14 +644,14 @@ date fastf writes, through `cli::recent::check_since`, for the reason
 text)` and `toggle_todo(path, ordinal, expected)` refuse when the note or task
 at `ordinal` no longer reads `expected` ("changed meanwhile"), because the
 ordinal alone cannot tell an edit of *this* note from an edit of whatever now
-sits where it was. `replace_note` splices over the note's own span (a dated
-note keeps its timestamp; empty text removes it, and the blank line removal
-would leave doubled); `set_preamble` sets the undated note where it was, or
-under the heading, or takes it out — a file with no notes section gets one
-before the journal, else at the end, which is `replace_notes`' old contract.
-`toggle_todo` rewrites the one character inside the brackets and nothing
-else; `add_todo` appends `- [ ] text` at the end of `## Todo`, opening the
-section at the end of the file when there is none, and is one line.
+sits where it was. `replace_note` splices over the note's own span — a dated
+note keeps its timestamp; the undated one keeps the `##` refusal; empty text
+removes the note, and the blank line removal would leave doubled. There is no
+"set the notes" any more: the undated note is edited like any other, and a
+new note is always dated. `toggle_todo` rewrites the one character inside the
+brackets and nothing else; `add_todo` appends `- [ ] text` at the end of
+`## Todo`, opening the section at the end of the file when there is none,
+and is one line.
 
 **A list is opened under a blank line.** `append_in_section` puts `\n\n`
 before the first item of a section that holds no item yet — only its heading,

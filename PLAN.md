@@ -7,7 +7,7 @@ release PR.
 
 ## Phases
 
-- [ ] **Phase 1 — notes are the journal** (branch `notes-are-the-journal`):
+- [x] **Phase 1 — notes are the journal** (branch `notes-are-the-journal`):
   `src/core/body.rs` is the one grammar for the body's sections; notes are
   dated, multi-line, and lenient to read; todos are read, toggled and added;
   `fastf notes --since` refuses a non-date; docs and `src/core/CLAUDE.md`.

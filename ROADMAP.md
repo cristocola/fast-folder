@@ -289,7 +289,7 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
 - [x] Windows clippy: `cargo clippy --all-targets -- -D warnings` on a Windows
   runner (CI's "fmt + clippy (windows-latest)" leg), so `#[cfg(windows)]` code is
   linted rather than merely compiled
-- [x] `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --locked` (CI's "docs build
+- [x] `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked` (CI's "docs build
   clean"; a `pub` item's docs may not link to a `pub(crate)` one). **Locally,
   `rm -rf target/doc` first**: `cargo doc` is incremental and reports a clean
   run without rebuilding, so a fresh `private_intra_doc_links` error can pass on

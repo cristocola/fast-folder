@@ -151,25 +151,38 @@ What is on screen, top to bottom:
   [Columns](#columns). The folder name is never cut. When the table is empty
   it says so inside the box.
 - **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
-  selected project's template, base and date, its size and journal count, its
-  tags one per row, its template variables, the top of its folder, its notes
-  and its latest journal entries. The split favours the table: long folder
-  names take the room they need with the size beside them, the pane takes the
-  rest, and closes — as `i` would — when the rest would be a sliver.
+  selected project's template, base and date, its size and how many notes and
+  todos it has, its tags one per row, its template variables, the top of its
+  folder, its latest notes — each with the day it was written and every line
+  it has — and its todos. The split favours the table: long folder names take
+  the room they need with the size beside them, the pane takes the rest, and
+  closes — as `i` would — when the rest would be a sliver.
+
+  **The pane reads the file.** What it shows is `PROJECT_INFO.md` as it is on
+  disk: edit the file in another window — a note typed by hand, a todo ticked
+  in your editor, a tag added — and the pane follows within a second, and the
+  row's tags with it. F5 asks at once. A file in a shape fastf never wrote is
+  shown as far as it can be read: see [Notes](#notes) for what counts.
 
   **The pane is an editor you enter on purpose.** `→` (or Tab) puts the cursor
   in it; ↑/↓ walk the rows Enter can act on, and nothing changes until you
   press Enter on one. Enter on the **name** is the rename; on a **tag** the
   tag opens on its own line — change it and Enter, or empty it and Enter to
-  remove it; on **add a tag** the tag flow; on a **variable** the value opens
-  in place, or, for a `select` variable, a picker over its options and nothing
-  else; on the **notes** rule a text area over the notes, Ctrl-S to save, Enter
-  for a new line; on the **journal** rule a quick note. Esc leaves the row as it
-  was, and so does moving away. What you can type is what the file can hold: a
-  tag is one word (letters, digits, `- _ . /`), a variable is one line and a
-  `select` is one of its options, a note may not start a line with `##` (that
-  is how the file marks where a section ends). A refusal names the rule, under
-  the field, with the text still there to correct. A variable that drives a
+  remove it; on a **variable** the value opens in place, or, for a `select`
+  variable, a picker over its options and nothing else; on a **note** the note
+  opens as a text area over its own lines — Enter for a new line, Ctrl-S to
+  save, emptied and saved to remove it; on a **todo** Enter ticks it, or
+  unticks it; on **`… n earlier`** every note, as `J` shows them. Every
+  section that can grow ends in a row that adds to it: **add a tag**, **add a
+  note** (the quick note — Enter saves, Alt-Enter breaks a line), **add a
+  todo**. Esc leaves the row as it was, and so does moving away. What you can
+  type is what the file can hold: a tag is one word (letters, digits,
+  `- _ . /`), a variable is one line and a `select` is one of its options, a
+  todo is one line, and the undated note a project from before v3.6.0 may
+  carry may not start a line with `##` (that is how the file marks where a
+  section ends). A refusal names the rule, under the field, with the text
+  still there to correct — and a note or todo that changed on disk since the
+  pane read it is refused rather than overwritten. A variable that drives a
   `slug/value` tag keeps that tag honest, and the variables table under the
   frontmatter follows — while it is still the table fastf wrote.
 - **The status line and the hint bar** — what the last action did (or, when
@@ -216,10 +229,10 @@ and the pane beside it, and nothing else.
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
 | `A`, Ctrl-T | add a tag (pick one the library already knows, or type a new one); remove tags |
-| `N`, Ctrl-N | a journal note in your `$EDITOR`; a short note typed where you are — Enter saves, Alt-Enter breaks a line, a pasted paragraph lands whole |
+| `N`, Ctrl-N | a note in your `$EDITOR`; a note typed where you are — Enter saves, Alt-Enter breaks a line, a pasted paragraph lands whole |
 | `C` | copy the project to a folder outside your bases, keeping its ID |
 | `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good — it names the folder and asks you to type `delete` |
-| `M`, `J` | the selected project's metadata (its frontmatter); its journal |
+| `M`, `J` | the selected project's metadata (its frontmatter); every one of its notes |
 | Space, `v`, `*`, `-` | mark the row and step on; mark every row **between the last one you marked and the cursor**; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
@@ -448,12 +461,17 @@ that is still a terminal.
 
 #### The mouse
 
-Clicking a row selects it; clicking the detail pane or the search bar moves
-focus there; clicking a command-palette entry runs it. The
-wheel is `↑`/`↓`, three at a time, wherever the arrow keys already go — the
-list, the detail pane, a dialog that scrolls. Mouse reporting is on while the
-app is open, so hold **Shift** while dragging to select text, as in every other
-full-screen terminal program.
+**Off by default, so text selects as in any program.** The app does not ask
+the terminal to report the mouse unless the `mouse` setting says so, and the
+wheel still scrolls the list: every modern terminal turns it into arrow keys
+on the alternate screen. With `fastf config set mouse on` — or *Mouse capture
+on or off* in the command palette, or the Mouse row of the settings — clicking
+a row selects it, clicking the detail pane or the search bar moves focus there,
+clicking a command-palette entry runs it, and the wheel is `↑`/`↓`, three at a
+time, wherever the arrow keys already go; selecting text then needs the
+modifier the terminal keeps for it — hold **Shift** while dragging (Option on
+macOS), as in every full-screen program that reports the mouse. The palette
+toggle takes effect at once and is remembered.
 
 The `show-banner` and `show-frame` settings belonged to the old menu and were
 retired at v3.0.0. `fastf config set` still accepts them and says they are
@@ -897,6 +915,11 @@ fastf config set theme rich                      # auto | mono | ansi | rich
 # dims on its way out; off makes every frame a hard cut. A palette with no
 # colour is always off. FASTF_MOTION=0 turns it off for one run.
 fastf config set motion off                      # on | off
+
+# Whether the app asks the terminal to report the mouse. Off (the default),
+# text selects as in any program and the wheel is the terminal's; on, a click
+# selects a row, the wheel scrolls three, and Shift-drag selects text.
+fastf config set mouse on                        # off | on
 
 # Extra folders to index beyond base-dir, comma separated
 fastf config set bases "/mnt/projects/clients,/srv/archive"

@@ -675,13 +675,126 @@ fn the_detail_pane_is_read_once_per_project_and_only_when_visible() {
         !effects.iter().any(|e| matches!(e, Effect::LoadDetail(_))),
         "a cached detail is not read again: {effects:?}"
     );
+    // It is *checked* against the disk — a stat, and a read only if the
+    // file changed — carrying the stamp the cache holds, so a line added to
+    // the file in another window shows on the next visit.
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::RefreshDetail { path, stamp: None } if *path == wanted[0]
+        )),
+        "a cached detail is checked: {effects:?}"
+    );
+    // And on F5, which is the key a person presses after editing the file.
+    let effects = press(&mut app, Key::plain(KeyCode::F(5)));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::RefreshDetail { path, .. } if *path == wanted[0])),
+        "{effects:?}"
+    );
 
     let mut narrow = fixture(12, 80, 24);
     let effects = press(&mut narrow, Key::ch('j'));
     assert!(
-        !effects.iter().any(|e| matches!(e, Effect::LoadDetail(_))),
-        "no pane on screen, no read: {effects:?}"
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDetail(_) | Effect::RefreshDetail { .. })),
+        "no pane on screen, no read and no check: {effects:?}"
     );
+}
+
+/// **The file is the truth, and the pane just read it.** A detail whose
+/// metadata disagrees with the row — tags edited in another window, an
+/// index that went stale — patches the row and has the base's index entry
+/// written to match; a detail that agrees changes nothing.
+#[test]
+fn a_detail_that_disagrees_with_its_row_patches_the_row_and_the_index() {
+    use fastf::core::project_info::Metadata;
+    let mut app = fixture(12, 120, 40);
+    press(&mut app, Key::ch('j'));
+    let project = app.library.selected().unwrap().clone();
+    let meta = |tags: Vec<&str>| Metadata {
+        id: project.id.clone(),
+        id_number: project.id_number,
+        template: project.template.clone(),
+        template_name: project.template_name.clone(),
+        created: project.created.clone(),
+        folder: project.name.clone(),
+        path: String::new(),
+        variables: Default::default(),
+        tags: tags.into_iter().map(str::to_string).collect(),
+        auto_tags: Vec::new(),
+        provisioning: false,
+    };
+    let detail = fastf::tui::app::data::ProjectDetail {
+        meta: Some(meta(project.tags.iter().map(String::as_str).collect())),
+        ..Default::default()
+    };
+    let effects = update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(detail),
+        },
+    );
+    assert!(
+        effects.is_empty(),
+        "the file agrees with the row: {effects:?}"
+    );
+
+    let detail = fastf::tui::app::data::ProjectDetail {
+        meta: Some(meta(vec!["edited-outside"])),
+        ..Default::default()
+    };
+    let effects = update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(detail),
+        },
+    );
+    assert_eq!(
+        app.library.selected().unwrap().tags,
+        vec!["edited-outside".to_string()],
+        "the row took the file's tags"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::RefreshCache(p) if *p == project.path)),
+        "{effects:?}"
+    );
+}
+
+/// The mouse setting, flipped from the palette: written through `config
+/// set`, so the word on disk is the word every surface reads, and switched
+/// the moment the write is on its way.
+#[test]
+fn the_mouse_is_a_setting_flipped_live_from_the_palette() {
+    use fastf::tui::command::CommandId;
+    let mut app = fixture(12, 120, 40);
+    assert!(!app.mouse, "off by default: text selects as in any program");
+    let effects = app.run(CommandId::ToggleMouse);
+    assert!(app.mouse);
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::Mouse(true))),
+        "{effects:?}"
+    );
+    let sent = effects.iter().find_map(|e| match e {
+        Effect::Run(_, action) => Some(action.as_ref()),
+        _ => None,
+    });
+    assert_eq!(
+        sent,
+        Some(&Action::SetConfig {
+            key: "mouse",
+            value: "on".to_string(),
+        })
+    );
+    // Busy: refused, and the terminal is left as it is.
+    let effects = app.run(CommandId::ToggleMouse);
+    assert!(app.mouse && effects.is_empty(), "{effects:?}");
 }
 
 #[test]
@@ -2726,7 +2839,7 @@ mod mouse {
         let at_end = app.pane_cursor;
         assert_eq!(
             rows[at_end],
-            fastf::tui::app::pane::PaneRow::Rule("journal"),
+            fastf::tui::app::pane::PaneRow::AddTodo,
             "End is the last row Enter can act on"
         );
         wheel(&mut app, true);
@@ -4111,11 +4224,11 @@ mod pane_cursor {
             rows[app.pane_cursor]
         );
         press(&mut app, Key::ch('G'));
-        assert_eq!(rows[app.pane_cursor], PaneRow::Rule("journal"));
+        assert_eq!(rows[app.pane_cursor], PaneRow::AddTodo);
         press(&mut app, Key::ch('j'));
         assert_eq!(
             rows[app.pane_cursor],
-            PaneRow::Rule("journal"),
+            PaneRow::AddTodo,
             "the last row is the last row"
         );
         press(&mut app, Key::ch('g'));
@@ -4131,8 +4244,17 @@ mod pane_cursor {
     #[test]
     fn the_pane_scrolls_to_keep_its_cursor_in_view_and_a_new_row_resets_it() {
         let mut app = fixture(6, 120, 24);
+        // Five notes of six lines each: thirty rows, over a pane of twenty.
         let detail = ProjectDetail {
-            notes: (0..30).map(|n| format!("note {n}")).collect(),
+            notes: (0..5)
+                .map(|n| fastf::core::body::Note {
+                    timestamp: Some(format!("2026-01-0{}T00:00:00Z", n + 1)),
+                    text: (0..6)
+                        .map(|l| format!("note {n} line {l}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                })
+                .collect(),
             ..Default::default()
         };
         with_detail(&mut app, detail);
@@ -4140,10 +4262,10 @@ mod pane_cursor {
         assert_eq!(app.detail_scroll, 0);
         press(&mut app, Key::ch('G'));
         let rows = app.pane_rows();
-        assert_eq!(rows[app.pane_cursor], PaneRow::Rule("journal"));
+        assert_eq!(rows[app.pane_cursor], PaneRow::AddTodo);
         assert!(
             app.detail_scroll > 0,
-            "the journal rule sits under thirty notes, so the pane scrolled"
+            "the todo rows sit under thirty rows of notes, so the pane scrolled"
         );
         assert!(
             app.pane_cursor >= app.detail_scroll,
@@ -4240,8 +4362,26 @@ mod pane_editor {
                 variable("artist", VarType::Text, &[]),
                 variable("tier", VarType::Select, &["Indie", "Major"]),
             ],
-            notes_text: "first cut Friday".to_string(),
-            notes: vec!["first cut Friday".to_string()],
+            notes: vec![
+                fastf::core::body::Note {
+                    timestamp: None,
+                    text: "first cut Friday".to_string(),
+                },
+                fastf::core::body::Note {
+                    timestamp: Some("2026-08-28T10:00:00Z".to_string()),
+                    text: "began the edit\nrough cut by Friday".to_string(),
+                },
+            ],
+            todos: vec![
+                fastf::core::body::Todo {
+                    done: true,
+                    text: "ingested the videos".to_string(),
+                },
+                fastf::core::body::Todo {
+                    done: false,
+                    text: "delivered the video".to_string(),
+                },
+            ],
             ..Default::default()
         };
         update(
@@ -4576,11 +4716,165 @@ mod pane_editor {
         );
         press(&mut app, Key::plain(KeyCode::Esc));
 
-        go_to(&mut app, |row| matches!(row, PaneRow::Rule("journal")));
+        go_to(&mut app, |row| matches!(row, PaneRow::AddNote));
         press(&mut app, Key::plain(KeyCode::Enter));
         assert!(
             matches!(app.modals.top(), Some(Modal::Note(_))),
-            "the journal rule is a quick note"
+            "add a note is the quick note"
+        );
+        press(&mut app, Key::plain(KeyCode::Esc));
+
+        go_to(&mut app, |row| matches!(row, PaneRow::AddTodo));
+        press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(
+            matches!(app.modals.top(), Some(Modal::TextPrompt(_))),
+            "add a todo asks for its text"
+        );
+        type_text(&mut app, "invoice");
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        let project = app.library.selected().unwrap().clone();
+        assert_eq!(
+            sent(&effects),
+            Some(&Action::AddTodo {
+                project: Box::new(project.clone()),
+                text: "invoice".to_string(),
+            })
+        );
+        assert!(app.modals.is_empty());
+        let id = app.busy_id.unwrap();
+        update(
+            &mut app,
+            Msg::ActionDone {
+                id,
+                outcome: Ok(Box::new(fastf::tui::effect::ActionOutcome::new(
+                    fastf::tui::effect::ListChange::DetailOnly {
+                        path: project.path.clone(),
+                    },
+                    "Todo added.",
+                ))),
+            },
+        );
+    }
+
+    /// Enter on a todo writes the toggle at once — there is nothing to type
+    /// — with no edit open, and the answer lands on that row: the cursor
+    /// stays there and the row pulses, as an edit's does. Nothing on the
+    /// list lights up, because nothing on the list changed.
+    #[test]
+    fn enter_on_a_todo_toggles_it_and_the_answer_lands_on_its_row() {
+        let mut app = editing_fixture();
+        go_to(
+            &mut app,
+            |row| matches!(row, PaneRow::Todo { text, .. } if text == "delivered the video"),
+        );
+        let at = app.pane_cursor;
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        let project = app.library.selected().unwrap().clone();
+        assert_eq!(
+            sent(&effects),
+            Some(&Action::ToggleTodo {
+                project: Box::new(project.clone()),
+                ordinal: 1,
+                was: "delivered the video".to_string(),
+            })
+        );
+        assert!(app.pane_edit.is_none(), "a toggle opens nothing");
+        // Nothing else starts while the write is on its way.
+        let again = press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(sent(&again).is_none(), "{again:?}");
+
+        let id = app.busy_id.unwrap();
+        let effects = update(
+            &mut app,
+            Msg::ActionDone {
+                id,
+                outcome: Ok(Box::new(fastf::tui::effect::ActionOutcome::new(
+                    fastf::tui::effect::ListChange::DetailOnly {
+                        path: project.path.clone(),
+                    },
+                    "Done.",
+                ))),
+            },
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadDetail(p) if *p == project.path)),
+            "the detail is read again: {effects:?}"
+        );
+        assert!(
+            app.pulses.is_empty(),
+            "no row of the list changed, so none lights up"
+        );
+        assert_eq!(app.pane_cursor, at, "the cursor stays on the todo");
+        assert!(!app.pane_pulses.is_empty(), "and the todo's row pulses");
+        // The pane keeps what it shows until the re-read lands — no
+        // `reading…` frame between the keypress and the answer — and the
+        // re-read lands with the todo flipped, the cursor still on it.
+        assert!(
+            app.details.contains_key(&project.path),
+            "the detail on screen stays until the fresh one arrives"
+        );
+        let fresh = fastf::tui::app::data::ProjectDetail {
+            todos: vec![
+                fastf::core::body::Todo {
+                    done: true,
+                    text: "ingested the videos".to_string(),
+                },
+                fastf::core::body::Todo {
+                    done: true,
+                    text: "delivered the video".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        update(
+            &mut app,
+            Msg::Detail {
+                path: project.path.clone(),
+                detail: Box::new(fresh),
+            },
+        );
+        assert!(matches!(
+            app.pane_rows()[app.pane_cursor],
+            PaneRow::Todo {
+                done: true,
+                ordinal: 1,
+                ..
+            }
+        ));
+    }
+
+    /// `… n earlier` shows every note; Enter on it is `J`.
+    #[test]
+    fn enter_on_earlier_notes_shows_them_all() {
+        let mut app = editing_fixture();
+        let project = app.library.selected().unwrap().clone();
+        let mut detail = app.details.get(&project.path).cloned().unwrap();
+        detail.notes = (0..7)
+            .map(|n| fastf::core::body::Note {
+                timestamp: Some(format!("2026-01-0{}T00:00:00Z", n + 1)),
+                text: format!("note {n}"),
+            })
+            .collect();
+        update(
+            &mut app,
+            Msg::Detail {
+                path: project.path.clone(),
+                detail: Box::new(detail),
+            },
+        );
+        go_to(&mut app, |row| matches!(row, PaneRow::EarlierNotes(2)));
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(
+            effects.iter().any(|e| matches!(
+                e,
+                Effect::LoadView {
+                    kind: fastf::tui::effect::ViewKind::Journal,
+                    ..
+                }
+            )),
+            "{effects:?}"
         );
     }
 
@@ -4612,39 +4906,64 @@ mod pane_editor {
     }
 
     #[test]
-    fn the_notes_are_a_text_area_saved_with_ctrl_s_and_enter_is_a_new_line() {
+    fn a_note_is_a_text_area_saved_with_ctrl_s_and_enter_is_a_new_line() {
         let mut app = editing_fixture();
-        go_to(&mut app, |row| matches!(row, PaneRow::Rule("notes")));
+        go_to(&mut app, |row| {
+            matches!(row, PaneRow::Note { ordinal: 0, .. })
+        });
         press(&mut app, Key::plain(KeyCode::Enter));
-        assert!(matches!(&app.pane_edit, Some(PaneEdit::Notes { .. })));
+        assert!(matches!(
+            &app.pane_edit,
+            Some(PaneEdit::Note { ordinal: 0, .. })
+        ));
         press(&mut app, Key::plain(KeyCode::End));
         press(&mut app, Key::plain(KeyCode::Enter));
         type_text(&mut app, "then colour");
         assert!(
             app.pane_edit.is_some(),
-            "Enter in the notes is a new line, not a send"
+            "Enter in a note is a new line, not a send"
         );
         let effects = press(&mut app, Key::ctrl('s'));
         let project = app.library.selected().unwrap().clone();
-        match sent(&effects) {
-            Some(Action::SetNotes { project: p, text }) => {
-                assert_eq!(**p, project);
-                assert_eq!(text, "first cut Friday\nthen colour");
-            }
-            other => panic!("Ctrl-S saves the notes: {other:?}"),
-        }
+        assert_eq!(
+            sent(&effects),
+            Some(&Action::ReplaceNote {
+                project: Box::new(project.clone()),
+                ordinal: 0,
+                was: "first cut Friday".to_string(),
+                text: "first cut Friday\nthen colour".to_string(),
+            }),
+            "Ctrl-S saves the note, naming the text it read"
+        );
         let id = app.busy_id.unwrap();
         update(
             &mut app,
             Msg::ActionDone {
                 id,
-                outcome: Err("a line beginning with ## would end the notes section".to_string()),
+                outcome: Err("the note changed meanwhile — reload and edit it again".to_string()),
             },
         );
         assert!(
-            matches!(&app.pane_edit, Some(PaneEdit::Notes { error: Some(e), .. }) if e.contains("##")),
-            "a refusal lands on the notes editor"
+            matches!(&app.pane_edit, Some(PaneEdit::Note { error: Some(e), .. }) if e.contains("changed meanwhile")),
+            "a refusal lands on the note editor"
         );
+
+        // A dated note edits the same way, and its other lines are there.
+        press(&mut app, Key::plain(KeyCode::Esc));
+        go_to(&mut app, |row| {
+            matches!(row, PaneRow::Note { ordinal: 1, .. })
+        });
+        press(&mut app, Key::plain(KeyCode::Enter));
+        match &app.pane_edit {
+            Some(PaneEdit::Note { area, was, .. }) => {
+                assert_eq!(area.text(), "began the edit\nrough cut by Friday");
+                assert_eq!(was, "began the edit\nrough cut by Friday");
+            }
+            other => panic!("{other:?}"),
+        }
+        // Unchanged, Ctrl-S is a cancel.
+        let effects = press(&mut app, Key::ctrl('s'));
+        assert!(sent(&effects).is_none() && app.pane_edit.is_none());
     }
 
     #[test]
@@ -4686,7 +5005,36 @@ mod pane_editor {
             hints.iter().any(|h| h == "a actions"),
             "`a` still works in the pane: {hints:?}"
         );
-        go_to(&mut app, |row| matches!(row, PaneRow::Rule("notes")));
+        // Enter says what it will do to the row under the cursor.
+        for (wanted, verb) in [
+            (
+                Box::new(|row: &PaneRow| matches!(row, PaneRow::Todo { .. }))
+                    as Box<dyn Fn(&PaneRow) -> bool>,
+                "Enter toggle",
+            ),
+            (
+                Box::new(|row: &PaneRow| matches!(row, PaneRow::AddNote)),
+                "Enter add",
+            ),
+            (
+                Box::new(|row: &PaneRow| matches!(row, PaneRow::AddTodo)),
+                "Enter add",
+            ),
+            (
+                Box::new(|row: &PaneRow| matches!(row, PaneRow::Note { .. })),
+                "Enter edit",
+            ),
+        ] {
+            go_to(&mut app, wanted);
+            let hints: Vec<String> = fastf::tui::command::hints(app.context(), &app, 200)
+                .into_iter()
+                .map(|(key, what)| format!("{key} {what}"))
+                .collect();
+            assert!(hints.iter().any(|h| h == verb), "{verb}: {hints:?}");
+        }
+        go_to(&mut app, |row| {
+            matches!(row, PaneRow::Note { ordinal: 0, .. })
+        });
         press(&mut app, Key::plain(KeyCode::Enter));
         let hints: Vec<String> = fastf::tui::command::hints(app.context(), &app, 200)
             .into_iter()

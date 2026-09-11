@@ -458,6 +458,50 @@ fn copy_path_falls_back_to_showing_the_path() {
     );
 }
 
+/// **The pane reads the file, and keeps reading it.** A note appended to
+/// `PROJECT_INFO.md` by something that is not fastf — an editor in another
+/// window, here a thread — is on the pane within a couple of seconds, with
+/// no key pressed. The pane used to trust its cache until a verb inside the
+/// app dropped it, so a line added outside never showed.
+#[test]
+fn a_note_added_outside_the_app_appears_in_the_pane_unasked() {
+    let sb = Sandbox::new();
+    let root = plant_dated_project(&sb, "Watched", "ID0001", "2026-01-01T00:00:00Z", 256);
+    let pinfo = root.join("PROJECT_INFO.md");
+
+    // The editor in the other window: two and a half seconds in, one note.
+    let outside = std::thread::spawn({
+        let pinfo = pinfo.clone();
+        move || {
+            std::thread::sleep(std::time::Duration::from_millis(2500));
+            let mut text = fs::read_to_string(&pinfo).unwrap();
+            text.push_str("\n- 2026-01-02T00:00:00Z — added from outside the app\n");
+            fs::write(&pinfo, text).unwrap();
+        }
+    });
+
+    // Nothing pressed but the quit, five seconds in.
+    let script = pty::Script::new().pause(5000).key(KEY_QUIT).build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+    outside.join().unwrap();
+    assert_eq!(code, 0, "{}", pty::plain(&out));
+    // The frame as it was, not the stream: a partial redraw splits words.
+    let screen = app_screen(&out);
+    assert!(
+        screen.contains("added from outside the app") && screen.contains("1 note"),
+        "the pane should have re-read the file within a second of the edit:\n{screen}"
+    );
+}
+
 /// `N` drops out of the terminal and into `$EDITOR`; whatever comes back is
 /// appended to the project's notes.
 ///

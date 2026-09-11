@@ -21,6 +21,12 @@ use crate::tui::widgets::text_area::TextArea;
 /// How many entries of the folder listing the pane shows before `… n more`.
 pub const LISTING_SHOWN: usize = 8;
 
+/// How many notes the pane shows — the latest — under `… n earlier`.
+pub const NOTES_SHOWN: usize = 5;
+
+/// How many lines of one note the pane shows before `… n more lines`.
+pub const NOTE_LINES_SHOWN: usize = 8;
+
 /// What kind of value a variable row holds, and so what Enter on it opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VarKind {
@@ -37,10 +43,10 @@ pub enum PaneRow {
     Name,
     /// `template · base · created`.
     Facts,
-    /// The size and the journal count.
+    /// The size, the note count and the todo count.
     Figures,
-    /// A section heading: `── label ───`. The notes' and the journal's are
-    /// where Enter edits the notes and adds an entry.
+    /// A section heading: `── label ───`. Never a row the cursor rests on:
+    /// every section that can grow ends in a row that adds to it.
     Rule(&'static str),
     /// One tag. Enter edits it; emptied, it is removed.
     Tag(String),
@@ -61,10 +67,31 @@ pub enum PaneRow {
     Entry(Entry),
     /// `… n more` under a listing longer than `LISTING_SHOWN`.
     More(usize),
-    /// One line of the notes.
-    Note(String),
-    /// One journal entry: `(date, message)`.
-    Journal(String, String),
+    /// `… n earlier` above the notes shown. Enter shows them all.
+    EarlierNotes(usize),
+    /// A note's first line, with the day it was written (none for the
+    /// undated note). Enter edits the note. `ordinal` is its index among
+    /// the file's notes, which is what an edit is addressed by.
+    Note {
+        ordinal: usize,
+        date: Option<String>,
+        first: String,
+    },
+    /// A further line of the note above. Not a row the cursor rests on: the
+    /// note is one thing, and its first row is where Enter acts on it.
+    NoteLine(String),
+    /// `… n more lines` of the note above.
+    NoteMore(usize),
+    /// The row under the last note that adds one.
+    AddNote,
+    /// One todo. Enter toggles it.
+    Todo {
+        ordinal: usize,
+        done: bool,
+        text: String,
+    },
+    /// The row under the last todo that adds one.
+    AddTodo,
 }
 
 impl PaneRow {
@@ -77,8 +104,11 @@ impl PaneRow {
                 | PaneRow::Tag(_)
                 | PaneRow::AddTag
                 | PaneRow::Variable { .. }
-                | PaneRow::Rule("notes")
-                | PaneRow::Rule("journal")
+                | PaneRow::EarlierNotes(_)
+                | PaneRow::Note { .. }
+                | PaneRow::AddNote
+                | PaneRow::Todo { .. }
+                | PaneRow::AddTodo
         )
     }
 }
@@ -87,10 +117,17 @@ impl PaneRow {
 ///
 /// The order is the order the pane always drew: the name, the facts, the
 /// figures, the tags, then everything the detail read added — a warning if a
-/// read failed, the variables, the folder's top level, the notes, the
-/// journal. Tags are one row each so a cursor can rest on one, with the row
-/// that adds one under them; the tag rule is drawn whenever the tags are
-/// there to add to, which is always.
+/// read failed, the variables, the folder's top level, the notes, the todos.
+/// Tags, notes and todos are one row each so a cursor can rest on one, with
+/// the row that adds one under them; their rules are drawn whenever there is
+/// something to add to, which is always.
+///
+/// **A note is several rows, never one wrapped row.** Its first line is the
+/// row the cursor rests on and Enter edits; every further line is a row of
+/// its own under it, up to `NOTE_LINES_SHOWN`, then `… n more lines`. The
+/// cursor is an index into the rows and the scroll counts rows, so a row that
+/// drew two lines would put everything under it off by one. The latest
+/// `NOTES_SHOWN` notes are shown, under `… n earlier` when there are more.
 ///
 /// Variables follow the template's own order and carry its `type`, so a
 /// `select` offers its options and nothing else; a variable the metadata
@@ -163,15 +200,43 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>) -> Vec<PaneR
     }
 
     rows.push(PaneRow::Rule("notes"));
-    rows.extend(detail.notes.iter().cloned().map(PaneRow::Note));
+    let earlier = detail.notes.len().saturating_sub(NOTES_SHOWN);
+    if earlier > 0 {
+        rows.push(PaneRow::EarlierNotes(earlier));
+    }
+    for (ordinal, note) in detail.notes.iter().enumerate().skip(earlier) {
+        let mut lines = note.text.lines();
+        rows.push(PaneRow::Note {
+            ordinal,
+            date: note.day().map(str::to_string),
+            first: lines.next().unwrap_or("").to_string(),
+        });
+        let rest: Vec<&str> = lines.collect();
+        let shown = NOTE_LINES_SHOWN.saturating_sub(1);
+        rows.extend(
+            rest.iter()
+                .take(shown)
+                .map(|line| PaneRow::NoteLine(line.to_string())),
+        );
+        if rest.len() > shown {
+            rows.push(PaneRow::NoteMore(rest.len() - shown));
+        }
+    }
+    rows.push(PaneRow::AddNote);
 
-    rows.push(PaneRow::Rule("journal"));
+    rows.push(PaneRow::Rule("todo"));
     rows.extend(
         detail
-            .journal
+            .todos
             .iter()
-            .map(|(date, message)| PaneRow::Journal(date.clone(), message.clone())),
+            .enumerate()
+            .map(|(ordinal, todo)| PaneRow::Todo {
+                ordinal,
+                done: todo.done,
+                text: todo.text.clone(),
+            }),
     );
+    rows.push(PaneRow::AddTodo);
     rows
 }
 
@@ -202,10 +267,15 @@ pub enum PaneEdit {
         error: Option<String>,
         pending: bool,
     },
-    /// The notes, as a text area over the section. Boxed: a text area is
-    /// the larger payload by a distance, and the enum travels in `App`.
-    Notes {
+    /// One note, as a text area over its rows. `ordinal` and `was` are how
+    /// the write names the note: its index in the file, and the text it had
+    /// when the edit opened, so a note that changed meanwhile is refused
+    /// rather than overwritten. Boxed: a text area is the larger payload by
+    /// a distance, and the enum travels in `App`.
+    Note {
         row: usize,
+        ordinal: usize,
+        was: String,
         area: Box<TextArea>,
         error: Option<String>,
         pending: bool,
@@ -216,29 +286,37 @@ impl PaneEdit {
     /// The row the edit is on.
     pub fn row(&self) -> usize {
         match self {
-            PaneEdit::Line { row, .. } | PaneEdit::Notes { row, .. } => *row,
+            PaneEdit::Line { row, .. } | PaneEdit::Note { row, .. } => *row,
         }
     }
 
-    pub fn is_notes(&self) -> bool {
-        matches!(self, PaneEdit::Notes { .. })
+    pub fn is_note(&self) -> bool {
+        matches!(self, PaneEdit::Note { .. })
+    }
+
+    /// Move the edit to the row its target is on now — the rows were rebuilt
+    /// under it.
+    pub fn set_row(&mut self, at: usize) {
+        match self {
+            PaneEdit::Line { row, .. } | PaneEdit::Note { row, .. } => *row = at,
+        }
     }
 
     pub fn pending(&self) -> bool {
         match self {
-            PaneEdit::Line { pending, .. } | PaneEdit::Notes { pending, .. } => *pending,
+            PaneEdit::Line { pending, .. } | PaneEdit::Note { pending, .. } => *pending,
         }
     }
 
     pub fn set_pending(&mut self, on: bool) {
         match self {
-            PaneEdit::Line { pending, .. } | PaneEdit::Notes { pending, .. } => *pending = on,
+            PaneEdit::Line { pending, .. } | PaneEdit::Note { pending, .. } => *pending = on,
         }
     }
 
     pub fn error(&self) -> Option<&str> {
         match self {
-            PaneEdit::Line { error, .. } | PaneEdit::Notes { error, .. } => error.as_deref(),
+            PaneEdit::Line { error, .. } | PaneEdit::Note { error, .. } => error.as_deref(),
         }
     }
 
@@ -246,7 +324,7 @@ impl PaneEdit {
     /// pending, so the field can be corrected and sent again.
     pub fn fail(&mut self, message: String) {
         match self {
-            PaneEdit::Line { error, pending, .. } | PaneEdit::Notes { error, pending, .. } => {
+            PaneEdit::Line { error, pending, .. } | PaneEdit::Note { error, pending, .. } => {
                 *error = Some(message);
                 *pending = false;
             }
@@ -255,7 +333,7 @@ impl PaneEdit {
 
     pub fn clear_error(&mut self) {
         match self {
-            PaneEdit::Line { error, .. } | PaneEdit::Notes { error, .. } => *error = None,
+            PaneEdit::Line { error, .. } | PaneEdit::Note { error, .. } => *error = None,
         }
     }
 }
@@ -271,7 +349,12 @@ pub enum PaneTarget {
     /// A tag by its text; gone, the cursor settles on the row that adds one.
     Tag(String),
     Variable(String),
-    Notes,
+    /// A note by its ordinal; gone (removed), the row that adds one.
+    Note(usize),
+    /// A todo by its ordinal; gone, the row that adds one.
+    Todo(usize),
+    AddNote,
+    AddTodo,
 }
 
 impl PaneEdit {
@@ -288,7 +371,7 @@ impl PaneEdit {
                 input,
                 ..
             } => PaneTarget::Tag(input.text().trim().to_string()),
-            PaneEdit::Notes { .. } => PaneTarget::Notes,
+            PaneEdit::Note { ordinal, .. } => PaneTarget::Note(*ordinal),
         }
     }
 }
@@ -302,7 +385,16 @@ pub fn find_row(rows: &[PaneRow], target: &PaneTarget) -> Option<usize> {
         PaneTarget::Variable(slug) => {
             find(&|row| matches!(row, PaneRow::Variable { slug: s, .. } if s == slug))
         }
-        PaneTarget::Notes => find(&|row| matches!(row, PaneRow::Rule("notes"))),
+        PaneTarget::Note(ordinal) => {
+            find(&|row| matches!(row, PaneRow::Note { ordinal: o, .. } if o == ordinal))
+                .or_else(|| find(&|row| matches!(row, PaneRow::AddNote)))
+        }
+        PaneTarget::Todo(ordinal) => {
+            find(&|row| matches!(row, PaneRow::Todo { ordinal: o, .. } if o == ordinal))
+                .or_else(|| find(&|row| matches!(row, PaneRow::AddTodo)))
+        }
+        PaneTarget::AddNote => find(&|row| matches!(row, PaneRow::AddNote)),
+        PaneTarget::AddTodo => find(&|row| matches!(row, PaneRow::AddTodo)),
     }
 }
 
@@ -400,15 +492,28 @@ mod tests {
         );
     }
 
+    fn note(timestamp: Option<&str>, text: &str) -> crate::core::body::Note {
+        crate::core::body::Note {
+            timestamp: timestamp.map(str::to_string),
+            text: text.to_string(),
+        }
+    }
+
     #[test]
-    fn selectable_rows_skip_the_facts_the_rules_and_the_listing() {
+    fn selectable_rows_skip_the_facts_the_rules_the_listing_and_a_notes_other_lines() {
         let detail = ProjectDetail {
             listing: vec![Entry {
                 name: "src".to_string(),
                 is_dir: true,
             }],
-            notes: vec!["a note".to_string()],
-            journal: vec![("2026-01-01".to_string(), "began".to_string())],
+            notes: vec![
+                note(None, "free text\nsecond line"),
+                note(Some("2026-01-01T10:00:00Z"), "began"),
+            ],
+            todos: vec![crate::core::body::Todo {
+                done: true,
+                text: "ingested".to_string(),
+            }],
             ..Default::default()
         };
         let rows = pane_rows(&project(&["draft"], "client"), Some(&detail));
@@ -419,12 +524,81 @@ mod tests {
                 &PaneRow::Name,
                 &PaneRow::Tag("draft".to_string()),
                 &PaneRow::AddTag,
-                &PaneRow::Rule("notes"),
-                &PaneRow::Rule("journal"),
+                &PaneRow::Note {
+                    ordinal: 0,
+                    date: None,
+                    first: "free text".to_string(),
+                },
+                &PaneRow::Note {
+                    ordinal: 1,
+                    date: Some("2026-01-01".to_string()),
+                    first: "began".to_string(),
+                },
+                &PaneRow::AddNote,
+                &PaneRow::Todo {
+                    ordinal: 0,
+                    done: true,
+                    text: "ingested".to_string(),
+                },
+                &PaneRow::AddTodo,
             ]
         );
         assert!(rows.contains(&PaneRow::Rule("inside")));
+        assert!(rows.contains(&PaneRow::NoteLine("second line".to_string())));
         assert!(!rows.contains(&PaneRow::Reading));
+        // The rows of a note sit together, under one rule, over the todos.
+        let at = |wanted: &PaneRow| rows.iter().position(|r| r == wanted).unwrap();
+        assert_eq!(
+            at(&PaneRow::NoteLine("second line".to_string())),
+            at(&PaneRow::Note {
+                ordinal: 0,
+                date: None,
+                first: "free text".to_string()
+            }) + 1
+        );
+        assert!(at(&PaneRow::Rule("notes")) < at(&PaneRow::AddNote));
+        assert!(at(&PaneRow::AddNote) < at(&PaneRow::Rule("todo")));
+        assert!(at(&PaneRow::Rule("todo")) < at(&PaneRow::AddTodo));
+    }
+
+    #[test]
+    fn the_latest_notes_are_shown_under_earlier_and_a_long_note_is_cut_with_more() {
+        let long = (0..12)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = ProjectDetail {
+            notes: (0..8)
+                .map(|n| note(Some("2026-01-01"), if n == 7 { &long } else { "short" }))
+                .collect(),
+            ..Default::default()
+        };
+        let rows = pane_rows(&project(&[], "client"), Some(&detail));
+        assert!(rows.contains(&PaneRow::EarlierNotes(3)));
+        let shown: Vec<usize> = rows
+            .iter()
+            .filter_map(|r| match r {
+                PaneRow::Note { ordinal, .. } => Some(*ordinal),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, vec![3, 4, 5, 6, 7], "the latest, in file order");
+        let lines = rows
+            .iter()
+            .filter(|r| matches!(r, PaneRow::NoteLine(_)))
+            .count();
+        assert_eq!(lines, NOTE_LINES_SHOWN - 1);
+        assert!(rows.contains(&PaneRow::NoteMore(12 - NOTE_LINES_SHOWN)));
+        assert_eq!(
+            rows.iter()
+                .position(|r| matches!(r, PaneRow::EarlierNotes(_))),
+            Some(
+                rows.iter()
+                    .position(|r| r == &PaneRow::Rule("notes"))
+                    .unwrap()
+                    + 1
+            )
+        );
     }
 
     #[test]

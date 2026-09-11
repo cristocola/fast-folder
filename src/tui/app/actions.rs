@@ -45,6 +45,8 @@ pub enum TextThen {
     /// destructive verb at a different project from the one on screen.
     Rename(std::path::PathBuf),
     AddTag,
+    /// A todo for the selected project, from the pane's add row.
+    AddTodo,
     /// Type the word `delete` to confirm; nothing else deletes. The prompt
     /// names the folder — or the folders, over marks — so what is being
     /// confirmed is on screen, and the word is the same every time.

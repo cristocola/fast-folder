@@ -72,6 +72,8 @@ pub struct Settings {
     pub theme: String,
     /// `on` or `off` — empty reads as `on`.
     pub motion: String,
+    /// `on` or `off` — empty reads as `off`.
+    pub mouse: String,
     pub default_template: String,
 
     pub date_format: String,
@@ -138,24 +140,37 @@ pub struct Entry {
     pub is_dir: bool,
 }
 
+/// What the file and the folder looked like when a detail was read: the
+/// metadata file's modification time and length, and the folder's
+/// modification time. A cached detail whose stamp still matches the disk is
+/// fresh; one whose stamp differs is read again. `None` for either time
+/// where the platform reports none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stamp {
+    pub info_modified: Option<std::time::SystemTime>,
+    pub info_len: u64,
+    pub dir_modified: Option<std::time::SystemTime>,
+}
+
 /// What the detail pane shows for the selected project.
 #[derive(Clone, Debug, Default)]
 pub struct ProjectDetail {
     pub meta: Option<Metadata>,
-    /// The most recent entries, newest last, `(date, message)`.
-    pub journal: Vec<(String, String)>,
-    pub journal_count: usize,
+    /// Every note, oldest first.
+    pub notes: Vec<crate::core::body::Note>,
+    /// Every todo, in file order.
+    pub todos: Vec<crate::core::body::Todo>,
     /// Directories first, then files, both sorted; `PROJECT_INFO.md` hidden.
     pub listing: Vec<Entry>,
-    /// The first lines of the `## Notes` section.
-    pub notes: Vec<String>,
-    /// The whole `## Notes` section, for the editor; `notes` is its preview.
-    pub notes_text: String,
     /// The template's variables, in its order and with their types, so the
     /// pane can offer a `select` its options and nothing else. Empty for a
     /// registered project or a template that is gone: every variable is
     /// free text then.
     pub variables: Vec<Variable>,
+    /// What was on disk when this was read — `None` when it could not be
+    /// stat'ed, or in a fixture — so a later check can tell whether the file
+    /// has changed under the pane.
+    pub stamp: Option<Stamp>,
     /// The read that failed, if one did.
     pub error: Option<String>,
 }

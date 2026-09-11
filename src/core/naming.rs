@@ -210,13 +210,8 @@ pub fn parse_id_token(name: &str, prefix: &str) -> Option<u64> {
 /// counter self-heal floor (`library::max_id`). Returns `None` when the string
 /// has no trailing digits.
 ///
-/// **Ids containing a hyphen are rejected outright.** A sequential id never has
-/// one, but a UUID (`019fa635-876f-7f41-8831-74a0bcb20044`) and a word handle
-/// (`simple-panda-fennec`) both do — and reading the trailing digits of that
-/// UUID would yield `20044` and shove the counter to `ID20045`. An interim build
-/// wrote ids in both of those shapes, so this guard is not hypothetical: it is
-/// what lets such a project sit in a base harmlessly instead of poisoning every
-/// ID minted afterwards.
+/// **Ids containing a hyphen are rejected outright**, so the trailing digits of a
+/// UUID-shaped id can never be read as a number and raise the counter floor.
 pub fn id_value(id: &str) -> Option<u64> {
     if id.contains('-') {
         return None;
@@ -398,9 +393,7 @@ mod tests {
         assert_eq!(id_value(""), None);
     }
 
-    /// An interim build wrote UUID and word-handle ids. Reading the trailing
-    /// digits of a UUID would put the counter floor at 20044 and every project
-    /// created afterwards would be ID20045+. Such an id must contribute nothing.
+    /// A UUID or a word-handle id contributes nothing to the counter floor.
     #[test]
     fn id_value_rejects_uuid_and_word_handles() {
         assert_eq!(id_value("019fa635-876f-7f41-8831-74a0bcb20044"), None);

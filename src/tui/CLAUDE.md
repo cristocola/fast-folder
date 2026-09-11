@@ -63,7 +63,7 @@ terminal nobody is holding is never switched to the alternate screen.
 `app::update(&mut App, Msg) -> Vec<Effect>` is the one state transition and
 **performs no I/O**: everything it wants done is an `Effect` (`effect.rs`) that
 `runtime.rs` carries out, and `view::view(&App, &mut Frame)` takes the app by
-shared reference. So `tests/tui_update.rs` drives the state machine with no
+shared reference. So `tests/tui_update/` drives the state machine with no
 terminal, `tests/tui_snapshots.rs` renders any state a test can build, and a slow
 filesystem can never reach the key handler.
 
@@ -368,7 +368,8 @@ re-sort and a reload by **path**.
 `apply_change`'s effects with the next item's `Run`. `App::discover` sets
 `inflight` before returning its effect, so a dropped `Reload` would leave every
 later patch merely `dirty` and the list frozen for the session; the helpers in
-`tests/tui_update.rs` find the `Effect::Run` among the effects for that reason.
+`tests/tui_update/harness.rs` find the `Effect::Run` among the effects for that
+reason.
 
 ## The table
 

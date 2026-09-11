@@ -7,10 +7,14 @@
 
 use std::path::PathBuf;
 
+use super::{App, Focus};
 use crate::tui::app::data::TemplateCard;
 use crate::tui::app::library::LibraryState;
-use crate::tui::command::{Availability, Command, CommandId};
+use crate::tui::app::modal::Modal;
+use crate::tui::command::{self, Availability, Command, CommandId, Context, Key};
+use crate::tui::effect::Effect;
 use crate::tui::fuzzy::Fuzzy;
+use crate::tui::layout;
 use crate::tui::widgets::input::LineEdit;
 use crate::tui::widgets::nav;
 
@@ -204,4 +208,105 @@ pub fn build(
         candidates.sort_by(|a, b| b.score.cmp(&a.score).then(a.order.cmp(&b.order)));
     }
     candidates.into_iter().map(|c| c.entry).collect()
+}
+
+impl App {
+    /// The palette is a query with a list under it, so the same rule the
+    /// search bar follows applies: everything printable is the query, and only
+    /// a key a field cannot hold reaches the registry. `Ctrl-p` is the
+    /// previous entry here rather than "open the palette", which is why the
+    /// opener is bound in every context **except** this one.
+    pub(super) fn on_palette_key(&mut self, key: Key) -> Vec<Effect> {
+        if key.typed().is_none()
+            && let Some(id) = command::lookup(Context::Palette, key, self)
+        {
+            return self.run(id);
+        }
+        let changed = match self.modals.top_mut() {
+            Some(Modal::Palette(palette)) => palette.input.apply(&key),
+            _ => false,
+        };
+        if changed {
+            self.refresh_palette();
+        }
+        Vec::new()
+    }
+
+    /// Move the palette's cursor, keeping its window around it.
+    pub(super) fn step_palette(&mut self, delta: isize) -> Vec<Effect> {
+        let rows = self.palette_rows();
+        if let Some(Modal::Palette(palette)) = self.modals.top_mut() {
+            palette.step(delta);
+            palette.clamp_viewport(rows);
+        }
+        Vec::new()
+    }
+
+    /// Run whatever is under the palette's cursor: a command dispatches
+    /// exactly the `CommandId` its key would, a project selects its row, a
+    /// template filters by it.
+    pub(super) fn run_palette_entry(&mut self) -> Vec<Effect> {
+        let chosen = match self.modals.top() {
+            Some(Modal::Palette(palette)) => palette.chosen().cloned(),
+            _ => None,
+        };
+        self.modals.pop();
+        let Some(entry) = chosen else {
+            return Vec::new();
+        };
+        if !entry.enabled {
+            self.warn(format!(
+                "{}: {}",
+                entry.title,
+                entry.reason.unwrap_or("not available right now")
+            ));
+            return Vec::new();
+        }
+        match entry.target {
+            PaletteTarget::Command(id) => self.run(id),
+            PaletteTarget::Project(path) => {
+                self.set_focus(Focus::Projects);
+                if !self.library.select_path(&path) {
+                    // Hidden by the query or the filter: show everything.
+                    self.search.input.clear();
+                    self.search.sync();
+                    self.library.template_filter = None;
+                    self.recompute();
+                    self.library.select_path(&path);
+                }
+                self.after_selection_change()
+            }
+            PaletteTarget::Template(slug) => self.set_template_filter(Some(slug)),
+        }
+    }
+
+    /// Rows the palette list has, for its viewport.
+    fn palette_rows(&self) -> usize {
+        layout::centered(self.area(), 70, 70)
+            .height
+            .saturating_sub(4) as usize
+    }
+
+    pub(super) fn refresh_palette(&mut self) {
+        let query = match self.modals.top() {
+            Some(Modal::Palette(palette)) => palette.input.text().to_string(),
+            _ => return,
+        };
+        let commands = command::palette_entries(self.focus_context(), self);
+        let entries = build(
+            &query,
+            commands,
+            &self.library,
+            &self.templates.cards,
+            &mut self.fuzzy,
+        );
+        if let Some(Modal::Palette(palette)) = self.modals.top_mut() {
+            palette.set_entries(entries);
+        }
+    }
+
+    pub(super) fn open_palette(&mut self) {
+        self.modals.push(Modal::Palette(PaletteState::default()));
+        self.refresh_palette();
+    }
 }

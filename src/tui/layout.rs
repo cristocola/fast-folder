@@ -155,11 +155,6 @@ pub fn settings_rows(area: Rect) -> usize {
     list_rows(sized_dialog(area, 22), 2)
 }
 
-/// The studio's list, beside a detail `lines` long.
-pub fn studio_rows(area: Rect, cards: usize, lines: usize) -> usize {
-    list_rows(sized_dialog(area, cards.max(lines).max(4) as u16), 2)
-}
-
 /// The templates tab's list: the body band's rows, inside its border.
 pub fn template_rows(area: Rect) -> usize {
     regions(area, false, 0).table.height.saturating_sub(2) as usize

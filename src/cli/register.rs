@@ -630,7 +630,7 @@ fn desired_rename(
 }
 
 /// Stub Template for the no-`--template` register path. Empty everything
-/// except the basics needed by `Metadata::from_plan` / `project_info::render`.
+/// except the basics needed by `Metadata::from_plan_at` / `project_info::render`.
 fn registered_stub_template() -> Template {
     Template {
         name: "Registered project".to_string(),

@@ -16,9 +16,16 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use ratatui::crossterm::event::KeyCode;
+
+use super::App;
 use crate::core::project::DryRunReport;
-use crate::tui::app::data::TemplateInfo;
-use crate::tui::widgets::form::{Field, Form};
+use crate::tui::app::data::{self, Prefs, TemplateInfo};
+use crate::tui::app::modal::{Modal, PickItem, PickState, Then};
+use crate::tui::app::register;
+use crate::tui::command::{self, Key};
+use crate::tui::effect::{Action, ApplyRequest, CreateRequest, Effect, Request};
+use crate::tui::widgets::form::{Field, Form, FormEvent};
 
 /// The field every flow that names a template uses.
 pub const FIELD_TEMPLATE: &str = "template";
@@ -345,6 +352,369 @@ pub fn apply_form(templates: &[String], template_at: usize) -> Form {
             String::new(),
         ),
     ])
+}
+
+impl App {
+    /// The templates on disk, by slug. Deliberately not `templates.cards`,
+    /// which also carries a bare card for every slug the projects mention that
+    /// no template answers to — `(registered)` is a slug, not a template.
+    pub(super) fn template_slugs(&self) -> Vec<String> {
+        self.summary
+            .as_ref()
+            .map(|summary| {
+                summary
+                    .templates
+                    .iter()
+                    .map(|card| card.slug.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn prefs(&self) -> Prefs {
+        self.summary
+            .as_ref()
+            .map(|summary| summary.prefs.clone())
+            .unwrap_or_default()
+    }
+
+    /// The bases a new project could go in, the configured default first —
+    /// which is what makes a plain Enter mean exactly what it always meant.
+    fn base_options(&self) -> Vec<String> {
+        let Some(summary) = &self.summary else {
+            return Vec::new();
+        };
+        let mut bases: Vec<&data::BaseInfo> = summary
+            .bases
+            .iter()
+            .filter(|base| base.probe.usable())
+            .collect();
+        bases.sort_by_key(|base| !base.is_default);
+        bases
+            .iter()
+            .map(|base| crate::util::paths::display_path(&base.path))
+            .collect()
+    }
+
+    /// `n`: the new-project wizard.
+    pub(super) fn open_create(&mut self) -> Vec<Effect> {
+        let slugs = self.template_slugs();
+        if slugs.is_empty() {
+            self.warn(command::NO_TEMPLATES);
+            return Vec::new();
+        }
+        let default = self.prefs().default_template;
+        let at = slugs.iter().position(|slug| *slug == default).unwrap_or(0);
+        let mut flow = Flow::new(
+            FlowKind::Create,
+            create_form(&slugs, at, &self.base_options()),
+        );
+        flow.auto_commit = !self.prefs().confirm_create;
+        flow.pending = true;
+        let slug = slugs[at].clone();
+        self.modals.push(Modal::Flow(Box::new(flow)));
+        vec![Effect::LoadTemplate { slug }]
+    }
+
+    /// The apply flow: a template over a folder that already exists.
+    pub(super) fn open_apply(&mut self) -> Vec<Effect> {
+        let slugs = self.template_slugs();
+        if slugs.is_empty() {
+            self.warn(command::NO_TEMPLATES);
+            return Vec::new();
+        }
+        let default = self.prefs().default_template;
+        let at = slugs.iter().position(|slug| *slug == default).unwrap_or(0);
+        let mut flow = Flow::new(FlowKind::Apply, apply_form(&slugs, at));
+        flow.pending = true;
+        let slug = slugs[at].clone();
+        self.modals.push(Modal::Flow(Box::new(flow)));
+        vec![Effect::LoadTemplate { slug }]
+    }
+
+    pub(super) fn on_flow_key(&mut self, key: Key) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top() else {
+            return Vec::new();
+        };
+        if flow.step == Step::Preview {
+            return self.on_preview_key(key);
+        }
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        let event = flow.form.apply(&key);
+        let rows = flow.form.rows();
+        flow.form.clamp_viewport(rows.min(12));
+        match event {
+            FormEvent::Cancel => {
+                let kind = flow.kind;
+                self.modals.pop();
+                self.info(kind.cancelled());
+                Vec::new()
+            }
+            FormEvent::Submit => self.submit_flow(),
+            FormEvent::Pick => self.open_field_picker(),
+            FormEvent::Changed => self.on_form_changed(),
+            // **A form does not fall through to the registry, and the preview
+            // does.** The difference is that a form is a place you type into:
+            // on a choice field every letter is `Ignored`, so handing those to
+            // `lookup_and_run` would make `q` — `Close` in every context — throw
+            // away a form somebody had filled in, with no question and no undo.
+            // Esc is the form's own cancel and its key line says so. The
+            // preview has nothing to type into, which is why `?` and `q` work
+            // there.
+            FormEvent::Moved | FormEvent::Ignored => Vec::new(),
+        }
+    }
+
+    /// Keys on the preview half: Esc goes back to the answers (the app's Esc
+    /// ladder — one step at a time, nothing typed is lost), Enter commits.
+    fn on_preview_key(&mut self, key: Key) -> Vec<Effect> {
+        let delta: isize = match key.code {
+            KeyCode::Esc => {
+                if let Some(Modal::Flow(flow)) = self.modals.top_mut() {
+                    flow.step = Step::Form;
+                    flow.scroll = 0;
+                }
+                return Vec::new();
+            }
+            KeyCode::Enter => return self.commit_flow(),
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::PageDown | KeyCode::Char(' ') => 10,
+            KeyCode::PageUp => -10,
+            KeyCode::Home => isize::MIN / 2,
+            KeyCode::End => isize::MAX / 2,
+            // Anything the preview does not consume is whatever the registry
+            // binds where the keys are: `?` for the help, `q` to close. There
+            // is nothing to type into on this step, so swallowing them said
+            // nothing and did nothing.
+            _ => return self.lookup_and_run(key),
+        };
+        // Clamped **here**, against the geometry `view` draws with. Only the
+        // view clamped before, so ten PgDns over a short preview drove `scroll`
+        // to 100 with nothing moving on screen, and the next ten PgUps did
+        // nothing either — a dialog that reads as frozen. `layout.rs`'s whole
+        // job is that a cursor cannot leave the drawn window.
+        let max = match self.modals.top() {
+            Some(Modal::Flow(flow)) => {
+                crate::tui::view::modals::preview_max_scroll(self, flow) as isize
+            }
+            _ => 0,
+        };
+        if let Some(Modal::Flow(flow)) = self.modals.top_mut() {
+            flow.scroll = (flow.scroll as isize + delta).clamp(0, max) as usize;
+        }
+        Vec::new()
+    }
+
+    /// A value changed: the template field decides which variables are asked
+    /// for, and register's scope decides which questions apply at all.
+    pub(super) fn on_form_changed(&mut self) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if flow.kind == FlowKind::Register {
+            register::sync_visibility(flow);
+        }
+        let focused = flow.form.focused().map(|field| field.key.clone());
+        if focused.as_deref() != Some(FIELD_TEMPLATE) {
+            return Vec::new();
+        }
+        self.load_flow_template()
+    }
+
+    /// Read the template the form now names, and rebuild its variable fields.
+    fn load_flow_template(&mut self) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        match flow.template_slug() {
+            Some(slug) => {
+                flow.pending = true;
+                vec![Effect::LoadTemplate { slug }]
+            }
+            None => {
+                flow.pending = false;
+                flow.set_template(None);
+                Vec::new()
+            }
+        }
+    }
+
+    pub(super) fn on_template_loaded(
+        &mut self,
+        slug: &str,
+        result: Result<Box<data::TemplateInfo>, String>,
+    ) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        // A slower read for a template the form has already moved off is an
+        // answer to a question nobody is asking any more.
+        if flow.template_slug().as_deref() != Some(slug) {
+            return Vec::new();
+        }
+        flow.pending = false;
+        match result {
+            Ok(info) => {
+                flow.set_template(Some(*info));
+                if flow.kind == FlowKind::Register {
+                    register::sync_visibility(flow);
+                }
+            }
+            Err(error) => {
+                flow.set_template(None);
+                flow.form.fail(Some(FIELD_TEMPLATE), error);
+            }
+        }
+        Vec::new()
+    }
+
+    pub(super) fn on_previewed(&mut self, preview: Preview) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        flow.pending = false;
+        flow.preview = Some(preview);
+        // `confirm_create = false` is a standing answer to the question the
+        // preview asks, so it is not asked: the plan was still built, by the
+        // same code path, and every refusal it can produce still lands on the
+        // field that caused it.
+        if flow.auto_commit {
+            return self.commit_flow();
+        }
+        flow.step = Step::Preview;
+        flow.scroll = 0;
+        Vec::new()
+    }
+
+    /// Space on a choice: the same options as a fuzzy-filtered picker.
+    fn open_field_picker(&mut self) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top() else {
+            return Vec::new();
+        };
+        let Some(field) = flow.form.focused() else {
+            return Vec::new();
+        };
+        let crate::tui::widgets::form::FieldKind::Choice { options, .. } = &field.kind else {
+            return Vec::new();
+        };
+        let describe = field.key == FIELD_TEMPLATE;
+        let cards = self.summary.as_ref().map(|s| s.templates.clone());
+        let items: Vec<PickItem> = options
+            .iter()
+            .map(|option| PickItem {
+                label: option.clone(),
+                detail: if describe {
+                    cards
+                        .as_ref()
+                        .and_then(|cards| cards.iter().find(|card| &card.slug == option))
+                        .map(|card| card.description.clone())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                value: option.clone(),
+            })
+            .collect();
+        let title = field.label.clone();
+        let key = field.key.clone();
+        self.modals.push(Modal::Pick(PickState::new(
+            title,
+            items,
+            Then::FormField(key),
+        )));
+        Vec::new()
+    }
+
+    /// Enter on the form: check what `update` can check, then ask a worker for
+    /// the preview — which is where a path that does not exist is refused,
+    /// because looking is I/O and `update` does none.
+    fn submit_flow(&mut self) -> Vec<Effect> {
+        let Some(Modal::Flow(flow)) = self.modals.top_mut() else {
+            return Vec::new();
+        };
+        if flow.pending {
+            return Vec::new();
+        }
+        if let Some((key, message)) = flow.missing_required() {
+            flow.form.fail(Some(&key), message);
+            return Vec::new();
+        }
+        let Some(request) = self.flow_request() else {
+            return Vec::new();
+        };
+        if let Some(Modal::Flow(flow)) = self.modals.top_mut() {
+            flow.pending = true;
+            flow.form.clear_errors();
+        }
+        vec![Effect::Preview(Box::new(request))]
+    }
+
+    /// The open flow's answers, as the request both the preview and the commit
+    /// are built from.
+    fn flow_request(&self) -> Option<Request> {
+        let Some(Modal::Flow(flow)) = self.modals.top() else {
+            return None;
+        };
+        match flow.kind {
+            FlowKind::Create => Some(Request::Create(CreateRequest {
+                template_slug: flow.template_slug()?,
+                vars: flow.variables(),
+                base_dir_override: self.chosen_base(flow),
+            })),
+            FlowKind::Apply => Some(Request::Apply(ApplyRequest {
+                template_slug: flow.template_slug()?,
+                target: PathBuf::from(flow.form.value(FIELD_TARGET).trim()),
+                vars: flow.variables(),
+            })),
+            FlowKind::Register => Some(Request::Register(register::request(flow))),
+            FlowKind::FromFolder => {
+                Some(Request::FromFolder(crate::tui::effect::FromFolderRequest {
+                    source: PathBuf::from(flow.form.value(FIELD_SOURCE).trim()),
+                    slug: flow.form.value(FIELD_SLUG).trim().to_string(),
+                    force: flow.form.is_on(FIELD_FORCE),
+                    bundle_assets: flow.form.is_on(FIELD_BUNDLE),
+                }))
+            }
+        }
+    }
+
+    /// The base the create form names, or `None` for the configured default —
+    /// the same distinction `pick_base_interactively` drew by returning early
+    /// when there was only one base to offer.
+    fn chosen_base(&self, flow: &Flow) -> Option<String> {
+        let chosen = flow.form.value(FIELD_BASE);
+        if chosen.is_empty() {
+            return None;
+        }
+        let default = self.base_options().into_iter().next();
+        (Some(&chosen) != default.as_ref()).then_some(chosen)
+    }
+
+    /// Enter on the preview: run it.
+    fn commit_flow(&mut self) -> Vec<Effect> {
+        let Some(request) = self.flow_request() else {
+            return Vec::new();
+        };
+        self.modals.pop();
+        match request {
+            Request::Create(request) => {
+                self.run_action("creating…", Action::Create(Box::new(request)))
+            }
+            Request::Apply(request) => {
+                self.run_action("applying…", Action::Apply(Box::new(request)))
+            }
+            Request::Register(request) => {
+                self.run_action("registering…", Action::Register(Box::new(request)))
+            }
+            Request::FromFolder(request) => self.run_action(
+                "generating the template…",
+                Action::TemplateFromFolder(Box::new(request)),
+            ),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -873,49 +873,6 @@ structure:
 }
 
 #[test]
-fn config_ignores_removed_project_info_keys() {
-    // The `project_info_*` / `pinfo_*` config knobs are gone (metadata is now
-    // mandatory and always named PROJECT_INFO.md). Old configs that still carry
-    // those keys must keep parsing — serde ignores unknown fields — and the
-    // surviving fields must load normally.
-    let raw = r#"
-base_dir = "/tmp/x"
-editor = ""
-default_template = ""
-date_format = "%Y-%m-%d"
-pinfo_enabled = false
-pinfo_filename = ".legacy-info.md"
-project_info_enabled = false
-project_info_filename = ".fastf-info.md"
-"#;
-    let cfg: Config = toml::from_str(raw).expect("config with removed keys should still parse");
-    assert_eq!(cfg.base_dir, "/tmp/x");
-    assert!(cfg.confirm_create);
-}
-
-#[test]
-fn config_defaults_are_backwards_compatible() {
-    // An old config.toml that predates the new fields must still parse,
-    // and the new fields must take their defaults.
-    // `show_banner` and `show_frame` were retired at v3.0.0 with the menu they
-    // drew: `Config` has no `deny_unknown_fields`, so a file that still names
-    // them parses and they are ignored.
-    let raw = r#"
-base_dir = ""
-editor = ""
-default_template = ""
-date_format = "%Y-%m-%d"
-show_banner = true
-show_frame = false
-"#;
-    let cfg: Config = toml::from_str(raw).expect("old config should still parse");
-    assert!(cfg.prompt_open_after_create, "default should be true");
-    assert_eq!(cfg.recent_default_limit, 20);
-    assert!(cfg.confirm_create);
-    assert!(cfg.bases.is_empty());
-}
-
-#[test]
 fn bundled_templates_do_not_emit_duplicate_project_info() {
     // Auto-gen owns PROJECT_INFO.md — bundled templates must not also
     // declare it as a content file (would conflict / overwrite). This guards

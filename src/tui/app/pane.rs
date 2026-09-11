@@ -11,9 +11,15 @@
 //! **Nothing here edits.** A row says what it is; Enter on it is `update`'s
 //! business, and what a change does to the file is `core::operations`'.
 
+use super::App;
 use crate::core::library::Project;
 use crate::core::template::VarType;
+use crate::tui::app::actions::{TextPrompt, TextThen};
 use crate::tui::app::data::{Entry, ProjectDetail};
+use crate::tui::app::modal::{Modal, PickItem, PickState, Then};
+use crate::tui::command::{self, CommandId, Context, Key};
+use crate::tui::effect::{Action, Effect};
+use crate::tui::validators;
 use crate::tui::widgets::input::LineEdit;
 use crate::tui::widgets::nav;
 use crate::tui::widgets::text_area::TextArea;
@@ -418,6 +424,282 @@ pub fn step_cursor(rows: &[PaneRow], from: usize, delta: isize) -> usize {
         .unwrap_or(selectable.len() - 1);
     let next = nav::step(Some(at), selectable.len(), delta).unwrap_or(0);
     selectable[next]
+}
+
+impl App {
+    /// A pane edit is open: the field has first refusal on anything typed,
+    /// the registry answers the rest (`Enter`, `Esc`, `Ctrl-S`), and what
+    /// neither takes goes to the field — which is how Enter in the notes is a
+    /// new line: `PaneEditConfirm` is hidden there, so the text area gets it.
+    pub(super) fn on_pane_edit_key(&mut self, key: Key) -> Vec<Effect> {
+        if key.typed().is_none()
+            && let Some(id) = command::lookup(Context::PaneEdit, key, self)
+        {
+            return self.run(id);
+        }
+        let Some(edit) = &mut self.pane_edit else {
+            return Vec::new();
+        };
+        if edit.pending() {
+            return Vec::new();
+        }
+        let changed = match edit {
+            PaneEdit::Line { input, .. } => input.apply(&key),
+            PaneEdit::Note { area, .. } => area.apply(&key),
+        };
+        if changed {
+            edit.clear_error();
+        }
+        Vec::new()
+    }
+
+    /// Enter on a pane row: what the row is decides what opens — or, for a
+    /// todo, what is written at once, since a toggle has nothing to type.
+    pub(super) fn pane_edit_start(&mut self) -> Vec<Effect> {
+        let rows = self.pane_rows();
+        let Some(row) = rows.get(self.pane_cursor).cloned() else {
+            return Vec::new();
+        };
+        let at = self.pane_cursor;
+        match row {
+            PaneRow::Name => self.run(CommandId::Rename),
+            PaneRow::AddTag => self.open_add_tag(),
+            PaneRow::AddNote => self.run(CommandId::NoteInline),
+            PaneRow::EarlierNotes(_) => self.run(CommandId::ShowJournal),
+            PaneRow::AddTodo => {
+                self.modals.push(Modal::TextPrompt(TextPrompt::new(
+                    validators::ADD_TODO_PROMPT,
+                    TextThen::AddTodo,
+                )));
+                Vec::new()
+            }
+            PaneRow::Todo { ordinal, text, .. } => {
+                let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                let effects = self.run_action(
+                    "writing…",
+                    Action::ToggleTodo {
+                        project: Box::new(project),
+                        ordinal,
+                        was: text,
+                    },
+                );
+                if !effects.is_empty() {
+                    self.pane_pending = Some(PaneTarget::Todo(ordinal));
+                }
+                effects
+            }
+            PaneRow::Tag(tag) => {
+                self.pane_edit = Some(PaneEdit::Line {
+                    row: at,
+                    input: crate::tui::widgets::input::LineEdit::with_text(tag.clone()),
+                    target: EditTarget::Tag(tag),
+                    error: None,
+                    pending: false,
+                });
+                Vec::new()
+            }
+            PaneRow::Variable {
+                slug,
+                label,
+                kind: VarKind::Select(options),
+                value,
+            } => {
+                // A select offers its options and nothing else — the picker
+                // is the one shape that cannot hold anything outside them.
+                let items: Vec<PickItem> = options
+                    .into_iter()
+                    .map(|option| PickItem {
+                        detail: if option == value {
+                            "current".to_string()
+                        } else {
+                            String::new()
+                        },
+                        label: option.clone(),
+                        value: option,
+                    })
+                    .collect();
+                self.modals.push(Modal::Pick(PickState::new(
+                    format!(" {label} "),
+                    items,
+                    Then::PaneVariable(slug),
+                )));
+                Vec::new()
+            }
+            PaneRow::Variable {
+                slug,
+                kind: VarKind::Text,
+                value,
+                ..
+            } => {
+                self.pane_edit = Some(PaneEdit::Line {
+                    row: at,
+                    input: crate::tui::widgets::input::LineEdit::with_text(value),
+                    target: EditTarget::Variable(slug),
+                    error: None,
+                    pending: false,
+                });
+                Vec::new()
+            }
+            PaneRow::Note { ordinal, .. } => {
+                let text = self
+                    .library
+                    .selected()
+                    .and_then(|project| self.details.get(&project.path))
+                    .and_then(|detail| detail.notes.get(ordinal))
+                    .map(|note| note.text.clone())
+                    .unwrap_or_default();
+                self.pane_edit = Some(PaneEdit::Note {
+                    row: at,
+                    ordinal,
+                    was: text.clone(),
+                    area: Box::new(crate::tui::widgets::text_area::TextArea::with_text(&text)),
+                    error: None,
+                    pending: false,
+                });
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Enter on the pane's line editor: what was typed goes to the project —
+    /// unless nothing changed, which is a cancel, or a tag is not a tag, which
+    /// is a refusal under the line.
+    pub(super) fn pane_edit_confirm(&mut self) -> Vec<Effect> {
+        let Some(PaneEdit::Line { target, input, .. }) = &self.pane_edit else {
+            return Vec::new();
+        };
+        let text = input.text().trim().to_string();
+        let Some(project) = self.library.selected().cloned() else {
+            self.pane_edit = None;
+            return Vec::new();
+        };
+        let action = match target {
+            EditTarget::Variable(slug) => Action::SetVariable {
+                project: Box::new(project),
+                slug: slug.clone(),
+                value: text,
+            },
+            EditTarget::Tag(from) => {
+                if text == *from {
+                    self.pane_edit = None;
+                    return Vec::new();
+                }
+                let to = if text.is_empty() {
+                    None
+                } else {
+                    match validators::tag(&text) {
+                        Ok(tag) => Some(tag),
+                        Err(error) => {
+                            if let Some(edit) = &mut self.pane_edit {
+                                edit.fail(error);
+                            }
+                            return Vec::new();
+                        }
+                    }
+                };
+                Action::ReplaceTag {
+                    project: Box::new(project),
+                    from: from.clone(),
+                    to,
+                }
+            }
+        };
+        self.send_pane_edit(action)
+    }
+
+    /// `Ctrl-S` on the pane's note editor: the note, rewritten — or, emptied,
+    /// removed. Unchanged text is a cancel.
+    pub(super) fn pane_edit_save(&mut self) -> Vec<Effect> {
+        let Some(PaneEdit::Note {
+            area, ordinal, was, ..
+        }) = &self.pane_edit
+        else {
+            return Vec::new();
+        };
+        let text = area.text();
+        if text.trim() == was.trim() {
+            self.pane_edit = None;
+            return Vec::new();
+        }
+        let (ordinal, was) = (*ordinal, was.clone());
+        let Some(project) = self.library.selected().cloned() else {
+            self.pane_edit = None;
+            return Vec::new();
+        };
+        self.send_pane_edit(Action::ReplaceNote {
+            project: Box::new(project),
+            ordinal,
+            was,
+            text,
+        })
+    }
+
+    /// The edit stays open, marked pending, until the worker answers: an
+    /// `Ok` closes it and pulses the row, an `Err` lands on it.
+    pub(super) fn send_pane_edit(&mut self, action: Action) -> Vec<Effect> {
+        if let Some(edit) = &mut self.pane_edit {
+            edit.set_pending(true);
+        }
+        let effects = self.run_action("writing…", action);
+        if effects.is_empty()
+            && let Some(edit) = &mut self.pane_edit
+        {
+            // Refused before it left — something else is still running.
+            edit.set_pending(false);
+        }
+        effects
+    }
+
+    /// The pane's rows for the selected project — `pane_rows` over what
+    /// has been read of it. Empty with nothing selected.
+    pub fn pane_rows(&self) -> Vec<PaneRow> {
+        let Some(project) = self.library.selected() else {
+            return Vec::new();
+        };
+        pane_rows(project, self.details.get(&project.path))
+    }
+
+    /// How many rows the pane shows at once: its height inside the border.
+    pub(super) fn pane_rows_on_screen(&self) -> usize {
+        self.regions()
+            .detail
+            .map(|pane| pane.height.saturating_sub(2) as usize)
+            .unwrap_or(0)
+    }
+
+    /// Put the pane's cursor back on the row an edit was about, pulse it, and
+    /// keep it in view. Nothing happens when the row is not there (yet).
+    pub(super) fn settle_pane_cursor(&mut self, target: &PaneTarget) {
+        let rows = self.pane_rows();
+        let Some(row) = find_row(&rows, target) else {
+            return;
+        };
+        self.pane_cursor = row;
+        self.pane_pulses.start(row, self.elapsed_ms);
+        self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
+            self.detail_scroll,
+            Some(row),
+            rows.len(),
+            self.pane_rows_on_screen(),
+        );
+    }
+
+    /// Move the pane's cursor by `delta` selectable rows (`isize::MIN` and
+    /// `isize::MAX` are the ends) and scroll the pane so it stays in view —
+    /// the same bargain the table makes with its viewport.
+    pub(super) fn move_pane_cursor(&mut self, delta: isize) {
+        let rows = self.pane_rows();
+        self.pane_cursor = step_cursor(&rows, self.pane_cursor, delta);
+        self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
+            self.detail_scroll,
+            Some(self.pane_cursor),
+            rows.len(),
+            self.pane_rows_on_screen(),
+        );
+    }
 }
 
 #[cfg(test)]

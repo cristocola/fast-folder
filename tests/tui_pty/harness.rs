@@ -39,21 +39,13 @@ use std::time::Duration;
 pub(crate) const DEADLINE: Duration = Duration::from_secs(25);
 
 /// The app's own keys, named so a script reads as what it does.
-#[allow(dead_code)]
 pub(crate) const KEY_QUIT: &str = "q";
-#[allow(dead_code)]
 pub(crate) const KEY_CREATE: &str = "n";
-#[allow(dead_code)]
 pub(crate) const KEY_REGISTER: &str = "e";
-#[allow(dead_code)]
 pub(crate) const KEY_TEMPLATES: &str = "T";
-#[allow(dead_code)]
 pub(crate) const KEY_SETTINGS: &str = ",";
-#[allow(dead_code)]
 pub(crate) const KEY_SEARCH: &str = "/";
-#[allow(dead_code)]
 pub(crate) const KEY_COPY_PATH: &str = "y";
-#[allow(dead_code)]
 pub(crate) const KEY_FROM_FOLDER: &str = "I";
 
 pub(crate) fn launch(sb: &Sandbox, script: Vec<pty::Keystroke>) -> (String, i32) {
@@ -73,7 +65,6 @@ pub(crate) fn launch(sb: &Sandbox, script: Vec<pty::Keystroke>) -> (String, i32)
 /// tracer is compiled out of release, like the failpoints, and so are its
 /// callers.
 #[cfg(debug_assertions)]
-#[allow(dead_code)]
 pub(crate) fn launch_traced(
     sb: &Sandbox,
     script: Vec<pty::Keystroke>,
@@ -94,7 +85,6 @@ pub(crate) fn launch_traced(
 
 /// Plant a project with a chosen creation date and a payload of a known size,
 /// so ordering and the Size column are both assertable.
-#[allow(dead_code)]
 pub(crate) fn plant_dated_project(
     sb: &Sandbox,
     folder: &str,
@@ -112,7 +102,6 @@ pub(crate) fn plant_dated_project(
 
 /// `launch` on its own thread, for the cases that need a second process running
 /// while the app sits on a prompt.
-#[allow(dead_code)]
 pub(crate) fn launch_detached(
     sb: &Sandbox,
     script: Vec<pty::Keystroke>,
@@ -146,7 +135,6 @@ pub(crate) fn app_screen(transcript: &str) -> String {
 /// person looks for to know where their typing will land. Read from the same
 /// `vt100` replay as `app_screen`, because ratatui parks the caret with a
 /// cursor-position escape that means nothing outside a terminal.
-#[allow(dead_code)]
 pub(crate) fn app_cursor(transcript: &str) -> (u16, u16) {
     const LEAVE: &str = "\x1b[?1049l";
     let end = transcript.rfind(LEAVE).unwrap_or(transcript.len());
@@ -184,7 +172,6 @@ pub(crate) fn parser_at_sized(
 
 /// How many times `name` was traced.
 #[cfg(debug_assertions)]
-#[allow(dead_code)]
 pub(crate) fn traced(trace: &Path, name: &str) -> usize {
     let recorded = fs::read_to_string(trace).unwrap_or_default();
     let count = recorded.lines().filter(|line| *line == name).count();

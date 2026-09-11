@@ -1,41 +1,21 @@
 //! Movement that guides the eye, and nothing that does not.
 //!
-//! The app draws a command centre, so motion here is held to the same rule as
-//! colour: it appears where it *means* something and never as decoration.
-//! Every movement points at the one thing on screen that just changed, and
-//! then lets go:
+//! Motion is held to the same rule as colour: it appears where it *means*
+//! something and never as decoration. Every movement points at the one thing
+//! on screen that just changed, and then lets go:
 //!
-//! - a **pulse** on a row a verb just changed — *which* rows did that batch
-//!   touch, when the cursor is somewhere else — and on a pane row an edit
-//!   just landed on;
-//! - a **pulse** on a size cell whose number *changed* — is the figure the one
-//!   that was there a moment ago (never on a first fill: a page of sizes
-//!   arrives at once, and lighting every visible row together is a flash);
-//! - a **pulse** on the selected row after a sort or a filter reordered the
-//!   list — the row kept the selection, so where did it go;
-//! - the **focus easing** from one pane to the other — border and title move
-//!   between their two rest colours rather than swapping, so the move is seen
-//!   where it landed and not only inferred from a line that changed colour
-//!   while nobody was reading it;
-//! - a **wash** under a status message as it arrives — that line is where
-//!   what just happened is said — and a **fade** as it goes, so it reads as
-//!   going and can still be read;
-//! - one **activity indicator** wherever something is pending — is it working,
-//!   or is it stuck (that one is `Glyphs::spin`, and older than this module).
+//! - a **pulse** on a row a verb just changed, and on a pane row an edit just
+//!   landed on;
+//! - a **pulse** on a size cell whose number *changed* (never on a first fill);
+//! - a **pulse** on the selected row after a sort or a filter reordered the list;
+//! - the **focus easing** from one pane to the other, border and title moving
+//!   between their two rest colours;
+//! - a **wash** under a status message as it arrives, and a **fade** as it goes;
+//! - one **activity indicator** wherever something is pending (`Glyphs::spin`).
 //!
-//! **A pulse fades; it does not flash.** It was one step — the wash held for
-//! 450 ms and then gone — and a background that snaps on and off is what a
-//! terminal looks like when it glitches, which is how it was described. A
-//! terminal cell has no alpha, so a fade needs something to fade *toward*:
-//! the rich palette declares its `ground`, the dark it is drawn on, and a
-//! pulse mixes from the wash to the ground with an ease-out, spending most
-//! of its time near the ground so the last step to nothing is not seen. The
-//! sixteen ANSI colours have no ramp, so there the wash is held and let go;
-//! mono has no colour at all, and never moves.
-//!
-//! Deliberately not built: eased scrolling, dialog transitions, cursor trails,
-//! a reveal sweep as a pane fills in. They answer nothing — and the sweep
-//! fights a held arrow key.
+//! A pulse fades toward the rich palette's `ground` with an ease-out rather than
+//! snapping off, because a terminal cell has no alpha; the sixteen ANSI colours
+//! hold the wash and let go, and mono never moves.
 //!
 //! **This module is pure.** No clock, no environment, no I/O: every function
 //! takes the elapsed milliseconds it should reason about, which is what lets

@@ -45,7 +45,7 @@ Pointers to deleted ROADMAP sections were fixed in root `CLAUDE.md` (gates →
 skill, and the hygiene line), `src/core/CLAUDE.md` (threat model →
 `docs/projects.md`), `tests/CLAUDE.md` and `tests/windows_live.rs`.
 
-## Phase 3 — the four CLAUDE.md files ✔ (this PR)
+## Phase 3 — the four CLAUDE.md files ✔ (#77)
 
 All four rewritten as current state, 2 750 → 1 779 lines: root 385, core
 493, tui 761, tests 140. Every rule kept with its one-line why; PR numbers,
@@ -64,28 +64,24 @@ repo_hygiene pass, and a script extracting every backticked identifier finds
 all of them in `src/`/`tests/` except `IndexMap`, `RUSTFLAGS`, `_unlocked`
 and serde's `ContentDeserializer`, which are external or a suffix.
 
-## Phase 4 — source: dead weight and the two oversized files
+## Phase 4 — source: dead weight and the two oversized files ✔ (this PR)
 
-- Delete `Metadata::from_plan` (`src/core/project_info.rs`),
-  `layout::studio_rows`, `App::selected_detail` — no callers.
-- Remove the 13 `#[allow(dead_code)]` in `tests/tui_pty/harness.rs`.
-- `AssetJob::last_progress_at` stays (its journal is `deny_unknown_fields`);
-  cut its comment to two lines.
-- Trim the UUID / "interim build" prose in `src/core/naming.rs`; fix the
-  dangling `crate::tui::browser` example in `tests/layering.rs`; halve the
-  `//!` header of `src/tui/motion.rs`.
-- Move `config_ignores_removed_project_info_keys` and
-  `config_defaults_are_backwards_compatible` from `tests/create.rs` to
-  `tests/data_dir.rs`.
-- Split `tests/tui_update.rs` into `tests/tui_update/` along its existing
-  inline modules and banner comments; shared helpers in `harness.rs`; one
-  binary as before.
-- Split `src/tui/app/mod.rs` by moving `impl App` blocks into the flow
-  modules that already exist (`wizard`, `register`, `studio`, `settings`,
-  `pane`, `jobs`, `palette`); pure moves, `pub(super)` where a call crosses a
-  file; `mod.rs` keeps the types, `new`/`start`, dispatch, status, discovery.
-- Verify: fmt, clippy debug + release, clippy on `x86_64-pc-windows-gnu`,
-  `cargo test` debug + release, snapshots unchanged, two frames screenshotted.
+`Metadata::from_plan`, `layout::studio_rows`, `App::selected_detail` and the
+thirteen `#[allow(dead_code)]` in the pty harness are gone. `last_progress_at`
+stays with a two-line comment, but not for the reason written here: it is a
+field of `Progress`, which is `Serialize` only, so no journal reads it — it is
+kept as the field a "no progress" note would read. The UUID prose, the
+`crate::tui::browser` example and half of `motion.rs`'s header went; the two
+config-compatibility tests live in `data_dir.rs`. `tests/tui_update.rs` is one
+binary with twenty modules under `tests/tui_update/` and a `harness.rs`
+prelude (170 tests before and after). `src/tui/app/mod.rs` is 4 681 → 2 347
+lines: 92 methods moved by script, byte for byte, into `pane`, `palette`,
+`wizard`, `register`, `studio`, `settings`, `jobs`, `actions` and `modal` (the
+guide's methods beside `GuideState`), 54 of them now `pub(super)` because a
+call crosses a file. Verified: fmt; clippy debug, release and
+`x86_64-pc-windows-gnu`; `cargo test` debug and release; the doc gate from a
+clean `target/doc`; no snapshot changed; the dashboard and builder frames from
+the screenshot tool identical to the pre-split binary's.
 
 ## Phase 5 — v3.7.0
 

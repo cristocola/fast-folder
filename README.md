@@ -16,7 +16,7 @@ You describe a folder structure once as a template. Every project you make from 
 
 Day to day you work in a full screen terminal app that shows your whole library at once and acts on it. Everything the app can do also has a command, so the same work fits into a script, a cron job, or a hotkey on your desktop. The command is `fastf`.
 
-<p align="center"><img src="docs/img/dashboard.svg" alt="The fast-folder dashboard: two tabs in the header, the configured bases beneath them, a search bar with the counts and the sort order, a table of projects with their IDs, sizes and bases, and a detail pane showing the selected project's tags, template variables and folder contents" width="960"></p>
+<p align="center"><img src="docs/img/dashboard.svg" alt="The fast-folder dashboard: two tabs in the header, the configured bases beneath them, a search bar with the counts and the sort order, a table of projects with their IDs, sizes and bases, and a detail pane showing the selected project's tags, template variables, folder contents, dated notes and todo list" width="960"></p>
 
 ## Quick start
 
@@ -46,7 +46,7 @@ More templates for specific kinds of work live in the [`examples/templates/`](ex
 - **Keeps the filesystem as the single source of truth.** A folder is a project because it contains a `PROJECT_INFO.md` file. Move it with your file manager, rename it, or copy it to another drive, and it stays the same project; `fastf reindex` picks up whatever you did outside the app. Delete the folder and the project goes with it.
 - **Adopts folders you already have.** `fastf register` writes the metadata into work that came from somewhere else, one folder at a time or a whole directory at once. `fastf apply` adds a template's missing folders and files to a folder that already exists.
 - **Reads a template out of a finished project.** `fastf template from-folder` looks at a project you are happy with and writes the template that would produce it.
-- **Keeps a record of each project.** Tags group projects across templates and bases, and every project has dated notes for the things that belong with the work.
+- **Keeps a record of each project.** Tags group projects across templates and bases. Every project keeps dated notes, as many lines as a note needs, and a todo list you tick off with Enter. Both are plain Markdown in the project's `PROJECT_INFO.md`, so any editor can change them, and the app shows the change within a second.
 - **Runs your own steps after creating a project.** It can open the new folder, start your editor, initialize a git repository, or run any command you give it.
 - **Works on Linux and Windows.** Templates use `/` on every platform. Paths are checked before anything is written, so a template can only ever produce files inside the project it belongs to.
 
@@ -60,11 +60,13 @@ Typing into the search bar narrows the list. A word matches a name, an ID, a tem
 
 Each verb has a key. `o` opens the folder, `t` opens a terminal there, `y` copies the path, `Enter` opens the action menu for the selected project, and `c` opens a command palette that finds any command or any project by name. `?` lists every key that works where you are.
 
+The detail pane beside the list is an editor you step into with `→`. Enter on a tag, a template variable or a note edits it in place, Enter on a todo ticks it or unticks it, and every section ends in a row that adds another. The pane reads the project's file as it is on disk, so a note you type in another editor shows up without a keypress.
+
 Every list moves the same way — the arrows or `j`/`k`, a page at a time, half a page, or straight to either end — and `→` goes into whatever is under the cursor while `←` comes back out, so the whole app can be driven with the arrow keys alone.
 
 Creating a project, adopting an existing folder and applying a template follow the same three steps: a form with every question on it, a preview built by the same code that commits it, then Enter. Templates have a tab of their own, with a builder that draws the folder tree beside the paths as you type them, a panel that explains whatever the cursor is on and shows the folder name your template would produce, and a built-in guide that walks you through building your first one. Every setting fast-folder has is on one screen with its current value beside it. Esc goes back one step at a time, and an answer the app refuses comes back editable with your text still in it.
 
-The app needs a terminal of at least 60x16, and the detail pane appears from 100 columns. It draws in truecolor where the terminal announces it, in the sixteen ANSI colours otherwise, and in plain ASCII when you ask for it with `FASTF_ASCII=1`. Motion takes the eye to what just changed and lets go: a row a verb touched lights up and fades, the focus eases from one pane to the other, the row you were on pulses after a sort; `fastf config set motion off` turns all of it off. `fastf config set theme` pins a palette for a terminal that announces its colours differently, such as an ssh session. Details in [docs/cli.md](docs/cli.md#the-guided-app).
+The app needs a terminal of at least 60x16, and the detail pane appears from 100 columns. It draws in truecolor where the terminal announces it, in the sixteen ANSI colours otherwise, and in plain ASCII when you ask for it with `FASTF_ASCII=1`. The mouse stays your terminal's: text selects as usual, and the wheel scrolls whatever the arrow keys would. Motion takes the eye to what just changed and lets go: a row a verb touched lights up and fades, the focus eases from one pane to the other, the row you were on pulses after a sort; `fastf config set motion off` turns all of it off. `fastf config set theme` pins a palette for a terminal that announces its colours differently, such as an ssh session. Details in [docs/cli.md](docs/cli.md#the-guided-app).
 
 ## The command line
 
@@ -81,7 +83,8 @@ cd "$(fastf path api)"                       # the bare path, for a shell
 fastf move ID0047 archive                    # into another base
 fastf copy-to ID0047 /mnt/backup             # onto a backup drive, ID kept
 fastf tag add ID0047 delivered
-fastf note add ID0047 "sent the rough cut"
+fastf note add ID0047 "sent the rough cut"   # a dated note; stdin and $EDITOR take several lines
+fastf notes ID0047 --since 2026-07           # every note since July, every line of each
 ```
 
 The whole tool is one binary of a few megabytes that carries everything it needs. Install it from a package manager, or keep it in a folder on a USB stick and take it with you. `fastf paths` tells you where its data lives.

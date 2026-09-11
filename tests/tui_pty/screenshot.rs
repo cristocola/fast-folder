@@ -378,6 +378,26 @@ fn plant_showcase(sb: &Sandbox, n: usize) {
                 ),
             )
             .replace("tags: []", &tags);
+        // The first project carries notes and todos, so the pane shows what a
+        // project's record looks like: a note of more than one line, and a
+        // list with some of it done.
+        let raw = if i == 0 {
+            raw.replace(
+                "## Notes\n",
+                "## Notes\n\n\
+                 - 2026-01-05T09:12:00Z — brief signed off, shoot booked\n\
+                 - 2026-01-16T18:40:00Z — first cut sent to Acme\n  \
+                   hold the logo two seconds longer\n  \
+                   and a quieter music bed\n\n\
+                 ## Todo\n\n\
+                 - [x] shoot the product close-ups\n\
+                 - [x] rough cut\n\
+                 - [ ] colour and sound mix\n\
+                 - [ ] deliver the 16:9 and 9:16 masters\n",
+            )
+        } else {
+            raw
+        };
         fs::write(&pinfo, raw).unwrap();
     }
     // The index the header reads before discovery answers.

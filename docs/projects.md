@@ -38,7 +38,19 @@ auto_tags:
 | Client Type        | Indie         |
 
 ## Notes
+
+- 2026-04-20T09:12:00Z — treatment approved, shoot on the 28th
+- 2026-05-02T18:40:00Z — first cut sent
+  the label wants the chorus shots held longer
+
+## Todo
+
+- [x] shoot
+- [ ] colour grade
+- [ ] deliver the masters
 ```
+
+A new project starts with an empty `## Notes` and no `## Todo`. The two notes and the list above are what a few weeks of work leave behind: `fastf note add` or the app's quick note writes a note, the app's pane adds and ticks the todos, and you can type either in any editor.
 
 The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming a folder never breaks tracking.
 

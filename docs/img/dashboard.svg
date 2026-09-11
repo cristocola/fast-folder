@@ -247,7 +247,8 @@
 <line x1="625.4" y1="125.0" x2="625.4" y2="134.0" stroke="#464c54" stroke-width="1"/>
 <text x="629.6" y="129.5" xml:space="preserve" fill="#767e88">client-project · </text>
 <text x="772.4" y="129.5" xml:space="preserve" fill="#7aa2c4">projects</text>
-<text x="839.6" y="129.5" xml:space="preserve" fill="#767e88"> · created</text>
+<text x="839.6" y="129.5" xml:space="preserve" fill="#767e88"> · created </text>
+<text x="932.0" y="129.5" xml:space="preserve" fill="#c9ced4">2026-01-0</text>
 <line x1="1011.8" y1="116.0" x2="1011.8" y2="125.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="125.0" x2="1011.8" y2="134.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="134.0" x2="12.2" y2="143.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -259,7 +260,8 @@
 <line x1="617.0" y1="143.0" x2="617.0" y2="152.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="134.0" x2="625.4" y2="143.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="143.0" x2="625.4" y2="152.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="147.5" xml:space="preserve" fill="#c9ced4">2026-01-02                                   </text>
+<text x="629.6" y="147.5" xml:space="preserve" fill="#c9ced4">41.0 GB</text>
+<text x="688.4" y="147.5" xml:space="preserve" fill="#767e88">   ·   2 notes   ·   2/4 todos done</text>
 <line x1="1011.8" y1="134.0" x2="1011.8" y2="143.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="143.0" x2="1011.8" y2="152.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="152.0" x2="12.2" y2="161.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -271,8 +273,7 @@
 <line x1="617.0" y1="161.0" x2="617.0" y2="170.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="152.0" x2="625.4" y2="161.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="161.0" x2="625.4" y2="170.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="165.5" xml:space="preserve" fill="#c9ced4">41.0 GB</text>
-<text x="688.4" y="165.5" xml:space="preserve" fill="#767e88">   ·   0 journal entries</text>
+<text x="629.6" y="165.5" xml:space="preserve" fill="#767e88">── tags ─────────────────────────────────────</text>
 <line x1="1011.8" y1="152.0" x2="1011.8" y2="161.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="161.0" x2="1011.8" y2="170.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="170.0" x2="12.2" y2="179.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -284,9 +285,7 @@
 <line x1="617.0" y1="179.0" x2="617.0" y2="188.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="170.0" x2="625.4" y2="179.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="179.0" x2="625.4" y2="188.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="183.5" xml:space="preserve" fill="#767e88">tags  </text>
-<text x="680.0" y="183.5" xml:space="preserve" fill="#a0a07a">● draft  </text>
-<text x="755.6" y="183.5" xml:space="preserve" fill="#8c96aa">● client/Acme  </text>
+<text x="629.6" y="183.5" xml:space="preserve" fill="#a0a07a">● draft</text>
 <line x1="1011.8" y1="170.0" x2="1011.8" y2="179.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="179.0" x2="1011.8" y2="188.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="188.0" x2="12.2" y2="197.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -298,7 +297,7 @@
 <line x1="617.0" y1="197.0" x2="617.0" y2="206.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="188.0" x2="625.4" y2="197.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="197.0" x2="625.4" y2="206.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="201.5" xml:space="preserve" fill="#767e88">── variables ────────────────────────────────</text>
+<text x="629.6" y="201.5" xml:space="preserve" fill="#8c96aa">● client/Acme</text>
 <line x1="1011.8" y1="188.0" x2="1011.8" y2="197.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="197.0" x2="1011.8" y2="206.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="206.0" x2="12.2" y2="215.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -310,8 +309,7 @@
 <line x1="617.0" y1="215.0" x2="617.0" y2="224.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="206.0" x2="625.4" y2="215.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="215.0" x2="625.4" y2="224.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="219.5" xml:space="preserve" fill="#767e88">client  </text>
-<text x="696.8" y="219.5" xml:space="preserve" fill="#c9ced4">Acme                                 </text>
+<text x="629.6" y="219.5" xml:space="preserve" fill="#767e88">· add a tag</text>
 <line x1="1011.8" y1="206.0" x2="1011.8" y2="215.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="215.0" x2="1011.8" y2="224.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="224.0" x2="12.2" y2="233.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -323,8 +321,7 @@
 <line x1="617.0" y1="233.0" x2="617.0" y2="242.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="224.0" x2="625.4" y2="233.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="233.0" x2="625.4" y2="242.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="237.5" xml:space="preserve" fill="#767e88">project </text>
-<text x="696.8" y="237.5" xml:space="preserve" fill="#c9ced4">Spring Campaign                      </text>
+<text x="629.6" y="237.5" xml:space="preserve" fill="#767e88">── variables ────────────────────────────────</text>
 <line x1="1011.8" y1="224.0" x2="1011.8" y2="233.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="233.0" x2="1011.8" y2="242.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="242.0" x2="12.2" y2="251.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -336,8 +333,8 @@
 <line x1="617.0" y1="251.0" x2="617.0" y2="260.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="242.0" x2="625.4" y2="251.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="251.0" x2="625.4" y2="260.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="255.5" xml:space="preserve" fill="#767e88">year    </text>
-<text x="696.8" y="255.5" xml:space="preserve" fill="#c9ced4">2026                                 </text>
+<text x="629.6" y="255.5" xml:space="preserve" fill="#767e88">Client Name     </text>
+<text x="764.0" y="255.5" xml:space="preserve" fill="#c9ced4">Acme                         </text>
 <line x1="1011.8" y1="242.0" x2="1011.8" y2="251.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="251.0" x2="1011.8" y2="260.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="260.0" x2="12.2" y2="269.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -349,7 +346,8 @@
 <line x1="617.0" y1="269.0" x2="617.0" y2="278.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="260.0" x2="625.4" y2="269.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="269.0" x2="625.4" y2="278.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="273.5" xml:space="preserve" fill="#767e88">── inside ───────────────────────────────────</text>
+<text x="629.6" y="273.5" xml:space="preserve" fill="#767e88">Project Title   </text>
+<text x="764.0" y="273.5" xml:space="preserve" fill="#c9ced4">Spring Campaign              </text>
 <line x1="1011.8" y1="260.0" x2="1011.8" y2="269.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="269.0" x2="1011.8" y2="278.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="278.0" x2="12.2" y2="287.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -361,8 +359,8 @@
 <line x1="617.0" y1="287.0" x2="617.0" y2="296.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="278.0" x2="625.4" y2="287.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="287.0" x2="625.4" y2="296.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="291.5" xml:space="preserve" fill="#767e88">▸ </text>
-<text x="646.4" y="291.5" xml:space="preserve" fill="#c9ced4">00_Brief/                                  </text>
+<text x="629.6" y="291.5" xml:space="preserve" fill="#767e88">Engagement Type </text>
+<text x="764.0" y="291.5" xml:space="preserve" fill="#c9ced4">(empty)                      </text>
 <line x1="1011.8" y1="278.0" x2="1011.8" y2="287.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="287.0" x2="1011.8" y2="296.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="296.0" x2="12.2" y2="305.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -374,8 +372,8 @@
 <line x1="617.0" y1="305.0" x2="617.0" y2="314.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="296.0" x2="625.4" y2="305.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="305.0" x2="625.4" y2="314.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="309.5" xml:space="preserve" fill="#767e88">▸ </text>
-<text x="646.4" y="309.5" xml:space="preserve" fill="#c9ced4">01_Working/                                </text>
+<text x="629.6" y="309.5" xml:space="preserve" fill="#767e88">year            </text>
+<text x="764.0" y="309.5" xml:space="preserve" fill="#c9ced4">2026                         </text>
 <line x1="1011.8" y1="296.0" x2="1011.8" y2="305.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="305.0" x2="1011.8" y2="314.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="314.0" x2="12.2" y2="323.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -387,8 +385,7 @@
 <line x1="617.0" y1="323.0" x2="617.0" y2="332.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="314.0" x2="625.4" y2="323.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="323.0" x2="625.4" y2="332.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="327.5" xml:space="preserve" fill="#767e88">▸ </text>
-<text x="646.4" y="327.5" xml:space="preserve" fill="#c9ced4">02_Delivery/                               </text>
+<text x="629.6" y="327.5" xml:space="preserve" fill="#767e88">── inside ───────────────────────────────────</text>
 <line x1="1011.8" y1="314.0" x2="1011.8" y2="323.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="323.0" x2="1011.8" y2="332.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="332.0" x2="12.2" y2="341.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -400,7 +397,8 @@
 <line x1="617.0" y1="341.0" x2="617.0" y2="350.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="332.0" x2="625.4" y2="341.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="341.0" x2="625.4" y2="350.0" stroke="#464c54" stroke-width="1"/>
-<text x="629.6" y="345.5" xml:space="preserve" fill="#767e88">· BRIEF.md</text>
+<text x="629.6" y="345.5" xml:space="preserve" fill="#767e88">▸ </text>
+<text x="646.4" y="345.5" xml:space="preserve" fill="#c9ced4">00_Brief/                                  </text>
 <line x1="1011.8" y1="332.0" x2="1011.8" y2="341.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="341.0" x2="1011.8" y2="350.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="350.0" x2="12.2" y2="359.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -412,6 +410,8 @@
 <line x1="617.0" y1="359.0" x2="617.0" y2="368.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="350.0" x2="625.4" y2="359.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="359.0" x2="625.4" y2="368.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="363.5" xml:space="preserve" fill="#767e88">▸ </text>
+<text x="646.4" y="363.5" xml:space="preserve" fill="#c9ced4">01_Working/                                </text>
 <line x1="1011.8" y1="350.0" x2="1011.8" y2="359.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="359.0" x2="1011.8" y2="368.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="368.0" x2="12.2" y2="377.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -420,6 +420,8 @@
 <line x1="617.0" y1="377.0" x2="617.0" y2="386.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="368.0" x2="625.4" y2="377.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="377.0" x2="625.4" y2="386.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="381.5" xml:space="preserve" fill="#767e88">▸ </text>
+<text x="646.4" y="381.5" xml:space="preserve" fill="#c9ced4">02_Delivery/                               </text>
 <line x1="1011.8" y1="368.0" x2="1011.8" y2="377.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="377.0" x2="1011.8" y2="386.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="386.0" x2="12.2" y2="395.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -428,6 +430,7 @@
 <line x1="617.0" y1="395.0" x2="617.0" y2="404.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="386.0" x2="625.4" y2="395.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="395.0" x2="625.4" y2="404.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="399.5" xml:space="preserve" fill="#767e88">· BRIEF.md</text>
 <line x1="1011.8" y1="386.0" x2="1011.8" y2="395.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="395.0" x2="1011.8" y2="404.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="404.0" x2="12.2" y2="413.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -436,6 +439,7 @@
 <line x1="617.0" y1="413.0" x2="617.0" y2="422.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="404.0" x2="625.4" y2="413.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="413.0" x2="625.4" y2="422.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="417.5" xml:space="preserve" fill="#767e88">── notes ────────────────────────────────────</text>
 <line x1="1011.8" y1="404.0" x2="1011.8" y2="413.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="413.0" x2="1011.8" y2="422.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="422.0" x2="12.2" y2="431.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -444,6 +448,8 @@
 <line x1="617.0" y1="431.0" x2="617.0" y2="440.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="422.0" x2="625.4" y2="431.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="431.0" x2="625.4" y2="440.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="435.5" xml:space="preserve" fill="#767e88">2026-01-05 </text>
+<text x="722.0" y="435.5" xml:space="preserve" fill="#c9ced4">brief signed off, shoot booked    </text>
 <line x1="1011.8" y1="422.0" x2="1011.8" y2="431.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="431.0" x2="1011.8" y2="440.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="440.0" x2="12.2" y2="449.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -452,6 +458,8 @@
 <line x1="617.0" y1="449.0" x2="617.0" y2="458.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="440.0" x2="625.4" y2="449.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="449.0" x2="625.4" y2="458.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="453.5" xml:space="preserve" fill="#767e88">2026-01-16 </text>
+<text x="722.0" y="453.5" xml:space="preserve" fill="#c9ced4">first cut sent to Acme            </text>
 <line x1="1011.8" y1="440.0" x2="1011.8" y2="449.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="449.0" x2="1011.8" y2="458.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="458.0" x2="12.2" y2="467.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -460,6 +468,7 @@
 <line x1="617.0" y1="467.0" x2="617.0" y2="476.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="458.0" x2="625.4" y2="467.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="467.0" x2="625.4" y2="476.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="471.5" xml:space="preserve" fill="#c9ced4">           hold the logo two seconds longer  </text>
 <line x1="1011.8" y1="458.0" x2="1011.8" y2="467.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="467.0" x2="1011.8" y2="476.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="476.0" x2="12.2" y2="485.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -468,6 +477,7 @@
 <line x1="617.0" y1="485.0" x2="617.0" y2="494.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="476.0" x2="625.4" y2="485.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="485.0" x2="625.4" y2="494.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="489.5" xml:space="preserve" fill="#c9ced4">           and a quieter music bed           </text>
 <line x1="1011.8" y1="476.0" x2="1011.8" y2="485.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="485.0" x2="1011.8" y2="494.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="494.0" x2="12.2" y2="503.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -476,6 +486,7 @@
 <line x1="617.0" y1="503.0" x2="617.0" y2="512.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="494.0" x2="625.4" y2="503.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="503.0" x2="625.4" y2="512.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="507.5" xml:space="preserve" fill="#767e88">· add a note</text>
 <line x1="1011.8" y1="494.0" x2="1011.8" y2="503.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="503.0" x2="1011.8" y2="512.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="512.0" x2="12.2" y2="521.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -484,6 +495,7 @@
 <line x1="617.0" y1="521.0" x2="617.0" y2="530.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="512.0" x2="625.4" y2="521.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="521.0" x2="625.4" y2="530.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="525.5" xml:space="preserve" fill="#767e88">── todo ─────────────────────────────────────</text>
 <line x1="1011.8" y1="512.0" x2="1011.8" y2="521.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="521.0" x2="1011.8" y2="530.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="530.0" x2="12.2" y2="539.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -492,6 +504,7 @@
 <line x1="617.0" y1="539.0" x2="617.0" y2="548.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="530.0" x2="625.4" y2="539.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="539.0" x2="625.4" y2="548.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="543.5" xml:space="preserve" fill="#767e88">[x] shoot the product close-ups</text>
 <line x1="1011.8" y1="530.0" x2="1011.8" y2="539.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="539.0" x2="1011.8" y2="548.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="548.0" x2="12.2" y2="557.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -500,6 +513,7 @@
 <line x1="617.0" y1="557.0" x2="617.0" y2="566.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="548.0" x2="625.4" y2="557.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="557.0" x2="625.4" y2="566.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="561.5" xml:space="preserve" fill="#767e88">[x] rough cut</text>
 <line x1="1011.8" y1="548.0" x2="1011.8" y2="557.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="557.0" x2="1011.8" y2="566.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="566.0" x2="12.2" y2="575.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -508,6 +522,8 @@
 <line x1="617.0" y1="575.0" x2="617.0" y2="584.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="566.0" x2="625.4" y2="575.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="575.0" x2="625.4" y2="584.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="579.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">[ ] </text>
+<text x="663.2" y="579.5" xml:space="preserve" fill="#c9ced4">colour and sound mix                     </text>
 <line x1="1011.8" y1="566.0" x2="1011.8" y2="575.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="575.0" x2="1011.8" y2="584.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="584.0" x2="12.2" y2="593.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -516,6 +532,8 @@
 <line x1="617.0" y1="593.0" x2="617.0" y2="602.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="584.0" x2="625.4" y2="593.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="593.0" x2="625.4" y2="602.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="597.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">[ ] </text>
+<text x="663.2" y="597.5" xml:space="preserve" fill="#c9ced4">deliver the 16:9 and 9:16 masters        </text>
 <line x1="1011.8" y1="584.0" x2="1011.8" y2="593.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="593.0" x2="1011.8" y2="602.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="602.0" x2="12.2" y2="611.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -524,6 +542,7 @@
 <line x1="617.0" y1="611.0" x2="617.0" y2="620.0" stroke="#7aa2c4" stroke-width="1"/>
 <line x1="625.4" y1="602.0" x2="625.4" y2="611.0" stroke="#464c54" stroke-width="1"/>
 <line x1="625.4" y1="611.0" x2="625.4" y2="620.0" stroke="#464c54" stroke-width="1"/>
+<text x="629.6" y="615.5" xml:space="preserve" fill="#767e88">· add a todo</text>
 <line x1="1011.8" y1="602.0" x2="1011.8" y2="611.0" stroke="#464c54" stroke-width="1"/>
 <line x1="1011.8" y1="611.0" x2="1011.8" y2="620.0" stroke="#464c54" stroke-width="1"/>
 <line x1="12.2" y1="620.0" x2="12.2" y2="629.0" stroke="#7aa2c4" stroke-width="1"/>
@@ -806,8 +825,10 @@
 <text x="579.2" y="723.5" xml:space="preserve" fill="#767e88"> new  </text>
 <text x="629.6" y="723.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">T</text>
 <text x="638.0" y="723.5" xml:space="preserve" fill="#767e88"> templates  </text>
-<text x="738.8" y="723.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">?</text>
-<text x="747.2" y="723.5" xml:space="preserve" fill="#767e88"> help  </text>
-<text x="806.0" y="723.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">c</text>
-<text x="814.4" y="723.5" xml:space="preserve" fill="#767e88"> commands  </text>
+<text x="738.8" y="723.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">→</text>
+<text x="747.2" y="723.5" xml:space="preserve" fill="#767e88"> pane  </text>
+<text x="806.0" y="723.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">?</text>
+<text x="814.4" y="723.5" xml:space="preserve" fill="#767e88"> help  </text>
+<text x="873.2" y="723.5" xml:space="preserve" fill="#7aa2c4" font-weight="bold">c</text>
+<text x="881.6" y="723.5" xml:space="preserve" fill="#767e88"> commands  </text>
 </svg>

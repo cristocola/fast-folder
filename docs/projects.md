@@ -52,7 +52,7 @@ auto_tags:
 
 A new project starts with an empty `## Notes` and no `## Todo`. The two notes and the list above are what a few weeks of work leave behind: `fastf note add` or the app's quick note writes a note, the app's pane adds and ticks the todos, and you can type either in any editor.
 
-The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming a folder never breaks tracking.
+The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming a folder never breaks tracking. Only `id` and `template` are required to read the file; the rest is repaired from the folder when it is missing (see below).
 
 `id_number` is the number behind that id, written down rather than parsed back out of it. A template may declare any `id.prefix`, digits included, and `ID0047`, `47` and `2047` cannot all be told apart by reading their trailing digits — so the number is recorded when the project is created. Projects made before fastf stored it have their number read from the id string instead, and `fastf reindex` fills the field in for them.
 
@@ -60,7 +60,7 @@ The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming 
 
 After creation the file is yours. fastf rewrites the frontmatter when you tag, move, rename, or register a project, or set a variable from the app's detail pane, and every rewrite leaves the rest of the file byte for byte as it was — with the exceptions that are the point of the verb. Setting a variable also rewrites the variables table under `# Project Info`, so the table stays true, but only while it is still the table fastf wrote: reshape it, rename its header, and fastf leaves it alone. A note is appended at the end of the `## Notes` section; editing one from the pane rewrites that note's own lines; toggling a todo rewrites the one character inside its brackets. That includes **keys fastf does not recognise**: add `obsidian_folder:` or anything else your own tooling needs, and it stays where you put it, in the same position in the file.
 
-**Notes are dated entries under `## Notes`** — `- 2026-04-20T14:32:11Z — text`, with any further lines of the note indented under it. The reader is lenient: a line at the left margin starting with `- ` and a date starts a note, with or without the `—`; every line until the next one belongs to it; text above the first entry is one undated note; the heading is matched in any case and with or without a colon. A project written before v3.6.0 has its notes under `## Journal`, and keeps them there. **Todos** are `- [ ] text` and `- [x] text` lines under `## Todo`. See [docs/cli.md](cli.md#notes).
+**Notes are dated entries under `## Notes`** — `- 2026-04-20T14:32:11Z — text`, with any further lines of the note indented under it. The reader is lenient: a line at the left margin starting with `- ` and a date starts a note, with or without the `—`; every line until the next one belongs to it; text above the first entry is one undated note; the heading is matched in any case and with or without a colon. A project whose notes are under a `## Journal` heading keeps them there. **Todos** are `- [ ] text` and `- [x] text` lines under `## Todo`. See [docs/cli.md](cli.md#notes).
 
 What the pane lets you type is what the file can hold. A tag is one word; a variable is one line, and a `select` variable is one of its options — the value lands through the same transform a create applies; an undated note may not begin a line with `##`, because a second-level heading is how the file marks where a section ends, and one inside the notes would end them there (a dated note's lines are indented, so nothing in them can). Each refusal names the rule.
 
@@ -107,7 +107,7 @@ fastf reindex
 
 The guided TUI shows a current Size snapshot for each project it displays, and
 never waits for one: it draws its list first and fills the column in from
-background workers (see "Browsing projects" in `cli.md`). Size is the sum of the
+background workers (see [app.md](app.md#sizes)). Size is the sum of the
 logical lengths of all regular files below the project folder, including hidden
 files and `PROJECT_INFO.md`. Empty directories
 add zero bytes. Symlinks, Windows junctions, and other links are never followed;
@@ -129,7 +129,7 @@ the row is measured again when you return to the list.
 
 The counter lives **inside each base**, as `.fastf-counter.toml` next to the projects it numbers. Your project drive is already mounted by every operating system you boot, so they all read the same number — nothing to symlink, nothing to keep in sync, and a base on an external drive carries its numbering with it.
 
-It cannot drift into collision with your projects. When planning a new one, fastf takes the highest of: every base's counter file, the highest ID actually present in your projects, and (for upgrades) the old counter from the config directory. Delete the counter file and the next ID still clears every project you have.
+It cannot drift into collision with your projects. When planning a new one, fastf takes the highest of: every base's counter file, the highest ID actually present in your projects, and the record in fastf's own data folder. Delete the counter file and the next ID still clears every project you have. The commands are in [config.md](config.md#the-id-counter).
 
 **Every base converges on that number.** Add three folders as bases holding `ID0004`, `ID0082` and `ID0017` and each one's counter file comes out at 82, so the next project is `ID0083` wherever you create it. A base's file wins when it is *higher* than the projects in that folder — that is what carries the number to a machine which cannot see your other drives; when the projects are higher, the file is raised and the new value pushed to the rest. This happens on every create and every `fastf id show`; `fastf id sync` forces it after something changed outside fastf.
 
@@ -141,7 +141,7 @@ Because nothing ever lowers it, there is no `fastf id reset`, and `fastf id set`
 fastf move ID0047 archive
 ```
 
-Moves are also available from the `fastf recent` action menu. The rules:
+The app's `m` does the same, over every marked project when there are marks. The rules:
 
 - Targets must be configured bases, so a moved project always stays discoverable.
 - On the same filesystem, a move is an instant atomic rename. fastf says so —
@@ -221,6 +221,41 @@ report-only**. They contain arbitrary absolute paths, so `reconcile` never
 parses or migrates them, follows their paths, or deletes anything they name. It
 lists each marker and leaves it plus all related paths untouched. Inspect both
 locations before manually removing any obsolete artifact.
+
+## What fastf promises
+
+fastf is a local, single-user tool for self-contained trees of ordinary
+directories and regular files. It has two surfaces, the command line and the
+guided app, and no network surface at all. Its commands may wait behind one
+coarse mutation lock per data folder; it does not coordinate simultaneous
+writers on two computers, so two machines writing one shared base at the same
+moment can mint the same ID.
+
+**What it starts.** fastf runs other programs on your behalf in five places,
+all of them configuration rather than input: a template's `post_create`
+commands, your editor, the file manager for Reveal, a clipboard tool
+(`wl-copy`, `xclip`, `xsel`, `clip`, `pbcopy`), and — unix only — a terminal
+emulator plus `notify-send`. The emulator is started only when fastf has been
+asked for something interactive and can prove nothing can read its output, and
+it is given fastf's own arguments as arguments, never through a shell.
+
+**What it trusts.** One OS account. Bases, templates, `config.toml`, the
+counters and the caches are your own files and are trusted as content — a
+template's `post_create` commands run with your privileges, which is the
+feature. Two things are enforced anyway, because they are the routes by which
+a file that travels could start naming somewhere it should not: a cache entry
+can only ever point at a direct child of its own base (above), and a write
+fastf performs beneath a root it controls — a new project, an apply target, a
+template's `files/` — never follows a link, junction or reparse point that is
+already there. The path text cannot escape its root, and the filesystem
+beneath it is checked component by component immediately before each write.
+
+**What a move or copy does not promise.** Hashes, ACLs, extended attributes,
+sparse-file layout, hard-link relationships, symlink or junction reproduction,
+and storage-level durability are outside the contract; links and special
+entries are refused when copying would be required. Process-crash recovery is
+in scope; hardware failure, power loss, bit rot and storage corruption remain
+the job of the filesystem and your backups.
 
 ## Onboarding folders fastf did not create
 

@@ -440,7 +440,7 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                 )
             }
             other => bail!(
-                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, default-template, date-format, \
+                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, motion, default-template, date-format, \
              preview-lines, prompt-open-after-create, confirm-create, \
              recent-limit, register-naming-pattern, on-name-collision, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",

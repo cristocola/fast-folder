@@ -11,7 +11,7 @@ use ratatui::widgets::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::library;
-use crate::tui::app::pane::{EditTarget, PaneEdit, PaneRow};
+use crate::tui::app::pane::{EditTarget, NOTE_INDENT, PaneEdit, PaneRow, TODO_INDENT};
 use crate::tui::app::{App, Focus};
 use crate::tui::rows::{SIZE_CELL, date_cell, size_label};
 use crate::tui::view::{fit, highlighted};
@@ -533,22 +533,23 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                 theme.dim(),
             )),
             // A note's day in a column ten wide — blank for the undated
-            // note — and its first line; its other lines under the text,
-            // in the text column, so a note reads as one block.
+            // note — and its first row as `pane_rows` wrapped it; its other
+            // rows under the text, in the text column, so a note reads as one
+            // block.
             PaneRow::Note { date, first, .. } => Line::from(vec![
                 Span::styled(
                     format!("{:<10} ", date.as_deref().unwrap_or("")),
                     theme.dim(),
                 ),
                 Span::styled(
-                    fit(first, width.saturating_sub(11), g.ellipsis),
+                    fit(first, width.saturating_sub(NOTE_INDENT), g.ellipsis),
                     theme.text(),
                 ),
             ]),
             PaneRow::NoteLine(line) => Line::from(vec![
                 Span::raw(format!("{:<10} ", "")),
                 Span::styled(
-                    fit(line, width.saturating_sub(11), g.ellipsis),
+                    fit(line, width.saturating_sub(NOTE_INDENT), g.ellipsis),
                     theme.text(),
                 ),
             ]),
@@ -572,7 +573,14 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                     if *done { theme.dim() } else { theme.accent() },
                 ),
                 Span::styled(
-                    fit(text, width.saturating_sub(4), g.ellipsis),
+                    fit(text, width.saturating_sub(TODO_INDENT), g.ellipsis),
+                    if *done { theme.dim() } else { theme.text() },
+                ),
+            ]),
+            PaneRow::TodoLine { done, text } => Line::from(vec![
+                Span::raw(" ".repeat(TODO_INDENT)),
+                Span::styled(
+                    fit(text, width.saturating_sub(TODO_INDENT), g.ellipsis),
                     if *done { theme.dim() } else { theme.text() },
                 ),
             ]),

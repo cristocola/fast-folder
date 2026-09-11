@@ -64,7 +64,7 @@ repo_hygiene pass, and a script extracting every backticked identifier finds
 all of them in `src/`/`tests/` except `IndexMap`, `RUSTFLAGS`, `_unlocked`
 and serde's `ContentDeserializer`, which are external or a suffix.
 
-## Phase 4 — source: dead weight and the two oversized files ✔ (this PR)
+## Phase 4 — source: dead weight and the two oversized files ✔ (#78)
 
 `Metadata::from_plan`, `layout::studio_rows`, `App::selected_detail` and the
 thirteen `#[allow(dead_code)]` in the pty harness are gone. `last_progress_at`
@@ -88,6 +88,14 @@ the screenshot tool identical to the pre-split binary's.
 `Cargo.toml` → 3.7.0; `.github/release-notes/v3.7.0.md`; green PR run on
 both platforms; tag on `main`; `packaging/aur/update.sh 3.7.0`; `makepkg -f`
 both; push both AUR clones; commit the packaging bump; delete this file.
+
+Added at the maintainer's request during the pass, and shipped in this
+release as its one user-visible change: the detail pane wraps a note or a
+todo too wide for it (`pane::wrap_columns`, in display columns) instead of
+cutting it with `…`, and a todo toggle names the todo's text from the detail
+rather than from its row. One new snapshot
+(`detail_pane_wraps_a_long_note_and_todo_120x40`); every other frame is
+unchanged. The release PR carries it with the version bump and the notes.
 
 ## Not doing
 

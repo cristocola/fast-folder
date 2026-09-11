@@ -8,8 +8,13 @@
 //! that `update` and `view` both read. `pane_rows` is that answer, and it is
 //! pure: a project and what has been read of it in, rows out.
 //!
-//! **Nothing here edits.** A row says what it is; Enter on it is `update`'s
-//! business, and what a change does to the file is `core::operations`'.
+//! **A row only says what it is**, and holds only what fits the pane, so an
+//! edit reads the text it changes from the detail, never from a row. The
+//! `impl App` below is `update`'s side of the pane — opening, sending and
+//! landing an edit, and walking the cursor; what a change does to the file is
+//! `core::operations`'.
+
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::App;
 use crate::core::library::Project;
@@ -30,8 +35,14 @@ pub const LISTING_SHOWN: usize = 8;
 /// How many notes the pane shows — the latest — under `… n earlier`.
 pub const NOTES_SHOWN: usize = 5;
 
-/// How many lines of one note the pane shows before `… n more lines`.
+/// How many rows of one note the pane shows before `… n more lines`.
 pub const NOTE_LINES_SHOWN: usize = 8;
+
+/// The columns in front of a note's text: its date, ten wide, and a space.
+pub const NOTE_INDENT: usize = 11;
+
+/// The columns in front of a todo's text: `[ ] `.
+pub const TODO_INDENT: usize = 4;
 
 /// What kind of value a variable row holds, and so what Enter on it opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,7 +86,7 @@ pub enum PaneRow {
     More(usize),
     /// `… n earlier` above the notes shown. Enter shows them all.
     EarlierNotes(usize),
-    /// A note's first line, with the day it was written (none for the
+    /// A note's first row, with the day it was written (none for the
     /// undated note). Enter edits the note. `ordinal` is its index among
     /// the file's notes, which is what an edit is addressed by.
     Note {
@@ -83,19 +94,22 @@ pub enum PaneRow {
         date: Option<String>,
         first: String,
     },
-    /// A further line of the note above. Not a row the cursor rests on: the
-    /// note is one thing, and its first row is where Enter acts on it.
+    /// A further row of the note above: the rest of a line too wide for the
+    /// pane, or a line of its own. Not a row the cursor rests on: the note is
+    /// one thing, and its first row is where Enter acts on it.
     NoteLine(String),
-    /// `… n more lines` of the note above.
+    /// `… n more lines` of the note above, counted in rows.
     NoteMore(usize),
     /// The row under the last note that adds one.
     AddNote,
-    /// One todo. Enter toggles it.
+    /// One todo's first row. Enter toggles it.
     Todo {
         ordinal: usize,
         done: bool,
         text: String,
     },
+    /// The rest of a todo too wide for the pane. Not a row the cursor rests on.
+    TodoLine { done: bool, text: String },
     /// The row under the last todo that adds one.
     AddTodo,
 }
@@ -128,18 +142,21 @@ impl PaneRow {
 /// the row that adds one under them; their rules are drawn whenever there is
 /// something to add to, which is always.
 ///
-/// **A note is several rows, never one wrapped row.** Its first line is the
-/// row the cursor rests on and Enter edits; every further line is a row of
-/// its own under it, up to `NOTE_LINES_SHOWN`, then `… n more lines`. The
-/// cursor is an index into the rows and the scroll counts rows, so a row that
-/// drew two lines would put everything under it off by one. The latest
-/// `NOTES_SHOWN` notes are shown, under `… n earlier` when there are more.
+/// **A note is several rows, never one wrapped row.** `width` is the pane's
+/// inside, and every line of a note is wrapped to the columns after its date
+/// (`wrap_columns`): the first row is the one the cursor rests on and Enter
+/// edits, and every further row is its own under it, up to `NOTE_LINES_SHOWN`
+/// rows, then `… n more lines`. A todo wraps the same way into `TodoLine`s.
+/// The cursor is an index into the rows and the scroll counts rows, so a row
+/// that drew two lines would put everything under it off by one. A `width` of
+/// zero wraps nothing. The latest `NOTES_SHOWN` notes are shown, under
+/// `… n earlier` when there are more.
 ///
 /// Variables follow the template's own order and carry its `type`, so a
 /// `select` offers its options and nothing else; a variable the metadata
 /// holds that the template no longer declares — or every variable of a
 /// registered project, which has no template — is free text after them.
-pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>) -> Vec<PaneRow> {
+pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) -> Vec<PaneRow> {
     let mut rows = vec![PaneRow::Name, PaneRow::Facts, PaneRow::Figures];
 
     rows.push(PaneRow::Rule("tags"));
@@ -210,20 +227,20 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>) -> Vec<PaneR
     if earlier > 0 {
         rows.push(PaneRow::EarlierNotes(earlier));
     }
+    let note_width = width.saturating_sub(NOTE_INDENT);
     for (ordinal, note) in detail.notes.iter().enumerate().skip(earlier) {
-        let mut lines = note.text.lines();
+        let mut lines = note
+            .text
+            .lines()
+            .flat_map(|line| wrap_columns(line, note_width));
         rows.push(PaneRow::Note {
             ordinal,
             date: note.day().map(str::to_string),
-            first: lines.next().unwrap_or("").to_string(),
+            first: lines.next().unwrap_or_default(),
         });
-        let rest: Vec<&str> = lines.collect();
+        let rest: Vec<String> = lines.collect();
         let shown = NOTE_LINES_SHOWN.saturating_sub(1);
-        rows.extend(
-            rest.iter()
-                .take(shown)
-                .map(|line| PaneRow::NoteLine(line.to_string())),
-        );
+        rows.extend(rest.iter().take(shown).cloned().map(PaneRow::NoteLine));
         if rest.len() > shown {
             rows.push(PaneRow::NoteMore(rest.len() - shown));
         }
@@ -231,19 +248,62 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>) -> Vec<PaneR
     rows.push(PaneRow::AddNote);
 
     rows.push(PaneRow::Rule("todo"));
-    rows.extend(
-        detail
-            .todos
-            .iter()
-            .enumerate()
-            .map(|(ordinal, todo)| PaneRow::Todo {
-                ordinal,
-                done: todo.done,
-                text: todo.text.clone(),
-            }),
-    );
+    let todo_width = width.saturating_sub(TODO_INDENT);
+    for (ordinal, todo) in detail.todos.iter().enumerate() {
+        let mut lines = wrap_columns(&todo.text, todo_width).into_iter();
+        rows.push(PaneRow::Todo {
+            ordinal,
+            done: todo.done,
+            text: lines.next().unwrap_or_default(),
+        });
+        rows.extend(lines.map(|text| PaneRow::TodoLine {
+            done: todo.done,
+            text,
+        }));
+    }
     rows.push(PaneRow::AddTodo);
     rows
+}
+
+/// `text` as lines at most `width` display columns wide: broken at a space
+/// where one fits, inside a word only when the word alone is wider than a
+/// line. The spaces a break lands on are dropped and every other character is
+/// kept, the indent a line starts with included. A `width` of zero is no limit.
+fn wrap_columns(text: &str, width: usize) -> Vec<String> {
+    if width == 0 || text.width() <= width {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut rest = text;
+    while rest.width() > width {
+        let (mut columns, mut fits, mut space, mut word) = (0, 0, None, false);
+        for (at, c) in rest.char_indices() {
+            let w = c.width().unwrap_or(0);
+            if columns + w > width {
+                break;
+            }
+            columns += w;
+            fits = at + c.len_utf8();
+            if c == ' ' {
+                if word {
+                    space = Some(at);
+                }
+            } else {
+                word = true;
+            }
+        }
+        let split = if rest[fits..].starts_with(' ') {
+            fits
+        } else {
+            space.unwrap_or_else(|| fits.max(rest.chars().next().map_or(0, char::len_utf8)))
+        };
+        lines.push(rest[..split].trim_end().to_string());
+        rest = rest[split..].trim_start_matches(' ');
+    }
+    if !rest.is_empty() {
+        lines.push(rest.to_string());
+    }
+    lines
 }
 
 /// What a line edit in the pane is changing.
@@ -473,8 +533,17 @@ impl App {
                 )));
                 Vec::new()
             }
-            PaneRow::Todo { ordinal, text, .. } => {
+            PaneRow::Todo { ordinal, .. } => {
                 let Some(project) = self.library.selected().cloned() else {
+                    return Vec::new();
+                };
+                // The whole todo as it was read — the row holds only what fits.
+                let Some(was) = self
+                    .details
+                    .get(&project.path)
+                    .and_then(|detail| detail.todos.get(ordinal))
+                    .map(|todo| todo.text.clone())
+                else {
                     return Vec::new();
                 };
                 let effects = self.run_action(
@@ -482,7 +551,7 @@ impl App {
                     Action::ToggleTodo {
                         project: Box::new(project),
                         ordinal,
-                        was: text,
+                        was,
                     },
                 );
                 if !effects.is_empty() {
@@ -654,12 +723,18 @@ impl App {
     }
 
     /// The pane's rows for the selected project — `pane_rows` over what
-    /// has been read of it. Empty with nothing selected.
+    /// has been read of it, wrapped to the pane as it is drawn. Empty with
+    /// nothing selected.
     pub fn pane_rows(&self) -> Vec<PaneRow> {
         let Some(project) = self.library.selected() else {
             return Vec::new();
         };
-        pane_rows(project, self.details.get(&project.path))
+        let width = self
+            .regions()
+            .detail
+            .map(|pane| pane.width.saturating_sub(2) as usize)
+            .unwrap_or(0);
+        pane_rows(project, self.details.get(&project.path), width)
     }
 
     /// How many rows the pane shows at once: its height inside the border.
@@ -758,7 +833,7 @@ mod tests {
 
     #[test]
     fn rows_are_one_per_tag_then_add_tag_and_reading_until_the_detail_lands() {
-        let rows = pane_rows(&project(&["draft", "client/Acme"], "client"), None);
+        let rows = pane_rows(&project(&["draft", "client/Acme"], "client"), None, 0);
         assert_eq!(
             rows,
             vec![
@@ -798,7 +873,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let rows = pane_rows(&project(&["draft"], "client"), Some(&detail));
+        let rows = pane_rows(&project(&["draft"], "client"), Some(&detail), 0);
         let selectable: Vec<&PaneRow> = rows.iter().filter(|r| r.selectable()).collect();
         assert_eq!(
             selectable,
@@ -855,7 +930,7 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        let rows = pane_rows(&project(&[], "client"), Some(&detail));
+        let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
         assert!(rows.contains(&PaneRow::EarlierNotes(3)));
         let shown: Vec<usize> = rows
             .iter()
@@ -897,7 +972,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let rows = pane_rows(&project(&[], "client"), Some(&detail));
+        let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
         let variables: Vec<&PaneRow> = rows
             .iter()
             .filter(|r| matches!(r, PaneRow::Variable { .. }))
@@ -940,7 +1015,7 @@ mod tests {
             meta: Some(metadata(&[("b", "2"), ("a", "1")])),
             ..Default::default()
         };
-        let rows = pane_rows(&project(&[], "(registered)"), Some(&detail));
+        let rows = pane_rows(&project(&[], "(registered)"), Some(&detail), 0);
         let kinds: Vec<(&str, &VarKind)> = rows
             .iter()
             .filter_map(|r| match r {
@@ -953,7 +1028,7 @@ mod tests {
 
     #[test]
     fn the_cursor_walks_selectable_rows_and_stops() {
-        let rows = pane_rows(&project(&["draft"], "client"), None);
+        let rows = pane_rows(&project(&["draft"], "client"), None, 0);
         // Name(0) Facts Figures Rule Tag(4) AddTag(5) Reading
         assert_eq!(step_cursor(&rows, 0, 1), 4, "over the facts and the rule");
         assert_eq!(step_cursor(&rows, 4, 1), 5);
@@ -968,5 +1043,96 @@ mod tests {
             "a cursor on a row it may not rest on settles below"
         );
         assert_eq!(step_cursor(&rows, 99, 0), 5, "or on the last, past the end");
+    }
+
+    #[test]
+    fn a_line_wider_than_the_pane_breaks_at_a_space_and_keeps_every_word() {
+        assert_eq!(wrap_columns("one two three", 0), ["one two three"]);
+        assert_eq!(wrap_columns("one two three", 13), ["one two three"]);
+        assert_eq!(wrap_columns("one two three", 8), ["one two", "three"]);
+        assert_eq!(wrap_columns("one two three", 7), ["one two", "three"]);
+        assert_eq!(
+            wrap_columns("abcdefghij", 4),
+            ["abcd", "efgh", "ij"],
+            "a word wider than a line is broken where it must be"
+        );
+        assert_eq!(
+            wrap_columns("  indented words here", 12),
+            ["  indented", "words here"],
+            "the indent a line starts with stays, and is never a row of its own"
+        );
+        assert_eq!(
+            wrap_columns("日本語のメモ", 6),
+            ["日本語", "のメモ"],
+            "measured in display columns, not characters"
+        );
+    }
+
+    #[test]
+    fn a_long_note_and_a_long_todo_continue_on_the_rows_under_them() {
+        let detail = ProjectDetail {
+            notes: vec![note(
+                Some("2026-01-01T10:00:00Z"),
+                "recut the second verse around the new take\nthen colour",
+            )],
+            todos: vec![crate::core::body::Todo {
+                done: false,
+                text: "send the rough cut to the label".to_string(),
+            }],
+            ..Default::default()
+        };
+        // 31 columns inside the border: 20 for a note's text, 27 for a todo's.
+        let rows = pane_rows(&project(&[], "client"), Some(&detail), 31);
+        let at = rows
+            .iter()
+            .position(|r| matches!(r, PaneRow::Note { .. }))
+            .unwrap();
+        assert_eq!(
+            rows[at..at + 4],
+            [
+                PaneRow::Note {
+                    ordinal: 0,
+                    date: Some("2026-01-01".to_string()),
+                    first: "recut the second".to_string(),
+                },
+                PaneRow::NoteLine("verse around the new".to_string()),
+                PaneRow::NoteLine("take".to_string()),
+                PaneRow::NoteLine("then colour".to_string()),
+            ]
+        );
+        let todo = rows
+            .iter()
+            .position(|r| matches!(r, PaneRow::Todo { .. }))
+            .unwrap();
+        assert_eq!(
+            rows[todo..todo + 2],
+            [
+                PaneRow::Todo {
+                    ordinal: 0,
+                    done: false,
+                    text: "send the rough cut to the".to_string(),
+                },
+                PaneRow::TodoLine {
+                    done: false,
+                    text: "label".to_string(),
+                },
+            ]
+        );
+        assert!(
+            !rows[todo + 1].selectable(),
+            "the cursor rests on the todo, not on the rest of it"
+        );
+
+        let long = ProjectDetail {
+            notes: vec![note(None, &"word ".repeat(200))],
+            ..Default::default()
+        };
+        let rows = pane_rows(&project(&[], "client"), Some(&long), 31);
+        let lines = rows
+            .iter()
+            .filter(|r| matches!(r, PaneRow::NoteLine(_)))
+            .count();
+        assert_eq!(lines, NOTE_LINES_SHOWN - 1, "wrapped rows count as lines");
+        assert!(rows.iter().any(|r| matches!(r, PaneRow::NoteMore(_))));
     }
 }

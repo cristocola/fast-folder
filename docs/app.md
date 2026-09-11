@@ -41,7 +41,9 @@ Top to bottom:
   selected project's template, base and date, its size and how many notes and
   todos it has, its tags one per row, its template variables, the top of its
   folder, its latest notes — each with the day it was written and every line
-  it has — and its todos. The split favours the table: long folder names take
+  it has — and its todos. A note or todo too long for the pane continues on the
+  rows under it; a note shows its first eight rows there and says how many
+  more, and `J` shows every note in full. The split favours the table: long folder names take
   the room they need with the size beside them, the pane takes the rest, and
   closes — as `i` would — when the rest would be a sliver.
 - **The status line and the hint bar** — what the last action did (or, when

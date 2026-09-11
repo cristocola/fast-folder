@@ -1233,3 +1233,40 @@ fn detail_pane_editing_a_variable_120x40() {
         render_to_string(&app, 120, 40),
     );
 }
+
+/// A note and a todo too wide for the pane continue on the rows under them,
+/// each in its own column, instead of being cut.
+#[test]
+fn detail_pane_wraps_a_long_note_and_todo_120x40() {
+    use fastf::tui::app::data::ProjectDetail;
+
+    let mut app = fixture(12, 120, 40);
+    let project = app.library.selected().unwrap().clone();
+    let detail = ProjectDetail {
+        notes: vec![fastf::core::body::Note {
+            timestamp: Some("2026-09-11T10:00:00Z".to_string()),
+            text: "the client wants the second verse recut around the new vocal take, \
+                   with the chorus lights left as they were on Friday\nthen colour"
+                .to_string(),
+        }],
+        todos: vec![fastf::core::body::Todo {
+            done: false,
+            text: "send the rough cut to the label and ask whether the lyric video is in scope"
+                .to_string(),
+        }],
+        ..Default::default()
+    };
+    let _ = update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(detail),
+        },
+    );
+    let frame = render_to_string(&app, 120, 40);
+    assert!(
+        frame.contains("Friday") && frame.contains("scope"),
+        "the ends of the note and the todo are on screen, not cut:\n{frame}"
+    );
+    snap("detail_pane_wraps_a_long_note_and_todo_120x40", frame);
+}

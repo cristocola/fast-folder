@@ -34,6 +34,10 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf paths` | Show where fastf keeps its data and why |
 | `fastf completions <shell>` | Print shell completions (bash, zsh, fish, PowerShell) |
 
+## Keys
+
+Keys belong to the guided app: every one it answers to is listed in [app.md](app.md#keys), and `?` inside the app shows the ones that apply where you are.
+
 ## Creating projects
 
 ```bash

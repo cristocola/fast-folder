@@ -446,6 +446,45 @@ fn enter_on_add_tag_the_name_and_the_journal_open_the_flows_that_exist() {
     );
 }
 
+/// A todo too wide for the pane wraps onto the rows under it, and Enter on it
+/// still names the whole todo: the row holds only what fits, and a toggle that
+/// named the row's text would be refused as changed meanwhile.
+#[test]
+fn a_todo_too_wide_for_the_pane_wraps_and_toggles_by_its_whole_text() {
+    let mut app = editing_fixture();
+    let project = app.library.selected().unwrap().clone();
+    let long = "send the rough cut to the label and ask whether the lyric video is still in scope";
+    update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(ProjectDetail {
+                todos: vec![fastf::core::body::Todo {
+                    done: false,
+                    text: long.to_string(),
+                }],
+                ..Default::default()
+            }),
+        },
+    );
+    let rows = app.pane_rows();
+    assert!(
+        rows.iter()
+            .any(|row| matches!(row, PaneRow::TodoLine { .. })),
+        "the rest of the todo is on the rows under it: {rows:?}"
+    );
+    go_to(&mut app, |row| matches!(row, PaneRow::Todo { .. }));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(
+        sent(&effects),
+        Some(&Action::ToggleTodo {
+            project: Box::new(project),
+            ordinal: 0,
+            was: long.to_string(),
+        })
+    );
+}
+
 /// Enter on a todo writes the toggle at once — there is nothing to type
 /// — with no edit open, and the answer lands on that row: the cursor
 /// stays there and the row pulses, as an edit's does. Nothing on the

@@ -675,11 +675,18 @@ the cursor arithmetic and the scroll ceiling, so which rows exist and which are
 `PaneRow::selectable` is never counted twice. One line per row and no `Wrap`,
 because the cursor and `detail_scroll` count rows.
 
-**A note is several rows**: `PaneRow::Note` is its first line with the date in a
-ten-wide column (blank when undated), then `NoteLine`s up to `NOTE_LINES_SHOWN`,
-then `NoteMore`; only the first is selectable, and Enter edits the whole note. The
-latest `NOTES_SHOWN` notes show under `EarlierNotes(n)`, whose Enter is
-`ShowJournal`. Todos are one `PaneRow::Todo` each, drawn `[x]`/`[ ]`. **Rules are
+**A note is several rows, and so is a long line**: `App::pane_rows` hands
+`pane_rows` the pane's inside width, and every line of a note is wrapped to the
+columns after its date (`NOTE_INDENT`) by `wrap_columns`, in display columns.
+`PaneRow::Note` is the first row with the date in a ten-wide column (blank when
+undated), then `NoteLine`s up to `NOTE_LINES_SHOWN` rows, then `NoteMore`; only the
+first is selectable, and Enter edits the whole note. The latest `NOTES_SHOWN` notes
+show under `EarlierNotes(n)`, whose Enter is `ShowJournal`. A todo is a
+`PaneRow::Todo`, drawn `[x]`/`[ ]`, with the rest of a long one in `TodoLine`s.
+**A row holds only what fits, so an edit reads its text from the detail**: the
+note editor opens on `detail.notes[ordinal]`, and a toggle names
+`detail.todos[ordinal]` — never a row's text, or a wrapped todo would be refused
+as changed. **Rules are
 never selectable, and every section that can grow ends in an add row** (`AddTag`,
 `AddNote`, `AddTodo`), so the three sections behave alike. `Figures` counts the
 notes and the todos done.

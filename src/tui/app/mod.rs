@@ -2,9 +2,13 @@
 //! I/O of its own. Everything it wants done comes back as an `Effect`.
 //!
 //! That split is what makes the guided app testable without a terminal
-//! (`tests/tui_update.rs` builds an `App`, feeds it messages and asserts on the
+//! (`tests/tui_update/` builds an `App`, feeds it messages and asserts on the
 //! effects) and what keeps a slow filesystem out of the key handler: nothing in
 //! here blocks, because nothing in here reads a disk.
+//!
+//! This file holds the types, `new`/`start`, the `handle`/`on_key`/`run`
+//! dispatch, the status line and discovery; each flow module carries its own
+//! `impl App` for the keys and answers that belong to it.
 
 pub mod actions;
 pub mod data;

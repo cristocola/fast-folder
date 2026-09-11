@@ -122,15 +122,6 @@ pub struct Config {
     #[serde(default)]
     pub motion: String,
 
-    /// Whether the guided app asks the terminal to report the mouse: `off`
-    /// (default) or `on`. Off, text selects as in any program and the wheel
-    /// is the terminal's — every modern terminal turns it into arrow keys on
-    /// the alternate screen; on, a click selects a row, the wheel scrolls
-    /// three, and selecting text needs the modifier the terminal keeps for
-    /// it (Shift, or Option on macOS). Parsed leniently, as `motion` is.
-    #[serde(default)]
-    pub mouse: String,
-
     /// What to do when the resolved folder name is already taken:
     /// `"suffix"` (default) appends `_2`, `_3`… , `"error"` refuses.
     ///
@@ -201,23 +192,6 @@ impl std::fmt::Display for NameCollision {
     }
 }
 
-/// The words a yes/no setting is spelled with, as `config set` takes them:
-/// `on`, `true`, `1` — `off`, `false`, `0`. `None` for anything else.
-pub fn on_off(text: &str) -> Option<bool> {
-    match text.trim() {
-        "on" | "true" | "1" => Some(true),
-        "off" | "false" | "0" => Some(false),
-        _ => None,
-    }
-}
-
-impl Config {
-    /// The `mouse` setting, resolved: off unless it says on.
-    pub fn mouse_on(&self) -> bool {
-        on_off(&self.mouse).unwrap_or(false)
-    }
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -227,7 +201,6 @@ impl Default for Config {
             terminal: String::new(),
             theme: String::new(),
             motion: String::new(),
-            mouse: String::new(),
             default_template: String::new(),
             date_format: default_date_format(),
             preview_lines: default_preview_lines(),

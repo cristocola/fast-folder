@@ -92,7 +92,6 @@ pub fn settings() -> Result<crate::tui::app::data::Settings> {
         terminal: cfg.terminal.clone(),
         theme: cfg.theme.clone(),
         motion: cfg.motion.clone(),
-        mouse: cfg.mouse.clone(),
         default_template: cfg.default_template.clone(),
         date_preview: chrono::Local::now().format(&cfg.date_format).to_string(),
         date_format: cfg.date_format.clone(),

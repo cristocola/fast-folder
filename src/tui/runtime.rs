@@ -19,8 +19,7 @@ use anyhow::{Context as _, Result, anyhow};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyEventKind, MouseButton, MouseEventKind,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind,
 };
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -34,7 +33,7 @@ use crate::tui::effect::{
 };
 use crate::tui::entry::Entry;
 use crate::tui::loaders;
-use crate::tui::msg::{Mouse, MouseKind, Msg, Resumed};
+use crate::tui::msg::{Msg, Resumed};
 use crate::tui::session::Session;
 use crate::tui::theme::Theme;
 
@@ -67,10 +66,9 @@ pub fn run(
     onboarding: Option<String>,
     theme: Theme,
     motion: crate::tui::motion::Motion,
-    mouse: bool,
 ) -> Result<Exit> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut runtime = Runtime::init(tx, rx, mouse)?;
+    let mut runtime = Runtime::init(tx, rx)?;
     let outcome = runtime.main_loop(entry, onboarding, theme, motion);
     runtime.shutdown();
     let (exit, session) = outcome?;
@@ -107,9 +105,6 @@ struct Runtime {
     /// When the selected project's detail was last checked against the disk
     /// — once a second at most, whatever the wake.
     last_watch: Option<Instant>,
-    /// Whether the terminal reports the mouse: the `mouse` setting, and
-    /// what every retake of the screen asks for again.
-    mouse: bool,
 }
 
 /// The runtime's half of a running move: the progress handle it snapshots and
@@ -120,7 +115,7 @@ struct MovingJob {
 }
 
 impl Runtime {
-    fn init(tx: Sender<Msg>, rx: Receiver<Msg>, mouse: bool) -> Result<Self> {
+    fn init(tx: Sender<Msg>, rx: Receiver<Msg>) -> Result<Self> {
         install_panic_hook();
         // The second Ctrl-C from outside — `kill -INT` twice, a terminal that
         // sends one on close — exits from the handler, where nothing of
@@ -134,7 +129,7 @@ impl Runtime {
         // see again. Spawning touches no terminal state, so there is nothing to
         // undo if it fails.
         let input = InputThread::spawn(tx.clone())?;
-        let terminal = take_screen(mouse)?;
+        let terminal = take_screen()?;
         // The one choke point that replaces `live_select`'s: an interactive
         // surface ran, so a relaunched window closes without a pause.
         tty::mark_interactive_surface();
@@ -155,7 +150,6 @@ impl Runtime {
             started: Instant::now(),
             next_tick: None,
             last_watch: None,
-            mouse,
         })
     }
 
@@ -190,7 +184,6 @@ impl Runtime {
         let remembered = Session::load();
         let mut app = App::new(entry, theme, self.size());
         app.motion = motion;
-        app.mouse = self.mouse;
         app.data_dir = Some(crate::util::paths::display_path(
             &crate::util::paths::install_dir(),
         ));
@@ -391,10 +384,6 @@ impl Runtime {
                         crate::core::library::refresh_cache(&path);
                     });
                 }
-                Effect::Mouse(on) => {
-                    self.mouse = on;
-                    set_mouse(&mut self.terminal, on);
-                }
                 Effect::LoadMeta(paths) => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-metadata", move || {
@@ -563,7 +552,7 @@ impl Runtime {
         }
         pause_for_enter();
 
-        self.terminal = take_screen(self.mouse)?;
+        self.terminal = take_screen()?;
         self.input.resume();
         Ok(())
     }
@@ -582,7 +571,7 @@ impl Runtime {
         unsafe {
             libc::raise(libc::SIGTSTP);
         }
-        self.terminal = take_screen(self.mouse)?;
+        self.terminal = take_screen()?;
         self.input.resume();
         Ok(())
     }
@@ -622,7 +611,7 @@ impl Runtime {
             pause_for_enter();
         }
 
-        self.terminal = take_screen(self.mouse)?;
+        self.terminal = take_screen()?;
         self.input.resume();
         self.announce_size();
         Ok(Resumed::Note {
@@ -660,23 +649,22 @@ fn restore_on_signal() {
     if !SCREEN_OWNED.swap(false, Ordering::SeqCst) {
         return;
     }
-    // Paste off, every mouse mode off, leave the alternate screen, show the
-    // cursor.
-    tty::write_raw(b"\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h");
+    // Paste off, leave the alternate screen, show the cursor.
+    tty::write_raw(b"\x1b[?2004l\x1b[?1049l\x1b[?25h");
     #[cfg(unix)]
     tty::restore_cooked_mode();
 }
 
-/// Raw mode, the alternate screen, bracketed paste — on stderr — and mouse
-/// reporting when the setting asks for it.
+/// Raw mode, the alternate screen, bracketed paste — on stderr.
 ///
-/// **Off by default.** With reporting on, the terminal hands every click and
-/// drag to the app and selecting text needs the modifier the terminal keeps
-/// for it (Shift, or Option on macOS), which nobody finds by themselves. Off,
-/// text selects as in any program, and the wheel still scrolls the list:
-/// every modern terminal turns it into arrow keys on the alternate screen.
-/// `mouse = on` buys a click on a row, and a wheel that moves three.
-fn take_screen(mouse: bool) -> Result<Screen> {
+/// **And never the mouse.** A terminal that reports the mouse hands every drag
+/// to the program, so text can no longer be selected without a modifier
+/// nobody finds by themselves. There is no tracking mode that reports the
+/// wheel and leaves the drag alone — the wheel is a button — so the app asks
+/// for none, and the wheel is the terminal's: on the alternate screen, with
+/// no mouse mode requested, it sends arrow keys, which the app answers
+/// everywhere the wheel meant anything.
+fn take_screen() -> Result<Screen> {
     #[cfg(unix)]
     tty::remember_cooked_mode();
     enable_raw_mode().context("putting the terminal into raw mode")?;
@@ -690,26 +678,12 @@ fn take_screen(mouse: bool) -> Result<Screen> {
         let _ = disable_raw_mode();
         return Err(anyhow!("switching to the alternate screen: {err}"));
     }
-    if mouse {
-        let _ = execute!(stderr, EnableMouseCapture);
-    }
     SCREEN_OWNED.store(true, Ordering::SeqCst);
     // A fresh `Terminal` draws its first frame against an empty back buffer,
     // and the alternate screen starts blank — so nothing to clear. Deliberately
     // not `Terminal::clear`: that asks the terminal where its cursor is and
     // waits for the answer, which a pty under test never sends.
     Terminal::new(CrosstermBackend::new(stderr)).context("opening the terminal")
-}
-
-/// Mouse reporting on or off, live — the `mouse` setting flipped from the
-/// palette or the settings screen. Disabling what was never enabled is a
-/// no-op on every terminal.
-fn set_mouse(terminal: &mut Screen, on: bool) {
-    let _ = if on {
-        execute!(terminal.backend_mut(), EnableMouseCapture)
-    } else {
-        execute!(terminal.backend_mut(), DisableMouseCapture)
-    };
 }
 
 /// Back to the main screen in cooked mode with the cursor shown. Idempotent.
@@ -721,7 +695,6 @@ fn release_screen(terminal: &mut Screen) {
     let _ = execute!(
         terminal.backend_mut(),
         DisableBracketedPaste,
-        DisableMouseCapture,
         LeaveAlternateScreen,
         cursor::Show
     );
@@ -744,7 +717,6 @@ fn install_panic_hook() {
             let _ = execute!(
                 io::stderr(),
                 DisableBracketedPaste,
-                DisableMouseCapture,
                 LeaveAlternateScreen,
                 cursor::Show
             );
@@ -1479,21 +1451,6 @@ fn input_loop(gate: &Gate, tx: &Sender<Msg>) -> InputEnd {
 
             Ok(Event::Paste(text)) => Msg::Paste(text),
             Ok(Event::Resize(width, height)) => Msg::Resize(width, height),
-            Ok(Event::Mouse(mouse)) => {
-                let kind = match mouse.kind {
-                    MouseEventKind::Down(MouseButton::Left) => MouseKind::Click,
-                    MouseEventKind::ScrollUp => MouseKind::ScrollUp,
-                    MouseEventKind::ScrollDown => MouseKind::ScrollDown,
-                    // Drag, release, and the other buttons: a terminal reports
-                    // them inconsistently and none of them mean anything here.
-                    _ => continue,
-                };
-                Msg::Mouse(Mouse {
-                    kind,
-                    column: mouse.column,
-                    row: mouse.row,
-                })
-            }
             Ok(_) => continue,
             Err(err) => {
                 return InputEnd::Failed(format!("the terminal stopped answering ({err})"));
@@ -1545,8 +1502,9 @@ fn collect_burst(first: crate::tui::command::Key) -> Burst {
                 }
             }
             Ok(Event::Key(_)) => continue,
-            // Anything but a key ends the run; it is lost here, which the
-            // one thing this loop discards — a mouse event — can afford.
+            // Anything but a key ends the run and is dropped here. With the
+            // mouse never reported, what can land in that instant is a
+            // resize, which is then lost until the next one.
             _ => break,
         }
     }

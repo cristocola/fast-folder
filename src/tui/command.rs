@@ -381,12 +381,10 @@ pub enum CommandId {
     ShowLog,
     // Ctrl-Z
     Suspend,
-    // Mouse reporting on or off, live
-    ToggleMouse,
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 97] = [
+    pub const ALL: [CommandId; 96] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -483,7 +481,6 @@ impl CommandId {
         CommandId::SettingsFilter,
         CommandId::ShowLog,
         CommandId::Suspend,
-        CommandId::ToggleMouse,
     ];
 }
 
@@ -1265,19 +1262,6 @@ pub static COMMANDS: &[Command] = &[
         TEMPLATES,
         [],
         Navigate,
-        palette = true,
-        hint = false,
-        always
-    ),
-    // Palette-only, like `BackToLibrary`: a setting flipped from wherever
-    // you are, written through `config set` and switched at once.
-    cmd!(
-        ToggleMouse,
-        "Mouse capture on or off",
-        "off, text selects as usual and the wheel is the terminal's; on, a click selects a row and the wheel scrolls three — hold Shift to select text",
-        G,
-        [],
-        Settings,
         palette = true,
         hint = false,
         always

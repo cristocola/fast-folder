@@ -366,7 +366,6 @@ pub fn raw_value(settings: &Settings, key: &str) -> String {
         "editor" => settings.editor.clone(),
         "terminal" => settings.terminal.clone(),
         "theme" => or(&settings.theme, "auto"),
-        "mouse" => or(&settings.mouse, "off"),
         "default-template" => settings.default_template.clone(),
         "date-format" => settings.date_format.clone(),
         "register-naming-pattern" => settings.register_naming_pattern.clone(),
@@ -434,7 +433,6 @@ fn run(label: &'static str, job: Job, value: String, hint: &'static str) -> Row 
 const COLLISION: &[&str] = &["suffix", "error"];
 const THEMES: &[&str] = &crate::tui::theme::ThemeChoice::NAMES;
 const MOTION: &[&str] = &["on", "off"];
-const MOUSE: &[&str] = &["off", "on"];
 
 /// Every setting fastf has, grouped, with what it is set to now.
 pub fn rows(s: &Settings) -> Vec<Row> {
@@ -513,12 +511,6 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             value: or(&s.motion, "on"),
             hint: "a row a verb just changed lights up and fades, the focus eases between the panes, a message arrives and dims on its way out — off makes every frame a hard cut; a theme with no colour is always off",
             kind: Kind::Choice("motion", MOTION),
-        },
-        Row {
-            label: "Mouse",
-            value: or(&s.mouse, "off"),
-            hint: "off: text selects as in any program, and the wheel is the terminal's; on: a click selects a row and the wheel scrolls — hold Shift to select text",
-            kind: Kind::Choice("mouse", MOUSE),
         },
         heading("Library bases"),
         Row {

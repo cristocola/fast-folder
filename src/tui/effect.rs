@@ -33,8 +33,6 @@ pub enum Effect {
     /// the pane just found changed under it, so the base's disposable cache
     /// agrees with the file.
     RefreshCache(PathBuf),
-    /// Switch mouse reporting on or off, live.
-    Mouse(bool),
     /// Metadata for rows whose variables a query needs.
     LoadMeta(Vec<PathBuf>),
     /// What the size scanner should measure next, most important first.

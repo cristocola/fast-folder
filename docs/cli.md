@@ -474,23 +474,21 @@ that is still a terminal.
 
 #### The mouse
 
-**Off by default, so text selects as in any program.** The app does not ask
-the terminal to report the mouse unless the `mouse` setting says so, and the
-wheel still scrolls the list: every modern terminal turns it into arrow keys
-on the alternate screen. With `fastf config set mouse on` — or *Mouse capture
-on or off* in the command palette, or the Mouse row of the settings — clicking
-a row selects it, clicking the detail pane or the search bar moves focus there,
-clicking a command-palette entry runs it, and the wheel is `↑`/`↓`, three at a
-time, wherever the arrow keys already go; selecting text then needs the
-modifier the terminal keeps for it — hold **Shift** while dragging (Option on
-macOS), as in every full-screen program that reports the mouse. The palette
-toggle takes effect at once and is remembered.
+**The app never takes the mouse**, so text selects as in any program: drag to
+select, and copy the way your terminal copies. The wheel scrolls whatever the
+arrow keys would — the list, the detail pane, a dialog that scrolls — because
+on the alternate screen a terminal turns it into arrow-key presses when no
+program has asked for the mouse. kitty, Konsole, GNOME Terminal, WezTerm,
+Alacritty and Windows Terminal do this out of the box; xterm does it with its
+`alternateScroll` resource. There is nothing to click: every row, pane and
+command is a key away.
 
 The `show-banner` and `show-frame` settings belonged to the old menu and were
 retired at v3.0.0. `fastf config set` still accepts them and says they are
 ignored, so a script that sets one does not start failing, and a `config.toml`
-that names them still parses. `recent-default-limit` was renamed
-`recent-limit`; the old key still works.
+that names them still parses. `mouse`, a setting in v3.6.0, went the same way
+when the app stopped asking for the mouse at all. `recent-default-limit` was
+renamed `recent-limit`; the old key still works.
 
 ## Browsing projects
 
@@ -928,11 +926,6 @@ fastf config set theme rich                      # auto | mono | ansi | rich
 # dims on its way out; off makes every frame a hard cut. A palette with no
 # colour is always off. FASTF_MOTION=0 turns it off for one run.
 fastf config set motion off                      # on | off
-
-# Whether the app asks the terminal to report the mouse. Off (the default),
-# text selects as in any program and the wheel is the terminal's; on, a click
-# selects a row, the wheel scrolls three, and Shift-drag selects text.
-fastf config set mouse on                        # off | on
 
 # Extra folders to index beyond base-dir, comma separated
 fastf config set bases "/mnt/projects/clients,/srv/archive"

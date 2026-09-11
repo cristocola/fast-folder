@@ -324,7 +324,7 @@ that is still running.
 -INT` twice, a terminal that sends one on close, SIGHUP) exits from the
 handler, where nothing of ratatui may run: `Runtime::init` registers
 `restore_on_signal` with `interrupt::set_restore`, which writes the escapes
-that undo the mouse (whether it was on or not), the paste reports and the alternate screen with raw
+that undo the paste reports and the alternate screen with raw
 system calls and puts back the terminal settings `tty::remember_cooked_mode`
 captured before raw mode was ever enabled. `inline.rs` registers its own for
 its rows, and installs a panic hook of its own. Ctrl-Z is a command
@@ -1064,18 +1064,22 @@ is refused rather than overwritten. `validators::tag` is the same rule for
 the prompts that want to refuse under the line before a worker is asked. See
 `src/core/CLAUDE.md`, "The pane's edits" and "Notes and todos".
 
-**The mouse is a setting, and off.** `take_screen(mouse)` asks the terminal
-to report the mouse only when `Config::mouse_on()`; every retake after a
-suspend asks again with `Runtime.mouse`, and `Effect::Mouse` switches it live
-— from the palette's `ToggleMouse`, which writes the word through
-`Action::SetConfig` and flips the terminal the moment the write is on its
-way, and from the settings screen, whose re-read (`Msg::SettingsLoaded`)
-pushes the effect when the value differs from `App.mouse`. Off by default
-because reporting on means a plain drag no longer selects text, which nobody
-finds the modifier for by themselves, while the wheel keeps scrolling either
-way: every modern terminal turns it into arrow keys on the alternate screen.
-`release_screen`, the panic hook and `restore_on_signal` disable reporting
-unconditionally — disabling what was never enabled is a no-op everywhere.
+**The app never takes the mouse.** From v3.0.0 it asked the terminal to report
+clicks and the wheel, and a terminal that reports the mouse hands the program
+every drag too — so selecting text needed a modifier nobody finds by
+themselves, which was the complaint. v3.6.0 made capture a setting, off; after
+it the click handling went altogether. `take_screen` enables no mouse mode,
+there is no `Msg::Mouse`, and the wheel is the terminal's: on the alternate
+screen, with no mouse mode requested, kitty, Konsole, VTE, WezTerm, Alacritty
+and Windows Terminal send arrow-key presses, which the app already answers
+everywhere the wheel meant anything. There is no tracking mode that reports
+only the wheel to ask for instead — the modes report buttons, and the wheel is
+a button — so "scroll, but let me select" is exactly "report nothing".
+Deliberately not `DECSET 1007` (alternate scroll) either: the terminals above
+do it unasked, and a new escape write is not something this app adds for
+xterm alone. `mouse` is a retired `config set` key, accepted and ignored.
+`tests/tui_pty/app.rs` holds the rule: no tracking mode is ever switched on,
+whatever an older `config.toml` says.
 
 ## Settings, the counter, maintenance, the first run
 

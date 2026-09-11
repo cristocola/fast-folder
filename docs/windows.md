@@ -130,12 +130,10 @@ for a single run.
 
 ## The mouse
 
-Off by default: text selects as in any program, and the wheel scrolls the
-list, because Windows Terminal turns it into arrow keys on the alternate
-screen. `fastf config set mouse on` makes a click select a row and a pane
-focus, and the wheel scroll three at a time — and a plain drag then no longer
-selects text: hold **Shift** while dragging, as in every full-screen program
-that reports the mouse.
+fastf never takes the mouse, so text selects as in any program. The wheel
+scrolls the list and the panes because Windows Terminal turns it into arrow
+keys on the alternate screen; a console that does not leaves the scrolling to
+the arrow keys and PageUp/PageDown.
 
 ## "VCRUNTIME140.dll was not found"
 

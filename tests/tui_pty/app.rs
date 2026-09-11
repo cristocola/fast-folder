@@ -145,6 +145,29 @@ fn ctrl_c_at_the_root_is_honest_and_restores_the_cursor() {
     );
 }
 
+/// **The app never asks the terminal for the mouse.** A terminal that reports
+/// the mouse hands every drag to the program, so text can no longer be
+/// selected — which is what the app did until it stopped. The wheel stays the
+/// terminal's, which sends arrow keys on the alternate screen. Checked against
+/// a `config.toml` that still says `mouse = "on"` from v3.6.0.
+#[test]
+fn the_app_never_asks_the_terminal_for_the_mouse() {
+    let sb = Sandbox::new();
+    let config_path = sb.install.join("config.toml");
+    let raw = fs::read_to_string(&config_path).unwrap();
+    fs::write(&config_path, format!("mouse = \"on\"\n{raw}")).unwrap();
+
+    let (out, code) = launch(&sb, pty::Script::new().pause(800).key(KEY_QUIT).build());
+    assert_eq!(code, 0, "{}", pty::plain(&out));
+    assert!(out.contains("\x1b[?1049h"), "the app opened its screen");
+    for mode in ["1000", "1002", "1003", "1005", "1006", "1015"] {
+        assert!(
+            !out.contains(&format!("\x1b[?{mode}h")),
+            "mouse tracking mode {mode} was switched on, and text can no longer be selected"
+        );
+    }
+}
+
 /// A `config.toml` that exists but does not parse changes which directory is
 /// the library, so the app that used to open on the home directory — with the
 /// real projects nowhere in sight — has to refuse instead.

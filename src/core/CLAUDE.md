@@ -3,746 +3,491 @@
 The engine: what a project *is*, how one is created, moved and recovered, and
 what may never happen while any of that is in flight. The root `CLAUDE.md` has
 the orientation, the layering rule and the data-dir and counter models; this file
-is the part that bites when you edit these directories.
-
-**The layering rule applies here above all: `core` and `util` import nothing
-from `cli` or `tui`, never prompt, and never print.** `tests/layering.rs`
-enforces it; `util::diag` is the one sink for anything these layers have to say.
+is the part that bites when you edit these directories. **`core` and `util`
+import nothing from `cli` or `tui`, never prompt, and never print**
+(`tests/layering.rs`); `util::diag` is the one sink for anything they have to say.
 
 ## Templates
 
 `templates/<slug>/template.yaml` is **metadata only**; the file spec is the
 sibling `files/` directory. Keys: `naming_pattern` (tokens `{date}`, `{YYYY}`,
-`{MM}`, `{DD}`, `{id}`, plus any variable slug), `variables` (`text` or
-`select`, with transforms `none` / `title_underscore` / `upper_underscore` /
-`lower_underscore`), `structure` (nested `FolderNode`s — the archive-safe way to
-declare **empty** dirs), `verbatim` (globs copied literally even if text, which
-is how you preserve literal `{braces}`), `exclude`, and an optional per-template
-`post_create`.
+`{MM}`, `{DD}`, `{id}`, plus any variable slug), `variables` (`text` or `select`,
+transforms `none` / `title_underscore` / `upper_underscore` / `lower_underscore`),
+`structure` (nested `FolderNode`s — the archive-safe way to declare **empty**
+dirs), `verbatim` (globs copied literally, to keep literal `{braces}`),
+`exclude`, and an optional `post_create`.
 
 **`files/` on disk is the source of truth for create and apply, not
-`Template.files`.** That field is `#[serde(skip)]` — a hand-written `files:`
-block is silently ignored on load — and exists only as a load-time scan of *text*
-files for the editors, previews and apply's variable detection. Building a
-`Template` in memory with `files` and calling `create` writes nothing.
+`Template.files`**, which is `#[serde(skip)]` (a hand-written `files:` block is
+ignored) and only a load-time scan of text files for the editors, previews and
+apply's variable detection; an in-memory `Template` with `files` creates nothing.
+`Template::load_with(path, FileBuffer::Skip | Load)` decides whether to read it.
+`load_all` skips, since listing never needs contents, so
+`tui::pickers::pick_template` re-loads what it picked for the preview.
 
-`Template::load_with(path, FileBuffer::Skip | Load)` decides whether to read that
-buffer. `load_all` uses `Skip`: listing, picking and counting templates never
-needs contents, and reading every file of every template to print a name was
-work nobody asked for. `tui::pickers::pick_template` therefore re-loads the
-template it picked, because its caller previews it.
+**The directory is the template's identity; the manifest's `slug:` is cosmetic.**
+`load_with` takes the folder name as the slug (a disagreeing manifest value is
+kept in `declared_slug` for `template show`), and `find_by_slug` is the only door,
+so a manifest can neither hide a listed template nor let two folders answer to one
+name. Projects are the mirror image: discovered, so their folder is cosmetic and
+`id` is identity; a template is looked up by a path component, so the path wins.
+fastf never writes a mismatch (`save_template` writes to `template_dir(slug)`);
+`cp -r` plus a half-finished edit does, and a save repairs it.
 
-**The directory is the template's identity, and the manifest's `slug:` is
-cosmetic.** `load_with` takes the folder's name as the slug and keeps a
-disagreeing manifest value in `declared_slug` for `template show` to mention.
-Every lookup builds `templates/<slug>/template.yaml` from the slug —
-`find_by_slug` is the only door — so a manifest naming something else was a
-template `template list` printed and every other command rejected; and because a
-manifest field cannot be unique, two folders declaring one slug both listed and
-both resolved to whichever was read first, which is a create from the wrong
-template with no error anywhere.
-
-This is the same doctrine as filesystem-as-truth for projects, applied to the
-opposite field, and the asymmetry is worth stating: a project has no by-name
-lookup — it is *discovered*, so its folder may be renamed freely and the
-metadata `id` is the identity. A template *is* looked up by name, and that name
-is a path component, so the path is the identity and the field is the one that
-gives way. fastf never writes a mismatch (`save_template` writes to
-`template_dir(slug)`, `from-folder` builds both from the slug); it comes from
-`cp -r` plus a half-finished edit, and a save through fastf repairs it.
-
-There is **no migrate command** for pre-v0.8 flat `<slug>.yaml` templates and no
-flat-form fallback — `load_all` only reads subdirectories with a `template.yaml`.
-`Template::OWNED_KEYS` must keep listing `files` and `dir`: without them a flat
-`files:` block would start being *preserved* instead of dropped.
+There is **no migrate command** and no flat-form fallback for pre-v0.8
+`<slug>.yaml` templates. `Template::OWNED_KEYS` must keep `files` and `dir`, or a
+flat `files:` block would be preserved instead of dropped.
 
 `--force` on `template from-folder` **must clear `files/` first**: that subtree
-*is* the create spec, so regenerating without clearing merges the old generation
-into the new template while the manifest's `structure` is correctly replaced —
-two halves that disagree silently.
-
-`core::template_import` is the noninteractive from-folder engine;
-`operations::template_from_folder` is the locked entry point. The CLI may
-pre-scan read-only for its size confirmation, but the operation rescans beneath
-`DataLock` before writing. Text (UTF-8 ≤ 64 KB) becomes editable template files;
-binary and large files are bundled only when asked for. A root `PROJECT_INFO.md`
-is excluded.
+is the create spec, and regenerating over it would merge old files under a
+replaced `structure`. `core::template_import` is the from-folder engine and
+`operations::template_from_folder` the locked entry point, which rescans under
+`DataLock` whatever the CLI pre-scanned. Text (UTF-8 ≤ 64 KB) becomes editable
+files, binary and large files are bundled only on request, and a root
+`PROJECT_INFO.md` is excluded.
 
 ## Interpolation: one context, one pass
 
-`naming::RenderContext { date, yyyy, mm, dd }` is built **once per operation** and
-threaded through everything it renders (`project::plan` builds one and carries it
-on `ProjectPlan`; apply builds one at entry). The clock used to be sampled inside
-`interpolate`, which runs per path segment and per file, so a create spanning
-midnight could date the folder differently from the files in it.
+`naming::RenderContext { date, yyyy, mm, dd }` is built **once per operation**
+(`project::plan` carries it on `ProjectPlan`; apply builds one at entry), so a
+create spanning midnight dates folder and files alike. Substitution is **one
+left-to-right pass that never re-scans a substituted value**, so a value
+containing `{token}` stays literal in any variable order; `tests/properties.rs`
+pins order-independence, no re-scan, and unknown tokens passing through.
 
-Substitution is **one left-to-right pass, and a substituted value is never
-re-scanned** — it was a `String::replace` per variable in `HashMap` order, so a
-value containing `{another_token}` expanded or not depending on hashing.
-Proptests in `tests/properties.rs` pin order-independence, no re-scanning, and
-unknown tokens passing through verbatim.
-
-Two shapes, and mixing them is the classic mistake:
-
-- **`interpolate_with`** — raw substitution, for **file content**. Preserves `__`
-  so Python's `__version__` survives.
-- **`interpolate_name_with`** — then collapses runs of `_`/`-` and trims the
-  ends, for **folder and file names**, so an empty optional variable does not
-  leave a dangling separator.
-
-A run of two or more separators collapses to the **last** one, because the
-leading one belonged to the variable that vanished: `{user}_{artist}-{title}`
-with no artist gives `french-Seeping`, not `french_-Seeping`. **Single separators
-are never touched**, so a `{date}` of `2026-07-28` passes through intact — that
-is the property to protect.
-
-`assets::interp_rel` interpolates each path segment separately, so collapse
-happens *within* a name and never across `/`. `interp_rel_os` does the same over
-a native path, converting a component only when it contains `{`.
+Two shapes, and mixing them is the classic mistake: **`interpolate_with`** for
+**file content** (raw, so `__version__` survives), and **`interpolate_name_with`**
+for **folder and file names**, which also collapses runs of `_`/`-` and trims the
+ends so an empty optional variable leaves no dangling separator. A run collapses
+to its **last** separator — `{user}_{artist}-{title}` with no artist is
+`french-Seeping` — and **single separators are never touched**, so `2026-07-28`
+survives. `assets::interp_rel` interpolates per path segment, never across `/`;
+`interp_rel_os` does the same over a native path.
 
 ## One classification per template file
 
-**`assets::plan_entries` is the only thing that decides what happens to a file
-under `files/`**, and `FileAction::{Skipped, Folder, Unsupported, Interpolated,
-Verbatim}` is the answer. The rule — `exclude` on the path *as the template
-spells it*, then interpolate, then the two reserved predicates, then `verbatim`
-or oversize — used to be written out in `copy_template_files`, in
-`apply_plan_resolved`, and in the dry run's file list; the dry run's *previews*
-were a fourth place that had no rule at all. They iterated `Template.files`,
-which is every UTF-8 file under `files/` because its job is to feed the editors,
-so an `exclude`d file was previewed with a body it would never have and a
-`verbatim` file was previewed with its `{braces}` substituted — the opposite of
-what the copy writes, under a promise in `docs/cli.md` that the preview is built
-by the code that commits.
+**`assets::plan_entries` alone decides what happens to a file under `files/`**
+(`FileAction::{Skipped, Folder, Unsupported, Interpolated, Verbatim}`): `exclude`
+on the path as the template spells it, interpolate, the two reserved predicates,
+then `verbatim` or oversize. `copy_template_files`, `apply_plan_resolved`, the dry
+run's file list and its previews all read it. A preview must never iterate
+`Template.files`, or an excluded file previews a body and a verbatim one previews
+substituted, breaking `docs/cli.md`'s promise that the preview is built by the
+code that commits.
 
-One [`PlannedEntry`] per walked entry, `Skipped` included, so a caller that
-counts entries — a failpoint, a progress bar — still sees them all. It is
-**infallible**: it decides policy, and each caller keeps its own
-`SafeRelativePath` validation, which is load-bearing in `apply`, the one path
-that never goes through `plan()`.
-
-The walk decides *which* files exist and the text buffer only answers *what
-text*, so a template built in memory with a `files` buffer and no directory
-previews nothing — the same nothing it would write.
+It yields one `PlannedEntry` per walked entry, `Skipped` included, so anything
+counting entries (a failpoint, a progress bar) sees them all. It is **infallible**
+policy, and each caller keeps its own `SafeRelativePath` check, which is
+load-bearing in `apply`, the one path that never goes through `plan()`. The walk
+decides which files exist, so a template with a `files` buffer and no directory
+previews and writes nothing.
 
 ## Path safety
 
-`validated::TemplateSlug` accepts one ASCII alphanumeric/`-`/`_` component.
-`validated::SafeRelativePath` normalizes slash styles and rejects empty and dot
-components, absolute and drive paths, and `..`; `src/components` stays valid.
+`validated::TemplateSlug` is one ASCII alphanumeric/`-`/`_` component;
+`validated::SafeRelativePath` normalizes slashes and rejects empty and dot
+components, absolute and drive paths, and `..`. Both run before path derivation
+at template lookup and save and on raw `files`/`structure` entries;
+`project::plan` re-validates every path **after interpolation**, and the create
+and apply walks repeat the check.
 
-Validation happens before path derivation at template lookup and save, and on raw
-`files` plus `structure` entries. `project::plan` then validates every physical
-and structure path **again after interpolation**, before claiming a folder; the
-create and apply file walks repeat the typed boundary check.
+`assets::AssetEntry` carries `rel: String` (lossy, for globs and validation) and
+`os_rel: PathBuf` (exact, for opening). **Never join `rel`**: a non-UTF-8 name
+would open a `?`-substituted path that does not exist. Validation stays textual
+because every dangerous component is ASCII.
 
-`assets::AssetEntry` carries **both** `rel: String` (textual, lossy — what globs,
-`SafeRelativePath` reasons about) and `os_rel: PathBuf`
-(exact — what you join to open or create a file). **Never join `rel`.** A
-template file whose name is not valid UTF-8 was opened at a `?`-substituted path
-that does not exist, so the create aborted naming a path the user never wrote.
-Validation stays textual because every dangerous component is ASCII.
+**Path safety is two layers.** `SafeRelativePath` and
+`paths::require_native_relative` prove the *text* cannot escape, but
+`create_dir_all` walks straight through an existing `docs -> /outside`.
+`paths::contained_destination(root, rel)` is the physical layer: `root` a real
+directory, every existing component of `root/rel` a real directory (the last may
+be a file), none a link; components that do not exist yet are fine. **Call it
+immediately before the write.** `assets::copy_file` takes `(dest_root, rel)` for
+that reason; `create_structure`, apply's structure loop, `copy_template_files`,
+`Template::save_to_file`, `template_import`'s bundling and `provisioning`'s resume
+all use it; `copy_job`'s caller derives its destination through it first. This is
+not a race-free `openat2` fortress: the threat model is one user's own filesystem
+(`docs/projects.md`, "What fastf promises").
 
-**Path safety is two layers, and lexical is only the first.**
-`SafeRelativePath` and `paths::require_native_relative` prove the *text* of a
-path cannot escape its root. They say nothing about the filesystem, and
-`create_dir_all` walks straight through an existing `docs -> /outside` — so a
-template file at `docs/new.md` applied to a folder with such a link landed
-outside the folder while every lexical check passed.
+`paths::is_link_like` is the **one** definition of "link", and the widest — any
+Windows reparse point, junctions included — and `tree_size` shares it.
+`paths::display_path` strips `\\?\` **for display and metadata only**; the
+verbatim form is what makes paths past MAX_PATH work.
 
-`paths::contained_destination(root, rel)` is the physical layer: `root` must be a
-real directory, every existing component of `root/rel` must be a real directory
-(the last may be an ordinary file), and none may be a link. A component that does
-not exist yet is fine — nothing can be reached through a path that is not there.
-**Call it immediately before the write**, which is where every caller does:
-`assets::copy_file` takes `(dest_root, rel)` rather than a joined path for
-exactly that reason, and `create_structure`, `apply`'s structure loop,
-`copy_template_files`, `Template::save_to_file`'s file flush,
-`template_import`'s asset bundling and `provisioning`'s create-journal resume all
-go through it. `copy_job` is the one that takes a joined path, because a
-`CopyJob` is a pair of absolute paths by the time it exists — its caller derives
-the destination through the helper first.
-
-This closes the gap where a link is already sitting in the tree. It is not a
-race-free `openat2` fortress and does not claim to be; the threat model is one
-user's own filesystem, stated in `docs/projects.md` ("What fastf promises").
-
-`paths::is_link_like` is the **one** definition of "link" in the crate, and it is
-the widest one: any Windows reparse point, not only what `FileType::is_symlink()`
-reports. Junctions are the case that matters, and `tree_size` shares it so a
-second walker cannot end up with a weaker rule.
-
-`paths::display_path` strips `\\?\` **for display and metadata only**. The
-verbatim form is what makes paths past MAX_PATH work. Strip at display, never at
-storage.
-
-Every recursive walk stops at `paths::MAX_WALK_DEPTH` (**64**) and reports
-through `paths::too_deep`; `tree_size` turns it into `None` like any other read
-failure.
-
-**Thread the depth, never re-enter through the wrapper.** Each of these walks
-is a `_at` function that takes `depth` and a zero-initialising entry point that
-calls it. Three of the five recursed back through the *entry point* —
-`tree_size::directory_size_inner`, `transactions::scan_inner`,
-`template_import::scan_dir` — which restarts the counter at every level and
-leaves the check below it unreachable however deep the tree goes.
-`assets::walk_inner` is the one that always got it right. The size scan's own
-workers had no `stack_size` either (`util::size_scan`), so the walk with the
-deadest guard was the one running on the smallest stack, and a stack overflow is
-not an unwind. A template's `structure:` is bounded at the one place every load
-and every save goes through, `template::validate_structure` — which is why the
-five recursions over it elsewhere need no bound of their own. 64 rather than 256 because a Windows *thread* gets a 1 MiB stack and the
-app's size scan runs on worker threads — 256 frames of `read_dir`
-iterator overflowed one, which is the exact failure the limit exists to prevent.
+**Every recursive walk stops at `paths::MAX_WALK_DEPTH` (64)** through
+`paths::too_deep` (`tree_size` maps it to `None`). 64, not 256, because a Windows
+*thread* has a 1 MiB stack and the size scan and discovery run on workers; a stack
+overflow is not an unwind, which is also why those workers set `stack_size`.
+**Thread the depth**: each walk is a `_at` function taking `depth` behind a
+zero-initialising entry point, and recursing through the entry point resets the
+count and makes the guard unreachable. A template's `structure:` is bounded once,
+in `template::validate_structure`, which every load and save passes through.
 
 ## `PROJECT_INFO.md`
 
-Two layers. **YAML frontmatter** — the typed `Metadata`: `id`, `template`,
-`template_name`, `created`, `folder`, `path`, `tags`, `auto_tags` (which of
-`tags` the template derived — see *Tags* below), and `variables:
-BTreeMap` holding **every** template variable whether or not it appears in the
-naming pattern (a `BTreeMap` for diff-stable ordering). Then a **human body** —
-a variables table, a `## Notes` section of dated notes, and a `## Todo` list
-from the first `add_todo`. The body's grammar is `core/body.rs` — see *Notes
-and todos* below — and outside its helpers fastf never touches the file after
-creation.
+**YAML frontmatter** is the typed `Metadata`: `id`, `template`, `template_name`,
+`created`, `folder`, `path`, `tags`, `auto_tags` (the derived subset), and
+`variables: BTreeMap` holding **every** template variable (sorted, for stable
+diffs). The **body** holds a variables table, a `## Notes` section and, after the
+first `add_todo`, a `## Todo` list; its grammar is `core/body.rs`, and outside
+those helpers fastf never touches the file after creation.
 
-`write_frontmatter(path, |meta| …)` reads → splits → parses → applies → writes
-atomically. Body **and** frontmatter bytes are byte-identical after a no-op
-mutation, and there is one integration test each. It is a wrapper over
-`write_document(path, |meta, body| …)`, which hands the body over too — **one
-read, one mutation over both halves, one atomic write**, for the verb that has
-to change both: setting a variable rewrites the frontmatter and the table that
-mirrors it, and two writes would leave a moment (and, killed there, a file)
-where the table disagreed with the frontmatter above it.
+`write_frontmatter(path, |meta| …)` reads, splits, parses, applies and writes
+atomically, byte-identical after a no-op (one test per half). It wraps
+`write_document(path, |meta, body| …)` — **one read, one mutation over both
+halves, one atomic write** — for a verb that changes both, since two writes could
+leave (or be killed leaving) a table that disagrees with its frontmatter.
 
-**The body's variables table is regenerated only while it is fastf's.**
-`variables_table` is the one definition — `render_at` writes it at creation
-and `sync_variables_table` rewrites it — and the second recognises the first by
-shape: the first run of `|` lines under `# Project Info` whose header cells trim
-to `Variable`/`Value` and whose second line is dashes. Anything else — a table
-the user reshaped, a renamed header, no table — is left byte for byte, because
-the body is theirs and rewriting the wrong block would be worse than a table
-that drifted. `docs/projects.md` promises exactly this.
+**The variables table is regenerated only while it is fastf's.**
+`variables_table` is the one definition (`render_at` writes it,
+`sync_variables_table` rewrites it), recognised by shape: the first `|` run under
+`# Project Info` with `Variable`/`Value` headers and a dash line. A reshaped,
+renamed or absent table is left byte for byte, because the body is the user's —
+`docs/projects.md` promises exactly this.
 
-**Sections are found by one rule.** `body::section_span(content, Section)` is
-the byte range from a `##` heading line to the `\n` before the next `##` line,
-or the end; every reader and every writer of the body goes through it. It walks
-the body after `split_frontmatter_body` — a frontmatter value can never be
-taken for a heading — and returns whole-file offsets, so a writer can splice
-with them. The heading is matched where it starts a line, in any case, with or
-without a trailing colon (`## notes:`), and `###` is neither a start nor an
-end. Every writer changes the bytes it is about and no others.
+**Sections are found by one rule**: `body::section_span(content, Section)` is the
+byte range from a `##` heading line to before the next `##` line, walked after
+`split_frontmatter_body` and returned as whole-file offsets for splicing. Headings
+match at line start, in any case, with or without a trailing colon; `###` neither
+starts nor ends one. Every writer changes only the bytes it is about.
 
-**Unknown keys survive every mutation.** The re-serialize step is
-`util::yaml::to_string_preserving_unknown(&meta, frontmatter, Metadata::OWNED_KEYS)`,
-which merges the fresh struct onto the parsed `Mapping` — an `IndexMap`, so a key
-fastf has no field for keeps its **position**, not just its value. `OWNED_KEYS`
-distinguishes "ours and no longer emitted, remove it" from "not ours, leave it",
-and an exhaustiveness test fails if a field is added without updating the list.
+**Unknown keys survive every mutation**:
+`util::yaml::to_string_preserving_unknown(&meta, frontmatter, Metadata::OWNED_KEYS)`
+merges onto the parsed `Mapping` (an `IndexMap`, so position is kept), and
+`OWNED_KEYS` separates "ours, remove" from "not ours, keep", with an exhaustiveness
+test. **Do not use `#[serde(flatten)]`**: it routes fields through serde's
+`Content` buffer, so `year: 2026` arrives as an integer, the `String` field fails,
+and the project drops out of discovery — by design
+(`private::de::ContentDeserializer`), not a bug to wait out.
 
-**Do not replace this with `#[serde(flatten)]`.** It was the obvious design and
-it is wrong: `flatten` routes every field through serde's `Content` buffer, so a
-plain unquoted scalar in a hand-edited file (`year: 2026`) arrives as an integer
-and the `String` field rejects it — and `read_project_meta` drops that error, so
-the project disappears from discovery. Verified against serde's
-`private::de::ContentDeserializer` and the YAML crate's deserializer — the
-behaviour is `flatten`'s design, not a version's bug, so there is no release to
-wait for.
-
-`render` returns `Result` because the fallback it replaced wrote an *invisible
-project*: a `# yaml-serialize-error` comment between valid `---` delimiters
-parses as an empty document, so the folder was not a project from the moment it
-was created — with a success message on screen. Never substitute a placeholder
-for content that defines a file's identity.
-
-`Metadata::from_plan_at` / `write_at` / `render_at` take the timestamp, so
-register writes the file **once** rather than writing it with `now` and rewriting
-the frontmatter to patch `created`.
+`render` returns `Result`: a placeholder such as `# yaml-serialize-error` between
+`---` lines parses as an empty document, which would create a non-project under a
+success message. Never substitute a placeholder for identity-defining content.
+`Metadata::from_plan_at` / `write_at` / `render_at` take the timestamp, so register
+writes the file once.
 
 **The filename is fixed** (`RESERVED_FILENAME`). `path_is_reserved` is root-only
-(leaf match, case-insensitive, no `/` in the normalised path), so
-`docs/PROJECT_INFO.md` is fine. `Template::load_from_file`/`save_to_file` strip a
-root-level declaration; the builder rejects the name inline and offers `NOTES.md`
-as the example, which matters because `PROJECT_INFO.md` as an example teaches
-people to write entries that get silently dropped. `pinfo_path(dir)` is the one
-helper that builds the path.
-
-**`apply` does not write `PROJECT_INFO.md`** — by design. Only `new` and
-`register` do. `apply` retrofits structure into a folder fastf does not
-necessarily own; `register` explicitly claims one.
+(a case-insensitive leaf with no `/`), so `docs/PROJECT_INFO.md` is fine; template
+load and save strip a root-level declaration, and the builder refuses the name as
+it is typed (`studio::file_from`), since such an entry would be dropped in
+silence. `pinfo_path(dir)` builds the path. **`apply` does not write
+`PROJECT_INFO.md`**: it retrofits structure into a folder fastf may not own, and
+only `new` and `register` claim one.
 
 ## Create, apply, register
 
-`project::plan()` resolves variables, mints the ID (`counter_value =
-next_value(...)?`, so preview and commit agree), interpolates the folder name
-with `interpolate_name_with`, and validates every rendered path. It writes
-nothing.
+`project::plan()` resolves variables, mints the ID with `next_value(...)?` (so
+preview and commit agree), interpolates the name with `interpolate_name_with`,
+validates every rendered path, and writes nothing.
 
-**`validated::ProjectFolderName` is the one validator for what a project folder
-may be called.** `plan`, `library::rename_project_inner` and `operations`'
-register-rename all go through it, so a name refused in one is refused in all
-three — the rule used to live only in the rename path. `naming::sanitize_name`
-still does the character work underneath it and still *refuses nothing*: it maps
-illegal characters and trims what Windows would trim, and returns `""` for `".."`
-and leaves a leading `.` alone. `ProjectFolderName` supplies the opinion —
-non-empty, not dot-prefixed (discovery skips those), one path component — and its
-error names the rendered value and the pattern that produced it, because the user
-typed a variable, not a folder name.
+**`validated::ProjectFolderName` is the one folder-name validator**: `plan`,
+`library::rename_project_inner` and register's rename all use it. Beneath it
+`naming::sanitize_name` maps illegal characters and trims what Windows trims but
+*refuses nothing*; `ProjectFolderName` refuses empty, dot-prefixed (discovery
+skips those) and multi-component names, naming the rendered value and its pattern,
+because the user typed a variable, not a folder name. `Template::validate` refuses
+a `naming_pattern` starting with `.`, an empty `id.prefix` (or `parse_id_token`
+would read `Album_2024` as ID 2024), and `id.digits` outside `1..=MAX_ID_DIGITS`.
 
-`Template::validate` refuses a `naming_pattern` starting with `.` at save time,
-so the invisible-project case is caught before any project exists. It also
-requires a non-empty `id.prefix` (register's `parse_id_token` would otherwise
-match any trailing digits — `Album_2024` becomes ID 2024) and `1 <= id.digits <=
-MAX_ID_DIGITS`.
+`create_inner` claims with `fs::create_dir`, **not** `create_dir_all`, which
+would let two racers merge into one folder, after re-checking that
+`root_path.parent()` **is** the base (an empty name joins to the base itself,
+whose parent is outside the library). Everything after the claim is in
+`provision_project`, which rolls the folder back on failure; **nothing may sit
+between the claim and that call**. A collision walks `name`, `name_2`, … each an
+atomic `create_dir`, so racers take different suffixes; the loop wraps only the
+claim, and `create` returns the plan **as realized**, which callers must report
+from. `on_name_collision = "error"` refuses instead.
 
-`create_inner` claims the folder with `fs::create_dir` — **not**
-`create_dir_all`, which succeeds on an existing directory and let two racers
-merge into one folder. Before that it re-checks that `root_path.parent()` **is**
-the configured base: defense in depth, because `base.join("")` is `base` itself
-and its parent is one level up, which is how an empty rendered name once planted
-a folder beside the library instead of inside it. Everything after the claim lives in `provision_project` so
-a failure rolls the folder back; **nothing may sit between the claim and that
-call**, or an early return skips the rollback and leaks the folder. A failpoint
-placed one line too early found exactly that.
-
-The `_2` collision suffix: `create_inner` walks `name`, `name_2`, `name_3`, each
-a single atomic `create_dir`, so racing processes land on different suffixes and
-can never merge. The loop wraps **only** the claim. `create` therefore returns
-the plan **as realized** — callers must report from that, not from the plan they
-passed in. `config.on_name_collision = "error"` restores
-refuse-a-duplicate.
-
-**Register** writes a `PROJECT_INFO.md` into a folder that lacks one. It builds
-its `ProjectPlan` directly rather than calling `plan()`, because `plan` always
-sets `root_path = base.join(folder_name)` and register's root is an existing
-canonical path — keep the two flows separate. The ID comes from an `ID####` token
-recovered from the folder name (`naming::parse_id_token`, the *only* place folder
-names influence identity) or is minted fresh from the floor; recovering a low ID
-never lowers the counter.
-
-Without `--template` it uses a stub (`slug = "(registered)"`). `PinfoConflict`
-(Abort / Skip / Overwrite) is what "already a project" means now — there is no
-index to consult. `--recursive` writes into every metadata-less direct child of a
-base; `--dry-run` previews and writes nothing. `--apply` requires `--template`;
-`--rename` falls back to `cfg.register_naming_pattern`, which `config set`
-refuses without `{id}` (without it, several folders with the same `{name}` all
-rename onto each other).
-
-`naming::sanitize_name` swaps filesystem-illegal characters and does **not**
-replace spaces — `fastf new` gets that from the variable's transform. Register's
-no-template path has no transform, so it uses `slugify_folder_name`.
-
-`naming::parse_id_token(name, prefix)` (register only) versus `naming::id_value`
-(prefix-agnostic trailing digits). Do not swap them.
+**Register** writes a `PROJECT_INFO.md` into a folder that lacks one and builds
+its own `ProjectPlan`, because `plan` sets `root_path = base.join(folder_name)`
+and register's root is an existing canonical path. Its ID is an `ID####` token in
+the folder name (`naming::parse_id_token`, the *only* place a folder name affects
+identity) or fresh from the floor; a recovered low ID never lowers the counter.
+Without `--template` it uses the `(registered)` stub. `PinfoConflict` (Abort /
+Skip / Overwrite) is what "already a project" means. `--recursive` covers every
+metadata-less direct child; `--dry-run` writes nothing; `--apply` needs
+`--template`; `--rename` falls back to `cfg.register_naming_pattern`, which
+`config set` refuses without `{id}`, or same-named folders would rename onto each
+other. The template-less path has no transform, so it uses `slugify_folder_name`
+(`sanitize_name` keeps spaces). `parse_id_token(name, prefix)` is register's;
+`naming::id_value` is prefix-agnostic trailing digits. Do not swap them.
 
 **A project's number is written down, not re-derived.** `Metadata.id_number`
-holds what the counter minted, and `Project::number()` is the one way to ask
-for it — it prefers the field and falls back to `id_value` for projects
-written before it existed. `Counters::format_id` is a *lossy* encoder (prefix
-`20` with two digits and prefix `2` with three both render 1 as `2001`), so
-inverting it by parsing is a guess, and for the digits-only prefix
-`docs/cli.md` explicitly supports it guessed catastrophically: `2001` read
-back as two thousand and one, `max_id` fed that to the counter floor, and
-since the counter never descends **one create renumbered the whole library
-permanently**. Making the read prefix-aware instead was rejected — the floor
-is computed on every create *and* every preview over every project, so a
-template load per row is absurd there, and it has no answer at all for a
-project registered without a template, one whose template was deleted, or one
-copied from a machine with different templates; a guess that reads too *low*
-mints a duplicate id, which is worse than one that reads too high. That
-lookup is affordable exactly once, in `reindex`, which backfills the field and
-leaves anything it cannot resolve alone.
-
-`id_number` is `Option<u64>` with `skip_serializing_if`, and `CacheEntry`
-carries it with `serde(default)` and **no `CACHE_VERSION` bump**: an older
-file simply reads as `None` and the fallback covers it, so nothing has to be
-rescanned or rewritten to adopt this.
+holds what the counter minted; `Project::number()` prefers it and falls back to
+`id_value` for older files. `Counters::format_id` is lossy (prefix `20` with two
+digits and prefix `2` with three both render 1 as `2001`), and parsing a
+digits-only prefix back guesses high — which, fed to the monotonic floor,
+renumbers the library for good. A prefix-aware parse would cost a template load
+per row on every create and preview, has no answer for template-less or foreign
+projects, and mints duplicates when it guesses low, so the lookup happens once, in
+`reindex`, which backfills what it can resolve. The field is `Option<u64>` with
+`skip_serializing_if`, and `CacheEntry` carries it `serde(default)` with **no
+`CACHE_VERSION` bump** — an older file reads `None` and falls back.
 
 ## Moving projects
 
 **Invariant: a source is never removed until a complete destination has been
 copied, verified and published.**
 
-`library::move_project` is the compatibility shape (takes the lock, revalidates
-the recorded project); applications use `operations::move_project` →
+`library::move_project` is the compatibility shape (lock, revalidate);
+applications use `operations::move_project` →
 `move_project_configured_with_outcome`, which also revalidates the target against
-freshly loaded configuration. Move targets are **configured bases only**, enforced
-by every caller so a moved project stays discoverable.
+freshly loaded configuration. Targets are **configured bases only**, so a moved
+project stays discoverable.
 
-Same-filesystem moves are a direct `fs::rename` with no journal. The staged path
-is taken **only** for Unix `EXDEV` or Windows `ERROR_NOT_SAME_DEVICE` — permission,
-sharing, missing-path and every other rename error returns unchanged. Never
-broaden that match. The rename probe is deliberately not wrapped in `fs_retry`:
-its failure is the signal to stage, so retrying would add the full backoff to
-every cross-drive move.
+A same-filesystem move is a plain `fs::rename` with no journal. The staged path is
+taken **only** for Unix `EXDEV` or Windows `ERROR_NOT_SAME_DEVICE`; every other
+rename error returns unchanged — never broaden that match. The rename probe skips
+`fs_retry`, because its failure is the signal to stage and retrying would add the
+backoff to every cross-drive move.
 
-Staged moves live below the target base at
-`.fastf-transactions/<timestamp-pid-counter>/`. `move.json` holds only version,
-operation id, project id, configured source base, validated folder components and
-`Copying | ReadyToCommit | CleanupPending`; paths are derived from the
-transaction's own location. `MoveManifest::scan` is **deny-by-default** — a link
-or special entry fails the whole move rather than being omitted — and
-`verify_destination` compares the exact path/type/size manifest the scan
-produced. Verification must never be narrower than the copy it checks: that is
-how a move once deleted a source whose junctions never reached the destination.
-Manifests do not hash and do not promise advanced metadata.
+Staged moves live at `.fastf-transactions/<timestamp-pid-counter>/` in the target
+base. `move.json` holds only version, operation id, project id, source base,
+validated folder components and `Copying | ReadyToCommit | CleanupPending`; paths
+derive from the transaction's own location. `MoveManifest::scan` is
+**deny-by-default** — a link or special entry fails the whole move — and
+`verify_destination` compares the exact path/type/size manifest, because a
+verification narrower than the copy could remove a source that never fully
+arrived. No hashes, no advanced metadata. Links are refused only on the staged
+path; a rename preserves them. Every walked name is payload — there is no
+transient-suffix filter.
 
-Links are refused only on the **staged** path. The same-filesystem rename copies
-nothing and preserves links perfectly, so refusing there would block the common
-case for no benefit.
-
-Every walked source name is payload — `.tmp`, `.part`, `.fastf-index.json`,
-marker-looking names, all of it. There is no suffix-based transient filter.
-
-Before publication, a cancellation or failure removes only the owned transaction
-and leaves the source. After publication, cancellation is too late; a
-source-removal failure retains `CleanupPending` and reports the destination as
-published.
+Before publication, a cancel or failure removes only the owned transaction. After
+it, cancel is too late, and a failed source removal keeps `CleanupPending` and
+reports the destination published.
 
 ## Copying projects out
 
 `copy_engine::copy_project_configured` is a move that keeps its source: the same
-`MoveManifest::scan` (deny-by-default on links), the same `MoveTransaction`,
-the same `copy_to_staging`, the same `verify_destination` and
-`verify_source_unchanged`, the same atomic publish — and then nothing, because
-the source was never being given up. The two engines share `transactions` rather
-than each other, so **the one invariant lives in one place**: a destination is
-published only after it has been copied and verified in full.
+`MoveManifest::scan`, `MoveTransaction`, `copy_to_staging`, `verify_destination`,
+`verify_source_unchanged` and atomic publish, then nothing. Both engines share
+`transactions`, so **the invariant lives in one place**; a copy has no
+cleanup-pending state.
 
-**There is no cleanup-pending state.** A move keeps its transaction when the
-source cannot be removed; a copy removes no source, so the transaction always
-goes.
-
-**`resolve_destination` is the whole rule**, and it is called before any
-confirmation is asked: a real directory, not inside the project (checked first —
-a project sits inside a base, and the base rule would answer that with the wrong
-sentence), and not a configured base or inside one. That last is what keeps the
-library's one-id-one-row property, because **the copy keeps its id**: it is the
-same project on another drive, and the base is what tells two of them apart.
-Two rows with one id in *one* library is a library that cannot answer "which
-one", and a keystroke would have made it.
-
-Once a copy's folder is adopted as a base, `discover` lists both — it unions the
-bases and does not dedupe, which is the behaviour, not an oversight.
-`revalidate_project_in_base` checks path **and** id, so neither row can be
-mistaken for the other; `resolve` reports the ambiguity by naming the bases
-rather than asking for a fuller id that is already exact; and `max_id` is
-unaffected, since the same id twice is the same highest id.
+**`resolve_destination` is the whole rule**, checked before any confirmation: a
+real directory, not inside the project (checked first, for the right message), not
+a configured base or inside one — because **the copy keeps its id**, and one id
+twice in one library cannot answer "which one". Once the copy's folder is adopted
+as a base, `discover` lists both (bases are unioned, not deduped);
+`revalidate_project_in_base` checks path **and** id, `resolve` names the bases in
+the ambiguity, and `max_id` is unaffected.
 
 ## Recovery
 
 **Create** writes `PROJECT_INFO.md` first with `provisioning: true`, clears the
 flag before removing the journal, and writes `.fastf-create-v2.json` on **every**
 path. An empty journal cannot prove which interpolated files landed, so it is
-reported for inspection. Creates no longer defer any copy, but the resume branch
-stays: a journal listing pending copies can still be on a shared drive, written
-by a v1.x binary on the other operating system, and it resumes those files after
-identity, type and length checks.
+reported for inspection. Creates defer no copies, but the resume branch stays for
+a journal an older binary left on a shared drive, resuming after identity, type
+and length checks.
 
-**Reconcile** holds `DataLock` for the whole pass and is idempotent. `Copying`
-and an unpublished `ReadyToCommit` discard only the owned transaction; a
-published `ReadyToCommit` compares project identity and saved manifests before
-entering cleanup; `CleanupPending` repeats those checks before source removal.
-Missing bases, malformed journals, identity mismatches and unknown states are
-report-only.
+**Reconcile** holds `DataLock` for the whole pass and is idempotent. `Copying` and
+unpublished `ReadyToCommit` discard only the owned transaction; published
+`ReadyToCommit` compares identity and manifests before cleanup; `CleanupPending`
+repeats those checks before removing the source. Missing bases, malformed
+journals, identity mismatches and unknown states are report-only.
 
-**A case-only rename** stages through `.<target>.fastf-case`, and reconcile
-finishes it. `library::lifecycle::case_staging_name`/`case_staging_target` are
-the one spelling of that name, so the writer and the recovery cannot disagree
-about it. Every *error* path in the rename rolls back, and a failed rollback says
-where it left the folder; a hard kill between the two renames reaches neither,
-and `scan_base` skips dot-prefixed directories — so the project was simply gone,
-with nothing anywhere recording it. It was the one multi-step mutation in the
-crate with no recovery story. Reconcile finishes **forward**, because the staging
-name carries the target and the name the folder had before is written down
-nowhere by then; it requires both a name only lifecycle writes *and* a
-`PROJECT_INFO.md` inside, since renaming somebody else's `.X.fastf-case` on top
-of whatever `X` is would be worse than the state being repaired, and it refuses
-rather than overwriting an occupied target. `ReconcileReport.restored` is the
-count, and the restore calls `library::refresh_cache` the way the create arm's
-resume does — leaving it to the staleness gate is not enough, because a rename
-within a directory does not reliably move that directory's mtime on Windows and
-`write_cache` re-stamps the index *after* the rename that publishes it, so the
-project stayed missing from a library it had just been put back into. The
-Windows leg of CI found that on a green Linux run; the test now reads the index
-before discovering, so both platforms catch it.
+**A case-only rename** stages through `.<target>.fastf-case`
+(`library::lifecycle::case_staging_name`/`case_staging_target`, one spelling for
+writer and recovery). Error paths roll back, and a failed rollback says where it
+left the folder; a hard kill between the two renames leaves a dot-folder discovery
+skips, so reconcile finishes it **forward** — the staging name carries the target,
+and the old name is recorded nowhere. It requires a lifecycle-shaped name *and* a
+`PROJECT_INFO.md` inside, and refuses an occupied target, because renaming a
+stranger's `.X.fastf-case` over `X` would be worse than the state it repairs.
+`ReconcileReport.restored` counts it, and the restore calls
+`library::refresh_cache`, because a Windows rename may not move the directory's
+mtime and the staleness gate alone would leave the project missing.
 
-**Pre-v2 markers contain arbitrary absolute paths and are never read as
-authority.** Reconcile reports them as `obsolete` without parsing, migrating,
-following, copying, deleting or suffix-sweeping. Never resurrect v1 JSON
-migration — fastf having no writer for that format is the point, which is why the
-four tests that need those bytes plant them literally.
+**Pre-v2 markers hold arbitrary absolute paths and are never authority.**
+Reconcile reports them `obsolete` without parsing, migrating, following, copying,
+deleting or sweeping. Never resurrect v1 JSON migration; the four tests that need
+those bytes plant them literally.
 
 ## Locking and mutation
 
 `util::lockfile::DataLock` is the cross-process lock over the data dir
-(`.fastf.lock`). Any read-modify-write of `counters.toml` or `config.toml` must
-hold it — an in-process `Mutex` would not see a second fastf running in another
-terminal. Windows uses `share_mode(0)`, Unix `flock`; both are released by the OS
-on process death, so there is no stale lock to recover.
+(`.fastf.lock`); every read-modify-write of `counters.toml` or `config.toml` holds
+it, since an in-process `Mutex` cannot see another fastf. Windows uses
+`share_mode(0)`, Unix `flock`, and the OS releases both on process death, so there
+is no stale lock. **Never hold it across a prompt, an editor, a reveal or a
+post-create hook**: `cli::new` re-plans inside it and runs post-create outside.
 
-**Never hold it across a prompt, an editor, a reveal or a post-create hook.**
-`cli::new` re-plans inside the lock and runs post-create outside it for exactly
-that reason.
+**Prompt first, then lock, then reload.** The settings screen collects the answer,
+then `Action::SetConfig` calls `operations::update_config`, which locks and
+re-reads, because a `Config` held across a prompt would revert another `config
+set` made meanwhile. Removals go by **text**, not by index. (`post_create.commands`
+is read-only on both surfaces; a template's own `commands` is where it is edited.)
 
-**Prompt first, then lock, then reload.** The settings screen collects the
-answer, *then* `Action::SetConfig` calls `operations::update_config`, which
-takes the lock and re-reads (`post_create.commands` is read-only from both
-surfaces — a template's own `commands` is where that list is edited). Holding a loaded `Config` across a human prompt
-and saving it afterwards reverted whatever another `config set` had written
-meanwhile. Both remove by **text**, not by the index the user saw.
+`core::operations` is the shared mutation entry point: lock, reload config and
+authoritative identity, mutate, refresh the disposable caches. **A cached
+`Project` is a hint and never authorizes deletion.** A `pub fn` under `core/` that
+mutates without the lock is named `_unlocked` (`reconcile_unlocked`,
+`unregister_project_unlocked`, `delete_project_unlocked`,
+`rename_project_unlocked`), is `#[doc(hidden)]`, and has a `*_configured` entry
+point.
 
-`core::operations` is the shared mutation entry point: it holds `DataLock`,
-reloads config and authoritative project identity beneath it, then refreshes the
-disposable caches. **A cached `Project` is a hint and never authorizes deletion by
-itself.** A `pub fn` under `core/` that mutates without the lock says `_unlocked`
-in its name (`reconcile_unlocked`, `unregister_project_unlocked`,
-`delete_project_unlocked`, `rename_project_unlocked`), each `#[doc(hidden)]` with
-a `*_configured` application entry point.
+**Every write to the templates directory goes through `operations`**:
+`save_template(&template, original_slug)` and `delete_template(slug)`.
+`Template::save_to_file` is `pub(crate)`, and `tests/layering.rs` refuses
+`save_to_file(` or `remove_dir_all(` under `src/cli` or `src/tui`. When the slug
+differs from `original_slug`, the directory is renamed before the manifest is
+written, so no stale duplicate remains. **A save may overwrite an existing
+template only when it was loaded from that slug** — a new template (`None`) named
+`general` is refused — and "existing" means **a manifest**, since a bare directory
+is a from-folder leftover that must stay claimable. `delete_template` refuses
+anything but a real directory directly under the templates dir, because
+`remove_dir_all` follows links. **Bootstrap is the one exception**: it writes the
+two bundled templates without the lock, before a lock file exists, into a
+templates directory it has just found empty.
 
-**Every write to the templates directory goes through `operations` too.**
-`save_template(&template, original_slug)` and `delete_template(slug)` are the
-only ways in; `Template::save_to_file` is `pub(crate)` so that stays true, and
-`tests/layering.rs` refuses `save_to_file(` or `remove_dir_all(` anywhere under
-`src/cli` or `src/tui`. `save_template`'s `original_slug` is the slug the
-template was *loaded* under: when it differs, the directory is renamed before
-the manifest is written, because the builder's edit mode can change a slug and
-without the rename the old directory stayed behind as a stale duplicate.
-It is also what licenses writing over something that is already there — **a
-save may land on an existing template only when it was loaded from that very
-slug.** The collision check used to live inside `if let Some(original)`, so a
-*new* template (`None`) skipped it entirely and typing `general` as its slug
-replaced the bundled template, variables, structure and all, reporting `✓
-Saved`. The test is the **manifest**, not the directory: `load_all` reads only
-subdirectories that hold a `template.yaml`, so a bare directory is a leftover
-from a half-finished `from-folder` and refusing it would leave a slug nothing
-could ever claim. A caller re-saving a template it just loaded is editing and
-must say so — passing `None` there now asks to create one.
-`delete_template` refuses a template directory that is not a real directory
-directly under the templates directory — `remove_dir_all` follows a link, and
-the link's target is somewhere it has no business removing.
+`util::fs_retry` wraps the destructive calls (Windows sharing violations from
+Defender or the indexer; read-only attribute clearing).
 
-**Bootstrap is the one exception.** `bootstrap.rs` writes the two bundled
-templates on first run without the lock: it runs before the data directory has a
-lock file to take, and only into a templates directory it has just found empty.
+## Tags
 
-`util::fs_retry` wraps the destructive filesystem calls (Windows sharing
-violations from Defender or the indexer, plus read-only attribute clearing).
-
-## Tags, search
-
-**Tags** live in `Metadata.tags`. Free-form strings, plus auto-derived ones from
-`Template.tag_from`: slug `client_type` with value `Indie` becomes
-`client_type/Indie`, and empty values are skipped so there are no orphan `slug/`
-tags. `Template::validate()` rejects a `tag_from` entry that is not a declared
-variable. **`Template::auto_tags` is the one definition of the derived half** —
+`Metadata.tags` holds free-form strings plus tags derived from `Template.tag_from`
+(`client_type` = `Indie` becomes `client_type/Indie`; empty values are skipped).
+`Template::validate()` rejects a `tag_from` entry that is not a declared variable.
+**`Template::auto_tags` is the one definition of the derived half**, used by
 `project::provision_project`, `operations::derived_tags` and
-`operations::replace_auto_tags` each had their own, and the third had it
-backwards.
+`operations::replace_auto_tags`.
 
-`fastf tag reauto` is the safety valve, and **it removes only the tags it
-wrote**. Which ones those were is `Metadata.auto_tags`, written down for the
-same reason `id_number` is: the derivation cannot be inverted. It used to ask
-instead whether a tag started with a `tag_from` slug and a slash, which is a
-wider set than the one it derived — a template's own literal `tags:
-["tier/legacy"]` matches it, and so does a `tier/manual` somebody typed — so
-re-deriving deleted both. Nothing fastf did not write is fastf's to delete.
+**`fastf tag reauto` removes only the tags it wrote**, recorded in
+`Metadata.auto_tags`, because a prefix match on `slug/` would also delete a
+template's literal `tier/legacy` and a hand-typed `tier/manual`. `auto_tags` is
+`skip_serializing_if = "Vec::is_empty"`. For a file older than the field,
+`Metadata::previous_auto_tags` replays the derivation and claims only results
+present in `tags` — no migration; a hand-edited variable's old derived tag is
+unidentifiable and left alone. An unchanged derived tag keeps its position, so a
+no-op reauto writes identical bytes, and `remove_tags` prunes the record to what
+`tags` still holds.
 
-`auto_tags` is `skip_serializing_if = "Vec::is_empty"`, so a project whose
-template derives nothing writes the frontmatter earlier versions wrote. For a
-project written before the field existed, `Metadata::previous_auto_tags`
-replays the derivation against the variables in the file and claims only the
-results that are actually in `tags` — no migration, no rewrite, and the first
-reauto records the answer. The one thing it cannot recover is a *hand-edited*
-variable on such a project: the tag derived from the old value is
-unidentifiable, so it is left alone rather than guessed at.
+**The pane's edits** — `operations::set_variable`, `replace_tag`, `replace_note`,
+`toggle_todo`, `add_todo` — take the same steps as every mutation.
+`set_variable` stores a value the way a create would (`vars::validated_raw_values`
+and `rendered_values` with this one replaced, so a `select` stays inside its
+options and a `text` gets its transform; an undeclared variable, or any on a
+registered project, is one line of free text), then re-derives the auto-tags
+(`rederive_auto_tags`) and syncs the table in one `write_document`. A changed
+derived tag **takes the place of the one it replaces**. `replace_tag` renames in
+place, or removes when `to` is `None`.
 
-A derived tag that has not changed keeps its position in `tags`, so a reauto
-that changes nothing writes the same bytes back.
+**A tag is one word** (`validated::Tag`: trimmed, non-empty, no whitespace, at
+most 64 characters, letters, digits and `- _ . /`, a `/` only between parts),
+parsed at `operations::add_tags` — the one door for the CLI, the app's prompt and
+the pane — so a tag never carries a newline that becomes a second YAML item. Tag
+mutations call `library::refresh_cache`; the note and todo verbs do not, since the
+cache stores neither.
 
-`remove_tags` prunes the record to what `tags` still holds, so it can never
-name a tag that is no longer there.
+## Search, and resolving a query
 
-**The pane's edits.** `operations::set_variable`, `replace_tag`,
-`replace_note`, `toggle_todo` and `add_todo` are the detail pane's writes,
-each the same five steps every mutation here takes. `set_variable` lands a
-value the way a create would have stored it — `vars::validated_raw_values`
-and `rendered_values` over the project's current variables with this one
-replaced, so a `select` cannot hold anything outside its options and a `text`
-gets its transform; a variable the template no longer declares, or any
-variable of a registered project, is free text, one line — then writes the
-variable, re-derives the auto-tags (`rederive_auto_tags`, the body
-`replace_auto_tags` shares) and syncs the body table in one `write_document`.
-A derived tag whose value changed **takes the place of the one it replaces**
-rather than leaving from the middle and arriving at the end. `replace_tag`
-renames in place, or removes when `to` is `None`. The note and todo verbs are
-`body`'s, under the lock — see *Notes and todos*.
+**Search** (`core/query.rs`) ANDs its predicates — no OR, no parens: bare term,
+`key=value`, `key=prefix*`, `key>date`, `key<date`, `tag:value`, `tag:prefix*`.
+Fields resolve from `Metadata`, then `meta.variables.<slug>`; an unknown key is
+`false` rather than an error, for forward compatibility. `Predicate::Free` is the
+fallthrough (anything below it is unreachable): a case-insensitive substring over
+tags, variable values, folder, template, template name and id. **`path` is
+excluded**, with a regression test, so home-directory text never matches.
 
-**A tag is one word.** `validated::Tag`: trimmed, non-empty, no whitespace, at
-most 64 characters, letters and digits and `- _ . /`, a `/` only between parts.
-It is parsed at `operations::add_tags` before the lock — the one door the CLI,
-the app's prompt and the pane all come through — so "arbitrary strings"
-stopped admitting a paragraph, or a newline that was a second YAML list item on
-the way back in.
+**`library::resolve_matches(cfg, query) -> Resolution` is the shared resolver**;
+`resolve` wraps it with three `pub(crate)` error builders, so a picker-driven and
+a piped caller print the same messages. Tiers: exact id → **id number** → id
+prefix → case-insensitive name substring. `Resolution::{NoProjects, NoMatch,
+One(Box<Project>), Many(Vec<Project>)}` hands candidates to a picker as data
+(`cli::target::one_project`); `One` is boxed for the Windows clippy leg's
+`large_enum_variant`; `Many` carries every candidate, and only the error text is
+capped at ten.
 
-**Search** (`core/query.rs`) ANDs its predicates; no OR, no parens. Operators:
-bare term (free-text substring fallthrough), `key=value`, `key=prefix*`,
-`key>date`, `key<date`, `tag:value`, `tag:prefix*`. Fields resolve from
-`Metadata` first, then `meta.variables.<slug>`; an unknown key returns `false`
-rather than erroring, which keeps it forward-compatible.
-
-`Predicate::Free` is the parser's fallthrough — do not add another below it, it
-would be unreachable — and searches **case-insensitive substring** over tags,
-variable values, folder, template, template name and id. **`path` is deliberately
-excluded**, with a regression test: home-directory text must never produce
-phantom matches.
+The numeric tier reads an all-digits query as an id *number* (`naming::id_value`),
+so `fastf open 37` finds ID0037 under any prefix and padding. It sits **below**
+exact id, because a digits-only prefix makes an all-digits string a complete id,
+and **above** the prefix tier, or `4` would match ID0040–ID0049. A digit run too
+long for `u64` falls through: `numeric_query` returns `None` rather than
+saturating.
 
 ## Notes and todos
 
-**`core/body.rs` is the body's grammar, and the journal is the notes.** A
-note is a dated entry under `## Notes` — `- 2026-04-20T14:32:11Z — text`, and
-every further line of it under two spaces — and `body::notes_span` is **the
-one definition of where those live, read by the writer and the reader
-alike**: the `## Journal` section when a file written before v3.6.0 has one,
-else `## Notes`. They had one each once: `append_journal_entry` wrote at the
-end of the *file* whenever a `## Journal` heading existed anywhere, and the
-reader stopped at the next `##`, so a heading of the user's own underneath
-put every later note past the point the reader stopped at — written, `Ok`,
-printed, never seen again. New files never get a `## Journal`; a legacy file
-keeps its shape, and a note appended to it is the only line that changes.
+**`core/body.rs` is the body's grammar, and the journal is the notes.** A note is a
+dated entry under `## Notes` — `- 2026-04-20T14:32:11Z — text`, further lines
+indented two spaces — and `body::notes_span` is **the one definition of where
+notes live, shared by the writer and the reader**: a legacy `## Journal` section
+when the file has one, else `## Notes`. Separate answers lose notes written past
+the point where the reader stops. New files never get a `## Journal`; a legacy
+file keeps its shape.
 
-**A note is several lines, and the writer is what makes that safe.** The old
-writer put the whole message on one line, so a message with a newline —
-stdin, the editor, the app's quick note with Alt-Enter — landed lines 2+ with
-no prefix, and the reader dropped every one of them: the pane, `fastf notes`
-and the count showed the first line, a continuation holding ` — ` parsed as a
-bogus entry, one starting `##` ended the section. `render_entry` indents every
-line after the first by two spaces, so nothing inside a note can start an
-entry or a section, and a one-line note writes the bytes every earlier version
-wrote. `render_preamble`, for the undated note, refuses a `##` line by name,
-because those lines are not indented.
+**`render_entry` indents every line after the first**, so nothing inside a note
+can start an entry or a section, and a one-line note's bytes are unchanged.
+`render_preamble` (the undated note) refuses a `##` line by name, since its lines
+are not indented.
 
-**The reader never fails and never drops a line it could show.** Under the
-heading, a column-0 `- `/`* ` line whose rest holds ` — `, or whose first
-word is `YYYY-MM-DD…` (a trailing `:` allowed), starts an entry; every line up
-to the next start is its text, with the two-space indent taken back off and
-trailing blank lines trimmed — so the files the old writer corrupted read
-correctly now. Text above the first entry is one **undated** note
-(`Note { timestamp: None }`), which is how the legacy free-text `## Notes`
-shows up. `notes_in` walks the Notes section and then the Journal section, so
-a dated line somebody typed under `## Notes` in a legacy file is a note too.
-There is no validation of what a timestamp *is*: it is whatever was typed.
-**Slice a timestamp with `.get(..10)`, never `[..10]`** — a hand-edited file
-can put anything there, and byte-slicing panicked on the first multi-byte
-character. `notes --since` compares the timestamp as text, which is cheap and
-correct because ISO-8601 sorts as text — and it refuses a value that is not a
-date fastf writes, through `cli::recent::check_since`, for the reason
-`recent --since` does: `2026-6-1` sorts after every `2026-0…`.
+**The reader never fails and never drops a line it could show.** A column-0
+`- `/`* ` line whose rest holds ` — `, or whose first word is `YYYY-MM-DD…` (a
+trailing `:` allowed), starts an entry; every line up to the next start is its
+text, un-indented, trailing blanks trimmed, so continuations written without the
+indent still read whole. Text above the first entry is one **undated** note
+(`Note { timestamp: None }`) — the legacy free-text `## Notes`. `notes_in` walks
+Notes, then Journal. Timestamps are not validated, so **slice one with
+`.get(..10)`, never `[..10]`**, which panics on a multi-byte character. `notes
+--since` compares timestamps as text (ISO-8601 sorts that way) and refuses a date
+fastf does not write through `cli::recent::check_since`, since `2026-6-1` sorts
+after every `2026-0…`.
 
-**Edits name the text they read.** `replace_note(path, ordinal, expected,
-text)` and `toggle_todo(path, ordinal, expected)` refuse when the note or task
-at `ordinal` no longer reads `expected` ("changed meanwhile"), because the
-ordinal alone cannot tell an edit of *this* note from an edit of whatever now
-sits where it was. `replace_note` splices over the note's own span — a dated
-note keeps its timestamp; the undated one keeps the `##` refusal; empty text
-removes the note, and the blank line removal would leave doubled. There is no
-"set the notes" any more: the undated note is edited like any other, and a
-new note is always dated. `toggle_todo` rewrites the one character inside the
-brackets and nothing else; `add_todo` appends `- [ ] text` at the end of
-`## Todo`, opening the section at the end of the file when there is none,
-and is one line.
+**Edits name the text they read.** `replace_note(path, ordinal, expected, text)`
+and `toggle_todo(path, ordinal, expected)` refuse "changed meanwhile" when the item
+at `ordinal` no longer reads `expected`, because an ordinal cannot tell this note
+from whatever now sits in its place. `replace_note` splices over the note's own
+span (a dated note keeps its timestamp, the undated one its `##` refusal; empty
+text removes it without doubling a blank line); a new note is always dated.
+`toggle_todo` rewrites only the character inside the brackets; `add_todo` appends
+`- [ ] text` to `## Todo`, opening the section at the end of the file when needed.
 
-**A list is opened under a blank line.** `append_in_section` puts `\n\n`
-before the first item of a section that holds no item yet — only its heading,
-or only prose — and a single `\n` before every later one, so the shape stays
-`## Notes`, a blank line, the list, whether the section was empty, mid-file,
-or at the end. The reader decides "holds an item" (a dated note; a task), so
-the writer and the reader agree about that too.
-
-**`library::resolve_matches(cfg, query) -> Resolution` is the shared resolver**,
-and `resolve` is a thin wrapper over it plus three `pub(crate)` error builders,
-so the three messages exist exactly once and a picker-driven caller reports the
-same text as a piped one. Tiers: exact id → **id number** → id prefix →
-case-insensitive name substring.
-
-`Resolution::{NoProjects, NoMatch, One(Box<Project>), Many(Vec<Project>)}` exists
-because an ambiguity flattened into an error string cannot be offered to a
-picker — `cli::target::one_project` is the caller that needed the candidates as
-data. `One` is boxed: the Windows clippy leg fires `large_enum_variant` on the
-unboxed form where Linux does not (the `ActionLoop` precedent). `Many` carries
-the **whole** candidate set; only the error *text* is capped at ten.
-
-The numeric tier reads an all-digits query as an id *number*
-(`naming::id_value`), so `fastf open 37` finds ID0037 whatever prefix and padding
-width a template declares. It sits **below** exact id, because a template may
-declare a digits-only id prefix and then an all-digits string is a legal complete
-id; and **above** the prefix tier, because `4` otherwise matches everything from
-ID0040 to ID0049. A digit run too long for `u64` is not a number and falls
-through — `numeric_query` returns `None` rather than saturating.
-
-Tag mutations call `library::refresh_cache` so lists stay fresh without a
-rescan; the note and todo verbs do not, because the cache stores neither.
+**A list opens under a blank line**: `append_in_section` writes `\n\n` before the
+first item of a section that has none and `\n` before later ones, so the shape is
+heading, blank line, list wherever the section sits; "holds an item" is the
+reader's answer, so writer and reader agree.
 
 ## Post-create actions
 
-`PostCreate` on both `Config` and `Template`; a template-level block overrides the
-global one entirely. All fields default to off: `git_init`, `reveal`,
-`open_in_editor`, `print_path` (for `$(fastf new ...)` pipelines), and `commands`.
+`PostCreate` sits on both `Config` and `Template`; a template's block replaces the
+global one entirely. Every field defaults off: `git_init`, `reveal`,
+`open_in_editor`, `print_path` (for `$(fastf new ...)`), and `commands`.
 
-**A project path never appears inside shell source.** Every child fastf spawns
-for a project goes through `post_create::project_command`, which sets the project
-as `current_dir` **and** as `PROJECT_PATH_VAR` (`FASTF_PROJECT_PATH`).
-`rewrite_path_token` then turns a `{path}` in a command into `"$FASTF_PROJECT_PATH"`
-(`"%FASTF_PROJECT_PATH%"` on Windows) rather than into the path — a folder name
-may legally contain `;`, `&`, `$`, `(`, `)` and a backtick, and `sanitize_name`
-leaves every one of them alone, so substituting the path split the command in
-two. `{path}` is **not** deprecated: after the rewrite there is nothing to
-migrate. A token already wrapped in a matching pair of quotes is replaced as a
-unit so `code "{path}"` does not come out double-quoted; Windows paths cannot
-contain `"`, so the quoted expansion is safe for every legal path.
+**A project path never appears inside shell source.** Every child spawned for a
+project goes through `post_create::project_command`, which sets the project as
+`current_dir` **and** as `PROJECT_PATH_VAR` (`FASTF_PROJECT_PATH`), and
+`rewrite_path_token` turns `{path}` into `"$FASTF_PROJECT_PATH"`
+(`"%FASTF_PROJECT_PATH%"` on Windows), because a folder name may hold `;`, `&`,
+`$`, `(`, `)` or a backtick that `sanitize_name` keeps. `{path}` is **not**
+deprecated. A token already in matching quotes is replaced whole, so `code
+"{path}"` is not double-quoted; Windows paths cannot contain `"`. Commands run
+synchronously through `cmd /c` or `sh -c`, and **there is no sandbox** — template
+authors control this.
 
-Commands run synchronously through the user's shell (`cmd /c` on Windows, `sh -c`
-elsewhere). **There is no sandbox** — template authors control this.
+**Reveal on Windows is `util::shell_open` (`ShellExecuteW`), not `cmd /c start`**,
+because `cmd.exe` expands `%VAR%` in the command line it rebuilds, so a folder
+named `%USERPROFILE%` would open the home directory. The editor stays on `cmd /c
+start` (`code` is a `.cmd` shim only cmd resolves), but its path argument is the
+quoted variable.
 
-**Reveal on Windows is `util::shell_open` (`ShellExecuteW`), not `cmd /c start`.**
-std quotes `start`'s argument correctly, but `cmd.exe` expands `%VAR%` inside the
-command line it reconstructs afterwards, so a folder named `%USERPROFILE%` opened
-the home directory. `ShellExecuteW` takes the path as an argument, with no
-command line to expand. The editor **does** stay on `cmd /c start` on Windows —
-`code` is a `.cmd` shim only cmd can resolve — but its path argument is the
-quoted variable, so the folder's own name never reaches the parser.
-
-`core::post_create::run` returns `Vec<Note>` — no `Result`, because every
-individual failure is already a `Note::Warning`: the project on disk is finished
-and correct whatever the editor did. It does **not** print: `core` may not write
-to a stdout the caller may be piping. `Note::Path` is separate from `Note::Done`
-because `print_path`'s line is the run's *output*, so it goes to stdout alone and
-last.
-
-`resolve_post_create()` is `pub` so `cli::new`'s open-prompt can avoid
-double-opening when `reveal: true` is already set.
+`core::post_create::run` returns `Vec<Note>`, not `Result` — each failure is a
+`Note::Warning`, since the project is complete whatever the editor did — and does
+**not** print. `Note::Path` is separate from `Note::Done` because `print_path`'s
+line is the run's *output*: stdout, alone, last. `resolve_post_create()` is `pub`
+so `cli::new`'s open-prompt does not double-open when `reveal: true` is set.
 
 ## Output
 
 **`core` produces data; `cli::render` turns it into text.** `project::plan_report`
-and `ApplyReport::of` build `DryRunReport`/`ApplyReport`; `cli/render.rs` is the
-only module that prints them. 255 lines of `colored` output used to sit in
-`core::project`, where the only way to test what a preview *said* was to read
-terminal output — so none of it was tested. The report structs have unit tests
-now.
+and `ApplyReport::of` build `DryRunReport`/`ApplyReport`, and `cli/render.rs` alone
+prints them, so what a preview says is unit-tested as data. `print_tree(nodes,
+indent)` is the one tree renderer (the dry run, `template show`, the builder) and
+takes no variables: a preview interpolates as it builds its report, and `template
+show` prints the raw `{token}` form. `PreviewKind::{DryRun, BeforeCommit}` picks
+the header, and every caller must say which side of the commit it is on.
 
-`print_tree(nodes, indent)` is the one tree renderer, used by the dry run,
-`template show` and the builder. It does not take variables: a preview
-interpolates its tree when it builds its report, and `template show` deliberately
-prints the raw `{token}` form.
-
-`PreviewKind::{DryRun, BeforeCommit}` decides the header. Both printers are
-called on both paths, so a new caller must say which side of the commit it is on
-— printing the dry-run header over a real create is the defect this replaced.
-
-`util::diag` is the one sink for anything `core` or `util` says: `warn` for a
-best-effort failure that must not change what the operation did, `note` for
-something the caller could not have known (a partial project rolled back),
-`fatal` for the two paths that cannot return a `Result` (an armed failpoint
-calling `abort`, a data directory that cannot be resolved).
+`util::diag` is the one sink for `core` and `util`: `warn` for a best-effort
+failure that must not change the outcome, `note` for something the caller could
+not have known (a partial project rolled back), `fatal` for the two paths with no
+`Result` (an armed failpoint's `abort`, an unresolvable data directory).

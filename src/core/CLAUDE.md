@@ -208,7 +208,29 @@ touches the file after creation.
 
 `write_frontmatter(path, |meta| …)` reads → splits → parses → applies → writes
 atomically. Body **and** frontmatter bytes are byte-identical after a no-op
-mutation, and there is one integration test each.
+mutation, and there is one integration test each. It is a wrapper over
+`write_document(path, |meta, body| …)`, which hands the body over too — **one
+read, one mutation over both halves, one atomic write**, for the verb that has
+to change both: setting a variable rewrites the frontmatter and the table that
+mirrors it, and two writes would leave a moment (and, killed there, a file)
+where the table disagreed with the frontmatter above it.
+
+**The body's variables table is regenerated only while it is fastf's.**
+`variables_table` is the one definition — `render_at` writes it at creation
+and `sync_variables_table` rewrites it — and the second recognises the first by
+shape: the first run of `|` lines under `# Project Info` whose header cells trim
+to `Variable`/`Value` and whose second line is dashes. Anything else — a table
+the user reshaped, a renamed header, no table — is left byte for byte, because
+the body is theirs and rewriting the wrong block would be worse than a table
+that drifted. `docs/projects.md` promises exactly this.
+
+**Sections are found by one rule.** `section_span(content, heading)` is the
+byte range from a `## Heading` to the `\n` before the next `##` or the end;
+`journal_span` and `notes_body` are both it. `replace_notes` rewrites the notes
+section and nothing outside it — `## Notes`, a blank line, the text, and the
+blank line under it that the next heading expects; empty text writes
+`render_at`'s own `## Notes\n\n`, so emptied notes read as never written; a
+file with no section gets one before the journal, else at the end.
 
 **Unknown keys survive every mutation.** The re-serialize step is
 `util::yaml::to_string_preserving_unknown(&meta, frontmatter, Metadata::OWNED_KEYS)`,
@@ -539,6 +561,28 @@ that changes nothing writes the same bytes back.
 
 `remove_tags` prunes the record to what `tags` still holds, so it can never
 name a tag that is no longer there.
+
+**The pane's edits.** `operations::set_variable`, `replace_tag` and
+`set_notes` are the detail pane's three writes, each the same five steps every
+mutation here takes. `set_variable` lands a value the way a create would have
+stored it — `vars::validated_raw_values` and `rendered_values` over the
+project's current variables with this one replaced, so a `select` cannot hold
+anything outside its options and a `text` gets its transform; a variable the
+template no longer declares, or any variable of a registered project, is free
+text, one line — then writes the variable, re-derives the auto-tags
+(`rederive_auto_tags`, the body `replace_auto_tags` shares) and syncs the body
+table in one `write_document`. A derived tag whose value changed **takes the
+place of the one it replaces** rather than leaving from the middle and
+arriving at the end. `replace_tag` renames in place, or removes when `to` is
+`None`. `set_notes` refuses a line beginning with `##` — it would end the
+section there — and otherwise the text is the user's.
+
+**A tag is one word.** `validated::Tag`: trimmed, non-empty, no whitespace, at
+most 64 characters, letters and digits and `- _ . /`, a `/` only between parts.
+It is parsed at `operations::add_tags` before the lock — the one door the CLI,
+the app's prompt and the pane all come through — so "arbitrary strings"
+stopped admitting a paragraph, or a newline that was a second YAML list item on
+the way back in.
 
 **Search** (`core/query.rs`) ANDs its predicates; no OR, no parens. Operators:
 bare term (free-text substring fallthrough), `key=value`, `key=prefix*`,

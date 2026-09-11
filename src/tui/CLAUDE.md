@@ -145,6 +145,11 @@ An `Availability` is a function of the app: `Disabled(reason)` is listed dimmed
 and pressing its key shows the reason; `Hidden` is not bound at all (Move with
 no other mounted base, Clear-filter with no filter).
 
+**A command may be palette-only.** `BackToLibrary` lost its `←` when the
+horizontal axis became focus and `T` and Esc already do the job; it stays
+declared with `palette = true` and no keys, the `ReautoTags` precedent, so the
+palette can still name it and the help does not list a key that is not there.
+
 ## The movement grammar, and the horizontal axis
 
 **One set of movement keys, and every list has all of it.** `SCROLLERS` is the
@@ -865,11 +870,17 @@ eye needs to find it and then let go, which at 450 ms reads as a pulse rather
 than a state. The status line is the one thing that really does fade, because
 `DIM` is a modifier every terminal honours.
 
-**Four things move, and nothing else.** A row a verb changed (*which* rows did
-that batch touch, when the cursor is elsewhere); a size cell whose number
-*changed* (is the figure the one that was there a moment ago); one activity
-indicator wherever something is pending (is it working, or stuck); a message on
-its way out (it is going, and you can still read it).
+**Five things move, and nothing else.** A row a verb changed (*which* rows did
+that batch touch, when the cursor is elsewhere) — in the table by path and in
+the pane by row index, which is why `Pulses<K>` is generic over its key rather
+than being two structs; a size cell whose number *changed* (is the figure the
+one that was there a moment ago); one activity indicator wherever something is
+pending (is it working, or stuck); a message on its way out (it is going, and
+you can still read it); and the title of the pane the focus just moved to
+(which pane will the next key go to — the border says so at rest, but a colour
+changing on a line nobody was reading is not seen, and the pulse is the moment
+of the move). `App::set_focus` is the one way focus moves, so every mover
+stamps `focus_moved_at`; `motion::focus_style` reads it.
 
 **A page filling in is not a change.** The size pulse fired on arrival at
 first, which is every visible row at once on the first screenful and again on
@@ -892,11 +903,73 @@ frame that shows it was written — which is why `Effect::Retheme` and
 `Msg::Themed` carry both. `Mono` is always off: a colour wash with no colour is
 a flicker rather than a cue.
 
+**The pane's cursor is the mono-visible focus cue.** The focused pane's border
+and title are colour, and in `Theme::mono` colour is `Reset` — so before the
+pane had a cursor, focus was invisible there. The cursor is drawn only while
+the pane has the focus (`view/projects.rs::detail`), as the selection style,
+which mono draws reversed; and the same rule keeps a lit row out of a pane you
+are not in, where it would say the next key goes there when it does not.
+
 **A snapshot cannot see any of this** — `TestBackend` records symbols, and the
 snapshots render in `Theme::mono` where motion is off by rule. That is a feature
 (the layout snapshots do not churn) and it is why
 `testing::render_to_buffer` exists: the one place a frame's *colours* are
 asserted, for the one thing `render_to_string` cannot show.
+
+## The pane is an editor you enter on purpose
+
+**`pane::pane_rows` is the one answer to "what is in the pane"**, read by the
+view that draws it, by the cursor arithmetic in `update`, and by the scroll
+ceiling. The pane was one `Paragraph` the view built as it went, with
+`detail_scroll_max` hand-counting the same lines a second time; once some rows
+became things you can change, which rows exist and which the cursor may rest
+on (`PaneRow::selectable`) had to be one pure function. One line per row and
+no `Wrap`: the cursor is an index into the rows and `detail_scroll` counts
+rows, so a row that took two lines would put both off by one from there down.
+
+**Nothing edits until Enter, and Esc leaves the row as it was.** The cursor
+walks the selectable rows (`pane::step_cursor`, clamped like every list) and
+Enter on one is `CommandId::PaneEdit`, which dispatches on the row: the name
+is the rename prompt, a tag opens on its own line (emptied, it is removed —
+`operations::replace_tag`), "add a tag" is `open_add_tag`, a text variable
+opens on its line, a `select` variable opens `Modal::Pick` over its options
+with `Then::PaneVariable` — the picker is the one shape that cannot hold a
+value outside the options — the notes rule opens a `TextArea` over the section
+(`Ctrl-S` saves; `PaneEditConfirm` is *hidden* there so Enter reaches the
+widget as a new line), the journal rule is `NoteInline`. The edit lives in
+`App.pane_edit` beside the rows rather than in a dialog over them, so what is
+being changed stays in view with everything around it.
+
+**`Context::PaneEdit` is a text-entry context**, so the field has first refusal
+on every printable key and the registry answers Enter, Esc and `Ctrl-S`
+(`on_pane_edit_key`, the `on_text_prompt_key` shape). It is why Enter on the
+list had to become its own id: `Actions` carried `[a, Enter]` over both the
+list and the pane, one id cannot bind different keys in different contexts,
+and the pane's Enter now means *edit*. `ActionsEnter` is Enter over
+`[Projects]` with the same handler, hidden from the bar and the palette; `a`
+still opens the menu from the pane.
+
+**An edit stays open, pending, until the worker answers.** `send_pane_edit`
+marks it and `on_action_done` finishes it: an `Ok` closes the edit and the row
+pulses; an `Err` lands on it (`PaneEdit::fail`) with the text still there to
+correct — the builder's `saving` and a settings row's edit already worked this
+way, and a refusal in a dialog over a field you can no longer see is worse
+than none. Moving the focus or the selection drops an open edit untouched.
+
+**The cursor follows the thing, not its index.** A landed edit returns
+`ListChange::Patched`, which patches the row and drops the cached detail, so
+the pane's rows are rebuilt — with a tag more or less above the variable that
+changed, and with the variables gone until the re-read lands. `PaneEdit::target`
+says what the edit was about (`PaneTarget`), `settle_pane_cursor` finds that
+row after `apply_change`, and `App.pane_return` keeps the target so
+`Msg::Detail` finds it again once the detail is back. Keeping the old index
+put the cursor one row off the moment a tag arrived.
+
+**What the pane admits is what the file can hold**, and the rule lives in
+`core`, once: `validated::Tag` at `operations::add_tags`, `vars::rendered_values`
+inside `set_variable`, the `##` refusal in `set_notes`. `validators::tag` is
+the same rule for the prompts that want to refuse under the line before a
+worker is asked. See `src/core/CLAUDE.md`, "The pane's edits".
 
 ## Settings, the counter, maintenance, the first run
 

@@ -152,10 +152,26 @@ What is on screen, top to bottom:
   it says so inside the box.
 - **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
   selected project's template, base and date, its size and journal count, its
-  tags, its template variables, the top of its folder and the first lines of
-  its notes. The split favours the table: long folder names take the room
-  they need with the size beside them, the pane takes the rest, and closes —
-  as `i` would — when the rest would be a sliver.
+  tags one per row, its template variables, the top of its folder, its notes
+  and its latest journal entries. The split favours the table: long folder
+  names take the room they need with the size beside them, the pane takes the
+  rest, and closes — as `i` would — when the rest would be a sliver.
+
+  **The pane is an editor you enter on purpose.** `→` (or Tab) puts the cursor
+  in it; ↑/↓ walk the rows Enter can act on, and nothing changes until you
+  press Enter on one. Enter on the **name** is the rename; on a **tag** the
+  tag opens on its own line — change it and Enter, or empty it and Enter to
+  remove it; on **add a tag** the tag flow; on a **variable** the value opens
+  in place, or, for a `select` variable, a picker over its options and nothing
+  else; on the **notes** rule a text area over the notes, Ctrl-S to save, Enter
+  for a new line; on the **journal** rule a quick note. Esc leaves the row as it
+  was, and so does moving away. What you can type is what the file can hold: a
+  tag is one word (letters, digits, `- _ . /`), a variable is one line and a
+  `select` is one of its options, a note may not start a line with `##` (that
+  is how the file marks where a section ends). A refusal names the rule, under
+  the field, with the text still there to correct. A variable that drives a
+  `slug/value` tag keeps that tag honest, and the variables table under the
+  frontmatter follows — while it is still the table fastf wrote.
 - **The status line and the hint bar** — what the last action did (or, when
   rows are marked, that a verb will act on them rather than on the cursor),
   and the keys that matter where you are.
@@ -623,7 +639,9 @@ fastf tag list ID0047
 fastf tag reauto ID0047          # re-derive auto tags from the template's tag_from
 ```
 
-Tags come in two flavors. Free-form tags are arbitrary strings you add yourself. Auto-derived tags are generated at creation from template variables (`tag_from: ["client_type"]` plus the value `Indie` produces `client_type/Indie`). `reauto` refreshes the derived ones and leaves everything else alone.
+A tag is one word: letters and digits, `-`, `_`, `.`, and `/` between parts as in `client/Acme`; at most 64 characters, no spaces. The same rule holds on the command line, in the app's prompt and in the detail pane, and a refusal names it.
+
+Tags come in two flavors. Free-form tags are the ones you add yourself. Auto-derived tags are generated at creation from template variables (`tag_from: ["client_type"]` plus the value `Indie` produces `client_type/Indie`). `reauto` refreshes the derived ones and leaves everything else alone.
 
 `reauto` removes only the tags fastf derived last time — which ones those were is recorded in the project's `PROJECT_INFO.md`, under `auto_tags`. A tag that merely *looks* derived is not its to remove: a literal `tags: ["client_type/legacy"]` in the template, or a `client_type/mine` you typed yourself, both survive. A project created before fastf recorded this reconstructs what it can from its own variables; the first `reauto` writes the record.
 
@@ -638,7 +656,7 @@ fastf notes ID0047                               # all entries
 fastf notes ID0047 --since 2026-04-01
 ```
 
-Entries are timestamped lines in the `## Journal` section of the project's `PROJECT_INFO.md`. They are append-only and grow over the project's lifetime.
+Entries are timestamped lines in the `## Journal` section of the project's `PROJECT_INFO.md`. They are append-only and grow over the project's lifetime. The `## Notes` section above it is free text you own; the app's detail pane edits it in place (Enter on the notes rule, Ctrl-S to save) and rewrites nothing outside it.
 
 With no message, the editor (`config.editor`, else `$EDITOR`, else Notepad on
 Windows and `nano` elsewhere) opens on a scratch file, started in the project's

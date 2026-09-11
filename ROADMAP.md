@@ -67,7 +67,27 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- In flight: **two things that looked like faults.** The size pulse fired on
+- In flight: **the app feels deliberate.** Four things, each about the cursor
+  going where you meant and nothing happening that you did not ask for. **A
+  list stops at its ends** — every list wrapped through one shared helper, and
+  one `j` too many at the bottom of a long table put the cursor back at the
+  top with nothing to say why. **The horizontal axis is focus** — `→` was
+  "whatever Enter does here" and `←` "whatever Esc does", two arrows that ran
+  verbs and closed dialogs; they only move the cursor between the list and
+  the pane now, on both tabs, hidden where there is nowhere to go, and the
+  pane the focus arrives in pulses once. **The detail pane is an editor you
+  enter on purpose** — a cursor over the rows Enter can act on; Enter on the
+  name renames, on a tag edits it (emptied, removes it), on a variable edits
+  the value in place or picks from a `select`'s options and nothing else, on
+  the notes opens the section as a text area with `Ctrl-S` to save; Esc leaves
+  the row as it was; a refusal lands under the field with the text still there.
+  **What the pane admits is what the file can hold**: a tag is one word
+  (`validated::Tag`, at the one door every tag comes through), a variable
+  lands through the template's own validation and transform, a note may not
+  begin a line with `##`; setting a variable rewrites the frontmatter, its
+  derived tag and the body's table in one atomic write, and the table only
+  while it is still the one fastf wrote.
+- Released, unversioned: **two things that looked like faults.** The size pulse fired on
   arrival, and every visible row's size arrives at once — so the first
   screenful of a run washed twenty rows together, and so did every scroll after
   it. A pulse is a cue; a page lighting up is a flash. It answers nothing there
@@ -282,6 +302,21 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
   package's release test suite passed before both AUR repositories were pushed.
 
 Regression coverage grows with the relevant release:
+
+- [x] Every list stops at its ends and the extreme jump deltas do not
+  overflow; every command bound to `←`/`→`/`h`/`l` is a focus move or a page
+  turn; Tab reaches the template pane on a narrow window; a focus move pulses
+  the pane it landed in and asks for the fast wake only while it does; the
+  pane's cursor walks selectable rows, stops, keeps itself in view and is drawn
+  only with the focus; `set_variable` rewrites the frontmatter, the derived
+  tag and the body table and nothing else, refuses a `select` value outside
+  its options and leaves a reshaped table alone; `replace_tag` renames in
+  place and empties to a removal; `set_notes` keeps every other byte, creates
+  the section before the journal, and refuses a `##` line; `add_tags` refuses
+  what is not a tag; in the pane nothing edits before Enter, Esc restores, a
+  refusal stays open with its message, a select offers only its options, the
+  notes save with `Ctrl-S`, and a landed edit's cursor follows the thing it
+  edited across the rows that changed.
 
 - [x] A page of sizes filling in for the first time does not pulse, a size that
   changed does, and a size a verb threw away pulses once when it comes back;

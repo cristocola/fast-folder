@@ -67,7 +67,26 @@ responsibility of the filesystem and backups.
 
 ## Current phase
 
-- In flight: **the app feels deliberate.** Four things, each about the cursor
+- Released in v3.6.0: **the pane reads the file, and motion guides the eye.**
+  **Notes are the journal**: a note is a dated entry under `## Notes` with
+  every further line indented under its first, so a message from stdin, the
+  editor or the quick note keeps all of its lines — the old writer put the
+  whole message on one line and the reader dropped everything after it. The
+  reader is lenient (a column-0 list item starting with a date is an entry
+  with or without the `—`, every line up to the next belongs to it, text
+  above the first entry is one undated note, a heading is matched in any
+  case), a file from before 3.6.0 keeps its `## Journal`, and `core/body.rs`
+  is the one grammar for the body's sections. **Todos** live under `## Todo`,
+  toggled by rewriting the one character inside the brackets. **The pane
+  shows a note as its own rows** and the todos as a list Enter toggles, every
+  section ending in an add row; **a cached detail carries a stamp** and is
+  checked against the disk on every visit, on F5 and once a second, so a file
+  edited in another window shows unasked. **The mouse is a setting, off by
+  default**, so text selects as in any program. **Motion fades rather than
+  flashes**: a pulse mixes toward the palette's ground, the focus eases
+  between its rest states, a message arrives under a wash, and a sort pulses
+  the row that kept the selection.
+- Released in v3.6.0: **the app feels deliberate.** Four things, each about the cursor
   going where you meant and nothing happening that you did not ask for. **A
   list stops at its ends** — every list wrapped through one shared helper, and
   one `j` too many at the bottom of a long table put the cursor back at the
@@ -228,7 +247,7 @@ responsibility of the filesystem and backups.
     terminal that reports it.
   - Ctrl-Z and `fg`; `kill -INT` twice against the app leaves the shell
     cooked; `ssh localhost -t fastf` picks a theme and `o` says "no display".
-- Last reviewed: **2026-09-10** (v3.5.0)
+- Last reviewed: **2026-09-11** (v3.6.0)
 
 ## Release train
 
@@ -257,6 +276,7 @@ responsibility of the filesystem and backups.
 | v3.3.0 | nothing fails quietly: a project fastf cannot read is named rather than dropped, the app cannot be crashed or made to act on the wrong project, guards that were written down are enforced, and every surface says one thing | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.3.0) |
 | v3.4.0 | the template editor explains itself: a panel that says what each part is and what the template would produce, a seven-page guide with a walkthrough that builds one, and a Save row that counts what is still worth a look | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.4.0) |
 | v3.5.0 | the app answers the keys you try: one movement grammar in every list, `→`/`←` to go in and come back, every key line read from the registry, four things it could not do, and motion only where it answers a question | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.5.0) |
+| v3.6.0 | the pane reads the file: notes are the journal and keep every line, todos, a detail cache that checks the disk, the mouse as a setting, and motion that fades and eases instead of flashing | [release](https://github.com/cristocola/fast-folder/releases/tag/v3.6.0) |
 
 Each release's guarantees live in `CLAUDE.md` (the current design) and the test
 suite (enforced), not here — this table is what shipped when and where to find
@@ -302,6 +322,35 @@ recognise them. Push the branch, open the PR, wait for the matrix, then tag.
   package's release test suite passed before both AUR repositories were pushed.
 
 Regression coverage grows with the relevant release:
+
+- [x] A note of several lines round-trips through `append_journal_entry`,
+  `note add -`, the editor and the quick note; the reader takes every entry
+  shape (` — `, a bare date, a colon, a star), every line up to the next
+  entry, the undated preamble, both sections of a legacy file, a heading in
+  any case with or without a colon, and never a `###`; a legacy `## Journal`
+  receives the append byte for byte; `replace_note` and `toggle_todo` refuse
+  a note or task that changed meanwhile and write nothing; `add_todo` opens
+  `## Todo` after the notes; `notes --since` refuses what `recent --since`
+  refuses (v3.6.0).
+
+- [x] A note is several pane rows with only its first selectable, the latest
+  five under `… n earlier`, a long one cut with `… n more lines`; Enter on a
+  todo sends the toggle at once with no edit open and the answer lands on its
+  row; a `DetailOnly` change keeps the detail on screen, starts no table
+  pulse and keeps the cursor; a cached detail is checked with its stamp on
+  every visit and on F5, never read again unasked; a detail whose metadata
+  disagrees with its row patches the row and refreshes the index; a note
+  appended from outside the app is on the pane within a second under a pty;
+  the mouse setting is flipped live from the palette and written through
+  `config set` (v3.6.0).
+
+- [x] A pulse is the wash at its start, between the wash and the ground at
+  its middle and gone at its end; the sixteen colours hold and let go; the
+  focus borders and titles ease between their rest states with no wash and no
+  snap, and land at once with motion off; a status line arrives under a wash
+  across the whole line and settles; a sort or a filter pulses the selected
+  row and a recompute alone does not; mono never asks for the fast wake
+  (v3.6.0).
 
 - [x] Every list stops at its ends and the extreme jump deltas do not
   overflow; every command bound to `←`/`→`/`h`/`l` is a focus move or a page
@@ -476,6 +525,9 @@ This work does not use GitHub issues, a separate ADR system, or a changelog.
 
 ## Unscheduled backlog
 
+- A `fastf todo` verb — list, add, toggle — so the command line has what the
+  pane has; and removing or rewording a todo from the pane, which today means
+  editing the file (the pane follows within a second).
 - Portable project packages.
 - Template upgrades.
 - Template diagnostics and language-server support.

@@ -287,7 +287,8 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                     "Set motion = {}  ({})",
                     choice.name(),
                     match choice {
-                        crate::tui::motion::Motion::On => "a row that changed lights up as it does",
+                        crate::tui::motion::Motion::On =>
+                            "a row that changed lights up and fades, the focus eases between the panes",
                         crate::tui::motion::Motion::Off => "every frame is a hard cut",
                     }
                 )

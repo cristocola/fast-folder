@@ -851,7 +851,7 @@ fixed row nothing can push off the end and leaves the list whole underneath so
 you can watch it narrow. Esc gives the whole screen back: a filter left behind
 is a screen missing rows for a reason nobody can see.
 
-## Motion, and only where it answers a question
+## Motion that guides the eye, and only where it answers a question
 
 **`src/tui/motion.rs` is pure.** No clock, no environment, no I/O: every
 function takes the milliseconds it should reason about, which is what lets
@@ -875,10 +875,11 @@ one moment it exists for. `Runtime.next_tick` is the deadline; a burst is still
 drained and drawn once, and the tick that came due during it is delivered after.
 
 **`App::tick_interval` replaces `needs_tick`**, because two kinds of thing move
-at two speeds: a spinner and a countdown want five frames a second, a pulse
-fading wants twenty. Asking for the faster one **only while a pulse is in
-flight** is what keeps the documented claim true — the app costs nothing while
-idle — and `the_faster_wake_ends_with_the_pulse` holds it to that.
+at two speeds: a spinner and a countdown want five frames a second, a fade
+wants twenty. Asking for the faster one **only while something is fading** —
+and only when the setting and the palette let it be seen — is what keeps the
+documented claim true — the app costs nothing while idle — and
+`the_faster_wake_ends_with_the_pulse` holds it to that.
 
 **The pulse is a background, and it has to be.** Every cell in a row sets its
 own foreground — the id is accent, the size is dim, a tag is its own colour — so
@@ -887,24 +888,60 @@ That was the first draft, and it was invisible in a real frame while passing a
 test that asked the wrong question. A background is the one thing the cells
 leave alone.
 
-**One step, not a fade.** A terminal cell has no alpha and this theme defines no
-page background — `Color::Reset` has no RGB — so there is nothing to interpolate
-*towards*. What a terminal can do honestly is hold the row lit for as long as an
-eye needs to find it and then let go, which at 450 ms reads as a pulse rather
-than a state. The status line is the one thing that really does fade, because
-`DIM` is a modifier every terminal honours.
+**A pulse fades; it does not flash.** It was one step — the wash held for 450
+ms and then gone — on the reasoning that a terminal cell has no alpha and
+`Color::Reset` has no RGB, so there was nothing to fade *toward*. True, and it
+read as a screen glitch: a background that snaps on and off is what a terminal
+looks like when it is broken, which is how it was described. `Theme.ground`
+is the answer — the dark the rich palette is drawn on, which its selection and
+its wash already presumed — and `motion::wash` mixes from `pulse` toward it
+with an ease-out (`ease_out`, `mix`) over `PULSE_MS`, spending the end of the
+fade close enough to the ground that the last step to nothing is not seen.
+The sixteen ANSI colours have no ramp, so there the wash is held for
+`ANSI_HOLD` of the pulse and let go; mono has no colour and never moves. One
+function, `wash`, for the table's rows, the pane's rows and the status line.
 
-**Five things move, and nothing else.** A row a verb changed (*which* rows did
-that batch touch, when the cursor is elsewhere) — in the table by path and in
-the pane by row index, which is why `Pulses<K>` is generic over its key rather
-than being two structs; a size cell whose number *changed* (is the figure the
-one that was there a moment ago); one activity indicator wherever something is
-pending (is it working, or stuck); a message on its way out (it is going, and
-you can still read it); and the title of the pane the focus just moved to
-(which pane will the next key go to — the border says so at rest, but a colour
-changing on a line nobody was reading is not seen, and the pulse is the moment
-of the move). `App::set_focus` is the one way focus moves, so every mover
-stamps `focus_moved_at`; `motion::focus_style` reads it.
+**Focus eases between rest states.** The title used to wear the wash for a
+moment — the same flash, on a line. `motion::border_style` and `title_style`
+take `focus_moved_at` and ease the newly focused pane `border → border_focus`
+and `dim → accent` over `FOCUS_MS`, and the pane that lost the focus the
+other way at the same moment (`eased`). A transition between two rest states
+has no end step to snap through, which is what makes it the cleanest kind of
+motion there is; off, and on the sixteen colours, it is the rest state at
+once. `App::set_focus` is the one way focus moves, so every mover stamps
+`focus_moved_at`; `view::projects::title_style` and `border_style` are the
+readers, for the table, the detail pane and both panes of the templates tab.
+Dialogs keep `Theme::border` — they do not take the focus.
+
+**A message arrives, and goes.** The status line is where what just happened
+is said, and a line that changes its text in silence is not read: `Status`
+carries `shown_at` (an `Option`, because `Status::default()` is what a test
+assigns and a clock at zero must not read as a message arriving) and
+`view::dashboard::status` paints `motion::arriving_style`'s wash under the
+whole line for `ARRIVE_MS`, then, as before, dims it for its last `FADE_MS`
+(`expiring_style`).
+
+**Find my row.** A sort or a filter keeps the selection by path, so the row
+you were on is somewhere else on the screen now; `App::reordered` recomputes
+the rows and pulses the selected one, and every reorder anybody asked for —
+`s`, `S`, `f`, `b`, `F`, the tag filter — goes through it. Deliberately not
+in `after_rows_changed`, which discovery, the size reports and every search
+keystroke run through: those change what is on screen without anyone having
+asked for a reorder.
+
+**What moves, in full.** A row a verb changed (*which* rows did that batch
+touch, when the cursor is elsewhere) — in the table by path and in the pane by
+row index, which is why `Pulses<K>` is generic over its key rather than being
+two structs; a size cell whose number *changed* (is the figure the one that
+was there a moment ago); the selected row after a reorder (where did it go);
+the focus, between the panes (which pane will the next key go to); a status
+message arriving and going; and one activity indicator wherever something is
+pending (is it working, or stuck). Deliberately **not** built: eased
+scrolling, dialog transitions, cursor trails, and a reveal sweep as a pane
+fills in — the sweep fights a held arrow key, restarting on every arrival.
+They answer nothing, and this app's rule for motion is the rule it already
+had for colour — it appears where it *means* something and never as
+decoration.
 
 **A page filling in is not a change.** The size pulse fired on arrival at
 first, which is every visible row at once on the first screenful and again on
@@ -915,17 +952,15 @@ from the sizes (`view/projects.rs`), so a landing number cannot reflow
 anything. `Msg::Sizes` now pulses on a number that replaced a *different*
 number, and on the one arrival that is a change rather than a first fill — a
 size a verb threw away coming back, which `ListChange::Patched` records in
-`App.rescanning` on its way past and the answering size spends. Deliberately **not** built: eased scrolling,
-dialog transitions, cursor trails. They answer nothing, and this app's rule for
-motion is the rule it already had for colour — it appears where it *means*
-something and never as decoration.
+`App.rescanning` on its way past and the answering size spends.
 
 **Off is a first-class state.** `theme::choose_motion` resolves it beside the
 palette, from an `Env` and one config key, so `update` still reads no
 environment and a setting written on the settings screen takes effect on the
 frame that shows it was written — which is why `Effect::Retheme` and
 `Msg::Themed` carry both. `Mono` is always off: a colour wash with no colour is
-a flicker rather than a cue.
+a flicker rather than a cue. Off, every frame is a hard cut: the rest state on
+the first frame, and no fast wake asked for.
 
 **The pane's cursor is the mono-visible focus cue.** The focused pane's border
 and title are colour, and in `Theme::mono` colour is `Reset` — so before the

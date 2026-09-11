@@ -179,6 +179,10 @@ pub struct Status {
     pub level: StatusLevel,
     /// The tick it disappears at; `None` stays until replaced.
     pub expires_at: Option<u64>,
+    /// When it was set, for the wash it arrives under; `None` for a status
+    /// nobody set — `Status::default()`, which a test assigns — so a clock at
+    /// zero does not read as a message arriving.
+    pub shown_at: Option<u64>,
 }
 
 /// One line of the session's message log: what the status line said, and
@@ -511,9 +515,14 @@ impl App {
     /// the faster one only while a pulse is in flight is what keeps the
     /// documented claim true: **the app costs nothing while idle.**
     pub fn tick_interval(&self) -> Option<std::time::Duration> {
-        if !self.pulses.is_empty()
-            || !self.pane_pulses.is_empty()
-            || motion::focus_pulsing(self.focus_moved_at, self.elapsed_ms)
+        // Only where a frame could show it: off, or with no colour to show
+        // it in, nothing moves and nothing asks to be redrawn for it.
+        let visible = self.motion.is_on() && self.theme.kind != crate::tui::theme::ThemeKind::Mono;
+        if visible
+            && (!self.pulses.is_empty()
+                || !self.pane_pulses.is_empty()
+                || motion::focus_easing(self.focus_moved_at, self.elapsed_ms)
+                || motion::arriving(self.status.shown_at, self.elapsed_ms))
         {
             return Some(std::time::Duration::from_millis(motion::FRAME_MS));
         }
@@ -566,6 +575,7 @@ impl App {
             text,
             level,
             expires_at: Some(self.elapsed_ms + STATUS_MS),
+            shown_at: Some(self.elapsed_ms),
         };
     }
 
@@ -744,14 +754,12 @@ impl App {
 
     fn set_template_filter(&mut self, slug: Option<String>) -> Vec<Effect> {
         self.library.template_filter = slug;
-        self.recompute();
-        self.after_rows_changed()
+        self.reordered()
     }
 
     fn set_base_filter(&mut self, base: Option<PathBuf>) -> Vec<Effect> {
         self.library.base_filter = base;
-        self.recompute();
-        self.after_rows_changed()
+        self.reordered()
     }
 
     /// Both row filters off. `F` is one key because they are one question —
@@ -760,8 +768,25 @@ impl App {
     fn clear_filters(&mut self) -> Vec<Effect> {
         self.library.template_filter = None;
         self.library.base_filter = None;
+        self.reordered()
+    }
+
+    /// After a sort or a filter changed the order of the rows. **Find my
+    /// row:** the selection is kept by path, so the row you were on is
+    /// somewhere else on the screen now, and it pulses so the eye finds
+    /// where it went. Not in `after_rows_changed`, which discovery, the size
+    /// reports and every search keystroke run through: those change what is
+    /// on screen without anyone having asked for a reorder.
+    fn reordered(&mut self) -> Vec<Effect> {
         self.recompute();
+        self.pulse_selected();
         self.after_rows_changed()
+    }
+
+    fn pulse_selected(&mut self) {
+        if let Some(project) = self.library.selected() {
+            self.pulses.start(project.path.clone(), self.elapsed_ms);
+        }
     }
 
     /// What a finished verb does to the list, without the worker that finished
@@ -846,7 +871,7 @@ impl App {
                 }
                 self.pulses.retire(self.elapsed_ms);
                 self.pane_pulses.retire(self.elapsed_ms);
-                if !motion::focus_pulsing(self.focus_moved_at, self.elapsed_ms) {
+                if !motion::focus_easing(self.focus_moved_at, self.elapsed_ms) {
                     self.focus_moved_at = None;
                 }
                 Vec::new()
@@ -2337,8 +2362,7 @@ impl App {
         match pick.then {
             Then::SortPick => {
                 self.library.explicit_sort = Sort::from_label(&item.value);
-                self.recompute();
-                self.after_rows_changed()
+                self.reordered()
             }
             Then::TemplateFilter => self.set_template_filter(Some(item.value.clone())),
             // A tag filter is `tag:x` in the bar and nothing else — one
@@ -2348,7 +2372,9 @@ impl App {
             Then::TagFilter => {
                 self.search.input.set_text(format!("tag:{}", item.value));
                 self.search.sync();
-                self.after_query_change()
+                let effects = self.after_query_change();
+                self.pulse_selected();
+                effects
             }
             Then::BaseFilter => {
                 let base = (!item.value.is_empty()).then(|| PathBuf::from(&item.value));
@@ -2937,10 +2963,9 @@ impl App {
                 // down for the rest of the session.
                 let current = self.library.effective_sort(&self.search.query);
                 self.library.explicit_sort = Some(Sort::new(current.order.next()));
-                self.recompute();
                 let sort = self.library.effective_sort(&self.search.query);
                 self.info(format!("sorted by {}", sort.label()));
-                self.after_rows_changed()
+                self.reordered()
             }
             CommandId::SortPick => {
                 // Both directions of every order that has two, each beside the

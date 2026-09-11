@@ -511,7 +511,7 @@ pub fn rows(s: &Settings) -> Vec<Row> {
         Row {
             label: "Motion",
             value: or(&s.motion, "on"),
-            hint: "a row a verb just changed lights up as it does, and a message dims on its way out — off makes every frame a hard cut; a theme with no colour is always off",
+            hint: "a row a verb just changed lights up and fades, the focus eases between the panes, a message arrives and dims on its way out — off makes every frame a hard cut; a theme with no colour is always off",
             kind: Kind::Choice("motion", MOTION),
         },
         Row {

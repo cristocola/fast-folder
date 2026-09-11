@@ -7,9 +7,9 @@
 //! `- [ ] text` and `- [x] text` — and, in a file written before v3.6.0, a
 //! `## Journal` section that held the notes then and keeps holding them now.
 //!
-//! **One grammar, read by the writer and the reader alike.** [`notes_span`]
+//! **One grammar, read by the writer and the reader alike.** `notes_span`
 //! is where the notes are, for `append_journal_entry` and `notes_in` both;
-//! [`section_span`] is where any section is. The two halves had a definition
+//! `section_span` is where any section is. The two halves had a definition
 //! each once, and a note the writer put past the point the reader stopped at
 //! was written, confirmed, and never seen again.
 //!
@@ -300,7 +300,7 @@ fn notes_in_section(content: &str, span: &Range<usize>) -> Vec<Placed> {
     out
 }
 
-/// Every note in `content`, in file order — see [`place_notes`].
+/// Every note in `content`, in file order — see `place_notes`.
 pub fn notes_in(content: &str) -> Vec<Note> {
     place_notes(content)
         .into_iter()

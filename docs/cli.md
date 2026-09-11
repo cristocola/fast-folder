@@ -24,8 +24,8 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf unregister <query>` | Forget a project — remove its `PROJECT_INFO.md`, keep the files |
 | `fastf delete <query>` | Delete a project's folder and everything inside it |
 | `fastf tag add/remove/list/reauto` | Manage project tags |
-| `fastf note add <id> [msg]` | Append a timestamped journal note |
-| `fastf notes <id>` | Show journal entries |
+| `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
+| `fastf notes <id>` | Show a project's notes |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
 | `fastf reconcile` | Recover scoped v2 work and report obsolete pre-v2 markers |
@@ -366,8 +366,8 @@ and asks you to type the word `delete` — a typo keeps your text and says why
 it was refused; `y` or `n` answers a yes/no without Enter. A
 move shows its progress (phase and bytes) while it runs, cancelled with Esc
 or Ctrl-C. `N`
-drops out of the terminal into your `$EDITOR` and appends whatever you save to
-the journal when you come back; `M` and `J` open the metadata and journal,
+drops out of the terminal into your `$EDITOR` and appends whatever you save as
+one note when you come back; `M` and `J` open the metadata and the notes,
 scrollable with the arrow keys.
 
 **Marks make a verb a batch.** Space marks the row and steps on, so a run of
@@ -645,23 +645,54 @@ Tags come in two flavors. Free-form tags are the ones you add yourself. Auto-der
 
 `reauto` removes only the tags fastf derived last time — which ones those were is recorded in the project's `PROJECT_INFO.md`, under `auto_tags`. A tag that merely *looks* derived is not its to remove: a literal `tags: ["client_type/legacy"]` in the template, or a `client_type/mine` you typed yourself, both survive. A project created before fastf recorded this reconstructs what it can from its own variables; the first `reauto` writes the record.
 
-## Journal
+## Notes
 
 ```bash
 fastf note add ID0047 "finished final mix"       # inline message
 fastf note add ID0047 -                          # read from stdin
 fastf note add ID0047                            # open $EDITOR
 
-fastf notes ID0047                               # all entries
+fastf notes ID0047                               # every note
 fastf notes ID0047 --since 2026-04-01
 ```
 
-Entries are timestamped lines in the `## Journal` section of the project's `PROJECT_INFO.md`. They are append-only and grow over the project's lifetime. The `## Notes` section above it is free text you own; the app's detail pane edits it in place (Enter on the notes rule, Ctrl-S to save) and rewrites nothing outside it.
+A note is a dated entry in the `## Notes` section of the project's `PROJECT_INFO.md`:
+
+```markdown
+## Notes
+
+- 2026-04-20T14:32:11Z — finished final mix
+- 2026-04-22T09:10:03Z — client made a poem for me
+  oh you who edit my videos
+  road is long
+```
+
+One line, and as many under it as the note has, indented by two spaces — so a
+note read from stdin or saved in your editor keeps every line, and a line in it
+that happens to start with `##` or `- ` cannot end the section or start another
+note. Notes are appended in order; the app's detail pane is where one is
+edited or removed, and the file is yours to edit too.
+
+**The reader is lenient.** Under the heading, a line at the left margin that
+starts with `- ` and a date — `- 2026-04-20 called the client`, with or without
+the `—` — starts a note, and every line until the next one belongs to it;
+whatever you typed above the first entry is shown as one undated note. The
+heading itself is matched in any case, with or without a trailing colon
+(`## notes:`), but a heading is a `##` line: `###` neither starts nor ends a
+section. A project written before v3.6.0 has its notes under `## Journal`;
+that section keeps them, new notes go under it, and nothing in the file moves.
+Todos live under a `## Todo` heading as `- [ ] text` and `- [x] text`, in any
+indent; the app's pane lists and toggles them.
+
+`--since` takes a date fastf writes — `2026-04-01`, or a prefix like `2026-04`
+— and is refused otherwise, for the reason `recent --since` is: the comparison
+is on the text, so `2026-4-1` would silently hide the whole year. An undated
+note has no day to compare and is left out of a `--since` listing.
 
 With no message, the editor (`config.editor`, else `$EDITOR`, else Notepad on
 Windows and `nano` elsewhere) opens on a scratch file, started in the project's
-folder; save, close it, and what you wrote is appended. Lines starting with `#`
-are dropped, and an empty note writes nothing.
+folder; save, close it, and what you wrote is appended as one note. Lines
+starting with `#` are dropped, and an empty note writes nothing.
 
 ## Registering existing folders
 

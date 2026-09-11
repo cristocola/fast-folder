@@ -46,7 +46,7 @@ More templates for specific kinds of work live in the [`examples/templates/`](ex
 - **Keeps the filesystem as the single source of truth.** A folder is a project because it contains a `PROJECT_INFO.md` file. Move it with your file manager, rename it, or copy it to another drive, and it stays the same project; `fastf reindex` picks up whatever you did outside the app. Delete the folder and the project goes with it.
 - **Adopts folders you already have.** `fastf register` writes the metadata into work that came from somewhere else, one folder at a time or a whole directory at once. `fastf apply` adds a template's missing folders and files to a folder that already exists.
 - **Reads a template out of a finished project.** `fastf template from-folder` looks at a project you are happy with and writes the template that would produce it.
-- **Keeps a record of each project.** Tags group projects across templates and bases, and every project has a timestamped journal for the notes that belong with the work.
+- **Keeps a record of each project.** Tags group projects across templates and bases, and every project has dated notes for the things that belong with the work.
 - **Runs your own steps after creating a project.** It can open the new folder, start your editor, initialize a git repository, or run any command you give it.
 - **Works on Linux and Windows.** Templates use `/` on every platform. Paths are checked before anything is written, so a template can only ever produce files inside the project it belongs to.
 
@@ -160,7 +160,7 @@ Portable mode keeps everything in one folder. To use it, put an empty `config.to
 
 | Guide | Contents |
 |---|---|
-| [docs/cli.md](docs/cli.md) | Full command reference and recipes: create, search, tags, journal, register, move, copy, config |
+| [docs/cli.md](docs/cli.md) | Full command reference and recipes: create, search, tags, notes, register, move, copy, config |
 | [docs/templates.md](docs/templates.md) | Template authoring: `template.yaml`, variables, transforms, tokens, bundled assets |
 | [docs/projects.md](docs/projects.md) | The project model: `PROJECT_INFO.md`, discovery, bases, safe moves, copies, crash recovery |
 | [docs/windows.md](docs/windows.md) | Windows install, PATH setup, data locations |

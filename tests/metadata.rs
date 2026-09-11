@@ -1,4 +1,4 @@
-//! Tags, `PROJECT_INFO.md` frontmatter, and the journal.
+//! Tags, `PROJECT_INFO.md` frontmatter, the notes and the todos.
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -185,8 +185,9 @@ fn write_frontmatter_errors_on_missing_frontmatter() {
     );
 }
 
-/// append_journal_entry creates the section when it doesn't exist and appends
-/// additional entries chronologically.
+/// A note lands under `## Notes` — the section every new file has — and the
+/// next one after it. No `## Journal` is ever opened: that heading is read,
+/// and appended to, only where a file written before v3.6.0 already has it.
 #[test]
 fn append_journal_entry_creates_and_appends() {
     sandboxed(|install| {
@@ -205,26 +206,30 @@ fn append_journal_entry_creates_and_appends() {
         project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
 
         let pinfo = project_info::pinfo_path(&plan.root_path);
+        let fresh = fs::read_to_string(&pinfo).unwrap();
+        assert!(fresh.ends_with("## Notes\n\n"), "{fresh:?}");
 
-        // No journal section yet.
-        let content = fs::read_to_string(&pinfo).unwrap();
-        assert!(
-            !content.contains("## Journal"),
-            "no journal before first append"
-        );
-
-        // First entry — should create the section.
         project_info::append_journal_entry(&pinfo, "first note").unwrap();
         let after_first = fs::read_to_string(&pinfo).unwrap();
-        assert!(after_first.contains("## Journal"));
-        assert!(after_first.contains("first note"));
+        assert!(
+            after_first.starts_with(&fresh),
+            "every byte before the note stays"
+        );
+        assert!(after_first.contains("## Notes\n\n- "), "{after_first:?}");
+        assert!(after_first.ends_with(" — first note\n"), "{after_first:?}");
+        assert!(!after_first.contains("## Journal"));
 
-        // Second entry — appended after first.
         project_info::append_journal_entry(&pinfo, "second note").unwrap();
         let after_second = fs::read_to_string(&pinfo).unwrap();
-        assert!(after_second.contains("first note"));
-        assert!(after_second.contains("second note"));
-        // Chronological: first appears before second.
+        assert!(after_second.starts_with(&after_first));
+        assert!(
+            after_second.contains(" — first note\n- "),
+            "{after_second:?}"
+        );
+        assert!(
+            after_second.ends_with(" — second note\n"),
+            "{after_second:?}"
+        );
         let pos_first = after_second.find("first note").unwrap();
         let pos_second = after_second.find("second note").unwrap();
         assert!(pos_first < pos_second, "entries should be chronological");
@@ -252,12 +257,20 @@ fn journal_entries_round_trip() {
         let pinfo = project_info::pinfo_path(&plan.root_path);
 
         project_info::append_journal_entry(&pinfo, "alpha").unwrap();
-        project_info::append_journal_entry(&pinfo, "beta").unwrap();
+        project_info::append_journal_entry(&pinfo, "beta\nwith a second line\n\nand a third")
+            .unwrap();
 
         let entries = project_info::read_journal_entries(&plan.root_path).unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].message, "alpha");
-        assert_eq!(entries[1].message, "beta");
+        assert_eq!(entries[0].text, "alpha");
+        assert_eq!(entries[1].text, "beta\nwith a second line\n\nand a third");
+        assert!(
+            entries.iter().all(|note| note
+                .timestamp
+                .as_deref()
+                .is_some_and(|ts| ts.ends_with('Z'))),
+            "every note fastf writes is dated: {entries:?}"
+        );
     });
 }
 
@@ -269,7 +282,8 @@ fn journal_entries_round_trip() {
 /// at. `append_journal_entry` wrote at the end of the *file*;
 /// `read_journal_entries` stopped at the next `##`. So the write succeeded, the
 /// CLI printed the entry it had just saved, and it was never seen again. Both
-/// now go through one `journal_span`.
+/// now go through one `body::notes_span` — and for a file written before
+/// v3.6.0 that span is its `## Journal`, so the file keeps its shape.
 #[test]
 fn a_note_after_a_heading_the_user_added_is_still_readable() {
     sandboxed(|install| {
@@ -298,19 +312,32 @@ fn a_note_after_a_heading_the_user_added_is_still_readable() {
         project_info::append_journal_entry(&pinfo, "after").unwrap();
 
         let entries = project_info::read_journal_entries(&plan.root_path).unwrap();
-        let messages: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
+        let messages: Vec<&str> = entries.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(
             messages,
             ["before", "after"],
             "a note fastf says it wrote must be a note fastf can read back"
         );
 
-        // And the user's own section is still there, still below the journal.
+        // And the user's own section is still there, still below the notes.
         let after = fs::read_to_string(&pinfo).unwrap();
         assert!(after.contains("things I want to keep"));
         assert!(
             after.find("after").unwrap() < after.find("## Archive").unwrap(),
-            "the entry belongs in the journal section, not after somebody else's"
+            "the entry belongs in the notes section, not after somebody else's"
+        );
+
+        // A file written before v3.6.0: its `## Journal` keeps the notes, and
+        // the new line is the only change.
+        let legacy = after.replace("## Notes\n\n- ", "## Notes\n\n## Journal\n\n- ");
+        fs::write(&pinfo, &legacy).unwrap();
+        project_info::append_journal_entry(&pinfo, "later").unwrap();
+        let entries = project_info::read_journal_entries(&plan.root_path).unwrap();
+        let ts = entries[2].timestamp.clone().unwrap();
+        assert_eq!(
+            fs::read_to_string(&pinfo).unwrap(),
+            legacy.replace("— after\n", &format!("— after\n- {ts} — later\n")),
+            "one line added under the journal, nothing else moved"
         );
     });
 }
@@ -402,7 +429,8 @@ variables:
 }
 
 // ---------------------------------------------------------------------------
-// The pane's edits: set_variable, replace_tag, set_notes — and the tag rule
+// The pane's edits: set_variable, replace_tag, set_notes, replace_note, the
+// todos — and the tag rule
 // ---------------------------------------------------------------------------
 
 mod pane_edits {
@@ -599,30 +627,32 @@ tag_from: ["tier"]
         });
     }
 
-    /// The notes section is rewritten in place and everything around it stays
-    /// byte for byte — the journal underneath included.
+    /// The undated text of the notes section is rewritten in place and
+    /// everything around it stays byte for byte — the dated notes under it
+    /// included.
     #[test]
-    fn set_notes_replaces_the_section_and_keeps_every_other_byte() {
+    fn set_notes_replaces_the_preamble_and_keeps_every_other_byte() {
         sandboxed(|install| {
             let (_cfg, project) = planted(install);
             operations::append_note(&project, "began").unwrap();
             let before = file(&project);
-            assert!(before.contains("## Notes\n\n## Journal\n"), "{before}");
+            assert!(before.contains("## Notes\n\n- "), "{before}");
 
             operations::set_notes(&project, "first cut due Friday\nthen colour").unwrap();
             let after = file(&project);
             assert_eq!(
                 after,
                 before.replace(
-                    "## Notes\n\n## Journal\n",
-                    "## Notes\n\nfirst cut due Friday\nthen colour\n\n## Journal\n"
+                    "## Notes\n\n- ",
+                    "## Notes\n\nfirst cut due Friday\nthen colour\n\n- "
                 ),
                 "the notes and only the notes"
             );
-            assert_eq!(
-                project_info::notes_body(&after),
-                Some("first cut due Friday\nthen colour")
-            );
+            let notes = project_info::read_journal_entries(&project.path).unwrap();
+            assert_eq!(notes.len(), 2);
+            assert_eq!(notes[0].timestamp, None);
+            assert_eq!(notes[0].text, "first cut due Friday\nthen colour");
+            assert_eq!(notes[1].text, "began");
 
             operations::set_notes(&project, "").unwrap();
             assert_eq!(
@@ -633,10 +663,10 @@ tag_from: ["tier"]
         });
     }
 
-    /// Notes at the end of the file — no journal yet — keep the blank line a
-    /// fresh file has, so the first journal entry lands under one.
+    /// Notes at the end of the file — no entry yet — keep the blank line a
+    /// fresh file has, so the first entry lands under one.
     #[test]
-    fn set_notes_at_the_end_of_the_file_keeps_the_shape_a_journal_expects() {
+    fn set_notes_at_the_end_of_the_file_keeps_the_shape_a_note_expects() {
         sandboxed(|install| {
             let (_cfg, project) = planted(install);
             let before = file(&project);
@@ -645,41 +675,49 @@ tag_from: ["tier"]
             assert!(file(&project).ends_with("## Notes\n\nremember the invoice\n\n"));
             operations::append_note(&project, "sent").unwrap();
             assert!(
-                file(&project).contains("remember the invoice\n\n## Journal\n\n- "),
+                file(&project).contains("remember the invoice\n\n- "),
                 "{}",
                 file(&project)
             );
             operations::set_notes(&project, "").unwrap();
             assert!(
-                file(&project).contains("## Notes\n\n## Journal\n\n- "),
+                file(&project).contains("## Notes\n\n- "),
                 "{}",
                 file(&project)
             );
         });
     }
 
-    /// A file that lost its notes section gets one back where it belongs.
+    /// A file written before v3.6.0 that lost its notes section gets one back
+    /// where it belongs: before the journal, which keeps holding the entries.
     #[test]
     fn set_notes_creates_the_section_before_the_journal() {
         sandboxed(|install| {
             let (_cfg, project) = planted(install);
             operations::append_note(&project, "began").unwrap();
             let pinfo = project_info::pinfo_path(&project.path);
-            let without = file(&project).replace("## Notes\n\n", "");
-            fs::write(&pinfo, &without).unwrap();
-            assert_eq!(project_info::notes_body(&without), None);
-            operations::set_notes(&project, "back").unwrap();
-            let after = file(&project);
-            assert!(
-                after.contains("## Notes\n\nback\n\n## Journal\n\n- "),
-                "{after}"
-            );
+            let legacy = file(&project).replace("## Notes\n\n- ", "## Journal\n\n- ");
+            fs::write(&pinfo, &legacy).unwrap();
             assert_eq!(
                 project_info::read_journal_entries(&project.path)
                     .unwrap()
                     .len(),
                 1
             );
+            operations::set_notes(&project, "back").unwrap();
+            let after = file(&project);
+            assert_eq!(
+                after,
+                legacy.replace("## Journal\n\n- ", "## Notes\n\nback\n\n## Journal\n\n- "),
+                "{after}"
+            );
+            let notes = project_info::read_journal_entries(&project.path).unwrap();
+            assert_eq!(notes.len(), 2);
+            assert_eq!(
+                (notes[0].timestamp.as_deref(), notes[0].text.as_str()),
+                (None, "back")
+            );
+            assert_eq!(notes[1].text, "began");
         });
     }
 
@@ -699,6 +737,124 @@ tag_from: ["tier"]
             );
             assert_eq!(file(&project), before);
             operations::set_notes(&project, "# a title is fine\n- and a list").unwrap();
+        });
+    }
+
+    /// A note is one thing however many lines it has: written as one, read
+    /// back as one, rewritten over its own lines and nothing else — and
+    /// refused, untouched, when it is no longer the note the caller read.
+    #[test]
+    fn replace_note_rewrites_one_note_and_keeps_every_other_byte() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            operations::append_note(&project, "began").unwrap();
+            operations::append_note(
+                &project,
+                "Timeline v02 has a render problem when h264\nrender with quicktime",
+            )
+            .unwrap();
+            operations::append_note(
+                &project,
+                "client made a poem for me\n\noh you who edit my videos\nroad is long",
+            )
+            .unwrap();
+            let notes = project_info::read_journal_entries(&project.path).unwrap();
+            let texts: Vec<&str> = notes.iter().map(|n| n.text.as_str()).collect();
+            assert_eq!(
+                texts,
+                [
+                    "began",
+                    "Timeline v02 has a render problem when h264\nrender with quicktime",
+                    "client made a poem for me\n\noh you who edit my videos\nroad is long",
+                ]
+            );
+            let before = file(&project);
+
+            operations::replace_note(&project, 1, &notes[1].text, "Timeline v02 renders fine now")
+                .unwrap();
+            let after = file(&project);
+            assert_eq!(
+                after,
+                before.replace(
+                    " — Timeline v02 has a render problem when h264\n  render with quicktime\n",
+                    " — Timeline v02 renders fine now\n"
+                ),
+                "one note rewritten, every other byte kept"
+            );
+
+            // A stale expectation is refused and writes nothing.
+            let err = operations::replace_note(&project, 1, &notes[1].text, "again")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("changed meanwhile"), "{err}");
+            assert_eq!(file(&project), after);
+
+            // Empty text takes the note out.
+            operations::replace_note(&project, 0, "began", "").unwrap();
+            let notes = project_info::read_journal_entries(&project.path).unwrap();
+            assert_eq!(notes.len(), 2);
+            assert_eq!(notes[0].text, "Timeline v02 renders fine now");
+            assert!(
+                file(&project).contains("## Notes\n\n- "),
+                "{}",
+                file(&project)
+            );
+        });
+    }
+
+    /// A todo is added at the end of `## Todo` — opened after the notes when
+    /// there is none — and toggled by the one character in its brackets.
+    #[test]
+    fn a_todo_is_added_and_toggled_under_the_lock() {
+        sandboxed(|install| {
+            let (_cfg, project) = planted(install);
+            operations::append_note(&project, "began").unwrap();
+            let before = file(&project);
+            operations::add_todo(&project, "ingested the videos").unwrap();
+            operations::add_todo(&project, "delivered the video").unwrap();
+            let after = file(&project);
+            assert_eq!(
+                after,
+                format!(
+                    "{before}\n## Todo\n\n- [ ] ingested the videos\n- [ ] delivered the video\n"
+                )
+            );
+            let todos = fastf::core::body::read_todos(&project.path).unwrap();
+            assert_eq!(
+                todos
+                    .iter()
+                    .map(|t| (t.done, t.text.as_str()))
+                    .collect::<Vec<_>>(),
+                [
+                    (false, "ingested the videos"),
+                    (false, "delivered the video")
+                ]
+            );
+
+            assert!(operations::toggle_todo(&project, 0, "ingested the videos").unwrap());
+            assert_eq!(
+                file(&project),
+                after.replace("- [ ] ingested", "- [x] ingested"),
+                "one byte"
+            );
+            assert!(!operations::toggle_todo(&project, 0, "ingested the videos").unwrap());
+            assert_eq!(file(&project), after);
+
+            let err = operations::toggle_todo(&project, 0, "something else")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("changed meanwhile"), "{err}");
+            for bad in ["", "   ", "two\nlines"] {
+                assert!(operations::add_todo(&project, bad).is_err(), "{bad:?}");
+            }
+            assert_eq!(file(&project), after);
+            // The notes are untouched by any of it.
+            assert_eq!(
+                project_info::read_journal_entries(&project.path)
+                    .unwrap()
+                    .len(),
+                1
+            );
         });
     }
 

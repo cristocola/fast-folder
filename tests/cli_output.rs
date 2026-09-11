@@ -54,6 +54,85 @@ fn notes_survives_a_hand_edited_journal_timestamp() {
     assert!(out.status.success(), "fastf notes failed: {out:?}");
 }
 
+/// **A note is read as far as it can be, whatever shape it was typed in.**
+///
+/// The reader used to keep only a `- <ts> — <text>` line, so a note with a
+/// second line lost it, a date typed without the separator was not a note,
+/// and `fastf notes` said nothing about either. Every line under the heading
+/// belongs to the note above it now, and a line starting with a date starts
+/// one.
+#[test]
+fn notes_reads_a_hand_written_note_and_every_line_under_it() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let pinfo = dir.join("PROJECT_INFO.md");
+    // Under the heading the planted file already has — typed the way a
+    // person types, not the way fastf writes.
+    let mut text = fs::read_to_string(&pinfo).unwrap();
+    assert!(text.ends_with("## Notes\n"), "{text:?}");
+    text.push_str(
+        "\nfree text above the first entry\n\n\
+         - 2026-05-01 Should probably call the client again.\n\
+         - 2026-05-02T10:00:00Z — Timeline v02 has a render problem\n\
+         render with quicktime\n",
+    );
+    fs::write(&pinfo, text).unwrap();
+
+    let out = sb.ok(&["notes", "ID0001"]);
+    for line in [
+        "free text above the first entry",
+        "2026-05-01  Should probably call the client again.",
+        "2026-05-02  Timeline v02 has a render problem",
+        "render with quicktime",
+        "3 notes",
+    ] {
+        assert!(out.contains(line), "missing {line:?} in:\n{out}");
+    }
+    // `--since` compares the day, and leaves the undated note out.
+    let out = sb.ok(&["notes", "ID0001", "--since", "2026-05-02"]);
+    assert!(
+        out.contains("render problem") && !out.contains("free text"),
+        "{out}"
+    );
+    assert!(out.contains("1 note\n"), "{out}");
+}
+
+/// **A multi-line note round-trips through `note add` and `notes`.** Lines
+/// 2+ used to land in the file with no prefix and were dropped on the way
+/// back, so a note read from stdin or an editor kept only its first line.
+#[test]
+fn a_multi_line_note_round_trips() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let mut child = sb
+        .spawn_with_stdin(&["note", "add", "ID0001", "-"])
+        .expect("spawn note add");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin
+            .write_all(b"client made a poem for me\n\noh you who edit my videos\nroad is long\n")
+            .unwrap();
+    }
+    let status = child.wait().unwrap();
+    assert!(status.success(), "note add failed: {status}");
+
+    let file = fs::read_to_string(dir.join("PROJECT_INFO.md")).unwrap();
+    assert!(
+        file.ends_with(
+            " — client made a poem for me\n\n  oh you who edit my videos\n  road is long\n"
+        ),
+        "the note's other lines are indented under its first:\n{file}"
+    );
+    let out = sb.ok(&["notes", "ID0001"]);
+    assert!(out.contains("client made a poem for me"), "{out}");
+    assert!(
+        out.contains("oh you who edit my videos") && out.contains("road is long"),
+        "{out}"
+    );
+    assert!(out.contains("1 note\n"), "{out}");
+}
+
 /// `note add` with no message passed the raw `editor` config field, so the
 /// documented `$EDITOR` fallback never happened: an unconfigured install failed
 /// with `launching editor ''`.

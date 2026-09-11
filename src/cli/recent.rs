@@ -97,6 +97,20 @@ pub fn run(args: RecentArgs) -> Result<()> {
     }
 }
 
+/// Refuse a `--since` that is not a date fastf writes. **The one sentence**,
+/// for `recent` and for `notes`: both compare the value as text against an
+/// ISO-8601 timestamp, so `2026-6-1` sorts after every `2026-0…` and silently
+/// hides the year.
+pub(crate) fn check_since(since: &str) -> Result<()> {
+    if !crate::core::query::looks_like_a_date(since) {
+        anyhow::bail!(
+            "--since needs a date like 2026-01-01, not '{since}'\n\
+             hint: months and days are two digits, and a prefix works too (2026, 2026-05)."
+        );
+    }
+    Ok(())
+}
+
 /// Refuse a filter that can only ever match nothing.
 ///
 /// **"No projects match those filters" is an answer, and it was being given to
@@ -110,13 +124,8 @@ pub fn run(args: RecentArgs) -> Result<()> {
 /// that matches nothing because the library is empty is still a legitimate
 /// empty list — this refuses only what cannot match by construction.
 fn validate_filters(cfg: &Config, args: &RecentArgs) -> Result<()> {
-    if let Some(since) = &args.since
-        && !crate::core::query::looks_like_a_date(since)
-    {
-        anyhow::bail!(
-            "--since needs a date like 2026-01-01, not '{since}'\n\
-             hint: months and days are two digits, and a prefix works too (2026, 2026-05)."
-        );
+    if let Some(since) = &args.since {
+        check_since(since)?;
     }
 
     if let Some(slug) = &args.template {

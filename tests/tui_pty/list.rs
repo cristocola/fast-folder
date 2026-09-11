@@ -459,7 +459,7 @@ fn copy_path_falls_back_to_showing_the_path() {
 }
 
 /// `N` drops out of the terminal and into `$EDITOR`; whatever comes back is
-/// appended to the project's journal.
+/// appended to the project's notes.
 ///
 /// The editor here is a recorder: it logs the scratch file it was handed and
 /// appends a line to it, so the test can prove both halves of the contract —
@@ -510,14 +510,14 @@ fn a_note_added_in_the_editor_is_appended() {
         "an editor note should return to the dashboard:\n{text}"
     );
     assert!(
-        text.contains("Journal entry added"),
+        text.contains("Note added"),
         "the append should be reported:\n{text}"
     );
     assert!(
         fs::read_to_string(root.join("PROJECT_INFO.md"))
             .unwrap()
             .contains("a note from the editor"),
-        "the editor's note should be in the journal"
+        "the editor's note should be in the notes"
     );
     assert!(
         fs::read_to_string(&log).unwrap().contains("fastf-note-"),

@@ -478,7 +478,7 @@ enum Commands {
         plain: bool,
     },
 
-    /// Append a timestamped journal note to a project
+    /// Append a dated note to a project
     #[command(
         name = "note",
         after_help = "Three ways to supply the message:\n  \
@@ -491,7 +491,7 @@ enum Commands {
         action: NoteAction,
     },
 
-    /// Show journal entries for a project
+    /// Show a project's notes
     #[command(
         name = "notes",
         after_help = "Examples:\n  \
@@ -502,7 +502,7 @@ enum Commands {
         /// Project ID, ID prefix, or name substring
         query: String,
 
-        /// Only show entries on or after this date (YYYY-MM-DD or ISO-8601)
+        /// Only show notes on or after this date (YYYY-MM-DD, or a prefix like 2026-05)
         #[arg(long)]
         since: Option<String>,
     },
@@ -664,7 +664,7 @@ enum TagAction {
 
 #[derive(Subcommand)]
 enum NoteAction {
-    /// Add a timestamped journal entry
+    /// Add a dated note — several lines are kept as one note
     Add {
         /// Project ID, ID prefix, or name substring
         query: String,

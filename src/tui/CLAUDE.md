@@ -155,8 +155,10 @@ prints `aborted.` and exits 130 as a signal would. An external SIGINT is seen on
 the idle wake. **`diag` goes through the channel** as `Msg::Diag`, because a
 worker's `eprintln!` would land mid-frame on the alternate screen.
 
-**`session.rs`** keeps five things in `state.toml` beside `config.toml`: the sort,
-whether the pane is open, the selected row's id, `guide_seen` and `explain_open`.
+**`session.rs`** keeps six things in `state.toml` beside `config.toml`: the sort,
+whether the pane is open, the selected row's id, `guide_seen`, `explain_open`,
+and `declined_shell_setup` — the one the app never reads, the shells `fastf cd`
+was told not to set itself up in.
 It is read before the first frame, written after the screen is given back, and
 applied once on the first discovery — a reload is not a restart. `fastf recent`
 and `search` own their order and take only the pane's state.

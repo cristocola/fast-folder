@@ -29,8 +29,8 @@ The data folder holds:
   the projects; see [The ID counter](#the-id-counter).
 - `state.toml` — what the app remembers between runs: the sort order, whether
   the detail pane was open, the row the cursor was on, whether the template
-  guide has been offered, and whether the builder's panel is shown. Delete it
-  to start fresh.
+  guide has been offered, whether the builder's panel is shown, and the shells
+  in which you told `fastf cd` not to set itself up. Delete it to start fresh.
 
 Each base directory carries two files of its own next to the projects:
 `.fastf-index.json`, a disposable cache discovery rebuilds whenever it

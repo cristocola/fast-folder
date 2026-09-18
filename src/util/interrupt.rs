@@ -22,6 +22,21 @@ static INSTALLED: AtomicBool = AtomicBool::new(false);
 /// screen and raw mode, or an inline prompt's rows. A `fn()` stored as its
 /// address, so the handler can load it without a lock.
 static RESTORE: AtomicUsize = AtomicUsize::new(0);
+/// Set while a shell fastf started owns the console. See [`pass_to_child`].
+#[cfg(windows)]
+static PASS_THROUGH: AtomicBool = AtomicBool::new(false);
+
+/// Leave Ctrl-C to a child that shares this console, or take it back.
+///
+/// Windows delivers a console's Ctrl-C to every process attached to it. While
+/// `fastf cd` waits on the shell it started, that Ctrl-C belongs to the shell
+/// — interrupting a command typed there — and a second one must not make fastf
+/// exit underneath it and leave two programs reading one console. Unix `exec`s
+/// the shell instead, so there is nothing to hand over there.
+#[cfg(windows)]
+pub fn pass_to_child(on: bool) {
+    PASS_THROUGH.store(on, Ordering::SeqCst);
+}
 
 /// True once the user has asked us to stop.
 pub fn is_set() -> bool {
@@ -199,6 +214,11 @@ fn install_platform() {
         const CTRL_CLOSE_EVENT: u32 = 2;
         const CTRL_LOGOFF_EVENT: u32 = 5;
         const CTRL_SHUTDOWN_EVENT: u32 = 6;
+        if PASS_THROUGH.load(Ordering::SeqCst)
+            && matches!(ctrl_type, CTRL_C_EVENT | CTRL_BREAK_EVENT)
+        {
+            return 1; // the child's to answer, and it has its own handler
+        }
         match ctrl_type {
             CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT
             | CTRL_SHUTDOWN_EVENT => {

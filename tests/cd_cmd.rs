@@ -308,34 +308,278 @@ fn an_ambiguous_query_asks_from_inside_the_function() {
     assert_eq!(cwd, expected, "Down then Enter is the second row:\n{plain}");
 }
 
-/// Without the function, stdout is the terminal, and a path printed to a
-/// terminal is not a directory changed. The note says so, on stderr, and
-/// names the setup line for the shell `$SHELL` says the user is in.
+/// bash under a pty with no startup file of its own, running `fastf cd`
+/// without the function: the unhooked case every new user meets. `keys` answer
+/// the offer and then type into the shell fastf opens, and must end it.
 #[cfg(unix)]
-#[test]
-fn without_the_function_a_terminal_gets_the_path_and_the_note() {
-    let (sb, dir) = library();
-    let keys = common::pty::Script::new().build();
+fn unhooked_bash(sb: &Sandbox, keys: common::pty::Script) -> String {
+    let path = path_with_fastf();
+    let script = "fastf cd alpha; echo \"AFTER=$(pwd)\"";
     let (out, code) = common::pty::run(
-        common::FASTF,
-        &["cd", "alpha"],
+        "/bin/bash",
+        &["--noprofile", "--norc", "-c", script],
         &[
             ("FASTF_INSTALL_DIR", sb.install.as_path()),
             ("HOME", sb.tmp.path()),
-            ("SHELL", std::path::Path::new("/usr/bin/zsh")),
+            ("PATH", std::path::Path::new(&path)),
+            ("PS1", std::path::Path::new("$ ")),
         ],
-        &keys,
-        std::time::Duration::from_secs(15),
+        &keys.build(),
+        std::time::Duration::from_secs(25),
     );
     assert_eq!(code, 0, "{out}");
-    let plain = common::pty::plain(&out);
-    assert!(
-        plain.contains(&shown_path(&dir)),
-        "the path is still the answer:\n{plain}"
+    common::pty::plain(&out)
+}
+
+/// The line the shell fastf opened printed about where it is.
+#[cfg(unix)]
+fn marker<'a>(plain: &'a str, prefix: &str) -> &'a str {
+    plain
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(prefix))
+        .unwrap_or_else(|| panic!("no {prefix} line:\n{plain}"))
+}
+
+/// **Nobody edits a file.** In a shell without the function, `fastf cd`
+/// offers to add it; `y` writes the guarded line into `~/.bashrc` and opens a
+/// new bash *in the project* — which has read that line, so it can move — and
+/// `exit` returns to the shell it was typed into, which never moved.
+#[cfg(unix)]
+#[test]
+fn without_the_function_fastf_cd_offers_it_and_opens_a_shell_there() {
+    let (sb, dir) = library();
+    let keys = common::pty::Script::new()
+        .pause(1200)
+        .key("y")
+        .pause(1500)
+        .line("echo \"CWD=$(pwd) KIND=$(type -t fastf)\"; exit");
+    let plain = unhooked_bash(&sb, keys);
+    assert!(plain.contains("Add it to"), "the offer was made:\n{plain}");
+    let rc = std::fs::read_to_string(sb.tmp.path().join(".bashrc")).expect("~/.bashrc written");
+    assert!(rc.contains("eval \"$(fastf init bash)\""), "{rc}");
+    assert!(rc.contains("command -v fastf"), "guarded: {rc}");
+    assert_eq!(
+        marker(&plain, "CWD="),
+        format!("{} KIND=function", shown_path(&dir)),
+        "the new shell is in the project and already has the function:\n{plain}"
     );
-    assert!(plain.contains("printed, not entered"), "{plain}");
+    assert_ne!(
+        marker(&plain, "AFTER="),
+        shown_path(&dir),
+        "the shell `fastf cd` was typed into is where it was:\n{plain}"
+    );
+}
+
+/// `n` is remembered: nothing is written, the new shell opens anyway, and the
+/// next `fastf cd` does not ask again.
+#[cfg(unix)]
+#[test]
+fn a_declined_offer_is_not_made_twice_and_the_shell_still_opens() {
+    let (sb, dir) = library();
+    let keys = common::pty::Script::new()
+        .pause(1200)
+        .key("n")
+        .pause(1500)
+        .line("echo \"CWD=$(pwd)\"; exit");
+    let plain = unhooked_bash(&sb, keys);
+    assert!(plain.contains("Add it to"), "{plain}");
+    assert!(!sb.tmp.path().join(".bashrc").exists(), "no means no file");
+    assert_eq!(marker(&plain, "CWD="), shown_path(&dir), "{plain}");
+    let state = std::fs::read_to_string(sb.install.join("state.toml")).unwrap();
     assert!(
-        plain.contains("fastf init zsh") && plain.contains("~/.zshrc"),
-        "the note names the user's own shell:\n{plain}"
+        state.contains("declined_shell_setup = [\"bash\"]"),
+        "{state}"
+    );
+
+    let keys = common::pty::Script::new()
+        .pause(1500)
+        .line("echo \"CWD=$(pwd)\"; exit");
+    let plain = unhooked_bash(&sb, keys);
+    assert!(!plain.contains("Add it to"), "asked twice:\n{plain}");
+    assert_eq!(marker(&plain, "CWD="), shown_path(&dir), "{plain}");
+}
+
+// ---------------------------------------------------------------------------
+// `fastf init` with no shell: setting up the one it was typed into
+// ---------------------------------------------------------------------------
+
+/// Run `setup` then, in a fresh shell, `check`, both under `shell` in the
+/// sandbox; `None` when the shell is not installed.
+#[cfg(unix)]
+fn set_up_then_check(
+    sb: &Sandbox,
+    shell: &str,
+    setup: (&[&str], &str),
+    check: (&[&str], &str),
+) -> Option<(String, String)> {
+    let first = shell_session(sb, shell, setup.0, setup.1)?;
+    assert!(first.status.success(), "{shell} setup: {first:?}");
+    let second = shell_session(sb, shell, check.0, check.1)?;
+    assert!(second.status.success(), "{shell} check: {second:?}");
+    Some((
+        String::from_utf8_lossy(&first.stdout).into_owned(),
+        String::from_utf8_lossy(&second.stdout).into_owned(),
+    ))
+}
+
+/// bash: the lines land in `~/.bashrc`, a shell that reads it moves, and a
+/// second `fastf init` writes nothing more.
+#[cfg(unix)]
+#[test]
+fn init_with_no_shell_sets_up_bash() {
+    let (sb, dir) = library();
+    let Some((said, moved)) = set_up_then_check(
+        &sb,
+        "bash",
+        (&["--noprofile", "--norc", "-c"], "fastf init; true"),
+        (
+            &["--noprofile", "--norc", "-c"],
+            "source ~/.bashrc; fastf cd alpha; pwd; fastf init",
+        ),
+    ) else {
+        return;
+    };
+    assert!(said.contains(".bashrc"), "{said}");
+    let mut lines = moved.lines();
+    assert_eq!(lines.next(), Some(shown_path(&dir).as_str()), "{moved}");
+    assert!(
+        lines.next().unwrap_or_default().contains("already runs"),
+        "{moved}"
+    );
+    let rc = std::fs::read_to_string(sb.tmp.path().join(".bashrc")).unwrap();
+    assert_eq!(rc.matches("fastf init bash").count(), 1, "{rc}");
+}
+
+/// zsh follows `ZDOTDIR`; fish gets a `conf.d` file of its own, which it reads
+/// without being told.
+#[cfg(unix)]
+#[test]
+fn init_with_no_shell_sets_up_zsh_and_fish_where_they_look() {
+    let (sb, dir) = library();
+    let zdot = sb.tmp.path().join("zdot");
+    std::fs::create_dir_all(&zdot).unwrap();
+    let zsh = {
+        let mut cmd = sb.command_named("zsh");
+        cmd.env("ZDOTDIR", &zdot)
+            .env("PATH", path_with_fastf())
+            .current_dir(sb.tmp.path());
+        cmd
+    };
+    run_pair(
+        zsh,
+        // `; true`: a lone command is exec'd, and fastf's parent would be
+        // this test rather than zsh.
+        &["-f", "-c", "fastf init; true"],
+        &["-f", "-c", "source $ZDOTDIR/.zshrc; fastf cd alpha; pwd"],
+        &shown_path(&dir),
+        "zsh",
+    );
+    assert!(zdot.join(".zshrc").exists(), "zsh reads $ZDOTDIR/.zshrc");
+
+    let xdg = sb.tmp.path().join("xdg");
+    let fish = {
+        let mut cmd = sb.command_named("fish");
+        cmd.env("XDG_CONFIG_HOME", &xdg)
+            .env("PATH", path_with_fastf())
+            .current_dir(sb.tmp.path());
+        cmd
+    };
+    run_pair(
+        fish,
+        &["-c", "fastf init; true"],
+        &["-c", "fastf cd alpha; pwd"],
+        &shown_path(&dir),
+        "fish",
+    );
+}
+
+/// Run `first` then `second` with the environment `base` carries; the last
+/// stdout line of `second` is where the shell ended up. Skips with a word when
+/// the shell is not installed.
+#[cfg(unix)]
+fn run_pair(base: std::process::Command, first: &[&str], second: &[&str], want: &str, name: &str) {
+    let rerun = |args: &[&str]| {
+        let mut cmd = std::process::Command::new(base.get_program());
+        for (key, value) in base.get_envs() {
+            match value {
+                Some(value) => cmd.env(key, value),
+                None => cmd.env_remove(key),
+            };
+        }
+        if let Some(dir) = base.get_current_dir() {
+            cmd.current_dir(dir);
+        }
+        cmd.args(args).stdin(Stdio::null()).output()
+    };
+    let out = match rerun(first) {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping: {name} is not installed");
+            return;
+        }
+        Err(e) => panic!("running {name}: {e}"),
+    };
+    assert!(out.status.success(), "{name} setup: {out:?}");
+    let out = rerun(second).expect("the shell ran once already");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{name}: {out:?}");
+    assert_eq!(stdout.lines().last(), Some(want), "{name}:\n{stdout}");
+}
+
+/// PowerShell is asked where its own profile is, and a new session that loads
+/// it moves. Not on Windows, where `$PROFILE` follows the real Documents
+/// folder whatever the sandbox says — the suite must not write there.
+#[cfg(unix)]
+#[test]
+fn init_with_no_shell_sets_up_powershell_where_it_says_its_profile_is() {
+    let (sb, dir) = library();
+    let xdg = sb.tmp.path().join("xdg");
+    let pwsh = {
+        let mut cmd = sb.command_named("pwsh");
+        cmd.env("XDG_CONFIG_HOME", &xdg)
+            .env("PATH", path_with_fastf())
+            .current_dir(sb.tmp.path());
+        cmd
+    };
+    run_pair(
+        pwsh,
+        &[
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "fastf init",
+        ],
+        &[
+            "-NoLogo",
+            "-NonInteractive",
+            "-Command",
+            "fastf cd alpha; (Get-Location).Path",
+        ],
+        &shown_path(&dir),
+        "pwsh",
+    );
+}
+
+/// `cmd.exe` has no functions to give; `fastf init` typed there says so and
+/// what `fastf cd` does instead. On Windows this is also the proof that the
+/// parent process is read at all.
+#[cfg(windows)]
+#[test]
+fn init_in_cmd_says_what_fastf_cd_does_there_instead() {
+    let sb = Sandbox::new();
+    let out = sb
+        .command_named("cmd.exe")
+        .args(["/d", "/c", "fastf init"])
+        .env("PATH", path_with_fastf())
+        .stdin(Stdio::null())
+        .output()
+        .expect("cmd.exe runs");
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cmd has no shell functions"), "{stderr}");
+    assert!(
+        stderr.contains("opens a new shell in the project"),
+        "{stderr}"
     );
 }

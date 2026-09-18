@@ -8,6 +8,7 @@ pub mod interrupt;
 pub mod lockfile;
 #[cfg(unix)]
 pub mod notify;
+pub mod parent_process;
 pub mod paths;
 #[cfg(unix)]
 pub mod relaunch;

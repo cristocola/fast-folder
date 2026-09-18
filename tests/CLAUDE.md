@@ -57,8 +57,13 @@ What each suite guards — the intent, not the case list:
   the function's half **under real shells** — bash, zsh and fish on unix, `pwsh`
   anywhere — each evaluating `fastf init` and reporting its own `pwd`, skipping
   with a word where a shell is absent; plus the picker inside the capture, on a
-  pty. `Sandbox::command_named` is the same environment for a program that is
-  not fastf.
+  pty. Then the setup nobody does by hand: `fastf cd` in a bash without the
+  function offers it and opens a shell in the project (on a pty, both answers),
+  and `fastf init` with no shell writes each shell's own startup file, which a
+  fresh session of that shell then moves with. **A shell running a lone
+  command `exec`s it**, so fastf's parent would be the test — end every such
+  script with `; true`. `Sandbox::command_named` is the same environment for a
+  program that is not fastf.
 - `layering.rs` — reads the source: `core`/`util` never prompt or print, only
   `tui::runtime` and `tui::inline` take the terminal, no key line is written by
   hand, the env guards stay single, `dialoguer` stays gone. An import is invisible

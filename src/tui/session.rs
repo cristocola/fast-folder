@@ -41,6 +41,11 @@ pub struct Session {
     /// the panel than from the width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explain_open: Option<bool>,
+    /// Shells `fastf cd` offered to set itself up in and was told no, by
+    /// `fastf init` name — so it asks once, not at every run. `fastf init`
+    /// with no shell named removes its shell from the list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declined_shell_setup: Vec<String>,
 }
 
 /// `state.toml` in the data directory.
@@ -139,6 +144,7 @@ mod tests {
             selected: Some("ID0240".to_string()),
             guide_seen: Some(true),
             explain_open: Some(false),
+            declined_shell_setup: vec!["zsh".to_string()],
         };
         let text = toml::to_string(&session).unwrap();
         assert_eq!(Session::parse(&text).unwrap(), session);
@@ -209,6 +215,7 @@ mod tests {
             selected: None,
             guide_seen: None,
             explain_open: Some(true),
+            declined_shell_setup: Vec::new(),
         };
         session.save_to(&path).unwrap();
         assert_eq!(Session::load_from(&path), session);

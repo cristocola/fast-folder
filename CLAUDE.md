@@ -89,16 +89,19 @@ tell you.
   terminal relaunch and `notify-send`), `term_open` (an emulator whose shell
   starts in a project's folder: `fastf term`, "Open terminal here"), `test_env`
   (the one env-mutation guard, test-only), `tree_size`, `size_scan`,
-  `human_bytes`, `clipboard`, `tty` (`require_tty`, `has_display`, the remembered
-  cooked mode a signal handler restores).
+  `human_bytes`, `clipboard`, `parent_process` (which shell fastf was typed
+  into: `/proc` on Linux, a toolhelp snapshot on Windows), `tty` (`require_tty`,
+  `has_display`, the remembered cooked mode a signal handler restores).
 - `src/cli/` — one module per subcommand (`folder_verbs.rs` is `rename`,
   `unregister` and `delete`), plus `render.rs`, the only module that prints a
   plan, a create or an apply; `target.rs` (resolve a query to one project, asking
   when it is ambiguous — shared by `open`/`copy`/`path`/`term`/`cd` and the
   folder verbs); `cd_cmd.rs` + `shell_init.rs` (the two halves of `fastf cd`:
   the binary prints the path, the emitted shell function enters it — nothing
-  else can); `terminal.rs` (the `Config`↔`util::relaunch` seam, since `util` may
-  not read `Config`). `move_project.rs`, `path_cmd.rs` and `paths_cmd.rs` are
+  else can) + `shell_setup.rs` (fastf writing that function's line into the
+  startup file of the shell it was typed into, so nobody edits one by hand);
+  `terminal.rs` (the `Config`↔`util::relaunch` seam, since `util` may not read
+  `Config`). `move_project.rs`, `path_cmd.rs` and `paths_cmd.rs` are
   named around a keyword and `std::path`.
 - `src/tui/` — every interactive terminal surface, all ratatui. The guided app:
   `runtime.rs` (the one owner of the alternate screen, the threads and the loop),

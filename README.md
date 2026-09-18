@@ -68,7 +68,7 @@ fastf search ariana                          # plain text
 fastf search template=music-video tag:draft  # exact filters
 fastf open 47                                # reveal the folder
 cd "$(fastf path api)"                       # the bare path, for a shell
-fastf cd api                                 # or the shell's own cd, after `fastf init`
+fastf cd api                                 # or change this shell's directory
 fastf move ID0047 archive                    # into another base
 fastf copy-to ID0047 /mnt/backup             # onto a backup drive, ID kept
 fastf tag add ID0047 delivered

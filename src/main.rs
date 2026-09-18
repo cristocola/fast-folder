@@ -215,21 +215,18 @@ enum Commands {
         query: String,
     },
 
-    /// Change directory to a project's folder — with the shell function from `fastf init`
+    /// Change this shell's directory to a project's folder
     #[command(
         after_help = "A program cannot change the directory of the shell that ran it, so\n\
-        this verb is two parts: the binary prints the project's path, and a\n\
-        small shell function, printed by `fastf init <shell>`, captures that\n\
-        line and enters it. Without the function, `fastf cd` prints the path\n\
-        and says how to add it.\n\n\
+        `fastf cd` works through a small function in your shell's startup file.\n\
+        The first time you use it in a shell that lacks the function, fastf\n\
+        offers to add it there itself, and meanwhile opens a new shell inside\n\
+        the project — `exit` comes back. Shells that cannot have the function\n\
+        (cmd.exe, a PowerShell whose policy runs no profile) always get the\n\
+        new shell.\n\n\
         An unambiguous query changes directory at once. One that matches\n\
         several projects shows a picker, and no query at all picks from the\n\
-        whole library.\n\n\
-        Setup, once:\n  \
-            eval \"$(fastf init bash)\"                                  # ~/.bashrc\n  \
-            eval \"$(fastf init zsh)\"                                   # ~/.zshrc\n  \
-            fastf init fish | source                                  # ~/.config/fish/config.fish\n  \
-            Invoke-Expression (& fastf init powershell | Out-String)  # $PROFILE\n\n\
+        whole library. Captured — `cd \"$(fastf cd x)\"` — it prints the path.\n\n\
         Examples:\n  \
             fastf cd ID0047\n  \
             fastf cd 47                            # the ID number\n  \
@@ -546,20 +543,24 @@ enum Commands {
         shell: String,
     },
 
-    /// Print the shell function that lets `fastf cd` change directory
+    /// Set up `fastf cd` in this shell, or print its function for a named shell
     #[command(
-        after_help = "Evaluate the output from your shell's startup file, once, and\n\
-        `fastf cd <query>` changes directory from then on. Every other command\n\
-        passes through the function untouched.\n\n\
+        after_help = "With no shell named, fastf adds the function to the startup file of\n\
+        the shell it was typed into — ~/.bashrc, ~/.zshrc, fish's conf.d, or\n\
+        PowerShell's $PROFILE — and new terminals change directory with\n\
+        `fastf cd`. `fastf cd` offers the same the first time it needs it.\n\n\
+        With a shell named, it prints the function, for a startup file you\n\
+        keep yourself. Every other command passes through it untouched.\n\n\
         Examples:\n  \
+            fastf init                                                # set up this shell\n  \
             eval \"$(fastf init bash)\"                                  # ~/.bashrc\n  \
             eval \"$(fastf init zsh)\"                                   # ~/.zshrc\n  \
             fastf init fish | source                                  # ~/.config/fish/config.fish\n  \
             Invoke-Expression (& fastf init powershell | Out-String)  # $PROFILE"
     )]
     Init {
-        /// Target shell: bash, zsh, fish, or powershell
-        shell: String,
+        /// Shell to print the function for: bash, zsh, fish, or powershell; omit to set up this one
+        shell: Option<String>,
     },
 
     /// Show where fastf keeps its data (config, templates, counters) and why
@@ -1150,7 +1151,8 @@ fn run() -> Result<()> {
         }
 
         Some(Commands::Completions { shell }) => generate_completions(&shell),
-        Some(Commands::Init { shell }) => cli::shell_init::run(&shell),
+        Some(Commands::Init { shell: Some(shell) }) => cli::shell_init::run(&shell),
+        Some(Commands::Init { shell: None }) => cli::shell_setup::install_here(),
         Some(Commands::Paths) => cli::paths_cmd::run(),
         Some(Commands::Mangen { dir }) => generate_man_pages(&dir),
     }

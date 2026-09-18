@@ -141,22 +141,26 @@ pub fn open_terminal_at(preference: Option<&str>, dir: &Path) -> Result<()> {
     )
 }
 
-/// Replace this process with the user's shell, started at `dir`.
+/// Replace this process with a shell started at `dir` — `program` when the
+/// caller knows which shell, `$SHELL` otherwise.
 ///
-/// For the window fastf already owns: a relaunch opened it just to show a
-/// picker, and becoming the shell there *is* "open a terminal at the project" —
-/// a second window would strand this one. `$SHELL`, then `/bin/sh` if that
-/// fails to exec. Returns only on failure.
+/// For a terminal fastf may take over: a relaunch opened it just to show a
+/// picker, and becoming the shell there *is* "open a terminal at the project";
+/// or `fastf cd`, typed into a shell that cannot be moved, hands over a new
+/// one already there. `/bin/sh` if the first choice fails to exec. Returns only
+/// on failure.
 ///
 /// The shell is the user's from here on, so it does not inherit the relaunch
 /// marker — see [`open_terminal_at`] for what inheriting it costs.
 #[cfg(unix)]
-pub fn exec_shell_at(dir: &Path) -> anyhow::Error {
+pub fn exec_shell_at(program: Option<&std::ffi::OsStr>, dir: &Path) -> anyhow::Error {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let marker = crate::util::relaunch::RELAUNCHED_VAR;
-    let shell = std::env::var_os("SHELL")
+    let shell = program
+        .map(OsString::from)
+        .or_else(|| std::env::var_os("SHELL"))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| OsString::from("/bin/sh"));
     let err = Command::new(&shell)
@@ -171,6 +175,24 @@ pub fn exec_shell_at(dir: &Path) -> anyhow::Error {
         return anyhow::Error::from(err).context("could not start /bin/sh");
     }
     anyhow::Error::from(err).context(format!("could not start {}", shell.to_string_lossy()))
+}
+
+/// Run `program` as a shell in this console, started at `dir`, and return its
+/// exit code once the user leaves it.
+///
+/// Windows has no `exec`: fastf waits, and hands the console's Ctrl-C to the
+/// shell for as long as it runs.
+#[cfg(windows)]
+pub fn run_shell_at(program: &std::ffi::OsStr, dir: &Path) -> anyhow::Result<i32> {
+    crate::util::interrupt::pass_to_child(true);
+    let status = std::process::Command::new(program)
+        .current_dir(dir)
+        .status();
+    crate::util::interrupt::pass_to_child(false);
+    let status = status.map_err(|e| {
+        anyhow::Error::from(e).context(format!("could not start {}", program.to_string_lossy()))
+    })?;
+    Ok(status.code().unwrap_or(1))
 }
 
 /// Spawn a terminal at `dir` on Windows: Windows Terminal when it is there, a

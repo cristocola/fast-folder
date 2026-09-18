@@ -45,7 +45,7 @@ pub fn run(query: &str) -> Result<()> {
     // sidesteps the pause a relaunched window takes before closing.
     #[cfg(unix)]
     if crate::cli::terminal::window_is_ours() {
-        return Err(crate::util::term_open::exec_shell_at(&project.path));
+        return Err(crate::util::term_open::exec_shell_at(None, &project.path));
     }
 
     let shown = paths::display_path(&project.path);

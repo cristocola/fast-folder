@@ -96,11 +96,14 @@ exists.
 `fastf term <query>` works here too: it opens Windows Terminal (`wt`) at the
 project's folder when it is installed, and a new `cmd` console there otherwise.
 
-`fastf cd <query>` changes the current PowerShell session's directory once the
-function from `fastf init powershell` is in your `$PROFILE` — see
-[cli.md](cli.md#shell-integration); it works in Windows PowerShell 5.1 and in
-PowerShell 7. It is a PowerShell function, so `cmd.exe` does not get it: there,
-`cd /d` the line `fastf path <query>` prints.
+`fastf cd <query>` changes the current PowerShell session's directory, in
+Windows PowerShell 5.1 and in PowerShell 7. The first time, it offers to add
+the function that does it to your `$PROFILE` — see
+[cli.md](cli.md#shell-integration). That needs an execution policy that runs
+profile scripts, such as `RemoteSigned`; under `Restricted`, which is Windows
+PowerShell 5.1's default on a desktop, and in `cmd.exe`, which has no
+functions, `fastf cd` opens a new shell of the same kind inside the project
+instead, and `exit` comes back.
 
 ## The guided app in the old console
 

@@ -15,7 +15,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf copy <query>` | Put a project's folder path on the clipboard |
 | `fastf path <query>` | Print a project's folder path, and nothing else |
 | `fastf term <query>` | Open a terminal window at a project's folder |
-| `fastf cd [query]` | Change this shell's directory to a project's folder — with the function from `fastf init` |
+| `fastf cd [query]` | Change this shell's directory to a project's folder |
 | `fastf search <expr>...` | Search projects by text, field, date, or tag |
 | `fastf register <dir>` | Onboard an existing folder by writing its `PROJECT_INFO.md` |
 | `fastf apply <slug> <dir>` | Add missing template structure to an existing folder |
@@ -34,7 +34,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf id show` / `sync` / `set` | Inspect, synchronize, and raise the [ID counter](config.md#the-id-counter) |
 | `fastf paths` | Show where fastf keeps its data and why |
 | `fastf completions <shell>` | Print shell completions (bash, zsh, fish, PowerShell) |
-| `fastf init <shell>` | Print the shell function that lets `fastf cd` change directory |
+| `fastf init [shell]` | Set up `fastf cd` in this shell, or print its function for a named one |
 
 ## Keys
 
@@ -228,19 +228,31 @@ fastf cd                             # no query at all: pick from every project
 
 `fastf cd` is `cd` with a project query. A program cannot change the working
 directory of the shell that ran it — the directory is the shell's own, and a
-child process only ever holds a copy — so the verb is two parts: the binary
-prints the project's path, exactly as `fastf path` does, and a small function
-inside your shell captures that line and calls the shell's own `cd` on it. The
-function is printed by `fastf init <shell>`, and one line in your shell's
-startup file installs it: see [Shell integration](#shell-integration).
+child process only ever holds a copy — so `fastf cd` works through a small
+function inside your shell: the binary prints the project's path, exactly as
+`fastf path` does, and the function calls the shell's own `cd` on it.
+
+You never add that function yourself. The first time you run `fastf cd` in a
+shell that does not have it, fastf offers to add it:
+
+```
+`fastf cd` moves a shell through a small function in its startup file. fastf can add it for you.
+Add it to ~/.bashrc? [Y/n]
+```
+
+Yes writes two lines to the end of that file, and every terminal you open
+afterwards changes directory with `fastf cd` directly. The terminal you asked
+in started before those lines existed, so fastf opens a new shell of the same
+kind inside the project there and then; `exit` takes you back. No is
+remembered, and `fastf cd` then always opens that new shell instead of asking
+again; `fastf init` sets it up whenever you change your mind. Details, and
+which file each shell uses, are under [Shell integration](#shell-integration).
 
 With the function, an unambiguous query changes directory at once; a query
 that matches several projects shows the picker, which draws on stderr and so
-works from inside the capture; Esc leaves you where you were and says so.
-Without the function, `fastf cd lullaby` prints the path and a note on stderr
-saying how to add it, for the shell `$SHELL` says you are in — the path is
-still an answer, and `cd "$(fastf cd lullaby)"` works exactly as it does with
-`path`.
+works from inside the function; Esc leaves you where you were and says so.
+Captured by something else — `cd "$(fastf cd lullaby)"` — it prints the path,
+exactly as `path` does.
 
 ### Ambiguous queries
 
@@ -563,20 +575,46 @@ Package installs (AUR) ship completions and man pages already wired up.
 
 ## Shell integration
 
-`fastf cd` needs one function in your shell, and `fastf init` prints it. Add
-the line for your shell to its startup file, open a new terminal, and `fastf
-cd` changes directory from then on:
+`fastf cd` needs one function in your shell, and fastf puts it there for you:
+`fastf cd` offers the first time it needs it, and `fastf init` with no
+arguments does it without asking, for the shell you type it into.
+
+| Shell | Where the function goes |
+|---|---|
+| bash | two lines at the end of `~/.bashrc` |
+| zsh | two lines at the end of `$ZDOTDIR/.zshrc` (`~/.zshrc` by default) |
+| fish | its own file, `~/.config/fish/conf.d/fastf.fish` |
+| PowerShell 5.1 and 7 | two lines at the end of `$PROFILE` |
+
+The file fastf writes to is the one belonging to the shell you are actually
+in — fish started from bash is set up as fish — and fastf asks PowerShell
+where its own `$PROFILE` is, so a Documents folder that OneDrive has moved is
+followed. The lines start with a comment that says fastf added them and that
+deleting them undoes it, and they only run when `fastf` is on your `PATH`, so a
+shell keeps starting cleanly after fastf is uninstalled. The file is appended
+to, never replaced, so a startup file that is a symlink into a dotfiles
+repository stays one.
+
+Two kinds of shell cannot have the function: `cmd.exe`, which has no
+functions, and a PowerShell whose execution policy is `Restricted` or
+`AllSigned`, which runs no profile at all — Windows PowerShell 5.1's default
+on a desktop. There, `fastf cd` opens a new shell inside the project every
+time, and `exit` comes back. fastf does not change the execution policy.
+
+To manage the line yourself instead, `fastf init <shell>` prints the function
+and nothing else:
 
 ```bash
 eval "$(fastf init bash)"                                  # ~/.bashrc
 eval "$(fastf init zsh)"                                   # ~/.zshrc
 fastf init fish | source                                   # ~/.config/fish/config.fish
-Invoke-Expression (& fastf init powershell | Out-String)   # $PROFILE — PowerShell 5.1 and 7
+Invoke-Expression (& fastf init powershell | Out-String)   # $PROFILE
 ```
 
+A line like that counts as set up, and fastf does not offer to add another.
 The function is a dozen lines, and `fastf init bash` shows them. It shadows
 `fastf`, intercepts `cd`, and hands every other command to the binary it finds
 on your `PATH`, so the app, the prompts and every other verb behave exactly as
 they do without it — and `fastf cd --help` still prints help rather than trying
-to enter it. `init` prints nothing but the function and never touches fastf's
-data directory, so it costs a new terminal nothing but one short process.
+to enter it. `init` never touches fastf's data directory, so it costs a new
+terminal nothing but one short process.

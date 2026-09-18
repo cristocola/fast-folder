@@ -16,11 +16,12 @@
 //! Anything else on stdout (help text, the "Cancelled" line) is printed as it
 //! would have been, so `fastf cd --help` still helps.
 //!
-//! **The texts are the contract.** They are pasted into `.bashrc`s and read by
-//! people who will never read this file, so they say what they are at the top,
-//! carry no machine-specific path (the binary is found on `PATH`, as the user
-//! found it), and are exercised end to end by `tests/cd_cmd.rs` under every
-//! shell the runner has.
+//! **The texts are the contract.** `cli::shell_setup` writes the line that
+//! evaluates them into startup files, and some people paste it there
+//! themselves; either way they are read by people who will never read this
+//! file, so they say what they are at the top, carry no machine-specific path
+//! (the binary is found on `PATH`, as the user found it), and are exercised end
+//! to end by `tests/cd_cmd.rs` under every shell the runner has.
 
 use anyhow::{Result, bail};
 
@@ -46,17 +47,6 @@ impl Shell {
         }
     }
 
-    /// The shell the user is most likely typing into: `$SHELL`'s basename on
-    /// unix, PowerShell on Windows. A guess for a hint, never a decision.
-    pub fn current() -> Option<Self> {
-        if cfg!(windows) {
-            return Some(Self::PowerShell);
-        }
-        let shell = std::env::var_os("SHELL")?;
-        let name = std::path::Path::new(&shell).file_name()?.to_str()?;
-        Self::from_name(name)
-    }
-
     /// The name `fastf init` is given for this shell.
     pub fn name(self) -> &'static str {
         match self {
@@ -64,20 +54,6 @@ impl Shell {
             Self::Zsh => "zsh",
             Self::Fish => "fish",
             Self::PowerShell => "powershell",
-        }
-    }
-
-    /// The one line to add, and the file it goes in — what the docs and the
-    /// unhooked `fastf cd` both show.
-    pub fn setup(self) -> (&'static str, &'static str) {
-        match self {
-            Self::Bash => (r#"eval "$(fastf init bash)""#, "~/.bashrc"),
-            Self::Zsh => (r#"eval "$(fastf init zsh)""#, "~/.zshrc"),
-            Self::Fish => ("fastf init fish | source", "~/.config/fish/config.fish"),
-            Self::PowerShell => (
-                "Invoke-Expression (& fastf init powershell | Out-String)",
-                "$PROFILE",
-            ),
         }
     }
 
@@ -207,20 +183,6 @@ mod tests {
                 "{}: the passthrough must bypass the function: {script}",
                 shell.name()
             );
-        }
-    }
-
-    /// The setup line names the shell it is for, so the hint an unhooked
-    /// `fastf cd` prints can be pasted as it is.
-    #[test]
-    fn the_setup_line_names_its_shell() {
-        for shell in ALL {
-            let (line, file) = shell.setup();
-            assert!(
-                line.contains(&format!("fastf init {}", shell.name())),
-                "{line}"
-            );
-            assert!(!file.is_empty());
         }
     }
 }

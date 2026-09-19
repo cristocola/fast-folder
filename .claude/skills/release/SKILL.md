@@ -101,7 +101,12 @@ Re-tagging while a release run is going waits for it: the concurrency group
 **One more environment is not covered by CI**: the AUR source package's
 `check()` is `cargo test --frozen --release` inside a makepkg sandbox — no
 display, and `debug_assertions` off, so the failpoints and the tracer are
-compiled out. That is why the release clippy is a gate.
+compiled out. That is why the release clippy is a gate. It runs with the
+release profile's LTO off and 16 codegen units, in `target/check`: fat LTO
+with one codegen unit on two dozen test binaries built eight at a time got
+rustc OOM-killed on an 8-thread machine with 3 GB free, which is a desktop busy
+with other things, and the separate target dir keeps build()'s LTO binary,
+the one package() ships, from being rebuilt over. Keep both when editing it.
 
 ## Local machine safety boundary
 

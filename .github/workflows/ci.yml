@@ -138,6 +138,57 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  # The Linux installer is published by merging it: raw.githubusercontent.com
+  # serves it from `main`, so nothing but this job stands between an edit and
+  # everyone's next install. It runs the working tree's script against the
+  # latest release, in homes that have never seen fastf, with no terminal (so
+  # it never asks about /usr/local). The installs are real downloads; the
+  # question and the sudo path need a terminal, which the maintainer's local
+  # container rig drives.
+  install-script:
+    name: Linux installer
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: shellcheck
+        run: shellcheck -s sh packaging/linux/install.sh
+      - name: install, reinstall, and use it
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A clean environment: a fresh HOME, a PATH without ~/.local/bin.
+          install_into() { env -i HOME="$1" PATH=/usr/bin:/bin "${@:2}" sh packaging/linux/install.sh </dev/null; }
+          fail() { echo "::error::$*"; exit 1; }
+
+          home=$(mktemp -d)
+          first=$(install_into "$home" FASTF_INSTALL=user); echo "$first"
+          second=$(install_into "$home" FASTF_INSTALL=user); echo "$second"
+          line="export PATH=\"$home/.local/bin:\$PATH\""
+
+          "$home/.local/bin/fastf" --version || fail "the installed binary does not run"
+          [ "$(grep -cxF "$line" "$home/.profile")" = 1 ] \
+            || fail "~/.profile should hold the PATH line exactly once after two runs"
+          found=$(env -i HOME="$home" PATH=/usr/bin:/bin bash -lc 'command -v fastf') \
+            && [ "$found" = "$home/.local/bin/fastf" ] || fail "a login shell does not find fastf"
+          grep -qxF "Exec=$home/.local/bin/fastf" "$home/.local/share/applications/fastf.desktop" \
+            || fail "the desktop entry should name the binary by its full path"
+          grep -qF "open a new one and run fastf" <<<"$first" || fail "the first run should say to open a new terminal"
+          ! grep -qiE 'put [^ ]+ on your PATH' <<<"$second" \
+            || fail "a second run must not tell anyone to fix PATH by hand"
+
+          # With nobody to ask, the default is ~/.local, whatever sudo allows.
+          home=$(mktemp -d)
+          install_into "$home" >/dev/null
+          [ -x "$home/.local/bin/fastf" ] || fail "with no terminal, the install should go to ~/.local"
+
+          # Already on PATH: it works at once and no profile is touched.
+          home=$(mktemp -d)
+          out=$(env -i HOME="$home" PATH="$home/.local/bin:/usr/bin:/bin" sh packaging/linux/install.sh </dev/null)
+          echo "$out"
+          grep -qF "Run fastf to start." <<<"$out" || fail "with ~/.local/bin on PATH it should say run fastf"
+          [ ! -s "$home/.profile" ] || fail "with ~/.local/bin on PATH no profile should change"
+
   docs:
     name: docs build clean
     if: github.event_name != 'schedule'

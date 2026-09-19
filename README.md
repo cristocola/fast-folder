@@ -88,9 +88,17 @@ curl -fsSL https://raw.githubusercontent.com/cristocola/fast-folder/main/packagi
 The script downloads the statically linked release archive, checks it against
 the release's own `SHA256SUMS`, and unpacks the binary along with the man
 pages, the completions for bash, zsh and fish, the desktop entry and the icons.
-**It puts `fastf` on your PATH for you.** As root it installs into `/usr/local`,
-which is already on PATH. As anyone else it installs into `~/.local` and adds
-`~/.local/bin` to your shell profile, so the next shell has it.
+
+**It puts `fastf` on your PATH for you.** If you can use `sudo`, it asks once:
+
+- **`/usr/local`**, the default: `fastf` works straight away, in the terminal
+  you ran the script from and in the app menu. `sudo` asks for your password.
+- **`~/.local`**: just for you, no password. It adds `~/.local/bin` to your
+  shell profile, so `fastf` works in every terminal you open after that.
+
+Without `sudo`, or when there is no terminal to ask in, it uses `~/.local`. As
+root, and whenever `~/.local/bin` is already on your PATH, it installs without
+asking. Running it again updates the copy you already have, wherever that is.
 
 Read it before you run it, as with any script from the internet:
 [`packaging/linux/install.sh`](packaging/linux/install.sh). To read your copy
@@ -102,10 +110,13 @@ less install.sh
 sh install.sh
 ```
 
-`FASTF_VERSION=vX.Y.Z` pins a release and `PREFIX=/opt/fastf` chooses where it
-goes. To remove it later, delete `fastf` from the `bin` directory it went into,
-the `fast-folder` files under `share`, and the two lines the script marked in
-your shell profile.
+`FASTF_INSTALL=system` or `FASTF_INSTALL=user` answers the question in
+advance, `FASTF_VERSION=vX.Y.Z` pins a release, and `PREFIX=/opt/fastf` chooses
+somewhere else entirely. Pass them to the `sh` end of the pipe:
+`curl … | FASTF_INSTALL=user sh`. To remove it later, delete `fastf` from the
+`bin` directory it went into, the `fastf` and `fast-folder` files under
+`share`, and, for a `~/.local` install, the two lines the script marked in your
+shell profile.
 
 ### Arch Linux (AUR)
 

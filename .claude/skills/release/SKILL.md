@@ -101,7 +101,12 @@ Re-tagging while a release run is going waits for it: the concurrency group
 **One more environment is not covered by CI**: the AUR source package's
 `check()` is `cargo test --frozen --release` inside a makepkg sandbox — no
 display, and `debug_assertions` off, so the failpoints and the tracer are
-compiled out. That is why the release clippy is a gate.
+compiled out. That is why the release clippy is a gate. It runs with the
+release profile's LTO off and 16 codegen units, in `target/check`: fat LTO
+with one codegen unit on two dozen test binaries built eight at a time got
+rustc OOM-killed on an 8-thread machine with 3 GB free, which is a desktop busy
+with other things, and the separate target dir keeps build()'s LTO binary,
+the one package() ships, from being rebuilt over. Keep both when editing it.
 
 ## Local machine safety boundary
 
@@ -179,18 +184,32 @@ targeting fastf.exe.
 
 `packaging/linux/install.sh` is how fastf is installed on a distribution
 without a package of its own, and it is the route the README leads with. It
-resolves the latest tag through the GitHub API, downloads the musl archive
-**and** `SHA256SUMS`, verifies one against the other, and unpacks into
-`$PREFIX`: `/usr/local` for root, `~/.local` for everyone else. Keep the
-checksum step; a curl-to-shell installer that skips it is the thing people are
-right to distrust.
+resolves the latest tag from the `github.com/<repo>/releases/latest` redirect
+(the REST API, sixty unauthenticated calls an hour per address, is only the
+fallback), downloads the musl archive **and** `SHA256SUMS`, verifies one against
+the other, and unpacks. Keep the checksum step; a curl-to-shell installer that
+skips it is the thing people are right to distrust.
 
-**It puts the binary on PATH itself** rather than telling the reader to go and
-edit a profile. The line it appends carries a marker comment, so running the
-installer twice finds its own work and leaves the file alone, and deleting two
-lines undoes it. Root needs none of that, which is why root gets `/usr/local`.
+**`fastf` has to work the moment the script ends, in the terminal that ran
+it.** A script piped into `sh` cannot change its parent's PATH, so the only
+destinations that work at once are directories already on it. So:
+`PREFIX` wins; root gets `/usr/local`; an update goes where the last install
+went; `~/.local` when `~/.local/bin` is already on PATH; otherwise, for a user
+who can `sudo` with a terminal to ask on (`/dev/tty`, since stdin is the
+download), one `[Y/n]` whose default is `/usr/local`; with nobody to ask,
+`~/.local`. `FASTF_INSTALL=system|user` answers in advance.
 
-It is fetched from `main`, so a fix to it reaches people without a release.
+A `~/.local` install adds the PATH line to the profiles itself rather than
+telling the reader to go and edit one. The exact line is what it looks for, so a
+second run leaves a profile that has it alone and never tells anyone to fix
+PATH by hand, which the old marker-only check did in the very window where
+`fastf` was still "command not found". The desktop entry is rewritten to name
+the binary by its full path, because a desktop session reads PATH once, at
+login. The `install-script` job in `ci.yml` runs the installer twice and holds
+it to all of this.
+
+It is fetched from `main`, so a fix to it reaches people without a release, and
+merging a change to it *is* publishing it.
 
 ## Packaging-sensitive code
 

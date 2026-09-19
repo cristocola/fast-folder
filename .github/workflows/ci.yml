@@ -143,8 +143,7 @@ jobs:
   # everyone's next install. It runs the working tree's script against the
   # latest release, in homes that have never seen fastf, with no terminal (so
   # it never asks about /usr/local). The installs are real downloads; the
-  # question and the sudo path need a terminal, which the maintainer's local
-  # container rig drives.
+  # question and the sudo path need a terminal, so they are not covered here.
   install-script:
     name: Linux installer
     if: github.event_name != 'schedule'

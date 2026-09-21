@@ -21,4 +21,5 @@ pub mod tag;
 pub mod target;
 pub mod template;
 pub mod term_cmd;
+pub mod todo;
 pub mod terminal;

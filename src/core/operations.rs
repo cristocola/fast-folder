@@ -684,6 +684,12 @@ pub fn toggle_todo(project: &Project, ordinal: usize, expected: &str) -> Result<
 /// Add an open todo, one line, at the end of `## Todo` — opening the
 /// section when there is none (`body::add_todo`).
 pub fn add_todo(project: &Project, text: &str) -> Result<()> {
+    add_todo_in(project, text, None)
+}
+
+/// Add an open todo under a `### phase` label, opening the label and the
+/// section as needed (`body::add_todo_in`). `None` is the plain append.
+pub fn add_todo_in(project: &Project, text: &str, phase: Option<&str>) -> Result<()> {
     if text.contains(['\n', '\r']) {
         bail!("a todo is one line");
     }
@@ -693,7 +699,7 @@ pub fn add_todo(project: &Project, text: &str) -> Result<()> {
     let _mutation_lock = DataLock::acquire()?;
     let config = Config::load()?;
     let project = library::revalidate_project(&config, project)?;
-    body::add_todo(&project_info::pinfo_path(&project.path), text)
+    body::add_todo_in(&project_info::pinfo_path(&project.path), text, phase)
 }
 
 pub fn rename(project: &Project, folder: &str) -> Result<Project> {

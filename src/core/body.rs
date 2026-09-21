@@ -598,6 +598,18 @@ pub fn toggle_todo(path: &Path, ordinal: usize, expected: &str) -> Result<bool> 
 /// Add an open task at the end of `## Todo`, opening the section at the end
 /// of the file when there is none. One line.
 pub fn add_todo(path: &Path, text: &str) -> Result<()> {
+    add_todo_in(path, text, None)
+}
+
+/// Add an open todo under the `### phase` label, creating the label when the
+/// list has none by that name — before an `### Other`, which is where a list
+/// keeps what belongs to no phase, and at the end otherwise. `None` for the
+/// phase is the plain append: the end of the section, whatever labels it has.
+///
+/// Matching a label is as lenient as reading one: the name, trimmed, ignoring
+/// case. A list whose labels repeat takes the task into the last block of that
+/// name, because that is where the eye goes.
+pub fn add_todo_in(path: &Path, text: &str, phase: Option<&str>) -> Result<()> {
     if text.contains(['\n', '\r']) {
         bail!("a todo is one line");
     }
@@ -605,16 +617,75 @@ pub fn add_todo(path: &Path, text: &str) -> Result<()> {
     if text.is_empty() {
         bail!("the todo is empty — nothing written");
     }
+    let phase = phase.map(str::trim).filter(|p| !p.is_empty());
+    if phase.is_some_and(|name| name.contains(['\n', '\r'])) {
+        bail!("a phase is one line");
+    }
     let content = read_document(path, "add a todo")?;
     let line = format!("- [ ] {text}\n");
-    let new_content = match section_span(&content, Section::Todo) {
-        Some(span) => {
+    let new_content = match (section_span(&content, Section::Todo), phase) {
+        (Some(span), Some(name)) => insert_under_phase(&content, &span, name, &line),
+        (Some(span), None) => {
             let has_items = !place_todos(&content).is_empty();
             append_in_section(&content, &span, has_items, &line)
         }
-        None => open_section(&content, TODO_HEADING, &line),
+        (None, Some(name)) => open_section(&content, TODO_HEADING, &format!("### {name}\n{line}")),
+        (None, None) => open_section(&content, TODO_HEADING, &line),
     };
     crate::util::atomic::write(path, new_content.as_bytes())
+}
+
+/// `line`, placed under `phase` inside the todo section at `span`.
+fn insert_under_phase(content: &str, span: &Range<usize>, phase: &str, line: &str) -> String {
+    let wanted = phase.to_lowercase();
+    let mut in_wanted = false;
+    let mut at: Option<usize> = None;
+    let mut other_at: Option<usize> = None;
+    let mut last_task_end: Option<usize> = None;
+    for (range, text) in section_lines(content, span) {
+        if let Some(name) = phase_name(text) {
+            let name = name.to_lowercase();
+            in_wanted = name == wanted;
+            if in_wanted {
+                at = Some(range.end);
+            } else if name == "other" && other_at.is_none() {
+                other_at = Some(range.start);
+            }
+            continue;
+        }
+        if task_line(text).is_some() {
+            last_task_end = Some(range.end);
+            if in_wanted {
+                at = Some(range.end);
+            }
+        }
+    }
+    // A label of that name: the task joins the end of its run.
+    if let Some(at) = at {
+        return splice(content, at..at, &with_newline_before(content, at, line));
+    }
+    // No such label. Open one where a reader would look for it.
+    let block = format!("### {phase}\n{line}");
+    if let Some(start) = other_at {
+        return splice(content, start..start, &format!("{block}\n"));
+    }
+    let at = last_task_end.unwrap_or(span.end).max(span.start);
+    let blank = if content[..at].ends_with("\n\n") { "" } else { "\n" };
+    splice(
+        content,
+        at..at,
+        &with_newline_before(content, at, &format!("{blank}{block}")),
+    )
+}
+
+/// `text`, with the newline the line before it is missing — a section whose
+/// last line the file ended without one.
+fn with_newline_before(content: &str, at: usize, text: &str) -> String {
+    if at == 0 || content[..at].ends_with('\n') {
+        text.to_string()
+    } else {
+        format!("\n{text}")
+    }
 }
 
 #[cfg(test)]
@@ -899,6 +970,71 @@ mod tests {
             "{err}"
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), after);
+    }
+
+    #[test]
+    fn a_todo_joins_the_phase_it_names_or_opens_one_where_a_reader_would_look() {
+        let grouped = doc(concat!(
+            "## Todo\n\n",
+            "- [x] read the order\n\n",
+            "### Setup\n",
+            "- [x] download\n\n",
+            "### Other\n",
+            "- [ ] chase the invoice\n",
+        ));
+
+        // An existing label: the end of its run, not the end of the section.
+        let (_d, path) = file(&grouped);
+        add_todo_in(&path, "copy the audio", Some("setup")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            grouped.replace("- [x] download\n", "- [x] download\n- [ ] copy the audio\n")
+        );
+
+        // A new label goes above `### Other`, which is where a list keeps
+        // what belongs to no phase.
+        let (_d, path) = file(&grouped);
+        add_todo_in(&path, "listen to the song", Some("Creative Plan")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            grouped.replace(
+                "### Other\n",
+                "### Creative Plan\n- [ ] listen to the song\n\n### Other\n"
+            )
+        );
+
+        // With no `### Other`, a new label opens at the end of the section.
+        let plain = doc("## Todo\n\n- [ ] read the order\n\n## Something Else\n\nafter\n");
+        let (_d, path) = file(&plain);
+        add_todo_in(&path, "cut the first minute", Some("Main Edit")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            plain.replace(
+                "- [ ] read the order\n",
+                "- [ ] read the order\n\n### Main Edit\n- [ ] cut the first minute\n"
+            ),
+            "the section after it is untouched"
+        );
+
+        // No section at all: the heading, the label and the task.
+        let bare = doc("## Notes\n\n- 2026-01-01 — a\n");
+        let (_d, path) = file(&bare);
+        add_todo_in(&path, "first", Some("Setup")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("{bare}\n## Todo\n\n### Setup\n- [ ] first\n")
+        );
+
+        // And the phaseless append is what it always was.
+        let (_d, path) = file(&grouped);
+        add_todo_in(&path, "last", None).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            grouped.replace(
+                "- [ ] chase the invoice\n",
+                "- [ ] chase the invoice\n- [ ] last\n"
+            )
+        );
     }
 
     #[test]

@@ -26,6 +26,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf tag add/remove/list/reauto` | Manage project tags |
 | `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
 | `fastf notes <id>` | Show a project's notes |
+| `fastf todo list/add/done <id>` | A project's task list |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
 | `fastf reconcile` | Recover scoped v2 work and report obsolete pre-v2 markers |
@@ -333,8 +334,6 @@ heading itself is matched in any case, with or without a trailing colon
 (`## notes:`), but a heading is a `##` line: `###` neither starts nor ends a
 section. A project whose notes are under a `## Journal` heading keeps them
 there; new notes go under it, and nothing in the file moves.
-Todos live under a `## Todo` heading as `- [ ] text` and `- [x] text`, in any
-indent; the app's pane lists and toggles them.
 
 `--since` takes a date fastf writes — `2026-04-01`, or a prefix like `2026-04`
 — and is refused otherwise, for the reason `recent --since` is: the comparison
@@ -499,6 +498,49 @@ migrates, resumes, rolls back, or deletes through them. It also never sweeps
 files merely because their names end in `.tmp` or `.part`. Inspect source and
 destination manually and remove an obsolete marker only after deciding which
 copy is authoritative.
+
+## Todos
+
+```bash
+fastf todo list ID0047                            # the list, numbered
+fastf todo list ID0047 --open                     # only what is left
+fastf todo add ID0047 "colour grade"              # at the end
+fastf todo add ID0047 "cut" --phase "Main Edit"   # under a phase label
+fastf todo done ID0047 3                          # tick number 3
+fastf todo done ID0047 3 --undo                   # untick it again
+```
+
+Todos live under a `## Todo` heading in the project's `PROJECT_INFO.md`, as
+`- [ ] text` and `- [x] text`, in any indent. The app's detail pane shows the
+same list and toggles it with Enter.
+
+A `###` line inside the section is a **phase**: every task under it belongs to
+it, until the next one.
+
+```markdown
+## Todo
+
+- [x] read the order
+
+### Main Edit
+- [ ] cut the first minute
+- [ ] colour grade
+
+### Other
+```
+
+Write phases when a list grows long enough to want them and leave them out when
+it does not — a list with none behaves exactly as it always did. `--phase` adds
+a task to the end of that label's run, matching the name whatever its case, and
+opens the label when the list has none by that name: above an `### Other` if
+there is one, since that is where a list keeps what belongs to no phase, and at
+the end otherwise.
+
+**The numbers are the ones `list` prints**, counted from one over the tasks
+alone, so a label takes no number and adding a phase renumbers nothing. `done`
+reads the list first and refuses if that task's text changed meanwhile, rather
+than ticking the wrong line; ticking what is already ticked says so and writes
+nothing.
 
 ## Templates
 

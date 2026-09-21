@@ -1488,3 +1488,59 @@ fn template_show_lists_only_assets_that_are_really_copied() {
         "nor an excluded one:\n{shown}"
     );
 }
+
+/// `fastf todo` is the command line's half of the pane: the list numbered over
+/// the tasks alone, a task added under the phase it names, and a tick that
+/// refuses a number the list does not have.
+#[test]
+fn todo_lists_adds_under_a_phase_and_ticks_by_number() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let pinfo = dir.join("PROJECT_INFO.md");
+
+    // An empty list says how to start one.
+    let empty = sb.ok(&["todo", "list", "ID0001"]);
+    assert!(empty.contains("no todos yet"), "{empty}");
+
+    sb.ok(&["todo", "add", "ID0001", "read the order"]);
+    sb.ok(&["todo", "add", "ID0001", "download the files", "--phase", "Setup"]);
+    sb.ok(&["todo", "add", "ID0001", "copy the audio", "--phase", "setup"]);
+    let body = fs::read_to_string(&pinfo).unwrap();
+    assert!(
+        body.contains("### Setup\n- [ ] download the files\n- [ ] copy the audio\n"),
+        "a label matches whatever its case, and the task joins the end of its run:\n{body}"
+    );
+
+    // The numbers count tasks, so the label between them takes none.
+    let listed = sb.ok(&["todo", "list", "ID0001"]);
+    assert!(listed.contains("1.") && listed.contains("3."), "{listed}");
+    assert!(listed.contains("Setup"), "the label is shown:\n{listed}");
+    assert!(listed.contains("0/3 done"), "{listed}");
+
+    let ticked = sb.ok(&["todo", "done", "ID0001", "2"]);
+    assert!(ticked.contains("download the files"), "{ticked}");
+    assert!(
+        fs::read_to_string(&pinfo)
+            .unwrap()
+            .contains("- [x] download the files"),
+        "the one byte changed"
+    );
+    // Twice is not an error, and undo puts it back.
+    assert!(sb.ok(&["todo", "done", "ID0001", "2"]).contains("already done"));
+    assert!(sb.ok(&["todo", "done", "ID0001", "2", "--undo"]).contains("Reopened"));
+    assert!(
+        fs::read_to_string(&pinfo)
+            .unwrap()
+            .contains("- [ ] download the files")
+    );
+
+    // Only the open ones, when that is what you want.
+    sb.ok(&["todo", "done", "ID0001", "1"]);
+    let open = sb.ok(&["todo", "list", "ID0001", "--open"]);
+    assert!(!open.contains("read the order"), "{open}");
+
+    let err = sb.fails(&["todo", "done", "ID0001", "9"]);
+    assert!(err.contains("3 todos") && err.contains("todo list"), "{err}");
+    let err = sb.fails(&["todo", "add", "ID0001", "  "]);
+    assert!(err.contains("empty"), "{err}");
+}

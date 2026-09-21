@@ -491,6 +491,16 @@ enum Commands {
         action: NoteAction,
     },
 
+    /// A project's task list
+    #[command(
+        name = "todo",
+        after_help = "The numbers are the ones `list` prints, counted from one over the\n            tasks alone — a `###` phase label is not a task and takes no number.\n\n            Examples:\n              fastf todo list ID0047\n              fastf todo add ID0047 \"colour grade\"\n              fastf todo add ID0047 \"cut the first minute\" --phase \"Main Edit\"\n              fastf todo done ID0047 3\n              fastf todo done ID0047 3 --undo"
+    )]
+    Todo {
+        #[command(subcommand)]
+        action: TodoAction,
+    },
+
     /// Show a project's notes
     #[command(
         name = "notes",
@@ -671,6 +681,38 @@ enum NoteAction {
         query: String,
         /// Message text, or `-` to read from stdin, or omit to open $EDITOR
         message: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TodoAction {
+    /// Show the task list, numbered, grouped by phase
+    List {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// Leave out the tasks already done
+        #[arg(long)]
+        open: bool,
+    },
+    /// Add an open task — one line
+    Add {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// The task text
+        text: String,
+        /// Put it under this `###` phase label, opening one if there is none
+        #[arg(long)]
+        phase: Option<String>,
+    },
+    /// Tick a task off by its number
+    Done {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// The number `fastf todo list` printed
+        number: usize,
+        /// Mark it open again instead
+        #[arg(long)]
+        undo: bool,
     },
 }
 
@@ -1097,6 +1139,22 @@ fn run() -> Result<()> {
             NoteAction::Add { query, message } => {
                 cli::note::add(cli::note::NoteAddArgs { query, message })
             }
+        },
+
+        Some(Commands::Todo { action }) => match action {
+            TodoAction::List { query, open } => cli::todo::list(cli::todo::ListArgs { query, open }),
+            TodoAction::Add { query, text, phase } => {
+                cli::todo::add(cli::todo::AddArgs { query, text, phase })
+            }
+            TodoAction::Done {
+                query,
+                number,
+                undo,
+            } => cli::todo::done(cli::todo::DoneArgs {
+                query,
+                number,
+                undo,
+            }),
         },
 
         Some(Commands::Notes { query, since }) => {

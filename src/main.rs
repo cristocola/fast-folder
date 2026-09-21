@@ -134,6 +134,10 @@ enum Commands {
         /// Auto-engages when stdout is not a TTY (e.g. piping to grep or a file).
         #[arg(long)]
         plain: bool,
+
+        /// Print the matches as JSON — an array, one object per project
+        #[arg(long, conflicts_with = "plain")]
+        json: bool,
     },
 
     /// Open a previously created project folder in the system file manager
@@ -476,6 +480,23 @@ enum Commands {
         /// Print non-interactive list (auto-engages when stdout is not a TTY)
         #[arg(long)]
         plain: bool,
+
+        /// Print the matches as JSON — an array, one object per project
+        #[arg(long, conflicts_with = "plain")]
+        json: bool,
+    },
+
+    /// Everything fastf knows about one project
+    #[command(
+        after_help = "Examples:\n              fastf show ID0047\n              fastf show lullaby --json\n\n            The JSON carries the project's facts, its template variables, its\n            notes and its todos with the phase each sits under."
+    )]
+    Show {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+
+        /// Print JSON instead of the summary
+        #[arg(long)]
+        json: bool,
     },
 
     /// Append a dated note to a project
@@ -1021,12 +1042,14 @@ fn run() -> Result<()> {
             tag,
             base,
             plain,
+            json,
         }) => cli::recent::run(cli::recent::RecentArgs {
             limit,
             template,
             since,
             tag,
             base,
+            json,
             plain,
         }),
 
@@ -1131,8 +1154,12 @@ fn run() -> Result<()> {
             TagAction::Reauto { query } => cli::tag::reauto(&query),
         },
 
-        Some(Commands::Search { terms, plain }) => {
-            cli::search::run(cli::search::SearchArgs { terms, plain })
+        Some(Commands::Search { terms, plain, json }) => {
+            cli::search::run(cli::search::SearchArgs { terms, plain, json })
+        }
+
+        Some(Commands::Show { query, json }) => {
+            cli::show::run(cli::show::ShowArgs { query, json })
         }
 
         Some(Commands::Note { action }) => match action {

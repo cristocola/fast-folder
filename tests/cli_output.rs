@@ -1544,3 +1544,41 @@ fn todo_lists_adds_under_a_phase_and_ticks_by_number() {
     let err = sb.fails(&["todo", "add", "ID0001", "  "]);
     assert!(err.contains("empty"), "{err}");
 }
+
+/// `--json` and `fastf show`: the machine surface. An array for a list, one
+/// object for a project, and never a picker whatever the terminal is.
+#[test]
+fn json_output_is_an_array_and_show_is_one_project_whole() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "proj", "ID0001");
+    sb.ok(&["todo", "add", "ID0001", "cut the first minute", "--phase", "Main Edit"]);
+    sb.ok(&["note", "add", "ID0001", "began the edit"]);
+
+    let listed = sb.ok(&["recent", "--json"]);
+    let rows: serde_json::Value = serde_json::from_str(&listed).expect("recent --json is JSON");
+    assert!(rows.is_array(), "a bare array, so `jq '.[].id'` works: {listed}");
+    assert_eq!(rows[0]["id"], "ID0001");
+    assert!(rows[0]["path"].is_string() && rows[0]["base_label"].is_string());
+
+    let searched = sb.ok(&["search", "proj", "--json"]);
+    let found: serde_json::Value = serde_json::from_str(&searched).expect("search --json is JSON");
+    assert_eq!(found[0]["id"], "ID0001");
+
+    let shown = sb.ok(&["show", "ID0001", "--json"]);
+    let one: serde_json::Value = serde_json::from_str(&shown).expect("show --json is JSON");
+    assert_eq!(one["id"], "ID0001");
+    assert_eq!(one["todos"][0]["text"], "cut the first minute");
+    assert_eq!(
+        one["todos"][0]["phase"], "Main Edit",
+        "a todo carries its phase into the JSON: {shown}"
+    );
+    assert_eq!(one["notes"][0]["text"], "began the edit");
+
+    // The summary names the project and counts what it has.
+    let summary = sb.ok(&["show", "ID0001"]);
+    assert!(summary.contains("ID0001") && summary.contains("1 note"), "{summary}");
+
+    // Two formats are one too many.
+    let err = sb.fails(&["recent", "--json", "--plain"]);
+    assert!(err.contains("cannot be used with"), "{err}");
+}

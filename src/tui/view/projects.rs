@@ -565,6 +565,13 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             PaneRow::AddNote => {
                 Line::from(Span::styled(format!("{} add a note", g.sep), theme.dim()))
             }
+            // A phase label, in the marker's column so the tasks under it
+            // read as its own: dim, one row, no wrap, like every other label
+            // the pane draws.
+            PaneRow::Phase(name) => Line::from(Span::styled(
+                format!("{} {}", g.rule.repeat(2), fit(name, width.saturating_sub(3), g.ellipsis)),
+                theme.dim(),
+            )),
             // The markdown's own marker, which every terminal can draw: a
             // done todo recedes with its text, an open one is lit.
             PaneRow::Todo { done, text, .. } => Line::from(vec![

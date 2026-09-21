@@ -102,6 +102,9 @@ pub enum PaneRow {
     NoteMore(usize),
     /// The row under the last note that adds one.
     AddNote,
+    /// The `###` label a run of todos sits under. Not a row the cursor rests
+    /// on: a phase is a line of the user's own file, not something to toggle.
+    Phase(String),
     /// One todo's first row. Enter toggles it.
     Todo {
         ordinal: usize,
@@ -249,7 +252,16 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
 
     rows.push(PaneRow::Rule("todo"));
     let todo_width = width.saturating_sub(TODO_INDENT);
+    // A label is drawn where it changes, so an ungrouped list draws none and
+    // a grouped one draws each label once, over the run it names.
+    let mut phase: Option<&str> = None;
     for (ordinal, todo) in detail.todos.iter().enumerate() {
+        if todo.phase.as_deref() != phase {
+            phase = todo.phase.as_deref();
+            if let Some(name) = phase {
+                rows.push(PaneRow::Phase(name.to_string()));
+            }
+        }
         let mut lines = wrap_columns(&todo.text, todo_width).into_iter();
         rows.push(PaneRow::Todo {
             ordinal,
@@ -854,6 +866,64 @@ mod tests {
             timestamp: timestamp.map(str::to_string),
             text: text.to_string(),
         }
+    }
+
+    #[test]
+    fn a_phase_label_is_drawn_where_it_changes_and_the_cursor_steps_over_it() {
+        let todo = |done: bool, text: &str, phase: Option<&str>| crate::core::body::Todo {
+            done,
+            text: text.to_string(),
+            phase: phase.map(str::to_string),
+        };
+        let detail = ProjectDetail {
+            todos: vec![
+                todo(true, "read the order", None),
+                todo(false, "download the files", Some("Setup")),
+                todo(false, "copy the audio", Some("Setup")),
+                todo(false, "listen to the song", Some("Creative Plan")),
+            ],
+            ..Default::default()
+        };
+        let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
+        let todo_rows: Vec<&PaneRow> = rows
+            .iter()
+            .skip_while(|r| **r != PaneRow::Rule("todo"))
+            .collect();
+        assert_eq!(
+            todo_rows,
+            vec![
+                &PaneRow::Rule("todo"),
+                &PaneRow::Todo {
+                    ordinal: 0,
+                    done: true,
+                    text: "read the order".to_string(),
+                },
+                &PaneRow::Phase("Setup".to_string()),
+                &PaneRow::Todo {
+                    ordinal: 1,
+                    done: false,
+                    text: "download the files".to_string(),
+                },
+                // The second task of a run draws no second label.
+                &PaneRow::Todo {
+                    ordinal: 2,
+                    done: false,
+                    text: "copy the audio".to_string(),
+                },
+                &PaneRow::Phase("Creative Plan".to_string()),
+                &PaneRow::Todo {
+                    ordinal: 3,
+                    done: false,
+                    text: "listen to the song".to_string(),
+                },
+                &PaneRow::AddTodo,
+            ],
+            "a label where the phase changes, and the ordinals still count tasks only"
+        );
+        assert!(
+            !PaneRow::Phase("Setup".to_string()).selectable(),
+            "Enter on a phase would have nothing to toggle"
+        );
     }
 
     #[test]

@@ -1236,6 +1236,60 @@ fn detail_pane_editing_a_variable_120x40() {
     );
 }
 
+/// A todo list long enough to be grouped: the `###` labels its file carries
+/// are drawn over the run each one names, and the cursor steps over them.
+#[test]
+fn detail_pane_groups_todos_by_phase_120x40() {
+    use fastf::tui::app::data::ProjectDetail;
+    use fastf::tui::app::pane::PaneRow;
+
+    let mut app = fixture(12, 120, 40);
+    let project = app.library.selected().unwrap().clone();
+    let todo = |done: bool, text: &str, phase: Option<&str>| fastf::core::body::Todo {
+        done,
+        text: text.to_string(),
+        phase: phase.map(str::to_string),
+    };
+    let detail = ProjectDetail {
+        todos: vec![
+            todo(true, "read the order requirements", None),
+            todo(true, "download the client files, untouched", Some("Project Setup")),
+            todo(false, "copy the audio into the audio folder", Some("Project Setup")),
+            todo(false, "listen to the full song", Some("Creative Plan")),
+            todo(false, "choose mood, theme and search terms", Some("Creative Plan")),
+            todo(false, "edit the first minute, then rewatch", Some("Main Edit")),
+        ],
+        ..Default::default()
+    };
+    let _ = update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(detail),
+        },
+    );
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Right)));
+    // Down from the first todo lands on the next todo, not on the label
+    // between them.
+    let rows = app.pane_rows();
+    let first = rows
+        .iter()
+        .position(|r| matches!(r, PaneRow::Todo { ordinal: 0, .. }))
+        .unwrap();
+    while app.pane_cursor < first {
+        let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    }
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    assert!(
+        matches!(app.pane_rows()[app.pane_cursor], PaneRow::Todo { ordinal: 1, .. }),
+        "the cursor steps over a phase label"
+    );
+    snap(
+        "detail_pane_groups_todos_by_phase_120x40",
+        render_to_string(&app, 120, 40),
+    );
+}
+
 /// A note and a todo too wide for the pane continue on the rows under them,
 /// each in its own column, instead of being cut.
 #[test]

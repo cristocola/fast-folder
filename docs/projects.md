@@ -46,11 +46,15 @@ auto_tags:
 ## Todo
 
 - [x] shoot
+
+### Post
 - [ ] colour grade
 - [ ] deliver the masters
 ```
 
 A new project starts with an empty `## Notes` and no `## Todo`. The two notes and the list above are what a few weeks of work leave behind: `fastf note add` or the app's quick note writes a note, the app's pane adds and ticks the todos, and you can type either in any editor.
+
+A `###` line inside `## Todo` is a **phase**: every task under it belongs to it, until the next one. Write them when a list grows long enough to want grouping, and leave them out when it does not. The pane draws each label over the run of tasks it names; a label is not a task, so it changes no numbering and ticking a todo never touches it.
 
 The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming a folder never breaks tracking. Only `id` and `template` are required to read the file; the rest is repaired from the folder when it is missing (see below).
 

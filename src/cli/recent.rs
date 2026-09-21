@@ -18,6 +18,8 @@ pub struct RecentArgs {
     /// Force the plain (non-interactive) list output. Auto-engages when stdout
     /// is not a TTY.
     pub plain: bool,
+    /// Print the matches as JSON instead — never interactive.
+    pub json: bool,
 }
 
 pub fn run(args: RecentArgs) -> Result<()> {
@@ -77,6 +79,10 @@ pub fn run(args: RecentArgs) -> Result<()> {
     // (a pipe gets the plain list), and stderr decides whether the picker can
     // be drawn and answered at all. Without the second, `2>/dev/null` launched
     // a picker nobody could see and waited for a key.
+    if args.json {
+        return crate::cli::json::print_projects(&filtered);
+    }
+
     let interactive =
         !args.plain && std::io::stdout().is_terminal() && crate::util::tty::prompt_available();
 

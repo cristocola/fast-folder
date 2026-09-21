@@ -37,6 +37,8 @@ pub struct SearchArgs {
     pub terms: Vec<String>,
     /// Force plain list output (also auto-engaged on non-TTY stdout).
     pub plain: bool,
+    /// Print the matches as JSON instead — never interactive.
+    pub json: bool,
 }
 
 pub fn run(args: SearchArgs) -> Result<()> {
@@ -107,6 +109,10 @@ pub fn run(args: SearchArgs) -> Result<()> {
     // (a pipe gets the plain list), and stderr decides whether the picker can
     // be drawn and answered at all. Without the second, `2>/dev/null` launched
     // a picker nobody could see and waited for a key.
+    if args.json {
+        return crate::cli::json::print_projects(&matches);
+    }
+
     let interactive =
         !args.plain && std::io::stdout().is_terminal() && crate::util::tty::prompt_available();
 

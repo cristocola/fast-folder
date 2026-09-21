@@ -27,6 +27,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
 | `fastf notes <id>` | Show a project's notes |
 | `fastf todo list/add/done <id>` | A project's task list |
+| `fastf show <query>` | Everything fastf knows about one project |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
 | `fastf reconcile` | Recover scoped v2 work and report obsolete pre-v2 markers |
@@ -282,6 +283,38 @@ A clause fastf cannot read is refused by name rather than answered with an empty
 A `*` in a `key=` or `tag:` value may lead, trail, or do both — `Aria*`, `*Grande`, `*rian*` — matched case-insensitively. It is three shapes rather than a glob engine: a `*` in the middle of a value is a literal `*`, and a bare `key=*` means the field is present at all.
 
 Free text is a case-insensitive substring match. Project paths are deliberately excluded from free-text search, so a term that happens to appear in your home directory path never produces phantom matches. On a terminal, the results open in the guided app, the terms already in its search bar — as `fastf recent` does.
+
+## Machine-readable output
+
+```bash
+fastf recent --json                  # an array, one object per project
+fastf search tag:draft --json
+fastf show ID0047                    # the summary a person reads
+fastf show ID0047 --json             # the same project, whole
+```
+
+`--json` prints a bare array, so `fastf recent --json | jq '.[].id'` is the
+obvious thing, and it never opens the picker whatever the terminal is. It
+cannot be combined with `--plain`: they are two answers to the same question.
+
+Each row carries `id`, `number`, `name`, `path`, `base`, `base_label`,
+`template`, `template_name`, `created`, `tags` and `exists`. `fastf show` adds
+what only the file knows — `variables`, `notes`, and `todos` with the `phase`
+each one sits under:
+
+```json
+{
+  "id": "ID0047",
+  "name": "2026-04-20_Lullaby_ID0047",
+  "todos": [
+    { "done": true,  "text": "read the order",     "phase": null },
+    { "done": false, "text": "cut the first minute", "phase": "Main Edit" }
+  ]
+}
+```
+
+Paths are printed the way every other command prints them. The shape is a
+promise: fields are added, not renamed or removed.
 
 ## Tags
 

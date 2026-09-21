@@ -299,6 +299,35 @@ pub fn render_at(
     }
 
     out.push_str("## Notes\n\n");
+
+    // A template's starter task list, in the grammar `body` reads: a `###`
+    // label for a block that names a phase, `- [ ]` for every task, and the
+    // same interpolation the rest of the create uses — so `{artist}` or
+    // `{id}` in a task resolves the way it does in a file name.
+    if !tmpl.todo.is_empty() {
+        out.push_str("\n## Todo\n\n");
+        let mut first = true;
+        for block in &tmpl.todo {
+            if let Some(phase) = &block.phase {
+                if !first {
+                    out.push('\n');
+                }
+                out.push_str("### ");
+                out.push_str(&crate::core::naming::interpolate_with(
+                    phase, &plan.vars, &plan.ctx,
+                ));
+                out.push('\n');
+            }
+            for task in &block.tasks {
+                out.push_str("- [ ] ");
+                out.push_str(&crate::core::naming::interpolate_with(
+                    task, &plan.vars, &plan.ctx,
+                ));
+                out.push('\n');
+            }
+            first = false;
+        }
+    }
     Ok(out)
 }
 

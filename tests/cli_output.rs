@@ -1582,3 +1582,45 @@ fn json_output_is_an_array_and_show_is_one_project_whole() {
     let err = sb.fails(&["recent", "--json", "--plain"]);
     assert!(err.contains("cannot be used with"), "{err}");
 }
+
+/// `{id}` at apply time: from the target's own metadata when it has some, and
+/// left as written — with a word about it — when it has none.
+#[test]
+fn apply_renders_the_id_of_the_folder_it_is_applied_to() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let tmpl = sb.install.join("templates").join("stamped");
+    fs::create_dir_all(tmpl.join("files")).unwrap();
+    fs::write(
+        tmpl.join("template.yaml"),
+        "name: Stamped\nslug: stamped\nnaming_pattern: \"{id}\"\n\
+         id:\n  prefix: ID\n  digits: 4\nvariables: []\n",
+    )
+    .unwrap();
+    fs::write(tmpl.join("files").join("STAMP.md"), "project {id}\n").unwrap();
+
+    sb.ok(&["apply", "stamped", dir.to_str().unwrap(), "--yes"]);
+    assert_eq!(
+        fs::read_to_string(dir.join("STAMP.md")).unwrap(),
+        "project ID0001\n",
+        "the folder's own id, not the literal token"
+    );
+
+    // A folder fastf owns no metadata for keeps the token, and says so.
+    let plain = sb.tmp.path().join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    let out = sb
+        .command()
+        .args(["apply", "stamped", plain.to_str().unwrap(), "--yes"])
+        .output()
+        .expect("running fastf");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("{id}") && stderr.contains("PROJECT_INFO.md"),
+        "the note explains the literal token:\n{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(plain.join("STAMP.md")).unwrap(),
+        "project {id}\n"
+    );
+}

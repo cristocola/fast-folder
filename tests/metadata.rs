@@ -856,4 +856,75 @@ tag_from: ["tier"]
             );
         });
     }
+    /// A template's starter task list is written into `## Todo` at create time,
+    /// in the grammar the reader reads, with the same interpolation a file name
+    /// gets — and a block with a phase and no tasks hands out the label alone.
+    #[test]
+    fn a_template_hands_its_task_list_to_every_new_project() {
+        sandboxed(|install| {
+            write_template(
+                install,
+                "seeded",
+                r#"name: Seeded
+slug: seeded
+naming_pattern: "{id}_{title}"
+id:
+  prefix: S
+  digits: 4
+variables:
+  - slug: title
+    label: Title
+    type: text
+    required: true
+    transform: title_underscore
+todo:
+  - tasks:
+      - "read the brief for {title} ({id})"
+  - phase: Main Edit
+    tasks:
+      - cut the first minute
+      - grade
+  - phase: Other
+"#,
+            );
+            let mut cfg = Config::default();
+            cfg.base_dir = install.join("projects").display().to_string();
+            fs::create_dir_all(&cfg.base_dir).unwrap();
+            cfg.save().unwrap();
+
+            let tmpl = template::find_by_slug("seeded").unwrap();
+            tmpl.validate().expect("a valid starter list");
+            let mut vars = HashMap::new();
+            vars.insert("title".to_string(), "Waking Up".to_string());
+            let counters = Counters::load().unwrap();
+            let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+            let mut counters = counters;
+            project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+            let project = library::resolve(&cfg, "S0001").unwrap();
+
+            let body = file(&project);
+            let todo = &body[body.find("## Todo").expect("the section was written")..];
+            assert_eq!(
+                todo,
+                "## Todo\n\n- [ ] read the brief for Waking_Up (S0001)\n\n\
+                 ### Main Edit\n- [ ] cut the first minute\n- [ ] grade\n\n### Other\n",
+                "the tokens resolve and the labels group"
+            );
+
+            // The reader reads back exactly what was written.
+            let todos = fastf::core::body::read_todos(&project.path).unwrap();
+            assert_eq!(todos.len(), 3);
+            assert_eq!(todos[1].phase.as_deref(), Some("Main Edit"));
+
+            // A task that is empty or more than one line is refused when the
+            // template is validated, not when a project is created from it.
+            let mut bad = tmpl.clone();
+            bad.todo.push(fastf::core::template::TodoBlock {
+                phase: None,
+                tasks: vec!["two\nlines".to_string()],
+            });
+            assert!(bad.validate().is_err());
+        });
+    }
+
 }

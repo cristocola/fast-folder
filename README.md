@@ -1,6 +1,6 @@
 <h1 align="center">fast-folder</h1>
 
-<p align="center"><b>A project folder creator and manager, with a full terminal interface and a full command line.</b></p>
+<p align="center"><b>Template-based project folders, created and managed from your terminal. Start a project in seconds, then find, jump to and organize any of them with a keystroke. Every project numbered, across all your drives.</b></p>
 
 <p align="center">
   <a href="https://github.com/cristocola/fast-folder/actions/workflows/ci.yml"><img src="https://github.com/cristocola/fast-folder/actions/workflows/ci.yml/badge.svg" alt="CI"></a>

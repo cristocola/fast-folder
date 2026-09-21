@@ -119,6 +119,25 @@ gallery shows the feature rather than only documenting it.
 
 ## Phase log
 
+**Phase 6** — 3.8.0. Release notes, the two `ROADMAP.md` entries consumed, the gallery's
+music-video template seeded. The whole gate list green locally before the tag, Windows
+cross-lint and the rustdoc build included.
+
+**Phase 5** — `Template.todo` written by `render_at`, and `{id}` in `RenderContext`. PR #89.
+The template's field had to be a manifest key, not a file: `PROJECT_INFO.md` is reserved
+under `files/` and the metadata is written before the copy. `apply_plan` and `apply` both
+take the target's id or neither does, so the preview and the commit agree.
+
+**Phase 4** — `--json` and `fastf show`. PR #88. The shapes live in `cli::json` rather than
+a derive on `core`'s structs: the JSON is a promise and the library has to stay free to
+move. `--plain` was left exactly as it was; it answers a different question.
+
+**Phase 3** — `fastf todo list|add|done`. PR #87. `add_todo_in` is the one new core
+function; `done` reads the list first so `expected` can refuse a file that changed.
+
+**Phase 2** — `PaneRow::Phase`, drawn where the phase changes. PR #86. Not selectable, so
+the cursor steps over it; the ordinals never counted labels, so ticking was untouched.
+
 **Phase 1** — `Todo.phase`, read by `place_todos`. PR #85. Nine struct literals across the
 pane and the tui tests took the new field; nothing else moved. The one surprise: a `###`
 line under `## Notes` is read as the undated note the notes grammar already makes of text

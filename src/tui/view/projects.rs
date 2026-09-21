@@ -569,7 +569,11 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             // read as its own: dim, one row, no wrap, like every other label
             // the pane draws.
             PaneRow::Phase(name) => Line::from(Span::styled(
-                format!("{} {}", g.rule.repeat(2), fit(name, width.saturating_sub(3), g.ellipsis)),
+                format!(
+                    "{} {}",
+                    g.rule.repeat(2),
+                    fit(name, width.saturating_sub(3), g.ellipsis)
+                ),
                 theme.dim(),
             )),
             // The markdown's own marker, which every terminal can draw: a

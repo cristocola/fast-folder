@@ -649,12 +649,7 @@ pub fn apply_plan(
     // One clock for the whole apply, the same way a create takes one — and
     // the target's own id, so a template file that writes `{id}` is applied
     // with the number the folder already has instead of the literal token.
-    apply_plan_resolved(
-        template,
-        target,
-        &vars,
-        &apply_context(target, date_format),
-    )
+    apply_plan_resolved(template, target, &vars, &apply_context(target, date_format))
 }
 
 /// The render context an apply uses: one clock, and `{id}` from the target's

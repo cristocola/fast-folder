@@ -106,9 +106,8 @@ together or the preview and the commit disagree.
 
 Version bump, `docs/` and `ROADMAP.md` (the two backlog entries this plan consumes), the
 full gate list including the Windows and release-profile clippy legs, tag, Release workflow,
-both AUR packages. Then, outside the repo, `fiverrv` gets its starter todos from the music
-video SOP's required modules and Hermes' ingestion skill learns to add only the purchased
-extras on top.
+both AUR packages. `examples/templates/` gains one template with a seeded list, so the
+gallery shows the feature rather than only documenting it.
 
 ---
 

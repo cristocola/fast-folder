@@ -870,6 +870,7 @@ mod tests {
             todos: vec![crate::core::body::Todo {
                 done: true,
                 text: "ingested".to_string(),
+                phase: None,
             }],
             ..Default::default()
         };
@@ -1078,6 +1079,7 @@ mod tests {
             todos: vec![crate::core::body::Todo {
                 done: false,
                 text: "send the rough cut to the label".to_string(),
+                phase: None,
             }],
             ..Default::default()
         };

@@ -66,10 +66,12 @@ fn editing_fixture() -> App {
             fastf::core::body::Todo {
                 done: true,
                 text: "ingested the videos".to_string(),
+                phase: None,
             },
             fastf::core::body::Todo {
                 done: false,
                 text: "delivered the video".to_string(),
+                phase: None,
             },
         ],
         ..Default::default()
@@ -462,6 +464,7 @@ fn a_todo_too_wide_for_the_pane_wraps_and_toggles_by_its_whole_text() {
                 todos: vec![fastf::core::body::Todo {
                     done: false,
                     text: long.to_string(),
+                    phase: None,
                 }],
                 ..Default::default()
             }),
@@ -549,10 +552,12 @@ fn enter_on_a_todo_toggles_it_and_the_answer_lands_on_its_row() {
             fastf::core::body::Todo {
                 done: true,
                 text: "ingested the videos".to_string(),
+                phase: None,
             },
             fastf::core::body::Todo {
                 done: true,
                 text: "delivered the video".to_string(),
+                phase: None,
             },
         ],
         ..Default::default()

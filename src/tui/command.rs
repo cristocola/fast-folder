@@ -324,6 +324,8 @@ pub enum CommandId {
     ReautoTags,
     AddNote,
     NoteInline,
+    /// One task onto the list — what the pane's add row does, findable.
+    AddTodo,
     Rename,
     /// Enter on the project list: the action menu, as `a` opens it. Its own
     /// id because the pane's Enter means something else.
@@ -384,7 +386,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 96] = [
+    pub const ALL: [CommandId; 97] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -439,6 +441,7 @@ impl CommandId {
         CommandId::ReautoTags,
         CommandId::AddNote,
         CommandId::NoteInline,
+        CommandId::AddTodo,
         CommandId::Rename,
         CommandId::ActionsEnter,
         CommandId::PaneEdit,
@@ -658,6 +661,14 @@ fn selection_and_not_busy(app: &App) -> Availability {
 fn single_and_not_busy(app: &App) -> Availability {
     if !app.library.marks.is_empty() {
         return Availability::Disabled("one folder at a time — clear the marks (-) to rename");
+    }
+    selection_and_not_busy(app)
+}
+
+/// A todo goes to one list: marks would make "which one" a guess.
+fn one_project(app: &App) -> Availability {
+    if !app.library.marks.is_empty() {
+        return Availability::Disabled("one project at a time — clear the marks (-) to add a todo");
     }
     selection_and_not_busy(app)
 }
@@ -1540,6 +1551,17 @@ pub static COMMANDS: &[Command] = &[
         palette = true,
         hint = false,
         batch_target
+    ),
+    cmd!(
+        AddTodo,
+        "Add a todo",
+        "type one task onto this project's list, as the pane's add row does",
+        ACTIONS,
+        [],
+        Project,
+        palette = true,
+        hint = false,
+        one_project
     ),
     cmd!(
         Rename,

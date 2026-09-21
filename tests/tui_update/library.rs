@@ -354,6 +354,38 @@ fn the_palette_ranks_the_folder_command_first_for_open() {
     ));
 }
 
+/// Adding a todo is a verb of its own, not only the pane's add row: the
+/// palette finds it from the list, and it asks for the text the row asks for.
+#[test]
+fn the_palette_finds_add_a_todo_from_the_list() {
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch('c'));
+    type_text(&mut app, "todo");
+    let titles: Vec<String> = match app.modals.top() {
+        Some(fastf::tui::app::modal::Modal::Palette(p)) => {
+            p.entries.iter().map(|e| e.title.clone()).collect()
+        }
+        _ => panic!("the palette should be open"),
+    };
+    assert_eq!(titles[0], "Add a todo", "{titles:?}");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(app.modals.top(), Some(Modal::TextPrompt(_))));
+    type_text(&mut app, "invoice");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    let project = app.library.selected().unwrap().clone();
+    assert!(app.modals.is_empty());
+    let expected = fastf::tui::effect::Action::AddTodo {
+        project: Box::new(project),
+        text: "invoice".to_string(),
+    };
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Run(_, action) if **action == expected)),
+        "{effects:?}"
+    );
+}
+
 #[test]
 fn the_palette_jumps_to_a_project() {
     let mut app = fixture(12, 80, 24);

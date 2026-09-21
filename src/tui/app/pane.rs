@@ -19,7 +19,6 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use super::App;
 use crate::core::library::Project;
 use crate::core::template::VarType;
-use crate::tui::app::actions::{TextPrompt, TextThen};
 use crate::tui::app::data::{Entry, ProjectDetail};
 use crate::tui::app::modal::{Modal, PickItem, PickState, Then};
 use crate::tui::command::{self, CommandId, Context, Key};
@@ -538,13 +537,7 @@ impl App {
             PaneRow::AddTag => self.open_add_tag(),
             PaneRow::AddNote => self.run(CommandId::NoteInline),
             PaneRow::EarlierNotes(_) => self.run(CommandId::ShowJournal),
-            PaneRow::AddTodo => {
-                self.modals.push(Modal::TextPrompt(TextPrompt::new(
-                    validators::ADD_TODO_PROMPT,
-                    TextThen::AddTodo,
-                )));
-                Vec::new()
-            }
+            PaneRow::AddTodo => self.run(CommandId::AddTodo),
             PaneRow::Todo { ordinal, .. } => {
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();

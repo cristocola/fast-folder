@@ -2089,6 +2089,13 @@ impl App {
                 self.modals.push(Modal::Note(NoteState::new(count)));
                 Vec::new()
             }
+            CommandId::AddTodo => {
+                self.modals.push(Modal::TextPrompt(TextPrompt::new(
+                    validators::ADD_TODO_PROMPT,
+                    TextThen::AddTodo,
+                )));
+                Vec::new()
+            }
             CommandId::Rename => {
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();

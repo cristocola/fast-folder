@@ -70,7 +70,8 @@ over its own lines — Enter for a new line, Ctrl-S to save, emptied and saved t
 remove it; on a **todo** Enter ticks it, or unticks it; on **`… n earlier`**
 every note, as `J` shows them. Every section that can grow ends in a row that
 adds to it: **add a tag**, **add a note** (the quick note — Enter saves,
-Alt-Enter breaks a line), **add a todo**. Esc leaves the row as it was, and so
+Alt-Enter breaks a line), **add a todo** — also **Add a todo** in the
+palette and the action menu, from the list. Esc leaves the row as it was, and so
 does moving away. What you can type is what the file can hold: a tag is one
 word (letters, digits, `- _ . /`), a variable is one line and a `select` is one
 of its options, a todo is one line, and an undated note may not start a line

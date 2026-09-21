@@ -120,7 +120,11 @@ fn heading_name(line: &str) -> Option<&str> {
 /// reaches here, because a section ends where the next one starts.
 fn phase_name(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("###")?;
-    let name = rest.trim_start_matches('#').trim().trim_end_matches(':').trim();
+    let name = rest
+        .trim_start_matches('#')
+        .trim()
+        .trim_end_matches(':')
+        .trim();
     (!name.is_empty()).then_some(name)
 }
 
@@ -670,7 +674,11 @@ fn insert_under_phase(content: &str, span: &Range<usize>, phase: &str, line: &st
         return splice(content, start..start, &format!("{block}\n"));
     }
     let at = last_task_end.unwrap_or(span.end).max(span.start);
-    let blank = if content[..at].ends_with("\n\n") { "" } else { "\n" };
+    let blank = if content[..at].ends_with("\n\n") {
+        ""
+    } else {
+        "\n"
+    };
     splice(
         content,
         at..at,
@@ -1041,14 +1049,14 @@ mod tests {
     fn a_task_takes_the_phase_label_above_it_and_the_ordinals_do_not_move() {
         let before = doc(concat!(
             "## Todo\n\n",
-            "- [x] read the order\n",           // before any label: no phase
+            "- [x] read the order\n", // before any label: no phase
             "### Main Edit\n",
             "- [ ] cut the first minute\n",
-            "#### Grade:\n",                    // deeper, and a trailing colon
+            "#### Grade:\n", // deeper, and a trailing colon
             "- [ ] match the cameras\n",
-            "###\n",                            // an empty label leaves the one above standing
+            "###\n", // an empty label leaves the one above standing
             "- [ ] export\n",
-            "### Other\n",                      // a label with nothing under it
+            "### Other\n", // a label with nothing under it
         ));
         let todos = todos_in(&before);
         let phases: Vec<Option<&str>> = todos.iter().map(|t| t.phase.as_deref()).collect();

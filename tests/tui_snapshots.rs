@@ -1253,11 +1253,27 @@ fn detail_pane_groups_todos_by_phase_120x40() {
     let detail = ProjectDetail {
         todos: vec![
             todo(true, "read the order requirements", None),
-            todo(true, "download the client files, untouched", Some("Project Setup")),
-            todo(false, "copy the audio into the audio folder", Some("Project Setup")),
+            todo(
+                true,
+                "download the client files, untouched",
+                Some("Project Setup"),
+            ),
+            todo(
+                false,
+                "copy the audio into the audio folder",
+                Some("Project Setup"),
+            ),
             todo(false, "listen to the full song", Some("Creative Plan")),
-            todo(false, "choose mood, theme and search terms", Some("Creative Plan")),
-            todo(false, "edit the first minute, then rewatch", Some("Main Edit")),
+            todo(
+                false,
+                "choose mood, theme and search terms",
+                Some("Creative Plan"),
+            ),
+            todo(
+                false,
+                "edit the first minute, then rewatch",
+                Some("Main Edit"),
+            ),
         ],
         ..Default::default()
     };
@@ -1281,7 +1297,10 @@ fn detail_pane_groups_todos_by_phase_120x40() {
     }
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
     assert!(
-        matches!(app.pane_rows()[app.pane_cursor], PaneRow::Todo { ordinal: 1, .. }),
+        matches!(
+            app.pane_rows()[app.pane_cursor],
+            PaneRow::Todo { ordinal: 1, .. }
+        ),
         "the cursor steps over a phase label"
     );
     snap(

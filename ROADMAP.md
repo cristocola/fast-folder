@@ -32,26 +32,27 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
   window), plus `fastf term`. A person at a desktop has to say whether the right
   window appeared.
 
-Last reviewed: 2026-09-11.
+Last reviewed: 2026-09-21.
 
 ## Backlog
 
 Unscheduled; nothing here is promised.
 
-- A `fastf todo` verb — list, add, toggle — so the command line has what the
-  pane has; and removing or rewording a todo from the pane, which today means
-  editing the file (the pane follows within a second).
+- Removing or rewording a todo, from the pane or the command line — today
+  either means editing the file (the pane follows within a second).
+- Editing a template's starter todos in the guided builder: the manifest field
+  round-trips untouched, but only `template.yaml` and an editor can change it.
 - Portable project packages.
 - Template upgrades.
 - Template diagnostics and language-server support.
 - Project lifecycle states.
 - Declarative post-create workflows.
-- Scriptability: `--json`/`--format` output, `search --limit/--template/--since/--tag`,
+- Scriptability, what is left of it: `search --limit/--template/--since/--tag`,
   `print_path` as a `new` flag rather than only a config toggle,
   `--color=auto|always|never` (`colored` gates on stdout only, so stderr gets
   ANSI when redirected), documented exit codes, and `completions <shell>` as a
   typed `clap_complete::Shell` rather than a bare `String`.
-- An ambiguity picker for `move`, `tag` and `note`. They resolve and then act on
+- An ambiguity picker for `move`, `tag`, `note` and `todo`. They resolve and then act on
   the one project, so offering a choice there is a larger change than it looks.
 - A native KRunner DBus runner: search-as-you-type from Alt+Space without
   spawning fastf per keystroke. Its own deliverable, probably its own repository.

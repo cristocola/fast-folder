@@ -1503,8 +1503,22 @@ fn todo_lists_adds_under_a_phase_and_ticks_by_number() {
     assert!(empty.contains("no todos yet"), "{empty}");
 
     sb.ok(&["todo", "add", "ID0001", "read the order"]);
-    sb.ok(&["todo", "add", "ID0001", "download the files", "--phase", "Setup"]);
-    sb.ok(&["todo", "add", "ID0001", "copy the audio", "--phase", "setup"]);
+    sb.ok(&[
+        "todo",
+        "add",
+        "ID0001",
+        "download the files",
+        "--phase",
+        "Setup",
+    ]);
+    sb.ok(&[
+        "todo",
+        "add",
+        "ID0001",
+        "copy the audio",
+        "--phase",
+        "setup",
+    ]);
     let body = fs::read_to_string(&pinfo).unwrap();
     assert!(
         body.contains("### Setup\n- [ ] download the files\n- [ ] copy the audio\n"),
@@ -1526,8 +1540,14 @@ fn todo_lists_adds_under_a_phase_and_ticks_by_number() {
         "the one byte changed"
     );
     // Twice is not an error, and undo puts it back.
-    assert!(sb.ok(&["todo", "done", "ID0001", "2"]).contains("already done"));
-    assert!(sb.ok(&["todo", "done", "ID0001", "2", "--undo"]).contains("Reopened"));
+    assert!(
+        sb.ok(&["todo", "done", "ID0001", "2"])
+            .contains("already done")
+    );
+    assert!(
+        sb.ok(&["todo", "done", "ID0001", "2", "--undo"])
+            .contains("Reopened")
+    );
     assert!(
         fs::read_to_string(&pinfo)
             .unwrap()
@@ -1540,7 +1560,10 @@ fn todo_lists_adds_under_a_phase_and_ticks_by_number() {
     assert!(!open.contains("read the order"), "{open}");
 
     let err = sb.fails(&["todo", "done", "ID0001", "9"]);
-    assert!(err.contains("3 todos") && err.contains("todo list"), "{err}");
+    assert!(
+        err.contains("3 todos") && err.contains("todo list"),
+        "{err}"
+    );
     let err = sb.fails(&["todo", "add", "ID0001", "  "]);
     assert!(err.contains("empty"), "{err}");
 }
@@ -1551,12 +1574,22 @@ fn todo_lists_adds_under_a_phase_and_ticks_by_number() {
 fn json_output_is_an_array_and_show_is_one_project_whole() {
     let sb = Sandbox::new();
     sb.plant_project(&sb.base, "proj", "ID0001");
-    sb.ok(&["todo", "add", "ID0001", "cut the first minute", "--phase", "Main Edit"]);
+    sb.ok(&[
+        "todo",
+        "add",
+        "ID0001",
+        "cut the first minute",
+        "--phase",
+        "Main Edit",
+    ]);
     sb.ok(&["note", "add", "ID0001", "began the edit"]);
 
     let listed = sb.ok(&["recent", "--json"]);
     let rows: serde_json::Value = serde_json::from_str(&listed).expect("recent --json is JSON");
-    assert!(rows.is_array(), "a bare array, so `jq '.[].id'` works: {listed}");
+    assert!(
+        rows.is_array(),
+        "a bare array, so `jq '.[].id'` works: {listed}"
+    );
     assert_eq!(rows[0]["id"], "ID0001");
     assert!(rows[0]["path"].is_string() && rows[0]["base_label"].is_string());
 
@@ -1576,7 +1609,10 @@ fn json_output_is_an_array_and_show_is_one_project_whole() {
 
     // The summary names the project and counts what it has.
     let summary = sb.ok(&["show", "ID0001"]);
-    assert!(summary.contains("ID0001") && summary.contains("1 note"), "{summary}");
+    assert!(
+        summary.contains("ID0001") && summary.contains("1 note"),
+        "{summary}"
+    );
 
     // Two formats are one too many.
     let err = sb.fails(&["recent", "--json", "--plain"]);

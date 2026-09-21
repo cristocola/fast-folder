@@ -781,8 +781,11 @@ tag_from: ["tier"]
             let with_phases = format!(
                 "{before}\n## Todo\n\n### Intake\n- [ ] ingested the videos\n\n### Delivery\n- [ ] delivered the video\n"
             );
-            std::fs::write(fastf::core::project_info::pinfo_path(&project.path), &with_phases)
-                .unwrap();
+            std::fs::write(
+                fastf::core::project_info::pinfo_path(&project.path),
+                &with_phases,
+            )
+            .unwrap();
             let grouped = fastf::core::body::read_todos(&project.path).unwrap();
             assert_eq!(
                 grouped
@@ -926,5 +929,4 @@ todo:
             assert!(bad.validate().is_err());
         });
     }
-
 }

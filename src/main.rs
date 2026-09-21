@@ -1158,9 +1158,7 @@ fn run() -> Result<()> {
             cli::search::run(cli::search::SearchArgs { terms, plain, json })
         }
 
-        Some(Commands::Show { query, json }) => {
-            cli::show::run(cli::show::ShowArgs { query, json })
-        }
+        Some(Commands::Show { query, json }) => cli::show::run(cli::show::ShowArgs { query, json }),
 
         Some(Commands::Note { action }) => match action {
             NoteAction::Add { query, message } => {
@@ -1169,7 +1167,9 @@ fn run() -> Result<()> {
         },
 
         Some(Commands::Todo { action }) => match action {
-            TodoAction::List { query, open } => cli::todo::list(cli::todo::ListArgs { query, open }),
+            TodoAction::List { query, open } => {
+                cli::todo::list(cli::todo::ListArgs { query, open })
+            }
             TodoAction::Add { query, text, phase } => {
                 cli::todo::add(cli::todo::AddArgs { query, text, phase })
             }

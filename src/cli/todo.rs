@@ -82,7 +82,12 @@ pub fn list(args: ListArgs) -> Result<()> {
         let marker = if todo.done { "[x]" } else { "[ ]" };
         let number = format!("{:>width$}.", index + 1, width = width);
         if todo.done {
-            println!("  {} {} {}", number.dimmed(), marker.dimmed(), todo.text.dimmed());
+            println!(
+                "  {} {} {}",
+                number.dimmed(),
+                marker.dimmed(),
+                todo.text.dimmed()
+            );
         } else {
             println!("  {} {} {}", number.dimmed(), marker.green(), todo.text);
         }
@@ -91,10 +96,7 @@ pub fn list(args: ListArgs) -> Result<()> {
         println!("  {}", "(everything is done)".dimmed());
     }
     println!();
-    println!(
-        "  {}",
-        format!("{done}/{} done", todos.len()).dimmed()
-    );
+    println!("  {}", format!("{done}/{} done", todos.len()).dimmed());
     Ok(())
 }
 

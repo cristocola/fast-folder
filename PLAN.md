@@ -120,4 +120,8 @@ extras on top.
 
 ## Phase log
 
-(nothing yet)
+**Phase 1** — `Todo.phase`, read by `place_todos`. PR #85. Nine struct literals across the
+pane and the tui tests took the new field; nothing else moved. The one surprise: a `###`
+line under `## Notes` is read as the undated note the notes grammar already makes of text
+above the first entry, so the two sections' readers stay strangers, and a test now pins
+that. No docs — the field is invisible until phase 2 shows it.

@@ -160,6 +160,23 @@ pub fn describe(t: &Template) -> Vec<String> {
         lines.push("Excluded globs (never copied):".to_string());
         lines.extend(t.exclude.iter().map(|g| format!("  • {g}")));
     }
+    if !t.todo.is_empty() {
+        let tasks: usize = t.todo.iter().map(|b| b.tasks.len()).sum();
+        lines.push(String::new());
+        lines.push(format!(
+            "Starter todos: {tasks} task{}",
+            if tasks == 1 { "" } else { "s" }
+        ));
+        for block in &t.todo {
+            if let Some(phase) = &block.phase {
+                lines.push(format!("  {phase}"));
+            }
+            for task in &block.tasks {
+                lines.push(format!("    - {task}"));
+            }
+        }
+    }
+
     if !t.tags.is_empty() || !t.tag_from.is_empty() {
         lines.push(String::new());
         lines.push("Tags:".to_string());

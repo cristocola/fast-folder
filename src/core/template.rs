@@ -82,6 +82,25 @@ pub struct Template {
     /// Values that are empty after variable collection are skipped.
     #[serde(default)]
     pub tag_from: Vec<String>,
+
+    /// The task list every project from this template starts with, written
+    /// into `## Todo` at create time. Empty for a template that hands out no
+    /// tasks, which is every template that does not say otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub todo: Vec<TodoBlock>,
+}
+
+/// One phase of a template's starter task list.
+///
+/// A block with no `phase` writes its tasks bare, which a list keeps above
+/// its first label; a block with no `tasks` writes the label alone, which is
+/// how a template hands out an empty `### Other` for whatever comes up.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct TodoBlock {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<String>,
 }
 
 fn default_version() -> String {
@@ -520,6 +539,28 @@ impl Template {
             }
         }
         validate_structure(&self.structure, &self.slug)?;
+        // The same rules `body::add_todo_in` enforces, enforced when the
+        // template is saved rather than when a project is created from it.
+        for block in &self.todo {
+            if block
+                .phase
+                .as_ref()
+                .is_some_and(|p| p.trim().is_empty() || p.contains(['\n', '\r']))
+            {
+                bail!(
+                    "template '{}' has a todo phase that is empty or more than one line",
+                    self.slug
+                );
+            }
+            for task in &block.tasks {
+                if task.trim().is_empty() || task.contains(['\n', '\r']) {
+                    bail!(
+                        "template '{}' has a todo that is empty or more than one line",
+                        self.slug
+                    );
+                }
+            }
+        }
         // tag_from entries must reference declared variable slugs.
         let var_slugs: std::collections::HashSet<&str> =
             self.variables.iter().map(|v| v.slug.as_str()).collect();

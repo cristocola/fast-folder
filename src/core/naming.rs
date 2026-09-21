@@ -20,6 +20,11 @@ pub struct RenderContext {
     pub yyyy: String,
     pub mm: String,
     pub dd: String,
+    /// `{id}`, when there is a project to take one from — the ID a create is
+    /// about to mint, or the one an apply target already carries. `None`
+    /// leaves `{id}` literal, because an apply target need not be a project
+    /// and inventing a number there would be worse than leaving the token.
+    pub id: Option<String>,
 }
 
 impl RenderContext {
@@ -31,7 +36,14 @@ impl RenderContext {
             yyyy: now.format("%Y").to_string(),
             mm: now.format("%m").to_string(),
             dd: now.format("%d").to_string(),
+            id: None,
         }
+    }
+
+    /// The same context, resolving `{id}` to `id`.
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
     }
 
     /// The built-in token `name` resolves to, if it is one.
@@ -41,14 +53,16 @@ impl RenderContext {
             "YYYY" => Some(&self.yyyy),
             "MM" => Some(&self.mm),
             "DD" => Some(&self.dd),
+            "id" => self.id.as_deref(),
             _ => None,
         }
     }
 }
 
 /// Substitute `{token}` placeholders in `pattern`. Built-in tokens
-/// (`{date}`, `{YYYY}`, `{MM}`, `{DD}`) resolve from `ctx`; everything else
-/// comes from `vars`. Unrecognized tokens are left literal.
+/// (`{date}`, `{YYYY}`, `{MM}`, `{DD}`, and `{id}` when the context has one)
+/// resolve from `ctx`; everything else comes from `vars`. Unrecognized tokens
+/// are left literal.
 ///
 /// This is the raw form, used for file contents where `__` sequences (e.g.
 /// Python's `__init__`, `__version__`) must be preserved exactly.

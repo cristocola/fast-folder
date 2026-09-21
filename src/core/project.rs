@@ -283,6 +283,9 @@ pub fn plan(
     let counter_value = Counters::next_value(config, counters)?;
     let id_str = Counters::format_id(&template.id.prefix, template.id.digits, counter_value);
     vars.insert("id".to_string(), id_str.clone());
+    // The context carries it too, so `{id}` has one answer on every path: a
+    // create takes it from the counter, an apply from the target's metadata.
+    let ctx = ctx.with_id(id_str.clone());
 
     // Validate again after interpolation. Raw template paths can be safe while
     // a rendered date format or value turns a component into `..` or an
@@ -643,8 +646,27 @@ pub fn apply_plan(
 ) -> Result<Vec<ApplyAction>> {
     template.validate()?;
     let vars = crate::core::vars::rendered_values(template, vars)?;
-    // One clock for the whole apply, the same way a create takes one.
-    apply_plan_resolved(template, target, &vars, &RenderContext::now(date_format))
+    // One clock for the whole apply, the same way a create takes one — and
+    // the target's own id, so a template file that writes `{id}` is applied
+    // with the number the folder already has instead of the literal token.
+    apply_plan_resolved(
+        template,
+        target,
+        &vars,
+        &apply_context(target, date_format),
+    )
+}
+
+/// The render context an apply uses: one clock, and `{id}` from the target's
+/// own `PROJECT_INFO.md` when it has one. A target that is not a project
+/// leaves the token literal, which is what it has always done — `apply` never
+/// touches the counter and must not mint a number of its own.
+fn apply_context(target: &Path, date_format: &str) -> RenderContext {
+    let ctx = RenderContext::now(date_format);
+    match crate::core::project_info::read_metadata(target) {
+        Ok(Some(meta)) => ctx.with_id(meta.id),
+        _ => ctx,
+    }
 }
 
 fn apply_plan_resolved(
@@ -718,7 +740,8 @@ pub fn apply(
 ) -> Result<()> {
     crate::util::paths::require_real_directory(target, "apply target")?;
     let vars = crate::core::vars::rendered_values(template, vars)?;
-    let ctx = RenderContext::now(&config.date_format);
+    // The same context the preview was built with, for the same reason.
+    let ctx = apply_context(target, &config.date_format);
 
     // Empty dirs declared in `structure:` first (create-or-skip).
     for action in apply_plan_resolved(template, target, &vars, &ctx)? {

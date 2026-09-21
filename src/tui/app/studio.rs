@@ -832,6 +832,9 @@ pub fn sample_folder_name(template: &Template) -> String {
         yyyy: "2026".to_string(),
         mm: "01".to_string(),
         dd: "31".to_string(),
+        // The sample renders `{id}` from the variable map below, the way the
+        // sample renders every other token: one place, one answer.
+        id: None,
     };
     let mut vars: std::collections::HashMap<String, String> = template
         .variables

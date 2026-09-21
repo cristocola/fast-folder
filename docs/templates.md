@@ -138,8 +138,10 @@ Two variable types exist: `text` (free input) and `select` (pick from a list, wi
 |---|---|
 | `{date}` | `2026-04-17` (respects the `date_format` setting) |
 | `{YYYY}` `{MM}` `{DD}` | `2026` `04` `17` |
-| `{id}` | `ID0047` |
+| `{id}` | `ID0047` — the project's number; on `fastf apply`, the target folder's own |
 | `{anything_else}` | value of the matching variable |
+
+`{id}` on `fastf apply` comes from the target's `PROJECT_INFO.md`, so applying a template to a project stamps that project's number. A folder fastf holds no metadata for has no number to give, and `apply` leaves the token as written rather than inventing one — it says so once when it happens, and `fastf register` is what gives a folder a number.
 
 Two interpolation rules are worth knowing:
 
@@ -247,6 +249,39 @@ From the guided app it is `T` then `I`: a form for the source folder, the slug a
 ## Reserved filename
 
 `PROJECT_INFO.md` at the project root is reserved. fastf generates it on every `fastf new` and `fastf register`, and templates that try to declare their own root-level file with that name have the entry silently stripped. A nested `docs/PROJECT_INFO.md` is fine. If you want a custom notes file in your template, pick another name such as `NOTES.md`.
+
+## Starter todos
+
+A template can hand every new project the task list its workflow always starts with:
+
+```yaml
+todo:
+  - tasks:
+      - "read the brief for {title}"
+  - phase: "Main Edit"
+    tasks:
+      - "cut the first minute"
+      - "colour grade"
+  - phase: "Other"
+```
+
+Each block is a phase. A block with no `phase` writes its tasks bare, which the list keeps above its first label; a block with no `tasks` writes the label alone, which is how you hand out an empty `### Other` for whatever comes up. Tasks are interpolated like everything else, so `{title}` and `{id}` resolve.
+
+That produces, in the new project's `PROJECT_INFO.md`:
+
+```markdown
+## Todo
+
+- [ ] read the brief for Lullaby
+
+### Main Edit
+- [ ] cut the first minute
+- [ ] colour grade
+
+### Other
+```
+
+A task is one line and may not be empty; a template that breaks either rule is refused when it is saved rather than when a project is created from it. Leave `todo:` out and a new project starts with no `## Todo` at all, exactly as before — the list appears on the first `fastf todo add` or the first todo added in the app.
 
 ## Post-create actions
 

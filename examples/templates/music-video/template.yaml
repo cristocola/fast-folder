@@ -39,3 +39,24 @@ structure:
       - name: "01_Finals"
       - name: "02_WIP"
   - name: "03_Project_Files"
+
+# Every new project starts with this list, in `## Todo` of its PROJECT_INFO.md.
+# A block with no `phase` writes its tasks bare; a block with no `tasks` hands
+# out the label alone. `fastf todo add --phase "Main Edit"` adds to one later.
+todo:
+  - tasks:
+      - "read the brief and check the audio arrived"
+  - phase: "Creative Plan"
+    tasks:
+      - "listen to {title} start to finish"
+      - "choose the mood, the theme and the search terms"
+  - phase: "Main Edit"
+    tasks:
+      - "cut the first minute, then rewatch"
+      - "finish the edit"
+      - "colour grade"
+  - phase: "Delivery"
+    tasks:
+      - "export the masters into 02_Export"
+      - "check every export opens and plays"
+  - phase: "Other"

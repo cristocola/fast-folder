@@ -86,6 +86,20 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         return Ok(());
     };
 
+    // `{id}` resolves from the target's own metadata, so a folder fastf owns
+    // no metadata for gets the token as written. Say so once, here, rather
+    // than leaving a literal `{id}` in a file for somebody to find later.
+    if mentions_id(&tmpl) && !crate::core::project_info::pinfo_path(&target).is_file() {
+        eprintln!(
+            "{} template '{}' writes {{id}}, and {} has no PROJECT_INFO.md — \
+             it is left as written ({} would give the folder one)",
+            "note:".yellow().bold(),
+            tmpl.slug,
+            crate::util::paths::display_path(&target),
+            "fastf register".bold(),
+        );
+    }
+
     let actions = project::apply_plan(&tmpl, &target, &raw_vars, &config.date_format)?;
 
     if args.dry_run {
@@ -128,4 +142,19 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     crate::core::operations::apply(&tmpl.slug, &target, &raw_vars)?;
     println!("\n{}  {}", "✓".green().bold(), "Template applied".bold());
     Ok(())
+}
+
+/// Whether the template writes `{id}` anywhere an apply would render it: a
+/// folder name, a file name, or the text of a file it interpolates.
+fn mentions_id(tmpl: &crate::core::template::Template) -> bool {
+    fn in_structure(nodes: &[crate::core::template::FolderNode]) -> bool {
+        nodes
+            .iter()
+            .any(|n| n.name.contains("{id}") || in_structure(&n.children))
+    }
+    in_structure(&tmpl.structure)
+        || tmpl
+            .files
+            .iter()
+            .any(|f| f.path.contains("{id}") || f.template.contains("{id}"))
 }

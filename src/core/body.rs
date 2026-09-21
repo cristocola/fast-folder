@@ -18,8 +18,10 @@
 //! a trailing colon; a line under the notes heading that does not start an
 //! entry belongs to the entry above it (or, before the first entry, to one
 //! undated note); a line under the todo heading that is not a task is simply
-//! not a task. A file somebody hand-edited into a shape fastf never wrote is
-//! shown as far as it can be read, which is as far as it goes.
+//! not a task — except a `###` line, which labels the **phase** every task
+//! below it belongs to, until the next one. A file somebody hand-edited into a
+//! shape fastf never wrote is shown as far as it can be read, which is as far
+//! as it goes.
 //!
 //! **The writer changes the bytes it is about and no others.** An append
 //! lands at the end of its section; an edit splices over the note's own lines;
@@ -68,6 +70,10 @@ impl Note {
 pub struct Todo {
     pub done: bool,
     pub text: String,
+    /// The `###` label above it, if the list is grouped into phases — the
+    /// nearest one, so a task before the first label has none. It is read,
+    /// never written by a toggle: a phase is a line of the user's own file.
+    pub phase: Option<String>,
 }
 
 /// A section fastf knows how to read.
@@ -106,6 +112,16 @@ fn heading_name(line: &str) -> Option<&str> {
     }
     let name = rest.trim().trim_end_matches(':').trim();
     Some(name)
+}
+
+/// The phase a `###` line names, if it names one. Three hashes or more, so a
+/// deeper label groups the tasks under it the same way; an empty label is not
+/// a phase and leaves the one above it standing. `##` is a section and never
+/// reaches here, because a section ends where the next one starts.
+fn phase_name(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("###")?;
+    let name = rest.trim_start_matches('#').trim().trim_end_matches(':').trim();
+    (!name.is_empty()).then_some(name)
 }
 
 /// Whether `line` starts a section — any `##` heading, whatever it says.
@@ -521,19 +537,26 @@ fn place_todos(content: &str) -> Vec<PlacedTodo> {
     let Some(span) = section_span(content, Section::Todo) else {
         return Vec::new();
     };
-    section_lines(content, &span)
-        .into_iter()
-        .filter_map(|(range, line)| {
-            let (done, marker_at, inside, text) = task_line(line)?;
-            Some(PlacedTodo {
-                todo: Todo {
-                    done,
-                    text: text.to_string(),
-                },
-                marker: range.start + marker_at..range.start + marker_at + inside,
-            })
-        })
-        .collect()
+    let mut phase: Option<String> = None;
+    let mut placed = Vec::new();
+    for (range, line) in section_lines(content, &span) {
+        if let Some(name) = phase_name(line) {
+            phase = Some(name.to_string());
+            continue;
+        }
+        let Some((done, marker_at, inside, text)) = task_line(line) else {
+            continue;
+        };
+        placed.push(PlacedTodo {
+            todo: Todo {
+                done,
+                text: text.to_string(),
+                phase: phase.clone(),
+            },
+            marker: range.start + marker_at..range.start + marker_at + inside,
+        });
+    }
+    placed
 }
 
 /// Every task in `content`, in file order.
@@ -879,6 +902,50 @@ mod tests {
     }
 
     #[test]
+    fn a_task_takes_the_phase_label_above_it_and_the_ordinals_do_not_move() {
+        let before = doc(concat!(
+            "## Todo\n\n",
+            "- [x] read the order\n",           // before any label: no phase
+            "### Main Edit\n",
+            "- [ ] cut the first minute\n",
+            "#### Grade:\n",                    // deeper, and a trailing colon
+            "- [ ] match the cameras\n",
+            "###\n",                            // an empty label leaves the one above standing
+            "- [ ] export\n",
+            "### Other\n",                      // a label with nothing under it
+        ));
+        let todos = todos_in(&before);
+        let phases: Vec<Option<&str>> = todos.iter().map(|t| t.phase.as_deref()).collect();
+        assert_eq!(
+            phases,
+            vec![None, Some("Main Edit"), Some("Grade"), Some("Grade")]
+        );
+
+        // A label is not a task, so it consumes no ordinal and a toggle still
+        // names the same line it named before the phases were written.
+        let (_dir, path) = file(&before);
+        assert!(toggle_todo(&path, 3, "export").unwrap());
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            before.replace("[ ] export", "[x] export")
+        );
+    }
+
+    #[test]
+    fn a_phase_label_belongs_to_its_own_section_only() {
+        // A `###` line under the notes is prose there — the undated note the
+        // notes grammar already makes of text above the first entry — and it
+        // never reaches the todo reader.
+        let before =
+            doc("## Notes\n\n### not a phase\n\n- 2026-01-01 — a\n\n## Todo\n\n- [ ] plain\n");
+        assert_eq!(todos_in(&before)[0].phase, None);
+        let notes = notes_in(&before);
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].timestamp, None);
+        assert_eq!(notes[0].text, "### not a phase");
+    }
+
+    #[test]
     fn a_task_is_read_in_any_indent_and_toggled_by_one_byte() {
         let before = doc(
             "## Notes\n\n- 2026-01-01 — a\n\n## TODO:\n\nsome prose\n- [x] ingested\n  * [ ] edited\n- [] delivered\n- not a task\n- [y] nor this\n",
@@ -888,15 +955,18 @@ mod tests {
             vec![
                 Todo {
                     done: true,
-                    text: "ingested".to_string()
+                    text: "ingested".to_string(),
+                    phase: None,
                 },
                 Todo {
                     done: false,
-                    text: "edited".to_string()
+                    text: "edited".to_string(),
+                    phase: None,
                 },
                 Todo {
                     done: false,
-                    text: "delivered".to_string()
+                    text: "delivered".to_string(),
+                    phase: None,
                 },
             ]
         );

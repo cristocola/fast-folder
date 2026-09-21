@@ -776,6 +776,32 @@ tag_from: ["tier"]
                 ]
             );
 
+            // A phase label a user wrote by hand groups the tasks under it and
+            // takes no ordinal, so the numbers `add_todo` handed out still hold.
+            let with_phases = format!(
+                "{before}\n## Todo\n\n### Intake\n- [ ] ingested the videos\n\n### Delivery\n- [ ] delivered the video\n"
+            );
+            std::fs::write(fastf::core::project_info::pinfo_path(&project.path), &with_phases)
+                .unwrap();
+            let grouped = fastf::core::body::read_todos(&project.path).unwrap();
+            assert_eq!(
+                grouped
+                    .iter()
+                    .map(|t| (t.phase.as_deref(), t.text.as_str()))
+                    .collect::<Vec<_>>(),
+                [
+                    (Some("Intake"), "ingested the videos"),
+                    (Some("Delivery"), "delivered the video")
+                ]
+            );
+            assert!(operations::toggle_todo(&project, 1, "delivered the video").unwrap());
+            assert_eq!(
+                file(&project),
+                with_phases.replace("- [ ] delivered", "- [x] delivered"),
+                "one byte, and the phase lines untouched"
+            );
+            std::fs::write(fastf::core::project_info::pinfo_path(&project.path), &after).unwrap();
+
             assert!(operations::toggle_todo(&project, 0, "ingested the videos").unwrap());
             assert_eq!(
                 file(&project),

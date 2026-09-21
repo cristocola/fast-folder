@@ -1195,10 +1195,12 @@ fn detail_pane_editing_a_variable_120x40() {
             fastf::core::body::Todo {
                 done: true,
                 text: "ingested the footage".to_string(),
+                phase: None,
             },
             fastf::core::body::Todo {
                 done: false,
                 text: "deliver the video".to_string(),
+                phase: None,
             },
         ],
         ..Default::default()
@@ -1253,6 +1255,7 @@ fn detail_pane_wraps_a_long_note_and_todo_120x40() {
             done: false,
             text: "send the rough cut to the label and ask whether the lyric video is in scope"
                 .to_string(),
+            phase: None,
         }],
         ..Default::default()
     };

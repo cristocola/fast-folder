@@ -110,16 +110,48 @@ fn the_right_arrow_focuses_the_pane_and_the_left_arrow_the_list() {
     assert!(app.modals.is_empty());
 }
 
-/// **The horizontal axis never quits, and never runs.** On the list `←`
-/// has nothing to its left and is not bound; without a pane — the window
-/// is under a hundred columns — `→` has nothing to its right either.
+/// **On a small window the pane takes the list's place.** There is no room
+/// beside the list or under it at 80×24, so `→` puts the pane where the list
+/// was, and `←` brings the list back — the same keys, the same focus, the
+/// pane drawn instead of beside.
 #[test]
-fn the_arrows_are_unbound_where_there_is_nowhere_to_go() {
+fn on_a_small_window_the_pane_takes_the_lists_place() {
+    use fastf::tui::layout::Placement;
+
     let mut app = fixture(3, 80, 24);
+    assert_eq!(app.regions().placement, Some(Placement::Over));
+    assert!(app.pane_behind_list());
+    assert!(!app.detail_visible(), "the list is what is drawn");
+    press(&mut app, Key::plain(KeyCode::Right));
+    assert_eq!(app.focus, Focus::Detail);
+    assert!(app.detail_visible(), "and now the pane is");
+    let frame = fastf::tui::testing::render_to_string(&app, 80, 24);
+    let selected = app.library.selected().unwrap().name.clone();
     assert!(
-        !app.detail_visible(),
-        "the fixture is too narrow for a pane"
+        frame.contains(&selected),
+        "the pane names its project:\n{frame}"
     );
+    assert!(
+        !frame.contains("PROJECT"),
+        "and the table is not drawn under it:\n{frame}"
+    );
+    press(&mut app, Key::plain(KeyCode::Left));
+    assert_eq!(app.focus, Focus::Projects);
+    assert!(!app.detail_visible());
+    assert!(app.modals.is_empty());
+}
+
+/// **The horizontal axis never quits, and never runs.** On the list `←` has
+/// nothing to its left and is not bound; with the pane switched off, `→` has
+/// nothing to its right either.
+#[test]
+fn the_arrows_are_unbound_with_the_pane_closed() {
+    // Switched off where it sits beside the list — at 80×24 `i` only goes in
+    // and out of it — and the window made small after.
+    let mut app = fixture(3, 120, 40);
+    press(&mut app, Key::ch('i'));
+    update(&mut app, Msg::Resize(80, 24));
+    assert!(!app.detail_open, "the fixture switches the pane off");
     for key in [
         Key::plain(KeyCode::Left),
         Key::ch('h'),
@@ -134,6 +166,38 @@ fn the_arrows_are_unbound_where_there_is_nowhere_to_go() {
         assert!(app.modals.is_empty());
         assert_eq!(app.focus, Focus::Projects);
     }
+}
+
+/// **`i` shows or hides the pane, wherever it is.** Beside the list it closes
+/// and opens it; where it takes the list's place, showing it is going into it
+/// and hiding it is coming back out.
+#[test]
+fn i_shows_or_hides_the_pane_where_it_is() {
+    let mut wide = fixture(3, 120, 40);
+    assert!(wide.detail_visible());
+    press(&mut wide, Key::ch('i'));
+    assert!(
+        !wide.detail_open && !wide.detail_visible(),
+        "beside: i closes it"
+    );
+    press(&mut wide, Key::ch('i'));
+    assert!(
+        wide.detail_open && wide.detail_visible(),
+        "and opens it again"
+    );
+    assert_eq!(wide.focus, Focus::Projects, "without taking the focus");
+
+    let mut small = fixture(3, 80, 24);
+    press(&mut small, Key::ch('i'));
+    assert_eq!(
+        small.focus,
+        Focus::Detail,
+        "in the list's place: i goes into it"
+    );
+    assert!(small.detail_visible());
+    press(&mut small, Key::ch('i'));
+    assert_eq!(small.focus, Focus::Projects, "and i again comes back out");
+    assert!(small.detail_open, "still on, one key away");
 }
 
 /// The templates tab has a pane too, and it is always drawn — so `→`
@@ -293,4 +357,44 @@ fn esc_from_the_template_pane_goes_to_its_list_first() {
     assert_eq!(app.screen, Screen::Templates, "still on the tab");
     press(&mut app, Key::plain(KeyCode::Esc));
     assert_eq!(app.screen, Screen::Library, "then off it");
+}
+
+/// **A window that shrinks keeps the pane focused**, in its new place: from
+/// beside the list at 120 columns to the list's place at 80, the focus stays
+/// in the pane and the pane is what is drawn.
+#[test]
+fn a_window_that_shrinks_keeps_the_pane_focused_in_its_new_place() {
+    use fastf::tui::layout::Placement;
+
+    let mut app = fixture(6, 120, 40);
+    press(&mut app, Key::plain(KeyCode::Right));
+    assert_eq!(app.regions().placement, Some(Placement::Beside));
+    update(&mut app, Msg::Resize(80, 24));
+    assert_eq!(app.regions().placement, Some(Placement::Over));
+    assert_eq!(app.focus, Focus::Detail, "still in the pane");
+    assert!(app.detail_visible(), "which now has the list's place");
+    update(&mut app, Msg::Resize(120, 40));
+    assert_eq!(app.focus, Focus::Detail);
+    assert_eq!(app.regions().placement, Some(Placement::Beside));
+}
+
+/// The templates tab draws in the whole body, wherever the library's pane
+/// would be: it used to rebuild its band from the table's width plus the
+/// pane's, which is the window twice over once the pane sits under the table.
+#[test]
+fn the_templates_tab_takes_the_whole_body_whatever_the_library_pane_does() {
+    for (width, height) in [(120, 40), (60, 45), (80, 24)] {
+        let mut app = fixture(6, width, height);
+        press(&mut app, Key::ch('T'));
+        let frame = fastf::tui::testing::render_to_string(&app, width, height);
+        let regions = app.regions();
+        let bottom = frame
+            .lines()
+            .nth((regions.body.y + regions.body.height - 1) as usize)
+            .unwrap_or_default();
+        assert!(
+            bottom.contains('└') && bottom.contains('┘'),
+            "{width}×{height}: the tab's boxes close on the body's last row:\n{frame}"
+        );
+    }
 }

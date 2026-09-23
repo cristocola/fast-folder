@@ -295,9 +295,9 @@ pub enum CommandId {
     HalfUp,
     First,
     Last,
-    /// The horizontal axis, leftwards: the list beside the pane.
+    /// The horizontal axis, leftwards: from the pane back to the list.
     FocusList,
-    /// The horizontal axis, rightwards: the pane beside the list.
+    /// The horizontal axis, rightwards: from the list into the pane.
     FocusDetail,
     /// Back to the library from the templates tab — palette only; `T` and
     /// Esc are the keys.
@@ -522,8 +522,9 @@ fn pane_has_focus(app: &App) -> Availability {
 }
 
 /// `→` is bound only while there is a pane to go to and the cursor is not
-/// already in it. The library's pane closes under `layout::DETAIL_MIN_WIDTH`,
-/// and then the key is unbound rather than a no-op advertised on the bar.
+/// already in it. The library's pane is always one key away while it is
+/// switched on — beside the list, under it, or in its place — and with `i`
+/// it is off, and then the key is unbound rather than a no-op on the bar.
 fn pane_can_take_focus(app: &App) -> Availability {
     if app.focus == Focus::Projects && app.pane_present() {
         Availability::Enabled
@@ -822,7 +823,7 @@ fn can_move(app: &App) -> Availability {
 }
 
 const G: &[Context] = &[Context::Global];
-/// The library's own screen: the table and the pane beside it. The templates
+/// The library's own screen: the table and its pane. The templates
 /// tab is **not** in it — it was, while the templates were a strip along the
 /// bottom of this screen, and that is why `n` used to mean both "new project"
 /// and "new template" in the same hint bar.
@@ -864,7 +865,7 @@ const DIALOGS: &[Context] = &[
     Context::Modal,
 ];
 /// Where the horizontal axis moves focus: both tabs, each a list with a pane
-/// beside it. Nowhere else — a dialog has no second pane, and a text field
+/// of its own. Nowhere else — a dialog has no second pane, and a text field
 /// owns its own arrows.
 const PANED: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
 const STUDIO: &[Context] = &[Context::Templates];
@@ -1157,7 +1158,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         FocusNext,
         "Next pane",
-        "move focus between the list and the pane beside it",
+        "move focus between the list and its pane",
         G,
         [Key::plain(KeyCode::Tab)],
         Navigate,
@@ -1483,7 +1484,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         ToggleDetail,
         "Toggle the detail pane",
-        "show or hide the pane beside the list",
+        "show or hide the detail pane",
         LISTS,
         [Key::ch('i')],
         Navigate,
@@ -1743,7 +1744,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         FocusList,
         "Back to the list",
-        "put the cursor back on the list beside the pane",
+        "put the cursor back on the list",
         PANED,
         [Key::plain(KeyCode::Left), Key::ch('h')],
         Navigate,
@@ -1754,7 +1755,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         FocusDetail,
         "Into the pane",
-        "put the cursor in the pane beside the list — the project's detail, or the template's",
+        "put the cursor in the pane — the project's detail, or the template's",
         PANED,
         [Key::plain(KeyCode::Right), Key::ch('l')],
         Navigate,

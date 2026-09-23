@@ -24,7 +24,7 @@ pub fn view(app: &App, frame: &mut Frame) {
         render_too_small(app, frame, area);
         return;
     }
-    let regions = layout::regions(area, app.detail_open, app.table_min_width());
+    let regions = layout::regions(area, app.pane_live(), app.table_needs());
 
     dashboard::header(app, frame, regions.header);
     // The two tabs share every band but the middle one, so the chrome — the
@@ -33,15 +33,28 @@ pub fn view(app: &App, frame: &mut Frame) {
     let (search_caret, pane_caret) = match app.screen {
         crate::tui::app::Screen::Library => {
             let caret = dashboard::search_bar(app, frame, regions.search);
-            projects::table(app, frame, regions.table);
-            let pane_caret = regions
-                .detail
-                .and_then(|detail| projects::detail(app, frame, detail));
+            // The pane in the list's place is drawn only while it has the
+            // focus, and then instead of the table; beside or under the
+            // table, it is drawn with it.
+            let over = regions.placement == Some(layout::Placement::Over);
+            let pane_caret = match regions.detail {
+                Some(pane) if over && app.focus == crate::tui::app::Focus::Detail => {
+                    projects::detail(app, frame, pane)
+                }
+                Some(pane) if !over => {
+                    projects::table(app, frame, regions.table);
+                    projects::detail(app, frame, pane)
+                }
+                _ => {
+                    projects::table(app, frame, regions.table);
+                    None
+                }
+            };
             (caret, pane_caret)
         }
         crate::tui::app::Screen::Templates => {
             let caret = templates::bar(app, frame, regions.search);
-            templates::screen(app, frame, layout::templates_body(&regions));
+            templates::screen(app, frame, regions.body);
             (caret, None)
         }
     };

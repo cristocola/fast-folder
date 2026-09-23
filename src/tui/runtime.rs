@@ -275,7 +275,7 @@ impl Runtime {
         if self.last_watch.is_some_and(|at| at.elapsed() < WATCH_EVERY) {
             return;
         }
-        if !app.detail_visible() {
+        if !app.pane_live() {
             return;
         }
         let Some(project) = app.library.selected() else {

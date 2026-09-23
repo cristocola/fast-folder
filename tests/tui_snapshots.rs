@@ -1346,3 +1346,245 @@ fn detail_pane_wraps_a_long_note_and_todo_120x40() {
     );
     snap("detail_pane_wraps_a_long_note_and_todo_120x40", frame);
 }
+
+/// A project's record as the pane reads it: two tags come from the fixture;
+/// this adds a note of more than one line and a todo list in two phases, the
+/// first of them finished.
+fn a_record() -> fastf::tui::app::data::ProjectDetail {
+    use fastf::core::body::{Note, Todo};
+    let todo = |done: bool, text: &str, phase: &str| Todo {
+        done,
+        text: text.to_string(),
+        phase: Some(phase.to_string()),
+    };
+    fastf::tui::app::data::ProjectDetail {
+        notes: vec![
+            Note {
+                timestamp: Some("2026-01-05T09:12:00Z".to_string()),
+                text: "brief signed off, shoot booked".to_string(),
+            },
+            Note {
+                timestamp: Some("2026-01-16T18:40:00Z".to_string()),
+                text: "first cut sent to Acme\nhold the logo two seconds longer".to_string(),
+            },
+        ],
+        todos: vec![
+            todo(true, "shoot the product close-ups", "Shoot"),
+            todo(true, "rough cut", "Shoot"),
+            todo(false, "colour and sound mix", "Deliver"),
+            todo(false, "deliver the 16:9 and 9:16 masters", "Deliver"),
+        ],
+        ..Default::default()
+    }
+}
+
+/// Hand the selected project its record, as the pane's reader would.
+fn deliver_record(app: &mut App) {
+    let path = app.library.selected().unwrap().path.clone();
+    let _ = update(
+        app,
+        Msg::Detail {
+            path,
+            detail: Box::new(a_record()),
+        },
+    );
+}
+
+/// **On a standard terminal the pane takes the list's place.** No room beside
+/// the list at 80 columns, none under it at 24 rows: `→` draws the pane where
+/// the list was, and the table is not drawn under it.
+#[test]
+fn dashboard_over_80x24_pane_focused() {
+    let mut app = fixture(12, 80, 24);
+    press_key(&mut app, Key::ch('j'));
+    deliver_record(&mut app);
+    press_key(&mut app, Key::plain(KeyCode::Right));
+    let frame = render_to_string(&app, 80, 24);
+    let name = app.library.selected().unwrap().name.clone();
+    assert!(
+        frame.contains(&name),
+        "the pane names its project:\n{frame}"
+    );
+    assert!(
+        !frame.contains("PROJECT"),
+        "and the table's header is not under it:\n{frame}"
+    );
+    snap("dashboard_over_80x24_pane_focused", frame);
+}
+
+/// **A tall, narrow window puts the pane under the list**, full width, and the
+/// table keeps every name whole — the shape of a vertical split.
+#[test]
+fn dashboard_below_60x45() {
+    let mut app = fixture(8, 60, 45);
+    deliver_record(&mut app);
+    let frame = render_to_string(&app, 60, 45);
+    let regions = app.regions();
+    assert_eq!(
+        regions.placement,
+        Some(fastf::tui::layout::Placement::Below)
+    );
+    for project in fastf::tui::testing::sample_projects(8) {
+        assert!(
+            frame.contains(&project.name),
+            "{} is whole in the table:\n{frame}",
+            project.name
+        );
+    }
+    assert!(
+        frame.contains("brief signed off"),
+        "the pane shows the record:\n{frame}"
+    );
+    snap("dashboard_below_60x45", frame);
+}
+
+fn press_key(app: &mut App, key: Key) {
+    let _ = update(app, Msg::Key(key));
+}
+
+/// **Every state draws at every size.** Each screen the suites can build is
+/// built once, then moved through a grid of window sizes the way a person
+/// dragging a corner moves it, and drawn at each. Nothing may panic — the kind
+/// of crash the Bases editor had between 16 and 23 rows — and what is being
+/// worked on stays on screen: the pane's cursor inside the pane, an edit's
+/// caret inside the field.
+#[test]
+fn every_state_draws_at_every_size() {
+    use fastf::tui::app::Focus;
+    use fastf::tui::app::pane::PaneRow;
+
+    type Build = fn() -> App;
+    fn go_to(app: &mut App, wanted: impl Fn(&PaneRow) -> bool) {
+        press_key(app, Key::ch('g'));
+        let at = app.pane_rows().iter().position(wanted).expect("the row");
+        while app.pane_cursor < at {
+            press_key(app, Key::ch('j'));
+        }
+    }
+    let states: Vec<(&str, Build)> = vec![
+        ("dashboard", || fixture(12, 120, 40)),
+        ("pane focused", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('j'));
+            deliver_record(&mut app);
+            press_key(&mut app, Key::plain(KeyCode::Right));
+            press_key(&mut app, Key::ch('G'));
+            app
+        }),
+        ("a tag being edited", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('j'));
+            deliver_record(&mut app);
+            press_key(&mut app, Key::plain(KeyCode::Right));
+            go_to(&mut app, |row| matches!(row, PaneRow::Tag(_)));
+            press_key(&mut app, Key::plain(KeyCode::Enter));
+            app
+        }),
+        ("a note being edited", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('j'));
+            deliver_record(&mut app);
+            press_key(&mut app, Key::plain(KeyCode::Right));
+            go_to(&mut app, |row| {
+                matches!(row, PaneRow::Note { ordinal: 1, .. })
+            });
+            press_key(&mut app, Key::plain(KeyCode::Enter));
+            app
+        }),
+        ("help", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('?'));
+            app
+        }),
+        ("actions", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('a'));
+            app
+        }),
+        ("palette", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('c'));
+            app
+        }),
+        ("a query", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('/'));
+            for c in "lull".chars() {
+                press_key(&mut app, Key::ch(c));
+            }
+            app
+        }),
+        ("the wizard", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('n'));
+            app
+        }),
+        ("settings", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch(','));
+            app
+        }),
+        ("the templates tab", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('T'));
+            app
+        }),
+        ("the builder", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('T'));
+            press_key(&mut app, Key::ch('n'));
+            app
+        }),
+        ("a confirm", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('u'));
+            app
+        }),
+        ("the delete prompt", || {
+            let mut app = fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('D'));
+            app
+        }),
+    ];
+    let widths = [40, 59, 60, 64, 72, 80, 90, 100, 110, 120, 140, 200];
+    let heights = [12, 15, 16, 18, 20, 23, 24, 28, 30, 36, 45, 60];
+    for (name, build) in states {
+        let mut app = build();
+        for &width in &widths {
+            for &height in &heights {
+                let _ = update(&mut app, Msg::Resize(width, height));
+                let (_, caret) = fastf::tui::testing::render_with_caret(&app, width, height);
+                if fastf::tui::layout::too_small(app.area()) || !app.modals.is_empty() {
+                    continue;
+                }
+                let regions = app.regions();
+                if app.focus == Focus::Detail
+                    && app.detail_visible()
+                    && let Some(pane) = regions.detail
+                {
+                    let shown = pane.height.saturating_sub(2) as usize;
+                    let on = app.pane_edit.as_ref().map_or(app.pane_cursor, |e| e.row());
+                    assert!(
+                        on >= app.detail_scroll && on < app.detail_scroll + shown.max(1),
+                        "{name} at {width}×{height}: row {on} is off the pane \
+                         (scroll {}, {shown} rows)",
+                        app.detail_scroll
+                    );
+                    if app.pane_edit.is_some() {
+                        let caret = caret.unwrap_or_else(|| {
+                            panic!("{name} at {width}×{height}: an edit with no caret")
+                        });
+                        assert!(
+                            caret.x >= pane.x
+                                && caret.x < pane.x + pane.width
+                                && caret.y >= pane.y
+                                && caret.y < pane.y + pane.height,
+                            "{name} at {width}×{height}: the caret {caret:?} is outside \
+                             the pane {pane:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

@@ -209,13 +209,14 @@ pub struct LibraryState {
     pub meta: HashMap<PathBuf, Option<Metadata>>,
     /// Every tag the snapshot carries, sorted and distinct.
     pub known_tags: Vec<String>,
-    /// The widest id and the widest name among the rows shown — measured once
-    /// per `recompute`, so the table and the layout agree on them.
+    /// The widest id and the widest name in the library — measured once per
+    /// `recompute`, over every project rather than the rows a search leaves,
+    /// so the pane's placement does not move while a query is typed.
     pub widths: (usize, usize),
-    /// The widest base label among the rows shown, and whether they come from
-    /// more than one base. Measured beside `widths` for the same reason: the
-    /// layout has to reserve the base column the table is about to elect, or
-    /// the table asks for a width it will not use and the column never appears.
+    /// The widest base label in the library, and whether it spans more than
+    /// one base. Measured beside `widths` for the same reasons: the layout has
+    /// to reserve the base column the table is about to elect, or the table
+    /// asks for a width it will not use and the column never appears.
     pub base_width: usize,
     pub many_bases: bool,
 }
@@ -433,18 +434,24 @@ impl LibraryState {
 
         self.filtered = rows.iter().map(|(index, _)| *index).collect();
         self.scores = rows.into_iter().map(|(_, info)| info).collect();
-        self.widths = self.filtered.iter().fold((4, 8), |(id_w, name_w), &index| {
-            let project = &self.snapshot[index];
-            (
-                id_w.max(UnicodeWidthStr::width(project.id.as_str())),
-                name_w.max(UnicodeWidthStr::width(project.name.as_str())),
-            )
-        });
+        // The table's claim on the window, measured over the whole library
+        // rather than the rows the query leaves: a claim that shrank as a
+        // search was typed would move the pane on every keystroke — beside the
+        // list for one letter, under it for the next.
+        self.widths = self
+            .snapshot
+            .iter()
+            .fold((4, 8), |(id_w, name_w), project| {
+                (
+                    id_w.max(UnicodeWidthStr::width(project.id.as_str())),
+                    name_w.max(UnicodeWidthStr::width(project.name.as_str())),
+                )
+            });
         let mut base_width = 4usize;
         let mut first_base: Option<&Path> = None;
         let mut many = false;
-        for &index in &self.filtered {
-            let base = self.snapshot[index].base.as_path();
+        for project in &self.snapshot {
+            let base = project.base.as_path();
             base_width = base_width.max(UnicodeWidthStr::width(library::base_label(base).as_str()));
             match first_base {
                 None => first_base = Some(base),

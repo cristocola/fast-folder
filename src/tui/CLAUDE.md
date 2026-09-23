@@ -204,10 +204,26 @@ for the wrapped views (as `command::help_line_count` does for help) and
 Clamped only at draw time, a scroll runs past the end and the dialog seems frozen.
 
 `layout::panel_fits_width` settles whether a panel is coming before a dialog is
-sized, because the panel changes the height the dialog wants. The table/pane split
-favours the table (`regions`), and the pane closes under `DETAIL_PANE_MIN`. The
-templates tab splits through `layout::templates_panes`, so `studio_scroll_max` and
-the view measure one box.
+sized, because the panel changes the height the dialog wants. The templates tab
+draws in `Regions.body` and splits through `layout::templates_panes`, so
+`studio_scroll_max` and the view measure one box.
+
+**The pane goes where the room is** (`layout::place`, one pure function of the
+body and `TableNeeds`): **beside** the table when the names fit whole with
+`PANE_BESIDE_MIN` next to them; **below** it, full width, when the body holds
+`TABLE_BELOW_MIN` + `PANE_BELOW_MIN` rows — the table as tall as its projects, up
+to its share; otherwise **over** it, `Regions.detail` being the body itself, drawn
+instead of the table while the pane has the focus. The pane used to need 100
+columns *and* 26 left by the names, so a library of long names never showed it at
+all. `place` takes no focus: the pane's width is what its rows wrap to, and a
+focus that changed it would re-wrap them under the cursor. The app asks three
+questions of it: `pane_live` (switched on, and a library with a project in it —
+the pane arrives with the first project instead of moving when the names land),
+`detail_visible` (drawn this frame) and `pane_behind_list` (over, the list
+focused). The content is read whenever the pane is live, so going into a pane
+drawn over the list is instant. `i` shows or hides, literally: a pane on screen
+is closed (beside, below) or left (over); one not on screen is opened, and gone
+into when it would be over.
 
 ## One registry
 
@@ -389,9 +405,12 @@ cannot reflow the table; the size cell is `rows::SIZE_CELL`, right-aligned, head
 included.
 
 **The base is promoted above the date when the visible rows span more than one
-base** — a question about the rows on screen, not the configuration.
-`LibraryState.many_bases` and `base_width` are measured in `recompute`, so
-`App::table_min_width` can claim that column before long names take its room.
+base** — a question about the rows on screen, not the configuration. The
+*claim* is another question: `LibraryState.widths`, `many_bases` and
+`base_width` are measured in `recompute` over the **whole library**, so
+`App::table_min_width` can claim the base column before long names take its
+room, and so a claim that shrank as a query was typed cannot move the pane on
+every keystroke; the view's `choose_columns` still measures the rows on screen.
 
 **Width is display columns, never bytes or characters** (`Проекты` is seven
 columns and fourteen bytes): `view::fit`, `view::pad`, and

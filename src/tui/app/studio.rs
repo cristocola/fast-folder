@@ -1501,11 +1501,11 @@ impl App {
     /// draws with — so the cursor cannot leave the drawn window.
     ///
     /// **The templates tab's own split**, not the library's: it measured
-    /// `regions().detail` before, which is the library pane — closed under a
-    /// hundred columns while the template pane is always drawn — so on a
+    /// `regions().detail` before, which is the library pane — somewhere else
+    /// entirely, or closed, while the template pane is always drawn — so on a
     /// narrow window Tab could not reach a pane that was right there.
     pub(super) fn studio_scroll_max(&self) -> usize {
-        let (_, pane) = layout::templates_panes(layout::templates_body(&self.regions()));
+        let (_, pane) = layout::templates_panes(self.regions().body);
         let rows = pane.height.saturating_sub(2) as usize;
         self.studio.lines.len().saturating_sub(rows)
     }

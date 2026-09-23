@@ -1,4 +1,5 @@
-//! The project table and the detail pane beside it.
+//! The project table and its detail pane — beside it, under it, or in its
+//! place (`layout::place`).
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Position, Rect};

@@ -194,26 +194,26 @@ Defects 1, 2, 13, 14.
 
 ## Phase 4 — placement
 
-- [ ] `layout.rs`: `Placement`, `TableNeeds { min_width, rows }`, `place`,
+- [x] `layout.rs`: `Placement`, `TableNeeds { min_width, rows }`, `place`,
   `PANE_BESIDE_MIN`, `TABLE_BELOW_MIN`, `PANE_BELOW_MIN`; `Regions` gains `body` and
   `placement`; `regions(area, pane_open, needs)` on `place` with `percent_of` (defect 7);
   `help_box` gets `HELP_NARROW_BELOW`; delete `DETAIL_MIN_WIDTH`, `DETAIL_PANE_MIN`,
   `templates_body` — the templates tab draws in `regions.body` (`view/mod.rs:44`,
   `studio.rs:1508`); `template_rows` reads `.body`.
-- [ ] `app/library.rs:436-456`: `library_widths` over the whole snapshot; `table_needs()`
+- [x] `app/library.rs:436-456`: `library_widths` over the whole snapshot; `table_needs()`
   and `table_min_width()` read it. `choose_columns` keeps measuring what is on screen.
-- [ ] `app/mod.rs`: `pane_live()` (on), `detail_visible()` (drawn this frame),
+- [x] `app/mod.rs`: `pane_live()` (on), `detail_visible()` (drawn this frame),
   `pane_behind_list()` (Over, list focused, library tab); `selection_effects` (`:680`),
   `DetailOnly` (`:822`), F5 (`:1738`) and `runtime::watch_detail` (`runtime.rs:278`) use
   `pane_live()`; `pane_present()` is `Templates || pane_live()`; `ToggleDetail`
   (`:1990`) — visible: close (Beside/Below) or go to the list (Over); hidden: open, and in
   Over go into it; then `selection_effects` only.
-- [ ] `view/mod.rs:27-41`: Over with the pane focused draws the pane in the body;
+- [x] `view/mod.rs:27-41`: Over with the pane focused draws the pane in the body;
   otherwise the table, plus the pane Beside/Below.
-- [ ] `command.rs`: reword "beside" at `:1160, :1486, :1746, :1757` and the comments at
+- [x] `command.rs`: reword "beside" at `:1160, :1486, :1746, :1757` and the comments at
   `:298, :300, :513-533, :825, :867`; `mod.rs:2256-2258`; `studio.rs:1503-1506`
   (`guide.rs:222` is about the builder panel and stays).
-- [ ] Tests: layout unit tests `the_pane_goes_where_the_room_is` (120×40/54 → Beside
+- [x] Tests: layout unit tests `the_pane_goes_where_the_room_is` (120×40/54 → Beside
   72+48; /80 → Beside 80+40; /95 → Below; 80×24 → Over; 200×15 → Beside; 60×45 with 8
   rows → Below, table 11), `a_standard_terminal_gets_the_compact_layout` → Over,
   `regions_tile_every_window` (pure sweep, w 1..300 × h 1..100, open/closed, several
@@ -226,16 +226,16 @@ Defects 1, 2, 13, 14.
   `a_window_that_shrinks_keeps_the_pane_focused_in_its_new_place`;
   `the_templates_tab_takes_the_whole_body_whatever_the_library_pane_does`. Narrow
   `tui_update` fixtures now see `LoadDetail`: fix exact-effect assertions.
-- [ ] Frame sweep in `tests/tui_snapshots.rs`, `every_state_draws_at_every_size`: build
+- [x] Frame sweep in `tests/tui_snapshots.rs`, `every_state_draws_at_every_size`: build
   each state once (dashboard, pane focused, a line edit, a note edit, help, actions,
   palette, a query, wizard, settings, templates tab, builder, confirm, delete prompt, the
   journal) and move it through ~12×10 sizes with `Msg::Resize` + `render_to_buffer` at the
   same size. Assert no panic, the pane cursor inside the pane, the caret inside the text
   rect. Snapshots: `dashboard_over_80x24_pane_focused`, `dashboard_below_60x45`;
   `wide_names_120x40` becomes Below.
-- [ ] Docs: `docs/app.md:39-54` and the →, ←, Tab, `i` rows; `README.md:57`;
+- [x] Docs: `docs/app.md:39-54` and the →, ←, Tab, `i` rows; `README.md:57`;
   `src/tui/CLAUDE.md` Layout, The table (the library-wide claim), the horizontal axis.
-- [ ] Look: 120×40 `G right`, 100×30, 80×24 `G` and `G right`, 60×45, 200×15,
+- [x] Look: 120×40 `G right`, 100×30, 80×24 `G` and `G right`, 60×45, 200×15,
   `FASTF_SHOT_LONG=1` at 120×40.
 
 ## Phase 5 — Over, polished
@@ -390,3 +390,13 @@ console for F2, `+`, `<` and `>`.
   at `remove`, and rewording to the text a task already has writes nothing and says so,
   as `done` does for a tick. `todo --help` lost the twelve stray spaces its
   `after_help` printed on every continuation line.
+- **Phase 4** (2026-09-23): `layout::place` and the three placements. Two things
+  the plan did not foresee: an empty library (the first frame, before discovery
+  answers) put a "nothing selected" pane beside the list and then moved it when the
+  names landed, so `pane_live` also needs a project in the library — the pane now
+  arrives with the first one, in its place; and `place`'s beside test saturated at
+  the top of a u16, which the tiling sweep caught, so it compares in u32. The
+  showcase at 100×30 now goes below (its names claim 72 columns); the fixture's
+  100×30 snapshots keep their split. Onboarding's empty-state line is whole again,
+  no longer squeezed by an empty pane. The frame sweep (14 states × 144 sizes,
+  including under the minimum) runs in about two seconds in debug.

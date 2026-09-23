@@ -37,16 +37,22 @@ Top to bottom:
 - **The project table** — ID, folder name, then the size, the date, the base,
   the template and the tags, as many as fit; see [Columns](#columns). The
   folder name is never cut. When the table is empty it says so inside the box.
-- **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
+- **The detail pane** (`i` shows or hides it) — the
   selected project's template, base and date, its size and how many notes and
   todos it has, its tags one per row, its template variables, the top of its
   folder, its latest notes — each with the day it was written and every line
   it has — and its todos, grouped under the `###` labels the file carries when
   it has any. A note or todo too long for the pane continues on the
   rows under it; a note shows its first eight rows there and says how many
-  more, and `J` shows every note in full. The split favours the table: long folder names take
-  the room they need with the size beside them, the pane takes the rest, and
-  closes — as `i` would — when the rest would be a sliver.
+  more, and `J` shows every note in full. **The pane goes where the window has
+  room for it.** Beside the list when the folder names fit whole with a pane
+  of 36 columns next to them; under the list, at the full width, when the
+  window is tall enough for both (a vertical split, a portrait screen, a
+  library of long names); and on a window with room for neither — 80×24 — in
+  the list's place: `→` shows it where the list was, `←` or Esc brings the
+  list back where you left it. The folder names are never cut to make room.
+  Where the pane goes depends on the longest name in the whole library, not on
+  what a search leaves, so it never moves while you type.
 - **The status line and the hint bar** — what the last action did (or, when
   rows are marked, that a verb will act on them rather than on the cursor),
   and the keys that matter where you are.
@@ -108,14 +114,14 @@ pane beside it, and nothing else.
 | PageUp / PageDown | move by a screenful, stopping at the ends |
 | Ctrl-D / Ctrl-U | half a screenful, stopping at the ends |
 | Home / End, `g` / `G` | first row, last row |
-| → / `l` | put the cursor in the pane beside the list — the project's detail on the library, the template's on the templates tab. Unbound when there is no pane |
-| ← / `h` | put the cursor back on the list. It never quits and never closes anything: leaving is Esc's job |
+| → / `l` | put the cursor in the pane — the project's detail on the library, the template's on the templates tab. On a small window the pane is shown in the list's place. Unbound when the pane is switched off (`i`) |
+| ← / `h` | put the cursor back on the list. It never quits and never closes anything: leaving is Esc's job, and Esc in the pane does the same as ← |
 | `T` | the templates tab, and `T` again (or Esc) back to the library |
 | Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
 | `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size — and every one of those but the dates runs **both ways**, so `size reversed` is the smallest first and `id reversed` is the highest ID first |
 | `f` / `b` / `F` | show only the selected project's template / show only one base's projects / clear both filters. *Filter by tag* is in the command palette; it writes `tag:x` into the search bar, which is what a tag filter is |
-| `i` | show or hide the detail pane |
+| `i` | show or hide the detail pane: beside or under the list it switches the pane off and on; on a small window, where the pane takes the list's place, it goes into the pane and back out |
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
 | `A`, Ctrl-T | add a tag (pick one the library already knows, or type a new one); remove tags |

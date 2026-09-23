@@ -455,7 +455,16 @@ impl App {
     }
 
     pub fn regions(&self) -> layout::Regions {
-        layout::regions(self.area(), self.detail_open, self.table_min_width())
+        layout::regions(self.area(), self.pane_live(), self.table_needs())
+    }
+
+    /// What the table asks of the body (`layout::TableNeeds`): measured over
+    /// the whole library, so a search never moves the pane.
+    pub fn table_needs(&self) -> layout::TableNeeds {
+        layout::TableNeeds {
+            min_width: self.table_min_width(),
+            rows: self.library.snapshot.len(),
+        }
     }
 
     /// The width the table needs to show every folder name whole with the id
@@ -484,8 +493,35 @@ impl App {
         self.regions().table_rows()
     }
 
+    /// Whether the pane is switched on: its content is read and kept read
+    /// whatever its placement, so going into a pane drawn in the list's place
+    /// is instant.
+    ///
+    /// A library with nothing in it has nothing for a pane to show, and one
+    /// still being discovered does not know yet where the pane will go: the
+    /// pane arrives with the first project, in its place, rather than sitting
+    /// beside an empty list and then moving when the names come in.
+    pub fn pane_live(&self) -> bool {
+        self.detail_open && !self.library.snapshot.is_empty()
+    }
+
+    /// Whether the library's pane is drawn this frame: beside or under the
+    /// table, or in the list's place while it has the focus.
     pub fn detail_visible(&self) -> bool {
-        self.regions().detail.is_some()
+        self.screen == Screen::Library
+            && match self.regions().placement {
+                Some(layout::Placement::Beside | layout::Placement::Below) => true,
+                Some(layout::Placement::Over) => self.focus == Focus::Detail,
+                None => false,
+            }
+    }
+
+    /// The pane is on but drawn in the list's place, and the list has the
+    /// focus: the pane is one key away and nothing on screen shows it.
+    pub fn pane_behind_list(&self) -> bool {
+        self.screen == Screen::Library
+            && self.focus == Focus::Projects
+            && self.regions().placement == Some(layout::Placement::Over)
     }
 
     /// Where a key goes right now.
@@ -738,7 +774,7 @@ impl App {
         if !wanted.is_empty() {
             effects.push(Effect::RequestSizes(wanted));
         }
-        if self.detail_visible()
+        if self.pane_live()
             && let Some(project) = self.library.selected()
         {
             effects.push(self.detail_effect(&project.path));
@@ -880,8 +916,7 @@ impl App {
             // `reading…` frame between the keypress and the answer — and the
             // pane's own pulse says what landed.
             ListChange::DetailOnly { path } => {
-                if self.detail_visible() && self.library.selected().is_some_and(|p| p.path == path)
-                {
+                if self.pane_live() && self.library.selected().is_some_and(|p| p.path == path) {
                     effects.push(Effect::LoadDetail(path));
                 } else {
                     self.details.remove(&path);
@@ -1811,7 +1846,7 @@ impl App {
                 let mut effects = vec![self.discover(), Effect::LoadSummary];
                 // And the pane: F5 is the key a person presses after editing
                 // the file in another window.
-                if self.detail_visible()
+                if self.pane_live()
                     && let Some(project) = self.library.selected()
                 {
                     effects.push(self.detail_effect(&project.path));
@@ -2064,9 +2099,20 @@ impl App {
                 Vec::new()
             }
             CommandId::ToggleDetail => {
-                self.detail_open = !self.detail_open;
-                if !self.pane_present() && self.focus == Focus::Detail {
+                // Show or hide, literally. A pane on screen is hidden: closed
+                // where it shares the body, left for the list where it took
+                // the list's place. A pane not on screen is shown: switched
+                // on, and gone into where it can only be seen from inside.
+                if self.detail_visible() {
+                    if self.regions().placement != Some(layout::Placement::Over) {
+                        self.detail_open = false;
+                    }
                     self.set_focus(Focus::Projects);
+                } else {
+                    self.detail_open = true;
+                    if self.regions().placement == Some(layout::Placement::Over) {
+                        self.set_focus(Focus::Detail);
+                    }
                 }
                 self.after_selection_change()
             }
@@ -2334,11 +2380,11 @@ impl App {
         Vec::new()
     }
 
-    /// Whether there is a pane beside the list right now: the library's
-    /// closes under `layout::DETAIL_MIN_WIDTH` or on `i`, the templates tab's
-    /// is always drawn.
+    /// Whether there is a pane to put the focus in: the library's whenever it
+    /// is switched on — beside the list, under it, or in its place — and the
+    /// templates tab's always.
     pub fn pane_present(&self) -> bool {
-        self.screen == Screen::Templates || self.detail_visible()
+        self.screen == Screen::Templates || self.pane_live()
     }
 
     /// The one way focus moves, so every mover leaves the same trace: the

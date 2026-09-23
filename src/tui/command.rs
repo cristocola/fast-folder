@@ -2328,6 +2328,12 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
         };
         let label = key.label_in(&app.theme.glyphs);
         let title = hint_title(c.id, c.title, app);
+        // **A bar never says one verb twice.** On a pane row Enter already
+        // edits, F2's `edit` would repeat it; on a todo, where Enter ticks,
+        // F2 is the one that says it.
+        if out.iter().any(|(_, said): &(String, &str)| *said == title) {
+            continue;
+        }
         let cost = label.chars().count() + 1 + title.chars().count() + 2;
         if used + cost > width && !out.is_empty() {
             break;

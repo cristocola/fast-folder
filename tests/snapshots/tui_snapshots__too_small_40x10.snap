@@ -2,13 +2,13 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-"┌──────────────────────────────────────┐"
-"│fastf needs at least 60×16 — this     │"
-"│window is 40×10                       │"
-"│make it bigger, or press q to quit    │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"│                                      │"
-"└──────────────────────────────────────┘"
+"                                        "
+"                                        "
+"                                        "
+"        fastf needs 40×12 or more       "
+"   this window is 40×10: 2 rows short   "
+"   make it bigger, or press q to quit   "
+"                                        "
+"                                        "
+"                                        "
+"                                        "

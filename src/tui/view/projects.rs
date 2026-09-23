@@ -240,6 +240,22 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     // The cursor cell and the id, each followed by a space.
     let room = (inner.width as usize).saturating_sub(2 + id_w + 1);
     let columns = choose_columns(room, name_w, base_w, template_w, tags_w, many_bases);
+    // What the name has once the elected columns are placed. A name wider than
+    // that — a window narrower than the name itself — is cut with the
+    // ellipsis, never by the table's border in the middle of a letter.
+    let name_col = room.saturating_sub(
+        [
+            (columns.size, SIZE_CELL),
+            (columns.created, DATE_CELL),
+            (columns.base, base_w),
+            (columns.template, template_w),
+            (columns.tags, tags_w),
+        ]
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, w)| w + 1)
+        .sum::<usize>(),
+    );
 
     let mut header = vec![Cell::from(""), Cell::from("ID"), Cell::from("PROJECT")];
     let mut constraints = vec![
@@ -321,11 +337,15 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
                     theme.accent(),
                     theme.hit(),
                 ))),
-                Cell::from(Line::from(highlighted(
-                    &p.name,
-                    info.map(|i| i.name_hits.as_slice()).unwrap_or(&[]),
-                    theme.text(),
-                    theme.hit(),
+                Cell::from(Line::from(crate::tui::view::fit_spans(
+                    highlighted(
+                        &p.name,
+                        info.map(|i| i.name_hits.as_slice()).unwrap_or(&[]),
+                        theme.text(),
+                        theme.hit(),
+                    ),
+                    name_col,
+                    g.ellipsis,
                 ))),
             ];
             if columns.size {

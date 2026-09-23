@@ -63,7 +63,12 @@ Top to bottom:
   rows are marked, that a verb will act on them rather than on the cursor),
   and the keys that matter where you are.
 
-Below 60×16 the app says so and waits for a bigger window or `q`.
+It draws in any window of 40×12 or more — a tmux quarter, a phone over ssh,
+an editor's terminal panel, a drop-down terminal — keeping what matters as the
+room goes: the tabs in the header, the count in the search bar, whole folder
+names in the table (cut with `…` only when a name is wider than the window),
+and the pane one key away. Below that it says which side is short, and by how
+much, and waits for a bigger window or `q`.
 
 **The pane reads the file.** What it shows is `PROJECT_INFO.md` as it is on
 disk: edit the file in another window — a note typed by hand, a todo ticked in
@@ -395,8 +400,8 @@ draws nothing but a glance at the selected project's file.
 
 Nothing in the app needs a desktop: it draws with the sixteen colours where
 truecolor is not announced (`config set theme` pins a palette), with plain
-ASCII where the alphabet is not there (`FASTF_ASCII=1`), and in a 60×16
-window. What it cannot do without a desktop session it says so about: with no
+ASCII where the alphabet is not there (`FASTF_ASCII=1`) — key labels too,
+where an arrow key is the word on it — and in a 40×12 window. What it cannot do without a desktop session it says so about: with no
 `DISPLAY` or `WAYLAND_DISPLAY` — over ssh, on a console — `o` and `t` are dimmed
 with the reason, and `y` still copies the path when a clipboard tool exists
 (and shows it when none does). A note in `$EDITOR` and a template's

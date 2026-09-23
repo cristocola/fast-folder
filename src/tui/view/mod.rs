@@ -12,7 +12,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::app::App;
@@ -90,16 +90,37 @@ fn render_too_small(app: &App, frame: &mut Frame, area: Rect) {
     use crate::tui::command::{CommandId, key_of};
 
     let theme = &app.theme;
-    let mut text = vec![Line::from(Span::styled(
-        format!(
-            "fastf needs at least {}×{} — this window is {}×{}",
-            layout::MIN_WIDTH,
-            layout::MIN_HEIGHT,
-            area.width,
-            area.height
+    // Which side is short, and by how much — a person dragging a corner wants
+    // to know which way, and a split pane is short on one side only.
+    let columns = layout::MIN_WIDTH.saturating_sub(area.width);
+    let rows = layout::MIN_HEIGHT.saturating_sub(area.height);
+    let short = |n: u16, one: &str, many: &str| match n {
+        1 => format!("1 {one}"),
+        n => format!("{n} {many}"),
+    };
+    let what = match (columns, rows) {
+        (0, rows) => format!("{} short", short(rows, "row", "rows")),
+        (columns, 0) => format!("{} too narrow", short(columns, "column", "columns")),
+        (columns, rows) => format!(
+            "{} too narrow and {} short",
+            short(columns, "column", "columns"),
+            short(rows, "row", "rows")
         ),
-        theme.warn(),
-    ))];
+    };
+    let mut text = vec![
+        Line::from(Span::styled(
+            format!(
+                "fastf needs {}×{} or more",
+                layout::MIN_WIDTH,
+                layout::MIN_HEIGHT
+            ),
+            theme.warn(),
+        )),
+        Line::from(Span::styled(
+            format!("this window is {}×{}: {what}", area.width, area.height),
+            theme.dim(),
+        )),
+    ];
     // A dialog cannot be drawn here, so a question it is waiting on is asked
     // in words: the quit gesture works on this screen, and a template worked
     // on must not be thrown away by a second key nobody could see the
@@ -131,10 +152,30 @@ fn render_too_small(app: &App, frame: &mut Frame, area: Rect) {
             theme.dim(),
         ))),
     }
+    // Centred, and no box: a frame around three lines costs a small window
+    // two of its rows and four of its columns, and says nothing.
+    let lines = text_rows(&text, area.width as usize).min(area.height as usize) as u16;
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(paragraph, area);
+        .alignment(ratatui::layout::Alignment::Center);
+    let at = Rect::new(
+        area.x,
+        area.y + (area.height - lines) / 2,
+        area.width,
+        lines,
+    );
+    frame.render_widget(paragraph, at);
+}
+
+/// How many rows `lines` take wrapped at `width`, as `Wrap` wraps them.
+fn text_rows(lines: &[Line], width: usize) -> usize {
+    lines
+        .iter()
+        .map(|line| {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            crate::tui::command::wrap_words(&text, width).len().max(1)
+        })
+        .sum()
 }
 
 /// The one scrollbar, for every list and pane that outgrows its box: on the
@@ -263,8 +304,50 @@ pub fn highlighted<'a>(text: &'a str, hits: &[usize], base: Style, hit: Style) -
     spans
 }
 
+/// `spans` cut to `width` display columns, each keeping its own style, the
+/// cut marked with `ellipsis` in the style of the span it fell in. A line of
+/// several styles collapsed into the first one's — a tab's underline, a
+/// base's colour — says less than the same line cut short.
+pub fn fit_spans<'a>(spans: Vec<Span<'a>>, width: usize, ellipsis: &str) -> Vec<Span<'a>> {
+    let total: usize = spans.iter().map(|s| s.width()).sum();
+    if total <= width {
+        return spans;
+    }
+    let ellipsis_width = ellipsis.width();
+    if width <= ellipsis_width {
+        return vec![Span::raw(ellipsis.chars().take(width).collect::<String>())];
+    }
+    let room = width - ellipsis_width;
+    let mut out = Vec::new();
+    let mut used = 0;
+    for span in spans {
+        let w = span.width();
+        if used + w <= room {
+            used += w;
+            out.push(span);
+            continue;
+        }
+        let mut cut = String::new();
+        for c in span.content.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if used + cw > room {
+                break;
+            }
+            used += cw;
+            cut.push(c);
+        }
+        let style = span.style;
+        if !cut.is_empty() {
+            out.push(Span::styled(cut, style));
+        }
+        out.push(Span::styled(ellipsis.to_string(), style));
+        break;
+    }
+    out
+}
+
 /// A line with `left` at the start and `right` at the end, `right` winning
-/// the space when both cannot fit.
+/// the space when both cannot fit — and `left` cut with its styles kept.
 pub fn split_line<'a>(
     left: Vec<Span<'a>>,
     right: Vec<Span<'a>>,
@@ -280,16 +363,36 @@ pub fn split_line<'a>(
         spans.extend(right);
     } else if right_width < width {
         let room = width - right_width - 1;
-        let left_text: String = left.iter().map(|s| s.content.as_ref()).collect();
-        let style = left.first().map(|s| s.style).unwrap_or_default();
-        spans.push(Span::styled(fit(&left_text, room, ellipsis), style));
-
+        spans.extend(fit_spans(left, room, ellipsis));
         spans.push(Span::raw(" "));
         spans.extend(right);
     } else {
-        spans.extend(left);
+        spans.extend(fit_spans(left, width, ellipsis));
     }
     Line::from(spans)
+}
+
+/// The first of `candidates` — `(left, right)` pairs, most complete first —
+/// whose halves fit `width` side by side; the last one's left half, cut with
+/// its styles kept, when none does. What a narrow window gives up first is
+/// whatever the caller left out of the earlier candidates.
+pub fn first_that_fits<'a>(
+    candidates: Vec<(Vec<Span<'a>>, Vec<Span<'a>>)>,
+    width: usize,
+    ellipsis: &str,
+) -> Line<'a> {
+    let last = candidates.len().saturating_sub(1);
+    for (at, (left, right)) in candidates.into_iter().enumerate() {
+        let wide: usize = left.iter().chain(&right).map(|s| s.width()).sum();
+        if wide < width || at == last {
+            return if wide < width {
+                split_line(left, right, width, ellipsis)
+            } else {
+                Line::from(fit_spans(left, width, ellipsis))
+            };
+        }
+    }
+    Line::default()
 }
 
 #[cfg(test)]

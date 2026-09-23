@@ -533,17 +533,21 @@ impl App {
     /// The pane is drawn in the list's place and has the focus: the list is
     /// out of sight, one key away.
     pub fn pane_over_list(&self) -> bool {
-        self.screen == Screen::Library
-            && self.focus == Focus::Detail
-            && self.regions().placement == Some(layout::Placement::Over)
+        self.focus == Focus::Detail && self.placement_here() == Some(layout::Placement::Over)
+    }
+
+    /// Where this tab's pane is: the library's, or the templates tab's.
+    pub fn placement_here(&self) -> Option<layout::Placement> {
+        match self.screen {
+            Screen::Library => self.regions().placement,
+            Screen::Templates => Some(self.template_panes().2),
+        }
     }
 
     /// The pane is on but drawn in the list's place, and the list has the
     /// focus: the pane is one key away and nothing on screen shows it.
     pub fn pane_behind_list(&self) -> bool {
-        self.screen == Screen::Library
-            && self.focus == Focus::Projects
-            && self.regions().placement == Some(layout::Placement::Over)
+        self.focus == Focus::Projects && self.placement_here() == Some(layout::Placement::Over)
     }
 
     /// Where a key goes right now.
@@ -782,8 +786,7 @@ impl App {
         self.library.clamp_viewport(rows);
         if self.screen == Screen::Templates {
             let rows = self.studio.rows(self.search.input.text());
-            self.studio
-                .clamp_viewport(&rows, layout::template_rows(self.area()));
+            self.studio.clamp_viewport(&rows, self.template_rows());
         }
         self.refind_pane();
         self.selection_effects()
@@ -826,8 +829,7 @@ impl App {
         if self.screen == Screen::Templates {
             let rows = self.studio.rows(self.search.input.text());
             self.studio.reselect(&rows);
-            self.studio
-                .clamp_viewport(&rows, layout::template_rows(self.area()));
+            self.studio.clamp_viewport(&rows, self.template_rows());
             return self
                 .studio
                 .selected_slug()

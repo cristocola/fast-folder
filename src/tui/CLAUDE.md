@@ -213,8 +213,26 @@ Clamped only at draw time, a scroll runs past the end and the dialog seems froze
 
 `layout::panel_fits_width` settles whether a panel is coming before a dialog is
 sized, because the panel changes the height the dialog wants. The templates tab
-draws in `Regions.body` and splits through `layout::templates_panes`, so
-`studio_scroll_max` and the view measure one box.
+draws in `Regions.body` and places its pane by the library's rule
+(`layout::templates_panes`, `place_shared` with its list's own claim,
+`App::templates_needs`, and a 38 % share), so `App::template_rows`,
+`studio_scroll_max` and the view measure one box, and its doors lead the bar the
+same way (`App::placement_here`).
+
+**The app draws from 40×12** (`MIN_WIDTH`, `MIN_HEIGHT`), and every band keeps
+what matters as the room goes, through `view::fit_spans` (a cut that keeps each
+span's style) and `view::first_that_fits` (candidates, most complete first):
+the header gives up the highest ID, then the base count, never the tabs; its
+second line lets an attention warning win and drops "this session" first; the
+search bar drops the sort, then "(from index)", then the filters, never the
+count or the marks; the status line is fitted; a name wider than the table is cut
+with the ellipsis (`name_col`), never by the border. A sized dialog under 72
+columns takes the window but a column each side. Key lines a dialog writes go
+through `builder::key_line`, cut at whole pairs with the way out before the
+extras; the action menu drops its description column under `DESCRIPTION_MIN`;
+the first-run prose wraps and the box is its height. The too-small screen is
+centred, unboxed, and says which side is short and by how much. The frame sweep
+(`every_state_draws_at_every_size`) holds all of it from 40×12 up.
 
 **The pane goes where the room is** (`layout::place`, one pure function of the
 body and `TableNeeds`): **beside** the table when the names fit whole with
@@ -311,7 +329,9 @@ note, the first-run question) and `Context::Pick` exist so those keys are
 declared, and `Availability` hides the rest (`PromptNewline` outside a note,
 `PickToggle` outside a multi-pick). **A key line is cut at a whole pair, the way
 out before the extras** (`view::builder::key_line`), because half an entry
-advertises a key that is not one.
+advertises a key that is not one. **A bar never states one verb twice**: where
+Enter already edits a pane row, F2's `edit` is left off (it says it on a todo,
+where Enter ticks).
 
 **In a text-entry context everything printable is text**, and only a key a field
 cannot hold reaches the registry. The caret's chords are `LineEdit::CLAIMED`, and

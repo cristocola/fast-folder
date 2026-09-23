@@ -19,7 +19,7 @@ expression: frame
 "│  ID0240 20│  Standardize name no                                                     │           │"
 "│  ID0239 20│  Created          the folder's own date                                  │           │"
 "│  ID0238 20│ the folder to adopt — it must already exist                              │           │"
-"│  ID0237 20│ Tab next field   Enter preview   Esc cancel                              │           │"
+"│  ID0237 20│ Enter preview   Esc cancel   Tab next field                              │           │"
 "│           └──────────────────────────────────────────────────────────────────────────┘           │"
 "│                                                              ││                                  │"
 "│                                                              ││                                  │"

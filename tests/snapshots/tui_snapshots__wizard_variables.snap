@@ -19,7 +19,7 @@ expression: frame
 "│  ID0240 20│  Title                                                                   │           │"
 "│  ID0239 20│                                                                          │           │"
 "│  ID0238 20│ artist — required                                                        │           │"
-"│  ID0237 20│ Tab next field   Enter preview   Esc cancel                              │           │"
+"│  ID0237 20│ Enter preview   Esc cancel   Tab next field                              │           │"
 "│           └──────────────────────────────────────────────────────────────────────────┘           │"
 "│                                                              ││                                  │"
 "│                                                              ││                                  │"

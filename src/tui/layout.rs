@@ -6,8 +6,8 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 /// Below this the frame is one paragraph saying so.
-pub const MIN_WIDTH: u16 = 60;
-pub const MIN_HEIGHT: u16 = 16;
+pub const MIN_WIDTH: u16 = 40;
+pub const MIN_HEIGHT: u16 = 12;
 
 /// A terminal tall enough for the header's blank third line.
 pub const TALL_MIN_HEIGHT: u16 = 30;
@@ -95,15 +95,17 @@ impl Regions {
 /// the pane's width is what its rows are wrapped to, and a focus that changed
 /// it would re-wrap them under the cursor.
 pub fn place(body: Rect, needs: TableNeeds) -> (Rect, Rect, Placement) {
+    place_shared(body, needs, TABLE_SHARE)
+}
+
+/// `place`, with the list's share of the width beside the pane: the library's
+/// table takes `TABLE_SHARE`, the templates tab's card list a narrower one.
+pub fn place_shared(body: Rect, needs: TableNeeds, share: u32) -> (Rect, Rect, Placement) {
     let (w, h) = (body.width, body.height);
     // In u32: a claim near the top of a u16 plus the pane's minimum would
     // saturate to a width that seems to fit and does not.
     if w as u32 >= needs.min_width as u32 + PANE_BESIDE_MIN as u32 {
-        let table = fit_between(
-            percent_of(w, TABLE_SHARE),
-            needs.min_width,
-            w - PANE_BESIDE_MIN,
-        );
+        let table = fit_between(percent_of(w, share), needs.min_width, w - PANE_BESIDE_MIN);
         return (
             Rect::new(body.x, body.y, table, h),
             Rect::new(body.x + table, body.y, w - table, h),
@@ -178,16 +180,18 @@ pub fn pane_text(pane: Rect) -> Rect {
     )
 }
 
-/// The templates tab's split: the card list, and the pane beside it. Read by
-/// the view that draws it and by `update` when it clamps the pane's scroll,
-/// so the cursor cannot leave the drawn window.
-pub fn templates_panes(body: Rect) -> (Rect, Rect) {
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(body);
-    (panes[0], panes[1])
+/// The templates tab's split: the card list and the template's pane, placed
+/// the way the library's table and pane are (`place`) — beside, under, or in
+/// the list's place — with the list's own claim and a narrower share, since a
+/// card is a name and a count. Read by the view that draws it and by `update`
+/// when it clamps the list's viewport and the pane's scroll, so neither can
+/// leave the drawn window.
+pub fn templates_panes(body: Rect, needs: TableNeeds) -> (Rect, Rect, Placement) {
+    place_shared(body, needs, TEMPLATES_SHARE)
 }
+
+/// The templates list's share of the width beside its pane.
+const TEMPLATES_SHARE: u32 = 38;
 
 /// A rectangle of `percent_x` × `percent_y` of `area`, centred.
 pub fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
@@ -213,7 +217,13 @@ pub fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
 /// never so short that its footer and key line crowd the content. The studio,
 /// the builder and the settings are drawn in one of these.
 pub fn sized_dialog(area: Rect, body: u16) -> Rect {
-    let full = centered(area, 84, 96);
+    // On a narrow window the margin is what goes: 84 % of forty columns is a
+    // settings screen that cuts every value to a word.
+    let full = if area.width < NARROW_DIALOG_BELOW {
+        centered_fixed(area, area.width.saturating_sub(2), area.height)
+    } else {
+        centered(area, 84, 96)
+    };
     let height = (body + 4).clamp(8.min(full.height), full.height);
     Rect::new(
         full.x,
@@ -222,6 +232,10 @@ pub fn sized_dialog(area: Rect, body: u16) -> Rect {
         height,
     )
 }
+
+/// Under this width a sized dialog takes the whole window but a column each
+/// side.
+const NARROW_DIALOG_BELOW: u16 = 72;
 
 /// How many rows a list drawn inside `dialog` shows, under `above` rows of
 /// chrome besides the borders (a footer and a key line, a query line…).
@@ -233,14 +247,6 @@ pub fn list_rows(dialog: Rect, above: u16) -> usize {
 /// the key line.
 pub fn settings_rows(area: Rect) -> usize {
     list_rows(sized_dialog(area, 22), 2)
-}
-
-/// The templates tab's list: the body band's rows, inside its border.
-pub fn template_rows(area: Rect) -> usize {
-    regions(area, false, TableNeeds::default())
-        .body
-        .height
-        .saturating_sub(2) as usize
 }
 
 /// The action menu's box: as tall as its verbs, within reason.

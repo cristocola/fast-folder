@@ -14,6 +14,12 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
 - `fastf` in an 80×24 and a 120×40 window; `fastf search tag:x`;
   `fastf </dev/null`; `NO_COLOR=1 fastf`; a launcher-started `fastf` still
   opens a window running the app.
+- The pane in every shape of a real terminal: a 40×12 corner, a tall narrow
+  tmux split (the pane under the list), a wide short drop-down (beside it),
+  and dragging a corner across all three with a note open in the pane.
+- The todo keys on a real keyboard: F2 on a laptop (with and without Fn),
+  `+` on a keyboard where it needs Shift, `<` and `>` on a German layout, and a
+  list pasted from a browser, an editor and a chat window.
 - A real move between two mounted bases with the progress modal, and a cancel
   mid-batch-move on a real second volume; the `$EDITOR` note flow in a real
   terminal.
@@ -23,8 +29,9 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
 - Build a real template end to end and create a project from it; edit one of
   the gallery templates, following the guide's own walkthrough, which is the one
   test of it that matters.
-- The legacy Windows console pass for the ASCII alphabet, and the wheel on a
-  Windows console's alternate screen.
+- The legacy Windows console pass for the ASCII alphabet — the hint bar's
+  `Right details` and `Up/Down` included — and the wheel on a Windows console's
+  alternate screen; F2, `+`, `<` and `>` there.
 - Ctrl-Z and `fg`; `kill -INT` twice against the app leaves the shell cooked;
   `ssh localhost -t fastf` picks a theme and `o` says "no display".
 - On Windows, Reveal from the app's action menu and `fastf open` (the

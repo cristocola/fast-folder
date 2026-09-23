@@ -316,22 +316,22 @@ Defects 1, 2, 13, 14.
 
 ## Phase 9 — small and odd-shaped windows
 
-- [ ] `MIN_WIDTH`/`MIN_HEIGHT` 40×12; the too-small screen centred, naming the short side.
-- [ ] `dashboard.rs`: `split_line` gains a winning side and a style-keeping fit; line 1
+- [x] `MIN_WIDTH`/`MIN_HEIGHT` 40×12; the too-small screen centred, naming the short side.
+- [x] `dashboard.rs`: `split_line` gains a winning side and a style-keeping fit; line 1
   drops "highest" then the base count, keeping the tabs; line 2 keeps an attention
   warning over "this session"; the search bar's right side by priority (count, marks,
   filters, `(from index)`, sort); status strings (`:264-319`) fitted.
-- [ ] Table: the name fitted with the ellipsis when wider than the room, highlights kept.
-- [ ] Dialogs: note and confirm key lines through `builder::key_line` (`modals.rs:555`,
+- [x] Table: the name fitted with the ellipsis when wider than the room, highlights kept.
+- [x] Dialogs: note and confirm key lines through `builder::key_line` (`modals.rs:555`,
   `613`); the action menu drops its description column first; onboarding prose wraps
   (`builder.rs:866`); template list rows fitted.
-- [ ] Templates tab placed by `layout::place` (its own list minimum, share 38);
+- [x] Templates tab placed by `layout::place` (its own list minimum, share 38);
   `App::template_rows()` replaces `layout::template_rows` (`studio.rs:1051/1069/1080`,
   `mod.rs:710`); `studio_scroll_max` reads the split.
-- [ ] The frame sweep extended down to 40×12. Snapshots `dashboard_40x12`,
+- [x] The frame sweep extended down to 40×12. Snapshots `dashboard_40x12`,
   `dashboard_60x20`, `templates_tab_60x20`, `dashboard_200x15`.
-- [ ] Docs: `README.md`, `docs/app.md` (40×12); ROADMAP manual passes gain 40×12, a
-  tall-narrow split and a wide-short window; regenerate `docs/img/dashboard.svg`.
+- [x] Docs: `README.md`, `docs/app.md` (40×12); ROADMAP manual passes gain 40×12, a
+  tall-narrow split and a wide-short window; regenerate `docs/img/dashboard.svg` (in the release phase, with the README's todo section).
 
 ## Verification (by eye, after phases 4, 6, 7, 9)
 
@@ -435,3 +435,13 @@ console for F2, `+`, `<` and `>`.
   (Save, Discard, a yes/no, a maintenance verb). No hint-bar changes on those
   surfaces: their bars keep their first keys, and the help lists F2 and `+`. A
   registry test holds the promise over every context, reading each command's words.
+- **Phase 9** (2026-09-23): 40×12. `view::fit_spans` and `first_that_fits` give the
+  header, the search bar and the status line their priorities; the table's name is
+  cut with the ellipsis; the too-small screen is centred and names the short side.
+  The templates tab is placed by the same rule, through `place_shared` with its own
+  share (38) and claim — the fixture's short slugs keep it beside at 60 columns, so
+  its snapshot is taken at both 60×20 and 44×14. Sized dialogs under 72 columns take
+  the window but a column each side (84 % of 40 cut every settings value to a word).
+  The form's, the note's and the confirm's key lines go through `key_line`. The
+  frame sweep now covers seventeen states, the first run, the template pane and an
+  add line among them, and draws real frames at 40×12.

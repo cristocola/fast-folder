@@ -1,0 +1,18 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fast-folder   library │ templates          "
+" → projects 12   archi… ⚠ 1 needs attention "
+" ⌕ / to search the templates            3/3 "
+"┌ templates ───────────────────────────────┐"
+"│  client-project    4                     │"
+"│  general           4                     │"
+"│  music-video       4                     │"
+"│                                          │"
+"│                                          │"
+"│                                          │"
+"│                                          │"
+"└──────────────────────────────────────────┘"
+"                                            "
+" → details  / search  T templates           "

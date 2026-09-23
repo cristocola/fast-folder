@@ -5,14 +5,13 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
-    TableState,
-};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, ScrollbarState, Table, TableState};
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::library;
-use crate::tui::app::pane::{EditTarget, NOTE_INDENT, PaneEdit, PaneRow, TODO_INDENT};
+use crate::tui::app::pane::{
+    EditTarget, Fact, NOTE_INDENT, PaneEdit, PaneRow, TODO_INDENT, notes_label, todos_label,
+};
 use crate::tui::app::{App, Focus};
 use crate::tui::layout;
 use crate::tui::rows::{SIZE_CELL, date_cell, size_label};
@@ -75,17 +74,46 @@ fn tag_cell_width(tags: &[String]) -> usize {
     shown + gaps + extra
 }
 
+/// One header fact as the pane draws it (`pane::Fact`).
+fn fact_spans(
+    fact: &Fact,
+    app: &App,
+    project: &crate::core::library::Project,
+    theme: &crate::tui::theme::Theme,
+) -> Vec<Span<'static>> {
+    match fact {
+        Fact::Template => vec![Span::styled(project.template.clone(), theme.dim())],
+        Fact::Base => vec![Span::styled(
+            library::base_label(&project.base),
+            Style::default().fg(theme.accent),
+        )],
+        Fact::Created => vec![
+            Span::styled("created ", theme.dim()),
+            Span::styled(date_cell(&project.created).to_string(), theme.text()),
+        ],
+        Fact::Size => vec![Span::styled(
+            match app.size_cell(&project.path) {
+                SizeCell::Pending => theme.glyphs.pending.to_string(),
+                SizeCell::Known(size) => size_label(size),
+            },
+            theme.text(),
+        )],
+        Fact::Notes(notes) => vec![Span::styled(notes_label(*notes), theme.dim())],
+        Fact::Todos { done, total } => {
+            vec![Span::styled(todos_label(*done, *total), theme.dim())]
+        }
+    }
+}
+
 /// The list's peek at a hidden pane: ` 2 notes · 2/4 todos done `, the parts
 /// there are, and `None` when there are none.
 fn peek((notes, done, todos): (usize, usize, usize), sep: &str) -> Option<String> {
     let mut parts = Vec::new();
-    match notes {
-        0 => {}
-        1 => parts.push("1 note".to_string()),
-        n => parts.push(format!("{n} notes")),
+    if notes > 0 {
+        parts.push(notes_label(notes));
     }
     if todos > 0 {
-        parts.push(format!("{done}/{todos} todos done"));
+        parts.push(todos_label(done, todos));
     }
     (!parts.is_empty()).then(|| format!(" {} ", parts.join(&format!(" {sep} "))))
 }
@@ -361,9 +389,7 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
         let mut scroll = ScrollbarState::new(app.library.len().saturating_sub(rows_visible))
             .position(offset)
             .viewport_content_length(rows_visible);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None);
+        let scrollbar = crate::tui::view::scrollbar(&g);
         let bar_area = Rect::new(
             area.x + area.width - 1,
             inner.y + 1,
@@ -429,7 +455,10 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         .border_style(border_style(app, focused));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let width = inner.width as usize;
+    // The text sits a column in from each border (`layout::pane_text`, the
+    // rect `pane_rows` wrapped to); a highlight still spans the whole row.
+    let text = layout::pane_text(area);
+    let width = text.width as usize;
 
     let rule = |label: &str| -> Line<'static> {
         Line::from(Span::styled(
@@ -442,7 +471,6 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         ))
     };
 
-    let detail = app.details.get(&project.path);
     let rows = app.pane_rows();
     let key_w = rows
         .iter()
@@ -460,47 +488,21 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
     let mut lines: Vec<Line> = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
         let mut line = match row {
-            PaneRow::Name => Line::from(Span::styled(project.name.clone(), theme.bold())),
-            PaneRow::Facts => Line::from(vec![
-                Span::styled(project.template.clone(), theme.dim()),
-                Span::styled(format!(" {} ", g.sep), theme.dim()),
-                Span::styled(
-                    library::base_label(&project.base),
-                    Style::default().fg(theme.accent),
-                ),
-                Span::styled(format!(" {} created ", g.sep), theme.dim()),
-                Span::styled(date_cell(&project.created).to_string(), theme.text()),
-            ]),
-            PaneRow::Figures => {
-                let size = match app.size_cell(&project.path) {
-                    SizeCell::Pending => g.pending.to_string(),
-                    SizeCell::Known(size) => size_label(size),
-                };
-                let notes = detail.map(|d| d.notes.len()).unwrap_or(0);
-                let (done, todos) = detail
-                    .map(|d| (d.todos.iter().filter(|t| t.done).count(), d.todos.len()))
-                    .unwrap_or((0, 0));
-                Line::from(vec![
-                    Span::styled(size, theme.text()),
-                    Span::styled(
-                        format!(
-                            "   {}   {}   {}   {}",
-                            g.sep,
-                            match notes {
-                                0 => "no notes".to_string(),
-                                1 => "1 note".to_string(),
-                                n => format!("{n} notes"),
-                            },
-                            g.sep,
-                            if todos == 0 {
-                                "no todos".to_string()
-                            } else {
-                                format!("{done}/{todos} todos done")
-                            }
-                        ),
-                        theme.dim(),
-                    ),
-                ])
+            PaneRow::Name(first) => Line::from(Span::styled(first.clone(), theme.bold())),
+            PaneRow::NameLine(rest) => Line::from(Span::styled(rest.clone(), theme.bold())),
+            // Whole facts, as `pane_rows` flowed them: what the project is
+            // recedes but for its base, which is the one colour a list of
+            // drives needs; what it holds reads in the text colour where it is
+            // a figure.
+            PaneRow::Facts(facts) => {
+                let mut spans = Vec::with_capacity(facts.len() * 2);
+                for (at, fact) in facts.iter().enumerate() {
+                    if at > 0 {
+                        spans.push(Span::styled(format!("   {}   ", g.sep), theme.dim()));
+                    }
+                    spans.extend(fact_spans(fact, app, project, theme));
+                }
+                Line::from(spans)
             }
             PaneRow::Rule(section) => rule(section.label()),
             PaneRow::Tag(tag) => Line::from(Span::styled(
@@ -510,7 +512,9 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             PaneRow::AddTag => {
                 Line::from(Span::styled(format!("{} add a tag", g.sep), theme.dim()))
             }
-            PaneRow::Reading => Line::from(Span::styled("reading…", theme.dim())),
+            PaneRow::Reading => {
+                Line::from(Span::styled(format!("reading{}", g.ellipsis), theme.dim()))
+            }
             PaneRow::Warning(error) => {
                 Line::from(Span::styled(format!("warning: {error}"), theme.warn()))
             }
@@ -630,31 +634,60 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         // A row an edit just landed on wears the wash, under the cursor —
         // the cursor still says where you are while the pulse says what
         // changed, the same order the table keeps.
-        if let Some(wash) = app
+        let wash = app
             .pane_pulses
-            .style_for(&index, app.elapsed_ms, theme, app.motion)
-        {
+            .style_for(&index, app.elapsed_ms, theme, app.motion);
+        if let Some(wash) = wash {
             line = line.style(wash);
         }
         // The cursor: the selection's own highlight, and only while the pane
         // has the focus — a lit row in a pane you are not in would say the
         // next key goes there when it does not.
-        if focused && index == app.pane_cursor && row.selectable() {
+        let lit = focused && index == app.pane_cursor && row.selectable();
+        if lit {
             line = line.patch_style(theme.selection);
         }
         lines.push(line);
+        // Both reach the borders, across the padding, so the row reads as
+        // one bar rather than as a highlighted line of text inside a pane.
+        if let Some(y) = index
+            .checked_sub(app.detail_scroll)
+            .filter(|row| *row < text.height as usize)
+        {
+            let bar = Rect::new(inner.x, text.y + y as u16, inner.width, 1);
+            if let Some(wash) = wash {
+                frame.buffer_mut().set_style(bar, wash);
+            }
+            if lit {
+                frame.buffer_mut().set_style(bar, theme.selection);
+            }
+        }
     }
 
+    let total = lines.len();
     let paragraph = Paragraph::new(lines).scroll((app.detail_scroll as u16, 0));
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, text);
+
+    // More rows than the pane shows: the table's scrollbar, on the border.
+    let shown = text.height as usize;
+    if total > shown && inner.height > 0 {
+        let mut scroll = ScrollbarState::new(total.saturating_sub(shown))
+            .position(app.detail_scroll)
+            .viewport_content_length(shown);
+        frame.render_stateful_widget(
+            crate::tui::view::scrollbar(&g),
+            Rect::new(area.x + area.width - 1, inner.y, 1, inner.height),
+            &mut scroll,
+        );
+    }
 
     // An open edit is drawn over its row, in place: the field where the value
     // was, the refusal on the line under it. A note takes the rest of the
     // pane from its own row down, with its own key line at the bottom — a
     // text area is the one widget whose Enter is not the registry's.
     let edit = app.pane_edit.as_ref()?;
-    let row_y = (edit.row().checked_sub(app.detail_scroll)? as u16).checked_add(inner.y)?;
-    if row_y >= inner.y + inner.height {
+    let row_y = (edit.row().checked_sub(app.detail_scroll)? as u16).checked_add(text.y)?;
+    if row_y >= text.y + text.height {
         return None;
     }
     match edit {
@@ -678,7 +711,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                 }
                 EditTarget::Tag(_) => format!("{} ", g.dot),
             };
-            let line_area = Rect::new(inner.x, row_y, inner.width, 1);
+            let line_area = Rect::new(text.x, row_y, text.width, 1);
             frame.render_widget(Paragraph::new(""), line_area);
             let caret = input.render_line(
                 line_area,
@@ -687,29 +720,31 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                 theme.text().patch(theme.selection),
             );
             if let Some(error) = error
-                && row_y + 1 < inner.y + inner.height
+                && row_y + 1 < text.y + text.height
             {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
-                        fit(error, inner.width as usize, g.ellipsis),
+                        fit(error, text.width as usize, g.ellipsis),
                         theme.warn(),
                     )),
-                    Rect::new(inner.x, row_y + 1, inner.width, 1),
+                    Rect::new(text.x, row_y + 1, text.width, 1),
                 );
             }
             caret
         }
         PaneEdit::Note {
-            area: text, error, ..
+            area: editor,
+            error,
+            ..
         } => {
             // From the note's own row to the key line at the pane's bottom —
             // and never fewer than `NOTE_EDITOR_ROWS`: a note near the bottom
             // slides the editor up over the rows above it, rather than
             // opening as a sliver, or as nothing at all.
             let body = layout::box_at_row(
-                inner,
-                row_y - inner.y,
-                inner.y + inner.height - row_y,
+                text,
+                row_y - text.y,
+                text.y + text.height - row_y,
                 NOTE_EDITOR_ROWS,
             );
             if body.height < 2 {
@@ -717,13 +752,13 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             }
             let text_area = Rect::new(body.x, body.y, body.width, body.height - 1);
             frame.render_widget(ratatui::widgets::Clear, text_area);
-            let caret = text.render(text_area, frame.buffer_mut(), theme.text());
+            let caret = editor.render(text_area, frame.buffer_mut(), theme.text());
             let keys = Rect::new(body.x, body.y + body.height - 1, body.width, 1);
             frame.render_widget(ratatui::widgets::Clear, keys);
             match error {
                 Some(error) => frame.render_widget(
                     Paragraph::new(Span::styled(
-                        fit(error, inner.width as usize, g.ellipsis),
+                        fit(error, body.width as usize, g.ellipsis),
                         theme.warn(),
                     )),
                     keys,
@@ -732,7 +767,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                     let pairs: Vec<(String, String)> = crate::tui::command::hints(
                         crate::tui::command::Context::PaneEdit,
                         app,
-                        inner.width as usize,
+                        body.width as usize,
                     )
                     .into_iter()
                     .map(|(key, what)| (key, what.to_string()))
@@ -741,7 +776,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                         Paragraph::new(crate::tui::view::builder::key_line(
                             theme,
                             &pairs,
-                            inner.width as usize,
+                            body.width as usize,
                         )),
                         keys,
                     );

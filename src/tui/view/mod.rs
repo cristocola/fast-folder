@@ -137,6 +137,21 @@ fn render_too_small(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
+/// The one scrollbar, for every list and pane that outgrows its box: on the
+/// right border, no end arrows, and drawn in the theme's alphabet — a console
+/// with no block elements gets `|` and `#` rather than replacement boxes.
+pub fn scrollbar(g: &crate::tui::theme::Glyphs) -> ratatui::widgets::Scrollbar<'static> {
+    let bar =
+        ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None);
+    if g.is_ascii() {
+        bar.track_symbol(Some("|")).thumb_symbol("#")
+    } else {
+        bar
+    }
+}
+
 /// Cut `text` to `width` display columns, ending in `ellipsis` when it had to.
 pub fn fit(text: &str, width: usize, ellipsis: &str) -> String {
     if text.width() <= width {

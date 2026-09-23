@@ -400,7 +400,7 @@ fn enter_on_add_tag_the_name_and_the_journal_open_the_flows_that_exist() {
     );
     press(&mut app, Key::plain(KeyCode::Esc));
 
-    go_to(&mut app, |row| matches!(row, PaneRow::Name));
+    go_to(&mut app, |row| matches!(row, PaneRow::Name(_)));
     press(&mut app, Key::plain(KeyCode::Enter));
     assert!(
         matches!(app.modals.top(), Some(Modal::TextPrompt(_))),

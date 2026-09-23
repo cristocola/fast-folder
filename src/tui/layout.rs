@@ -163,6 +163,21 @@ pub fn regions(area: Rect, pane_open: bool, needs: TableNeeds) -> Regions {
     }
 }
 
+/// Where the detail pane's text goes: inside its border, with a column of
+/// padding on each side so nothing it says touches a border glyph. **The one
+/// answer**: `App::pane_rows` wraps to its width, the cursor and the scroll
+/// count its height, and the view draws into it — a second spelling of this
+/// arithmetic is how the two came to disagree about the width by two columns.
+pub fn pane_text(pane: Rect) -> Rect {
+    let inner_w = pane.width.saturating_sub(2);
+    Rect::new(
+        pane.x.saturating_add(2).min(pane.x.saturating_add(inner_w)),
+        pane.y.saturating_add(1),
+        inner_w.saturating_sub(2),
+        pane.height.saturating_sub(2),
+    )
+}
+
 /// The templates tab's split: the card list, and the pane beside it. Read by
 /// the view that draws it and by `update` when it clamps the pane's scroll,
 /// so the cursor cannot leave the drawn window.

@@ -257,21 +257,21 @@ Defects 1, 2, 13, 14.
 
 ## Phase 6 — the pane's content
 
-- [ ] `layout::pane_text(pane) -> Rect` (borders + one column each side), read by
+- [x] `layout::pane_text(pane) -> Rect` (borders + one column each side), read by
   `App::pane_rows`, `pane_rows_on_screen` (`pane.rs:733-751`) and the view (defect 8). The
   highlight and the wash cover the full inner row.
-- [ ] A shared themed scrollbar (`view::scrollbar(theme)`, ASCII symbols when
+- [x] A shared themed scrollbar (`view::scrollbar(theme)`, ASCII symbols when
   `g.is_ascii()`) for the table and the pane (defect 15).
-- [ ] Rows (`pane.rs:161-277`): `Name(String)` + `NameLine` via `wrap_name`; `Facts` and
+- [x] Rows (`pane.rs:161-277`): `Name(String)` + `NameLine` via `wrap_name`; `Facts` and
   `Figures` flowed whole, the size measured as `SIZE_CELL`; order header, tags, warning,
   todo, notes, variables, inside; `Rule(PaneSection)`; `reading` with `g.ellipsis`.
-- [ ] Tests: `a_long_name_wraps_after_its_separators`,
+- [x] Tests: `a_long_name_wraps_after_its_separators`,
   `facts_flow_whole_and_wrap_between_them`,
   `the_figures_row_count_does_not_depend_on_the_size`, `the_living_sections_come_first`,
   `a_size_landing_never_moves_the_pane_cursor`,
   `the_pane_text_is_where_pane_rows_measured_it`,
   `a_pane_taller_than_its_box_has_a_scrollbar`; pane snapshots re-blessed after a look.
-- [ ] Docs: `docs/app.md` pane paragraph; `src/tui/CLAUDE.md` "The pane is an editor".
+- [x] Docs: `docs/app.md` pane paragraph; `src/tui/CLAUDE.md` "The pane is an editor".
 
 ## Phase 7 — todos, finished
 
@@ -409,3 +409,11 @@ console for F2, `+`, `<` and `>`.
   theme, so the builder's `↑↓` had been drawing on ASCII consoles all along. Key
   labels now follow the alphabet (`Key::label_in`), and a guard keeps theme glyphs
   out of command titles and descriptions (two descriptions and `Sort by…` reworded).
+- **Phase 6** (2026-09-23): the text rect, the header, the order and the scrollbar.
+  `PaneRow::Figures` is gone: both runs of facts are `Facts(Vec<Fact>)` rows, and
+  before the record is read the second run is the size alone. Reserving the size at
+  `SIZE_CELL` (11: `unavailable`) costs a row at a 44-column text width — "2/4 todos
+  done" goes under the size — and that is the price of a row count no landing size
+  can change; the anchors would find the cursor again, but the rows would still jump.
+  The 120×40 showcase pane is two rows taller than it shows, so its scrollbar's thumb
+  is nearly the whole track, as the table's is at the same ratio.

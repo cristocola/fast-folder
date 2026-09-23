@@ -58,10 +58,10 @@ pub enum VarKind {
 pub enum PaneSection {
     Header,
     Tags,
+    Todo,
+    Notes,
     Variables,
     Inside,
-    Notes,
-    Todo,
 }
 
 impl PaneSection {
@@ -107,15 +107,125 @@ pub fn first_in_section(rows: &[PaneRow], section: PaneSection) -> Option<usize>
         .map(|(index, _)| index)
 }
 
+/// One fact the pane's header states about a project. The header is two
+/// runs of them — what the project is (its template, its base, the day it was
+/// made) and what it holds (its size, its notes, its todos) — each flowed
+/// across as many rows as the pane's width needs, whole facts to a row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fact {
+    Template,
+    Base,
+    Created,
+    Size,
+    Notes(usize),
+    Todos { done: usize, total: usize },
+}
+
+/// What stands between two facts on a row: three spaces, the separator, three
+/// spaces — the house rule for facts on a line.
+pub const FACT_GAP: usize = 7;
+
+/// A note count as the pane and the list's peek say it.
+pub fn notes_label(notes: usize) -> String {
+    match notes {
+        0 => "no notes".to_string(),
+        1 => "1 note".to_string(),
+        n => format!("{n} notes"),
+    }
+}
+
+/// A todo count as the pane and the list's peek say it.
+pub fn todos_label(done: usize, total: usize) -> String {
+    if total == 0 {
+        "no todos".to_string()
+    } else {
+        format!("{done}/{total} todos done")
+    }
+}
+
+/// How wide `fact` is drawn — the size at the widest a size cell gets, so a
+/// size landing (`scanning…` becoming `41.0 GB`) can never move a fact onto
+/// another row, and with it every row under the cursor.
+fn fact_width(fact: &Fact, project: &Project) -> usize {
+    match fact {
+        Fact::Template => project.template.width(),
+        Fact::Base => crate::core::library::base_label(&project.base).width(),
+        Fact::Created => "created ".len() + crate::tui::rows::date_cell(&project.created).width(),
+        Fact::Size => crate::tui::rows::SIZE_CELL,
+        Fact::Notes(notes) => notes_label(*notes).width(),
+        Fact::Todos { done, total } => todos_label(*done, *total).width(),
+    }
+}
+
+/// `facts` in rows no wider than `width`, whole facts to a row: one that does
+/// not fit after the last starts the next row, and one wider than a row has a
+/// row of its own. A `width` of zero is no limit.
+fn flow_facts(facts: Vec<Fact>, project: &Project, width: usize) -> Vec<Vec<Fact>> {
+    let mut rows: Vec<Vec<Fact>> = Vec::new();
+    let mut row: Vec<Fact> = Vec::new();
+    let mut used = 0;
+    for fact in facts {
+        let w = fact_width(&fact, project);
+        if !row.is_empty() && width > 0 && used + FACT_GAP + w > width {
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+        used += if row.is_empty() { w } else { FACT_GAP + w };
+        row.push(fact);
+    }
+    if !row.is_empty() {
+        rows.push(row);
+    }
+    rows
+}
+
+/// A folder name as rows no wider than `width`, broken **after** a `_`, `-`,
+/// `.` or space where one falls inside the row — the places a fastf name joins
+/// its parts, so a row ends on a whole word of it — and inside a run only when
+/// the run alone is wider than a row. Nothing is dropped. A `width` of zero is
+/// no limit.
+fn wrap_name(name: &str, width: usize) -> Vec<String> {
+    if width == 0 || name.width() <= width {
+        return vec![name.to_string()];
+    }
+    let mut rows = Vec::new();
+    let mut rest = name;
+    while rest.width() > width {
+        let mut used = 0;
+        let mut fits = 0;
+        let mut after_joint = None;
+        for (at, c) in rest.char_indices() {
+            let w = c.width().unwrap_or(0);
+            if used + w > width {
+                break;
+            }
+            used += w;
+            fits = at + c.len_utf8();
+            if matches!(c, '_' | '-' | '.' | ' ') {
+                after_joint = Some(fits);
+            }
+        }
+        // Always forward: a first character wider than the row is a row.
+        let first = rest.chars().next().map_or(rest.len(), char::len_utf8);
+        let cut = after_joint.unwrap_or(fits).max(first);
+        rows.push(rest[..cut].to_string());
+        rest = &rest[cut..];
+    }
+    if !rest.is_empty() {
+        rows.push(rest.to_string());
+    }
+    rows
+}
+
 /// One row of the pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaneRow {
-    /// The folder name. Enter renames.
-    Name,
-    /// `template · base · created`.
-    Facts,
-    /// The size, the note count and the todo count.
-    Figures,
+    /// The folder name, or as much of it as fits the first row. Enter renames.
+    Name(String),
+    /// The rest of a name too wide for one row. Not a row the cursor rests on.
+    NameLine(String),
+    /// One row of the header's facts (`Fact`).
+    Facts(Vec<Fact>),
     /// A section heading: `── label ───`. Never a row the cursor rests on:
     /// every section that can grow ends in a row that adds to it.
     Rule(PaneSection),
@@ -177,7 +287,7 @@ impl PaneRow {
     pub fn selectable(&self) -> bool {
         matches!(
             self,
-            PaneRow::Name
+            PaneRow::Name(_)
                 | PaneRow::Tag(_)
                 | PaneRow::AddTag
                 | PaneRow::Variable { .. }
@@ -192,12 +302,18 @@ impl PaneRow {
 
 /// The pane's rows for `project`, given what has been read of it so far.
 ///
-/// The order is the order the pane always drew: the name, the facts, the
-/// figures, the tags, then everything the detail read added — a warning if a
-/// read failed, the variables, the folder's top level, the notes, the todos.
-/// Tags, notes and todos are one row each so a cursor can rest on one, with
-/// the row that adds one under them; their rules are drawn whenever there is
-/// something to add to, which is always.
+/// **What you act on first, what you look up last**: the header (the name,
+/// what the project is, what it holds), the tags, then everything the detail
+/// read added — a warning if a read failed, the todos, the notes, and only
+/// then the reference material, the template's variables and the folder's top
+/// level. A short pane — under the list, or a small window — shows the living
+/// sections without a scroll. Tags, notes and todos are one row each so a
+/// cursor can rest on one, with the row that adds one under them; their rules
+/// are drawn whenever there is something to add to, which is always.
+///
+/// **Nothing in the header is cut.** The name wraps after the joints of a
+/// fastf name (`wrap_name`) and the facts flow whole (`flow_facts`), so a
+/// narrow pane shows more rows rather than half a date.
 ///
 /// **A note is several rows, never one wrapped row.** `width` is the pane's
 /// inside, and every line of a note is wrapped to the columns after its date
@@ -214,7 +330,31 @@ impl PaneRow {
 /// holds that the template no longer declares — or every variable of a
 /// registered project, which has no template — is free text after them.
 pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) -> Vec<PaneRow> {
-    let mut rows = vec![PaneRow::Name, PaneRow::Facts, PaneRow::Figures];
+    let mut rows = Vec::new();
+    let mut name = wrap_name(&project.name, width).into_iter();
+    rows.push(PaneRow::Name(name.next().unwrap_or_default()));
+    rows.extend(name.map(PaneRow::NameLine));
+    let identity = vec![Fact::Template, Fact::Base, Fact::Created];
+    rows.extend(
+        flow_facts(identity, project, width)
+            .into_iter()
+            .map(PaneRow::Facts),
+    );
+    // Until the record is read the pane knows the size and nothing else: a
+    // count of zero there would be a claim, not a fact.
+    let mut figures = vec![Fact::Size];
+    if let Some(detail) = detail {
+        figures.push(Fact::Notes(detail.notes.len()));
+        figures.push(Fact::Todos {
+            done: detail.todos.iter().filter(|todo| todo.done).count(),
+            total: detail.todos.len(),
+        });
+    }
+    rows.extend(
+        flow_facts(figures, project, width)
+            .into_iter()
+            .map(PaneRow::Facts),
+    );
 
     rows.push(PaneRow::Rule(PaneSection::Tags));
     rows.extend(project.tags.iter().cloned().map(PaneRow::Tag));
@@ -227,6 +367,56 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
     if let Some(error) = &detail.error {
         rows.push(PaneRow::Warning(error.clone()));
     }
+
+    rows.push(PaneRow::Rule(PaneSection::Todo));
+    let todo_width = width.saturating_sub(TODO_INDENT);
+    // A label is drawn where it changes, so an ungrouped list draws none and
+    // a grouped one draws each label once, over the run it names.
+    let mut phase: Option<&str> = None;
+    for (ordinal, todo) in detail.todos.iter().enumerate() {
+        if todo.phase.as_deref() != phase {
+            phase = todo.phase.as_deref();
+            if let Some(name) = phase {
+                rows.push(PaneRow::Phase(name.to_string()));
+            }
+        }
+        let mut lines = wrap_columns(&todo.text, todo_width).into_iter();
+        rows.push(PaneRow::Todo {
+            ordinal,
+            done: todo.done,
+            text: lines.next().unwrap_or_default(),
+        });
+        rows.extend(lines.map(|text| PaneRow::TodoLine {
+            done: todo.done,
+            text,
+        }));
+    }
+    rows.push(PaneRow::AddTodo);
+
+    rows.push(PaneRow::Rule(PaneSection::Notes));
+    let earlier = detail.notes.len().saturating_sub(NOTES_SHOWN);
+    if earlier > 0 {
+        rows.push(PaneRow::EarlierNotes(earlier));
+    }
+    let note_width = width.saturating_sub(NOTE_INDENT);
+    for (ordinal, note) in detail.notes.iter().enumerate().skip(earlier) {
+        let mut lines = note
+            .text
+            .lines()
+            .flat_map(|line| wrap_columns(line, note_width));
+        rows.push(PaneRow::Note {
+            ordinal,
+            date: note.day().map(str::to_string),
+            first: lines.next().unwrap_or_default(),
+        });
+        let rest: Vec<String> = lines.collect();
+        let shown = NOTE_LINES_SHOWN.saturating_sub(1);
+        rows.extend(rest.iter().take(shown).cloned().map(PaneRow::NoteLine));
+        if rest.len() > shown {
+            rows.push(PaneRow::NoteMore(rest.len() - shown));
+        }
+    }
+    rows.push(PaneRow::AddNote);
 
     if let Some(meta) = &detail.meta {
         let mut variables = Vec::new();
@@ -278,56 +468,6 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
             rows.push(PaneRow::More(detail.listing.len() - LISTING_SHOWN));
         }
     }
-
-    rows.push(PaneRow::Rule(PaneSection::Notes));
-    let earlier = detail.notes.len().saturating_sub(NOTES_SHOWN);
-    if earlier > 0 {
-        rows.push(PaneRow::EarlierNotes(earlier));
-    }
-    let note_width = width.saturating_sub(NOTE_INDENT);
-    for (ordinal, note) in detail.notes.iter().enumerate().skip(earlier) {
-        let mut lines = note
-            .text
-            .lines()
-            .flat_map(|line| wrap_columns(line, note_width));
-        rows.push(PaneRow::Note {
-            ordinal,
-            date: note.day().map(str::to_string),
-            first: lines.next().unwrap_or_default(),
-        });
-        let rest: Vec<String> = lines.collect();
-        let shown = NOTE_LINES_SHOWN.saturating_sub(1);
-        rows.extend(rest.iter().take(shown).cloned().map(PaneRow::NoteLine));
-        if rest.len() > shown {
-            rows.push(PaneRow::NoteMore(rest.len() - shown));
-        }
-    }
-    rows.push(PaneRow::AddNote);
-
-    rows.push(PaneRow::Rule(PaneSection::Todo));
-    let todo_width = width.saturating_sub(TODO_INDENT);
-    // A label is drawn where it changes, so an ungrouped list draws none and
-    // a grouped one draws each label once, over the run it names.
-    let mut phase: Option<&str> = None;
-    for (ordinal, todo) in detail.todos.iter().enumerate() {
-        if todo.phase.as_deref() != phase {
-            phase = todo.phase.as_deref();
-            if let Some(name) = phase {
-                rows.push(PaneRow::Phase(name.to_string()));
-            }
-        }
-        let mut lines = wrap_columns(&todo.text, todo_width).into_iter();
-        rows.push(PaneRow::Todo {
-            ordinal,
-            done: todo.done,
-            text: lines.next().unwrap_or_default(),
-        });
-        rows.extend(lines.map(|text| PaneRow::TodoLine {
-            done: todo.done,
-            text,
-        }));
-    }
-    rows.push(PaneRow::AddTodo);
     rows
 }
 
@@ -497,7 +637,7 @@ pub enum PaneTarget {
 /// never rests on, or past the end.
 pub fn target_at(rows: &[PaneRow], at: usize) -> Option<PaneTarget> {
     Some(match rows.get(at)? {
-        PaneRow::Name => PaneTarget::Name,
+        PaneRow::Name(_) => PaneTarget::Name,
         PaneRow::Tag(tag) => PaneTarget::Tag(tag.clone()),
         PaneRow::AddTag => PaneTarget::AddTag,
         PaneRow::Variable { slug, .. } => PaneTarget::Variable(slug.clone()),
@@ -565,7 +705,7 @@ pub fn find_row(rows: &[PaneRow], target: &PaneTarget) -> Option<usize> {
             find(&|row| matches!(row, PaneRow::Todo { ordinal: o, .. } if o == ordinal))
                 .or_else(|| find(&|row| matches!(row, PaneRow::AddTodo)))
         }
-        PaneTarget::Name => find(&|row| matches!(row, PaneRow::Name)),
+        PaneTarget::Name => find(&|row| matches!(row, PaneRow::Name(_))),
         PaneTarget::AddTag => find(&|row| matches!(row, PaneRow::AddTag)),
         PaneTarget::EarlierNotes => find(&|row| matches!(row, PaneRow::EarlierNotes(_)))
             .or_else(|| find(&|row| matches!(row, PaneRow::Note { .. }))),
@@ -669,7 +809,7 @@ impl App {
         };
         let at = self.pane_cursor;
         match row {
-            PaneRow::Name => self.run(CommandId::Rename),
+            PaneRow::Name(_) => self.run(CommandId::Rename),
             PaneRow::AddTag => self.open_add_tag(),
             PaneRow::AddNote => self.run(CommandId::NoteInline),
             PaneRow::EarlierNotes(_) => self.run(CommandId::ShowJournal),
@@ -873,16 +1013,16 @@ impl App {
         let width = self
             .regions()
             .detail
-            .map(|pane| pane.width.saturating_sub(2) as usize)
+            .map(|pane| crate::tui::layout::pane_text(pane).width as usize)
             .unwrap_or(0);
         pane_rows(project, self.details.get(&project.path), width)
     }
 
-    /// How many rows the pane shows at once: its height inside the border.
+    /// How many rows the pane shows at once: the height of its text.
     pub(super) fn pane_rows_on_screen(&self) -> usize {
         self.regions()
             .detail
-            .map(|pane| pane.height.saturating_sub(2) as usize)
+            .map(|pane| crate::tui::layout::pane_text(pane).height as usize)
             .unwrap_or(0)
     }
 
@@ -1075,9 +1215,10 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                PaneRow::Name,
-                PaneRow::Facts,
-                PaneRow::Figures,
+                PaneRow::Name("ID0001_One".to_string()),
+                PaneRow::Facts(vec![Fact::Template, Fact::Base, Fact::Created]),
+                // Before the read the size is all the pane knows.
+                PaneRow::Facts(vec![Fact::Size]),
                 PaneRow::Rule(PaneSection::Tags),
                 PaneRow::Tag("draft".to_string()),
                 PaneRow::Tag("client/Acme".to_string()),
@@ -1114,6 +1255,7 @@ mod tests {
         let todo_rows: Vec<&PaneRow> = rows
             .iter()
             .skip_while(|r| **r != PaneRow::Rule(PaneSection::Todo))
+            .take_while(|r| **r != PaneRow::Rule(PaneSection::Notes))
             .collect();
         assert_eq!(
             todo_rows,
@@ -1175,9 +1317,15 @@ mod tests {
         assert_eq!(
             selectable,
             vec![
-                &PaneRow::Name,
+                &PaneRow::Name("ID0001_One".to_string()),
                 &PaneRow::Tag("draft".to_string()),
                 &PaneRow::AddTag,
+                &PaneRow::Todo {
+                    ordinal: 0,
+                    done: true,
+                    text: "ingested".to_string(),
+                },
+                &PaneRow::AddTodo,
                 &PaneRow::Note {
                     ordinal: 0,
                     date: None,
@@ -1189,12 +1337,6 @@ mod tests {
                     first: "began".to_string(),
                 },
                 &PaneRow::AddNote,
-                &PaneRow::Todo {
-                    ordinal: 0,
-                    done: true,
-                    text: "ingested".to_string(),
-                },
-                &PaneRow::AddTodo,
             ]
         );
         assert!(rows.contains(&PaneRow::Rule(PaneSection::Inside)));
@@ -1210,9 +1352,10 @@ mod tests {
                 first: "free text".to_string()
             }) + 1
         );
-        assert!(at(&PaneRow::Rule(PaneSection::Notes)) < at(&PaneRow::AddNote));
-        assert!(at(&PaneRow::AddNote) < at(&PaneRow::Rule(PaneSection::Todo)));
         assert!(at(&PaneRow::Rule(PaneSection::Todo)) < at(&PaneRow::AddTodo));
+        assert!(at(&PaneRow::AddTodo) < at(&PaneRow::Rule(PaneSection::Notes)));
+        assert!(at(&PaneRow::Rule(PaneSection::Notes)) < at(&PaneRow::AddNote));
+        assert!(at(&PaneRow::AddNote) < at(&PaneRow::Rule(PaneSection::Inside)));
     }
 
     #[test]
@@ -1445,9 +1588,9 @@ mod tests {
         };
         let line = || PaneRow::NoteLine(String::new());
         let mut rows = vec![
-            PaneRow::Name,
-            PaneRow::Facts,
-            PaneRow::Figures,
+            PaneRow::Name(String::new()),
+            PaneRow::Facts(Vec::new()),
+            PaneRow::Facts(Vec::new()),
             PaneRow::Rule(PaneSection::Tags),
             PaneRow::Tag("draft".to_string()),
             PaneRow::AddTag,
@@ -1478,5 +1621,109 @@ mod tests {
         assert_eq!(page_cursor(&rows, 7, -1), 5, "or the next one before it");
         assert_eq!(page_cursor(&rows, 0, -10), 0, "and stops at the top");
         assert_eq!(page_cursor(&[], 3, 5), 0, "no rows, no cursor");
+    }
+
+    /// A name wider than the pane wraps after the joints of a fastf name —
+    /// `_`, `-`, `.`, a space — so a row ends on a whole part of it, and
+    /// inside a part only when the part alone is wider than a row. Nothing is
+    /// lost: the rows are the name.
+    #[test]
+    fn a_long_name_wraps_after_its_separators() {
+        let name = "2026-01-02_acme_studio_Spring_Campaign-Extended_Directors_Cut_ID0201";
+        let rows = wrap_name(name, 24);
+        assert_eq!(rows.concat(), name, "nothing dropped: {rows:?}");
+        assert!(rows.iter().all(|row| row.width() <= 24), "{rows:?}");
+        for row in &rows[..rows.len() - 1] {
+            assert!(
+                row.ends_with(['_', '-', '.', ' ']),
+                "a row ends on a joint: {rows:?}"
+            );
+        }
+        assert_eq!(wrap_name("short", 24), vec!["short"]);
+        assert_eq!(wrap_name(name, 0), vec![name], "no width, no wrap");
+        // A part wider than a row is cut inside it, and still goes forward.
+        let rows = wrap_name("abcdefghijklmnopqrstuvwxyz", 10);
+        assert_eq!(rows, vec!["abcdefghij", "klmnopqrst", "uvwxyz"]);
+        let rows = wrap_name("日本語のフォルダ", 3);
+        assert_eq!(rows.concat(), "日本語のフォルダ");
+        assert!(rows.iter().all(|row| !row.is_empty()));
+    }
+
+    /// Facts flow whole: as many to a row as fit with the gap between them,
+    /// the next on the row under — never half a date on one row and half on
+    /// the next.
+    #[test]
+    fn facts_flow_whole_and_wrap_between_them() {
+        let project = project(&[], "client-project");
+        let wide = pane_rows(&project, None, 200);
+        assert_eq!(
+            wide[1],
+            PaneRow::Facts(vec![Fact::Template, Fact::Base, Fact::Created]),
+            "a wide pane has what the project is on one row"
+        );
+        // "client-project" (14) + gap (7) + "projects" (8) = 29; the date's 18
+        // more does not fit 40, so it starts the next row.
+        let narrow = pane_rows(&project, None, 40);
+        assert_eq!(narrow[1], PaneRow::Facts(vec![Fact::Template, Fact::Base]));
+        assert_eq!(narrow[2], PaneRow::Facts(vec![Fact::Created]));
+        // Narrower than any two: one fact to a row.
+        let tight = pane_rows(&project, None, 15);
+        let facts: Vec<&PaneRow> = tight
+            .iter()
+            .filter(|row| matches!(row, PaneRow::Facts(_)))
+            .collect();
+        assert!(
+            facts
+                .iter()
+                .all(|row| matches!(row, PaneRow::Facts(f) if f.len() == 1))
+        );
+    }
+
+    /// The size is measured at the widest a size cell gets, so the rows the
+    /// figures take cannot change when a size lands — which would move every
+    /// row under the cursor by one.
+    #[test]
+    fn the_figures_row_count_does_not_depend_on_the_size() {
+        let project = project(&[], "client");
+        let detail = ProjectDetail::default();
+        // Size (11) + gap (7) + "no notes" (8) = 26: at 26 they share a row,
+        // whatever the size turns out to read.
+        let rows = pane_rows(&project, Some(&detail), 26);
+        assert!(rows.contains(&PaneRow::Facts(vec![Fact::Size, Fact::Notes(0)])));
+        let rows = pane_rows(&project, Some(&detail), 25);
+        assert!(rows.contains(&PaneRow::Facts(vec![Fact::Size])));
+    }
+
+    /// The sections you act on come before the ones you look things up in.
+    #[test]
+    fn the_living_sections_come_first() {
+        let meta = metadata(&[("client", "Acme")]);
+        let detail = ProjectDetail {
+            meta: Some(meta),
+            variables: vec![variable("client", VarType::Text, &[])],
+            listing: vec![Entry {
+                name: "src".to_string(),
+                is_dir: true,
+            }],
+            ..Default::default()
+        };
+        let rows = pane_rows(&project(&["draft"], "client"), Some(&detail), 60);
+        let rules: Vec<PaneSection> = rows
+            .iter()
+            .filter_map(|row| match row {
+                PaneRow::Rule(section) => Some(*section),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            rules,
+            vec![
+                PaneSection::Tags,
+                PaneSection::Todo,
+                PaneSection::Notes,
+                PaneSection::Variables,
+                PaneSection::Inside,
+            ]
+        );
     }
 }

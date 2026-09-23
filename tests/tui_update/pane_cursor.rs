@@ -35,11 +35,11 @@ fn the_cursor_walks_selectable_rows_and_stops_at_the_ends() {
         rows[app.pane_cursor]
     );
     press(&mut app, Key::ch('G'));
-    assert_eq!(rows[app.pane_cursor], PaneRow::AddTodo);
+    assert_eq!(rows[app.pane_cursor], PaneRow::AddNote);
     press(&mut app, Key::ch('j'));
     assert_eq!(
         rows[app.pane_cursor],
-        PaneRow::AddTodo,
+        PaneRow::AddNote,
         "the last row is the last row"
     );
     press(&mut app, Key::ch('g'));
@@ -73,10 +73,10 @@ fn the_pane_scrolls_to_keep_its_cursor_in_view_and_a_new_row_resets_it() {
     assert_eq!(app.detail_scroll, 0);
     press(&mut app, Key::ch('G'));
     let rows = app.pane_rows();
-    assert_eq!(rows[app.pane_cursor], PaneRow::AddTodo);
+    assert_eq!(rows[app.pane_cursor], PaneRow::AddNote);
     assert!(
         app.detail_scroll > 0,
-        "the todo rows sit under thirty rows of notes, so the pane scrolled"
+        "the last row sits under thirty rows of notes, so the pane scrolled"
     );
     assert!(
         app.pane_cursor >= app.detail_scroll,
@@ -163,4 +163,100 @@ fn page_down_in_the_pane_moves_by_the_panes_height() {
     press(&mut app, Key::plain(KeyCode::PageUp));
     press(&mut app, Key::plain(KeyCode::PageUp));
     assert_eq!(app.pane_cursor, 0, "two pages back up is the top");
+}
+
+fn with_todos(app: &mut App, n: usize) {
+    with_detail(
+        app,
+        ProjectDetail {
+            todos: (0..n)
+                .map(|t| fastf::core::body::Todo {
+                    done: false,
+                    text: format!("task {t}"),
+                    phase: None,
+                })
+                .collect(),
+            ..Default::default()
+        },
+    );
+}
+
+/// **A size landing never moves the pane's cursor.** The size shares a header
+/// row with the counts; measured at the widest a size gets, the row count
+/// cannot change when `scanning…` becomes `41.0 GB`, so the cursor stays on
+/// the row it was on — and no other row slides under it.
+#[test]
+fn a_size_landing_never_moves_the_pane_cursor() {
+    let mut app = fixture(6, 120, 40);
+    with_todos(&mut app, 3);
+    press(&mut app, Key::plain(KeyCode::Right));
+    press(&mut app, Key::ch('j'));
+    press(&mut app, Key::ch('j'));
+    press(&mut app, Key::ch('j'));
+    let before = app.pane_rows();
+    let at = app.pane_cursor;
+    let path = app.library.selected().unwrap().path.clone();
+    update(
+        &mut app,
+        Msg::Sizes(vec![(path, Some(41 * 1024 * 1024 * 1024))]),
+    );
+    assert_eq!(app.pane_rows(), before, "the rows are the same rows");
+    assert_eq!(app.pane_cursor, at, "and the cursor is where it was");
+}
+
+/// **The pane's text is drawn where `pane_rows` measured it**: a column in
+/// from each border. The first letter of the name sits at that column, and a
+/// wrapped todo's rows end inside it.
+#[test]
+fn the_pane_text_is_where_pane_rows_measured_it() {
+    let mut app = fixture(6, 120, 40);
+    with_todos(&mut app, 1);
+    let pane = app.regions().detail.expect("a pane at 120 columns");
+    let text = fastf::tui::layout::pane_text(pane);
+    assert_eq!((text.x, text.width), (pane.x + 2, pane.width - 4));
+    let buffer = fastf::tui::testing::render_to_buffer(&app, 120, 40);
+    let name = app.library.selected().unwrap().name.clone();
+    assert_eq!(
+        buffer[(pane.x + 1, pane.y + 1)].symbol(),
+        " ",
+        "the padding column is blank"
+    );
+    assert_eq!(
+        buffer[(text.x, text.y)].symbol(),
+        name.chars().next().unwrap().to_string(),
+        "the name starts at the text column"
+    );
+}
+
+/// A pane with more rows than it shows has a scrollbar on its border, drawn
+/// in the theme's alphabet; one that shows everything has none.
+#[test]
+fn a_pane_taller_than_its_box_has_a_scrollbar() {
+    use fastf::tui::theme::{Glyphs, Theme};
+
+    let mut app = fixture(6, 120, 40);
+    with_todos(&mut app, 3);
+    let pane = app.regions().detail.unwrap();
+    let edge = |app: &App| {
+        let buffer = fastf::tui::testing::render_to_buffer(app, 120, 40);
+        (pane.y + 1..pane.y + pane.height - 1)
+            .map(|y| buffer[(pane.x + pane.width - 1, y)].symbol().to_string())
+            .collect::<String>()
+    };
+    assert!(
+        edge(&app).chars().all(|c| c == '│'),
+        "everything fits: a plain border"
+    );
+
+    with_todos(&mut app, 60);
+    assert!(
+        edge(&app).contains('█'),
+        "sixty todos: a thumb on the border"
+    );
+    app.theme = Theme::mono().with_glyphs(Glyphs::ascii());
+    let ascii = edge(&app);
+    assert!(
+        ascii.contains('#') && !ascii.contains('█'),
+        "in the ASCII alphabet, too: {ascii}"
+    );
 }

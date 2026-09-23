@@ -727,8 +727,23 @@ pane's last row it slides up over the rows above (`layout::box_at_row`).
 **Space in the pane marks the project it shows and stays**; on the list it steps
 through `after_selection_change`, so the next row is read like any other move.
 
+**The pane's text has one rect** (`layout::pane_text`: inside the border, a
+column of padding each side), read by `App::pane_rows` for the width it wraps to,
+by `pane_rows_on_screen` for the height the cursor and scroll count, and by the
+view; the cursor's highlight and a pulse's wash span the whole inner row, across
+the padding. **The header is never cut**: the name wraps after the joints of a
+fastf name (`wrap_name`: `_ - .` and space, inside a part only when it is wider
+than a row) into `NameLine`s, and the facts — what the project is, then what it
+holds — flow whole (`flow_facts`) into `PaneRow::Facts` rows, the size measured
+at `rows::SIZE_CELL` whatever it reads, so a size landing can never add a row
+above the cursor. Until the record is read the figures are the size alone: a
+zero count there would be a claim. **The order is by use**: header, tags, todo,
+notes, then the reference — variables and the folder's top level — so a short
+pane shows the living sections unscrolled. A pane with more rows than it shows
+has the table's scrollbar (`view::scrollbar`, in the theme's alphabet).
+
 **A note is several rows, and so is a long line**: `App::pane_rows` hands
-`pane_rows` the pane's inside width, and every line of a note is wrapped to the
+`pane_rows` the pane's text width, and every line of a note is wrapped to the
 columns after its date (`NOTE_INDENT`) by `wrap_columns`, in display columns.
 `PaneRow::Note` is the first row with the date in a ten-wide column (blank when
 undated), then `NoteLine`s up to `NOTE_LINES_SHOWN` rows, then `NoteMore`; only the

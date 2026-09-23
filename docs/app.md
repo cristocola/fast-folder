@@ -37,14 +37,17 @@ Top to bottom:
 - **The project table** — ID, folder name, then the size, the date, the base,
   the template and the tags, as many as fit; see [Columns](#columns). The
   folder name is never cut. When the table is empty it says so inside the box.
-- **The detail pane** (`i` shows or hides it) — the
-  selected project's template, base and date, its size and how many notes and
-  todos it has, its tags one per row, its template variables, the top of its
-  folder, its latest notes — each with the day it was written and every line
-  it has — and its todos, grouped under the `###` labels the file carries when
-  it has any. A note or todo too long for the pane continues on the
-  rows under it; a note shows its first eight rows there and says how many
-  more, and `J` shows every note in full. **The pane goes where the window has
+- **The detail pane** (`i` shows or hides it) — the selected project's name,
+  its template, base and date, its size and how many notes and todos it has;
+  then what you work with: its tags one per row, its todos, grouped under the
+  `###` labels the file carries when it has any, and its latest notes, each
+  with the day it was written and every line it has; and last what you look
+  things up in, its template variables and the top of its folder. Nothing is
+  cut: a long folder name continues on the next row, broken after an `_`, `-`
+  or `.`; the facts wrap whole, never half a date on one row; a note or todo
+  too long for the pane continues on the rows under it. A note shows its first
+  eight rows there and says how many more, and `J` shows every note in full. A
+  pane with more rows than it shows has a scrollbar on its border. **The pane goes where the window has
   room for it.** Beside the list when the folder names fit whole with a pane
   of 36 columns next to them; under the list, at the full width, when the
   window is tall enough for both (a vertical split, a portrait screen, a

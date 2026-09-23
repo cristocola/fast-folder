@@ -39,7 +39,7 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
   window), plus `fastf term`. A person at a desktop has to say whether the right
   window appeared.
 
-Last reviewed: 2026-09-21.
+Last reviewed: 2026-09-23.
 
 ## Backlog
 

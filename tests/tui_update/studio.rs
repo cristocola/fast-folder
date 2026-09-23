@@ -689,3 +689,42 @@ fn from_folder_previews_before_it_writes() {
         other => panic!("{other:?}"),
     }
 }
+
+/// **Below the smallest window, a question still reaches the person it asks.**
+/// The dialog cannot be drawn there, so `q` over a worked-on template used to
+/// push a confirmation nobody could see, and a second `q` — answering it
+/// unseen — threw the template away. The guard now says what is waiting.
+#[test]
+fn the_too_small_guard_names_the_template_it_would_discard() {
+    let mut app = fixture(6, 120, 40);
+    open_new(&mut app);
+    press(&mut app, Key::plain(KeyCode::Enter));
+    type_text(&mut app, "Music video");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(builder(&app).is_dirty(), "the fixture has to be dirty");
+
+    update(&mut app, Msg::Resize(40, 10));
+    let frame = fastf::tui::testing::render_to_string(&app, 40, 10);
+    assert!(
+        frame.contains("unsaved"),
+        "the guard says a template is being worked on:\n{frame}"
+    );
+
+    let effects = press(&mut app, Key::ch('q'));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Quit(_))),
+        "the first q asks: {effects:?}"
+    );
+    let frame = fastf::tui::testing::render_to_string(&app, 40, 10);
+    assert!(
+        frame.contains("again"),
+        "and the question is on screen, in words:\n{frame}"
+    );
+    let effects = press(&mut app, Key::ch('q'));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Quit(Exit::Normal))),
+        "the second q is an answer given with the question in view: {effects:?}"
+    );
+}

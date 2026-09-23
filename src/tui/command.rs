@@ -2004,7 +2004,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Back,
         "Back",
-        "one step back: cancel a running job, clear the search, the filter, the marks — then quit",
+        "one step back: cancel a running job, leave the pane, clear the search, the filter, the marks — then quit",
         BACKSTEP,
         [Key::plain(KeyCode::Esc)],
         Navigate,

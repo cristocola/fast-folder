@@ -122,23 +122,23 @@ what happened in the Phase log.
 
 Defects 3, 4, 5, 6, 9, 11, 12.
 
-- [ ] Esc rung: right after the job-cancel check (`mod.rs:1562`), `focus == Detail →
+- [x] Esc rung: right after the job-cancel check (`mod.rs:1562`), `focus == Detail →
   set_focus(Projects)`. `Back` is over `BACKSTEP = TABS`, so the template pane gets it too.
   Back's description (`command.rs:2007`) adds "leave the pane".
-- [ ] Caret: keep the search caret and the pane caret apart in `view/mod.rs:33-62`; set the
+- [x] Caret: keep the search caret and the pane caret apart in `view/mod.rs:33-62`; set the
   pane's when `modals.is_empty() && pane_edit.is_some()`. Add
   `testing::render_with_caret(app, w, h) -> (Buffer, Position)`.
-- [ ] Paging: `page_rows()` follows the focus (table, pane, templates list, template pane);
+- [x] Paging: `page_rows()` follows the focus (table, pane, templates list, template pane);
   the `Focus::Detail` branch (`mod.rs:1791`) calls a new pure `pane::page_cursor(rows,
   from, delta_rows)` that pages by screen rows.
-- [ ] Note editor: `layout::box_at_row(inner, row, rest, 4)` replaces the early return at
+- [x] Note editor: `layout::box_at_row(inner, row, rest, 4)` replaces the early return at
   `view/projects.rs:677-686`; the key line stays on the box's last row.
-- [ ] Paste: an `on_paste` arm for `pane_edit` — a line takes the first line, a note every
+- [x] Paste: an `on_paste` arm for `pane_edit` — a line takes the first line, a note every
   line, nothing while pending; clears the error.
-- [ ] Space: on the list, step and `after_selection_change`; in the pane, mark and stay.
-- [ ] Too-small: `render_too_small` says when a discard question is waiting ("a template
+- [x] Space: on the list, step and `after_selection_change`; in the pane, mark and stay.
+- [x] Too-small: `render_too_small` says when a discard question is waiting ("a template
   has unsaved changes — make the window bigger to keep it, or q again discards it").
-- [ ] Tests (`tui_update`): `esc_in_the_pane_goes_back_to_the_list_and_never_quits`,
+- [x] Tests (`tui_update`): `esc_in_the_pane_goes_back_to_the_list_and_never_quits`,
   `esc_from_the_template_pane_goes_to_its_list_first`,
   `the_caret_sits_in_the_field_being_edited`,
   `a_note_opened_on_the_last_visible_row_slides_up`, `a_paste_lands_in_the_pane_field`,
@@ -146,7 +146,7 @@ Defects 3, 4, 5, 6, 9, 11, 12.
   `space_on_the_list_steps_and_reads_the_next_row`, `space_in_the_pane_marks_and_stays`,
   `the_too_small_guard_names_the_template_it_would_discard`; unit tests for
   `page_cursor`. Snapshot `too_small_40x10` changes.
-- [ ] Docs: `docs/app.md` (Esc, Space); the Esc ladder in `src/tui/CLAUDE.md`.
+- [x] Docs: `docs/app.md` (Esc, Space); the Esc ladder in `src/tui/CLAUDE.md`.
 
 ## Phase 2 — the cursor follows the item
 
@@ -364,3 +364,9 @@ console for F2, `+`, `<` and `>`.
   `state.toml` kept its timestamp and row. `FASTF_SHOT_LONG=1` reproduces the no-pane
   frame at 120×40; the showcase's todos carry two phases. crossterm decodes the Linux
   console's F2 (`ESC [ [ B`), so F2 is safe there.
+- **Phase 1** (2026-09-23): Esc leaves the pane on both tabs; the caret has one owner
+  at a time; the pane pages by drawn rows; the note editor slides up; paste reaches a
+  pane edit; Space in the pane marks and stays, on the list reads the next row; the
+  too-small guard says in words what `q` would discard. The caret is read back by
+  parking the test backend's cursor off-screen before the draw, since ratatui keeps
+  the frame's own cursor private. No snapshot moved.

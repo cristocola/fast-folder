@@ -781,3 +781,118 @@ fn the_hint_bar_reads_the_pane_and_the_edit() {
         "Enter is a new line here: {hints:?}"
     );
 }
+
+/// **The caret sits in the field being typed into.** The pane's editor drew
+/// its field but the terminal's cursor was only ever placed for the search
+/// bar, so an edit in the pane had no caret at all.
+#[test]
+fn the_caret_sits_in_the_field_being_edited() {
+    let mut app = editing_fixture();
+    go_to(
+        &mut app,
+        |row| matches!(row, PaneRow::Variable { slug, .. } if slug == "artist"),
+    );
+    let (_, caret) = fastf::tui::testing::render_with_caret(&app, 120, 40);
+    assert_eq!(caret, None, "no field open, no caret");
+
+    press(&mut app, Key::plain(KeyCode::Enter));
+    let pane = app.regions().detail.expect("a pane at 120 columns");
+    let row = (app.pane_edit.as_ref().unwrap().row() - app.detail_scroll) as u16;
+    let (_, caret) = fastf::tui::testing::render_with_caret(&app, 120, 40);
+    let caret = caret.expect("an open edit shows the caret");
+    assert_eq!(caret.y, pane.y + 1 + row, "on the edit's own row");
+    assert!(
+        caret.x > pane.x && caret.x < pane.x + pane.width - 1,
+        "inside the pane: {caret:?} in {pane:?}"
+    );
+
+    press(&mut app, Key::plain(KeyCode::Esc));
+    let (_, caret) = fastf::tui::testing::render_with_caret(&app, 120, 40);
+    assert_eq!(caret, None, "closed again, the caret goes with it");
+}
+
+/// A note on the pane's last visible row opens its editor all the same,
+/// slid up over the rows above it. It used to draw nothing: the editor wanted
+/// two rows under its own and returned without a frame, while the edit stayed
+/// open and took the keys.
+#[test]
+fn a_note_opened_on_the_last_visible_row_slides_up() {
+    let mut app = fixture(6, 120, 20);
+    press(&mut app, Key::ch('j'));
+    let path = app.library.selected().unwrap().path.clone();
+    let detail = ProjectDetail {
+        notes: (0..6)
+            .map(|n| fastf::core::body::Note {
+                timestamp: Some(format!("2026-01-0{}T00:00:00Z", n + 1)),
+                text: format!("note {n}"),
+            })
+            .collect(),
+        ..Default::default()
+    };
+    update(
+        &mut app,
+        Msg::Detail {
+            path,
+            detail: Box::new(detail),
+        },
+    );
+    press(&mut app, Key::plain(KeyCode::Right));
+    let last_note = app
+        .pane_rows()
+        .iter()
+        .rposition(|row| matches!(row, PaneRow::Note { .. }))
+        .unwrap();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Note { ordinal: 5, .. })
+    });
+    assert_eq!(app.pane_cursor, last_note);
+    let pane = app.regions().detail.expect("a pane at 120 columns");
+    let visible = (pane.height - 2) as usize;
+    assert_eq!(
+        app.pane_cursor - app.detail_scroll,
+        visible - 1,
+        "the fixture puts the note on the last visible row"
+    );
+
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(app.pane_edit, Some(PaneEdit::Note { .. })));
+    let (buffer, caret) = fastf::tui::testing::render_with_caret(&app, 120, 20);
+    let caret = caret.expect("the note editor is drawn, and takes the caret");
+    assert!(
+        caret.y > pane.y && caret.y < pane.y + pane.height - 1,
+        "inside the pane: {caret:?} in {pane:?}"
+    );
+    let text: String = (pane.y..pane.y + pane.height)
+        .flat_map(|y| (pane.x..pane.x + pane.width).map(move |x| (x, y)))
+        .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+        .collect();
+    assert!(text.contains("note 5"), "the note's text is in the editor");
+    assert!(text.contains("save"), "and its key line under it");
+}
+
+/// A paste lands in the field the pane has open — the first line in a line
+/// field, as every one-line field takes it. It used to fall through to
+/// "pasted text ignored".
+#[test]
+fn a_paste_lands_in_the_pane_field() {
+    let mut app = editing_fixture();
+    go_to(
+        &mut app,
+        |row| matches!(row, PaneRow::Variable { slug, .. } if slug == "artist"),
+    );
+    press(&mut app, Key::plain(KeyCode::Enter));
+    press(&mut app, Key::ctrl('u'));
+    update(
+        &mut app,
+        Msg::Paste("Beyoncé\nand a second line".to_string()),
+    );
+    match &app.pane_edit {
+        Some(PaneEdit::Line { input, .. }) => assert_eq!(input.text(), "Beyoncé"),
+        other => panic!("the line edit is still open: {other:?}"),
+    }
+    assert!(
+        app.status.text.contains("kept the first"),
+        "and says what it dropped: {:?}",
+        app.status
+    );
+}

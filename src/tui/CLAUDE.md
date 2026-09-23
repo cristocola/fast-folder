@@ -107,7 +107,8 @@ screen is released, `SIGTSTP` is raised, and `fg` retakes the screen and sends a
 faster than a hand types becomes one `Msg::Paste` (`collect_burst`), for
 terminals without bracketed paste; `on_paste` gives a line field the first line
 (saying how many it dropped), a text area every line, and the dashboard only a
-status line.
+status line. An edit open in the pane is a field like any other: its line takes
+the first line, a note every line, and nothing lands while its write is pending.
 
 **The app never takes the mouse**, because a terminal that reports the mouse takes
 every drag too, and selecting text would need a modifier nobody finds.
@@ -303,7 +304,10 @@ look around, and Enter in the pane means *edit this row*. `FocusList` and
 `FocusDetail` are declared over `PANED` and dispatch on `screen`; each is
 **hidden, not a no-op**, where it has nowhere to go (`pane_has_focus`,
 `pane_can_take_focus`). The axis never quits — leaving a tab is Esc's ladder and
-`T` — and `the_horizontal_axis_only_moves_focus_or_turns_a_page` holds it. Two
+`T` — and `the_horizontal_axis_only_moves_focus_or_turns_a_page` holds it. **The
+pane is a rung of that ladder**, on both tabs: `Back` takes the focus to the list
+right after cancelling a job, because a ladder that ran out under a focused pane
+quit the app — leaving the pane the way every dialog is left closed fastf. Two
 surfaces own their left and right: a **field** (`LineEdit`, `TextArea`, a `Form`
 choice) for its caret or option, and the guide, a **reader**, whose
 `Context::Guide` declares `GuideNext`/`GuidePrevious`; forward off the last page
@@ -321,7 +325,10 @@ Enter dispatches exactly the `CommandId` a key would, and `#`/`@` restricts it t
 projects.
 
 **Every quit goes through `App::quit`** — `q`, the palette entry, the too-small
-guard — so each asks what Esc would ask before a worked-on template is lost.
+guard — so each asks what Esc would ask before a worked-on template is lost. The
+too-small guard cannot draw the dialog, so it asks in words
+(`view::render_too_small` reads the top modal): a second `q` there is an answer
+given with the question in view, never one given blind.
 `close_top` owns the question, `quit` who must ask it, and
 `ConfirmThen::DiscardTemplate` carries `then_quit` so the answer finishes the quit.
 
@@ -673,7 +680,16 @@ asserted.
 **`pane::pane_rows` is the one answer to "what is in the pane"**, read by the view,
 the cursor arithmetic and the scroll ceiling, so which rows exist and which are
 `PaneRow::selectable` is never counted twice. One line per row and no `Wrap`,
-because the cursor and `detail_scroll` count rows.
+because the cursor and `detail_scroll` count rows. **A page is the pane's height
+in drawn rows** (`pane::page_cursor`, landing on the farthest selectable row the
+page reaches): stepping a page's worth of *selectable* rows skipped every wrapped
+line and jumped screens at a time. **The caret goes where typing lands**
+(`view::view`): a dialog's field, else the search bar while it is typed into, else
+an edit open in the pane — one owner at a time; `testing::render_with_caret`
+reads it back. A note editor never opens smaller than `NOTE_EDITOR_ROWS`: on the
+pane's last row it slides up over the rows above (`layout::box_at_row`).
+**Space in the pane marks the project it shows and stays**; on the list it steps
+through `after_selection_change`, so the next row is read like any other move.
 
 **A note is several rows, and so is a long line**: `App::pane_rows` hands
 `pane_rows` the pane's inside width, and every line of a note is wrapped to the

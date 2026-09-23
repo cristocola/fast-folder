@@ -497,6 +497,43 @@ pub fn step_cursor(rows: &[PaneRow], from: usize, delta: isize) -> usize {
     selectable[next]
 }
 
+/// The row the cursor lands on after paging `delta_rows` *drawn* rows from
+/// `from`: the farthest selectable row the page reaches, or the next one past
+/// it when the page holds none, stopping at the ends.
+///
+/// Paging by selectable rows instead — `step_cursor` with a page's worth —
+/// would skip every wrapped line of a note and every rule between sections,
+/// and a PageDown would jump several screens at once.
+pub fn page_cursor(rows: &[PaneRow], from: usize, delta_rows: isize) -> usize {
+    let selectable: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.selectable())
+        .map(|(index, _)| index)
+        .collect();
+    let (Some(&first), Some(&last)) = (selectable.first(), selectable.last()) else {
+        return 0;
+    };
+    let target = (from as isize).saturating_add(delta_rows);
+    if delta_rows >= 0 {
+        let within = selectable
+            .iter()
+            .rev()
+            .find(|&&index| index > from && index as isize <= target);
+        let beyond = selectable.iter().find(|&&index| index as isize > target);
+        *within.or(beyond).unwrap_or(&last)
+    } else {
+        let within = selectable
+            .iter()
+            .find(|&&index| index < from && index as isize >= target);
+        let beyond = selectable
+            .iter()
+            .rev()
+            .find(|&&index| (index as isize) < target);
+        *within.or(beyond).unwrap_or(&first)
+    }
+}
+
 impl App {
     /// A pane edit is open: the field has first refusal on anything typed,
     /// the registry answers the rest (`Enter`, `Esc`, `Ctrl-S`), and what
@@ -773,6 +810,19 @@ impl App {
     pub(super) fn move_pane_cursor(&mut self, delta: isize) {
         let rows = self.pane_rows();
         self.pane_cursor = step_cursor(&rows, self.pane_cursor, delta);
+        self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
+            self.detail_scroll,
+            Some(self.pane_cursor),
+            rows.len(),
+            self.pane_rows_on_screen(),
+        );
+    }
+
+    /// Page the pane's cursor by `delta_rows` drawn rows (`page_cursor`) and
+    /// keep it in view.
+    pub(super) fn page_pane_cursor(&mut self, delta_rows: isize) {
+        let rows = self.pane_rows();
+        self.pane_cursor = page_cursor(&rows, self.pane_cursor, delta_rows);
         self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
             self.detail_scroll,
             Some(self.pane_cursor),
@@ -1199,5 +1249,47 @@ mod tests {
             .count();
         assert_eq!(lines, NOTE_LINES_SHOWN - 1, "wrapped rows count as lines");
         assert!(rows.iter().any(|r| matches!(r, PaneRow::NoteMore(_))));
+    }
+
+    /// A page is counted in drawn rows and lands on the farthest row Enter can
+    /// act on inside it — or, when the page holds none, the next one past it.
+    #[test]
+    fn a_page_moves_by_drawn_rows_and_lands_on_a_row_that_can_be_acted_on() {
+        let note = |ordinal| PaneRow::Note {
+            ordinal,
+            date: None,
+            first: String::new(),
+        };
+        let line = || PaneRow::NoteLine(String::new());
+        let mut rows = vec![
+            PaneRow::Name,
+            PaneRow::Facts,
+            PaneRow::Figures,
+            PaneRow::Rule("tags"),
+            PaneRow::Tag("draft".to_string()),
+            PaneRow::AddTag,
+            PaneRow::Rule("notes"),
+            note(0),
+        ];
+        rows.extend((0..5).map(|_| line()));
+        rows.push(note(1));
+        rows.extend((0..5).map(|_| line()));
+        rows.extend([PaneRow::AddNote, PaneRow::Rule("todo"), PaneRow::AddTodo]);
+        let last = rows.len() - 1;
+
+        assert_eq!(page_cursor(&rows, 0, 6), 5, "the farthest inside the page");
+        assert_eq!(page_cursor(&rows, 5, 6), 7);
+        assert_eq!(
+            page_cursor(&rows, 7, 3),
+            13,
+            "a page of wrapped lines only reaches the next note"
+        );
+        assert_eq!(page_cursor(&rows, 13, 100), last, "and stops at the end");
+        assert_eq!(page_cursor(&rows, last, 100), last);
+
+        assert_eq!(page_cursor(&rows, 13, -6), 7, "up, the farthest back");
+        assert_eq!(page_cursor(&rows, 7, -1), 5, "or the next one before it");
+        assert_eq!(page_cursor(&rows, 0, -10), 0, "and stops at the top");
+        assert_eq!(page_cursor(&[], 3, 5), 0, "no rows, no cursor");
     }
 }

@@ -250,3 +250,47 @@ fn the_palette_moves_with_its_own_keys() {
     press(&mut app, Key::plain(KeyCode::Esc));
     assert!(app.modals.is_empty());
 }
+
+/// **Esc leaves the pane before it does anything else.** The pane is a level,
+/// like a tab; Esc used to fall through it to the list's ladder, and with no
+/// search, filter or marks to clear, that ladder quits — so leaving the pane
+/// the way every dialog is left closed the app.
+#[test]
+fn esc_in_the_pane_goes_back_to_the_list_and_never_quits() {
+    let mut app = fixture(3, 120, 40);
+    press(&mut app, Key::plain(KeyCode::Right));
+    assert_eq!(app.focus, Focus::Detail);
+
+    let effects = press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Quit(_))),
+        "Esc in the pane quit the app: {effects:?}"
+    );
+    assert_eq!(app.focus, Focus::Projects, "it goes back to the list");
+    assert_eq!(app.screen, Screen::Library);
+
+    // From the list, the ladder is what it always was.
+    let effects = press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Quit(Exit::Normal))),
+        "the list's Esc still quits once there is nothing to clear: {effects:?}"
+    );
+}
+
+/// The template pane is a level of its tab: Esc goes to the card list first,
+/// then off the tab.
+#[test]
+fn esc_from_the_template_pane_goes_to_its_list_first() {
+    let mut app = fixture(3, 120, 40);
+    press(&mut app, Key::ch('T'));
+    press(&mut app, Key::plain(KeyCode::Right));
+    assert_eq!(app.focus, Focus::Detail);
+
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert_eq!(app.focus, Focus::Projects, "the card list first");
+    assert_eq!(app.screen, Screen::Templates, "still on the tab");
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert_eq!(app.screen, Screen::Library, "then off it");
+}

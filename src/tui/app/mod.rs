@@ -1374,6 +1374,21 @@ impl App {
                 kept_first = true;
                 self.after_query_change()
             }
+            // An edit open in the pane: a line takes the first line, a note
+            // every line — and nothing while its write is on its way.
+            None if self.pane_edit.as_ref().is_some_and(|edit| !edit.pending()) => {
+                if let Some(edit) = &mut self.pane_edit {
+                    edit.clear_error();
+                    match edit {
+                        pane::PaneEdit::Line { input, .. } => {
+                            input.paste(&first);
+                            kept_first = true;
+                        }
+                        pane::PaneEdit::Note { area, .. } => area.paste(text),
+                    }
+                }
+                Vec::new()
+            }
             None => {
                 self.info(format!(
                     "pasted text ignored — press {} to search, or open a field first",
@@ -1536,8 +1551,15 @@ impl App {
     }
 
     /// A screenful, for the pagers: the height of the list on screen.
+    /// A screenful for the list or pane the keys go to: the pane pages by its
+    /// own height, which is not the table's once the two stop sitting side by
+    /// side, and was never the same number of rows anyway.
     fn page_rows(&self) -> usize {
-        self.rows_on_screen().max(1)
+        let rows = match (self.screen, self.focus) {
+            (Screen::Library, Focus::Detail) => self.pane_rows_on_screen(),
+            _ => self.rows_on_screen(),
+        };
+        rows.max(1)
     }
 
     // --- commands ---------------------------------------------------------
@@ -1561,6 +1583,13 @@ impl App {
                 // the user was looking at.
                 if self.job.is_some() || self.move_progress.is_some() {
                     return self.request_cancel();
+                }
+                // The pane is a level, like a tab: Esc leaves it for the list
+                // before it clears anything the list shows — and long before
+                // the ladder runs out and quits.
+                if self.focus == Focus::Detail {
+                    self.set_focus(Focus::Projects);
+                    return Vec::new();
                 }
                 // On the templates tab, the first step back is to the library:
                 // Esc is "one level out", and a tab is a level.
@@ -1790,7 +1819,7 @@ impl App {
                 }
                 match self.focus {
                     Focus::Detail => {
-                        self.move_pane_cursor(delta);
+                        self.page_pane_cursor(delta);
                         Vec::new()
                     }
                     _ => {
@@ -2007,8 +2036,13 @@ impl App {
                 // the anchor is "the row Space last acted on", so changing
                 // your mind about a row does not leave the anchor on it.
                 self.library.last_mark = Some(path);
+                // In the pane the mark is all: stepping would swap the project
+                // under the rows being read.
+                if self.focus == Focus::Detail {
+                    return Vec::new();
+                }
                 self.library.step(1);
-                Vec::new()
+                self.after_selection_change()
             }
             CommandId::MarkToHere => {
                 let added = self.library.mark_to_here();

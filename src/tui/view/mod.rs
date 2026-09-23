@@ -30,19 +30,19 @@ pub fn view(app: &App, frame: &mut Frame) {
     // The two tabs share every band but the middle one, so the chrome — the
     // name, the tabs, the bases, the status line, the keys — stays where it is
     // when you switch, and only the work changes.
-    let search_caret = match app.screen {
+    let (search_caret, pane_caret) = match app.screen {
         crate::tui::app::Screen::Library => {
             let caret = dashboard::search_bar(app, frame, regions.search);
             projects::table(app, frame, regions.table);
             let pane_caret = regions
                 .detail
                 .and_then(|detail| projects::detail(app, frame, detail));
-            caret.or(pane_caret)
+            (caret, pane_caret)
         }
         crate::tui::app::Screen::Templates => {
             let caret = templates::bar(app, frame, regions.search);
             templates::screen(app, frame, layout::templates_body(&regions));
-            caret
+            (caret, None)
         }
     };
     dashboard::status(app, frame, regions.status);
@@ -52,37 +52,72 @@ pub fn view(app: &App, frame: &mut Frame) {
     modals::render_move_progress(app, frame, area);
     modals::render_job(app, frame, area);
 
-    if let Some(caret) = modal_caret {
-        frame.set_cursor_position(caret);
-    } else if app.modals.is_empty()
-        && app.search.editing
-        && let Some(caret) = search_caret
-    {
+    // The terminal's own cursor goes where typing lands: a dialog's field, the
+    // search bar while it is being typed into, or an edit open in the pane —
+    // one at a time, since a field under a dialog is not the one being typed.
+    let caret = if modal_caret.is_some() {
+        modal_caret
+    } else if !app.modals.is_empty() {
+        None
+    } else if app.search.editing {
+        search_caret
+    } else if app.pane_edit.is_some() {
+        pane_caret
+    } else {
+        None
+    };
+    if let Some(caret) = caret {
         frame.set_cursor_position(caret);
     }
 }
 
 fn render_too_small(app: &App, frame: &mut Frame, area: Rect) {
+    use crate::tui::app::actions::{Confirm, ConfirmThen};
+    use crate::tui::app::modal::Modal;
+    use crate::tui::command::{CommandId, key_of};
+
     let theme = &app.theme;
-    let text = vec![
-        Line::from(Span::styled(
+    let mut text = vec![Line::from(Span::styled(
+        format!(
+            "fastf needs at least {}×{} — this window is {}×{}",
+            layout::MIN_WIDTH,
+            layout::MIN_HEIGHT,
+            area.width,
+            area.height
+        ),
+        theme.warn(),
+    ))];
+    // A dialog cannot be drawn here, so a question it is waiting on is asked
+    // in words: the quit gesture works on this screen, and a template worked
+    // on must not be thrown away by a second key nobody could see the
+    // question for.
+    let quit = key_of(CommandId::Quit);
+    match app.modals.top() {
+        Some(Modal::Confirm(Confirm {
+            then: ConfirmThen::DiscardTemplate { then_quit: Some(_) },
+            ..
+        })) => text.push(Line::from(Span::styled(
             format!(
-                "fastf needs at least {}×{} — this window is {}×{}",
-                layout::MIN_WIDTH,
-                layout::MIN_HEIGHT,
-                area.width,
-                area.height
+                "a template has unsaved changes — make the window bigger to keep it, \
+                 or press {quit} again to throw it away and quit"
             ),
             theme.warn(),
-        )),
-        Line::from(Span::styled(
-            format!(
-                "make it bigger, or press {} to quit",
-                crate::tui::command::key_of(crate::tui::command::CommandId::Quit)
-            ),
+        ))),
+        Some(Modal::Builder(builder)) if builder.is_dirty() => {
+            text.push(Line::from(Span::styled(
+                "a template has unsaved changes — make the window bigger to keep working on it",
+                theme.warn(),
+            )));
+            text.push(Line::from(Span::styled(
+                format!("or press {quit} to be asked about it"),
+                theme.dim(),
+            )));
+        }
+        _ => text.push(Line::from(Span::styled(
+            format!("make it bigger, or press {quit} to quit"),
             theme.dim(),
-        )),
-    ];
+        ))),
+    }
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: true })
         .block(Block::default().borders(Borders::ALL));

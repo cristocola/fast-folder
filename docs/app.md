@@ -123,7 +123,7 @@ pane beside it, and nothing else.
 | `C` | copy the project to a folder outside your bases, keeping its ID |
 | `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good — it names the folder and asks you to type `delete` |
 | `M`, `J` | the selected project's metadata (its frontmatter); every one of its notes |
-| Space, `v`, `*`, `-` | mark the row and step on; mark every row **between the last one you marked and the cursor**; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
+| Space, `v`, `*`, `-` | mark the row and step on (in the pane, mark the project it shows and stay); mark every row **between the last one you marked and the cursor**; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
@@ -133,7 +133,7 @@ pane beside it, and nothing else.
 | `R` | reindex: rescan every base from its folders and rebuild the caches |
 | Ctrl-Z | suspend to the shell, as in any program; `fg` brings the app back with its screen retaken (unix) |
 | `q` | quit; in a dialog, close it |
-| Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the search bar, clear the query, clear the filters, clear the marks — and only then quit |
+| Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the pane for the list, leave the search bar, clear the query, clear the filters, clear the marks — and only then quit |
 | Ctrl-C | leave at once (exit 130, `aborted.`) |
 
 ## Searching

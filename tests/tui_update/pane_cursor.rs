@@ -117,3 +117,50 @@ fn the_cursor_is_drawn_only_while_the_pane_has_the_focus() {
         "and not while the list has it"
     );
 }
+
+/// **A page in the pane is the pane's height, in drawn rows.** It used to be
+/// the table's height counted in *selectable* rows, so one PageDown walked
+/// past every wrapped line of every note and landed several screens down.
+#[test]
+fn page_down_in_the_pane_moves_by_the_panes_height() {
+    let mut app = fixture(6, 120, 24);
+    // Five notes of six lines each: thirty rows, over a pane of seventeen.
+    let detail = ProjectDetail {
+        notes: (0..5)
+            .map(|n| fastf::core::body::Note {
+                timestamp: Some(format!("2026-01-0{}T00:00:00Z", n + 1)),
+                text: (0..6)
+                    .map(|l| format!("note {n} line {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            })
+            .collect(),
+        ..Default::default()
+    };
+    with_detail(&mut app, detail);
+    press(&mut app, Key::plain(KeyCode::Right));
+    let pane = app.regions().detail.expect("a pane at 120 columns");
+    let page = (pane.height - 2) as usize;
+    let rows = app.pane_rows();
+    assert!(rows.len() > 2 * page, "the fixture is several pages tall");
+
+    press(&mut app, Key::plain(KeyCode::PageDown));
+    let first = app.pane_cursor;
+    assert!(
+        first > 0 && first <= page,
+        "one page down stays within a page: row {first} of a {page}-row pane"
+    );
+    assert!(rows[first].selectable());
+
+    press(&mut app, Key::plain(KeyCode::PageDown));
+    assert!(app.pane_cursor > first, "a second page goes further");
+    assert!(app.pane_cursor <= first + page);
+    assert!(
+        app.pane_cursor >= app.detail_scroll && app.pane_cursor < app.detail_scroll + page,
+        "and the cursor is in view"
+    );
+
+    press(&mut app, Key::plain(KeyCode::PageUp));
+    press(&mut app, Key::plain(KeyCode::PageUp));
+    assert_eq!(app.pane_cursor, 0, "two pages back up is the top");
+}

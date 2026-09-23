@@ -13,6 +13,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::core::library;
 use crate::tui::app::pane::{EditTarget, NOTE_INDENT, PaneEdit, PaneRow, TODO_INDENT};
 use crate::tui::app::{App, Focus};
+use crate::tui::layout;
 use crate::tui::rows::{SIZE_CELL, date_cell, size_label};
 use crate::tui::view::{fit, highlighted};
 use crate::util::size_scan::SizeCell;
@@ -25,6 +26,9 @@ const DATE_CELL: usize = 10;
 /// The widest a tags column gets before it is clamped: three short tags and
 /// their `+n`.
 const TAGS_MAX: usize = 24;
+/// The least a note editor in the pane is drawn at: three lines of text and
+/// its key line.
+const NOTE_EDITOR_ROWS: u16 = 4;
 
 /// Which optional columns a table shows.
 ///
@@ -674,16 +678,23 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         PaneEdit::Note {
             area: text, error, ..
         } => {
-            // From the note's own row to the key line at the bottom.
-            let top = row_y;
-            let bottom = inner.y + inner.height;
-            if top + 2 > bottom {
+            // From the note's own row to the key line at the pane's bottom —
+            // and never fewer than `NOTE_EDITOR_ROWS`: a note near the bottom
+            // slides the editor up over the rows above it, rather than
+            // opening as a sliver, or as nothing at all.
+            let body = layout::box_at_row(
+                inner,
+                row_y - inner.y,
+                inner.y + inner.height - row_y,
+                NOTE_EDITOR_ROWS,
+            );
+            if body.height < 2 {
                 return None;
             }
-            let text_area = Rect::new(inner.x, top, inner.width, bottom - top - 1);
+            let text_area = Rect::new(body.x, body.y, body.width, body.height - 1);
             frame.render_widget(ratatui::widgets::Clear, text_area);
             let caret = text.render(text_area, frame.buffer_mut(), theme.text());
-            let keys = Rect::new(inner.x, bottom - 1, inner.width, 1);
+            let keys = Rect::new(body.x, body.y + body.height - 1, body.width, 1);
             frame.render_widget(ratatui::widgets::Clear, keys);
             match error {
                 Some(error) => frame.render_widget(

@@ -240,19 +240,19 @@ Defects 1, 2, 13, 14.
 
 ## Phase 5 — Over, polished
 
-- [ ] `PanePreviousProject` (`<`) and `PaneNextProject` (`>`) over `[Context::Detail]`,
+- [x] `PanePreviousProject` (`<`) and `PaneNextProject` (`>`) over `[Context::Detail]`,
   after `FocusDetail` (`command.rs:1754`), hint off, palette off. Step the library,
   `after_selection_change`, `App.pane_seek = Some(section)`; land on the first selectable
   row of that section when the detail is there (fallback: the section's add row, then
   Name). No pulse.
-- [ ] The door: in `command::hints` (`:2075-2078`) `FocusDetail` leads while
+- [x] The door: in `command::hints` (`:2075-2078`) `FocusDetail` leads while
   `pane_behind_list()`; `hint_title` says `details` there, `pane` elsewhere.
-- [ ] The peek: `view/projects.rs::table` — a dim right-aligned `title_bottom` from
+- [x] The peek: `view/projects.rs::table` — a dim right-aligned `title_bottom` from
   `App::pane_counts()` while `pane_behind_list()`; nothing when there are no notes or todos.
-- [ ] Tests: `angle_brackets_walk_the_projects_from_the_pane_and_keep_the_section` (no
+- [x] Tests: `angle_brackets_walk_the_projects_from_the_pane_and_keep_the_section` (no
   pulse), `the_hint_bar_leads_with_the_door_when_the_pane_is_hidden`,
   `the_peek_says_what_the_hidden_pane_holds`; registry invariants.
-- [ ] Docs: the keys table; `src/tui/CLAUDE.md` "Keys named nowhere else", the hint-bar
+- [x] Docs: the keys table; `src/tui/CLAUDE.md` "Keys named nowhere else", the hint-bar
   ordering exception.
 
 ## Phase 6 — the pane's content
@@ -400,3 +400,12 @@ console for F2, `+`, `<` and `>`.
   100×30 snapshots keep their split. Onboarding's empty-state line is whole again,
   no longer squeezed by an empty pane. The frame sweep (14 states × 144 sizes,
   including under the minimum) runs in about two seconds in debug.
+- **Phase 5** (2026-09-23): `<`/`>`, the doors and the peek. `PaneSection` and
+  `Rule(PaneSection)` came forward from phase 6, since landing in the same section
+  needs them. The pane's own door, `← list`, leads too when the pane is over the list
+  — the way out was cut at 80 columns. `>` stays off the hint bar: at 120 columns it
+  took the last slot and pushed `? help` off, and help is what says it. The ASCII
+  snapshot caught `→ details` drawing a Unicode arrow: key labels never asked the
+  theme, so the builder's `↑↓` had been drawing on ASCII consoles all along. Key
+  labels now follow the alphabet (`Key::label_in`), and a guard keeps theme glyphs
+  out of command titles and descriptions (two descriptions and `Sort by…` reworded).

@@ -398,3 +398,80 @@ fn the_templates_tab_takes_the_whole_body_whatever_the_library_pane_does() {
         );
     }
 }
+
+/// **`<` and `>` walk the projects from inside the pane**, keeping the focus
+/// there and the cursor in the section it was in, so one project's todos
+/// after another's is one key each. A walk is not a change: nothing pulses.
+/// A project whose detail is still being read takes the cursor there when its
+/// read lands.
+#[test]
+fn angle_brackets_walk_the_projects_from_the_pane_and_keep_the_section() {
+    use fastf::tui::app::data::ProjectDetail;
+    use fastf::tui::app::pane::{PaneRow, PaneSection, section_at};
+
+    let record = || ProjectDetail {
+        todos: vec![
+            fastf::core::body::Todo {
+                done: false,
+                text: "grade".to_string(),
+                phase: None,
+            },
+            fastf::core::body::Todo {
+                done: false,
+                text: "deliver".to_string(),
+                phase: None,
+            },
+        ],
+        ..Default::default()
+    };
+    let deliver = |app: &mut App| {
+        let path = app.library.selected().unwrap().path.clone();
+        update(
+            app,
+            Msg::Detail {
+                path,
+                detail: Box::new(record()),
+            },
+        );
+    };
+    let mut app = fixture(6, 80, 24);
+    deliver(&mut app);
+    press(&mut app, Key::plain(KeyCode::Right));
+    // Onto the second todo.
+    let second = app
+        .pane_rows()
+        .iter()
+        .position(|row| matches!(row, PaneRow::Todo { ordinal: 1, .. }))
+        .unwrap();
+    while app.pane_cursor < second {
+        press(&mut app, Key::ch('j'));
+    }
+
+    // The next project has not been read: the cursor waits, then lands.
+    press(&mut app, Key::ch('>'));
+    assert_eq!(app.library.selected_index(), Some(1));
+    assert_eq!(app.focus, Focus::Detail, "still in the pane");
+    deliver(&mut app);
+    let rows = app.pane_rows();
+    assert_eq!(section_at(&rows, app.pane_cursor), PaneSection::Todo);
+    assert!(
+        matches!(rows[app.pane_cursor], PaneRow::Todo { ordinal: 0, .. }),
+        "the first todo of the next project: {:?}",
+        rows[app.pane_cursor]
+    );
+    assert!(app.pane_pulses.is_empty(), "a walk is not a change");
+
+    // Back: the first project is cached, so the cursor lands at once.
+    press(&mut app, Key::ch('<'));
+    assert_eq!(app.library.selected_index(), Some(0));
+    let rows = app.pane_rows();
+    assert!(matches!(
+        rows[app.pane_cursor],
+        PaneRow::Todo { ordinal: 0, .. }
+    ));
+
+    // At the top of the list there is nowhere above to go.
+    let effects = press(&mut app, Key::ch('<'));
+    assert!(effects.is_empty());
+    assert_eq!(app.library.selected_index(), Some(0));
+}

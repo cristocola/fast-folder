@@ -75,6 +75,21 @@ fn tag_cell_width(tags: &[String]) -> usize {
     shown + gaps + extra
 }
 
+/// The list's peek at a hidden pane: ` 2 notes · 2/4 todos done `, the parts
+/// there are, and `None` when there are none.
+fn peek((notes, done, todos): (usize, usize, usize), sep: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    match notes {
+        0 => {}
+        1 => parts.push("1 note".to_string()),
+        n => parts.push(format!("{n} notes")),
+    }
+    if todos > 0 {
+        parts.push(format!("{done}/{todos} todos done"));
+    }
+    (!parts.is_empty()).then(|| format!(" {} ", parts.join(&format!(" {sep} "))))
+}
+
 /// `room` is what is left after the cursor cell, the id, their spacing and the
 /// right gutter. `many_bases` promotes the base column above the date.
 pub fn choose_columns(
@@ -124,10 +139,18 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     let focused = app.focus == Focus::Projects && app.modals.is_empty() && !app.search.editing;
 
     let title = " projects ".to_string();
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(title, title_style(app, focused)))
         .border_style(border_style(app, focused));
+    // Where the pane is out of sight, the list's border says what it would
+    // show for the row under the cursor — the one reason to go and look.
+    // Nothing for a project with nothing in it.
+    if app.pane_behind_list()
+        && let Some(peek) = app.pane_counts().and_then(|counts| peek(counts, g.sep))
+    {
+        block = block.title_bottom(Line::from(Span::styled(peek, theme.dim())).right_aligned());
+    }
     let full_inner = block.inner(area);
     frame.render_widget(block, area);
     if full_inner.height < 2 || full_inner.width < 4 {
@@ -479,7 +502,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                     ),
                 ])
             }
-            PaneRow::Rule(label) => rule(label),
+            PaneRow::Rule(section) => rule(section.label()),
             PaneRow::Tag(tag) => Line::from(Span::styled(
                 format!("{} {tag}", g.dot),
                 Style::default().fg(theme.tag_color(tag)),

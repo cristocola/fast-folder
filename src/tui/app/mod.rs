@@ -235,6 +235,9 @@ pub struct App {
     /// reset only when the selection is another project, so a discovery or
     /// a metadata read landing does not throw the cursor back to the top.
     pane_for: Option<PathBuf>,
+    /// The section `<` or `>` left the pane's cursor in, to land in again
+    /// on the next project once its rows are there.
+    pane_seek: Option<pane::PaneSection>,
     pub focus: Focus,
     pub screen: Screen,
     pub templates: TemplatesState,
@@ -350,6 +353,7 @@ impl App {
             pane_pending: None,
             pane_anchor: None,
             pane_for: None,
+            pane_seek: None,
             focus: Focus::Projects,
             screen: Screen::Library,
             templates: TemplatesState::default(),
@@ -514,6 +518,24 @@ impl App {
                 Some(layout::Placement::Over) => self.focus == Focus::Detail,
                 None => false,
             }
+    }
+
+    /// What the selected project's record holds, once read: its notes, and
+    /// its todos done out of how many. The pane's figures say it; so does the
+    /// list's peek while the pane is out of sight.
+    pub fn pane_counts(&self) -> Option<(usize, usize, usize)> {
+        let project = self.library.selected()?;
+        let detail = self.details.get(&project.path)?;
+        let done = detail.todos.iter().filter(|todo| todo.done).count();
+        Some((detail.notes.len(), done, detail.todos.len()))
+    }
+
+    /// The pane is drawn in the list's place and has the focus: the list is
+    /// out of sight, one key away.
+    pub fn pane_over_list(&self) -> bool {
+        self.screen == Screen::Library
+            && self.focus == Focus::Detail
+            && self.regions().placement == Some(layout::Placement::Over)
     }
 
     /// The pane is on but drawn in the list's place, and the list has the
@@ -732,6 +754,7 @@ impl App {
         self.pane_edit = None;
         self.pane_return = None;
         self.pane_pending = None;
+        self.pane_seek = None;
         self.pane_pulses.clear();
         true
     }
@@ -1083,6 +1106,7 @@ impl App {
                         self.settle_pane_cursor(&target);
                     }
                     self.refind_pane();
+                    self.land_pane_seek();
                 }
                 effects
             }
@@ -1763,6 +1787,12 @@ impl App {
                 self.set_focus(Focus::Detail);
                 Vec::new()
             }
+            CommandId::PanePreviousProject | CommandId::PaneNextProject => self
+                .step_project_from_pane(if id == CommandId::PaneNextProject {
+                    1
+                } else {
+                    -1
+                }),
             CommandId::BackToLibrary => self.toggle_templates(),
             CommandId::ShowLog => self.open_log(),
             CommandId::Suspend => vec![Effect::Suspend(Suspended::Shell)],

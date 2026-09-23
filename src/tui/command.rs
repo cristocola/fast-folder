@@ -45,7 +45,8 @@ impl Key {
         }
     }
 
-    /// The text the hint bar and the help overlay print for this key.
+    /// The text the hint bar and the help overlay print for this key, in the
+    /// Unicode alphabet. Anything drawn on screen asks [`Key::label_in`].
     pub fn label(&self) -> String {
         let base = match self.code {
             KeyCode::Char(' ') => "Space".to_string(),
@@ -67,6 +68,27 @@ impl Key {
             KeyCode::F(n) => format!("F{n}"),
             other => format!("{other:?}"),
         };
+        self.with_modifiers(base)
+    }
+
+    /// The label in `g`'s alphabet. Where the terminal has no arrows to draw
+    /// — a console on the ASCII alphabet — an arrow key is the word printed
+    /// on it, not `->`, which reads as a key of its own.
+    pub fn label_in(&self, g: &crate::tui::theme::Glyphs) -> String {
+        if !g.is_ascii() {
+            return self.label();
+        }
+        let word = match self.code {
+            KeyCode::Up => "Up",
+            KeyCode::Down => "Down",
+            KeyCode::Left => "Left",
+            KeyCode::Right => "Right",
+            _ => return self.label(),
+        };
+        self.with_modifiers(word.to_string())
+    }
+
+    fn with_modifiers(&self, base: String) -> String {
         match (self.ctrl, self.alt) {
             (true, true) => format!("Ctrl-Alt-{base}"),
             (true, false) => format!("Ctrl-{base}"),
@@ -299,6 +321,11 @@ pub enum CommandId {
     FocusList,
     /// The horizontal axis, rightwards: from the list into the pane.
     FocusDetail,
+    /// From the pane, the project above the one it shows — staying in the
+    /// pane, in the same section.
+    PanePreviousProject,
+    /// From the pane, the project below the one it shows.
+    PaneNextProject,
     /// Back to the library from the templates tab — palette only; `T` and
     /// Esc are the keys.
     BackToLibrary,
@@ -386,7 +413,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 97] = [
+    pub const ALL: [CommandId; 99] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -421,6 +448,8 @@ impl CommandId {
         CommandId::Last,
         CommandId::FocusList,
         CommandId::FocusDetail,
+        CommandId::PanePreviousProject,
+        CommandId::PaneNextProject,
         CommandId::BackToLibrary,
         CommandId::Search,
         CommandId::ClearSearch,
@@ -1303,7 +1332,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         SortCycle,
         "Sort: next order",
-        "newest → oldest → name → id → template → base → size",
+        "in turn: newest, oldest, name, id, template, base, size",
         PD,
         [Key::ch('s')],
         Search,
@@ -1313,7 +1342,7 @@ pub static COMMANDS: &[Command] = &[
     ),
     cmd!(
         SortPick,
-        "Sort by…",
+        "Sort: pick an order",
         "pick the order from a list",
         PD,
         [Key::ch('S')],
@@ -1763,6 +1792,34 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         pane_can_take_focus
     ),
+    // Walking the projects without leaving the pane: reviewing the todos of
+    // one project after another would otherwise cost ← ↓ → each, three keys
+    // where the pane takes the list's place. `<` and `>`, not `[` and `]`,
+    // which need AltGr on German, French and Nordic keyboards. Off the hint
+    // bar: its last pair is `? help`, which says them, and a bar that spent
+    // that room on a walk would lose the one pair that explains the rest.
+    cmd!(
+        PanePreviousProject,
+        "Previous project",
+        "show the project above in the pane, staying in the pane and in the same section",
+        &[Context::Detail],
+        [Key::ch('<')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
+        PaneNextProject,
+        "Next project",
+        "show the project below in the pane, staying in the pane and in the same section",
+        &[Context::Detail],
+        [Key::ch('>')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
     cmd!(
         Settings,
         "Settings",
@@ -1777,7 +1834,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Reconcile,
         "Check and recover",
-        "finish or roll back work a crash left half-done — what ⚠ needs attention means",
+        "finish or roll back work a crash left half-done — what the header's needs-attention warning means",
         TABS,
         [Key::ch('!')],
         Library,
@@ -2073,15 +2130,30 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
         .collect();
     // A stable sort, so declaration order decides within each group — which
     // is why `? help` still comes before `c commands`, as it always has.
+    //
+    // **Except the doors.** Where the pane takes the list's place, whichever
+    // of the two is out of sight is one key away and nothing on screen says
+    // so: that key leads, so a narrow bar never cuts the way in or out.
+    let door = if app.pane_behind_list() {
+        Some(CommandId::FocusDetail)
+    } else if app.pane_over_list() {
+        Some(CommandId::FocusList)
+    } else {
+        None
+    };
     ranked.sort_by_key(|c| {
         let asking = c.category == Category::Help;
-        (asking, !asking && !c.contexts.contains(&ctx))
+        (
+            Some(c.id) != door,
+            asking,
+            !asking && !c.contexts.contains(&ctx),
+        )
     });
     for c in ranked {
         let Some(key) = keys_in(ctx, c).first().copied() else {
             continue;
         };
-        let label = key.label();
+        let label = key.label_in(&app.theme.glyphs);
         let title = hint_title(c.id, c.title, app);
         let cost = label.chars().count() + 1 + title.chars().count() + 2;
         if used + cost > width && !out.is_empty() {
@@ -2142,7 +2214,10 @@ pub fn field_claims(key: &Key) -> bool {
 /// rebinding reaches every line. The verb is the surface's own: you *choose*
 /// from a list of things to do, you *move* through a list of things to pick,
 /// and you *scroll* a body of text.
-pub fn movement_pair(ctx: Context) -> Option<(String, &'static str)> {
+pub fn movement_pair(
+    ctx: Context,
+    g: &crate::tui::theme::Glyphs,
+) -> Option<(String, &'static str)> {
     let by = |code: KeyCode| {
         COMMANDS
             .iter()
@@ -2155,7 +2230,12 @@ pub fn movement_pair(ctx: Context) -> Option<(String, &'static str)> {
         Context::Palette | Context::Pick | Context::SearchEdit => "move",
         _ => "choose",
     };
-    Some((format!("{}{}", up.label(), down.label()), what))
+    // Two glyphs read as one pair; two words need a stroke between them.
+    let joint = if g.is_ascii() { "/" } else { "" };
+    Some((
+        format!("{}{joint}{}", up.label_in(g), down.label_in(g)),
+        what,
+    ))
 }
 
 /// The hint bar has one line, so a few titles get a shorter form there —
@@ -2165,6 +2245,9 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         CommandId::Palette => "commands",
         CommandId::Actions => "actions",
         CommandId::FocusList => "list",
+        // Where the pane is out of sight, the key is the way to it, and says
+        // what is there rather than where.
+        CommandId::FocusDetail if app.pane_behind_list() => "details",
         CommandId::FocusDetail => "pane",
         CommandId::PaneEdit => pane_verb(app),
         CommandId::PaneEditConfirm => "keep",
@@ -2257,14 +2340,18 @@ const NARROW_DESCRIPTION: usize = 28;
 /// The three column widths the help overlay lays out in: keys, title, and
 /// what is left for the description — measured from the commands themselves,
 /// so a long title can never run into its description.
-pub fn help_columns(ctx: Context, inner_width: usize) -> (usize, usize, usize) {
+pub fn help_columns(
+    ctx: Context,
+    inner_width: usize,
+    g: &crate::tui::theme::Glyphs,
+) -> (usize, usize, usize) {
     let commands: Vec<&Command> = help_sections(ctx)
         .into_iter()
         .flat_map(|(_, commands)| commands)
         .collect();
     let keys_width = commands
         .iter()
-        .map(|c| key_labels(ctx, c).chars().count())
+        .map(|c| key_labels(ctx, c, g).chars().count())
         .max()
         .unwrap_or(0)
         .clamp(8, 18);
@@ -2303,18 +2390,32 @@ pub fn key_of(id: CommandId) -> String {
         .unwrap_or_default()
 }
 
-pub fn key_labels(ctx: Context, command: &Command) -> String {
+/// The key a command is bound to, in `g`'s alphabet — for a key line drawn on
+/// screen, where an arrow has to be one the terminal can draw.
+pub fn key_of_in(id: CommandId, g: &crate::tui::theme::Glyphs) -> String {
+    find(id)
+        .keys
+        .first()
+        .map(|key| key.label_in(g))
+        .unwrap_or_default()
+}
+
+pub fn key_labels(ctx: Context, command: &Command, g: &crate::tui::theme::Glyphs) -> String {
     keys_in(ctx, command)
         .iter()
-        .map(|k| k.label())
+        .map(|k| k.label_in(g))
         .collect::<Vec<_>>()
         .join(" / ")
 }
 
 /// The help overlay's body for `ctx`, laid out for `inner_width` columns: a
 /// description that does not fit its line continues under itself.
-pub fn help_lines(ctx: Context, inner_width: usize) -> Vec<HelpLine> {
-    let (keys_width, title_width, description_width) = help_columns(ctx, inner_width);
+pub fn help_lines(
+    ctx: Context,
+    inner_width: usize,
+    g: &crate::tui::theme::Glyphs,
+) -> Vec<HelpLine> {
+    let (keys_width, title_width, description_width) = help_columns(ctx, inner_width, g);
     // Wide enough: three columns. Narrow: the description on its own line
     // under the title, indented past the keys, so it reads as prose rather
     // than a ladder of three-word lines.
@@ -2331,7 +2432,7 @@ pub fn help_lines(ctx: Context, inner_width: usize) -> Vec<HelpLine> {
         for c in commands {
             let mut parts = wrap_words(c.description, width).into_iter();
             lines.push(HelpLine::Command {
-                keys: key_labels(ctx, c),
+                keys: key_labels(ctx, c, g),
                 title: c.title,
                 description: if beside {
                     parts.next().unwrap_or_default()
@@ -2384,8 +2485,8 @@ pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
 /// How many lines the help overlay draws for `ctx` at `inner_width`: the
 /// body, and the five lines of footer under it. The view draws exactly
 /// this, and `update` clamps the scroll with it.
-pub fn help_line_count(ctx: Context, inner_width: usize) -> usize {
-    help_lines(ctx, inner_width).len() + 5
+pub fn help_line_count(ctx: Context, inner_width: usize, g: &crate::tui::theme::Glyphs) -> usize {
+    help_lines(ctx, inner_width, g).len() + 5
 }
 
 /// The palette's command entries: everything listed and not hidden, the

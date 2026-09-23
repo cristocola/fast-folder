@@ -42,7 +42,15 @@ else ANSI. On Windows a host that announces no emulator gets the ASCII alphabet;
 `Effect::Retheme` → `Msg::Themed`, so `update` reads no environment.
 
 **Glyphs come from `Glyphs`** wherever a theme is in reach, so the ASCII alphabet
-holds (the ROADMAP lists four screens that still spell characters out). Success
+holds (the ROADMAP lists four screens that still spell characters out). **A key
+label is drawn in the alphabet too**: `Key::label_in(g)` spells an arrow as the
+word on the key (`Right`, `Up/Down`) where the terminal has no arrow to draw, and
+the hint bar, the movement pair, the help and the guide's key line all ask it;
+`Key::label` is the Unicode form, for tests and prose-free places. **No command's
+title or description carries a theme glyph**
+(`no_command_spells_a_glyph_the_theme_owns`), the rule `guide.rs` keeps for its
+prose, because the help, the palette and the action menu draw them under
+whichever alphabet the terminal has. Success
 wears the theme's tick through `App::good`, because `runtime::run_action` runs on
 a worker with no theme; the spinner is `Glyphs::spin(elapsed_ms)`; the progress
 bar is `view::modals::bar`, drawn from `Glyphs::bar_full`/`bar_empty` rather than
@@ -252,7 +260,11 @@ base, Clear-filter with no filter). **A command may be palette-only**
 (`palette = true` with no keys — `BackToLibrary`, `ReautoTags`, the tag filter),
 so the help never lists a key that is not there.
 
-**Keys named nowhere else in this file**: `R` reindexes from anywhere (`Reindex`);
+**Keys named nowhere else in this file**: `<`/`>` in the pane walk the projects
+without leaving it (`PanePreviousProject`/`PaneNextProject`, `[Detail]` only), the
+cursor landing in the section it left (`App.pane_seek`, `pane::first_in_section`)
+once the next project's rows are there, with no pulse, since a walk is not a
+change — not `[`/`]`, which need AltGr on several European layouts; `R` reindexes from anywhere (`Reindex`);
 `C` copies to a folder outside the bases (`CopyTo`) and `p` shows the full path
 (`ShowPath`), both action-menu verbs; `i` toggles the detail pane on the lists
 (`ToggleDetail`) and the explanation panel in the builder (`BuilderExplain`); `*`
@@ -264,7 +276,12 @@ filters, marks), the hint bar advertises keys, and the status line says what a
 batch verb would act on. `MarkToggle` is `hint = true, palette = true` for that
 reason. The hint bar orders by category — this context's verbs first, then `?
 help` and `c commands`, which are the same everywhere and what a narrow window can
-afford to lose.
+afford to lose. **The doors lead**: where the pane takes the list's place, the one
+of the two out of sight is a key away with nothing on screen to say so, so
+`→ details` (from the list) or `← list` (from the pane) comes first and no width
+cuts it. The list's bottom border carries the hidden pane's figures — its notes,
+its todos done — for the same reason (`view::projects::peek`), and nothing for a
+project with neither.
 
 ## Every key line is read, and the field goes first
 

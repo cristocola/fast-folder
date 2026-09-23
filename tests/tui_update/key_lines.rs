@@ -76,3 +76,34 @@ fn a_prompt_confirms_and_cancels_through_the_registry() {
     press(&mut app, Key::plain(KeyCode::Esc));
     assert!(app.modals.is_empty());
 }
+
+/// **The doors lead the bar.** Where the pane takes the list's place, the one
+/// of the two out of sight is a key away and nothing on screen says so — so
+/// its key comes first, and a narrow bar can never cut it: `→ details` from
+/// the list, `← list` from the pane.
+#[test]
+fn the_hint_bar_leads_with_the_door_when_the_pane_is_hidden() {
+    use fastf::tui::command::{Context, hints};
+
+    let mut app = fixture(6, 60, 20);
+    assert!(app.pane_behind_list());
+    let bar = hints(Context::Projects, &app, 58);
+    assert_eq!(
+        bar.first().map(|(k, t)| (k.as_str(), *t)),
+        Some(("→", "details")),
+        "{bar:?}"
+    );
+    press(&mut app, Key::plain(KeyCode::Right));
+    let bar = hints(Context::Detail, &app, 58);
+    assert_eq!(
+        bar.first().map(|(k, t)| (k.as_str(), *t)),
+        Some(("←", "list")),
+        "{bar:?}"
+    );
+
+    // Beside the list both are in view, and the bar keeps its usual order.
+    let wide = fixture(6, 120, 40);
+    let bar = hints(Context::Projects, &wide, 118);
+    assert_ne!(bar.first().map(|(k, _)| k.as_str()), Some("→"), "{bar:?}");
+    assert!(bar.iter().any(|(k, t)| k == "→" && *t == "pane"), "{bar:?}");
+}

@@ -101,7 +101,7 @@ fn no_two_commands_share_a_key_in_one_context() {
 #[test]
 fn every_bound_command_appears_in_its_contexts_help() {
     for ctx in CONTEXTS {
-        let drawn: HashSet<&str> = help_lines(ctx, 100)
+        let drawn: HashSet<&str> = help_lines(ctx, 100, &fastf::tui::theme::Glyphs::unicode())
             .into_iter()
             .filter_map(|line| match line {
                 fastf::tui::command::HelpLine::Command { title, .. } => Some(title),
@@ -276,7 +276,7 @@ fn the_horizontal_axis_only_moves_focus_or_turns_a_page() {
 fn every_context_has_help_and_a_way_out() {
     for ctx in CONTEXTS {
         assert!(
-            !help_lines(ctx, 100).is_empty(),
+            !help_lines(ctx, 100, &fastf::tui::theme::Glyphs::unicode()).is_empty(),
             "{ctx:?} has no help to show"
         );
         if ctx == Context::Global {
@@ -337,13 +337,89 @@ fn the_arrows_are_spelled_once_and_read_everywhere() {
             (c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global))
                 && c.keys.contains(&Key::plain(KeyCode::Down))
         });
-        match movement_pair(ctx) {
+        match movement_pair(ctx, &fastf::tui::theme::Glyphs::unicode()) {
             Some((keys, what)) => {
                 assert!(binds, "{ctx:?} has no arrows but movement_pair answered");
                 assert_eq!(keys, format!("{up}{down}"));
                 assert!(!what.is_empty());
             }
             None => assert!(!binds, "{ctx:?} binds the arrows but cannot say so"),
+        }
+    }
+}
+
+/// **A key label is drawn in the theme's alphabet.** A console with no arrow
+/// glyph draws a replacement box for `→`, so under the ASCII alphabet an arrow
+/// key is the word printed on it — and the movement pair, the help and every
+/// key line read the same spelling.
+#[test]
+fn an_arrow_key_is_a_word_in_the_ascii_alphabet() {
+    use fastf::tui::command::{Key, movement_pair};
+    use fastf::tui::theme::Glyphs;
+    use ratatui::crossterm::event::KeyCode;
+
+    let (ascii, unicode) = (Glyphs::ascii(), Glyphs::unicode());
+    for (code, glyph, word) in [
+        (KeyCode::Up, "↑", "Up"),
+        (KeyCode::Down, "↓", "Down"),
+        (KeyCode::Left, "←", "Left"),
+        (KeyCode::Right, "→", "Right"),
+    ] {
+        assert_eq!(Key::plain(code).label_in(&unicode), glyph);
+        assert_eq!(Key::plain(code).label_in(&ascii), word);
+    }
+    assert_eq!(Key::ch('q').label_in(&ascii), "q", "a letter is a letter");
+    assert_eq!(Key::ctrl('u').label_in(&ascii), "Ctrl-u");
+    assert_eq!(
+        movement_pair(Context::Projects, &ascii).map(|(keys, _)| keys),
+        Some("Up/Down".to_string())
+    );
+    for ctx in CONTEXTS {
+        for line in help_lines(ctx, 100, &ascii) {
+            if let fastf::tui::command::HelpLine::Command { keys, .. } = line {
+                for glyph in ["↑", "↓", "←", "→"] {
+                    assert!(!keys.contains(glyph), "{ctx:?} help labels a key {keys}");
+                }
+            }
+        }
+    }
+}
+
+/// **No command's words carry a glyph the theme owns**, as the guide's may
+/// not: a title and a description are prose, drawn in the help, the palette
+/// and the action menu under whichever alphabet the terminal has, and prose
+/// has no theme to ask for an ASCII spelling. An em dash is punctuation.
+#[test]
+fn no_command_spells_a_glyph_the_theme_owns() {
+    use fastf::tui::command::CommandId;
+    use fastf::tui::theme::Glyphs;
+
+    let unicode = Glyphs::unicode();
+    let owned = [
+        unicode.cursor,
+        unicode.mark,
+        unicode.dot,
+        unicode.search,
+        unicode.warn,
+        unicode.ellipsis,
+        unicode.sep,
+        unicode.arrow,
+        unicode.rule,
+        unicode.check,
+        unicode.cross,
+        "↑",
+        "↓",
+        "←",
+    ];
+    for id in CommandId::ALL {
+        let command = find(id);
+        for text in [command.title, command.description] {
+            for glyph in owned {
+                assert!(
+                    !text.contains(glyph),
+                    "{id:?} writes {glyph:?} into its words: {text}"
+                );
+            }
         }
     }
 }

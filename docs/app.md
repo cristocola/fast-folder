@@ -52,7 +52,10 @@ Top to bottom:
   the list's place: `→` shows it where the list was, `←` or Esc brings the
   list back where you left it. The folder names are never cut to make room.
   Where the pane goes depends on the longest name in the whole library, not on
-  what a search leaves, so it never moves while you type.
+  what a search leaves, so it never moves while you type. While the pane is out
+  of sight, the list's bottom border says what it holds for the row under the
+  cursor — `2 notes · 1/4 todos done` — and the hint bar leads with `→ details`;
+  inside it, with `← list`.
 - **The status line and the hint bar** — what the last action did (or, when
   rows are marked, that a verb will act on them rather than on the cursor),
   and the keys that matter where you are.
@@ -116,6 +119,7 @@ pane beside it, and nothing else.
 | Home / End, `g` / `G` | first row, last row |
 | → / `l` | put the cursor in the pane — the project's detail on the library, the template's on the templates tab. On a small window the pane is shown in the list's place. Unbound when the pane is switched off (`i`) |
 | ← / `h` | put the cursor back on the list. It never quits and never closes anything: leaving is Esc's job, and Esc in the pane does the same as ← |
+| `<` / `>` | in the pane: the project above or below, without leaving the pane — the cursor stays in the section it was in, so one project's todos after another's is a key each |
 | `T` | the templates tab, and `T` again (or Esc) back to the library |
 | Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |

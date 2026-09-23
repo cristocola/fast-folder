@@ -789,7 +789,7 @@ fn render_flow(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<
             ),
             Span::styled("Esc ", theme.key()),
             Span::styled("back to the answers   ", theme.dim()),
-            Span::styled(format!("{} ", scroll_keys()), theme.key()),
+            Span::styled(format!("{} ", scroll_keys(&theme.glyphs)), theme.key()),
             Span::styled("scroll", theme.dim()),
         ],
     };
@@ -798,8 +798,8 @@ fn render_flow(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<
 }
 
 /// The arrows, as the preview's key line prints them — read, never written.
-fn scroll_keys() -> String {
-    command::movement_pair(Context::Modal)
+fn scroll_keys(g: &crate::tui::theme::Glyphs) -> String {
+    command::movement_pair(Context::Modal, g)
         .map(|(keys, _)| keys)
         .unwrap_or_default()
 }
@@ -1114,9 +1114,9 @@ fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Fram
     // run into its description, and a description that does not fit its
     // line continues under itself rather than being cut.
     let width = inner.width as usize;
-    let (keys_w, title_w, _) = command::help_columns(ctx, width);
+    let (keys_w, title_w, _) = command::help_columns(ctx, width, &g);
     let mut lines: Vec<Line> = Vec::new();
-    for line in command::help_lines(ctx, width) {
+    for line in command::help_lines(ctx, width, &g) {
         lines.push(match line {
             command::HelpLine::Heading(label) => {
                 Line::from(Span::styled(format!(" {label}"), theme.accent()))
@@ -1242,16 +1242,19 @@ fn render_guide(
     let pairs: Vec<(String, String)> = vec![
         (command::key_of(CommandId::Close), "close".to_string()),
         (
-            command::key_of(CommandId::GuideNext),
+            command::key_of_in(CommandId::GuideNext, &app.theme.glyphs),
             if last { "close" } else { "next page" }.to_string(),
         ),
         (
-            command::key_of(CommandId::GuidePrevious),
+            command::key_of_in(CommandId::GuidePrevious, &app.theme.glyphs),
             "back".to_string(),
         ),
     ]
     .into_iter()
-    .chain(command::movement_pair(Context::Guide).map(|(keys, what)| (keys, what.to_string())))
+    .chain(
+        command::movement_pair(Context::Guide, &app.theme.glyphs)
+            .map(|(keys, what)| (keys, what.to_string())),
+    )
     .collect();
     frame.render_widget(
         Paragraph::new(crate::tui::view::builder::key_line(

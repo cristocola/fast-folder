@@ -30,7 +30,7 @@ expression: frame
 "│         │                                                     │     `-- Audio/                             │         │"
 "│         │                                                     │                                            │         │"
 "│         │                                                                                                  │         │"
-"│         │ ↑↓ choose   H guide   Enter open   s save   Esc close   ? help   c commands                      │         │"
+"│         │ Up/Down choose   H guide   Enter open   s save   Esc close   ? help   c commands                 │         │"
 "│         └──────────────────────────────────────────────────────────────────────────────────────────────────┘         │"
 "│                                            ││                                                                        │"
 "│                                            ││                                                                        │"

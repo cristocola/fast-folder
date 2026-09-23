@@ -359,10 +359,11 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
         | Some(Modal::Onboarding(_)) => Vec::new(),
         _ => {
             let ctx = app.context();
-            let mut pairs: Vec<(String, &'static str)> = command::movement_pair(ctx)
-                .into_iter()
-                .filter(|_| ctx.hints_movement())
-                .collect();
+            let mut pairs: Vec<(String, &'static str)> =
+                command::movement_pair(ctx, &app.theme.glyphs)
+                    .into_iter()
+                    .filter(|_| ctx.hints_movement())
+                    .collect();
             // Only what the movement pair actually costs comes off the width
             // the rest is measured against — a flat allowance dropped a verb
             // from every bar that never showed the arrows at all.

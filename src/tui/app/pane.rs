@@ -52,6 +52,61 @@ pub enum VarKind {
     Select(Vec<String>),
 }
 
+/// The parts of the pane, in the order they are drawn. The header is the
+/// name, the facts and the figures; every other part opens with its rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneSection {
+    Header,
+    Tags,
+    Variables,
+    Inside,
+    Notes,
+    Todo,
+}
+
+impl PaneSection {
+    /// The word on the section's rule.
+    pub fn label(self) -> &'static str {
+        match self {
+            PaneSection::Header => "",
+            PaneSection::Tags => "tags",
+            PaneSection::Variables => "variables",
+            PaneSection::Inside => "inside",
+            PaneSection::Notes => "notes",
+            PaneSection::Todo => "todo",
+        }
+    }
+}
+
+/// The section row `at` belongs to: the nearest rule above it, or the header
+/// when there is none.
+pub fn section_at(rows: &[PaneRow], at: usize) -> PaneSection {
+    rows.iter()
+        .take(at.saturating_add(1))
+        .rev()
+        .find_map(|row| match row {
+            PaneRow::Rule(section) => Some(*section),
+            _ => None,
+        })
+        .unwrap_or(PaneSection::Header)
+}
+
+/// The first row of `section` the cursor can rest on — its first item, or
+/// the row that adds one when it has none. `None` when the section is not in
+/// the rows (yet: the detail is still being read).
+pub fn first_in_section(rows: &[PaneRow], section: PaneSection) -> Option<usize> {
+    let start = match section {
+        PaneSection::Header => 0,
+        _ => rows.iter().position(|row| *row == PaneRow::Rule(section))? + 1,
+    };
+    rows.iter()
+        .enumerate()
+        .skip(start)
+        .take_while(|(index, row)| *index == start || !matches!(row, PaneRow::Rule(_)))
+        .find(|(_, row)| row.selectable())
+        .map(|(index, _)| index)
+}
+
 /// One row of the pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaneRow {
@@ -63,7 +118,7 @@ pub enum PaneRow {
     Figures,
     /// A section heading: `── label ───`. Never a row the cursor rests on:
     /// every section that can grow ends in a row that adds to it.
-    Rule(&'static str),
+    Rule(PaneSection),
     /// One tag. Enter edits it; emptied, it is removed.
     Tag(String),
     /// The row under the last tag that adds one.
@@ -161,7 +216,7 @@ impl PaneRow {
 pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) -> Vec<PaneRow> {
     let mut rows = vec![PaneRow::Name, PaneRow::Facts, PaneRow::Figures];
 
-    rows.push(PaneRow::Rule("tags"));
+    rows.push(PaneRow::Rule(PaneSection::Tags));
     rows.extend(project.tags.iter().cloned().map(PaneRow::Tag));
     rows.push(PaneRow::AddTag);
 
@@ -204,13 +259,13 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
             });
         }
         if !variables.is_empty() {
-            rows.push(PaneRow::Rule("variables"));
+            rows.push(PaneRow::Rule(PaneSection::Variables));
             rows.extend(variables);
         }
     }
 
     if !detail.listing.is_empty() {
-        rows.push(PaneRow::Rule("inside"));
+        rows.push(PaneRow::Rule(PaneSection::Inside));
         rows.extend(
             detail
                 .listing
@@ -224,7 +279,7 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
         }
     }
 
-    rows.push(PaneRow::Rule("notes"));
+    rows.push(PaneRow::Rule(PaneSection::Notes));
     let earlier = detail.notes.len().saturating_sub(NOTES_SHOWN);
     if earlier > 0 {
         rows.push(PaneRow::EarlierNotes(earlier));
@@ -249,7 +304,7 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
     }
     rows.push(PaneRow::AddNote);
 
-    rows.push(PaneRow::Rule("todo"));
+    rows.push(PaneRow::Rule(PaneSection::Todo));
     let todo_width = width.saturating_sub(TODO_INDENT);
     // A label is drawn where it changes, so an ungrouped list draws none and
     // a grouped one draws each label once, over the run it names.
@@ -878,6 +933,45 @@ impl App {
         );
     }
 
+    /// `<` and `>`: the project above or below, shown in the pane with the
+    /// focus still there and the cursor in the section it was in — so a run
+    /// of projects' todos can be read one after another. Moving is not a
+    /// change, so nothing pulses; at the ends of the list nothing moves.
+    pub(super) fn step_project_from_pane(&mut self, delta: isize) -> Vec<Effect> {
+        let section = section_at(&self.pane_rows(), self.pane_cursor);
+        let before = self.library.selected_index();
+        self.library.step(delta);
+        if self.library.selected_index() == before {
+            return Vec::new();
+        }
+        let effects = self.after_selection_change();
+        self.pane_seek = Some(section);
+        self.land_pane_seek();
+        effects
+    }
+
+    /// Put the cursor in the section `<` or `>` asked for, once that section
+    /// is among the rows — at once when the next project's detail is cached,
+    /// or when its read lands. Its first item, or the row that adds one.
+    pub(super) fn land_pane_seek(&mut self) {
+        let Some(section) = self.pane_seek else {
+            return;
+        };
+        let rows = self.pane_rows();
+        let Some(row) = first_in_section(&rows, section) else {
+            return;
+        };
+        self.pane_seek = None;
+        self.pane_cursor = row;
+        self.pane_anchor = target_at(&rows, row);
+        self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
+            self.detail_scroll,
+            Some(row),
+            rows.len(),
+            self.pane_rows_on_screen(),
+        );
+    }
+
     /// Find the cursor and an open edit again after the rows were rebuilt
     /// under them — a re-read, a re-wrap at a new width, a tag that changed
     /// above — by what they are on, and keep them in view. No pulse: nothing
@@ -984,7 +1078,7 @@ mod tests {
                 PaneRow::Name,
                 PaneRow::Facts,
                 PaneRow::Figures,
-                PaneRow::Rule("tags"),
+                PaneRow::Rule(PaneSection::Tags),
                 PaneRow::Tag("draft".to_string()),
                 PaneRow::Tag("client/Acme".to_string()),
                 PaneRow::AddTag,
@@ -1019,12 +1113,12 @@ mod tests {
         let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
         let todo_rows: Vec<&PaneRow> = rows
             .iter()
-            .skip_while(|r| **r != PaneRow::Rule("todo"))
+            .skip_while(|r| **r != PaneRow::Rule(PaneSection::Todo))
             .collect();
         assert_eq!(
             todo_rows,
             vec![
-                &PaneRow::Rule("todo"),
+                &PaneRow::Rule(PaneSection::Todo),
                 &PaneRow::Todo {
                     ordinal: 0,
                     done: true,
@@ -1103,7 +1197,7 @@ mod tests {
                 &PaneRow::AddTodo,
             ]
         );
-        assert!(rows.contains(&PaneRow::Rule("inside")));
+        assert!(rows.contains(&PaneRow::Rule(PaneSection::Inside)));
         assert!(rows.contains(&PaneRow::NoteLine("second line".to_string())));
         assert!(!rows.contains(&PaneRow::Reading));
         // The rows of a note sit together, under one rule, over the todos.
@@ -1116,9 +1210,9 @@ mod tests {
                 first: "free text".to_string()
             }) + 1
         );
-        assert!(at(&PaneRow::Rule("notes")) < at(&PaneRow::AddNote));
-        assert!(at(&PaneRow::AddNote) < at(&PaneRow::Rule("todo")));
-        assert!(at(&PaneRow::Rule("todo")) < at(&PaneRow::AddTodo));
+        assert!(at(&PaneRow::Rule(PaneSection::Notes)) < at(&PaneRow::AddNote));
+        assert!(at(&PaneRow::AddNote) < at(&PaneRow::Rule(PaneSection::Todo)));
+        assert!(at(&PaneRow::Rule(PaneSection::Todo)) < at(&PaneRow::AddTodo));
     }
 
     #[test]
@@ -1154,7 +1248,7 @@ mod tests {
                 .position(|r| matches!(r, PaneRow::EarlierNotes(_))),
             Some(
                 rows.iter()
-                    .position(|r| r == &PaneRow::Rule("notes"))
+                    .position(|r| r == &PaneRow::Rule(PaneSection::Notes))
                     .unwrap()
                     + 1
             )
@@ -1354,16 +1448,20 @@ mod tests {
             PaneRow::Name,
             PaneRow::Facts,
             PaneRow::Figures,
-            PaneRow::Rule("tags"),
+            PaneRow::Rule(PaneSection::Tags),
             PaneRow::Tag("draft".to_string()),
             PaneRow::AddTag,
-            PaneRow::Rule("notes"),
+            PaneRow::Rule(PaneSection::Notes),
             note(0),
         ];
         rows.extend((0..5).map(|_| line()));
         rows.push(note(1));
         rows.extend((0..5).map(|_| line()));
-        rows.extend([PaneRow::AddNote, PaneRow::Rule("todo"), PaneRow::AddTodo]);
+        rows.extend([
+            PaneRow::AddNote,
+            PaneRow::Rule(PaneSection::Todo),
+            PaneRow::AddTodo,
+        ]);
         let last = rows.len() - 1;
 
         assert_eq!(page_cursor(&rows, 0, 6), 5, "the farthest inside the page");

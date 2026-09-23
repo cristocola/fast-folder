@@ -138,7 +138,7 @@ pub(crate) fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
 /// same list the help overlay and the palette read, so a key the line shows
 /// is a key the list answers.
 fn registry_keys(app: &App, ctx: Context, width: usize) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = command::movement_pair(ctx)
+    let mut out: Vec<(String, String)> = command::movement_pair(ctx, &app.theme.glyphs)
         .map(|(keys, what)| (keys, what.to_string()))
         .into_iter()
         .collect();

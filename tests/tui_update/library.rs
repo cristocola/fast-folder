@@ -834,3 +834,71 @@ fn typing_a_search_never_moves_the_pane() {
         assert_eq!(app.regions(), before, "the pane moved on `{c}`");
     }
 }
+
+/// **The list's border peeks at a pane that is out of sight**: the selected
+/// project's notes and todos, in the pane's own words, and nothing for a
+/// project that has neither.
+#[test]
+fn the_peek_says_what_the_hidden_pane_holds() {
+    use fastf::tui::app::data::ProjectDetail;
+
+    let mut app = fixture(6, 80, 24);
+    let path = app.library.selected().unwrap().path.clone();
+    update(
+        &mut app,
+        Msg::Detail {
+            path,
+            detail: Box::new(ProjectDetail {
+                notes: vec![
+                    fastf::core::body::Note {
+                        timestamp: None,
+                        text: "one".to_string(),
+                    },
+                    fastf::core::body::Note {
+                        timestamp: None,
+                        text: "two".to_string(),
+                    },
+                ],
+                todos: (0..4)
+                    .map(|n| fastf::core::body::Todo {
+                        done: n < 1,
+                        text: format!("task {n}"),
+                        phase: None,
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+        },
+    );
+    let frame = fastf::tui::testing::render_to_string(&app, 80, 24);
+    let bottom = frame
+        .lines()
+        .find(|line| line.contains('└'))
+        .expect("the table's bottom border");
+    assert!(
+        bottom.contains("2 notes · 1/4 todos done"),
+        "the peek is on the border: {bottom}"
+    );
+
+    // A project with nothing in it: a plain border.
+    press(&mut app, Key::ch('j'));
+    let path = app.library.selected().unwrap().path.clone();
+    update(
+        &mut app,
+        Msg::Detail {
+            path,
+            detail: Box::default(),
+        },
+    );
+    let frame = fastf::tui::testing::render_to_string(&app, 80, 24);
+    let bottom = frame.lines().find(|line| line.contains('└')).unwrap();
+    assert!(
+        !bottom.contains("todo") && !bottom.contains("note"),
+        "{bottom}"
+    );
+
+    // With the pane in view, the pane says it and the border does not.
+    press(&mut app, Key::plain(KeyCode::Right));
+    let frame = fastf::tui::testing::render_to_string(&app, 80, 24);
+    assert!(!frame.contains("todos done ┘"), "{frame}");
+}

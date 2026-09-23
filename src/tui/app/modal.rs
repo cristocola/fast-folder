@@ -445,7 +445,11 @@ impl App {
                 let inner = layout::help_box(area);
                 (
                     scroll,
-                    command::help_line_count(*ctx, inner.width.saturating_sub(2) as usize),
+                    command::help_line_count(
+                        *ctx,
+                        inner.width.saturating_sub(2) as usize,
+                        &self.theme.glyphs,
+                    ),
                     inner.height.saturating_sub(2) as usize,
                 )
             }

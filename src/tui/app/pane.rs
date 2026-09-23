@@ -415,23 +415,44 @@ impl PaneEdit {
     }
 }
 
-/// What an edit was about, for finding its row again after the rows changed.
+/// A row by what it is about, for finding it again after the rows changed.
 ///
 /// A landed edit patches the project's row and drops the cached detail, so
 /// the pane's rows are rebuilt — with a tag more or less above the variable
-/// that changed, or with the variables gone until the re-read lands. The
-/// cursor follows the *thing*, not its old index.
+/// that changed, or with the variables gone until the re-read lands. A resize
+/// re-wraps every note and todo, and a discovery landing can change the tags
+/// above them. The cursor follows the *thing*, not its old index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaneTarget {
+    Name,
     /// A tag by its text; gone, the cursor settles on the row that adds one.
     Tag(String),
+    AddTag,
     Variable(String),
+    EarlierNotes,
     /// A note by its ordinal; gone (removed), the row that adds one.
     Note(usize),
     /// A todo by its ordinal; gone, the row that adds one.
     Todo(usize),
     AddNote,
     AddTodo,
+}
+
+/// What the selectable row at `at` is about — `None` for a row the cursor
+/// never rests on, or past the end.
+pub fn target_at(rows: &[PaneRow], at: usize) -> Option<PaneTarget> {
+    Some(match rows.get(at)? {
+        PaneRow::Name => PaneTarget::Name,
+        PaneRow::Tag(tag) => PaneTarget::Tag(tag.clone()),
+        PaneRow::AddTag => PaneTarget::AddTag,
+        PaneRow::Variable { slug, .. } => PaneTarget::Variable(slug.clone()),
+        PaneRow::EarlierNotes(_) => PaneTarget::EarlierNotes,
+        PaneRow::Note { ordinal, .. } => PaneTarget::Note(*ordinal),
+        PaneRow::AddNote => PaneTarget::AddNote,
+        PaneRow::Todo { ordinal, .. } => PaneTarget::Todo(*ordinal),
+        PaneRow::AddTodo => PaneTarget::AddTodo,
+        _ => return None,
+    })
 }
 
 impl PaneEdit {
@@ -448,6 +469,25 @@ impl PaneEdit {
                 input,
                 ..
             } => PaneTarget::Tag(input.text().trim().to_string()),
+            PaneEdit::Note { ordinal, .. } => PaneTarget::Note(*ordinal),
+        }
+    }
+
+    /// The row this edit was opened on, as it still is in the file — where
+    /// to find the edit again when the rows are rebuilt under it. Not
+    /// `target`: a tag is named there by the text being typed, which is no
+    /// row at all until the write lands, and an edit re-anchored by it moved
+    /// to "add a tag" on every refresh.
+    pub fn anchor(&self) -> PaneTarget {
+        match self {
+            PaneEdit::Line {
+                target: EditTarget::Variable(slug),
+                ..
+            } => PaneTarget::Variable(slug.clone()),
+            PaneEdit::Line {
+                target: EditTarget::Tag(from),
+                ..
+            } => PaneTarget::Tag(from.clone()),
             PaneEdit::Note { ordinal, .. } => PaneTarget::Note(*ordinal),
         }
     }
@@ -470,6 +510,10 @@ pub fn find_row(rows: &[PaneRow], target: &PaneTarget) -> Option<usize> {
             find(&|row| matches!(row, PaneRow::Todo { ordinal: o, .. } if o == ordinal))
                 .or_else(|| find(&|row| matches!(row, PaneRow::AddTodo)))
         }
+        PaneTarget::Name => find(&|row| matches!(row, PaneRow::Name)),
+        PaneTarget::AddTag => find(&|row| matches!(row, PaneRow::AddTag)),
+        PaneTarget::EarlierNotes => find(&|row| matches!(row, PaneRow::EarlierNotes(_)))
+            .or_else(|| find(&|row| matches!(row, PaneRow::Note { .. }))),
         PaneTarget::AddNote => find(&|row| matches!(row, PaneRow::AddNote)),
         PaneTarget::AddTodo => find(&|row| matches!(row, PaneRow::AddTodo)),
     }
@@ -795,6 +839,7 @@ impl App {
             return;
         };
         self.pane_cursor = row;
+        self.pane_anchor = Some(target.clone());
         self.pane_pulses.start(row, self.elapsed_ms);
         self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
             self.detail_scroll,
@@ -810,6 +855,7 @@ impl App {
     pub(super) fn move_pane_cursor(&mut self, delta: isize) {
         let rows = self.pane_rows();
         self.pane_cursor = step_cursor(&rows, self.pane_cursor, delta);
+        self.pane_anchor = target_at(&rows, self.pane_cursor);
         self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
             self.detail_scroll,
             Some(self.pane_cursor),
@@ -823,9 +869,52 @@ impl App {
     pub(super) fn page_pane_cursor(&mut self, delta_rows: isize) {
         let rows = self.pane_rows();
         self.pane_cursor = page_cursor(&rows, self.pane_cursor, delta_rows);
+        self.pane_anchor = target_at(&rows, self.pane_cursor);
         self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
             self.detail_scroll,
             Some(self.pane_cursor),
+            rows.len(),
+            self.pane_rows_on_screen(),
+        );
+    }
+
+    /// Find the cursor and an open edit again after the rows were rebuilt
+    /// under them — a re-read, a re-wrap at a new width, a tag that changed
+    /// above — by what they are on, and keep them in view. No pulse: nothing
+    /// the cursor is on changed.
+    ///
+    /// The anchor is kept when its row is not there (yet): while the detail
+    /// is being read a todo has no row, and the cursor waits on the nearest
+    /// one rather than forgetting where it was going.
+    pub(super) fn refind_pane(&mut self) {
+        let rows = self.pane_rows();
+        if rows.is_empty() {
+            self.pane_cursor = 0;
+            self.detail_scroll = 0;
+            return;
+        }
+        let found = self
+            .pane_anchor
+            .as_ref()
+            .and_then(|anchor| find_row(&rows, anchor));
+        self.pane_cursor = match found {
+            Some(row) => row,
+            None => step_cursor(&rows, self.pane_cursor.min(rows.len() - 1), 0),
+        };
+        if let Some(edit) = &self.pane_edit
+            && let Some(row) = find_row(&rows, &edit.anchor())
+            && let Some(edit) = &mut self.pane_edit
+        {
+            edit.set_row(row);
+        }
+        // An open edit is what must stay in view; otherwise the cursor.
+        let keep = self
+            .pane_edit
+            .as_ref()
+            .map_or(self.pane_cursor, PaneEdit::row);
+        self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
+            self.detail_scroll,
+            Some(keep),
             rows.len(),
             self.pane_rows_on_screen(),
         );

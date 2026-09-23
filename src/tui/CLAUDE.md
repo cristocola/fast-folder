@@ -741,8 +741,23 @@ or the selection drops an open edit untouched.
 or todo returns `DetailOnly`, which keeps the pane until the re-read lands, so no
 `reading…` frame flickers. `PaneEdit::target` (`PaneTarget`: tag text, variable
 slug or ordinal) lets `settle_pane_cursor` find the row after `apply_change`, and
-`App.pane_return` finds it again when `Msg::Detail` lands, which also re-anchors
-an open edit (`PaneEdit::set_row`) and re-clamps the cursor.
+`App.pane_return` finds it again when `Msg::Detail` lands, with a pulse.
+
+**Everything else that rebuilds the rows finds the cursor again by what it is
+on**, without a pulse, because nothing it is on changed: a re-read after an
+outside edit, a re-wrap at a new width, a discovery changing the tags above.
+`App.pane_anchor` (`pane::target_at`) is set by every cursor move and read by
+`refind_pane`, which also puts an open edit back on its row by
+`PaneEdit::anchor` — the row it was opened on, never `target`'s typed tag text,
+which is no row until the write lands and moved the editor to "add a tag" on
+every refresh. An anchor whose row is not there yet (the detail is being read)
+is kept, not overwritten. **`App.pane_for` is the project the pane's state
+belongs to**: `sync_pane` resets the cursor, scroll, pulses and an open edit only
+when the selection is another project, so a list change that keeps the selection
+keeps the pane. **A resize loses nothing** (`on_resize`): the focus leaves the pane
+only if no pane is left, the index-keyed pulses are cleared, the viewports are
+re-clamped and `refind_pane` does the rest; a resize to the size the app already
+has — one follows every `$EDITOR` note and every `fg` — is no message at all.
 
 **What the pane admits is what the file can hold**, ruled once in `core`:
 `validated::Tag` at `operations::add_tags`, `vars::rendered_values` in

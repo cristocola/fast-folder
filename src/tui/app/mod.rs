@@ -227,6 +227,14 @@ pub struct App {
     /// note or a todo added — so the answer lands on the row it was about:
     /// the cursor settles there and it pulses, as an edit's does.
     pane_pending: Option<pane::PaneTarget>,
+    /// What the pane's cursor is on, so a rebuild of the rows under it — a
+    /// re-read, a re-wrap at a new width — finds the same thing again rather
+    /// than the same index (`refind_pane`).
+    pane_anchor: Option<pane::PaneTarget>,
+    /// The project the pane's cursor, scroll and pulses belong to. They are
+    /// reset only when the selection is another project, so a discovery or
+    /// a metadata read landing does not throw the cursor back to the top.
+    pane_for: Option<PathBuf>,
     pub focus: Focus,
     pub screen: Screen,
     pub templates: TemplatesState,
@@ -340,6 +348,8 @@ impl App {
             pane_pulses: motion::Pulses::default(),
             pane_return: None,
             pane_pending: None,
+            pane_anchor: None,
+            pane_for: None,
             focus: Focus::Projects,
             screen: Screen::Library,
             templates: TemplatesState::default(),
@@ -644,8 +654,11 @@ impl App {
         }
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
-        self.detail_scroll = 0;
-        self.pane_cursor = 0;
+        // Another project under the cursor starts the pane afresh; the same
+        // one keeps its place, found again among rows that may have changed.
+        if !self.sync_pane() {
+            self.refind_pane();
+        }
 
         let mut effects = self.selection_effects();
         if self.search.query.needs_metadata() {
@@ -661,11 +674,59 @@ impl App {
     fn after_selection_change(&mut self) -> Vec<Effect> {
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
+        if !self.sync_pane() {
+            self.refind_pane();
+        }
+        self.selection_effects()
+    }
+
+    /// Start the pane afresh when the selection is another project than the
+    /// one its cursor, scroll, pulses and open edit belong to. Returns
+    /// whether it did. An edit belongs to its project: moving off it leaves
+    /// the row as it was.
+    fn sync_pane(&mut self) -> bool {
+        let now = self.library.selected().map(|p| p.path.clone());
+        if now == self.pane_for {
+            return false;
+        }
+        self.pane_for = now;
         self.detail_scroll = 0;
         self.pane_cursor = 0;
+        self.pane_anchor = None;
         self.pane_edit = None;
         self.pane_return = None;
         self.pane_pending = None;
+        self.pane_pulses.clear();
+        true
+    }
+
+    /// The window changed size. Everything that is measured moves with it —
+    /// the table's viewport, the templates list's, the pane's wrapping — and
+    /// nothing that was being done is lost: the pane's cursor and an open edit
+    /// are found again by what they are on. The focus leaves the pane only if
+    /// there is no pane left to be in.
+    ///
+    /// A resize to the size the app already has is nothing at all: one comes
+    /// back from every `$EDITOR` note and every `fg`, and it used to close
+    /// whatever edit was open in the pane.
+    fn on_resize(&mut self, width: u16, height: u16) -> Vec<Effect> {
+        if (width, height) == self.size {
+            return Vec::new();
+        }
+        self.size = (width, height);
+        if self.focus == Focus::Detail && !self.pane_present() {
+            self.set_focus(Focus::Projects);
+        }
+        // Pulses are keyed by row index, and the rows are about to re-wrap.
+        self.pane_pulses.clear();
+        let rows = self.rows_on_screen();
+        self.library.clamp_viewport(rows);
+        if self.screen == Screen::Templates {
+            let rows = self.studio.rows(self.search.input.text());
+            self.studio
+                .clamp_viewport(&rows, layout::template_rows(self.area()));
+        }
+        self.refind_pane();
         self.selection_effects()
     }
 
@@ -846,10 +907,7 @@ impl App {
         match msg {
             Msg::Key(key) => self.on_key(key),
             Msg::Paste(text) => self.on_paste(&text),
-            Msg::Resize(width, height) => {
-                self.size = (width, height);
-                self.after_selection_change()
-            }
+            Msg::Resize(width, height) => self.on_resize(width, height),
             Msg::Tick => {
                 if self
                     .status
@@ -982,25 +1040,14 @@ impl App {
                 let selected = self.library.selected().is_some_and(|p| p.path == path);
                 self.details.insert(path, *detail);
                 if selected {
+                    // A landed write settles on its row and pulses there;
+                    // anything else — a re-read after an outside edit, the
+                    // first read — finds the cursor and an open edit again
+                    // by what they are on, and moves nothing.
                     if let Some(target) = self.pane_return.take() {
                         self.settle_pane_cursor(&target);
                     }
-                    // An edit open on a row keeps its row: the rows were
-                    // rebuilt under it, and its note may have moved.
-                    if let Some(edit) = &self.pane_edit
-                        && let Some(row) = pane::find_row(&self.pane_rows(), &edit.target())
-                        && let Some(edit) = &mut self.pane_edit
-                    {
-                        edit.set_row(row);
-                    }
-                    let rows = self.pane_rows();
-                    self.pane_cursor = pane::step_cursor(&rows, self.pane_cursor, 0);
-                    self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
-                        self.detail_scroll,
-                        Some(self.pane_cursor),
-                        rows.len(),
-                        self.pane_rows_on_screen(),
-                    );
+                    self.refind_pane();
                 }
                 effects
             }

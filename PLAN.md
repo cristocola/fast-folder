@@ -152,24 +152,24 @@ Defects 3, 4, 5, 6, 9, 11, 12.
 
 Defects 1, 2, 13, 14.
 
-- [ ] `app/pane.rs`: `PaneSection { Header, Tags, Todo, Notes, Variables, Inside }`;
-  `PaneTarget` gains `Name`, `AddTag`, `EarlierNotes`, `Section(PaneSection)`; `find_row`
+- [x] `app/pane.rs`: `PaneTarget` gains `Name`, `AddTag`, `EarlierNotes`; `find_row`
   arms; `pane::target_at(rows, i)`; `PaneEdit::anchor()` — the row the edit opened on,
-  never the typed text.
-- [ ] `Msg::Resize` → `on_resize`: take the anchors, resize, repair focus only if no pane
+  never the typed text. (`PaneSection` waits for phase 5, the first thing that needs
+  it; `App.pane_anchor` is new — see the log.)
+- [x] `Msg::Resize` → `on_resize`: take the anchors, resize, repair focus only if no pane
   exists, clear the index-keyed `pane_pulses`, clamp the library and studio viewports,
   re-find the cursor and the edit row, `viewport_offset`, never drop the edit. A same-size
   resize is a no-op for the pane.
-- [ ] `App.pane_for: Option<PathBuf>`: the resets in `after_rows_changed` and
+- [x] `App.pane_for: Option<PathBuf>`: the resets in `after_rows_changed` and
   `after_selection_change` (`mod.rs:647-648, 664-668`) run only when the selected path
   changes (and clear `pane_pulses` then).
-- [ ] `Msg::Detail` (`mod.rs:982-1004`): take the anchor before `insert`; `pane_return`
+- [x] `Msg::Detail` (`mod.rs:982-1004`): take the anchor before `insert`; `pane_return`
   with a pulse, else the anchor without; the edit re-finds its row by `anchor()`.
-- [ ] Tests: `a_resize_keeps_the_panes_cursor_and_an_open_note_with_its_text` (with a
+- [x] Tests: `a_resize_keeps_the_panes_cursor_and_an_open_note_with_its_text` (with a
   same-size resize), `a_resize_rewraps_and_the_cursor_stays_on_its_todo`,
   `a_detail_refresh_keeps_an_open_tag_edit_on_its_tag`,
   `a_reload_landing_keeps_the_pane_cursor`.
-- [ ] Docs: "The cursor follows the thing" in `src/tui/CLAUDE.md` — anchor vs target,
+- [x] Docs: "The cursor follows the thing" in `src/tui/CLAUDE.md` — anchor vs target,
   `pane_for`, resize.
 
 ## Phase 3 — core and command line: reword, remove, add several
@@ -370,3 +370,7 @@ console for F2, `+`, `<` and `>`.
   too-small guard says in words what `q` would discard. The caret is read back by
   parking the test backend's cursor off-screen before the draw, since ratatui keeps
   the frame's own cursor private. No snapshot moved.
+- **Phase 2** (2026-09-23): the cursor's identity is state, `App.pane_anchor`, set by
+  every cursor move — a target taken *after* the rows were rebuilt is already the
+  wrong one, so it cannot be computed at the moment a list change lands. The four
+  new tests fail on the phase-1 build and pass on this one.

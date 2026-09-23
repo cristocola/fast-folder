@@ -896,3 +896,133 @@ fn a_paste_lands_in_the_pane_field() {
         app.status
     );
 }
+
+fn row_of(app: &App, wanted: impl Fn(&PaneRow) -> bool) -> usize {
+    app.pane_rows()
+        .iter()
+        .position(wanted)
+        .expect("the row is in the pane")
+}
+
+/// **A resize loses nothing.** A note being written stays open with its text,
+/// on its own row, and the cursor stays on it — through a resize to the same
+/// size (one arrives after every `$EDITOR` note and every `fg`) and through a
+/// real one. Both used to close the editor and throw the text away.
+#[test]
+fn a_resize_keeps_the_panes_cursor_and_an_open_note_with_its_text() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Note { ordinal: 1, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    press(&mut app, Key::ctrl('e'));
+    type_text(&mut app, " and the grade");
+
+    for (width, height) in [(120, 40), (110, 36)] {
+        update(&mut app, Msg::Resize(width, height));
+        match &app.pane_edit {
+            Some(PaneEdit::Note { area, ordinal, .. }) => {
+                assert_eq!(*ordinal, 1);
+                assert!(
+                    area.text().contains("rough cut by Friday and the grade"),
+                    "the typed text survives a resize to {width}×{height}: {:?}",
+                    area.text()
+                );
+            }
+            other => panic!("the note editor closed on a {width}×{height} resize: {other:?}"),
+        }
+        let note = row_of(&app, |row| matches!(row, PaneRow::Note { ordinal: 1, .. }));
+        assert_eq!(app.pane_edit.as_ref().unwrap().row(), note);
+        assert_eq!(app.pane_cursor, note, "and the cursor is still on it");
+        assert_eq!(app.focus, Focus::Detail);
+    }
+}
+
+/// A resize re-wraps every todo at the new width, so the row a todo starts on
+/// moves; the cursor stays on the todo, not on the index it had.
+#[test]
+fn a_resize_rewraps_and_the_cursor_stays_on_its_todo() {
+    let mut app = fixture(6, 120, 40);
+    press(&mut app, Key::ch('j'));
+    let path = app.library.selected().unwrap().path.clone();
+    let long = "check the colour of every shot against the reference stills, then the sound";
+    let detail = ProjectDetail {
+        todos: vec![
+            fastf::core::body::Todo {
+                done: false,
+                text: long.to_string(),
+                phase: None,
+            },
+            fastf::core::body::Todo {
+                done: false,
+                text: "export".to_string(),
+                phase: None,
+            },
+        ],
+        ..Default::default()
+    };
+    update(
+        &mut app,
+        Msg::Detail {
+            path,
+            detail: Box::new(detail),
+        },
+    );
+    press(&mut app, Key::plain(KeyCode::Right));
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    let before = app.pane_cursor;
+
+    update(&mut app, Msg::Resize(104, 40));
+    let after = row_of(&app, |row| matches!(row, PaneRow::Todo { ordinal: 1, .. }));
+    assert_ne!(before, after, "the fixture re-wraps the first todo");
+    assert_eq!(app.pane_cursor, after, "the cursor followed its todo");
+}
+
+/// A re-read landing while a tag is being edited leaves the editor on that
+/// tag. It used to look the tag up by the text being typed — which is no row
+/// until the write lands — and move the editor to "add a tag".
+#[test]
+fn a_detail_refresh_keeps_an_open_tag_edit_on_its_tag() {
+    let mut app = editing_fixture();
+    go_to(
+        &mut app,
+        |row| matches!(row, PaneRow::Tag(tag) if tag == "draft"),
+    );
+    press(&mut app, Key::plain(KeyCode::Enter));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "final");
+
+    let path = app.library.selected().unwrap().path.clone();
+    let detail = app.details.get(&path).cloned().unwrap();
+    update(
+        &mut app,
+        Msg::Detail {
+            path,
+            detail: Box::new(detail),
+        },
+    );
+    let draft = row_of(
+        &app,
+        |row| matches!(row, PaneRow::Tag(tag) if tag == "draft"),
+    );
+    let edit = app.pane_edit.as_ref().expect("the edit is still open");
+    assert_eq!(edit.row(), draft, "on the tag it was opened on");
+    match edit {
+        PaneEdit::Line { input, .. } => assert_eq!(input.text(), "final"),
+        other => panic!("a line edit: {other:?}"),
+    }
+}
+
+/// A list change that leaves the same project selected — a metadata read
+/// landing, a discovery — keeps the pane's cursor where it was.
+#[test]
+fn a_reload_landing_keeps_the_pane_cursor() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| matches!(row, PaneRow::AddTodo));
+    let at = app.pane_cursor;
+    update(&mut app, Msg::MetaLoaded(Vec::new()));
+    assert_eq!(app.pane_cursor, at, "the cursor did not go back to the top");
+    assert_eq!(app.focus, Focus::Detail);
+}

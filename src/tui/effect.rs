@@ -189,9 +189,20 @@ pub enum Action {
         ordinal: usize,
         was: String,
     },
-    AddTodo {
+    /// Reword one todo — `ordinal` in the file's todos, whose text was `was`
+    /// when the edit opened — or remove it when `text` is empty.
+    ReplaceTodo {
         project: Box<Project>,
+        ordinal: usize,
+        was: String,
         text: String,
+    },
+    /// Add open todos, in order, in one write: under `phase` when there is
+    /// one, else at the end of the list.
+    AddTodos {
+        project: Box<Project>,
+        texts: Vec<String>,
+        phase: Option<String>,
     },
     Rename {
         project: Box<Project>,

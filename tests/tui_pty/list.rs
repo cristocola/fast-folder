@@ -853,3 +853,88 @@ fn a_tag_over_marks_lands_on_every_row_without_a_rescan() {
         "a batch tag must not rescan the library"
     );
 }
+
+/// **A list pasted onto the add line lands in the file as that many todos.**
+/// `+` from the list opens the line in the pane; the terminal's bracketed
+/// paste arrives as one `Msg::Paste`; the checklist markers come off and every
+/// line is a todo, written in one go under `## Todo`.
+#[test]
+fn a_list_pasted_onto_the_add_line_lands_in_the_file_as_todos() {
+    let sb = Sandbox::new();
+    let root = plant_dated_project(&sb, "Pasted", "ID0001", "2026-01-01T00:00:00Z", 256);
+    let script = pty::Script::new()
+        .pause(1500)
+        .key("+")
+        .pause(400)
+        .key("\x1b[200~- [ ] colour\r- sound mix\r3. deliver the masters\r\x1b[201~")
+        .pause(1200)
+        .esc()
+        .pause(300)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+    assert_eq!(code, 0, "{}", pty::plain(&out));
+    let file = fs::read_to_string(root.join("PROJECT_INFO.md")).unwrap();
+    let todo = file
+        .split("## Todo")
+        .nth(1)
+        .unwrap_or_else(|| panic!("a Todo section:\n{file}"));
+    for line in [
+        "- [ ] colour",
+        "- [ ] sound mix",
+        "- [ ] deliver the masters",
+    ] {
+        assert!(todo.contains(line), "{line} is in the list:\n{file}");
+    }
+    let screen = app_screen(&out);
+    assert!(
+        screen.contains("3 todos added") || screen.contains("0/3 todos done"),
+        "the app says so:\n{screen}"
+    );
+}
+
+/// **Todos typed one after another land one after another.** `+`, a todo,
+/// Enter — and the next line is open for the next one without another key.
+#[test]
+fn todos_typed_in_a_row_on_the_add_line_land_in_the_file_in_order() {
+    let sb = Sandbox::new();
+    let root = plant_dated_project(&sb, "Typed", "ID0001", "2026-01-01T00:00:00Z", 256);
+    let script = pty::Script::new()
+        .pause(1500)
+        .key("+")
+        .pause(300)
+        .key("first task")
+        .enter()
+        .pause(900)
+        .key("second task")
+        .enter()
+        .pause(900)
+        .enter()
+        .pause(300)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+    assert_eq!(code, 0, "{}", pty::plain(&out));
+    let file = fs::read_to_string(root.join("PROJECT_INFO.md")).unwrap();
+    let first = file.find("- [ ] first task").expect("the first todo");
+    let second = file.find("- [ ] second task").expect("the second todo");
+    assert!(first < second, "in the order they were typed:\n{file}");
+}

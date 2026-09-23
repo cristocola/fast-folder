@@ -286,9 +286,10 @@ impl App {
                     .unwrap_or(0);
                 let effects = self.run_action(
                     "writing…",
-                    Action::AddTodo {
+                    Action::AddTodos {
                         project: Box::new(project),
-                        text,
+                        texts: vec![text],
+                        phase: None,
                     },
                 );
                 if !effects.is_empty() {

@@ -871,13 +871,39 @@ fn run_action(
                 if done { "Done." } else { "Open again." },
             ))
         }
-        Action::AddTodo { project, text } => {
-            crate::core::operations::add_todo(&project, &text)?;
+        Action::ReplaceTodo {
+            project,
+            ordinal,
+            was,
+            text,
+        } => {
+            crate::core::operations::replace_todo(&project, ordinal, &was, &text)?;
             Ok(ActionOutcome::new(
                 ListChange::DetailOnly {
                     path: project.path.clone(),
                 },
-                "Todo added.",
+                if text.trim().is_empty() {
+                    "Todo removed."
+                } else {
+                    "Todo reworded."
+                },
+            ))
+        }
+        Action::AddTodos {
+            project,
+            texts,
+            phase,
+        } => {
+            crate::core::operations::add_todos_in(&project, &texts, phase.as_deref())?;
+            let added = texts.iter().filter(|text| !text.trim().is_empty()).count();
+            Ok(ActionOutcome::new(
+                ListChange::DetailOnly {
+                    path: project.path.clone(),
+                },
+                match added {
+                    1 => "Todo added.".to_string(),
+                    n => format!("{n} todos added."),
+                },
             ))
         }
         Action::ReautoTags(project) => {

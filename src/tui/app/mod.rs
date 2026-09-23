@@ -1286,6 +1286,19 @@ impl App {
                 // `apply_change` would otherwise put it back on the name,
                 // which is the one row nobody who just changed a variable is
                 // looking at.
+                //
+                // **A todo added on the add line opens the next one under
+                // it**, so a list is typed in one go: the cursor settles on
+                // the new todo — and pulses — once the re-read shows it, and
+                // the next line is already open for the keys that follow.
+                let next_add = match &self.pane_edit {
+                    Some(pane::PaneEdit::Line {
+                        target: pane::EditTarget::NewTodo { phase, ordinal },
+                        pending: true,
+                        ..
+                    }) => Some((phase.clone(), ordinal + 1)),
+                    _ => None,
+                };
                 let landed = self
                     .pane_edit
                     .take_if(|edit| edit.pending())
@@ -1293,10 +1306,17 @@ impl App {
                     .or_else(|| self.pane_pending.take());
                 let mut effects = self.apply_change(outcome.change);
                 if let Some(target) = landed {
-                    self.settle_pane_cursor(&target);
+                    // Settled now only where its row is already there; the
+                    // new todo's row is not, until the re-read lands.
+                    if next_add.is_none() {
+                        self.settle_pane_cursor(&target);
+                    }
                     // The detail was just dropped and will be read again;
                     // the cursor finds the row once more when it lands.
                     self.pane_return = Some(target);
+                }
+                if let Some((phase, ordinal)) = next_add {
+                    self.open_adding(phase, ordinal);
                 }
                 if let Some(FollowUp::PostCreate {
                     root,
@@ -1384,6 +1404,23 @@ impl App {
     /// ignored and said so — it is never read as keystrokes, which is how a
     /// pasted paragraph once ran a dozen commands.
     fn on_paste(&mut self, text: &str) -> Vec<Effect> {
+        // **A line ends however the terminal ends it.** A bracketed paste
+        // carries the clipboard's line breaks as the terminal sends them, and
+        // many send a bare carriage return; `str::lines` splits on `\n`
+        // alone, so every multi-line paste arrived as one line with its breaks
+        // dropped — a note pasted whole, a list pasted as one todo.
+        let text = &text.replace("\r\n", "\n").replace('\r', "\n");
+        // A list pasted onto the add line is that many todos, at once.
+        if self.modals.is_empty()
+            && !self.search.editing
+            && self
+                .pane_edit
+                .as_ref()
+                .is_some_and(|edit| edit.is_adding() && !edit.pending())
+            && let Some(effects) = self.paste_todos(text)
+        {
+            return effects;
+        }
         let lines = text.lines().count();
         let first = text.lines().next().unwrap_or_default().to_string();
         let dropped = lines.saturating_sub(1);
@@ -2246,13 +2283,13 @@ impl App {
                 self.modals.push(Modal::Note(NoteState::new(count)));
                 Vec::new()
             }
-            CommandId::AddTodo => {
-                self.modals.push(Modal::TextPrompt(TextPrompt::new(
-                    validators::ADD_TODO_PROMPT,
-                    TextThen::AddTodo,
-                )));
-                Vec::new()
-            }
+            // Where the pane can show the list, a todo is typed into it,
+            // at the end, on a line that opens the next once it lands; where
+            // it cannot, the prompt.
+            CommandId::AddTodo | CommandId::ListAddTodo => self.start_adding(None),
+            CommandId::PaneAdd => self.pane_add(),
+            CommandId::PaneEditText => self.pane_edit_text(),
+            CommandId::ListRename => self.run(CommandId::Rename),
             CommandId::Rename => {
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();

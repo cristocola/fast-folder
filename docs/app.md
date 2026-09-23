@@ -80,11 +80,24 @@ on its own line — change it and Enter, or empty it and Enter to remove it; on 
 over its options and nothing else; on a **note** the note opens as a text area
 over its own lines — Enter for a new line, Ctrl-S to save, emptied and saved to
 remove it; on a **todo** Enter ticks it, or unticks it; on **`… n earlier`**
-every note, as `J` shows them. Every section that can grow ends in a row that
+every note, as `J` shows them. **F2 edits the text** of the row under the
+cursor in place — on a todo that is how you reword it, since Enter ticks it;
+emptied and Enter, the todo is removed — and on the name, a tag, a variable or
+a note it opens what Enter opens. Every section that can grow ends in a row that
 adds to it: **add a tag**, **add a note** (the quick note — Enter saves,
-Alt-Enter breaks a line), **add a todo** — also **Add a todo** in the
-palette and the action menu, from the list. Esc leaves the row as it was, and so
-does moving away. What you can type is what the file can hold: a tag is one
+Alt-Enter breaks a line), **add a todo**; and **`+` adds one more of whatever
+the cursor is among**, from anywhere in that section. Esc leaves the row as it
+was, and so does moving away.
+
+**Adding todos is typing a list.** `+` on the list or in the pane, Enter on
+**add a todo**, or **Add a todo** in the palette or the action menu opens an
+empty line in the todo list itself, where the todo will land — under the phase
+the cursor is in, or at the end. Enter writes it and opens the next line under
+it, so a list goes in one after another; Enter on an empty line, or Esc, is
+done. Paste a list onto the line — lines from a brief, a checklist copied with
+its `- [ ]` boxes, a numbered list — and every line is a todo, the markers taken
+off, in one write. With the pane switched off, `+` asks for one todo in a
+prompt instead. What you can type is what the file can hold: a tag is one
 word (letters, digits, `- _ . /`), a variable is one line and a `select` is one
 of its options, a todo is one line, and an undated note may not start a line
 with `##` (that is how the file marks where a section ends). A refusal names
@@ -123,6 +136,8 @@ pane beside it, and nothing else.
 | → / `l` | put the cursor in the pane — the project's detail on the library, the template's on the templates tab. On a small window the pane is shown in the list's place. Unbound when the pane is switched off (`i`) |
 | ← / `h` | put the cursor back on the list. It never quits and never closes anything: leaving is Esc's job, and Esc in the pane does the same as ← |
 | `<` / `>` | in the pane: the project above or below, without leaving the pane — the cursor stays in the section it was in, so one project's todos after another's is a key each |
+| F2 | edit the text under the cursor in place: in the pane a todo (reworded, or emptied to remove it), a tag, a variable, a note, the name; on the list, the folder's name |
+| `+` | add one more: on the list or in the todos, a todo, typed on a line in the list with the next opening under it; among the tags, a tag; among the notes, a note |
 | `T` | the templates tab, and `T` again (or Esc) back to the library |
 | Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |

@@ -326,6 +326,15 @@ pub enum CommandId {
     PanePreviousProject,
     /// From the pane, the project below the one it shows.
     PaneNextProject,
+    /// F2 in the pane: the text of the row under the cursor, opened in
+    /// place — a todo reworded, a tag, a variable, a note, the name.
+    PaneEditText,
+    /// `+` in the pane: one more of what the cursor is among.
+    PaneAdd,
+    /// F2 on the list: the folder's name — rename, as everywhere F2 edits.
+    ListRename,
+    /// `+` on the list: a todo for the project under the cursor.
+    ListAddTodo,
     /// Back to the library from the templates tab — palette only; `T` and
     /// Esc are the keys.
     BackToLibrary,
@@ -413,7 +422,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 99] = [
+    pub const ALL: [CommandId; 103] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -450,6 +459,10 @@ impl CommandId {
         CommandId::FocusDetail,
         CommandId::PanePreviousProject,
         CommandId::PaneNextProject,
+        CommandId::PaneEditText,
+        CommandId::PaneAdd,
+        CommandId::ListRename,
+        CommandId::ListAddTodo,
         CommandId::BackToLibrary,
         CommandId::Search,
         CommandId::ClearSearch,
@@ -655,6 +668,26 @@ fn pane_row_and_not_busy(app: &App) -> Availability {
                 Availability::Hidden
             }
         }
+        other => other,
+    }
+}
+
+/// F2 opens text in place: on a row that holds some — the name, a tag, a
+/// variable, a note, a todo. Hidden on a rule, a heading, an add row, the
+/// folder listing: there is nothing there to type over.
+fn pane_text_row(app: &App) -> Availability {
+    use crate::tui::app::pane::PaneRow;
+    match selection_and_not_busy(app) {
+        Availability::Enabled => match app.pane_rows().get(app.pane_cursor) {
+            Some(
+                PaneRow::Name(_)
+                | PaneRow::Tag(_)
+                | PaneRow::Variable { .. }
+                | PaneRow::Note { .. }
+                | PaneRow::Todo { .. },
+            ) => Availability::Enabled,
+            _ => Availability::Hidden,
+        },
         other => other,
     }
 }
@@ -1433,6 +1466,54 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         pane_row_and_not_busy
     ),
+    // **Enter acts, F2 edits, `+` adds** — the same three wherever there is a
+    // row to act on, text to edit or a list to add to. Enter on a todo ticks
+    // it, so rewording one needs a key of its own, and F2 is the edit key a
+    // file manager has always had.
+    cmd!(
+        PaneEditText,
+        "Edit the text",
+        "open the row under the cursor in place: reword a todo (Enter ticks it), a tag, a variable, a note, the name; emptied, a todo, a tag or a note is removed",
+        &[Context::Detail],
+        [Key::plain(KeyCode::F(2))],
+        Project,
+        palette = false,
+        hint = true,
+        pane_text_row
+    ),
+    cmd!(
+        PaneAdd,
+        "Add here",
+        "one more of what the cursor is among: a todo, typed where it will land (in the cursor's phase) with the next line opening under it; a tag; a note",
+        &[Context::Detail],
+        [Key::ch('+')],
+        Project,
+        palette = false,
+        hint = true,
+        selection_and_not_busy
+    ),
+    cmd!(
+        ListRename,
+        "Rename folder",
+        "F2 edits wherever it is pressed: on the list, the folder's name",
+        &[Context::Projects],
+        [Key::plain(KeyCode::F(2))],
+        Project,
+        palette = false,
+        hint = false,
+        single_and_not_busy
+    ),
+    cmd!(
+        ListAddTodo,
+        "Add a todo",
+        "a todo for the project under the cursor, typed into its list in the pane",
+        &[Context::Projects],
+        [Key::ch('+')],
+        Project,
+        palette = false,
+        hint = false,
+        one_project
+    ),
     cmd!(
         PaneEditConfirm,
         "Keep",
@@ -2123,9 +2204,23 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
     // because the palette stopped being a global command the day it stopped
     // opening itself, and a bar that led with `c commands` on every screen was
     // the whole of that change showing through.
+    //
+    // **The pane's bar is what the pane does.** The verbs it shares with the
+    // list — open, terminal, copy the path, mark, new, the tab switch — are on
+    // the list's bar and in the action menu, and in the pane they crowded out
+    // the pane's own: its row actions, the way back, and help.
+    let pane_keeps = |c: &Command| {
+        ctx != Context::Detail
+            || !c.contexts.contains(&Context::Projects)
+            || matches!(
+                c.id,
+                CommandId::Search | CommandId::Actions | CommandId::FocusList
+            )
+    };
     let mut ranked: Vec<&Command> = COMMANDS
         .iter()
         .filter(|c| c.hint && (c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global)))
+        .filter(|c| pane_keeps(c))
         .filter(|c| (c.available)(app) != Availability::Hidden)
         .collect();
     // A stable sort, so declaration order decides within each group — which
@@ -2165,12 +2260,19 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
     out
 }
 
+/// Whether the edit open in the pane is the line a new todo is typed on.
+fn adding(app: &App) -> bool {
+    app.pane_edit
+        .as_ref()
+        .is_some_and(crate::tui::app::pane::PaneEdit::is_adding)
+}
+
 /// What Enter does on the pane row under the cursor, in one word.
 fn pane_verb(app: &App) -> &'static str {
     use crate::tui::app::pane::PaneRow;
     match app.pane_rows().get(app.pane_cursor) {
         Some(PaneRow::Todo { .. }) => "toggle",
-        Some(PaneRow::AddTag | PaneRow::AddNote | PaneRow::AddTodo) => "add",
+        Some(PaneRow::AddTag | PaneRow::AddNote | PaneRow::AddTodo | PaneRow::Adding) => "add",
         Some(PaneRow::EarlierNotes(_)) => "show",
         _ => "edit",
     }
@@ -2249,9 +2351,15 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         // what is there rather than where.
         CommandId::FocusDetail if app.pane_behind_list() => "details",
         CommandId::FocusDetail => "pane",
+        CommandId::PaneEditText => "edit",
+        CommandId::PaneAdd => "add",
         CommandId::PaneEdit => pane_verb(app),
+        // On the add line Enter writes one more and opens the next, and Esc
+        // is the end of the run, not the loss of anything.
+        CommandId::PaneEditConfirm if adding(app) => "add",
         CommandId::PaneEditConfirm => "keep",
         CommandId::PaneEditSave => "save",
+        CommandId::PaneEditCancel if adding(app) => "done",
         CommandId::PaneEditCancel => "cancel",
         CommandId::OpenFolder => "open",
         CommandId::OpenTerminal => "terminal",

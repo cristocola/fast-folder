@@ -38,8 +38,6 @@ Last reviewed: 2026-09-21.
 
 Unscheduled; nothing here is promised.
 
-- Removing or rewording a todo, from the pane or the command line — today
-  either means editing the file (the pane follows within a second).
 - Editing a template's starter todos in the guided builder: the manifest field
   round-trips untouched, but only `template.yaml` and an editor can change it.
 - Portable project packages.

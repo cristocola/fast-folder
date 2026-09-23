@@ -43,6 +43,10 @@ pub const NOTE_INDENT: usize = 11;
 /// The columns in front of a todo's text: `[ ] `.
 pub const TODO_INDENT: usize = 4;
 
+/// How far the tasks under a phase sit in from its heading, so they read as
+/// its own.
+pub const PHASE_INDENT: usize = 2;
+
 /// What kind of value a variable row holds, and so what Enter on it opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VarKind {
@@ -179,6 +183,87 @@ fn flow_facts(facts: Vec<Fact>, project: &Project, width: usize) -> Vec<Vec<Fact
     rows
 }
 
+/// The phase the todo under `at` sits in: the nearest heading above it inside
+/// the todo section. `None` on the rows of an ungrouped list, on the row that
+/// adds a todo (the end of the list), and outside the section.
+fn phase_at(rows: &[PaneRow], at: usize) -> Option<String> {
+    if !matches!(
+        rows.get(at),
+        Some(PaneRow::Todo { .. } | PaneRow::TodoLine { .. } | PaneRow::Phase { .. })
+    ) {
+        return None;
+    }
+    rows.iter().take(at + 1).rev().find_map(|row| match row {
+        PaneRow::Phase { name, .. } => Some(Some(name.clone())),
+        PaneRow::Rule(_) | PaneRow::Todo { phased: false, .. } => Some(None),
+        _ => None,
+    })?
+}
+
+/// One pasted line as the todo it lists: the checklist or list marker it was
+/// copied with — `- [ ]`, `- [x]`, `* `, `+ `, `1.`, `2)` — taken off.
+pub fn todo_text_of(line: &str) -> String {
+    let mut rest = line.trim();
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(after) = rest.strip_prefix(marker) {
+            rest = after.trim_start();
+            break;
+        }
+    }
+    let numbered = rest.find(['.', ')']).filter(|&at| {
+        at > 0 && rest[..at].chars().all(|c| c.is_ascii_digit()) && rest[at + 1..].starts_with(' ')
+    });
+    if let Some(at) = numbered {
+        rest = rest[at + 1..].trim_start();
+    }
+    for bracket in ["[ ]", "[x]", "[X]", "[]"] {
+        if let Some(after) = rest.strip_prefix(bracket) {
+            rest = after.trim_start();
+            break;
+        }
+    }
+    rest.trim_end().to_string()
+}
+
+/// `rows` with the line a new todo is typed on, where the todo will land:
+/// after the last task of `phase` when the list has that phase, else at the
+/// end of the list, over "add a todo".
+pub fn with_adding(mut rows: Vec<PaneRow>, phase: Option<&str>) -> Vec<PaneRow> {
+    let Some(add) = rows.iter().position(|row| *row == PaneRow::AddTodo) else {
+        return rows;
+    };
+    let at = phase
+        .and_then(|wanted| {
+            let heading = rows
+                .iter()
+                .position(|row| matches!(row, PaneRow::Phase { name, .. } if name == wanted))?;
+            Some(
+                rows.iter()
+                    .enumerate()
+                    .skip(heading + 1)
+                    .find(|(_, row)| matches!(row, PaneRow::Phase { .. } | PaneRow::AddTodo))
+                    .map_or(add, |(index, _)| index),
+            )
+        })
+        .unwrap_or(add);
+    rows.insert(at, PaneRow::Adding);
+    rows
+}
+
+/// The ordinal a todo added under `phase` gets: after the last task of that
+/// phase, or after every task when the list has no such phase — which is
+/// where `body::add_todos_in` writes it.
+pub fn ordinal_for_new_todo(todos: &[crate::core::body::Todo], phase: Option<&str>) -> usize {
+    phase
+        .and_then(|wanted| {
+            todos
+                .iter()
+                .rposition(|todo| todo.phase.as_deref() == Some(wanted))
+                .map(|last| last + 1)
+        })
+        .unwrap_or(todos.len())
+}
+
 /// A folder name as rows no wider than `width`, broken **after** a `_`, `-`,
 /// `.` or space where one falls inside the row — the places a fastf name joins
 /// its parts, so a row ends on a whole word of it — and inside a run only when
@@ -266,17 +351,30 @@ pub enum PaneRow {
     NoteMore(usize),
     /// The row under the last note that adds one.
     AddNote,
-    /// The `###` label a run of todos sits under. Not a row the cursor rests
-    /// on: a phase is a line of the user's own file, not something to toggle.
-    Phase(String),
-    /// One todo's first row. Enter toggles it.
+    /// The `###` label a run of todos sits under, with how many of the run
+    /// are done. Not a row the cursor rests on: a phase is a line of the
+    /// user's own file, not something to toggle.
+    Phase {
+        name: String,
+        done: usize,
+        total: usize,
+    },
+    /// One todo's first row. Enter toggles it; F2 edits its text. `phased`
+    /// when it sits under a phase heading, and is drawn in from it.
     Todo {
         ordinal: usize,
         done: bool,
         text: String,
+        phased: bool,
     },
     /// The rest of a todo too wide for the pane. Not a row the cursor rests on.
-    TodoLine { done: bool, text: String },
+    TodoLine {
+        done: bool,
+        text: String,
+        phased: bool,
+    },
+    /// The line a new todo is being typed on, where it will land (`with_adding`).
+    Adding,
     /// The row under the last todo that adds one.
     AddTodo,
 }
@@ -295,6 +393,7 @@ impl PaneRow {
                 | PaneRow::Note { .. }
                 | PaneRow::AddNote
                 | PaneRow::Todo { .. }
+                | PaneRow::Adding
                 | PaneRow::AddTodo
         )
     }
@@ -369,26 +468,42 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
     }
 
     rows.push(PaneRow::Rule(PaneSection::Todo));
-    let todo_width = width.saturating_sub(TODO_INDENT);
     // A label is drawn where it changes, so an ungrouped list draws none and
-    // a grouped one draws each label once, over the run it names.
+    // a grouped one draws each label once, over the run it names, with how
+    // much of the run is done.
     let mut phase: Option<&str> = None;
     for (ordinal, todo) in detail.todos.iter().enumerate() {
         if todo.phase.as_deref() != phase {
             phase = todo.phase.as_deref();
             if let Some(name) = phase {
-                rows.push(PaneRow::Phase(name.to_string()));
+                let (done, total) = detail
+                    .todos
+                    .iter()
+                    .skip(ordinal)
+                    .take_while(|t| t.phase.as_deref() == Some(name))
+                    .fold((0, 0), |(done, total), t| {
+                        (done + usize::from(t.done), total + 1)
+                    });
+                rows.push(PaneRow::Phase {
+                    name: name.to_string(),
+                    done,
+                    total,
+                });
             }
         }
-        let mut lines = wrap_columns(&todo.text, todo_width).into_iter();
+        let phased = phase.is_some();
+        let indent = TODO_INDENT + if phased { PHASE_INDENT } else { 0 };
+        let mut lines = wrap_columns(&todo.text, width.saturating_sub(indent)).into_iter();
         rows.push(PaneRow::Todo {
             ordinal,
             done: todo.done,
             text: lines.next().unwrap_or_default(),
+            phased,
         });
         rows.extend(lines.map(|text| PaneRow::TodoLine {
             done: todo.done,
             text,
+            phased,
         }));
     }
     rows.push(PaneRow::AddTodo);
@@ -519,6 +634,17 @@ pub enum EditTarget {
     Variable(String),
     /// A tag, by the text it had; emptied, it is removed.
     Tag(String),
+    /// A todo's text: `ordinal` in the file's todos, whose text was `was`
+    /// when the edit opened, so a todo that changed meanwhile is refused
+    /// rather than rewritten; emptied, it is removed.
+    Todo { ordinal: usize, was: String },
+    /// A new todo, typed where it will land: under `phase`, or at the end of
+    /// the list. `ordinal` is where it will be once written, so the cursor
+    /// can follow it and the next line open under it.
+    NewTodo {
+        phase: Option<String>,
+        ordinal: usize,
+    },
 }
 
 /// An edit open on one row of the pane.
@@ -629,6 +755,8 @@ pub enum PaneTarget {
     Note(usize),
     /// A todo by its ordinal; gone, the row that adds one.
     Todo(usize),
+    /// The line a new todo is being typed on.
+    Adding,
     AddNote,
     AddTodo,
 }
@@ -645,6 +773,7 @@ pub fn target_at(rows: &[PaneRow], at: usize) -> Option<PaneTarget> {
         PaneRow::Note { ordinal, .. } => PaneTarget::Note(*ordinal),
         PaneRow::AddNote => PaneTarget::AddNote,
         PaneRow::Todo { ordinal, .. } => PaneTarget::Todo(*ordinal),
+        PaneRow::Adding => PaneTarget::Adding,
         PaneRow::AddTodo => PaneTarget::AddTodo,
         _ => return None,
     })
@@ -664,8 +793,27 @@ impl PaneEdit {
                 input,
                 ..
             } => PaneTarget::Tag(input.text().trim().to_string()),
+            PaneEdit::Line {
+                target: EditTarget::Todo { ordinal, .. },
+                ..
+            } => PaneTarget::Todo(*ordinal),
+            PaneEdit::Line {
+                target: EditTarget::NewTodo { ordinal, .. },
+                ..
+            } => PaneTarget::Todo(*ordinal),
             PaneEdit::Note { ordinal, .. } => PaneTarget::Note(*ordinal),
         }
+    }
+
+    /// Whether this is the line a new todo is typed on.
+    pub fn is_adding(&self) -> bool {
+        matches!(
+            self,
+            PaneEdit::Line {
+                target: EditTarget::NewTodo { .. },
+                ..
+            }
+        )
     }
 
     /// The row this edit was opened on, as it still is in the file — where
@@ -683,6 +831,14 @@ impl PaneEdit {
                 target: EditTarget::Tag(from),
                 ..
             } => PaneTarget::Tag(from.clone()),
+            PaneEdit::Line {
+                target: EditTarget::Todo { ordinal, .. },
+                ..
+            } => PaneTarget::Todo(*ordinal),
+            PaneEdit::Line {
+                target: EditTarget::NewTodo { .. },
+                ..
+            } => PaneTarget::Adding,
             PaneEdit::Note { ordinal, .. } => PaneTarget::Note(*ordinal),
         }
     }
@@ -709,6 +865,8 @@ pub fn find_row(rows: &[PaneRow], target: &PaneTarget) -> Option<usize> {
         PaneTarget::AddTag => find(&|row| matches!(row, PaneRow::AddTag)),
         PaneTarget::EarlierNotes => find(&|row| matches!(row, PaneRow::EarlierNotes(_)))
             .or_else(|| find(&|row| matches!(row, PaneRow::Note { .. }))),
+        PaneTarget::Adding => find(&|row| matches!(row, PaneRow::Adding))
+            .or_else(|| find(&|row| matches!(row, PaneRow::AddTodo))),
         PaneTarget::AddNote => find(&|row| matches!(row, PaneRow::AddNote)),
         PaneTarget::AddTodo => find(&|row| matches!(row, PaneRow::AddTodo)),
     }
@@ -932,6 +1090,30 @@ impl App {
                 slug: slug.clone(),
                 value: text,
             },
+            EditTarget::Todo { ordinal, was } => {
+                if text == *was {
+                    self.pane_edit = None;
+                    return Vec::new();
+                }
+                Action::ReplaceTodo {
+                    project: Box::new(project),
+                    ordinal: *ordinal,
+                    was: was.clone(),
+                    text,
+                }
+            }
+            // An empty line ends a run of adds; anything else is one more.
+            EditTarget::NewTodo { phase, .. } => {
+                if text.is_empty() {
+                    self.pane_edit = None;
+                    return Vec::new();
+                }
+                Action::AddTodos {
+                    project: Box::new(project),
+                    texts: vec![text],
+                    phase: phase.clone(),
+                }
+            }
             EditTarget::Tag(from) => {
                 if text == *from {
                     self.pane_edit = None;
@@ -958,6 +1140,138 @@ impl App {
             }
         };
         self.send_pane_edit(action)
+    }
+
+    /// F2 on a pane row: its text, opened in place. On a todo that is the
+    /// rewording Enter never does — Enter ticks it — and emptied, the todo
+    /// goes; on the name, a tag, a variable or a note it is what Enter opens.
+    pub(super) fn pane_edit_text(&mut self) -> Vec<Effect> {
+        let rows = self.pane_rows();
+        let Some(PaneRow::Todo { ordinal, .. }) = rows.get(self.pane_cursor) else {
+            return self.pane_edit_start();
+        };
+        let ordinal = *ordinal;
+        // The whole todo as it was read — the row holds only what fits.
+        let Some(was) = self
+            .library
+            .selected()
+            .and_then(|project| self.details.get(&project.path))
+            .and_then(|detail| detail.todos.get(ordinal))
+            .map(|todo| todo.text.clone())
+        else {
+            return Vec::new();
+        };
+        self.pane_edit = Some(PaneEdit::Line {
+            row: self.pane_cursor,
+            input: crate::tui::widgets::input::LineEdit::with_text(was.clone()),
+            target: EditTarget::Todo { ordinal, was },
+            error: None,
+            pending: false,
+        });
+        Vec::new()
+    }
+
+    /// `+` in the pane: one more of whatever the cursor is among — a tag, a
+    /// note, or a todo, typed on a line where it will land: in the phase the
+    /// cursor is in, else at the end of the list.
+    pub(super) fn pane_add(&mut self) -> Vec<Effect> {
+        let rows = self.pane_rows();
+        match section_at(&rows, self.pane_cursor) {
+            PaneSection::Tags => self.open_add_tag(),
+            PaneSection::Notes => self.run(CommandId::NoteInline),
+            _ => {
+                // A todo goes to one list: with marks, which one is a guess,
+                // and the verb says so rather than choosing.
+                if let command::Availability::Disabled(reason) =
+                    (command::find(CommandId::AddTodo).available)(self)
+                {
+                    self.warn(format!("Add a todo: {reason}"));
+                    return Vec::new();
+                }
+                let phase = phase_at(&rows, self.pane_cursor);
+                self.start_adding(phase)
+            }
+        }
+    }
+
+    /// Open the line a new todo is typed on, in the pane, with the focus
+    /// there. Falls back to the prompt when the pane cannot show the list —
+    /// switched off, or its record not read yet.
+    pub(super) fn start_adding(&mut self, phase: Option<String>) -> Vec<Effect> {
+        let read = self
+            .library
+            .selected()
+            .and_then(|p| self.details.get(&p.path));
+        let Some(detail) = read else {
+            return self.prompt_for_a_todo();
+        };
+        // The end of a list whose last run sits under a phase *is* that phase:
+        // a task appended there reads as the phase's own, so the line opens
+        // under the heading it will belong to.
+        let phase = phase.or_else(|| detail.todos.last().and_then(|todo| todo.phase.clone()));
+        let ordinal = ordinal_for_new_todo(&detail.todos, phase.as_deref());
+        if !self.pane_live() || self.screen != super::Screen::Library {
+            return self.prompt_for_a_todo();
+        }
+        self.set_focus(super::Focus::Detail);
+        self.open_adding(phase, ordinal);
+        Vec::new()
+    }
+
+    /// The add line itself, under `phase`, for the todo that will have
+    /// `ordinal` — placed on its row, with the cursor on it and in view.
+    pub(super) fn open_adding(&mut self, phase: Option<String>, ordinal: usize) {
+        self.pane_edit = Some(PaneEdit::Line {
+            row: 0,
+            input: crate::tui::widgets::input::LineEdit::new(),
+            target: EditTarget::NewTodo { phase, ordinal },
+            error: None,
+            pending: false,
+        });
+        self.pane_anchor = Some(PaneTarget::Adding);
+        self.refind_pane();
+    }
+
+    /// The one-line prompt for a todo — what adding is where the pane cannot
+    /// show the list it goes into.
+    pub(super) fn prompt_for_a_todo(&mut self) -> Vec<Effect> {
+        self.modals
+            .push(Modal::TextPrompt(super::actions::TextPrompt::new(
+                validators::ADD_TODO_PROMPT,
+                super::actions::TextThen::AddTodo,
+            )));
+        Vec::new()
+    }
+
+    /// A list pasted onto the add line: one todo per line, in one write, the
+    /// list markers a checklist is copied with stripped. `None` when the
+    /// paste is one line, which the field takes like any other.
+    pub(super) fn paste_todos(&mut self, text: &str) -> Option<Vec<Effect>> {
+        let texts: Vec<String> = text
+            .lines()
+            .map(todo_text_of)
+            .filter(|line| !line.is_empty())
+            .collect();
+        if texts.len() < 2 {
+            return None;
+        }
+        let Some(PaneEdit::Line {
+            target: EditTarget::NewTodo { phase, ordinal },
+            ..
+        }) = &mut self.pane_edit
+        else {
+            return None;
+        };
+        // The cursor follows the last of them, and the next line opens
+        // under it.
+        *ordinal += texts.len() - 1;
+        let phase = phase.clone();
+        let project = self.library.selected().cloned()?;
+        Some(self.send_pane_edit(Action::AddTodos {
+            project: Box::new(project),
+            texts,
+            phase,
+        }))
     }
 
     /// `Ctrl-S` on the pane's note editor: the note, rewritten — or, emptied,
@@ -1015,7 +1329,14 @@ impl App {
             .detail
             .map(|pane| crate::tui::layout::pane_text(pane).width as usize)
             .unwrap_or(0);
-        pane_rows(project, self.details.get(&project.path), width)
+        let rows = pane_rows(project, self.details.get(&project.path), width);
+        match &self.pane_edit {
+            Some(PaneEdit::Line {
+                target: EditTarget::NewTodo { phase, .. },
+                ..
+            }) => with_adding(rows, phase.as_deref()),
+            _ => rows,
+        }
     }
 
     /// How many rows the pane shows at once: the height of its text.
@@ -1140,6 +1461,8 @@ impl App {
             && let Some(edit) = &mut self.pane_edit
         {
             edit.set_row(row);
+            // The cursor is where the typing is.
+            self.pane_cursor = row;
         }
         // An open edit is what must stay in view; otherwise the cursor.
         let keep = self
@@ -1265,31 +1588,48 @@ mod tests {
                     ordinal: 0,
                     done: true,
                     text: "read the order".to_string(),
+                    phased: false,
                 },
-                &PaneRow::Phase("Setup".to_string()),
+                &PaneRow::Phase {
+                    name: "Setup".to_string(),
+                    done: 0,
+                    total: 2,
+                },
                 &PaneRow::Todo {
                     ordinal: 1,
                     done: false,
                     text: "download the files".to_string(),
+                    phased: true,
                 },
                 // The second task of a run draws no second label.
                 &PaneRow::Todo {
                     ordinal: 2,
                     done: false,
                     text: "copy the audio".to_string(),
+                    phased: true,
                 },
-                &PaneRow::Phase("Creative Plan".to_string()),
+                &PaneRow::Phase {
+                    name: "Creative Plan".to_string(),
+                    done: 0,
+                    total: 1,
+                },
                 &PaneRow::Todo {
                     ordinal: 3,
                     done: false,
                     text: "listen to the song".to_string(),
+                    phased: true,
                 },
                 &PaneRow::AddTodo,
             ],
             "a label where the phase changes, and the ordinals still count tasks only"
         );
         assert!(
-            !PaneRow::Phase("Setup".to_string()).selectable(),
+            !PaneRow::Phase {
+                name: "Setup".to_string(),
+                done: 0,
+                total: 2
+            }
+            .selectable(),
             "Enter on a phase would have nothing to toggle"
         );
     }
@@ -1324,6 +1664,7 @@ mod tests {
                     ordinal: 0,
                     done: true,
                     text: "ingested".to_string(),
+                    phased: false,
                 },
                 &PaneRow::AddTodo,
                 &PaneRow::Note {
@@ -1552,10 +1893,12 @@ mod tests {
                     ordinal: 0,
                     done: false,
                     text: "send the rough cut to the".to_string(),
+                    phased: false,
                 },
                 PaneRow::TodoLine {
                     done: false,
                     text: "label".to_string(),
+                    phased: false,
                 },
             ]
         );
@@ -1724,6 +2067,122 @@ mod tests {
                 PaneSection::Variables,
                 PaneSection::Inside,
             ]
+        );
+    }
+
+    /// A pasted line loses the marker a checklist was copied with — a box, a
+    /// bullet, a number — and nothing else.
+    #[test]
+    fn a_pasted_line_loses_its_list_marker_and_nothing_else() {
+        for (line, todo) in [
+            ("- [ ] colour", "colour"),
+            ("- [x] shot the stills", "shot the stills"),
+            ("* [X] graded", "graded"),
+            ("* sound mix", "sound mix"),
+            ("+ export", "export"),
+            ("1. deliver", "deliver"),
+            ("12) invoice", "invoice"),
+            ("[ ] bare box", "bare box"),
+            ("  plain words  ", "plain words"),
+            (
+                "2026-01-02 is a date, not a number",
+                "2026-01-02 is a date, not a number",
+            ),
+            ("3.5 GB to upload", "3.5 GB to upload"),
+            ("-dash without a space", "-dash without a space"),
+        ] {
+            assert_eq!(todo_text_of(line), todo, "{line:?}");
+        }
+    }
+
+    /// The add line opens where the todo will land, and the ordinal it gets is
+    /// the one `body::add_todos_in` gives it.
+    #[test]
+    fn the_add_line_opens_where_the_todo_will_land() {
+        let todo = |text: &str, phase: Option<&str>| crate::core::body::Todo {
+            done: false,
+            text: text.to_string(),
+            phase: phase.map(str::to_string),
+        };
+        let todos = vec![
+            todo("loose", None),
+            todo("brief", Some("Setup")),
+            todo("room", Some("Setup")),
+            todo("cut", Some("Edit")),
+        ];
+        let detail = ProjectDetail {
+            todos: todos.clone(),
+            ..Default::default()
+        };
+        let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
+
+        let into_setup = with_adding(rows.clone(), Some("Setup"));
+        let at = into_setup
+            .iter()
+            .position(|r| *r == PaneRow::Adding)
+            .unwrap();
+        assert!(matches!(
+            into_setup[at - 1],
+            PaneRow::Todo { ordinal: 2, .. }
+        ));
+        assert!(matches!(into_setup[at + 1], PaneRow::Phase { .. }));
+        assert_eq!(ordinal_for_new_todo(&todos, Some("Setup")), 3);
+
+        let at_end = with_adding(rows.clone(), None);
+        let at = at_end.iter().position(|r| *r == PaneRow::Adding).unwrap();
+        assert_eq!(at_end[at + 1], PaneRow::AddTodo);
+        assert_eq!(ordinal_for_new_todo(&todos, None), 4);
+
+        // A phase the list does not have yet: the end of the list, where
+        // `add_todos_in` opens it.
+        let new_phase = with_adding(rows, Some("Deliver"));
+        let at = new_phase
+            .iter()
+            .position(|r| *r == PaneRow::Adding)
+            .unwrap();
+        assert_eq!(new_phase[at + 1], PaneRow::AddTodo);
+        assert_eq!(ordinal_for_new_todo(&todos, Some("Deliver")), 4);
+    }
+
+    /// A phase heading counts what is done under it, and its tasks sit in from
+    /// it; a list with no phases is not indented at all.
+    #[test]
+    fn a_phase_heading_counts_its_tasks_and_indents_them() {
+        let todo = |done: bool, phase: Option<&str>| crate::core::body::Todo {
+            done,
+            text: "task".to_string(),
+            phase: phase.map(str::to_string),
+        };
+        let detail = ProjectDetail {
+            todos: vec![
+                todo(true, Some("Shoot")),
+                todo(true, Some("Shoot")),
+                todo(false, Some("Cut")),
+            ],
+            ..Default::default()
+        };
+        let rows = pane_rows(&project(&[], "client"), Some(&detail), 30);
+        let headings: Vec<(&str, usize, usize)> = rows
+            .iter()
+            .filter_map(|row| match row {
+                PaneRow::Phase { name, done, total } => Some((name.as_str(), *done, *total)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(headings, vec![("Shoot", 2, 2), ("Cut", 0, 1)]);
+        assert!(
+            rows.iter()
+                .all(|row| !matches!(row, PaneRow::Todo { phased: false, .. }))
+        );
+
+        let flat = ProjectDetail {
+            todos: vec![todo(false, None)],
+            ..Default::default()
+        };
+        let rows = pane_rows(&project(&[], "client"), Some(&flat), 30);
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row, PaneRow::Todo { phased: false, .. }))
         );
     }
 }

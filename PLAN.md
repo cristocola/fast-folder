@@ -275,23 +275,23 @@ Defects 1, 2, 13, 14.
 
 ## Phase 7 — todos, finished
 
-- [ ] Rows: `Phase { name, done, total }`; `Todo`/`TodoLine` gain `phased`; wrap width
+- [x] Rows: `Phase { name, done, total }`; `Todo`/`TodoLine` gain `phased`; wrap width
   minus the indent.
-- [ ] View (`view/projects.rs:568-600`): phase heading in the text colour, dim right-aligned
+- [x] View (`view/projects.rs:568-600`): phase heading in the text colour, dim right-aligned
   count, dim when finished; `[ ]` and open text in the text colour (no accent, no bold);
   `[x]` and done text dim; continuation aligned under the text.
-- [ ] F2 on a todo: `PaneEdit::Line` with `EditTarget::Todo { ordinal, was }`, the checkbox
+- [x] F2 on a todo: `PaneEdit::Line` with `EditTarget::Todo { ordinal, was }`, the checkbox
   prefix, continuation rows hidden while open; unchanged cancels; `Action::ReplaceTodo`
   (boxed `Project`, like its siblings) → `DetailOnly`, "Todo reworded." / "Todo removed.";
   a refusal under the line with the text kept.
-- [ ] `+` in the pane: `pane_rows` takes the open add and inserts an `Adding` row at the
+- [x] `+` in the pane: `pane_rows` takes the open add and inserts an `Adding` row at the
   insertion point (end of the cursor's phase, else the end); Enter → `add_todo_in` with
   that phase, then the line reopens after the new todo once the re-read lands; empty
   Enter or Esc ends; a multi-line paste → `add_todos_in`. `+` on tags →
   `open_add_tag`; on notes → `NoteInline`. "· add a todo" and *Add a todo* open the same
   line when the pane can show; pane off → today's prompt. Hint on a todo:
   `Enter toggle  F2 edit  + add`.
-- [ ] Tests: `f2_rewords_a_todo_on_its_line_and_emptied_removes_it`,
+- [x] Tests: `f2_rewords_a_todo_on_its_line_and_emptied_removes_it`,
   `a_todo_changed_on_disk_meanwhile_is_refused_under_the_line`,
   `plus_adds_into_the_cursors_phase_and_keeps_the_line_open_for_the_next`,
   `a_pasted_list_becomes_one_todo_per_line`,
@@ -299,7 +299,7 @@ Defects 1, 2, 13, 14.
   `an_open_todo_is_plain_text_and_a_finished_phase_recedes`; snapshots
   `detail_pane_groups_todos_by_phase_120x40`, `…wraps_a_long_note_and_todo…`, new
   `detail_pane_editing_a_todo_120x40`.
-- [ ] Docs: `docs/app.md`; delete the ROADMAP backlog item "Removing or rewording a todo".
+- [x] Docs: `docs/app.md`; delete the ROADMAP backlog item "Removing or rewording a todo".
 
 ## Phase 8 — the item grammar everywhere else
 
@@ -417,3 +417,15 @@ console for F2, `+`, `<` and `>`.
   can change; the anchors would find the cursor again, but the rows would still jump.
   The 120×40 showcase pane is two rows taller than it shows, so its scrollbar's thumb
   is nearly the whole track, as the table's is at the same ratio.
+- **Phase 7** (2026-09-23): phase headings with counts, calm boxes, F2 to reword or
+  remove, `+` and the add line, a pasted list. Deviations: F2 and `+` are four ids,
+  not two (`PaneEditText`/`PaneAdd` on the pane's bar, `ListRename`/`ListAddTodo` off
+  the dashboard's), because a command's hint visibility is one flag and the dashboard
+  bar has no room; and the pane's bar now leaves the list's shared verbs to the list,
+  which is what kept `← list` and `? help` on it at 120 columns. `Action::AddTodo`
+  became `Action::AddTodos` (a phase and several texts). Two defects found on the way:
+  `paste_todos` dropped the effect it built — the stronger test caught it — and
+  `on_paste` split lines on `\n` alone, while many terminals send a bare `\r`, so
+  every multi-line paste into any field arrived as one line; now normalised, with a
+  pty test pasting through a real terminal. The end of a list whose last run is under
+  a phase *is* that phase, so the add line opens there.

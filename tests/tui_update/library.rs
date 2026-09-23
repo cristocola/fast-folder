@@ -374,9 +374,12 @@ fn the_palette_finds_add_a_todo_from_the_list() {
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     let project = app.library.selected().unwrap().clone();
     assert!(app.modals.is_empty());
-    let expected = fastf::tui::effect::Action::AddTodo {
+    // The project's record has not been read, so there is no list on screen
+    // to type into: the prompt, and the todo goes at the end.
+    let expected = fastf::tui::effect::Action::AddTodos {
         project: Box::new(project),
-        text: "invoice".to_string(),
+        texts: vec!["invoice".to_string()],
+        phase: None,
     };
     assert!(
         effects

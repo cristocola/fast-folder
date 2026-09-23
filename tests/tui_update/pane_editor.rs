@@ -419,20 +419,21 @@ fn enter_on_add_tag_the_name_and_the_journal_open_the_flows_that_exist() {
     go_to(&mut app, |row| matches!(row, PaneRow::AddTodo));
     press(&mut app, Key::plain(KeyCode::Enter));
     assert!(
-        matches!(app.modals.top(), Some(Modal::TextPrompt(_))),
-        "add a todo asks for its text"
+        app.pane_edit.as_ref().is_some_and(PaneEdit::is_adding),
+        "add a todo opens a line in the list, where the todo will land"
     );
+    assert!(app.modals.is_empty(), "not a dialog");
     type_text(&mut app, "invoice");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     let project = app.library.selected().unwrap().clone();
     assert_eq!(
         sent(&effects),
-        Some(&Action::AddTodo {
+        Some(&Action::AddTodos {
             project: Box::new(project.clone()),
-            text: "invoice".to_string(),
+            texts: vec!["invoice".to_string()],
+            phase: None,
         })
     );
-    assert!(app.modals.is_empty());
     let id = app.busy_id.unwrap();
     update(
         &mut app,
@@ -1025,4 +1026,287 @@ fn a_reload_landing_keeps_the_pane_cursor() {
     update(&mut app, Msg::MetaLoaded(Vec::new()));
     assert_eq!(app.pane_cursor, at, "the cursor did not go back to the top");
     assert_eq!(app.focus, Focus::Detail);
+}
+
+fn done_ok(app: &mut App, message: &str) {
+    let id = app.busy_id.expect("an action is running");
+    let path = app.library.selected().unwrap().path.clone();
+    update(
+        app,
+        Msg::ActionDone {
+            id,
+            outcome: Ok(Box::new(fastf::tui::effect::ActionOutcome::new(
+                fastf::tui::effect::ListChange::DetailOnly { path },
+                message,
+            ))),
+        },
+    );
+}
+
+fn with_todos(app: &mut App, todos: &[(bool, &str, Option<&str>)]) {
+    let path = app.library.selected().unwrap().path.clone();
+    let mut detail = app.details.get(&path).cloned().unwrap_or_default();
+    detail.todos = todos
+        .iter()
+        .map(|(done, text, phase)| fastf::core::body::Todo {
+            done: *done,
+            text: text.to_string(),
+            phase: phase.map(str::to_string),
+        })
+        .collect();
+    update(
+        app,
+        Msg::Detail {
+            path,
+            detail: Box::new(detail),
+        },
+    );
+}
+
+/// **F2 rewords a todo where it sits; Enter still ticks it.** The text opens
+/// on the todo's own line behind its box, whole; Enter sends the new words
+/// with the old ones as the check against a file changed meanwhile; unchanged
+/// is a cancel; emptied, the todo is removed — the rule tags and notes keep.
+#[test]
+fn f2_rewords_a_todo_on_its_line_and_emptied_removes_it() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    let project = app.library.selected().unwrap().clone();
+
+    // Enter is still the tick.
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        sent(&effects),
+        Some(Action::ToggleTodo { ordinal: 1, .. })
+    ));
+    done_ok(&mut app, "Done.");
+
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    match &app.pane_edit {
+        Some(PaneEdit::Line { input, .. }) => assert_eq!(input.text(), "delivered the video"),
+        other => panic!("F2 opens the todo's text in place: {other:?}"),
+    }
+    // Unchanged: nothing is written.
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(sent(&effects).is_none() && app.pane_edit.is_none());
+
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "deliver the masters");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(
+        sent(&effects),
+        Some(&Action::ReplaceTodo {
+            project: Box::new(project.clone()),
+            ordinal: 1,
+            was: "delivered the video".to_string(),
+            text: "deliver the masters".to_string(),
+        })
+    );
+    done_ok(&mut app, "Todo reworded.");
+    assert!(app.pane_edit.is_none(), "a landed edit closes");
+
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 0, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    press(&mut app, Key::ctrl('u'));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(sent(&effects), Some(Action::ReplaceTodo { ordinal: 0, text, .. }) if text.is_empty()),
+        "emptied, the todo is removed: {effects:?}"
+    );
+}
+
+/// A todo that changed on disk since the pane read it is refused, and the
+/// refusal lands under the line with what was typed still there.
+#[test]
+fn a_todo_changed_on_disk_meanwhile_is_refused_under_the_line() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "send the masters");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    let id = app.busy_id.unwrap();
+    update(
+        &mut app,
+        Msg::ActionDone {
+            id,
+            outcome: Err("the todo changed meanwhile — reload and try again".to_string()),
+        },
+    );
+    match &app.pane_edit {
+        Some(PaneEdit::Line {
+            input,
+            error,
+            pending,
+            ..
+        }) => {
+            assert_eq!(input.text(), "send the masters", "the text is kept");
+            assert!(error.as_deref().is_some_and(|e| e.contains("meanwhile")));
+            assert!(!pending, "and can be sent again");
+        }
+        other => panic!("the edit stays open with the refusal: {other:?}"),
+    }
+}
+
+/// **`+` adds where the cursor is, and keeps the line open for the next.** On
+/// a todo under a phase the new one lands at the end of that phase; Enter
+/// writes it, and once it has landed the next line is already open under it,
+/// so a list is typed in one go. An empty Enter ends the run.
+#[test]
+fn plus_adds_into_the_cursors_phase_and_keeps_the_line_open_for_the_next() {
+    let mut app = editing_fixture();
+    with_todos(
+        &mut app,
+        &[
+            (true, "write the brief", Some("Setup")),
+            (false, "book the room", Some("Setup")),
+            (false, "cut", Some("Edit")),
+        ],
+    );
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 0, .. })
+    });
+    press(&mut app, Key::ch('+'));
+    let rows = app.pane_rows();
+    let adding = rows
+        .iter()
+        .position(|row| *row == PaneRow::Adding)
+        .expect("the add line");
+    assert!(
+        matches!(rows[adding - 1], PaneRow::Todo { ordinal: 1, .. })
+            && matches!(rows[adding + 1], PaneRow::Phase { .. }),
+        "at the end of the Setup phase: {rows:?}"
+    );
+    assert_eq!(app.pane_cursor, adding, "the cursor is where the typing is");
+
+    type_text(&mut app, "send the invite");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(sent(&effects), Some(Action::AddTodos { texts, phase, .. })
+            if texts == &["send the invite".to_string()] && phase.as_deref() == Some("Setup")),
+        "{effects:?}"
+    );
+    done_ok(&mut app, "Todo added.");
+    assert!(
+        app.pane_edit.as_ref().is_some_and(PaneEdit::is_adding),
+        "the next line is open"
+    );
+    // The re-read lands with the new todo in it: the line sits under it.
+    with_todos(
+        &mut app,
+        &[
+            (true, "write the brief", Some("Setup")),
+            (false, "book the room", Some("Setup")),
+            (false, "send the invite", Some("Setup")),
+            (false, "cut", Some("Edit")),
+        ],
+    );
+    let rows = app.pane_rows();
+    let adding = rows.iter().position(|row| *row == PaneRow::Adding).unwrap();
+    assert!(
+        matches!(&rows[adding - 1], PaneRow::Todo { ordinal: 2, text, .. } if text == "send the invite"),
+        "{rows:?}"
+    );
+    assert_eq!(app.pane_cursor, adding);
+    assert!(!app.pane_pulses.is_empty(), "the todo that landed pulses");
+
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(sent(&effects).is_none(), "an empty line writes nothing");
+    assert!(app.pane_edit.is_none(), "and ends the run");
+}
+
+/// **A pasted list is that many todos, in one write**, the markers a
+/// checklist is copied with taken off.
+#[test]
+fn a_pasted_list_becomes_one_todo_per_line() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| matches!(row, PaneRow::AddTodo));
+    press(&mut app, Key::ch('+'));
+    let effects = update(
+        &mut app,
+        Msg::Paste("- [ ] colour\n* sound mix\n\n3. deliver the masters\n".to_string()),
+    );
+    assert!(
+        matches!(sent(&effects), Some(Action::AddTodos { texts, phase: None, .. })
+            if texts == &["colour", "sound mix", "deliver the masters"]),
+        "one todo per line, the markers off, in one write: {effects:?}"
+    );
+    match &app.pane_edit {
+        Some(PaneEdit::Line { pending, .. }) => assert!(pending, "the line waits on the write"),
+        other => panic!("the add line is still there: {other:?}"),
+    }
+}
+
+/// The pane's bar on a todo says what each key does there: Enter ticks, F2
+/// edits, `+` adds — and on the add line, Enter adds and Esc is done.
+#[test]
+fn a_todo_row_says_enter_ticks_f2_edits_plus_adds() {
+    use fastf::tui::command::hints;
+
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| matches!(row, PaneRow::Todo { .. }));
+    let bar = hints(Context::Detail, &app, 118);
+    for pair in [
+        ("Enter", "toggle"),
+        ("F2", "edit"),
+        ("+", "add"),
+        ("←", "list"),
+        ("?", "help"),
+    ] {
+        assert!(
+            bar.iter().any(|(k, t)| k == pair.0 && *t == pair.1),
+            "{pair:?} is on the pane's bar: {bar:?}"
+        );
+    }
+    assert!(
+        !bar.iter().any(|(k, _)| k == "o" || k == "T"),
+        "the list's own verbs stay on the list's bar: {bar:?}"
+    );
+    press(&mut app, Key::ch('+'));
+    let bar = hints(Context::PaneEdit, &app, 118);
+    assert!(
+        bar.iter().any(|(k, t)| k == "Enter" && *t == "add"),
+        "{bar:?}"
+    );
+    assert!(
+        bar.iter().any(|(k, t)| k == "Esc" && *t == "done"),
+        "{bar:?}"
+    );
+}
+
+/// **A paste's line breaks are the terminal's**, and many terminals send a
+/// bare carriage return: a list pasted that way is still a list, and a note
+/// pasted that way still has its lines.
+#[test]
+fn a_paste_with_carriage_returns_is_still_several_lines() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| matches!(row, PaneRow::AddTodo));
+    press(&mut app, Key::ch('+'));
+    let effects = update(&mut app, Msg::Paste("colour\rsound\r\ndeliver".to_string()));
+    assert!(
+        matches!(sent(&effects), Some(Action::AddTodos { texts, .. })
+            if texts == &["colour", "sound", "deliver"]),
+        "{effects:?}"
+    );
+
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Note { ordinal: 0, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    press(&mut app, Key::ctrl('e'));
+    update(&mut app, Msg::Paste("\rsecond\rthird".to_string()));
+    match &app.pane_edit {
+        Some(PaneEdit::Note { area, .. }) => {
+            assert_eq!(area.text(), "first cut Friday\nsecond\nthird");
+        }
+        other => panic!("the note editor: {other:?}"),
+    }
 }

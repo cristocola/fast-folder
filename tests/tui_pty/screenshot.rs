@@ -19,7 +19,8 @@
 //! `pgup` `pgdn` `home` `end` `tab` `space` `backspace` `delete` `f1` `f2`
 //! `f5`, `ctrl-<letter>` for any control chord (`ctrl-c` `ctrl-s` `ctrl-n`
 //! `ctrl-t` `ctrl-u` `ctrl-k` `ctrl-r` `ctrl-z`), `alt-enter`, `wait:<ms>`,
-//! `type:<text>` (typed as-is, no Enter), and any other token is sent as the
+//! `type:<text>` (typed as-is, no Enter), `paste:<line>|<line>` (a bracketed
+//! paste, `|` between its lines), and any other token is sent as the
 //! keys it spells (`q`, `/`, `?`, `c`, `+`, `<`, `>`). The frame is taken after
 //! the last token, before the script ends the app.
 //!
@@ -94,6 +95,11 @@ fn screenshot() {
             other => match other.split_once(':') {
                 Some(("wait", ms)) => script.pause(ms.parse().unwrap_or(500)),
                 Some(("type", text)) => script.key(text),
+                // A bracketed paste, as a terminal sends one: `|` between
+                // lines, since a token cannot hold a space or a newline.
+                Some(("paste", text)) => {
+                    script.key(&format!("\x1b[200~{}\x1b[201~", text.replace('|', "\r")))
+                }
                 _ => match other.strip_prefix("ctrl-") {
                     // A control chord is the letter's position in the
                     // alphabet: Ctrl-A is 0x01, Ctrl-Z 0x1a.

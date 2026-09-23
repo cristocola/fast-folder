@@ -10,7 +10,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::core::library;
 use crate::tui::app::pane::{
-    EditTarget, Fact, NOTE_INDENT, PaneEdit, PaneRow, TODO_INDENT, notes_label, todos_label,
+    EditTarget, Fact, NOTE_INDENT, PHASE_INDENT, PaneEdit, PaneRow, TODO_INDENT, notes_label,
+    todos_label,
 };
 use crate::tui::app::{App, Focus};
 use crate::tui::layout;
@@ -72,6 +73,16 @@ fn tag_cell_width(tags: &[String]) -> usize {
         n => 1 + format!("+{n}").width(),
     };
     shown + gaps + extra
+}
+
+/// Whether every row after `todo` up to `row` is a continuation of it — so
+/// `row` is part of the todo that starts at `todo`.
+fn continues_todo(rows: &[PaneRow], todo: usize, row: usize) -> bool {
+    rows.get(todo + 1..=row).is_some_and(|between| {
+        between
+            .iter()
+            .all(|r| matches!(r, PaneRow::TodoLine { .. }))
+    })
 }
 
 /// One header fact as the pane draws it (`pane::Fact`).
@@ -472,6 +483,16 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
     };
 
     let rows = app.pane_rows();
+    // The row of a todo open in the editor, whose own rows are blank while
+    // the editor holds its text.
+    let editing_todo = match &app.pane_edit {
+        Some(PaneEdit::Line {
+            target: EditTarget::Todo { .. },
+            row,
+            ..
+        }) => Some(*row),
+        _ => None,
+    };
     let key_w = rows
         .iter()
         .filter_map(|row| match row {
@@ -597,36 +618,62 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             PaneRow::AddNote => {
                 Line::from(Span::styled(format!("{} add a note", g.sep), theme.dim()))
             }
-            // A phase label, in the marker's column so the tasks under it
-            // read as its own: dim, one row, no wrap, like every other label
-            // the pane draws.
-            PaneRow::Phase(name) => Line::from(Span::styled(
-                format!(
-                    "{} {}",
-                    g.rule.repeat(2),
-                    fit(name, width.saturating_sub(3), g.ellipsis)
-                ),
-                theme.dim(),
-            )),
-            // The markdown's own marker, which every terminal can draw: a
-            // done todo recedes with its text, an open one is lit.
-            PaneRow::Todo { done, text, .. } => Line::from(vec![
-                Span::styled(
-                    if *done { "[x] " } else { "[ ] " },
-                    if *done { theme.dim() } else { theme.accent() },
-                ),
-                Span::styled(
-                    fit(text, width.saturating_sub(TODO_INDENT), g.ellipsis),
-                    if *done { theme.dim() } else { theme.text() },
-                ),
-            ]),
-            PaneRow::TodoLine { done, text } => Line::from(vec![
-                Span::raw(" ".repeat(TODO_INDENT)),
-                Span::styled(
-                    fit(text, width.saturating_sub(TODO_INDENT), g.ellipsis),
-                    if *done { theme.dim() } else { theme.text() },
-                ),
-            ]),
+            // A phase is a heading of the list, in the text colour, with
+            // how much of it is done on the right; a finished phase recedes
+            // with its tasks. Its tasks sit two columns in from it.
+            PaneRow::Phase { name, done, total } => {
+                let finished = done == total;
+                let count = format!("{done}/{total}");
+                let room = width.saturating_sub(count.width() + 1);
+                let label = fit(name, room, g.ellipsis);
+                let gap = width.saturating_sub(label.width() + count.width());
+                Line::from(vec![
+                    Span::styled(label, if finished { theme.dim() } else { theme.text() }),
+                    Span::raw(" ".repeat(gap)),
+                    Span::styled(count, theme.dim()),
+                ])
+            }
+            // The markdown's own marker, which every terminal can draw. An
+            // open todo reads in the text colour — the accent is for focus,
+            // and a list of accented boxes is a list shouting — and a done
+            // one recedes with its text.
+            PaneRow::Todo {
+                done, text, phased, ..
+            } => {
+                if editing_todo == Some(index) {
+                    Line::default()
+                } else {
+                    let style = if *done { theme.dim() } else { theme.text() };
+                    let indent = if *phased { PHASE_INDENT } else { 0 };
+                    Line::from(vec![
+                        Span::raw(" ".repeat(indent)),
+                        Span::styled(if *done { "[x] " } else { "[ ] " }, theme.dim()),
+                        Span::styled(
+                            fit(text, width.saturating_sub(TODO_INDENT + indent), g.ellipsis),
+                            style,
+                        ),
+                    ])
+                }
+            }
+            // The rest of a long todo, under its text; blank while the todo
+            // is open in the editor, which holds the whole of it on one line.
+            PaneRow::TodoLine { done, text, phased } => {
+                if editing_todo.is_some_and(|row| row < index && continues_todo(&rows, row, index))
+                {
+                    Line::default()
+                } else {
+                    let indent = TODO_INDENT + if *phased { PHASE_INDENT } else { 0 };
+                    Line::from(vec![
+                        Span::raw(" ".repeat(indent)),
+                        Span::styled(
+                            fit(text, width.saturating_sub(indent), g.ellipsis),
+                            if *done { theme.dim() } else { theme.text() },
+                        ),
+                    ])
+                }
+            }
+            // The add line: its field is drawn over it below.
+            PaneRow::Adding => Line::default(),
             PaneRow::AddTodo => {
                 Line::from(Span::styled(format!("{} add a todo", g.sep), theme.dim()))
             }
@@ -710,6 +757,19 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                     format!("{:<key_w$} ", fit(&label, key_w, g.ellipsis))
                 }
                 EditTarget::Tag(_) => format!("{} ", g.dot),
+                // A todo is edited behind its own box, where it sits.
+                EditTarget::Todo { .. } => match rows.get(edit.row()) {
+                    Some(PaneRow::Todo { done, phased, .. }) => format!(
+                        "{}{}",
+                        " ".repeat(if *phased { PHASE_INDENT } else { 0 }),
+                        if *done { "[x] " } else { "[ ] " }
+                    ),
+                    _ => "[ ] ".to_string(),
+                },
+                EditTarget::NewTodo { phase, .. } => format!(
+                    "{}[ ] ",
+                    " ".repeat(if phase.is_some() { PHASE_INDENT } else { 0 })
+                ),
             };
             let line_area = Rect::new(text.x, row_y, text.width, 1);
             frame.render_widget(Paragraph::new(""), line_area);

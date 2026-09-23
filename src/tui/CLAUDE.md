@@ -749,7 +749,10 @@ columns after its date (`NOTE_INDENT`) by `wrap_columns`, in display columns.
 undated), then `NoteLine`s up to `NOTE_LINES_SHOWN` rows, then `NoteMore`; only the
 first is selectable, and Enter edits the whole note. The latest `NOTES_SHOWN` notes
 show under `EarlierNotes(n)`, whose Enter is `ShowJournal`. A todo is a
-`PaneRow::Todo`, drawn `[x]`/`[ ]`, with the rest of a long one in `TodoLine`s.
+`PaneRow::Todo`, drawn `[x]`/`[ ]` in the text colour (the accent is focus, and
+never bold), done ones dim, with the rest of a long one in `TodoLine`s aligned
+under its text; under a `PaneRow::Phase` heading — the text colour, its
+`done/total` on the right, dim once finished — the tasks sit `PHASE_INDENT` in.
 **A row holds only what fits, so an edit reads its text from the detail**: the
 note editor opens on `detail.notes[ordinal]`, and a toggle names
 `detail.todos[ordinal]` — never a row's text, or a wrapped todo would be refused
@@ -775,6 +778,25 @@ set `pane_pending` to the new item's ordinal, so the cursor follows it. The hint
 bar's Enter names what it will do (`edit`, `toggle`, `add`, `show`) through
 `command::hint_title`. The edit lives in `App.pane_edit` beside the rows, so what
 is being changed stays in view.
+
+**Enter acts, F2 edits, `+` adds.** Enter on a todo ticks it, so rewording one
+needs a key of its own: `PaneEditText` (F2) opens a row's text in place
+(`EditTarget::Todo { ordinal, was }` on a todo, what Enter opens elsewhere, and
+hidden where there is nothing to type); `PaneAdd` (`+`) adds to the section the
+cursor is in. On the list the same keys are `ListRename` and `ListAddTodo`, off
+the hint bar — **the pane's bar is what the pane does**: `command::hints` leaves
+the verbs the pane shares with the list (open, terminal, copy, mark, new, the
+tab) to the list's bar and the action menu, which is what left room for the way
+back and help. **A todo is added where it will land**: `EditTarget::NewTodo {
+phase, ordinal }` is a line edit on a `PaneRow::Adding` that `App::pane_rows`
+inserts (`pane::with_adding`) at the end of the cursor's phase, or at the end of
+the list — which is the last phase, when the list ends in one. When it lands,
+`on_action_done` opens the next line under it before the re-read shows the new
+todo, and `refind_pane` keeps the cursor on the line — an open edit is where the
+cursor is. A paste of several lines onto the line is `Action::AddTodos` at once
+(`pane::todo_text_of` takes the list markers off). `on_paste` normalises a
+terminal's line breaks first: many send a bare `\r`, and `str::lines` splits on
+`\n` alone, so every multi-line paste used to arrive as one line.
 
 **`Context::PaneEdit` is a text-entry context**: the field has first refusal, and
 the registry answers Enter, Esc and `Ctrl-S` (`on_pane_edit_key`). So Enter on the

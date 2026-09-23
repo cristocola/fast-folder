@@ -260,3 +260,70 @@ fn a_pane_taller_than_its_box_has_a_scrollbar() {
         "in the ASCII alphabet, too: {ascii}"
     );
 }
+
+/// **The list is calm.** An open todo's box and words are in the text
+/// colour, never the accent — the accent says what has the focus, and a list
+/// of accented boxes shouts — and never bold; a done todo and a finished
+/// phase recede to the dim colour.
+#[test]
+fn an_open_todo_is_plain_text_and_a_finished_phase_recedes() {
+    use fastf::tui::theme::Theme;
+    use ratatui::style::Modifier;
+
+    let mut app = fixture(6, 120, 40);
+    app.theme = Theme::rich();
+    let todo = |done: bool, text: &str, phase: &str| fastf::core::body::Todo {
+        done,
+        text: text.to_string(),
+        phase: Some(phase.to_string()),
+    };
+    with_detail(
+        &mut app,
+        ProjectDetail {
+            todos: vec![
+                todo(true, "shoot", "Shoot"),
+                todo(false, "grade", "Deliver"),
+            ],
+            ..Default::default()
+        },
+    );
+    let theme = app.theme.clone();
+    let buffer = fastf::tui::testing::render_to_buffer(&app, 120, 40);
+    let pane = app.regions().detail.unwrap();
+    let find = |needle: &str| {
+        (pane.y..pane.y + pane.height)
+            .find_map(|y| {
+                let line: String = (pane.x..pane.x + pane.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect();
+                line.find(needle).map(|at| {
+                    let column = line[..at].chars().count() as u16;
+                    (pane.x + column, y)
+                })
+            })
+            .unwrap_or_else(|| panic!("{needle} is in the pane"))
+    };
+    let (x, y) = find("grade");
+    let open = &buffer[(x, y)];
+    assert_eq!(
+        open.fg,
+        theme.text().fg.unwrap(),
+        "an open todo reads in the text colour"
+    );
+    assert!(!open.modifier.contains(Modifier::BOLD));
+    let open_box = &buffer[(x - 4, y)];
+    assert_ne!(open_box.fg, theme.accent, "its box is not the accent");
+    assert!(!open_box.modifier.contains(Modifier::BOLD), "and not bold");
+    let (x, y) = find("Shoot");
+    assert_eq!(
+        buffer[(x, y)].fg,
+        theme.dim().fg.unwrap(),
+        "a finished phase recedes"
+    );
+    let (x, y) = find("Deliver");
+    assert_eq!(
+        buffer[(x, y)].fg,
+        theme.text().fg.unwrap(),
+        "an open one does not"
+    );
+}

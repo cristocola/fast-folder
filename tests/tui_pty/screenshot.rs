@@ -19,7 +19,8 @@
 //! `pgup` `pgdn` `home` `end` `tab` `space` `backspace` `delete` `f1` `f2`
 //! `f5`, `ctrl-<letter>` for any control chord (`ctrl-c` `ctrl-s` `ctrl-n`
 //! `ctrl-t` `ctrl-u` `ctrl-k` `ctrl-r` `ctrl-z`), `alt-enter`, `wait:<ms>`,
-//! `type:<text>` (typed as-is, no Enter), `paste:<line>|<line>` (a bracketed
+//! `type:<text>` (typed as-is, no Enter), `text:<words>` (the same, `_` typed
+//! as a space), `paste:<line>|<line>` (a bracketed
 //! paste, `|` between its lines), and any other token is sent as the
 //! keys it spells (`q`, `/`, `?`, `c`, `+`, `<`, `>`). The frame is taken after
 //! the last token, before the script ends the app.
@@ -95,6 +96,8 @@ fn screenshot() {
             other => match other.split_once(':') {
                 Some(("wait", ms)) => script.pause(ms.parse().unwrap_or(500)),
                 Some(("type", text)) => script.key(text),
+                // Words with spaces in them: `_` stands for the space.
+                Some(("text", text)) => script.key(&text.replace('_', " ")),
                 // A bracketed paste, as a terminal sends one: `|` between
                 // lines, since a token cannot hold a space or a newline.
                 Some(("paste", text)) => {

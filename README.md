@@ -16,7 +16,7 @@ You describe a folder structure once as a template. Every project you make from 
 
 Day to day you work in a full screen terminal app that shows your whole library at once and acts on it. Everything the app can do also has a command, so the same work fits into a script, a cron job, or a hotkey on your desktop. The command is `fastf`.
 
-<p align="center"><img src="docs/img/dashboard.svg" alt="The fast-folder dashboard: two tabs in the header, the configured bases beneath them, a search bar with the counts and the sort order, a table of projects with their IDs, sizes and bases, and a detail pane showing the selected project's tags, template variables, folder contents, dated notes and todo list" width="960"></p>
+<p align="center"><img src="docs/img/dashboard.svg" alt="The fast-folder dashboard: two tabs in the header, the configured bases beneath them, a search bar with the counts and the sort order, a table of projects with their IDs, sizes and bases, and a detail pane showing the selected project's tags, its todo list in two phases with how much of each is done, its dated notes, its template variables and its folder contents" width="960"></p>
 
 ## Quick start
 
@@ -46,7 +46,7 @@ More templates for specific kinds of work live in the [`examples/templates/`](ex
 - **Keeps the filesystem as the single source of truth.** A folder is a project because it contains a `PROJECT_INFO.md` file. Move it with your file manager, rename it, or copy it to another drive, and it stays the same project; `fastf reindex` picks up whatever you did outside the app. Delete the folder and the project goes with it.
 - **Adopts folders you already have.** `fastf register` writes the metadata into work that came from somewhere else, one folder at a time or a whole directory at once. `fastf apply` adds a template's missing folders and files to a folder that already exists.
 - **Reads a template out of a finished project.** `fastf template from-folder` looks at a project you are happy with and writes the template that would produce it.
-- **Keeps a record of each project.** Tags group projects across templates and bases. Every project keeps dated notes, as many lines as a note needs, and a todo list you tick off with Enter. Both are plain Markdown in the project's `PROJECT_INFO.md`, so any editor can change them, and the app shows the change within a second.
+- **Keeps a record of each project.** Tags group projects across templates and bases. Every project keeps dated notes, as many lines as a note needs, and a todo list grouped into phases such as shoot, edit and deliver. Both are plain Markdown in the project's `PROJECT_INFO.md`, so any editor can change them, and the app shows the change within a second. A template can hand every new project the checklist its kind of work always starts with.
 - **Runs your own steps after creating a project.** It can open the new folder, start your editor, initialize a git repository, or run any command you give it.
 - **Works on Linux and Windows.** Templates use `/` on every platform. Paths are checked before anything is written, so a template can only ever produce files inside the project it belongs to.
 
@@ -54,7 +54,15 @@ fast-folder is a tool for one person, working on ordinary files and directories 
 
 ## The terminal app
 
-Running `fastf` on its own opens the app: one full screen dashboard over the whole library, every base, every project, folder sizes filling in as they arrive. Typing narrows the list and a typo still finds the project; every verb has a key, `Enter` opens the action menu, `c` opens a command palette, and `?` lists every key that works where you are. The detail pane is an editor you step into with `→`: tags, template variables, dated notes and a todo list, read from the project's file as it is on disk. It sits beside the list, under it, or in its place, whichever the window has room for. Creating a project, adopting a folder and applying a template are one shape, a form, a preview and Enter, and templates have a tab of their own with a builder and a built-in guide. It runs in any terminal of 40×12 or more, draws in truecolor or sixteen colours or plain ASCII, never takes the mouse, and moves only to show what just changed. Every key and every screen is in [docs/app.md](docs/app.md).
+Running `fastf` on its own opens the app: one full screen dashboard over the whole library, every base, every project, folder sizes filling in as they arrive. Typing narrows the list and a typo still finds the project; every verb has a key, `Enter` opens the action menu, `c` opens a command palette, and `?` lists every key that works where you are. The detail pane is an editor you step into with `→`: tags, a todo list, dated notes and template variables, read from the project's file as it is on disk. It sits beside the list, under it, or in its place, whichever the window has room for. Creating a project, adopting a folder and applying a template are one shape, a form, a preview and Enter, and templates have a tab of their own with a builder and a built-in guide. It runs in any terminal of 40×12 or more, draws in truecolor or sixteen colours or plain ASCII, never takes the mouse, and moves only to show what just changed. Every key and every screen is in [docs/app.md](docs/app.md).
+
+### Todos
+
+Every project's todo list is in its pane, grouped under the phases the file gives it, each phase with how much of it is done. Enter ticks a todo and ticks it back. F2 opens its words where they sit, to fix a typo or to empty and remove it. `+` opens a line inside the list, in the phase the cursor is in, and Enter writes the todo and opens the next line under it, so a whole list is typed in one go. Paste a checklist from a brief or a message onto that line and every line of it becomes a todo, the `- [ ]` boxes and numbers taken off. The same three keys mean the same thing everywhere in the app: Enter acts, F2 edits, `+` adds.
+
+<p align="center"><img src="docs/img/todos.svg" alt="The detail pane on an 80 by 24 window, drawn in the list's place: the project's name and facts, its tags, then its todo list in two phases, Shoot with two of two done and dimmed, and Deliver with two open todos and a third being typed on a highlighted line at the end of the phase; the key line reads Enter add, Esc done" width="720"></p>
+
+`<` and `>` step to the previous or next project without leaving the pane, staying on its todos, so a morning's review of every open list is a key per project.
 
 ## The command line
 
@@ -73,6 +81,11 @@ fastf copy-to ID0047 /mnt/backup             # onto a backup drive, ID kept
 fastf tag add ID0047 delivered
 fastf note add ID0047 "sent the rough cut"   # a dated note; stdin and $EDITOR take several lines
 fastf notes ID0047 --since 2026-07           # every note since July, every line of each
+fastf todo add ID0047 "colour pass" --phase Edit
+fastf todo list ID0047                       # numbered, grouped by phase
+fastf todo done ID0047 3                     # tick it; --undo opens it again
+fastf todo edit ID0047 3 "colour and grade"  # reword it
+fastf todo remove ID0047 3
 ```
 
 The whole tool is one binary of a few megabytes that carries everything it needs. Install it from a package manager, or keep it in a folder on a USB stick and take it with you. The full command reference is [docs/cli.md](docs/cli.md).

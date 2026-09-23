@@ -335,6 +335,10 @@ pub enum CommandId {
     ListRename,
     /// `+` on the list: a todo for the project under the cursor.
     ListAddTodo,
+    /// F2 in the builder: the highlighted part, variable or file, opened.
+    BuilderEditText,
+    /// F2 in the settings: a value, opened on its line.
+    SettingsEditText,
     /// Back to the library from the templates tab — palette only; `T` and
     /// Esc are the keys.
     BackToLibrary,
@@ -422,7 +426,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 103] = [
+    pub const ALL: [CommandId; 105] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -463,6 +467,8 @@ impl CommandId {
         CommandId::PaneAdd,
         CommandId::ListRename,
         CommandId::ListAddTodo,
+        CommandId::BuilderEditText,
+        CommandId::SettingsEditText,
         CommandId::BackToLibrary,
         CommandId::Search,
         CommandId::ClearSearch,
@@ -836,6 +842,52 @@ fn builder_list_closed(app: &App) -> Availability {
     match app.modals.top() {
         Some(crate::tui::app::modal::Modal::Builder(builder))
             if builder.open.is_none() && builder.pending.is_none() && !builder.saving =>
+        {
+            Availability::Enabled
+        }
+        _ => Availability::Hidden,
+    }
+}
+
+/// F2 in the builder opens what holds text: a part of the template on the
+/// section list (never Save or Discard, which are verbs), or the highlighted
+/// variable or file on its list. Hidden inside a form or an editor, where the
+/// key is the field's to ignore.
+fn builder_text_row(app: &App) -> Availability {
+    use crate::tui::app::studio::{Open, Row};
+    let Some(crate::tui::app::modal::Modal::Builder(builder)) = app.modals.top() else {
+        return Availability::Hidden;
+    };
+    if builder.pending.is_some() || builder.saving {
+        return Availability::Hidden;
+    }
+    let text = match &builder.open {
+        None => matches!(builder.row(), Row::Section(_)),
+        Some(Open::Variables(list)) => {
+            list.editing.is_none() && !builder.template.variables.is_empty()
+        }
+        Some(Open::Files(list)) => list.editing.is_none() && !builder.template.files.is_empty(),
+        Some(_) => false,
+    };
+    if text {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
+}
+
+/// F2 in the settings opens a value that is text — the rows Enter would open
+/// on their line. A yes/no, a choice and a maintenance verb have nothing to
+/// type, and are Enter's.
+fn settings_text_row(app: &App) -> Availability {
+    use crate::tui::app::settings::Kind;
+    match app.modals.top() {
+        Some(crate::tui::app::modal::Modal::Settings(state))
+            if state.editing.is_none()
+                && !state.pending
+                && state
+                    .row()
+                    .is_some_and(|row| matches!(row.kind, Kind::Text(_) | Kind::Bases)) =>
         {
             Availability::Enabled
         }
@@ -1940,7 +1992,11 @@ pub static COMMANDS: &[Command] = &[
         "Edit this template",
         "open the selected template in the builder",
         STUDIO,
-        [Key::plain(KeyCode::Enter), Key::ch('e')],
+        [
+            Key::plain(KeyCode::Enter),
+            Key::ch('e'),
+            Key::plain(KeyCode::F(2))
+        ],
         Templates,
         palette = false,
         hint = true,
@@ -1951,7 +2007,7 @@ pub static COMMANDS: &[Command] = &[
         "New template",
         "build a template from scratch: metadata, variables, folders, files",
         STUDIO,
-        [Key::ch('n')],
+        [Key::ch('n'), Key::ch('+')],
         Templates,
         palette = true,
         hint = true,
@@ -2029,11 +2085,22 @@ pub static COMMANDS: &[Command] = &[
         always
     ),
     cmd!(
+        BuilderEditText,
+        "Edit",
+        "F2 edits wherever it is pressed: here, the highlighted part, variable or file",
+        BUILDER,
+        [Key::plain(KeyCode::F(2))],
+        Templates,
+        palette = false,
+        hint = false,
+        builder_text_row
+    ),
+    cmd!(
         BuilderAdd,
         "Add",
         "a new variable or file at the end of the list",
         BUILDER,
-        [Key::ch('a')],
+        [Key::ch('a'), Key::ch('+')],
         Templates,
         palette = false,
         hint = true,
@@ -2105,6 +2172,17 @@ pub static COMMANDS: &[Command] = &[
         palette = false,
         hint = true,
         always
+    ),
+    cmd!(
+        SettingsEditText,
+        "Edit the value",
+        "F2 edits wherever it is pressed: here, a value on its line; a yes/no or a choice is Enter's",
+        SETTINGS,
+        [Key::plain(KeyCode::F(2))],
+        Settings,
+        palette = false,
+        hint = false,
+        settings_text_row
     ),
     cmd!(
         SettingsChange,

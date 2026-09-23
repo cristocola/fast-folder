@@ -1891,14 +1891,14 @@ impl App {
                 }));
                 Vec::new()
             }
-            CommandId::BuilderOpen => self.builder_open(),
+            CommandId::BuilderOpen | CommandId::BuilderEditText => self.builder_open(),
             CommandId::BuilderAdd => self.builder_add(),
             CommandId::BuilderRemove => self.builder_remove(),
             CommandId::BuilderMoveUp | CommandId::BuilderMoveDown => {
                 self.builder_move(id == CommandId::BuilderMoveUp)
             }
             CommandId::BuilderSave => self.save_template(),
-            CommandId::SettingsChange => self.settings_change(),
+            CommandId::SettingsChange | CommandId::SettingsEditText => self.settings_change(),
             CommandId::SettingsFilter => {
                 if let Some(Modal::Settings(state)) = self.modals.top_mut() {
                     state.begin_filter();

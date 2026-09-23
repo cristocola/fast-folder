@@ -124,8 +124,20 @@ type — `open` finds *Open project folder*, `#lull` jumps to the project.
 **Every list moves the same way** — the project table, the detail pane, the
 templates tab, the action menu, the template builder, the settings, and any
 dialog with more in it than fits. The movement keys below work in all of them.
-`→` and `←` never run anything: they move the cursor between the list and the
-pane beside it, and nothing else.
+`→` and `←` never run anything: they move the cursor between the list and its
+pane, and nothing else.
+
+**Enter acts, F2 edits, `+` adds** — three keys that mean the same thing on
+every surface:
+
+| Key | Means | On the list | In the pane | Templates tab | Builder | Settings |
+|---|---|---|---|---|---|---|
+| Enter | the row's action | the action menu | tick a todo, or open the row | edit the template | open the part, the variable, the file | flip a yes/no, open a value, run a verb |
+| F2 | edit the text in place | rename the folder | reword a todo, a tag, a variable, a note, the name | edit the template | open the part, the variable, the file | open a value |
+| `+` | add one more | a todo | a todo, a tag or a note — whichever the cursor is among | a new template | a variable or a file | — |
+
+Emptied and kept, a todo, a tag or a note is removed; where there is nothing to
+type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 
 | Key | What it does |
 |---|---|

@@ -250,6 +250,17 @@ for every dialog, one level at a time; `Quit` and `Back` are the dashboard's. A
 text widget's own keys (Ctrl-S in a text area, Tab in a form) are the one
 exception, and its key line names them.
 
+**Enter acts, F2 edits, `+` adds, on every surface** — a promise the maintainer
+asked for in so many words, and `f2_means_edit_and_plus_means_add_wherever_they_are_bound`
+holds it: F2 is bound on the list (`ListRename`), the pane (`PaneEditText`), the
+templates tab (a key of `StudioEdit`), the builder (`BuilderEditText`) and the
+settings (`SettingsEditText`), and every command it reaches says it edits; `+` on
+the list (`ListAddTodo`), the pane (`PaneAdd`), the tab (a key of `StudioNew`) and
+the builder (a key of `BuilderAdd`). Where there is nothing to type F2 is hidden,
+never a second Enter on a verb (`builder_text_row`, `settings_text_row`). They
+are separate ids where a surface's bar has room for them and another's does
+not, since a command's hint is one flag.
+
 **A sentence that names a key reads it from here** (`command::key_of`,
 `command::NO_TEMPLATES`), so no prompt or empty state outlives a rebinding. A verb
 with no key of its own shows `Enter` in the action menu, since Enter runs the row.

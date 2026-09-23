@@ -303,15 +303,15 @@ Defects 1, 2, 13, 14.
 
 ## Phase 8 — the item grammar everywhere else
 
-- [ ] `CommandId::EditItem` (F2) declared once over Projects, Detail, Templates, Builder,
+- [x] `CommandId::EditItem` (F2) declared once over Projects, Detail, Templates, Builder,
   Settings, dispatching on the context: rename; the pane edit; `StudioEdit`; the builder
   row's edit; a settings value (hidden on a yes/no or a verb).
-- [ ] `CommandId::AddItem` (`+`) over Projects, Detail, Templates, Builder: a todo; the
+- [x] `CommandId::AddItem` (`+`) over Projects, Detail, Templates, Builder: a todo; the
   section's add; a new template; `BuilderAdd`.
-- [ ] Both palette-off (their verbs are there), hint-on where they apply; `CommandId::ALL`
+- [x] Both palette-off (their verbs are there), hint-on where they apply; `CommandId::ALL`
   and the `CONTEXTS` array in `tests/tui_commands.rs` follow.
-- [ ] Tests: registry invariants; `f2_means_edit_and_plus_means_add_wherever_they_are_bound`.
-- [ ] Docs: an "Enter, F2, +" subsection in `docs/app.md` Keys; "One registry" in
+- [x] Tests: registry invariants; `f2_means_edit_and_plus_means_add_wherever_they_are_bound`.
+- [x] Docs: an "Enter, F2, +" subsection in `docs/app.md` Keys; "One registry" in
   `src/tui/CLAUDE.md`.
 
 ## Phase 9 — small and odd-shaped windows
@@ -429,3 +429,9 @@ console for F2, `+`, `<` and `>`.
   every multi-line paste into any field arrived as one line; now normalised, with a
   pty test pasting through a real terminal. The end of a list whose last run is under
   a phase *is* that phase, so the add line opens there.
+- **Phase 8** (2026-09-23): F2 and `+` on the templates tab, in the builder and in the
+  settings — extra keys on `StudioEdit`, `StudioNew` and `BuilderAdd`, new ids
+  `BuilderEditText` and `SettingsEditText` where F2 must be hidden on a verb row
+  (Save, Discard, a yes/no, a maintenance verb). No hint-bar changes on those
+  surfaces: their bars keep their first keys, and the help lists F2 and `+`. A
+  registry test holds the promise over every context, reading each command's words.

@@ -423,3 +423,63 @@ fn no_command_spells_a_glyph_the_theme_owns() {
         }
     }
 }
+
+/// **Enter acts, F2 edits, `+` adds — the same wherever they are bound.** F2
+/// is bound on every surface that has text to edit, and nowhere else; `+`
+/// on every surface that has a list to add to. Each is described as what it
+/// is, so the help says the same thing everywhere.
+#[test]
+fn f2_means_edit_and_plus_means_add_wherever_they_are_bound() {
+    let f2 = Key::plain(KeyCode::F(2));
+    let plus = Key::ch('+');
+    let bound_in = |key: Key| -> Vec<(Context, CommandId)> {
+        COMMANDS
+            .iter()
+            .flat_map(|c| {
+                c.keys
+                    .iter()
+                    .filter(move |k| **k == key)
+                    .flat_map(move |_| c.contexts.iter().map(move |ctx| (*ctx, c.id)))
+            })
+            .collect()
+    };
+    let f2_contexts: HashSet<Context> = bound_in(f2).iter().map(|(ctx, _)| *ctx).collect();
+    assert_eq!(
+        f2_contexts,
+        HashSet::from([
+            Context::Projects,
+            Context::Detail,
+            Context::Templates,
+            Context::Builder,
+            Context::Settings,
+        ]),
+        "F2 edits on every surface with text to edit"
+    );
+    for (ctx, id) in bound_in(f2) {
+        let c = find(id);
+        let words = format!("{} {}", c.title, c.description).to_lowercase();
+        assert!(
+            words.contains("edit") || words.contains("rename"),
+            "F2 in {ctx:?} is {id:?}, which does not say it edits: {words}"
+        );
+    }
+    let plus_contexts: HashSet<Context> = bound_in(plus).iter().map(|(ctx, _)| *ctx).collect();
+    assert_eq!(
+        plus_contexts,
+        HashSet::from([
+            Context::Projects,
+            Context::Detail,
+            Context::Templates,
+            Context::Builder,
+        ]),
+        "+ adds on every surface with a list to add to"
+    );
+    for (ctx, id) in bound_in(plus) {
+        let c = find(id);
+        let words = format!("{} {}", c.title, c.description).to_lowercase();
+        assert!(
+            words.contains("add") || words.contains("new"),
+            "+ in {ctx:?} is {id:?}, which does not say it adds: {words}"
+        );
+    }
+}

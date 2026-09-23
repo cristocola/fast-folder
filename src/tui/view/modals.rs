@@ -416,9 +416,20 @@ fn render_actions(
             };
             let mut left = vec![Span::raw(" ")];
             left.push(Span::styled(pad(&key, key_w), theme.key()));
-            left.push(Span::styled(pad(command.title, title_w), title_style));
+            // A description squeezed to a letter or two says nothing and
+            // costs the title its room: on a narrow window the menu is keys
+            // and titles, and a disabled verb says why when it is pressed.
             let room = width.saturating_sub(1 + key_w + title_w + 2);
-            left.push(Span::styled(fit(detail, room, g.ellipsis), theme.dim()));
+            if room >= DESCRIPTION_MIN {
+                left.push(Span::styled(pad(command.title, title_w), title_style));
+                left.push(Span::styled(fit(detail, room, g.ellipsis), theme.dim()));
+            } else {
+                let title_room = width.saturating_sub(1 + key_w);
+                left.push(Span::styled(
+                    fit(command.title, title_room, g.ellipsis),
+                    title_style,
+                ));
+            }
             ListItem::new(Line::from(left))
         })
         .collect();
@@ -429,6 +440,10 @@ fn render_actions(
     frame.render_stateful_widget(list, inner, &mut state);
     None
 }
+
+/// The least a description column in the action menu is worth: below it the
+/// menu drops the column rather than draw a letter and an ellipsis.
+const DESCRIPTION_MIN: usize = 12;
 
 fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: Rect) -> Position {
     use crate::tui::app::actions::TextThen;
@@ -555,15 +570,18 @@ fn render_note(
         .render(text_area, frame.buffer_mut(), theme.text())
         .unwrap_or(Position::new(text_area.x, text_area.y));
     let keys_area = Rect::new(inner.x, inner.y + 1 + rows, inner.width, 1);
+    // Cut at a whole pair, the way out before the extra: half a pair names a
+    // key that is not one.
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" Enter ", theme.key()),
-            Span::styled("save   ", theme.dim()),
-            Span::styled("Alt-Enter ", theme.key()),
-            Span::styled("new line   ", theme.dim()),
-            Span::styled("Esc ", theme.key()),
-            Span::styled("cancel", theme.dim()),
-        ])),
+        Paragraph::new(crate::tui::view::builder::key_line(
+            theme,
+            &[
+                ("Enter", "save"),
+                ("Esc", "cancel"),
+                ("Alt-Enter", "new line"),
+            ],
+            inner.width as usize,
+        )),
         keys_area,
     );
     caret
@@ -573,8 +591,8 @@ fn render_note(
 ///
 /// **Measured at the width it will actually be drawn at.** Both dialogs asked
 /// `wrapped_rows` about a hardcoded 62 or 64 and then let `centered_fixed` clamp
-/// the box to the screen, so on a 60-column window — one row above the app's own
-/// minimum — the text wrapped wider than had been reserved and the tail was cut.
+/// the box to the screen, so on a 60-column window — the app's minimum then —
+/// the text wrapped wider than had been reserved and the tail was cut.
 ///
 /// The row ceiling is the screen too, not a constant. `validators::delete_prompt`
 /// over six long folder names goes past eight wrapped rows easily, and a
@@ -611,14 +629,11 @@ fn render_confirm(app: &App, confirm: &Confirm, frame: &mut Frame, area: Rect) -
     );
     let keys_area = Rect::new(inner.x, inner.y + rows + 1, inner.width, 1);
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" y / Enter ", theme.key()),
-            Span::styled("yes   ", theme.dim()),
-            Span::styled("n ", theme.key()),
-            Span::styled("no   ", theme.dim()),
-            Span::styled("Esc ", theme.key()),
-            Span::styled("cancel", theme.dim()),
-        ])),
+        Paragraph::new(crate::tui::view::builder::key_line(
+            theme,
+            &[("y / Enter", "yes"), ("n", "no"), ("Esc", "cancel")],
+            inner.width as usize,
+        )),
         keys_area,
     );
     None
@@ -772,34 +787,36 @@ fn render_flow(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<
         footer,
     );
 
-    let key_line = match flow.step {
-        Step::Form => vec![
-            Span::styled(" Tab ", theme.key()),
-            Span::styled("next field   ", theme.dim()),
-            Span::styled("Enter ", theme.key()),
-            Span::styled("preview   ", theme.dim()),
-            Span::styled("Esc ", theme.key()),
-            Span::styled("cancel", theme.dim()),
-        ],
+    // Cut at whole pairs, the way on and the way out before the extras.
+    let pairs: Vec<(String, String)> = match flow.step {
+        Step::Form => crate::tui::view::builder::pairs(&[
+            ("Enter", "preview"),
+            ("Esc", "cancel"),
+            ("Tab", "next field"),
+        ]),
         Step::Preview => vec![
-            Span::styled(" Enter ", theme.key()),
-            Span::styled(
-                format!("{}   ", flow.kind.commit().trim_start_matches("Enter ")),
-                theme.dim(),
+            (
+                "Enter".to_string(),
+                flow.kind.commit().trim_start_matches("Enter ").to_string(),
             ),
-            Span::styled("Esc ", theme.key()),
-            Span::styled("back to the answers   ", theme.dim()),
-            Span::styled(format!("{} ", scroll_keys()), theme.key()),
-            Span::styled("scroll", theme.dim()),
+            ("Esc".to_string(), "back to the answers".to_string()),
+            (scroll_keys(&theme.glyphs), "scroll".to_string()),
         ],
     };
-    frame.render_widget(Paragraph::new(Line::from(key_line)), keys);
+    frame.render_widget(
+        Paragraph::new(crate::tui::view::builder::key_line(
+            theme,
+            &pairs,
+            inner.width as usize,
+        )),
+        keys,
+    );
     caret
 }
 
 /// The arrows, as the preview's key line prints them — read, never written.
-fn scroll_keys() -> String {
-    command::movement_pair(Context::Modal)
+fn scroll_keys(g: &crate::tui::theme::Glyphs) -> String {
+    command::movement_pair(Context::Modal, g)
         .map(|(keys, _)| keys)
         .unwrap_or_default()
 }
@@ -1114,9 +1131,9 @@ fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Fram
     // run into its description, and a description that does not fit its
     // line continues under itself rather than being cut.
     let width = inner.width as usize;
-    let (keys_w, title_w, _) = command::help_columns(ctx, width);
+    let (keys_w, title_w, _) = command::help_columns(ctx, width, &g);
     let mut lines: Vec<Line> = Vec::new();
-    for line in command::help_lines(ctx, width) {
+    for line in command::help_lines(ctx, width, &g) {
         lines.push(match line {
             command::HelpLine::Heading(label) => {
                 Line::from(Span::styled(format!(" {label}"), theme.accent()))
@@ -1242,16 +1259,19 @@ fn render_guide(
     let pairs: Vec<(String, String)> = vec![
         (command::key_of(CommandId::Close), "close".to_string()),
         (
-            command::key_of(CommandId::GuideNext),
+            command::key_of_in(CommandId::GuideNext, &app.theme.glyphs),
             if last { "close" } else { "next page" }.to_string(),
         ),
         (
-            command::key_of(CommandId::GuidePrevious),
+            command::key_of_in(CommandId::GuidePrevious, &app.theme.glyphs),
             "back".to_string(),
         ),
     ]
     .into_iter()
-    .chain(command::movement_pair(Context::Guide).map(|(keys, what)| (keys, what.to_string())))
+    .chain(
+        command::movement_pair(Context::Guide, &app.theme.glyphs)
+            .map(|(keys, what)| (keys, what.to_string())),
+    )
     .collect();
     frame.render_widget(
         Paragraph::new(crate::tui::view::builder::key_line(

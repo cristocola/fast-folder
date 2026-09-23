@@ -110,16 +110,48 @@ fn the_right_arrow_focuses_the_pane_and_the_left_arrow_the_list() {
     assert!(app.modals.is_empty());
 }
 
-/// **The horizontal axis never quits, and never runs.** On the list `←`
-/// has nothing to its left and is not bound; without a pane — the window
-/// is under a hundred columns — `→` has nothing to its right either.
+/// **On a small window the pane takes the list's place.** There is no room
+/// beside the list or under it at 80×24, so `→` puts the pane where the list
+/// was, and `←` brings the list back — the same keys, the same focus, the
+/// pane drawn instead of beside.
 #[test]
-fn the_arrows_are_unbound_where_there_is_nowhere_to_go() {
+fn on_a_small_window_the_pane_takes_the_lists_place() {
+    use fastf::tui::layout::Placement;
+
     let mut app = fixture(3, 80, 24);
+    assert_eq!(app.regions().placement, Some(Placement::Over));
+    assert!(app.pane_behind_list());
+    assert!(!app.detail_visible(), "the list is what is drawn");
+    press(&mut app, Key::plain(KeyCode::Right));
+    assert_eq!(app.focus, Focus::Detail);
+    assert!(app.detail_visible(), "and now the pane is");
+    let frame = fastf::tui::testing::render_to_string(&app, 80, 24);
+    let selected = app.library.selected().unwrap().name.clone();
     assert!(
-        !app.detail_visible(),
-        "the fixture is too narrow for a pane"
+        frame.contains(&selected),
+        "the pane names its project:\n{frame}"
     );
+    assert!(
+        !frame.contains("PROJECT"),
+        "and the table is not drawn under it:\n{frame}"
+    );
+    press(&mut app, Key::plain(KeyCode::Left));
+    assert_eq!(app.focus, Focus::Projects);
+    assert!(!app.detail_visible());
+    assert!(app.modals.is_empty());
+}
+
+/// **The horizontal axis never quits, and never runs.** On the list `←` has
+/// nothing to its left and is not bound; with the pane switched off, `→` has
+/// nothing to its right either.
+#[test]
+fn the_arrows_are_unbound_with_the_pane_closed() {
+    // Switched off where it sits beside the list — at 80×24 `i` only goes in
+    // and out of it — and the window made small after.
+    let mut app = fixture(3, 120, 40);
+    press(&mut app, Key::ch('i'));
+    update(&mut app, Msg::Resize(80, 24));
+    assert!(!app.detail_open, "the fixture switches the pane off");
     for key in [
         Key::plain(KeyCode::Left),
         Key::ch('h'),
@@ -134,6 +166,38 @@ fn the_arrows_are_unbound_where_there_is_nowhere_to_go() {
         assert!(app.modals.is_empty());
         assert_eq!(app.focus, Focus::Projects);
     }
+}
+
+/// **`i` shows or hides the pane, wherever it is.** Beside the list it closes
+/// and opens it; where it takes the list's place, showing it is going into it
+/// and hiding it is coming back out.
+#[test]
+fn i_shows_or_hides_the_pane_where_it_is() {
+    let mut wide = fixture(3, 120, 40);
+    assert!(wide.detail_visible());
+    press(&mut wide, Key::ch('i'));
+    assert!(
+        !wide.detail_open && !wide.detail_visible(),
+        "beside: i closes it"
+    );
+    press(&mut wide, Key::ch('i'));
+    assert!(
+        wide.detail_open && wide.detail_visible(),
+        "and opens it again"
+    );
+    assert_eq!(wide.focus, Focus::Projects, "without taking the focus");
+
+    let mut small = fixture(3, 80, 24);
+    press(&mut small, Key::ch('i'));
+    assert_eq!(
+        small.focus,
+        Focus::Detail,
+        "in the list's place: i goes into it"
+    );
+    assert!(small.detail_visible());
+    press(&mut small, Key::ch('i'));
+    assert_eq!(small.focus, Focus::Projects, "and i again comes back out");
+    assert!(small.detail_open, "still on, one key away");
 }
 
 /// The templates tab has a pane too, and it is always drawn — so `→`
@@ -249,4 +313,190 @@ fn the_palette_moves_with_its_own_keys() {
     );
     press(&mut app, Key::plain(KeyCode::Esc));
     assert!(app.modals.is_empty());
+}
+
+/// **Esc leaves the pane before it does anything else.** The pane is a level,
+/// like a tab; Esc used to fall through it to the list's ladder, and with no
+/// search, filter or marks to clear, that ladder quits — so leaving the pane
+/// the way every dialog is left closed the app.
+#[test]
+fn esc_in_the_pane_goes_back_to_the_list_and_never_quits() {
+    let mut app = fixture(3, 120, 40);
+    press(&mut app, Key::plain(KeyCode::Right));
+    assert_eq!(app.focus, Focus::Detail);
+
+    let effects = press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Quit(_))),
+        "Esc in the pane quit the app: {effects:?}"
+    );
+    assert_eq!(app.focus, Focus::Projects, "it goes back to the list");
+    assert_eq!(app.screen, Screen::Library);
+
+    // From the list, the ladder is what it always was.
+    let effects = press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Quit(Exit::Normal))),
+        "the list's Esc still quits once there is nothing to clear: {effects:?}"
+    );
+}
+
+/// The template pane is a level of its tab: Esc goes to the card list first,
+/// then off the tab.
+#[test]
+fn esc_from_the_template_pane_goes_to_its_list_first() {
+    let mut app = fixture(3, 120, 40);
+    press(&mut app, Key::ch('T'));
+    press(&mut app, Key::plain(KeyCode::Right));
+    assert_eq!(app.focus, Focus::Detail);
+
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert_eq!(app.focus, Focus::Projects, "the card list first");
+    assert_eq!(app.screen, Screen::Templates, "still on the tab");
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert_eq!(app.screen, Screen::Library, "then off it");
+}
+
+/// **A window that shrinks keeps the pane focused**, in its new place: from
+/// beside the list at 120 columns to the list's place at 80, the focus stays
+/// in the pane and the pane is what is drawn.
+#[test]
+fn a_window_that_shrinks_keeps_the_pane_focused_in_its_new_place() {
+    use fastf::tui::layout::Placement;
+
+    let mut app = fixture(6, 120, 40);
+    press(&mut app, Key::plain(KeyCode::Right));
+    assert_eq!(app.regions().placement, Some(Placement::Beside));
+    update(&mut app, Msg::Resize(80, 24));
+    assert_eq!(app.regions().placement, Some(Placement::Over));
+    assert_eq!(app.focus, Focus::Detail, "still in the pane");
+    assert!(app.detail_visible(), "which now has the list's place");
+    update(&mut app, Msg::Resize(120, 40));
+    assert_eq!(app.focus, Focus::Detail);
+    assert_eq!(app.regions().placement, Some(Placement::Beside));
+}
+
+/// The templates tab draws in the whole body, wherever the library's pane
+/// would be: it used to rebuild its band from the table's width plus the
+/// pane's, which is the window twice over once the pane sits under the table.
+#[test]
+fn the_templates_tab_takes_the_whole_body_whatever_the_library_pane_does() {
+    for (width, height) in [(120, 40), (60, 45), (80, 24)] {
+        let mut app = fixture(6, width, height);
+        press(&mut app, Key::ch('T'));
+        let frame = fastf::tui::testing::render_to_string(&app, width, height);
+        let regions = app.regions();
+        let bottom = frame
+            .lines()
+            .nth((regions.body.y + regions.body.height - 1) as usize)
+            .unwrap_or_default();
+        assert!(
+            bottom.contains('└') && bottom.contains('┘'),
+            "{width}×{height}: the tab's boxes close on the body's last row:\n{frame}"
+        );
+    }
+}
+
+/// **`<` and `>` walk the projects from inside the pane**, keeping the focus
+/// there and the cursor in the section it was in, so one project's todos
+/// after another's is one key each. A walk is not a change: nothing pulses.
+/// A project whose detail is still being read takes the cursor there when its
+/// read lands.
+#[test]
+fn angle_brackets_walk_the_projects_from_the_pane_and_keep_the_section() {
+    use fastf::tui::app::data::ProjectDetail;
+    use fastf::tui::app::pane::{PaneRow, PaneSection, section_at};
+
+    let record = || ProjectDetail {
+        todos: vec![
+            fastf::core::body::Todo {
+                done: false,
+                text: "grade".to_string(),
+                phase: None,
+            },
+            fastf::core::body::Todo {
+                done: false,
+                text: "deliver".to_string(),
+                phase: None,
+            },
+        ],
+        ..Default::default()
+    };
+    let deliver = |app: &mut App| {
+        let path = app.library.selected().unwrap().path.clone();
+        update(
+            app,
+            Msg::Detail {
+                path,
+                detail: Box::new(record()),
+            },
+        );
+    };
+    let mut app = fixture(6, 80, 24);
+    deliver(&mut app);
+    press(&mut app, Key::plain(KeyCode::Right));
+    // Onto the second todo.
+    let second = app
+        .pane_rows()
+        .iter()
+        .position(|row| matches!(row, PaneRow::Todo { ordinal: 1, .. }))
+        .unwrap();
+    while app.pane_cursor < second {
+        press(&mut app, Key::ch('j'));
+    }
+
+    // The next project has not been read: the cursor waits, then lands.
+    press(&mut app, Key::ch('>'));
+    assert_eq!(app.library.selected_index(), Some(1));
+    assert_eq!(app.focus, Focus::Detail, "still in the pane");
+    deliver(&mut app);
+    let rows = app.pane_rows();
+    assert_eq!(section_at(&rows, app.pane_cursor), PaneSection::Todo);
+    assert!(
+        matches!(rows[app.pane_cursor], PaneRow::Todo { ordinal: 0, .. }),
+        "the first todo of the next project: {:?}",
+        rows[app.pane_cursor]
+    );
+    assert!(app.pane_pulses.is_empty(), "a walk is not a change");
+
+    // Back: the first project is cached, so the cursor lands at once.
+    press(&mut app, Key::ch('<'));
+    assert_eq!(app.library.selected_index(), Some(0));
+    let rows = app.pane_rows();
+    assert!(matches!(
+        rows[app.pane_cursor],
+        PaneRow::Todo { ordinal: 0, .. }
+    ));
+
+    // At the top of the list there is nowhere above to go.
+    let effects = press(&mut app, Key::ch('<'));
+    assert!(effects.is_empty());
+    assert_eq!(app.library.selected_index(), Some(0));
+}
+
+/// **The template pane pages by its own height.** It paged by the library
+/// table's, which is a different box once each tab places its pane by its own
+/// rule — at 60×45 the library's table is eleven rows under a pane, while the
+/// templates tab's pane is beside a short card list.
+#[test]
+fn the_template_pane_pages_by_its_own_height() {
+    let mut app = fixture(8, 60, 45);
+    press(&mut app, Key::ch('T'));
+    press(&mut app, Key::plain(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Detail);
+    app.studio.lines = (0..200).map(|n| format!("line {n}")).collect();
+    let pane = app.template_panes().1;
+    press(&mut app, Key::plain(KeyCode::PageDown));
+    assert_eq!(
+        app.studio.scroll,
+        (pane.height - 2) as usize,
+        "one page is the template pane's text height"
+    );
+    assert_ne!(
+        app.studio.scroll,
+        app.regions().table_rows(),
+        "not the library table's"
+    );
 }

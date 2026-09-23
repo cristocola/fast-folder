@@ -365,7 +365,8 @@ no-op reauto writes identical bytes, and `remove_tags` prunes the record to what
 `tags` still holds.
 
 **The pane's edits** — `operations::set_variable`, `replace_tag`, `replace_note`,
-`toggle_todo`, `add_todo` — take the same steps as every mutation.
+and for a todo `toggle_todo`, `replace_todo`, `add_todo_in` and `add_todos_in`,
+which `fastf todo` calls too — take the same steps as every mutation.
 `set_variable` stores a value the way a create would (`vars::validated_raw_values`
 and `rendered_values` with this one replaced, so a `select` stays inside its
 options and a `text` gets its transform; an undeclared variable, or any on a
@@ -434,14 +435,44 @@ Notes, then Journal. Timestamps are not validated, so **slice one with
 fastf does not write through `cli::recent::check_since`, since `2026-6-1` sorts
 after every `2026-0…`.
 
-**Edits name the text they read.** `replace_note(path, ordinal, expected, text)`
-and `toggle_todo(path, ordinal, expected)` refuse "changed meanwhile" when the item
-at `ordinal` no longer reads `expected`, because an ordinal cannot tell this note
-from whatever now sits in its place. `replace_note` splices over the note's own
-span (a dated note keeps its timestamp, the undated one its `##` refusal; empty
-text removes it without doubling a blank line); a new note is always dated.
-`toggle_todo` rewrites only the character inside the brackets; `add_todo` appends
-`- [ ] text` to `## Todo`, opening the section at the end of the file when needed.
+**Edits name the text they read.** `replace_note(path, ordinal, expected, text)`,
+`toggle_todo(path, ordinal, expected)` and `replace_todo(path, ordinal, expected,
+text)` refuse "changed meanwhile" when the item at `ordinal` no longer reads
+`expected`, because an ordinal cannot tell this note from whatever now sits in its
+place; the command line passes the text its own `list` read, the pane the row's.
+`replace_note` splices over the note's own span (a dated note keeps its timestamp,
+the undated one its `##` refusal; empty text removes it without doubling a blank
+line); a new note is always dated.
+
+**A todo is edited through the ranges `place_todos` records**: `marker` (the one
+character inside the brackets, empty for `[]`) is what `toggle_todo` rewrites;
+`text` (just after the `]` to before any `\r`/`\n`) is what `replace_todo`
+replaces with ` <text>`, so indent, `-`/`*`, bracket state and a CRLF ending
+survive; `line` (the whole line, its ending included) is what an emptied
+`replace_todo` hands `remove_lines`. `section_span` stops short of the `\n` before
+the next heading, so the last task of a section above another is extended by that
+byte, or a removal would leave its newline behind. `remove_lines` counts `\r\n` as
+a blank line too. A phase label is never removed with the last task under it: it
+is the user's line. A todo is one line; `replace_todo` and the adders refuse
+`\n`/`\r` before reading, and the `operations` wrappers before the lock.
+
+`add_todos_at(path, texts, place)` is **one** atomic write of the whole run —
+trimmed, empties skipped, one line each or nothing written — at a `TodoPlace`:
+`Phase(name)`, after the last task of the last run of that label (matched ignoring
+case), or under a new label above `### Other` or at the section's end; `Loose`,
+after the last task that sits under no label, or above the first label when there
+is none; `End`, appended at the end of `## Todo`; each opening the section when
+needed. **It answers the ordinal the first todo got** — read back from what it
+wrote, from where the block starts — because the app's guess at it was wrong
+wherever a label's name repeated or differed in case, and the pane settles its
+cursor on that answer. `add_todos_in`, `add_todo_in` and `add_todo` are it with a
+phase or none, so there is one placement rule.
+
+**A file saved with `\r\n` keeps them** (`with_line_endings_of`): the adders, the
+note appender and `replace_note` make their edit on the file's `\n` reading and
+give it back in `\r\n` when every line of the file ended that way; a file mixing
+the two is written as it is, since there is no one ending to keep. `replace_todo`
+and the toggle touch no line ending at all.
 
 **A list opens under a blank line**: `append_in_section` writes `\n\n` before the
 first item of a section that has none and `\n` before later ones, so the shape is

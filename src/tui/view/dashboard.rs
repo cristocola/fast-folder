@@ -8,7 +8,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::tui::app::{App, Screen, StatusLevel};
 use crate::tui::command;
-use crate::tui::view::{fit, plural, split_line};
+use crate::tui::view::{first_that_fits, fit, fit_spans, plural, split_line};
 
 pub fn header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
@@ -44,14 +44,15 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
             },
         ));
     }
+    let mut with_bases = left.clone();
     if let Some(summary) = &app.summary {
-        left.push(Span::styled(
+        with_bases.push(Span::styled(
             format!("{gap}{}", plural(summary.bases.len(), "base", "bases")),
             theme.text(),
         ));
     }
 
-    let right = match app.summary.as_ref().and_then(|s| s.max_id.as_ref()) {
+    let highest = match app.summary.as_ref().and_then(|s| s.max_id.as_ref()) {
         Some(id) => vec![
             Span::styled("highest ", theme.dim()),
             Span::styled(id.clone(), theme.text()),
@@ -59,7 +60,17 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         ],
         None => Vec::new(),
     };
-    let mut lines = vec![split_line(left, right, width, g.ellipsis)];
+    // A narrow window gives up the highest ID first, then the base count —
+    // never the tabs, which say where you are and where `T` goes.
+    let mut lines = vec![first_that_fits(
+        vec![
+            (with_bases.clone(), highest),
+            (with_bases, Vec::new()),
+            (left, Vec::new()),
+        ],
+        width,
+        g.ellipsis,
+    )];
 
     // Line 2: the bases, and on the right whatever needs attention — else
     // what this session did.
@@ -94,23 +105,39 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
             None => bases.push(Span::styled("probing bases…", theme.dim())),
         },
     }
-    let right = match app.summary.as_ref().map(|s| s.attention) {
-        Some(n) if n > 0 => vec![Span::styled(
-            format!(
-                "{} {n} need{} attention ",
-                g.warn,
-                if n == 1 { "s" } else { "" }
-            ),
-            theme.warn(),
-        )],
-        _ if !app.session.is_empty() => vec![
-            Span::styled("this session: ", theme.dim()),
-            Span::styled(app.session.join(&format!("  {}  ", g.sep)), theme.dim()),
-            Span::raw(" "),
-        ],
-        _ => Vec::new(),
-    };
-    lines.push(split_line(bases, right, width, g.ellipsis));
+    // Something needing attention wins the row over the bases; what this
+    // session did is the first thing a narrow window gives up.
+    lines.push(match app.summary.as_ref().map(|s| s.attention) {
+        Some(n) if n > 0 => split_line(
+            bases,
+            vec![Span::styled(
+                format!(
+                    "{} {n} need{} attention ",
+                    g.warn,
+                    if n == 1 { "s" } else { "" }
+                ),
+                theme.warn(),
+            )],
+            width,
+            g.ellipsis,
+        ),
+        _ if !app.session.is_empty() => first_that_fits(
+            vec![
+                (
+                    bases.clone(),
+                    vec![
+                        Span::styled("this session: ", theme.dim()),
+                        Span::styled(app.session.join(&format!("  {}  ", g.sep)), theme.dim()),
+                        Span::raw(" "),
+                    ],
+                ),
+                (bases, Vec::new()),
+            ],
+            width,
+            g.ellipsis,
+        ),
+        _ => Line::from(fit_spans(bases, width, g.ellipsis)),
+    });
 
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -124,49 +151,80 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
     // **The one place the count is stated.** Live, next to the sort it is
     // ordered by, the filters that produced it and the marks a verb would act
     // on — everything a reader asking "how many am I seeing" wants at once.
-    let mut right = vec![Span::styled(
-        format!("{}/{}", app.library.len(), app.library.snapshot.len()),
-        theme.text(),
+    //
+    // Each part carries its priority: a narrow window gives up the sort
+    // first, then the "(from index)" words, then the filters, and never the
+    // count or the marks — the one fact a person looks here for, and the one
+    // that says a verb will act on more than the row under the cursor.
+    let mut parts: Vec<(u8, Span)> = vec![(
+        0,
+        Span::styled(
+            format!("{}/{}", app.library.len(), app.library.snapshot.len()),
+            theme.text(),
+        ),
     )];
     // The first frame's counts come from the index; the spinner rides with the
     // number it qualifies rather than sitting in a header that no longer has
     // one.
     if !app.library.loaded {
-        right.push(Span::styled(
-            format!(" (from index) {}", theme.glyphs.spin(app.elapsed_ms)),
-            theme.dim(),
+        parts.push((
+            3,
+            Span::styled(
+                format!(" (from index) {}", theme.glyphs.spin(app.elapsed_ms)),
+                theme.dim(),
+            ),
         ));
     }
-    right.push(Span::styled(
-        format!(
-            " {} {}",
-            g.sep,
-            app.library.effective_sort(&app.search.query).label()
+    parts.push((
+        4,
+        Span::styled(
+            format!(
+                " {} {}",
+                g.sep,
+                app.library.effective_sort(&app.search.query).label()
+            ),
+            theme.dim(),
         ),
-        theme.dim(),
     ));
     if let Some(slug) = &app.library.template_filter {
-        right.push(Span::styled(
-            format!(" {} template={slug}", g.sep),
-            theme.accent_alt(),
+        parts.push((
+            2,
+            Span::styled(format!(" {} template={slug}", g.sep), theme.accent_alt()),
         ));
     }
     if let Some(base) = &app.library.base_filter {
-        right.push(Span::styled(
-            format!(" {} base={}", g.sep, crate::core::library::base_label(base)),
-            theme.accent_alt(),
+        parts.push((
+            2,
+            Span::styled(
+                format!(" {} base={}", g.sep, crate::core::library::base_label(base)),
+                theme.accent_alt(),
+            ),
         ));
     }
     if !app.library.marks.is_empty() {
-        right.push(Span::styled(
-            format!(" {} {} {}", g.sep, app.library.marks.len(), g.mark),
-            theme.warn(),
+        parts.push((
+            1,
+            Span::styled(
+                format!(" {} {} {}", g.sep, app.library.marks.len(), g.mark),
+                theme.warn(),
+            ),
         ));
     }
-    right.push(Span::raw(" "));
-    // The counts win the row over the query text, but never past the row's
-    // end: a long template filter on a narrow terminal is cut, not drawn
-    // outside the frame.
+    parts.push((0, Span::raw(" ")));
+    // The query keeps room for the search glyph and a few letters.
+    let most = width.saturating_sub(10);
+    for dropped in [4, 3, 2] {
+        let wide: usize = parts.iter().map(|(_, s)| s.width()).sum();
+        if wide <= most {
+            break;
+        }
+        parts.retain(|(priority, _)| *priority != dropped);
+    }
+    let right = fit_spans(
+        parts.into_iter().map(|(_, s)| s).collect(),
+        width,
+        g.ellipsis,
+    );
     let right_width: usize = right.iter().map(|s| s.width()).sum::<usize>().min(width);
 
     let mut prefix = format!(" {} ", g.search);
@@ -318,6 +376,9 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
         };
         Line::from(Span::styled(format!(" {idle}"), theme.dim()))
     };
+    // Every sentence here fits the row, cut with the ellipsis rather than by
+    // the edge of the window.
+    let line = Line::from(fit_spans(line.spans, area.width as usize, g.ellipsis));
     // A message that just arrived wears the wash under the whole line, so
     // the eye is drawn to where what just happened is said; it lets go as a
     // row's does.
@@ -359,10 +420,11 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
         | Some(Modal::Onboarding(_)) => Vec::new(),
         _ => {
             let ctx = app.context();
-            let mut pairs: Vec<(String, &'static str)> = command::movement_pair(ctx)
-                .into_iter()
-                .filter(|_| ctx.hints_movement())
-                .collect();
+            let mut pairs: Vec<(String, &'static str)> =
+                command::movement_pair(ctx, &app.theme.glyphs)
+                    .into_iter()
+                    .filter(|_| ctx.hints_movement())
+                    .collect();
             // Only what the movement pair actually costs comes off the width
             // the rest is measured against — a flat allowance dropped a verb
             // from every bar that never showed the arrows at all.

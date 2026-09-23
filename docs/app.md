@@ -37,21 +37,38 @@ Top to bottom:
 - **The project table** — ID, folder name, then the size, the date, the base,
   the template and the tags, as many as fit; see [Columns](#columns). The
   folder name is never cut. When the table is empty it says so inside the box.
-- **The detail pane** (terminals 100 columns or wider; `i` hides it) — the
-  selected project's template, base and date, its size and how many notes and
-  todos it has, its tags one per row, its template variables, the top of its
-  folder, its latest notes — each with the day it was written and every line
-  it has — and its todos, grouped under the `###` labels the file carries when
-  it has any. A note or todo too long for the pane continues on the
-  rows under it; a note shows its first eight rows there and says how many
-  more, and `J` shows every note in full. The split favours the table: long folder names take
-  the room they need with the size beside them, the pane takes the rest, and
-  closes — as `i` would — when the rest would be a sliver.
+- **The detail pane** (`i` shows or hides it) — the selected project's name,
+  its template, base and date, its size and how many notes and todos it has;
+  then what you work with: its tags one per row, its todos, grouped under the
+  `###` labels the file carries when it has any, and its latest notes, each
+  with the day it was written and every line it has; and last what you look
+  things up in, its template variables and the top of its folder. Nothing is
+  cut: a long folder name continues on the next row, broken after an `_`, `-`
+  or `.`; the facts wrap whole, never half a date on one row; a note or todo
+  too long for the pane continues on the rows under it. A note shows its first
+  eight rows there and says how many more, and `J` shows every note in full. A
+  pane with more rows than it shows has a scrollbar on its border. **The pane goes where the window has
+  room for it.** Beside the list when the folder names fit whole with a pane
+  of 36 columns next to them; under the list, at the full width, when the
+  window is tall enough for both (a vertical split, a portrait screen, a
+  library of long names); and on a window with room for neither — 80×24 — in
+  the list's place: `→` shows it where the list was, `←` or Esc brings the
+  list back where you left it. The folder names are never cut to make room.
+  Where the pane goes depends on the longest name in the whole library, not on
+  what a search leaves, so it never moves while you type. While the pane is out
+  of sight, the list's bottom border says what it holds for the row under the
+  cursor — `2 notes · 1/4 todos done` — and the hint bar leads with `→ details`;
+  inside it, with `← list`.
 - **The status line and the hint bar** — what the last action did (or, when
   rows are marked, that a verb will act on them rather than on the cursor),
   and the keys that matter where you are.
 
-Below 60×16 the app says so and waits for a bigger window or `q`.
+It draws in any window of 40×12 or more — a tmux quarter, a phone over ssh,
+an editor's terminal panel, a drop-down terminal — keeping what matters as the
+room goes: the tabs in the header, the count in the search bar, whole folder
+names in the table (cut with `…` only when a name is wider than the window),
+and the pane one key away. Below that it says which side is short, and by how
+much, and waits for a bigger window or `q`.
 
 **The pane reads the file.** What it shows is `PROJECT_INFO.md` as it is on
 disk: edit the file in another window — a note typed by hand, a todo ticked in
@@ -68,11 +85,26 @@ on its own line — change it and Enter, or empty it and Enter to remove it; on 
 over its options and nothing else; on a **note** the note opens as a text area
 over its own lines — Enter for a new line, Ctrl-S to save, emptied and saved to
 remove it; on a **todo** Enter ticks it, or unticks it; on **`… n earlier`**
-every note, as `J` shows them. Every section that can grow ends in a row that
+every note, as `J` shows them. **F2 edits the text** of the row under the
+cursor in place — on a todo that is how you reword it, since Enter ticks it;
+emptied and Enter, the todo is removed — and on the name, a tag, a variable or
+a note it opens what Enter opens. Every section that can grow ends in a row that
 adds to it: **add a tag**, **add a note** (the quick note — Enter saves,
-Alt-Enter breaks a line), **add a todo** — also **Add a todo** in the
-palette and the action menu, from the list. Esc leaves the row as it was, and so
-does moving away. What you can type is what the file can hold: a tag is one
+Alt-Enter breaks a line), **add a todo**; and **`+` adds one more of whatever
+the cursor is among**, from anywhere in that section. Esc leaves the row as it
+was, and so does moving away.
+
+**Adding todos is typing a list.** `+` on the list or in the pane, Enter on
+**add a todo**, or **Add a todo** in the palette or the action menu opens an
+empty line in the todo list itself, where the todo will land — under the phase
+the cursor is in, beside the todos that sit under no phase when the cursor is on
+one of them, or at the end. Enter writes it and opens the next line under
+it, so a list goes in one after another — the line keeps taking keys while a
+todo is being written, so nothing typed is lost to the disk; Enter on an empty
+line, or Esc, is done. Paste a list onto the line — lines from a brief, a checklist copied with
+its `- [ ]` boxes, a numbered list — and every line is a todo, the markers taken
+off, in one write. With the pane switched off, `+` asks for one todo in a
+prompt instead. What you can type is what the file can hold: a tag is one
 word (letters, digits, `- _ . /`), a variable is one line and a `select` is one
 of its options, a todo is one line, and an undated note may not start a line
 with `##` (that is how the file marks where a section ends). A refusal names
@@ -99,8 +131,20 @@ type — `open` finds *Open project folder*, `#lull` jumps to the project.
 **Every list moves the same way** — the project table, the detail pane, the
 templates tab, the action menu, the template builder, the settings, and any
 dialog with more in it than fits. The movement keys below work in all of them.
-`→` and `←` never run anything: they move the cursor between the list and the
-pane beside it, and nothing else.
+`→` and `←` never run anything: they move the cursor between the list and its
+pane, and nothing else.
+
+**Enter acts, F2 edits, `+` adds** — three keys that mean the same thing on
+every surface:
+
+| Key | Means | On the list | In the pane | Templates tab | Builder | Settings |
+|---|---|---|---|---|---|---|
+| Enter | the row's action | the action menu | tick a todo, or open the row | edit the template | open the part, the variable, the file | flip a yes/no, open a value, run a verb |
+| F2 | edit the text in place | rename the folder | reword a todo, a tag, a variable, a note, the name | edit the template | open the part, the variable, the file | open a value |
+| `+` | add one more | a todo | a todo, a tag or a note — whichever the cursor is among | a new template | a variable or a file | — |
+
+Emptied and kept, a todo, a tag or a note is removed; where there is nothing to
+type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 
 | Key | What it does |
 |---|---|
@@ -108,14 +152,17 @@ pane beside it, and nothing else.
 | PageUp / PageDown | move by a screenful, stopping at the ends |
 | Ctrl-D / Ctrl-U | half a screenful, stopping at the ends |
 | Home / End, `g` / `G` | first row, last row |
-| → / `l` | put the cursor in the pane beside the list — the project's detail on the library, the template's on the templates tab. Unbound when there is no pane |
-| ← / `h` | put the cursor back on the list. It never quits and never closes anything: leaving is Esc's job |
+| → / `l` | put the cursor in the pane — the project's detail on the library, the template's on the templates tab. On a small window the pane is shown in the list's place. Unbound when the pane is switched off (`i`) |
+| ← / `h` | put the cursor back on the list. It never quits and never closes anything: leaving is Esc's job, and Esc in the pane does the same as ← |
+| `<` / `>` | in the pane: the project above or below, without leaving the pane — the cursor stays in the section it was in, so one project's todos after another's is a key each |
+| F2 | edit the text under the cursor in place: in the pane a todo (reworded, or emptied to remove it), a tag, a variable, a note, the name; on the list, the folder's name |
+| `+` | add one more: on the list or in the todos, a todo, typed on a line in the list with the next opening under it; among the tags, a tag; among the notes, a note |
 | `T` | the templates tab, and `T` again (or Esc) back to the library |
 | Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
 | `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size — and every one of those but the dates runs **both ways**, so `size reversed` is the smallest first and `id reversed` is the highest ID first |
 | `f` / `b` / `F` | show only the selected project's template / show only one base's projects / clear both filters. *Filter by tag* is in the command palette; it writes `tag:x` into the search bar, which is what a tag filter is |
-| `i` | show or hide the detail pane |
+| `i` | show or hide the detail pane: beside or under the list it switches the pane off and on; on a small window, where the pane takes the list's place, it goes into the pane and back out |
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
 | `A`, Ctrl-T | add a tag (pick one the library already knows, or type a new one); remove tags |
@@ -123,7 +170,7 @@ pane beside it, and nothing else.
 | `C` | copy the project to a folder outside your bases, keeping its ID |
 | `r`, `m`, `u`, `D` | rename the folder; move to another base; unregister (keep the files); delete the folder for good — it names the folder and asks you to type `delete` |
 | `M`, `J` | the selected project's metadata (its frontmatter); every one of its notes |
-| Space, `v`, `*`, `-` | mark the row and step on; mark every row **between the last one you marked and the cursor**; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
+| Space, `v`, `*`, `-` | mark the row and step on (in the pane, mark the project it shows and stay); mark every row **between the last one you marked and the cursor**; mark every row the view shows; clear the marks — every verb but rename then runs over **every mark**. The status line says how many are marked while any are |
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
@@ -133,7 +180,7 @@ pane beside it, and nothing else.
 | `R` | reindex: rescan every base from its folders and rebuild the caches |
 | Ctrl-Z | suspend to the shell, as in any program; `fg` brings the app back with its screen retaken (unix) |
 | `q` | quit; in a dialog, close it |
-| Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the search bar, clear the query, clear the filters, clear the marks — and only then quit |
+| Esc | in a dialog: close it, one level at a time (a builder section goes back to its list). On the dashboard: one step back — cancel a running job, leave the pane for the list, leave the search bar, clear the query, clear the filters, clear the marks — and only then quit |
 | Ctrl-C | leave at once (exit 130, `aborted.`) |
 
 ## Searching
@@ -355,8 +402,8 @@ draws nothing but a glance at the selected project's file.
 
 Nothing in the app needs a desktop: it draws with the sixteen colours where
 truecolor is not announced (`config set theme` pins a palette), with plain
-ASCII where the alphabet is not there (`FASTF_ASCII=1`), and in a 60×16
-window. What it cannot do without a desktop session it says so about: with no
+ASCII where the alphabet is not there (`FASTF_ASCII=1`) — key labels too,
+where an arrow key is the word on it — and in a 40×12 window. What it cannot do without a desktop session it says so about: with no
 `DISPLAY` or `WAYLAND_DISPLAY` — over ssh, on a console — `o` and `t` are dimmed
 with the reason, and `y` still copies the path when a clipboard tool exists
 (and shows it when none does). A note in `$EDITOR` and a template's

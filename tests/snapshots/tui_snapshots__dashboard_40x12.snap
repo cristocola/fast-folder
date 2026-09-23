@@ -1,0 +1,16 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fast-folder   library │ templates      "
+" → projects 12   a… ⚠ 1 needs attention "
+" ⌕ / to search           12/12 · newest "
+"┌ projects ────────────────────────────┐"
+"│  ID     PROJECT                      │"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID… █"
+"│  ID0247 2026-08-27_Client_Onboardin… ║"
+"│  ID0246 2026-08-26_Old_Shoot_ID0246  ║"
+"│  ID0245 2026-08-25_Test_Run_ID0245   ║"
+"└──────────────────────────────────────┘"
+"                                        "
+" → details  / search  a actions         "

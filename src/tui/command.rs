@@ -45,7 +45,8 @@ impl Key {
         }
     }
 
-    /// The text the hint bar and the help overlay print for this key.
+    /// The text the hint bar and the help overlay print for this key, in the
+    /// Unicode alphabet. Anything drawn on screen asks [`Key::label_in`].
     pub fn label(&self) -> String {
         let base = match self.code {
             KeyCode::Char(' ') => "Space".to_string(),
@@ -67,6 +68,27 @@ impl Key {
             KeyCode::F(n) => format!("F{n}"),
             other => format!("{other:?}"),
         };
+        self.with_modifiers(base)
+    }
+
+    /// The label in `g`'s alphabet. Where the terminal has no arrows to draw
+    /// — a console on the ASCII alphabet — an arrow key is the word printed
+    /// on it, not `->`, which reads as a key of its own.
+    pub fn label_in(&self, g: &crate::tui::theme::Glyphs) -> String {
+        if !g.is_ascii() {
+            return self.label();
+        }
+        let word = match self.code {
+            KeyCode::Up => "Up",
+            KeyCode::Down => "Down",
+            KeyCode::Left => "Left",
+            KeyCode::Right => "Right",
+            _ => return self.label(),
+        };
+        self.with_modifiers(word.to_string())
+    }
+
+    fn with_modifiers(&self, base: String) -> String {
         match (self.ctrl, self.alt) {
             (true, true) => format!("Ctrl-Alt-{base}"),
             (true, false) => format!("Ctrl-{base}"),
@@ -295,10 +317,28 @@ pub enum CommandId {
     HalfUp,
     First,
     Last,
-    /// The horizontal axis, leftwards: the list beside the pane.
+    /// The horizontal axis, leftwards: from the pane back to the list.
     FocusList,
-    /// The horizontal axis, rightwards: the pane beside the list.
+    /// The horizontal axis, rightwards: from the list into the pane.
     FocusDetail,
+    /// From the pane, the project above the one it shows — staying in the
+    /// pane, in the same section.
+    PanePreviousProject,
+    /// From the pane, the project below the one it shows.
+    PaneNextProject,
+    /// F2 in the pane: the text of the row under the cursor, opened in
+    /// place — a todo reworded, a tag, a variable, a note, the name.
+    PaneEditText,
+    /// `+` in the pane: one more of what the cursor is among.
+    PaneAdd,
+    /// F2 on the list: the folder's name — rename, as everywhere F2 edits.
+    ListRename,
+    /// `+` on the list: a todo for the project under the cursor.
+    ListAddTodo,
+    /// F2 in the builder: the highlighted part, variable or file, opened.
+    BuilderEditText,
+    /// F2 in the settings: a value, opened on its line.
+    SettingsEditText,
     /// Back to the library from the templates tab — palette only; `T` and
     /// Esc are the keys.
     BackToLibrary,
@@ -386,7 +426,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 97] = [
+    pub const ALL: [CommandId; 105] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -421,6 +461,14 @@ impl CommandId {
         CommandId::Last,
         CommandId::FocusList,
         CommandId::FocusDetail,
+        CommandId::PanePreviousProject,
+        CommandId::PaneNextProject,
+        CommandId::PaneEditText,
+        CommandId::PaneAdd,
+        CommandId::ListRename,
+        CommandId::ListAddTodo,
+        CommandId::BuilderEditText,
+        CommandId::SettingsEditText,
         CommandId::BackToLibrary,
         CommandId::Search,
         CommandId::ClearSearch,
@@ -522,8 +570,9 @@ fn pane_has_focus(app: &App) -> Availability {
 }
 
 /// `→` is bound only while there is a pane to go to and the cursor is not
-/// already in it. The library's pane closes under `layout::DETAIL_MIN_WIDTH`,
-/// and then the key is unbound rather than a no-op advertised on the bar.
+/// already in it. The library's pane is always one key away while it is
+/// switched on — beside the list, under it, or in its place — and with `i`
+/// it is off, and then the key is unbound rather than a no-op on the bar.
 fn pane_can_take_focus(app: &App) -> Availability {
     if app.focus == Focus::Projects && app.pane_present() {
         Availability::Enabled
@@ -625,6 +674,27 @@ fn pane_row_and_not_busy(app: &App) -> Availability {
                 Availability::Hidden
             }
         }
+        other => other,
+    }
+}
+
+/// F2 opens text in place: on a row that holds some — the name, a tag, a
+/// variable, a note, a todo. Hidden on a rule, a heading, an add row, the
+/// folder listing: there is nothing there to type over.
+fn pane_text_row(app: &App) -> Availability {
+    use crate::tui::app::pane::PaneRow;
+    match selection_and_not_busy(app) {
+        Availability::Enabled => match app.pane_rows().get(app.pane_cursor) {
+            // The name is the rename, with the rename's own rule about marks.
+            Some(PaneRow::Name(_)) => single_and_not_busy(app),
+            Some(
+                PaneRow::Tag(_)
+                | PaneRow::Variable { .. }
+                | PaneRow::Note { .. }
+                | PaneRow::Todo { .. },
+            ) => Availability::Enabled,
+            _ => Availability::Hidden,
+        },
         other => other,
     }
 }
@@ -780,6 +850,52 @@ fn builder_list_closed(app: &App) -> Availability {
     }
 }
 
+/// F2 in the builder opens what holds text: a part of the template on the
+/// section list (never Save or Discard, which are verbs), or the highlighted
+/// variable or file on its list. Hidden inside a form or an editor, where the
+/// key is the field's to ignore.
+fn builder_text_row(app: &App) -> Availability {
+    use crate::tui::app::studio::{Open, Row};
+    let Some(crate::tui::app::modal::Modal::Builder(builder)) = app.modals.top() else {
+        return Availability::Hidden;
+    };
+    if builder.pending.is_some() || builder.saving {
+        return Availability::Hidden;
+    }
+    let text = match &builder.open {
+        None => matches!(builder.row(), Row::Section(_)),
+        Some(Open::Variables(list)) => {
+            list.editing.is_none() && !builder.template.variables.is_empty()
+        }
+        Some(Open::Files(list)) => list.editing.is_none() && !builder.template.files.is_empty(),
+        Some(_) => false,
+    };
+    if text {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
+}
+
+/// F2 in the settings opens a value that is text — the rows Enter would open
+/// on their line. A yes/no, a choice and a maintenance verb have nothing to
+/// type, and are Enter's.
+fn settings_text_row(app: &App) -> Availability {
+    use crate::tui::app::settings::Kind;
+    match app.modals.top() {
+        Some(crate::tui::app::modal::Modal::Settings(state))
+            if state.editing.is_none()
+                && !state.pending
+                && state
+                    .row()
+                    .is_some_and(|row| matches!(row.kind, Kind::Text(_) | Kind::Bases)) =>
+        {
+            Availability::Enabled
+        }
+        _ => Availability::Hidden,
+    }
+}
+
 fn builder_variables_open(app: &App) -> Availability {
     use crate::tui::app::studio::Open;
     match app.modals.top() {
@@ -822,7 +938,7 @@ fn can_move(app: &App) -> Availability {
 }
 
 const G: &[Context] = &[Context::Global];
-/// The library's own screen: the table and the pane beside it. The templates
+/// The library's own screen: the table and its pane. The templates
 /// tab is **not** in it — it was, while the templates were a strip along the
 /// bottom of this screen, and that is why `n` used to mean both "new project"
 /// and "new template" in the same hint bar.
@@ -864,7 +980,7 @@ const DIALOGS: &[Context] = &[
     Context::Modal,
 ];
 /// Where the horizontal axis moves focus: both tabs, each a list with a pane
-/// beside it. Nowhere else — a dialog has no second pane, and a text field
+/// of its own. Nowhere else — a dialog has no second pane, and a text field
 /// owns its own arrows.
 const PANED: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
 const STUDIO: &[Context] = &[Context::Templates];
@@ -1157,7 +1273,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         FocusNext,
         "Next pane",
-        "move focus between the list and the pane beside it",
+        "move focus between the list and its pane",
         G,
         [Key::plain(KeyCode::Tab)],
         Navigate,
@@ -1302,7 +1418,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         SortCycle,
         "Sort: next order",
-        "newest → oldest → name → id → template → base → size",
+        "in turn: newest, oldest, name, id, template, base, size",
         PD,
         [Key::ch('s')],
         Search,
@@ -1312,7 +1428,7 @@ pub static COMMANDS: &[Command] = &[
     ),
     cmd!(
         SortPick,
-        "Sort by…",
+        "Sort: pick an order",
         "pick the order from a list",
         PD,
         [Key::ch('S')],
@@ -1403,6 +1519,54 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         pane_row_and_not_busy
     ),
+    // **Enter acts, F2 edits, `+` adds** — the same three wherever there is a
+    // row to act on, text to edit or a list to add to. Enter on a todo ticks
+    // it, so rewording one needs a key of its own, and F2 is the edit key a
+    // file manager has always had.
+    cmd!(
+        PaneEditText,
+        "Edit the text",
+        "open the row under the cursor in place: reword a todo (Enter ticks it), a tag, a variable, a note, the name; emptied, a todo, a tag or a note is removed",
+        &[Context::Detail],
+        [Key::plain(KeyCode::F(2))],
+        Project,
+        palette = false,
+        hint = true,
+        pane_text_row
+    ),
+    cmd!(
+        PaneAdd,
+        "Add here",
+        "one more of what the cursor is among: a todo, typed where it will land (in the cursor's phase) with the next line opening under it; a tag; a note",
+        &[Context::Detail],
+        [Key::ch('+')],
+        Project,
+        palette = false,
+        hint = true,
+        selection_and_not_busy
+    ),
+    cmd!(
+        ListRename,
+        "Rename folder",
+        "F2 edits wherever it is pressed: on the list, the folder's name",
+        &[Context::Projects],
+        [Key::plain(KeyCode::F(2))],
+        Project,
+        palette = false,
+        hint = false,
+        single_and_not_busy
+    ),
+    cmd!(
+        ListAddTodo,
+        "Add a todo",
+        "a todo for the project under the cursor, typed into its list in the pane",
+        &[Context::Projects],
+        [Key::ch('+')],
+        Project,
+        palette = false,
+        hint = false,
+        one_project
+    ),
     cmd!(
         PaneEditConfirm,
         "Keep",
@@ -1483,7 +1647,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         ToggleDetail,
         "Toggle the detail pane",
-        "show or hide the pane beside the list",
+        "show or hide the detail pane",
         LISTS,
         [Key::ch('i')],
         Navigate,
@@ -1743,7 +1907,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         FocusList,
         "Back to the list",
-        "put the cursor back on the list beside the pane",
+        "put the cursor back on the list",
         PANED,
         [Key::plain(KeyCode::Left), Key::ch('h')],
         Navigate,
@@ -1754,13 +1918,41 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         FocusDetail,
         "Into the pane",
-        "put the cursor in the pane beside the list — the project's detail, or the template's",
+        "put the cursor in the pane — the project's detail, or the template's",
         PANED,
         [Key::plain(KeyCode::Right), Key::ch('l')],
         Navigate,
         palette = false,
         hint = true,
         pane_can_take_focus
+    ),
+    // Walking the projects without leaving the pane: reviewing the todos of
+    // one project after another would otherwise cost ← ↓ → each, three keys
+    // where the pane takes the list's place. `<` and `>`, not `[` and `]`,
+    // which need AltGr on German, French and Nordic keyboards. Off the hint
+    // bar: its last pair is `? help`, which says them, and a bar that spent
+    // that room on a walk would lose the one pair that explains the rest.
+    cmd!(
+        PanePreviousProject,
+        "Previous project",
+        "show the project above in the pane, staying in the pane and in the same section",
+        &[Context::Detail],
+        [Key::ch('<')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
+    ),
+    cmd!(
+        PaneNextProject,
+        "Next project",
+        "show the project below in the pane, staying in the pane and in the same section",
+        &[Context::Detail],
+        [Key::ch('>')],
+        Navigate,
+        palette = false,
+        hint = false,
+        always
     ),
     cmd!(
         Settings,
@@ -1776,7 +1968,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Reconcile,
         "Check and recover",
-        "finish or roll back work a crash left half-done — what ⚠ needs attention means",
+        "finish or roll back work a crash left half-done — what the header's needs-attention warning means",
         TABS,
         [Key::ch('!')],
         Library,
@@ -1801,7 +1993,11 @@ pub static COMMANDS: &[Command] = &[
         "Edit this template",
         "open the selected template in the builder",
         STUDIO,
-        [Key::plain(KeyCode::Enter), Key::ch('e')],
+        [
+            Key::plain(KeyCode::Enter),
+            Key::ch('e'),
+            Key::plain(KeyCode::F(2))
+        ],
         Templates,
         palette = false,
         hint = true,
@@ -1812,7 +2008,7 @@ pub static COMMANDS: &[Command] = &[
         "New template",
         "build a template from scratch: metadata, variables, folders, files",
         STUDIO,
-        [Key::ch('n')],
+        [Key::ch('n'), Key::ch('+')],
         Templates,
         palette = true,
         hint = true,
@@ -1890,11 +2086,22 @@ pub static COMMANDS: &[Command] = &[
         always
     ),
     cmd!(
+        BuilderEditText,
+        "Edit",
+        "F2 edits wherever it is pressed: here, the highlighted part, variable or file",
+        BUILDER,
+        [Key::plain(KeyCode::F(2))],
+        Templates,
+        palette = false,
+        hint = false,
+        builder_text_row
+    ),
+    cmd!(
         BuilderAdd,
         "Add",
         "a new variable or file at the end of the list",
         BUILDER,
-        [Key::ch('a')],
+        [Key::ch('a'), Key::ch('+')],
         Templates,
         palette = false,
         hint = true,
@@ -1968,6 +2175,17 @@ pub static COMMANDS: &[Command] = &[
         always
     ),
     cmd!(
+        SettingsEditText,
+        "Edit the value",
+        "F2 edits wherever it is pressed: here, a value on its line; a yes/no or a choice is Enter's",
+        SETTINGS,
+        [Key::plain(KeyCode::F(2))],
+        Settings,
+        palette = false,
+        hint = false,
+        settings_text_row
+    ),
+    cmd!(
         SettingsChange,
         "Change / run",
         "flip a yes/no or cycle a choice where it stands, open a value on its line, or run the maintenance verb",
@@ -2004,7 +2222,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         Back,
         "Back",
-        "one step back: cancel a running job, clear the search, the filter, the marks — then quit",
+        "one step back: cancel a running job, leave the pane, clear the search, the filter, the marks — then quit",
         BACKSTEP,
         [Key::plain(KeyCode::Esc)],
         Navigate,
@@ -2065,23 +2283,58 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
     // because the palette stopped being a global command the day it stopped
     // opening itself, and a bar that led with `c commands` on every screen was
     // the whole of that change showing through.
+    //
+    // **The pane's bar is what the pane does.** The verbs it shares with the
+    // list — open, terminal, copy the path, mark, new, the tab switch — are on
+    // the list's bar and in the action menu, and in the pane they crowded out
+    // the pane's own: its row actions, the way back, and help.
+    let pane_keeps = |c: &Command| {
+        ctx != Context::Detail
+            || !c.contexts.contains(&Context::Projects)
+            || matches!(
+                c.id,
+                CommandId::Search | CommandId::Actions | CommandId::FocusList
+            )
+    };
     let mut ranked: Vec<&Command> = COMMANDS
         .iter()
         .filter(|c| c.hint && (c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global)))
+        .filter(|c| pane_keeps(c))
         .filter(|c| (c.available)(app) != Availability::Hidden)
         .collect();
     // A stable sort, so declaration order decides within each group — which
     // is why `? help` still comes before `c commands`, as it always has.
+    //
+    // **Except the doors.** Where the pane takes the list's place, whichever
+    // of the two is out of sight is one key away and nothing on screen says
+    // so: that key leads, so a narrow bar never cuts the way in or out.
+    let door = if app.pane_behind_list() {
+        Some(CommandId::FocusDetail)
+    } else if app.pane_over_list() {
+        Some(CommandId::FocusList)
+    } else {
+        None
+    };
     ranked.sort_by_key(|c| {
         let asking = c.category == Category::Help;
-        (asking, !asking && !c.contexts.contains(&ctx))
+        (
+            Some(c.id) != door,
+            asking,
+            !asking && !c.contexts.contains(&ctx),
+        )
     });
     for c in ranked {
         let Some(key) = keys_in(ctx, c).first().copied() else {
             continue;
         };
-        let label = key.label();
+        let label = key.label_in(&app.theme.glyphs);
         let title = hint_title(c.id, c.title, app);
+        // **A bar never says one verb twice.** On a pane row Enter already
+        // edits, F2's `edit` would repeat it; on a todo, where Enter ticks,
+        // F2 is the one that says it.
+        if out.iter().any(|(_, said): &(String, &str)| *said == title) {
+            continue;
+        }
         let cost = label.chars().count() + 1 + title.chars().count() + 2;
         if used + cost > width && !out.is_empty() {
             break;
@@ -2092,12 +2345,19 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
     out
 }
 
+/// Whether the edit open in the pane is the line a new todo is typed on.
+fn adding(app: &App) -> bool {
+    app.pane_edit
+        .as_ref()
+        .is_some_and(crate::tui::app::pane::PaneEdit::is_adding)
+}
+
 /// What Enter does on the pane row under the cursor, in one word.
 fn pane_verb(app: &App) -> &'static str {
     use crate::tui::app::pane::PaneRow;
     match app.pane_rows().get(app.pane_cursor) {
         Some(PaneRow::Todo { .. }) => "toggle",
-        Some(PaneRow::AddTag | PaneRow::AddNote | PaneRow::AddTodo) => "add",
+        Some(PaneRow::AddTag | PaneRow::AddNote | PaneRow::AddTodo | PaneRow::Adding) => "add",
         Some(PaneRow::EarlierNotes(_)) => "show",
         _ => "edit",
     }
@@ -2141,7 +2401,10 @@ pub fn field_claims(key: &Key) -> bool {
 /// rebinding reaches every line. The verb is the surface's own: you *choose*
 /// from a list of things to do, you *move* through a list of things to pick,
 /// and you *scroll* a body of text.
-pub fn movement_pair(ctx: Context) -> Option<(String, &'static str)> {
+pub fn movement_pair(
+    ctx: Context,
+    g: &crate::tui::theme::Glyphs,
+) -> Option<(String, &'static str)> {
     let by = |code: KeyCode| {
         COMMANDS
             .iter()
@@ -2154,7 +2417,12 @@ pub fn movement_pair(ctx: Context) -> Option<(String, &'static str)> {
         Context::Palette | Context::Pick | Context::SearchEdit => "move",
         _ => "choose",
     };
-    Some((format!("{}{}", up.label(), down.label()), what))
+    // Two glyphs read as one pair; two words need a stroke between them.
+    let joint = if g.is_ascii() { "/" } else { "" };
+    Some((
+        format!("{}{joint}{}", up.label_in(g), down.label_in(g)),
+        what,
+    ))
 }
 
 /// The hint bar has one line, so a few titles get a shorter form there —
@@ -2164,10 +2432,19 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         CommandId::Palette => "commands",
         CommandId::Actions => "actions",
         CommandId::FocusList => "list",
+        // Where the pane is out of sight, the key is the way to it, and says
+        // what is there rather than where.
+        CommandId::FocusDetail if app.pane_behind_list() => "details",
         CommandId::FocusDetail => "pane",
+        CommandId::PaneEditText => "edit",
+        CommandId::PaneAdd => "add",
         CommandId::PaneEdit => pane_verb(app),
+        // On the add line Enter writes one more and opens the next, and Esc
+        // is the end of the run, not the loss of anything.
+        CommandId::PaneEditConfirm if adding(app) => "add",
         CommandId::PaneEditConfirm => "keep",
         CommandId::PaneEditSave => "save",
+        CommandId::PaneEditCancel if adding(app) => "done",
         CommandId::PaneEditCancel => "cancel",
         CommandId::OpenFolder => "open",
         CommandId::OpenTerminal => "terminal",
@@ -2256,14 +2533,18 @@ const NARROW_DESCRIPTION: usize = 28;
 /// The three column widths the help overlay lays out in: keys, title, and
 /// what is left for the description — measured from the commands themselves,
 /// so a long title can never run into its description.
-pub fn help_columns(ctx: Context, inner_width: usize) -> (usize, usize, usize) {
+pub fn help_columns(
+    ctx: Context,
+    inner_width: usize,
+    g: &crate::tui::theme::Glyphs,
+) -> (usize, usize, usize) {
     let commands: Vec<&Command> = help_sections(ctx)
         .into_iter()
         .flat_map(|(_, commands)| commands)
         .collect();
     let keys_width = commands
         .iter()
-        .map(|c| key_labels(ctx, c).chars().count())
+        .map(|c| key_labels(ctx, c, g).chars().count())
         .max()
         .unwrap_or(0)
         .clamp(8, 18);
@@ -2302,18 +2583,32 @@ pub fn key_of(id: CommandId) -> String {
         .unwrap_or_default()
 }
 
-pub fn key_labels(ctx: Context, command: &Command) -> String {
+/// The key a command is bound to, in `g`'s alphabet — for a key line drawn on
+/// screen, where an arrow has to be one the terminal can draw.
+pub fn key_of_in(id: CommandId, g: &crate::tui::theme::Glyphs) -> String {
+    find(id)
+        .keys
+        .first()
+        .map(|key| key.label_in(g))
+        .unwrap_or_default()
+}
+
+pub fn key_labels(ctx: Context, command: &Command, g: &crate::tui::theme::Glyphs) -> String {
     keys_in(ctx, command)
         .iter()
-        .map(|k| k.label())
+        .map(|k| k.label_in(g))
         .collect::<Vec<_>>()
         .join(" / ")
 }
 
 /// The help overlay's body for `ctx`, laid out for `inner_width` columns: a
 /// description that does not fit its line continues under itself.
-pub fn help_lines(ctx: Context, inner_width: usize) -> Vec<HelpLine> {
-    let (keys_width, title_width, description_width) = help_columns(ctx, inner_width);
+pub fn help_lines(
+    ctx: Context,
+    inner_width: usize,
+    g: &crate::tui::theme::Glyphs,
+) -> Vec<HelpLine> {
+    let (keys_width, title_width, description_width) = help_columns(ctx, inner_width, g);
     // Wide enough: three columns. Narrow: the description on its own line
     // under the title, indented past the keys, so it reads as prose rather
     // than a ladder of three-word lines.
@@ -2330,7 +2625,7 @@ pub fn help_lines(ctx: Context, inner_width: usize) -> Vec<HelpLine> {
         for c in commands {
             let mut parts = wrap_words(c.description, width).into_iter();
             lines.push(HelpLine::Command {
-                keys: key_labels(ctx, c),
+                keys: key_labels(ctx, c, g),
                 title: c.title,
                 description: if beside {
                     parts.next().unwrap_or_default()
@@ -2383,8 +2678,8 @@ pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
 /// How many lines the help overlay draws for `ctx` at `inner_width`: the
 /// body, and the five lines of footer under it. The view draws exactly
 /// this, and `update` clamps the scroll with it.
-pub fn help_line_count(ctx: Context, inner_width: usize) -> usize {
-    help_lines(ctx, inner_width).len() + 5
+pub fn help_line_count(ctx: Context, inner_width: usize, g: &crate::tui::theme::Glyphs) -> usize {
+    help_lines(ctx, inner_width, g).len() + 5
 }
 
 /// The palette's command entries: everything listed and not hidden, the

@@ -275,7 +275,7 @@ impl Runtime {
         if self.last_watch.is_some_and(|at| at.elapsed() < WATCH_EVERY) {
             return;
         }
-        if !app.detail_visible() {
+        if !app.pane_live() {
             return;
         }
         let Some(project) = app.library.selected() else {
@@ -871,14 +871,41 @@ fn run_action(
                 if done { "Done." } else { "Open again." },
             ))
         }
-        Action::AddTodo { project, text } => {
-            crate::core::operations::add_todo(&project, &text)?;
+        Action::ReplaceTodo {
+            project,
+            ordinal,
+            was,
+            text,
+        } => {
+            crate::core::operations::replace_todo(&project, ordinal, &was, &text)?;
             Ok(ActionOutcome::new(
                 ListChange::DetailOnly {
                     path: project.path.clone(),
                 },
-                "Todo added.",
+                if text.trim().is_empty() {
+                    "Todo removed."
+                } else {
+                    "Todo reworded."
+                },
             ))
+        }
+        Action::AddTodos {
+            project,
+            texts,
+            place,
+        } => {
+            let first = crate::core::operations::add_todos_at(&project, &texts, &place)?;
+            let added = texts.iter().filter(|text| !text.trim().is_empty()).count();
+            Ok(ActionOutcome::new(
+                ListChange::DetailOnly {
+                    path: project.path.clone(),
+                },
+                match added {
+                    1 => "Todo added.".to_string(),
+                    n => format!("{n} todos added."),
+                },
+            )
+            .todo(first + added.saturating_sub(1)))
         }
         Action::ReautoTags(project) => {
             let derived = crate::core::operations::replace_auto_tags(&project)?;

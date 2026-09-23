@@ -1,18 +1,20 @@
-//! The project table and the detail pane beside it.
+//! The project table and its detail pane — beside it, under it, or in its
+//! place (`layout::place`).
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
-    TableState,
-};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, ScrollbarState, Table, TableState};
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::library;
-use crate::tui::app::pane::{EditTarget, NOTE_INDENT, PaneEdit, PaneRow, TODO_INDENT};
+use crate::tui::app::pane::{
+    EditTarget, Fact, NOTE_INDENT, PHASE_INDENT, PaneEdit, PaneRow, TODO_INDENT, notes_label,
+    todos_label,
+};
 use crate::tui::app::{App, Focus};
+use crate::tui::layout;
 use crate::tui::rows::{SIZE_CELL, date_cell, size_label};
 use crate::tui::view::{fit, highlighted};
 use crate::util::size_scan::SizeCell;
@@ -25,6 +27,9 @@ const DATE_CELL: usize = 10;
 /// The widest a tags column gets before it is clamped: three short tags and
 /// their `+n`.
 const TAGS_MAX: usize = 24;
+/// The least a note editor in the pane is drawn at: three lines of text and
+/// its key line.
+const NOTE_EDITOR_ROWS: u16 = 4;
 
 /// Which optional columns a table shows.
 ///
@@ -68,6 +73,60 @@ fn tag_cell_width(tags: &[String]) -> usize {
         n => 1 + format!("+{n}").width(),
     };
     shown + gaps + extra
+}
+
+/// Whether every row after `todo` up to `row` is a continuation of it — so
+/// `row` is part of the todo that starts at `todo`.
+fn continues_todo(rows: &[PaneRow], todo: usize, row: usize) -> bool {
+    rows.get(todo + 1..=row).is_some_and(|between| {
+        between
+            .iter()
+            .all(|r| matches!(r, PaneRow::TodoLine { .. }))
+    })
+}
+
+/// One header fact as the pane draws it (`pane::Fact`).
+fn fact_spans(
+    fact: &Fact,
+    app: &App,
+    project: &crate::core::library::Project,
+    theme: &crate::tui::theme::Theme,
+) -> Vec<Span<'static>> {
+    match fact {
+        Fact::Template => vec![Span::styled(project.template.clone(), theme.dim())],
+        Fact::Base => vec![Span::styled(
+            library::base_label(&project.base),
+            Style::default().fg(theme.accent),
+        )],
+        Fact::Created => vec![
+            Span::styled("created ", theme.dim()),
+            Span::styled(date_cell(&project.created).to_string(), theme.text()),
+        ],
+        Fact::Size => vec![Span::styled(
+            match app.size_cell(&project.path) {
+                SizeCell::Pending => theme.glyphs.pending.to_string(),
+                SizeCell::Known(size) => size_label(size),
+            },
+            theme.text(),
+        )],
+        Fact::Notes(notes) => vec![Span::styled(notes_label(*notes), theme.dim())],
+        Fact::Todos { done, total } => {
+            vec![Span::styled(todos_label(*done, *total), theme.dim())]
+        }
+    }
+}
+
+/// The list's peek at a hidden pane: ` 2 notes · 2/4 todos done `, the parts
+/// there are, and `None` when there are none.
+fn peek((notes, done, todos): (usize, usize, usize), sep: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    if notes > 0 {
+        parts.push(notes_label(notes));
+    }
+    if todos > 0 {
+        parts.push(todos_label(done, todos));
+    }
+    (!parts.is_empty()).then(|| format!(" {} ", parts.join(&format!(" {sep} "))))
 }
 
 /// `room` is what is left after the cursor cell, the id, their spacing and the
@@ -119,10 +178,18 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     let focused = app.focus == Focus::Projects && app.modals.is_empty() && !app.search.editing;
 
     let title = " projects ".to_string();
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(title, title_style(app, focused)))
         .border_style(border_style(app, focused));
+    // Where the pane is out of sight, the list's border says what it would
+    // show for the row under the cursor — the one reason to go and look.
+    // Nothing for a project with nothing in it.
+    if app.pane_behind_list()
+        && let Some(peek) = app.pane_counts().and_then(|counts| peek(counts, g.sep))
+    {
+        block = block.title_bottom(Line::from(Span::styled(peek, theme.dim())).right_aligned());
+    }
     let full_inner = block.inner(area);
     frame.render_widget(block, area);
     if full_inner.height < 2 || full_inner.width < 4 {
@@ -173,6 +240,22 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     // The cursor cell and the id, each followed by a space.
     let room = (inner.width as usize).saturating_sub(2 + id_w + 1);
     let columns = choose_columns(room, name_w, base_w, template_w, tags_w, many_bases);
+    // What the name has once the elected columns are placed. A name wider than
+    // that — a window narrower than the name itself — is cut with the
+    // ellipsis, never by the table's border in the middle of a letter.
+    let name_col = room.saturating_sub(
+        [
+            (columns.size, SIZE_CELL),
+            (columns.created, DATE_CELL),
+            (columns.base, base_w),
+            (columns.template, template_w),
+            (columns.tags, tags_w),
+        ]
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, w)| w + 1)
+        .sum::<usize>(),
+    );
 
     let mut header = vec![Cell::from(""), Cell::from("ID"), Cell::from("PROJECT")];
     let mut constraints = vec![
@@ -254,11 +337,15 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
                     theme.accent(),
                     theme.hit(),
                 ))),
-                Cell::from(Line::from(highlighted(
-                    &p.name,
-                    info.map(|i| i.name_hits.as_slice()).unwrap_or(&[]),
-                    theme.text(),
-                    theme.hit(),
+                Cell::from(Line::from(crate::tui::view::fit_spans(
+                    highlighted(
+                        &p.name,
+                        info.map(|i| i.name_hits.as_slice()).unwrap_or(&[]),
+                        theme.text(),
+                        theme.hit(),
+                    ),
+                    name_col,
+                    g.ellipsis,
                 ))),
             ];
             if columns.size {
@@ -333,9 +420,7 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
         let mut scroll = ScrollbarState::new(app.library.len().saturating_sub(rows_visible))
             .position(offset)
             .viewport_content_length(rows_visible);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None);
+        let scrollbar = crate::tui::view::scrollbar(&g);
         let bar_area = Rect::new(
             area.x + area.width - 1,
             inner.y + 1,
@@ -401,7 +486,10 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         .border_style(border_style(app, focused));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let width = inner.width as usize;
+    // The text sits a column in from each border (`layout::pane_text`, the
+    // rect `pane_rows` wrapped to); a highlight still spans the whole row.
+    let text = layout::pane_text(area);
+    let width = text.width as usize;
 
     let rule = |label: &str| -> Line<'static> {
         Line::from(Span::styled(
@@ -414,8 +502,17 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         ))
     };
 
-    let detail = app.details.get(&project.path);
     let rows = app.pane_rows();
+    // The row of a todo open in the editor, whose own rows are blank while
+    // the editor holds its text.
+    let editing_todo = match &app.pane_edit {
+        Some(PaneEdit::Line {
+            target: EditTarget::Todo { .. },
+            row,
+            ..
+        }) => Some(*row),
+        _ => None,
+    };
     let key_w = rows
         .iter()
         .filter_map(|row| match row {
@@ -432,49 +529,23 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
     let mut lines: Vec<Line> = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
         let mut line = match row {
-            PaneRow::Name => Line::from(Span::styled(project.name.clone(), theme.bold())),
-            PaneRow::Facts => Line::from(vec![
-                Span::styled(project.template.clone(), theme.dim()),
-                Span::styled(format!(" {} ", g.sep), theme.dim()),
-                Span::styled(
-                    library::base_label(&project.base),
-                    Style::default().fg(theme.accent),
-                ),
-                Span::styled(format!(" {} created ", g.sep), theme.dim()),
-                Span::styled(date_cell(&project.created).to_string(), theme.text()),
-            ]),
-            PaneRow::Figures => {
-                let size = match app.size_cell(&project.path) {
-                    SizeCell::Pending => g.pending.to_string(),
-                    SizeCell::Known(size) => size_label(size),
-                };
-                let notes = detail.map(|d| d.notes.len()).unwrap_or(0);
-                let (done, todos) = detail
-                    .map(|d| (d.todos.iter().filter(|t| t.done).count(), d.todos.len()))
-                    .unwrap_or((0, 0));
-                Line::from(vec![
-                    Span::styled(size, theme.text()),
-                    Span::styled(
-                        format!(
-                            "   {}   {}   {}   {}",
-                            g.sep,
-                            match notes {
-                                0 => "no notes".to_string(),
-                                1 => "1 note".to_string(),
-                                n => format!("{n} notes"),
-                            },
-                            g.sep,
-                            if todos == 0 {
-                                "no todos".to_string()
-                            } else {
-                                format!("{done}/{todos} todos done")
-                            }
-                        ),
-                        theme.dim(),
-                    ),
-                ])
+            PaneRow::Name(first) => Line::from(Span::styled(first.clone(), theme.bold())),
+            PaneRow::NameLine(rest) => Line::from(Span::styled(rest.clone(), theme.bold())),
+            // Whole facts, as `pane_rows` flowed them: what the project is
+            // recedes but for its base, which is the one colour a list of
+            // drives needs; what it holds reads in the text colour where it is
+            // a figure.
+            PaneRow::Facts(facts) => {
+                let mut spans = Vec::with_capacity(facts.len() * 2);
+                for (at, fact) in facts.iter().enumerate() {
+                    if at > 0 {
+                        spans.push(Span::styled(format!("   {}   ", g.sep), theme.dim()));
+                    }
+                    spans.extend(fact_spans(fact, app, project, theme));
+                }
+                Line::from(spans)
             }
-            PaneRow::Rule(label) => rule(label),
+            PaneRow::Rule(section) => rule(section.label()),
             PaneRow::Tag(tag) => Line::from(Span::styled(
                 format!("{} {tag}", g.dot),
                 Style::default().fg(theme.tag_color(tag)),
@@ -482,7 +553,9 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             PaneRow::AddTag => {
                 Line::from(Span::styled(format!("{} add a tag", g.sep), theme.dim()))
             }
-            PaneRow::Reading => Line::from(Span::styled("reading…", theme.dim())),
+            PaneRow::Reading => {
+                Line::from(Span::styled(format!("reading{}", g.ellipsis), theme.dim()))
+            }
             PaneRow::Warning(error) => {
                 Line::from(Span::styled(format!("warning: {error}"), theme.warn()))
             }
@@ -565,36 +638,62 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             PaneRow::AddNote => {
                 Line::from(Span::styled(format!("{} add a note", g.sep), theme.dim()))
             }
-            // A phase label, in the marker's column so the tasks under it
-            // read as its own: dim, one row, no wrap, like every other label
-            // the pane draws.
-            PaneRow::Phase(name) => Line::from(Span::styled(
-                format!(
-                    "{} {}",
-                    g.rule.repeat(2),
-                    fit(name, width.saturating_sub(3), g.ellipsis)
-                ),
-                theme.dim(),
-            )),
-            // The markdown's own marker, which every terminal can draw: a
-            // done todo recedes with its text, an open one is lit.
-            PaneRow::Todo { done, text, .. } => Line::from(vec![
-                Span::styled(
-                    if *done { "[x] " } else { "[ ] " },
-                    if *done { theme.dim() } else { theme.accent() },
-                ),
-                Span::styled(
-                    fit(text, width.saturating_sub(TODO_INDENT), g.ellipsis),
-                    if *done { theme.dim() } else { theme.text() },
-                ),
-            ]),
-            PaneRow::TodoLine { done, text } => Line::from(vec![
-                Span::raw(" ".repeat(TODO_INDENT)),
-                Span::styled(
-                    fit(text, width.saturating_sub(TODO_INDENT), g.ellipsis),
-                    if *done { theme.dim() } else { theme.text() },
-                ),
-            ]),
+            // A phase is a heading of the list, in the text colour, with
+            // how much of it is done on the right; a finished phase recedes
+            // with its tasks. Its tasks sit two columns in from it.
+            PaneRow::Phase { name, done, total } => {
+                let finished = done == total;
+                let count = format!("{done}/{total}");
+                let room = width.saturating_sub(count.width() + 1);
+                let label = fit(name, room, g.ellipsis);
+                let gap = width.saturating_sub(label.width() + count.width());
+                Line::from(vec![
+                    Span::styled(label, if finished { theme.dim() } else { theme.text() }),
+                    Span::raw(" ".repeat(gap)),
+                    Span::styled(count, theme.dim()),
+                ])
+            }
+            // The markdown's own marker, which every terminal can draw. An
+            // open todo reads in the text colour — the accent is for focus,
+            // and a list of accented boxes is a list shouting — and a done
+            // one recedes with its text.
+            PaneRow::Todo {
+                done, text, phased, ..
+            } => {
+                if editing_todo == Some(index) {
+                    Line::default()
+                } else {
+                    let style = if *done { theme.dim() } else { theme.text() };
+                    let indent = if *phased { PHASE_INDENT } else { 0 };
+                    Line::from(vec![
+                        Span::raw(" ".repeat(indent)),
+                        Span::styled(if *done { "[x] " } else { "[ ] " }, theme.dim()),
+                        Span::styled(
+                            fit(text, width.saturating_sub(TODO_INDENT + indent), g.ellipsis),
+                            style,
+                        ),
+                    ])
+                }
+            }
+            // The rest of a long todo, under its text; blank while the todo
+            // is open in the editor, which holds the whole of it on one line.
+            PaneRow::TodoLine { done, text, phased } => {
+                if editing_todo.is_some_and(|row| row < index && continues_todo(&rows, row, index))
+                {
+                    Line::default()
+                } else {
+                    let indent = TODO_INDENT + if *phased { PHASE_INDENT } else { 0 };
+                    Line::from(vec![
+                        Span::raw(" ".repeat(indent)),
+                        Span::styled(
+                            fit(text, width.saturating_sub(indent), g.ellipsis),
+                            if *done { theme.dim() } else { theme.text() },
+                        ),
+                    ])
+                }
+            }
+            // The add line: its field is drawn over it below.
+            PaneRow::Adding => Line::default(),
             PaneRow::AddTodo => {
                 Line::from(Span::styled(format!("{} add a todo", g.sep), theme.dim()))
             }
@@ -602,31 +701,60 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         // A row an edit just landed on wears the wash, under the cursor —
         // the cursor still says where you are while the pulse says what
         // changed, the same order the table keeps.
-        if let Some(wash) = app
+        let wash = app
             .pane_pulses
-            .style_for(&index, app.elapsed_ms, theme, app.motion)
-        {
+            .style_for(&index, app.elapsed_ms, theme, app.motion);
+        if let Some(wash) = wash {
             line = line.style(wash);
         }
         // The cursor: the selection's own highlight, and only while the pane
         // has the focus — a lit row in a pane you are not in would say the
         // next key goes there when it does not.
-        if focused && index == app.pane_cursor && row.selectable() {
+        let lit = focused && index == app.pane_cursor && row.selectable();
+        if lit {
             line = line.patch_style(theme.selection);
         }
         lines.push(line);
+        // Both reach the borders, across the padding, so the row reads as
+        // one bar rather than as a highlighted line of text inside a pane.
+        if let Some(y) = index
+            .checked_sub(app.detail_scroll)
+            .filter(|row| *row < text.height as usize)
+        {
+            let bar = Rect::new(inner.x, text.y + y as u16, inner.width, 1);
+            if let Some(wash) = wash {
+                frame.buffer_mut().set_style(bar, wash);
+            }
+            if lit {
+                frame.buffer_mut().set_style(bar, theme.selection);
+            }
+        }
     }
 
+    let total = lines.len();
     let paragraph = Paragraph::new(lines).scroll((app.detail_scroll as u16, 0));
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, text);
+
+    // More rows than the pane shows: the table's scrollbar, on the border.
+    let shown = text.height as usize;
+    if total > shown && inner.height > 0 {
+        let mut scroll = ScrollbarState::new(total.saturating_sub(shown))
+            .position(app.detail_scroll)
+            .viewport_content_length(shown);
+        frame.render_stateful_widget(
+            crate::tui::view::scrollbar(&g),
+            Rect::new(area.x + area.width - 1, inner.y, 1, inner.height),
+            &mut scroll,
+        );
+    }
 
     // An open edit is drawn over its row, in place: the field where the value
     // was, the refusal on the line under it. A note takes the rest of the
     // pane from its own row down, with its own key line at the bottom — a
     // text area is the one widget whose Enter is not the registry's.
     let edit = app.pane_edit.as_ref()?;
-    let row_y = (edit.row().checked_sub(app.detail_scroll)? as u16).checked_add(inner.y)?;
-    if row_y >= inner.y + inner.height {
+    let row_y = (edit.row().checked_sub(app.detail_scroll)? as u16).checked_add(text.y)?;
+    if row_y >= text.y + text.height {
         return None;
     }
     match edit {
@@ -649,8 +777,20 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                     format!("{:<key_w$} ", fit(&label, key_w, g.ellipsis))
                 }
                 EditTarget::Tag(_) => format!("{} ", g.dot),
+                // A todo is edited behind its own box, where it sits.
+                EditTarget::Todo { .. } => match rows.get(edit.row()) {
+                    Some(PaneRow::Todo { done, phased, .. }) => format!(
+                        "{}{}",
+                        " ".repeat(if *phased { PHASE_INDENT } else { 0 }),
+                        if *done { "[x] " } else { "[ ] " }
+                    ),
+                    _ => "[ ] ".to_string(),
+                },
+                EditTarget::NewTodo { phased, .. } => {
+                    format!("{}[ ] ", " ".repeat(if *phased { PHASE_INDENT } else { 0 }))
+                }
             };
-            let line_area = Rect::new(inner.x, row_y, inner.width, 1);
+            let line_area = Rect::new(text.x, row_y, text.width, 1);
             frame.render_widget(Paragraph::new(""), line_area);
             let caret = input.render_line(
                 line_area,
@@ -659,36 +799,45 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                 theme.text().patch(theme.selection),
             );
             if let Some(error) = error
-                && row_y + 1 < inner.y + inner.height
+                && row_y + 1 < text.y + text.height
             {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
-                        fit(error, inner.width as usize, g.ellipsis),
+                        fit(error, text.width as usize, g.ellipsis),
                         theme.warn(),
                     )),
-                    Rect::new(inner.x, row_y + 1, inner.width, 1),
+                    Rect::new(text.x, row_y + 1, text.width, 1),
                 );
             }
             caret
         }
         PaneEdit::Note {
-            area: text, error, ..
+            area: editor,
+            error,
+            ..
         } => {
-            // From the note's own row to the key line at the bottom.
-            let top = row_y;
-            let bottom = inner.y + inner.height;
-            if top + 2 > bottom {
+            // From the note's own row to the key line at the pane's bottom —
+            // and never fewer than `NOTE_EDITOR_ROWS`: a note near the bottom
+            // slides the editor up over the rows above it, rather than
+            // opening as a sliver, or as nothing at all.
+            let body = layout::box_at_row(
+                text,
+                row_y - text.y,
+                text.y + text.height - row_y,
+                NOTE_EDITOR_ROWS,
+            );
+            if body.height < 2 {
                 return None;
             }
-            let text_area = Rect::new(inner.x, top, inner.width, bottom - top - 1);
+            let text_area = Rect::new(body.x, body.y, body.width, body.height - 1);
             frame.render_widget(ratatui::widgets::Clear, text_area);
-            let caret = text.render(text_area, frame.buffer_mut(), theme.text());
-            let keys = Rect::new(inner.x, bottom - 1, inner.width, 1);
+            let caret = editor.render(text_area, frame.buffer_mut(), theme.text());
+            let keys = Rect::new(body.x, body.y + body.height - 1, body.width, 1);
             frame.render_widget(ratatui::widgets::Clear, keys);
             match error {
                 Some(error) => frame.render_widget(
                     Paragraph::new(Span::styled(
-                        fit(error, inner.width as usize, g.ellipsis),
+                        fit(error, body.width as usize, g.ellipsis),
                         theme.warn(),
                     )),
                     keys,
@@ -697,7 +846,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                     let pairs: Vec<(String, String)> = crate::tui::command::hints(
                         crate::tui::command::Context::PaneEdit,
                         app,
-                        inner.width as usize,
+                        body.width as usize,
                     )
                     .into_iter()
                     .map(|(key, what)| (key, what.to_string()))
@@ -706,7 +855,7 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                         Paragraph::new(crate::tui::view::builder::key_line(
                             theme,
                             &pairs,
-                            inner.width as usize,
+                            body.width as usize,
                         )),
                         keys,
                     );

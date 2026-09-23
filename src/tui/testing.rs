@@ -184,6 +184,39 @@ pub fn render_to_buffer(app: &App, width: u16, height: u16) -> ratatui::buffer::
     terminal.backend().buffer().clone()
 }
 
+/// The frame with its colours, and where it left the terminal's cursor —
+/// `None` when no field is being typed into. Where the caret is, is what says
+/// which field the next key will land in.
+pub fn render_with_caret(
+    app: &App,
+    width: u16,
+    height: u16,
+) -> (ratatui::buffer::Buffer, Option<ratatui::layout::Position>) {
+    use ratatui::backend::Backend;
+    use ratatui::layout::Position;
+
+    // The frame's own cursor is private to ratatui, so it is read back from
+    // the backend: parked somewhere no frame can put it before the draw, a
+    // frame that asks for no caret leaves it there.
+    const PARKED: Position = Position::new(u16::MAX, u16::MAX);
+    let mut backend = TestBackend::new(width, height);
+    backend
+        .set_cursor_position(PARKED)
+        .expect("a test backend cannot fail");
+    let mut terminal = Terminal::new(backend).expect("a test terminal");
+    terminal
+        .draw(|frame| crate::tui::view::view(app, frame))
+        .expect("a frame");
+    let at = terminal
+        .backend_mut()
+        .get_cursor_position()
+        .expect("a test backend cannot fail");
+    (
+        terminal.backend().buffer().clone(),
+        (at != PARKED).then_some(at),
+    )
+}
+
 /// One frame, as the text a terminal would show.
 pub fn render_to_string(app: &App, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);

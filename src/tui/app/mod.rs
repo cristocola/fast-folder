@@ -227,6 +227,17 @@ pub struct App {
     /// note or a todo added — so the answer lands on the row it was about:
     /// the cursor settles there and it pulses, as an edit's does.
     pane_pending: Option<pane::PaneTarget>,
+    /// What the pane's cursor is on, so a rebuild of the rows under it — a
+    /// re-read, a re-wrap at a new width — finds the same thing again rather
+    /// than the same index (`refind_pane`).
+    pane_anchor: Option<pane::PaneTarget>,
+    /// The project the pane's cursor, scroll and pulses belong to. They are
+    /// reset only when the selection is another project, so a discovery or
+    /// a metadata read landing does not throw the cursor back to the top.
+    pane_for: Option<PathBuf>,
+    /// The section `<` or `>` left the pane's cursor in, to land in again
+    /// on the next project once its rows are there.
+    pane_seek: Option<pane::PaneSection>,
     pub focus: Focus,
     pub screen: Screen,
     pub templates: TemplatesState,
@@ -340,6 +351,9 @@ impl App {
             pane_pulses: motion::Pulses::default(),
             pane_return: None,
             pane_pending: None,
+            pane_anchor: None,
+            pane_for: None,
+            pane_seek: None,
             focus: Focus::Projects,
             screen: Screen::Library,
             templates: TemplatesState::default(),
@@ -445,7 +459,16 @@ impl App {
     }
 
     pub fn regions(&self) -> layout::Regions {
-        layout::regions(self.area(), self.detail_open, self.table_min_width())
+        layout::regions(self.area(), self.pane_live(), self.table_needs())
+    }
+
+    /// What the table asks of the body (`layout::TableNeeds`): measured over
+    /// the whole library, so a search never moves the pane.
+    pub fn table_needs(&self) -> layout::TableNeeds {
+        layout::TableNeeds {
+            min_width: self.table_min_width(),
+            rows: self.library.snapshot.len(),
+        }
     }
 
     /// The width the table needs to show every folder name whole with the id
@@ -474,8 +497,57 @@ impl App {
         self.regions().table_rows()
     }
 
+    /// Whether the pane is switched on: its content is read and kept read
+    /// whatever its placement, so going into a pane drawn in the list's place
+    /// is instant.
+    ///
+    /// A library with nothing in it has nothing for a pane to show, and one
+    /// still being discovered does not know yet where the pane will go: the
+    /// pane arrives with the first project, in its place, rather than sitting
+    /// beside an empty list and then moving when the names come in.
+    pub fn pane_live(&self) -> bool {
+        self.detail_open && !self.library.snapshot.is_empty()
+    }
+
+    /// Whether the library's pane is drawn this frame: beside or under the
+    /// table, or in the list's place while it has the focus.
     pub fn detail_visible(&self) -> bool {
-        self.regions().detail.is_some()
+        self.screen == Screen::Library
+            && match self.regions().placement {
+                Some(layout::Placement::Beside | layout::Placement::Below) => true,
+                Some(layout::Placement::Over) => self.focus == Focus::Detail,
+                None => false,
+            }
+    }
+
+    /// What the selected project's record holds, once read: its notes, and
+    /// its todos done out of how many. The pane's figures say it; so does the
+    /// list's peek while the pane is out of sight.
+    pub fn pane_counts(&self) -> Option<(usize, usize, usize)> {
+        let project = self.library.selected()?;
+        let detail = self.details.get(&project.path)?;
+        let done = detail.todos.iter().filter(|todo| todo.done).count();
+        Some((detail.notes.len(), done, detail.todos.len()))
+    }
+
+    /// The pane is drawn in the list's place and has the focus: the list is
+    /// out of sight, one key away.
+    pub fn pane_over_list(&self) -> bool {
+        self.focus == Focus::Detail && self.placement_here() == Some(layout::Placement::Over)
+    }
+
+    /// Where this tab's pane is: the library's, or the templates tab's.
+    pub fn placement_here(&self) -> Option<layout::Placement> {
+        match self.screen {
+            Screen::Library => self.regions().placement,
+            Screen::Templates => Some(self.template_panes().2),
+        }
+    }
+
+    /// The pane is on but drawn in the list's place, and the list has the
+    /// focus: the pane is one key away and nothing on screen shows it.
+    pub fn pane_behind_list(&self) -> bool {
+        self.focus == Focus::Projects && self.placement_here() == Some(layout::Placement::Over)
     }
 
     /// Where a key goes right now.
@@ -644,8 +716,11 @@ impl App {
         }
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
-        self.detail_scroll = 0;
-        self.pane_cursor = 0;
+        // Another project under the cursor starts the pane afresh; the same
+        // one keeps its place, found again among rows that may have changed.
+        if !self.sync_pane() {
+            self.refind_pane();
+        }
 
         let mut effects = self.selection_effects();
         if self.search.query.needs_metadata() {
@@ -661,11 +736,69 @@ impl App {
     fn after_selection_change(&mut self) -> Vec<Effect> {
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
+        if !self.sync_pane() {
+            self.refind_pane();
+        }
+        self.selection_effects()
+    }
+
+    /// Start the pane afresh when the selection is another project than the
+    /// one its cursor, scroll, pulses and open edit belong to. Returns
+    /// whether it did. An edit belongs to its project: moving off it leaves
+    /// the row as it was.
+    fn sync_pane(&mut self) -> bool {
+        let now = self.library.selected().map(|p| p.path.clone());
+        if now == self.pane_for {
+            return false;
+        }
+        self.pane_for = now;
+        if let Some(pane::PaneEdit::Line {
+            target: pane::EditTarget::NewTodo { queued, .. },
+            ..
+        }) = &self.pane_edit
+            && !queued.is_empty()
+        {
+            let unsent = queued.join(", ");
+            self.warn(format!("not added: {unsent}"));
+        }
         self.detail_scroll = 0;
         self.pane_cursor = 0;
+        self.pane_anchor = None;
         self.pane_edit = None;
         self.pane_return = None;
         self.pane_pending = None;
+        self.pane_seek = None;
+        self.pane_pulses.clear();
+        true
+    }
+
+    /// The window changed size. Everything that is measured moves with it —
+    /// the table's viewport, the templates list's, the pane's wrapping — and
+    /// nothing that was being done is lost: the pane's cursor and an open edit
+    /// are found again by what they are on. The focus leaves the pane only if
+    /// there is no pane left to be in.
+    ///
+    /// A resize to the size the app already has is nothing at all: one comes
+    /// back from every `$EDITOR` note and every `fg`, and it used to close
+    /// whatever edit was open in the pane.
+    fn on_resize(&mut self, width: u16, height: u16) -> Vec<Effect> {
+        if (width, height) == self.size {
+            return Vec::new();
+        }
+        self.size = (width, height);
+        if self.focus == Focus::Detail && !self.pane_present() {
+            self.set_focus(Focus::Projects);
+        }
+        // Pulses are keyed by row index, and the rows are about to re-wrap.
+        self.pane_pulses.clear();
+        let rows = self.rows_on_screen();
+        self.library.clamp_viewport(rows);
+        if self.screen == Screen::Templates {
+            let rows = self.studio.rows(self.search.input.text());
+            self.studio.clamp_viewport(&rows, self.template_rows());
+            self.studio.scroll = self.studio.scroll.min(self.studio_scroll_max());
+        }
+        self.refind_pane();
         self.selection_effects()
     }
 
@@ -677,7 +810,7 @@ impl App {
         if !wanted.is_empty() {
             effects.push(Effect::RequestSizes(wanted));
         }
-        if self.detail_visible()
+        if self.pane_live()
             && let Some(project) = self.library.selected()
         {
             effects.push(self.detail_effect(&project.path));
@@ -706,8 +839,7 @@ impl App {
         if self.screen == Screen::Templates {
             let rows = self.studio.rows(self.search.input.text());
             self.studio.reselect(&rows);
-            self.studio
-                .clamp_viewport(&rows, layout::template_rows(self.area()));
+            self.studio.clamp_viewport(&rows, self.template_rows());
             return self
                 .studio
                 .selected_slug()
@@ -819,8 +951,7 @@ impl App {
             // `reading…` frame between the keypress and the answer — and the
             // pane's own pulse says what landed.
             ListChange::DetailOnly { path } => {
-                if self.detail_visible() && self.library.selected().is_some_and(|p| p.path == path)
-                {
+                if self.pane_live() && self.library.selected().is_some_and(|p| p.path == path) {
                     effects.push(Effect::LoadDetail(path));
                 } else {
                     self.details.remove(&path);
@@ -846,10 +977,7 @@ impl App {
         match msg {
             Msg::Key(key) => self.on_key(key),
             Msg::Paste(text) => self.on_paste(&text),
-            Msg::Resize(width, height) => {
-                self.size = (width, height);
-                self.after_selection_change()
-            }
+            Msg::Resize(width, height) => self.on_resize(width, height),
             Msg::Tick => {
                 if self
                     .status
@@ -982,25 +1110,15 @@ impl App {
                 let selected = self.library.selected().is_some_and(|p| p.path == path);
                 self.details.insert(path, *detail);
                 if selected {
+                    // A landed write settles on its row and pulses there;
+                    // anything else — a re-read after an outside edit, the
+                    // first read — finds the cursor and an open edit again
+                    // by what they are on, and moves nothing.
                     if let Some(target) = self.pane_return.take() {
                         self.settle_pane_cursor(&target);
                     }
-                    // An edit open on a row keeps its row: the rows were
-                    // rebuilt under it, and its note may have moved.
-                    if let Some(edit) = &self.pane_edit
-                        && let Some(row) = pane::find_row(&self.pane_rows(), &edit.target())
-                        && let Some(edit) = &mut self.pane_edit
-                    {
-                        edit.set_row(row);
-                    }
-                    let rows = self.pane_rows();
-                    self.pane_cursor = pane::step_cursor(&rows, self.pane_cursor, 0);
-                    self.detail_scroll = crate::tui::widgets::nav::viewport_offset(
-                        self.detail_scroll,
-                        Some(self.pane_cursor),
-                        rows.len(),
-                        self.pane_rows_on_screen(),
-                    );
+                    self.refind_pane();
+                    self.land_pane_seek();
                 }
                 effects
             }
@@ -1180,18 +1298,40 @@ impl App {
                 // `apply_change` would otherwise put it back on the name,
                 // which is the one row nobody who just changed a variable is
                 // looking at.
-                let landed = self
+                //
+                // **The add line stays open** — it took keys all along — and
+                // the todo it sent pulses where the writer says it put it
+                // (`todo_ordinal`), once the re-read shows it; a guess at that
+                // place was wrong wherever a phase's name repeats.
+                let landed = if self
                     .pane_edit
-                    .take_if(|edit| edit.pending())
-                    .map(|edit| edit.target())
-                    .or_else(|| self.pane_pending.take());
+                    .as_ref()
+                    .is_some_and(pane::PaneEdit::adding_in_flight)
+                {
+                    self.adds_landed(outcome.todo_ordinal);
+                    outcome.todo_ordinal.map(pane::PaneTarget::Todo)
+                } else {
+                    self.pane_edit
+                        .take_if(|edit| edit.pending())
+                        .map(|edit| edit.target())
+                        .or_else(|| self.pane_pending.take())
+                        .map(|target| match outcome.todo_ordinal {
+                            Some(ordinal) => pane::PaneTarget::Todo(ordinal),
+                            None => target,
+                        })
+                };
                 let mut effects = self.apply_change(outcome.change);
                 if let Some(target) = landed {
+                    // Settled now where its row is already there; the new
+                    // todo's is not, until the re-read lands.
                     self.settle_pane_cursor(&target);
                     // The detail was just dropped and will be read again;
                     // the cursor finds the row once more when it lands.
                     self.pane_return = Some(target);
                 }
+                // What was entered on the add line while this was written
+                // goes next, or the line closes as it was asked to.
+                effects.extend(self.flush_adds());
                 if let Some(FollowUp::PostCreate {
                     root,
                     template_slug,
@@ -1215,6 +1355,14 @@ impl App {
                 // A refusal belongs on the field that earned it, wherever one
                 // is open: `config set`'s own message, under the value that is
                 // still there to be corrected.
+                if self
+                    .pane_edit
+                    .as_ref()
+                    .is_some_and(pane::PaneEdit::adding_in_flight)
+                {
+                    self.adds_refused(error);
+                    return Vec::new();
+                }
                 if let Some(edit) = &mut self.pane_edit
                     && edit.pending()
                 {
@@ -1278,6 +1426,23 @@ impl App {
     /// ignored and said so — it is never read as keystrokes, which is how a
     /// pasted paragraph once ran a dozen commands.
     fn on_paste(&mut self, text: &str) -> Vec<Effect> {
+        // **A line ends however the terminal ends it.** A bracketed paste
+        // carries the clipboard's line breaks as the terminal sends them, and
+        // many send a bare carriage return; `str::lines` splits on `\n`
+        // alone, so every multi-line paste arrived as one line with its breaks
+        // dropped — a note pasted whole, a list pasted as one todo.
+        let text = &text.replace("\r\n", "\n").replace('\r', "\n");
+        // A list pasted onto the add line is that many todos, at once.
+        if self.modals.is_empty()
+            && !self.search.editing
+            && self
+                .pane_edit
+                .as_ref()
+                .is_some_and(|edit| edit.is_adding() && !edit.pending())
+            && let Some(effects) = self.paste_todos(text)
+        {
+            return effects;
+        }
         let lines = text.lines().count();
         let first = text.lines().next().unwrap_or_default().to_string();
         let dropped = lines.saturating_sub(1);
@@ -1373,6 +1538,21 @@ impl App {
                 self.search.input.paste(&first);
                 kept_first = true;
                 self.after_query_change()
+            }
+            // An edit open in the pane: a line takes the first line, a note
+            // every line — and nothing while its write is on its way.
+            None if self.pane_edit.as_ref().is_some_and(|edit| !edit.pending()) => {
+                if let Some(edit) = &mut self.pane_edit {
+                    edit.clear_error();
+                    match edit {
+                        pane::PaneEdit::Line { input, .. } => {
+                            input.paste(&first);
+                            kept_first = true;
+                        }
+                        pane::PaneEdit::Note { area, .. } => area.paste(text),
+                    }
+                }
+                Vec::new()
             }
             None => {
                 self.info(format!(
@@ -1536,8 +1716,19 @@ impl App {
     }
 
     /// A screenful, for the pagers: the height of the list on screen.
+    /// A screenful for the list or pane the keys go to: the pane pages by its
+    /// own height, which is not the table's once the two stop sitting side by
+    /// side, and was never the same number of rows anyway.
     fn page_rows(&self) -> usize {
-        self.rows_on_screen().max(1)
+        let rows = match (self.screen, self.focus) {
+            (Screen::Library, Focus::Detail) => self.pane_rows_on_screen(),
+            (Screen::Library, Focus::Projects) => self.rows_on_screen(),
+            (Screen::Templates, Focus::Projects) => self.template_rows(),
+            (Screen::Templates, Focus::Detail) => {
+                self.template_panes().1.height.saturating_sub(2) as usize
+            }
+        };
+        rows.max(1)
     }
 
     // --- commands ---------------------------------------------------------
@@ -1561,6 +1752,13 @@ impl App {
                 // the user was looking at.
                 if self.job.is_some() || self.move_progress.is_some() {
                     return self.request_cancel();
+                }
+                // The pane is a level, like a tab: Esc leaves it for the list
+                // before it clears anything the list shows — and long before
+                // the ladder runs out and quits.
+                if self.focus == Focus::Detail {
+                    self.set_focus(Focus::Projects);
+                    return Vec::new();
                 }
                 // On the templates tab, the first step back is to the library:
                 // Esc is "one level out", and a tab is a level.
@@ -1652,6 +1850,12 @@ impl App {
                 self.set_focus(Focus::Detail);
                 Vec::new()
             }
+            CommandId::PanePreviousProject | CommandId::PaneNextProject => self
+                .step_project_from_pane(if id == CommandId::PaneNextProject {
+                    1
+                } else {
+                    -1
+                }),
             CommandId::BackToLibrary => self.toggle_templates(),
             CommandId::ShowLog => self.open_log(),
             CommandId::Suspend => vec![Effect::Suspend(Suspended::Shell)],
@@ -1713,14 +1917,14 @@ impl App {
                 }));
                 Vec::new()
             }
-            CommandId::BuilderOpen => self.builder_open(),
+            CommandId::BuilderOpen | CommandId::BuilderEditText => self.builder_open(),
             CommandId::BuilderAdd => self.builder_add(),
             CommandId::BuilderRemove => self.builder_remove(),
             CommandId::BuilderMoveUp | CommandId::BuilderMoveDown => {
                 self.builder_move(id == CommandId::BuilderMoveUp)
             }
             CommandId::BuilderSave => self.save_template(),
-            CommandId::SettingsChange => self.settings_change(),
+            CommandId::SettingsChange | CommandId::SettingsEditText => self.settings_change(),
             CommandId::SettingsFilter => {
                 if let Some(Modal::Settings(state)) = self.modals.top_mut() {
                     state.begin_filter();
@@ -1735,7 +1939,7 @@ impl App {
                 let mut effects = vec![self.discover(), Effect::LoadSummary];
                 // And the pane: F5 is the key a person presses after editing
                 // the file in another window.
-                if self.detail_visible()
+                if self.pane_live()
                     && let Some(project) = self.library.selected()
                 {
                     effects.push(self.detail_effect(&project.path));
@@ -1790,7 +1994,7 @@ impl App {
                 }
                 match self.focus {
                     Focus::Detail => {
-                        self.move_pane_cursor(delta);
+                        self.page_pane_cursor(delta);
                         Vec::new()
                     }
                     _ => {
@@ -1969,7 +2173,26 @@ impl App {
             CommandId::PaneEditConfirm => self.pane_edit_confirm(),
             CommandId::PaneEditSave => self.pane_edit_save(),
             CommandId::PaneEditCancel => {
-                self.pane_edit = None;
+                // Esc on the add line is "done": now, or once what it sent
+                // has landed. Anywhere else it leaves the row as it was.
+                if let Some(pane::PaneEdit::Line {
+                    input,
+                    target:
+                        pane::EditTarget::NewTodo {
+                            sending,
+                            queued,
+                            closing,
+                            ..
+                        },
+                    ..
+                }) = &mut self.pane_edit
+                    && !(sending.is_empty() && queued.is_empty())
+                {
+                    input.set_text("");
+                    *closing = true;
+                    return Vec::new();
+                }
+                self.close_pane_edit();
                 Vec::new()
             }
             CommandId::OpenFolder => self.spawn_for_selection(SpawnKind::Reveal),
@@ -1988,9 +2211,20 @@ impl App {
                 Vec::new()
             }
             CommandId::ToggleDetail => {
-                self.detail_open = !self.detail_open;
-                if !self.pane_present() && self.focus == Focus::Detail {
+                // Show or hide, literally. A pane on screen is hidden: closed
+                // where it shares the body, left for the list where it took
+                // the list's place. A pane not on screen is shown: switched
+                // on, and gone into where it can only be seen from inside.
+                if self.detail_visible() {
+                    if self.regions().placement != Some(layout::Placement::Over) {
+                        self.detail_open = false;
+                    }
                     self.set_focus(Focus::Projects);
+                } else {
+                    self.detail_open = true;
+                    if self.regions().placement == Some(layout::Placement::Over) {
+                        self.set_focus(Focus::Detail);
+                    }
                 }
                 self.after_selection_change()
             }
@@ -2007,8 +2241,13 @@ impl App {
                 // the anchor is "the row Space last acted on", so changing
                 // your mind about a row does not leave the anchor on it.
                 self.library.last_mark = Some(path);
+                // In the pane the mark is all: stepping would swap the project
+                // under the rows being read.
+                if self.focus == Focus::Detail {
+                    return Vec::new();
+                }
                 self.library.step(1);
-                Vec::new()
+                self.after_selection_change()
             }
             CommandId::MarkToHere => {
                 let added = self.library.mark_to_here();
@@ -2089,13 +2328,15 @@ impl App {
                 self.modals.push(Modal::Note(NoteState::new(count)));
                 Vec::new()
             }
-            CommandId::AddTodo => {
-                self.modals.push(Modal::TextPrompt(TextPrompt::new(
-                    validators::ADD_TODO_PROMPT,
-                    TextThen::AddTodo,
-                )));
-                Vec::new()
+            // Where the pane can show the list, a todo is typed into it,
+            // at the end, on a line that opens the next once it lands; where
+            // it cannot, the prompt.
+            CommandId::AddTodo | CommandId::ListAddTodo => {
+                self.start_adding(crate::core::body::TodoPlace::End)
             }
+            CommandId::PaneAdd => self.pane_add(),
+            CommandId::PaneEditText => self.pane_edit_text(),
+            CommandId::ListRename => self.run(CommandId::Rename),
             CommandId::Rename => {
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();
@@ -2253,11 +2494,11 @@ impl App {
         Vec::new()
     }
 
-    /// Whether there is a pane beside the list right now: the library's
-    /// closes under `layout::DETAIL_MIN_WIDTH` or on `i`, the templates tab's
-    /// is always drawn.
+    /// Whether there is a pane to put the focus in: the library's whenever it
+    /// is switched on — beside the list, under it, or in its place — and the
+    /// templates tab's always.
     pub fn pane_present(&self) -> bool {
-        self.screen == Screen::Templates || self.detail_visible()
+        self.screen == Screen::Templates || self.pane_live()
     }
 
     /// The one way focus moves, so every mover leaves the same trace: the
@@ -2267,8 +2508,8 @@ impl App {
             self.focus_moved_at = Some(self.elapsed_ms);
             // An edit belongs to the row it was opened on; leaving the pane
             // leaves the row as it was.
-            self.pane_edit = None;
             self.pane_pending = None;
+            self.close_pane_edit();
         }
         self.focus = focus;
     }

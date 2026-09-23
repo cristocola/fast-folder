@@ -138,7 +138,7 @@ pub(crate) fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
 /// same list the help overlay and the palette read, so a key the line shows
 /// is a key the list answers.
 fn registry_keys(app: &App, ctx: Context, width: usize) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = command::movement_pair(ctx)
+    let mut out: Vec<(String, String)> = command::movement_pair(ctx, &app.theme.glyphs)
         .map(|(keys, what)| (keys, what.to_string()))
         .into_iter()
         .collect();
@@ -861,38 +861,56 @@ pub fn render_onboarding(
     area: Rect,
 ) -> Option<Position> {
     let theme = &app.theme;
-    let area = crate::tui::layout::centered_fixed(area, 68.min(area.width), 10);
+    let width = 68.min(area.width);
+    // The prose wraps to the box, and the box is as tall as the prose it
+    // holds: on a narrow window a sentence is several lines, never cut.
+    let prose: [(String, ratatui::style::Style); 4] = [
+        (
+            crate::tui::validators::ONBOARDING_PROMPT.to_string(),
+            theme.text(),
+        ),
+        (
+            "This folder is your first base — where new projects are created.".to_string(),
+            theme.dim(),
+        ),
+        (
+            "Add more later (a second drive, a network share) under Settings.".to_string(),
+            theme.dim(),
+        ),
+        // The one thing a first run cannot discover for itself: that
+        // templates are what shape a project, and that there is a guide to
+        // them. Both keys read from the registry, never spelled here.
+        (
+            format!(
+                "Templates shape every project: {} opens them, {} explains them.",
+                crate::tui::command::key_of(command::CommandId::Templates),
+                crate::tui::command::key_of(command::CommandId::Guide),
+            ),
+            theme.dim(),
+        ),
+    ];
+    let text_width = usize::from(width).saturating_sub(3);
+    let lines: Vec<Line> = prose
+        .iter()
+        .flat_map(|(text, style)| {
+            crate::tui::command::wrap_words(text, text_width)
+                .into_iter()
+                .map(move |row| Line::from(Span::styled(format!(" {row}"), *style)))
+        })
+        .collect();
+    let prose_rows = lines.len() as u16;
+    // The prose, a blank, the answer line — then the footer, the keys and the
+    // border.
+    let area = crate::tui::layout::centered_fixed(area, width, prose_rows + 2 + 4);
     let (body, footer, keys) = frame_parts(app, " welcome ".to_string(), frame, area)?;
-
+    // The answer line stays on screen however short the window: the prose
+    // above it gives way first, from its end.
+    let answer_row = (prose_rows + 1).min(body.height.saturating_sub(1));
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(
-                format!(" {}", crate::tui::validators::ONBOARDING_PROMPT),
-                theme.text(),
-            )),
-            Line::from(Span::styled(
-                " This folder is your first base — where new projects are created.",
-                theme.dim(),
-            )),
-            Line::from(Span::styled(
-                " Add more later (a second drive, a network share) under Settings.",
-                theme.dim(),
-            )),
-            // The one thing a first run cannot discover for itself: that
-            // templates are what shape a project, and that there is a guide to
-            // them. Both keys read from the registry, never spelled here.
-            Line::from(Span::styled(
-                format!(
-                    " Templates shape every project: {} opens them, {} explains them.",
-                    crate::tui::command::key_of(command::CommandId::Templates),
-                    crate::tui::command::key_of(command::CommandId::Guide),
-                ),
-                theme.dim(),
-            )),
-        ]),
-        Rect::new(body.x, body.y, body.width, 4),
+        Paragraph::new(lines),
+        Rect::new(body.x, body.y, body.width, answer_row.saturating_sub(1)),
     );
-    let line = Rect::new(body.x, body.y + 5, body.width, 1);
+    let line = Rect::new(body.x, body.y + answer_row, body.width, 1);
     let caret = state
         .input
         .render_line(line, frame.buffer_mut(), Span::raw(" "), theme.text());

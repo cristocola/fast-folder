@@ -173,9 +173,24 @@ enum Commands {
     },
 
     /// Copy a project's folder to somewhere outside your bases, keeping its ID
-    #[command(
-        after_help = "The copy is the same project on another drive: its\n        PROJECT_INFO.md, and its ID, are copied unchanged. Point a base at that\n        folder later and both list, told apart by the BASE column.\n\n        The destination must exist and must be **outside** every configured\n        base. Two projects with one ID inside one library is a library that\n        cannot answer \"which one\", and it would be made by a keystroke.\n\n        Links are refused, as they are for a cross-drive move: a symlink or a\n        junction cannot be reproduced faithfully somewhere else. The original is\n        never touched, and Ctrl-C leaves nothing behind but the copy's own\n        private transaction, which it removes.\n\n        `fastf copy` (no dash) is unrelated: it puts a path on the clipboard.\n\n        Examples:\n              fastf copy-to ID0047 /mnt/backup\n              fastf copy-to lullaby ~/archive --yes"
-    )]
+    #[command(after_help = "The copy is the same project on another drive: its\n\
+            PROJECT_INFO.md, and its ID, are copied unchanged. Point a base at that\n\
+            folder later and both list, told apart by the BASE column.\n\
+            \n\
+            The destination must exist and must be **outside** every configured\n\
+            base. Two projects with one ID inside one library is a library that\n\
+            cannot answer \"which one\", and it would be made by a keystroke.\n\
+            \n\
+            Links are refused, as they are for a cross-drive move: a symlink or a\n\
+            junction cannot be reproduced faithfully somewhere else. The original is\n\
+            never touched, and Ctrl-C leaves nothing behind but the copy's own\n\
+            private transaction, which it removes.\n\
+            \n\
+            `fastf copy` (no dash) is unrelated: it puts a path on the clipboard.\n\
+            \n\
+            Examples:\n  \
+            fastf copy-to ID0047 /mnt/backup\n  \
+            fastf copy-to lullaby ~/archive --yes")]
     CopyTo {
         /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
         query: String,
@@ -487,9 +502,11 @@ enum Commands {
     },
 
     /// Everything fastf knows about one project
-    #[command(
-        after_help = "Examples:\n              fastf show ID0047\n              fastf show lullaby --json\n\n            The JSON carries the project's facts, its template variables, its\n            notes and its todos with the phase each sits under."
-    )]
+    #[command(after_help = "Examples:\n  \
+            fastf show ID0047\n  \
+            fastf show lullaby --json\n\n\
+            The JSON carries the project's facts, its template variables, its\n\
+            notes and its todos with the phase each sits under.")]
     Show {
         /// Project ID, ID prefix, or name substring
         query: String,
@@ -515,7 +532,18 @@ enum Commands {
     /// A project's task list
     #[command(
         name = "todo",
-        after_help = "The numbers are the ones `list` prints, counted from one over the\n            tasks alone — a `###` phase label is not a task and takes no number.\n\n            Examples:\n              fastf todo list ID0047\n              fastf todo add ID0047 \"colour grade\"\n              fastf todo add ID0047 \"cut the first minute\" --phase \"Main Edit\"\n              fastf todo done ID0047 3\n              fastf todo done ID0047 3 --undo"
+        after_help = "The numbers are the ones `list` prints, counted from one over the\n\
+            tasks alone — a `###` phase label is not a task and takes no number.\n\
+            `done`, `edit` and `remove` read the list first and refuse a task\n\
+            whose text changed meanwhile, rather than touch the wrong line.\n\n\
+            Examples:\n  \
+            fastf todo list ID0047\n  \
+            fastf todo add ID0047 \"colour grade\"\n  \
+            fastf todo add ID0047 \"cut the first minute\" --phase \"Main Edit\"\n  \
+            fastf todo done ID0047 3\n  \
+            fastf todo done ID0047 3 --undo\n  \
+            fastf todo edit ID0047 3 \"grade the colour\"\n  \
+            fastf todo remove ID0047 3"
     )]
     Todo {
         #[command(subcommand)]
@@ -626,7 +654,7 @@ enum ConfigAction {
             base-dir                    Directory where new projects are created (default: home directory)\n  \
             bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
-            terminal                    Terminal emulator to open when launched without one\n                              (default: $TERMINAL, else probe; \"none\" disables)\n  \
+            terminal                    Terminal emulator to open when launched without one (default: $TERMINAL, else probe; \"none\" disables)\n  \
             theme                       The app's palette: auto, mono, ansi or rich (default: auto — follow the terminal)\n  \
             motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \
@@ -734,6 +762,23 @@ enum TodoAction {
         /// Mark it open again instead
         #[arg(long)]
         undo: bool,
+    },
+    /// Reword a task by its number — one line, ticked or not as it was
+    Edit {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// The number `fastf todo list` printed
+        number: usize,
+        /// The new text
+        text: String,
+    },
+    /// Remove a task by its number
+    #[command(visible_alias = "rm")]
+    Remove {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// The number `fastf todo list` printed
+        number: usize,
     },
 }
 
@@ -1182,6 +1227,18 @@ fn run() -> Result<()> {
                 number,
                 undo,
             }),
+            TodoAction::Edit {
+                query,
+                number,
+                text,
+            } => cli::todo::edit(cli::todo::EditArgs {
+                query,
+                number,
+                text,
+            }),
+            TodoAction::Remove { query, number } => {
+                cli::todo::remove(cli::todo::RemoveArgs { query, number })
+            }
         },
 
         Some(Commands::Notes { query, since }) => {

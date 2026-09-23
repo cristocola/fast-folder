@@ -689,3 +689,87 @@ fn from_folder_previews_before_it_writes() {
         other => panic!("{other:?}"),
     }
 }
+
+/// **Below the smallest window, a question still reaches the person it asks.**
+/// The dialog cannot be drawn there, so `q` over a worked-on template used to
+/// push a confirmation nobody could see, and a second `q` — answering it
+/// unseen — threw the template away. The guard now says what is waiting.
+#[test]
+fn the_too_small_guard_names_the_template_it_would_discard() {
+    let mut app = fixture(6, 120, 40);
+    open_new(&mut app);
+    press(&mut app, Key::plain(KeyCode::Enter));
+    type_text(&mut app, "Music video");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(builder(&app).is_dirty(), "the fixture has to be dirty");
+
+    update(&mut app, Msg::Resize(40, 10));
+    let frame = fastf::tui::testing::render_to_string(&app, 40, 10);
+    assert!(
+        frame.contains("unsaved"),
+        "the guard says a template is being worked on:\n{frame}"
+    );
+
+    let effects = press(&mut app, Key::ch('q'));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Quit(_))),
+        "the first q asks: {effects:?}"
+    );
+    let frame = fastf::tui::testing::render_to_string(&app, 40, 10);
+    assert!(
+        frame.contains("again"),
+        "and the question is on screen, in words:\n{frame}"
+    );
+    let effects = press(&mut app, Key::ch('q'));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Quit(Exit::Normal))),
+        "the second q is an answer given with the question in view: {effects:?}"
+    );
+}
+
+/// **F2 edits and `+` adds on the templates tab and in the builder**, as they
+/// do in the pane: F2 opens the selected template, `+` starts a new one; in
+/// the builder F2 opens the highlighted part or variable and `+` adds a
+/// variable — and on the Save row, a verb, F2 is not bound.
+#[test]
+fn f2_edits_and_plus_adds_on_the_templates_tab_and_in_the_builder() {
+    let mut app = fixture(6, 120, 40);
+    press(&mut app, Key::ch('T'));
+    let effects = press(&mut app, Key::plain(KeyCode::F(2)));
+    assert!(
+        matches!(app.modals.top(), Some(Modal::Builder(_))),
+        "F2 opens the selected template: {effects:?}"
+    );
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(app.modals.is_empty());
+
+    press(&mut app, Key::ch('+'));
+    assert!(
+        matches!(app.modals.top(), Some(Modal::Builder(b)) if b.original_slug.is_none()),
+        "+ starts a new template"
+    );
+    // The section list: F2 opens the part under the cursor.
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    assert!(builder(&app).open.is_some(), "F2 opened the metadata");
+    press(&mut app, Key::plain(KeyCode::Esc));
+    // The variables list: `+` adds one, as `a` does.
+    while !matches!(builder(&app).row(), Row::Section(Section::Variables)) {
+        press(&mut app, Key::plain(KeyCode::Down));
+    }
+    press(&mut app, Key::plain(KeyCode::Enter));
+    press(&mut app, Key::ch('+'));
+    assert!(
+        matches!(&builder(&app).open, Some(Open::Variables(list)) if list.editing.is_some()),
+        "+ adds a variable"
+    );
+    press(&mut app, Key::plain(KeyCode::Esc));
+    press(&mut app, Key::plain(KeyCode::Esc));
+    // The Save row is a verb: F2 is not bound there.
+    while !matches!(builder(&app).row(), Row::Save) {
+        press(&mut app, Key::plain(KeyCode::Down));
+    }
+    let effects = press(&mut app, Key::plain(KeyCode::F(2)));
+    assert!(effects.is_empty() && !builder(&app).saving, "{effects:?}");
+}

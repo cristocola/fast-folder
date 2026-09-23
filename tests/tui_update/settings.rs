@@ -241,3 +241,27 @@ fn the_first_run_asks_once_and_an_empty_answer_skips() {
     assert!(app.modals.is_empty());
     assert!(app.status.text.contains("Skipped"), "{}", app.status.text);
 }
+
+/// **F2 edits here too**: a value opens on its line, as Enter opens it; on a
+/// yes/no there is nothing to type, so F2 is not bound there and Enter keeps
+/// flipping it.
+#[test]
+fn f2_opens_a_value_and_leaves_a_toggle_to_enter() {
+    let mut app = fixture(6, 120, 40);
+    open(&mut app);
+    go_to(&mut app, "Date format");
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    assert!(
+        matches!(state(&app).editing, Some(Editing::Value { .. })),
+        "F2 opens the value"
+    );
+    press(&mut app, Key::plain(KeyCode::Esc));
+
+    go_to(&mut app, "Confirm before creating");
+    let effects = press(&mut app, Key::plain(KeyCode::F(2)));
+    assert!(
+        effects.is_empty(),
+        "nothing to type on a yes/no: {effects:?}"
+    );
+    assert!(state(&app).editing.is_none());
+}

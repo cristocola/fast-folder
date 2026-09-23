@@ -1047,8 +1047,7 @@ impl App {
         if self.screen == Screen::Templates {
             let rows = self.studio.rows("");
             self.studio.reselect(&rows);
-            self.studio
-                .clamp_viewport(&rows, layout::template_rows(self.area()));
+            self.studio.clamp_viewport(&rows, self.template_rows());
             if self.studio.shown.is_none()
                 && let Some(slug) = self.studio.selected_slug()
             {
@@ -1065,8 +1064,7 @@ impl App {
     pub(super) fn jump_templates(&mut self, first: bool) -> Vec<Effect> {
         let rows = self.studio.rows(self.search.input.text());
         self.studio.jump(first, &rows);
-        self.studio
-            .clamp_viewport(&rows, layout::template_rows(self.area()));
+        self.studio.clamp_viewport(&rows, self.template_rows());
         self.studio
             .selected_slug()
             .map(|slug| vec![Effect::LoadTemplateView { slug }])
@@ -1076,8 +1074,7 @@ impl App {
     fn step_templates(&mut self, delta: isize) -> Vec<Effect> {
         let rows = self.studio.rows(self.search.input.text());
         self.studio.step(delta, &rows);
-        self.studio
-            .clamp_viewport(&rows, layout::template_rows(self.area()));
+        self.studio.clamp_viewport(&rows, self.template_rows());
         self.studio
             .selected_slug()
             .map(|slug| vec![Effect::LoadTemplateView { slug }])
@@ -1501,13 +1498,50 @@ impl App {
     /// draws with — so the cursor cannot leave the drawn window.
     ///
     /// **The templates tab's own split**, not the library's: it measured
-    /// `regions().detail` before, which is the library pane — closed under a
-    /// hundred columns while the template pane is always drawn — so on a
+    /// `regions().detail` before, which is the library pane — somewhere else
+    /// entirely, or closed, while the template pane is always drawn — so on a
     /// narrow window Tab could not reach a pane that was right there.
     pub(super) fn studio_scroll_max(&self) -> usize {
-        let (_, pane) = layout::templates_panes(layout::templates_body(&self.regions()));
+        let (_, pane, _) = self.template_panes();
         let rows = pane.height.saturating_sub(2) as usize;
         self.studio.lines.len().saturating_sub(rows)
+    }
+
+    /// What the templates list asks of the body: every card's name whole with
+    /// its count, and how many cards there are — measured over every card, so
+    /// a search on the tab never moves its pane.
+    pub fn templates_needs(&self) -> layout::TableNeeds {
+        let name = self
+            .studio
+            .cards
+            .iter()
+            .map(|card| {
+                unicode_width::UnicodeWidthStr::width(super::TemplatesState::display_name(card))
+            })
+            .max()
+            .unwrap_or(8)
+            .clamp(8, crate::tui::view::templates::SLUG_MAX);
+        layout::TableNeeds {
+            // The borders, the marker and its space, the name, the count.
+            min_width: (2 + 2 + name + 5 + 1) as u16,
+            rows: self.studio.cards.len(),
+        }
+    }
+
+    /// The templates tab's list and pane, and where the pane is.
+    pub fn template_panes(
+        &self,
+    ) -> (
+        ratatui::layout::Rect,
+        ratatui::layout::Rect,
+        layout::Placement,
+    ) {
+        layout::templates_panes(self.regions().body, self.templates_needs())
+    }
+
+    /// How many cards the list shows at once: its height inside the border.
+    pub fn template_rows(&self) -> usize {
+        self.template_panes().0.height.saturating_sub(2) as usize
     }
 }
 

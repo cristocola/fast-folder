@@ -118,3 +118,38 @@ fn removing_a_row_drops_its_mark() {
     app.library.remove(&doomed);
     assert!(!app.library.marks.contains(&doomed));
 }
+
+/// Space on the list moves on the way any other move does: the next row's
+/// size and detail are asked for. It used to step without them, and the pane
+/// sat on `reading…` for a row nobody had asked about.
+#[test]
+fn space_on_the_list_steps_and_reads_the_next_row() {
+    let mut app = fixture(12, 120, 40);
+    let effects = press(&mut app, Key::ch(' '));
+    let next = app.library.selected().unwrap().path.clone();
+    assert_eq!(app.library.selected_index(), Some(1));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDetail(path) if *path == next)),
+        "the pane reads the row it now shows: {effects:?}"
+    );
+}
+
+/// In the pane, Space marks the project the pane is about and stays on it:
+/// stepping would swap the project under the rows being read.
+#[test]
+fn space_in_the_pane_marks_and_stays() {
+    let mut app = fixture(12, 120, 40);
+    let first = app.library.selected().unwrap().path.clone();
+    press(&mut app, Key::plain(KeyCode::Right));
+    assert_eq!(app.focus, Focus::Detail);
+    press(&mut app, Key::ch(' '));
+    assert!(app.library.marks.contains(&first), "the project is marked");
+    assert_eq!(
+        app.library.selected_index(),
+        Some(0),
+        "and still the one shown"
+    );
+    assert_eq!(app.focus, Focus::Detail);
+}

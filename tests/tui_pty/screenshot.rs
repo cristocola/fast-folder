@@ -16,12 +16,14 @@
 //! alternate screen, so the frame includes whatever was printed above them.
 //!
 //! Tokens, whitespace-separated: `enter` `esc` `up` `down` `left` `right`
-//! `pgup` `pgdn` `home` `end` `tab` `space` `backspace` `delete` `f1` `f5`,
-//! `ctrl-<letter>` for any control chord (`ctrl-c` `ctrl-s` `ctrl-n` `ctrl-t`
-//! `ctrl-u` `ctrl-k` `ctrl-r` `ctrl-z`), `alt-enter`, `wait:<ms>`,
-//! `type:<text>` (typed as-is, no Enter), and any other token is sent as the
-//! keys it spells (`q`, `/`, `?`, `c`). The frame is taken after the last
-//! token, before the script ends the app.
+//! `pgup` `pgdn` `home` `end` `tab` `space` `backspace` `delete` `f1` `f2`
+//! `f5`, `ctrl-<letter>` for any control chord (`ctrl-c` `ctrl-s` `ctrl-n`
+//! `ctrl-t` `ctrl-u` `ctrl-k` `ctrl-r` `ctrl-z`), `alt-enter`, `wait:<ms>`,
+//! `type:<text>` (typed as-is, no Enter), `text:<words>` (the same, `_` typed
+//! as a space), `paste:<line>|<line>` (a bracketed
+//! paste, `|` between its lines), and any other token is sent as the
+//! keys it spells (`q`, `/`, `?`, `c`, `+`, `<`, `>`). The frame is taken after
+//! the last token, before the script ends the app.
 //!
 //! `FASTF_SHOT_SIZE=80x24` runs the app in that window instead of the suite's
 //! 120×40, which is how the compact layout is looked at.
@@ -31,8 +33,15 @@
 //! binary. Sandbox only: the repository is public.
 //!
 //! The library is a sandbox of `FASTF_SHOT_PROJECTS` planted projects (eight
-//! by default) unless `FASTF_SHOT_REAL=1`, which runs against **your own**
-//! configuration and library — read-only keys only, please.
+//! by default); `FASTF_SHOT_LONG=1` gives every other one a folder name of
+//! about ninety characters, the shape a library of client handles and song
+//! titles has, where the table's names claim most of the window.
+//!
+//! `FASTF_SHOT_REAL=1` runs against **your own** library instead — read-only
+//! keys only, please. It reads your configuration from a private copy of the
+//! data directory, because the app remembers the cursor's row, the sort and
+//! whether the pane is open when it exits, and a picture must not change what
+//! you see the next time you open it.
 
 use super::common::{self, Sandbox, pty};
 use super::harness::*;
@@ -48,6 +57,7 @@ fn screenshot() {
         .map(str::to_string)
         .collect();
     let real = std::env::var("FASTF_SHOT_REAL").is_ok_and(|v| v == "1");
+    let long = std::env::var("FASTF_SHOT_LONG").is_ok_and(|v| v == "1");
     let projects: usize = std::env::var("FASTF_SHOT_PROJECTS")
         .ok()
         .and_then(|n| n.parse().ok())
@@ -79,12 +89,20 @@ fn screenshot() {
             "backspace" => script.key("\x7f"),
             "delete" => script.key("\x1b[3~"),
             "f1" => script.key("\x1bOP"),
+            "f2" => script.key("\x1bOQ"),
             "f5" => script.key("\x1b[15~"),
             "alt-enter" => script.key("\x1b\r"),
             "ctrl-c" => script.ctrl_c(),
             other => match other.split_once(':') {
                 Some(("wait", ms)) => script.pause(ms.parse().unwrap_or(500)),
                 Some(("type", text)) => script.key(text),
+                // Words with spaces in them: `_` stands for the space.
+                Some(("text", text)) => script.key(&text.replace('_', " ")),
+                // A bracketed paste, as a terminal sends one: `|` between
+                // lines, since a token cannot hold a space or a newline.
+                Some(("paste", text)) => {
+                    script.key(&format!("\x1b[200~{}\x1b[201~", text.replace('|', "\r")))
+                }
                 _ => match other.strip_prefix("ctrl-") {
                     // A control chord is the letter's position in the
                     // alphabet: Ctrl-A is 0x01, Ctrl-Z 0x1a.
@@ -108,11 +126,16 @@ fn screenshot() {
     // A tool for looking at a named screen: it starts where the keys aim,
     // not behind the one-time guide. `G` still opens it on purpose.
     sb.guide_seen();
-    if !real {
-        plant_showcase(&sb, projects);
+    let real_data = sb.tmp.path().join("real-data");
+    if real {
+        copy_real_data_dir(&real_data);
+    } else {
+        plant_showcase(&sb, projects, long);
     }
+    // A real run keeps the real `HOME`, so a `~` in the configuration still
+    // names your folders; only the data directory is the copy.
     let env: Vec<(&str, &std::path::Path)> = if real {
-        Vec::new()
+        vec![("FASTF_INSTALL_DIR", real_data.as_path())]
     } else {
         vec![
             ("FASTF_INSTALL_DIR", sb.install.as_path()),
@@ -159,6 +182,48 @@ fn screenshot() {
     println!("── end ──");
 }
 
+/// Copy the real data directory's configuration, session, counter and
+/// templates into `to`, so a `FASTF_SHOT_REAL` run reads your library as it is
+/// and writes its session somewhere you never look. The lock and the logs stay
+/// behind: the copy takes its own lock, and a picture has nothing to log.
+fn copy_real_data_dir(to: &std::path::Path) {
+    let (from, _) = fastf::util::paths::try_install_dir().expect("finding the real data directory");
+    fs::create_dir_all(to).expect("creating the copy");
+    for file in ["config.toml", "state.toml", "counters.toml"] {
+        let source = from.join(file);
+        if source.is_file() {
+            fs::copy(&source, to.join(file)).expect("copying the data directory");
+        }
+    }
+    copy_tree(&from.join("templates"), &to.join("templates"));
+    // Past the one-time guide, as the sandbox is.
+    let state = to.join("state.toml");
+    let mut session = fs::read_to_string(&state).unwrap_or_default();
+    if !session.contains("guide_seen") {
+        if !session.is_empty() && !session.ends_with('\n') {
+            session.push('\n');
+        }
+        session.push_str("guide_seen = true\n");
+        fs::write(&state, session).expect("writing the copy's state.toml");
+    }
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    let Ok(entries) = fs::read_dir(from) else {
+        return;
+    };
+    fs::create_dir_all(to).expect("creating a folder in the copy");
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let target = to.join(entry.file_name());
+        if path.is_dir() {
+            copy_tree(&path, &target);
+        } else if path.is_file() {
+            fs::copy(&path, &target).expect("copying a template file");
+        }
+    }
+}
+
 /// A library with something in every column: several templates, tags, dates
 /// spread across months, distinct project names, and sizes across every
 /// magnitude the size column can render.
@@ -168,7 +233,10 @@ fn screenshot() {
 /// of numbers that all read `xxx KB` demonstrates nothing about either column.
 /// The payloads are sparse files: `tree_size` reads `metadata.len()`, so a
 /// forty gigabyte project costs one `set_len` call and no disk.
-fn plant_showcase(sb: &Sandbox, n: usize) {
+///
+/// `long` gives every other folder a client handle and a long title, about
+/// ninety characters in all, as a library of commissioned work reads.
+fn plant_showcase(sb: &Sandbox, n: usize, long: bool) {
     // name, template slug, template display name, size in bytes.
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
@@ -332,7 +400,15 @@ fn plant_showcase(sb: &Sandbox, n: usize) {
         let id = format!("ID{:04}", 201 + i);
         let month = 1 + (i % 9) as u32;
         let day = 2 + (i % 26) as u32;
-        let folder = format!("2026-{month:02}-{day:02}_{}_{id}", row.name);
+        let folder = if long && i % 2 == 0 {
+            format!(
+                "2026-{month:02}-{day:02}_{}_studio_{}-Extended_Directors_Cut_Alternate_Endings_Final_{id}",
+                row.client.to_lowercase(),
+                row.name
+            )
+        } else {
+            format!("2026-{month:02}-{day:02}_{}_{id}", row.name)
+        };
         let base = if i % 4 == 1 { &archive } else { &projects };
         let root = sb.plant_project(base, &folder, &id);
         for sub in row.folders {
@@ -380,7 +456,7 @@ fn plant_showcase(sb: &Sandbox, n: usize) {
             .replace("tags: []", &tags);
         // The first project carries notes and todos, so the pane shows what a
         // project's record looks like: a note of more than one line, and a
-        // list with some of it done.
+        // list in two phases, the first of them finished.
         let raw = if i == 0 {
             raw.replace(
                 "## Notes\n",
@@ -390,8 +466,10 @@ fn plant_showcase(sb: &Sandbox, n: usize) {
                    hold the logo two seconds longer\n  \
                    and a quieter music bed\n\n\
                  ## Todo\n\n\
+                 ### Shoot\n\n\
                  - [x] shoot the product close-ups\n\
-                 - [x] rough cut\n\
+                 - [x] rough cut\n\n\
+                 ### Deliver\n\n\
                  - [ ] colour and sound mix\n\
                  - [ ] deliver the 16:9 and 9:16 masters\n",
             )

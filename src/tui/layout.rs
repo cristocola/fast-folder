@@ -6,11 +6,9 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 /// Below this the frame is one paragraph saying so.
-pub const MIN_WIDTH: u16 = 60;
-pub const MIN_HEIGHT: u16 = 16;
+pub const MIN_WIDTH: u16 = 40;
+pub const MIN_HEIGHT: u16 = 12;
 
-/// A terminal wide enough to keep the detail pane beside the list.
-pub const DETAIL_MIN_WIDTH: u16 = 100;
 /// A terminal tall enough for the header's blank third line.
 pub const TALL_MIN_HEIGHT: u16 = 30;
 
@@ -18,12 +16,56 @@ pub fn too_small(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }
 
+/// Where the detail pane goes: whichever the window has room for. See
+/// [`place`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// Beside the table, sharing the body's width.
+    Beside,
+    /// Under the table, at the body's full width.
+    Below,
+    /// In the table's place, taking the whole body while it has the focus.
+    Over,
+}
+
+/// The least a pane beside the table is worth drawing at: the facts and
+/// figures wrap whole into it, a note keeps two dozen columns after its date.
+pub const PANE_BESIDE_MIN: u16 = 36;
+/// The least a table above the pane shows: six projects under its header.
+pub const TABLE_BELOW_MIN: u16 = 9;
+/// The least a pane under the table is worth: a dozen rows inside its border.
+pub const PANE_BELOW_MIN: u16 = 14;
+/// The table's share of the width when the pane sits beside it.
+const TABLE_SHARE: u32 = 60;
+/// The table's share of the height, at most, when the pane sits under it.
+const TABLE_BELOW_SHARE: u32 = 45;
+/// Under this width the help overlay takes most of the window.
+const HELP_NARROW_BELOW: u16 = 100;
+
+/// What the table asks of the body: the width that shows every folder name
+/// whole with the id and the size beside it, and how many projects there are.
+///
+/// Both are measured over the **whole library**, never the rows a search
+/// leaves, so typing into the search bar cannot move the pane.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TableNeeds {
+    pub min_width: u16,
+    pub rows: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Regions {
     pub header: Rect,
     pub search: Rect,
+    /// The whole middle band. The table and the pane share it; the templates
+    /// tab takes it all.
+    pub body: Rect,
     pub table: Rect,
+    /// Where the pane is drawn when it is: `None` with the pane closed. In
+    /// `Placement::Over` it is the body, the same box as the table, and the
+    /// app draws one of the two.
     pub detail: Option<Rect>,
+    pub placement: Option<Placement>,
     pub status: Rect,
     pub hints: Rect,
 }
@@ -36,15 +78,57 @@ impl Regions {
     }
 }
 
-/// The least the detail pane is worth drawing at: the name cut, but the
-/// template, the base, the date, the size and the tags all there.
-pub const DETAIL_PANE_MIN: u16 = 26;
+/// Split the body between the table and the pane, as the window allows.
+///
+/// - **Beside** when the names fit whole and a pane of `PANE_BESIDE_MIN` still
+///   fits next to them. The table takes `TABLE_SHARE` of the width, or what its
+///   names need, and never so much the pane drops under its minimum.
+/// - **Below** otherwise, when the body is tall enough for a list worth
+///   scrolling and a pane worth reading. The table keeps the full width, so the
+///   names stay whole, and the height its projects need up to
+///   `TABLE_BELOW_SHARE` — a library of eight hands the pane its spare rows.
+/// - **Over** otherwise: the list has the whole body, and the pane takes the
+///   list's place when it has the focus. The same box either way, so nothing
+///   re-wraps going in and out.
+///
+/// A pure function of the body and the table's needs, never of the focus:
+/// the pane's width is what its rows are wrapped to, and a focus that changed
+/// it would re-wrap them under the cursor.
+pub fn place(body: Rect, needs: TableNeeds) -> (Rect, Rect, Placement) {
+    place_shared(body, needs, TABLE_SHARE)
+}
 
-/// `table_min` is the width the table needs to show every folder name whole
-/// with the id and the size beside it. The split favours the table: it takes
-/// at least 60 % and as much more as the names need, the pane takes the rest
-/// — and closes, as `i` would, when the rest is under `DETAIL_PANE_MIN`.
-pub fn regions(area: Rect, detail_open: bool, table_min: u16) -> Regions {
+/// `place`, with the list's share of the width beside the pane: the library's
+/// table takes `TABLE_SHARE`, the templates tab's card list a narrower one.
+pub fn place_shared(body: Rect, needs: TableNeeds, share: u32) -> (Rect, Rect, Placement) {
+    let (w, h) = (body.width, body.height);
+    // In u32: a claim near the top of a u16 plus the pane's minimum would
+    // saturate to a width that seems to fit and does not.
+    if w as u32 >= needs.min_width as u32 + PANE_BESIDE_MIN as u32 {
+        let table = fit_between(percent_of(w, share), needs.min_width, w - PANE_BESIDE_MIN);
+        return (
+            Rect::new(body.x, body.y, table, h),
+            Rect::new(body.x + table, body.y, w - table, h),
+            Placement::Beside,
+        );
+    }
+    if h >= TABLE_BELOW_MIN + PANE_BELOW_MIN {
+        let wanted = (needs.rows.saturating_add(3).min(u16::MAX as usize) as u16)
+            .min(percent_of(h, TABLE_BELOW_SHARE));
+        let table = fit_between(wanted, TABLE_BELOW_MIN, h - PANE_BELOW_MIN);
+        return (
+            Rect::new(body.x, body.y, w, table),
+            Rect::new(body.x, body.y + table, w, h - table),
+            Placement::Below,
+        );
+    }
+    (body, body, Placement::Over)
+}
+
+/// The bands of the screen, top to bottom, and the table and the pane in the
+/// middle one (`place`). `pane_open` is whether the pane is switched on at
+/// all; `needs` is what the table asks of the body.
+pub fn regions(area: Rect, pane_open: bool, needs: TableNeeds) -> Regions {
     let tall = area.height >= TALL_MIN_HEIGHT;
     // Two lines — the tabs and the bases — and a blank one under them where
     // there is room to breathe. The templates strip that used to sit above the
@@ -60,54 +144,54 @@ pub fn regions(area: Rect, detail_open: bool, table_min: u16) -> Regions {
             Constraint::Length(1),
         ])
         .split(area);
+    let body = bands[2];
 
-    let table_width = table_min.max(area.width * 60 / 100).min(area.width);
-    let pane_width = area.width - table_width;
-    let (table, detail) =
-        if detail_open && area.width >= DETAIL_MIN_WIDTH && pane_width >= DETAIL_PANE_MIN {
-            let panes = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Length(table_width),
-                    Constraint::Length(pane_width),
-                ])
-                .split(bands[2]);
-            (panes[0], Some(panes[1]))
-        } else {
-            (bands[2], None)
-        };
+    let (table, detail, placement) = if pane_open {
+        let (table, pane, placement) = place(body, needs);
+        (table, Some(pane), Some(placement))
+    } else {
+        (body, None, None)
+    };
 
     Regions {
         header: bands[0],
         search: bands[1],
+        body,
         table,
         detail,
+        placement,
         status: bands[3],
         hints: bands[4],
     }
 }
 
-/// The templates tab's body: the table band, full width — the tab has no
-/// detail pane to give up columns to, so it takes the whole row.
-pub fn templates_body(regions: &Regions) -> Rect {
+/// Where the detail pane's text goes: inside its border, with a column of
+/// padding on each side so nothing it says touches a border glyph. **The one
+/// answer**: `App::pane_rows` wraps to its width, the cursor and the scroll
+/// count its height, and the view draws into it — a second spelling of this
+/// arithmetic is how the two came to disagree about the width by two columns.
+pub fn pane_text(pane: Rect) -> Rect {
+    let inner_w = pane.width.saturating_sub(2);
     Rect::new(
-        regions.table.x,
-        regions.table.y,
-        regions.table.width + regions.detail.map_or(0, |pane| pane.width),
-        regions.table.height,
+        pane.x.saturating_add(2).min(pane.x.saturating_add(inner_w)),
+        pane.y.saturating_add(1),
+        inner_w.saturating_sub(2),
+        pane.height.saturating_sub(2),
     )
 }
 
-/// The templates tab's split: the card list, and the pane beside it. Read by
-/// the view that draws it and by `update` when it clamps the pane's scroll,
-/// so the cursor cannot leave the drawn window.
-pub fn templates_panes(body: Rect) -> (Rect, Rect) {
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(body);
-    (panes[0], panes[1])
+/// The templates tab's split: the card list and the template's pane, placed
+/// the way the library's table and pane are (`place`) — beside, under, or in
+/// the list's place — with the list's own claim and a narrower share, since a
+/// card is a name and a count. Read by the view that draws it and by `update`
+/// when it clamps the list's viewport and the pane's scroll, so neither can
+/// leave the drawn window.
+pub fn templates_panes(body: Rect, needs: TableNeeds) -> (Rect, Rect, Placement) {
+    place_shared(body, needs, TEMPLATES_SHARE)
 }
+
+/// The templates list's share of the width beside its pane.
+const TEMPLATES_SHARE: u32 = 38;
 
 /// A rectangle of `percent_x` × `percent_y` of `area`, centred.
 pub fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
@@ -133,7 +217,13 @@ pub fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
 /// never so short that its footer and key line crowd the content. The studio,
 /// the builder and the settings are drawn in one of these.
 pub fn sized_dialog(area: Rect, body: u16) -> Rect {
-    let full = centered(area, 84, 96);
+    // On a narrow window the margin is what goes: 84 % of forty columns is a
+    // settings screen that cuts every value to a word.
+    let full = if area.width < NARROW_DIALOG_BELOW {
+        centered_fixed(area, area.width.saturating_sub(2), area.height)
+    } else {
+        centered(area, 84, 96)
+    };
     let height = (body + 4).clamp(8.min(full.height), full.height);
     Rect::new(
         full.x,
@@ -142,6 +232,10 @@ pub fn sized_dialog(area: Rect, body: u16) -> Rect {
         height,
     )
 }
+
+/// Under this width a sized dialog takes the whole window but a column each
+/// side.
+const NARROW_DIALOG_BELOW: u16 = 72;
 
 /// How many rows a list drawn inside `dialog` shows, under `above` rows of
 /// chrome besides the borders (a footer and a key line, a query line…).
@@ -153,11 +247,6 @@ pub fn list_rows(dialog: Rect, above: u16) -> usize {
 /// the key line.
 pub fn settings_rows(area: Rect) -> usize {
     list_rows(sized_dialog(area, 22), 2)
-}
-
-/// The templates tab's list: the body band's rows, inside its border.
-pub fn template_rows(area: Rect) -> usize {
-    regions(area, false, 0).table.height.saturating_sub(2) as usize
 }
 
 /// The action menu's box: as tall as its verbs, within reason.
@@ -175,7 +264,7 @@ pub fn pick_box(area: Rect, items: usize) -> Rect {
 /// Where the help overlay is drawn: most of a narrow window, 84 % of a wide
 /// one. The app clamps its scroll with the same box the view draws it in.
 pub fn help_box(area: Rect) -> Rect {
-    if area.width < DETAIL_MIN_WIDTH {
+    if area.width < HELP_NARROW_BELOW {
         centered_fixed(
             area,
             area.width.saturating_sub(4),
@@ -332,26 +421,70 @@ mod tests {
         assert_eq!(box_at_row(squeezed, 1, 4, 4), Rect::new(0, 0, 40, 2));
     }
 
+    fn inside(outer: Rect, inner: Rect) -> bool {
+        let end = |start: u16, len: u16| start as u32 + len as u32;
+        inner.x >= outer.x
+            && inner.y >= outer.y
+            && end(inner.x, inner.width) <= end(outer.x, outer.width)
+            && end(inner.y, inner.height) <= end(outer.y, outer.height)
+    }
+
+    fn needs(min_width: u16, rows: usize) -> TableNeeds {
+        TableNeeds { min_width, rows }
+    }
+
+    /// Beside when the names fit whole with a pane beside them, below when the
+    /// window is tall enough for both, and in the list's place otherwise.
     #[test]
-    fn the_split_favours_the_table_and_closes_the_pane_when_it_must() {
-        // The names fit the 60 %: the split is the usual one.
-        let r = regions(Rect::new(0, 0, 120, 40), true, 54);
+    fn the_pane_goes_where_the_room_is() {
+        let wide = Rect::new(0, 0, 120, 40);
+        // The names fit the 60 %: the usual split.
+        let r = regions(wide, true, needs(54, 8));
+        assert_eq!(r.placement, Some(Placement::Beside));
         assert_eq!((r.table.width, r.detail.map(|d| d.width)), (72, Some(48)));
         // Long names: the table takes what they need, the pane the rest.
-        let r = regions(Rect::new(0, 0, 120, 40), true, 80);
+        let r = regions(wide, true, needs(80, 8));
+        assert_eq!(r.placement, Some(Placement::Beside));
         assert_eq!((r.table.width, r.detail.map(|d| d.width)), (80, Some(40)));
-        // Names so long the pane would be a sliver: it closes.
-        let r = regions(Rect::new(0, 0, 120, 40), true, 95);
+        // Names so long a pane beside them would be a sliver: it goes under
+        // the table, which keeps the whole width and the names whole.
+        let r = regions(wide, true, needs(95, 8));
+        assert_eq!(r.placement, Some(Placement::Below));
+        let pane = r.detail.unwrap();
+        assert_eq!((r.table.width, pane.width), (120, 120));
+        assert_eq!(r.table.height, 11, "eight projects, a header and borders");
+        assert_eq!(pane.y, r.table.y + r.table.height);
+        assert_eq!(r.table.height + pane.height, r.body.height);
 
-        assert!(r.detail.is_none());
-        assert_eq!(r.table.width, 120);
+        // A standard terminal has neither room: the pane takes the list's place.
+        let r = regions(Rect::new(0, 0, 80, 24), true, needs(64, 8));
+        assert_eq!(r.placement, Some(Placement::Over));
+        assert_eq!(r.table, r.body);
+        assert_eq!(r.detail, Some(r.body));
+
+        // Wide and short: beside, whatever the height.
+        let r = regions(Rect::new(0, 0, 200, 15), true, needs(64, 8));
+        assert_eq!(r.placement, Some(Placement::Beside));
+
+        // Tall and narrow: below, with the table as tall as its projects.
+        let r = regions(Rect::new(0, 0, 60, 45), true, needs(52, 8));
+        assert_eq!(r.placement, Some(Placement::Below));
+        assert_eq!(r.table.height, 11);
+        assert_eq!(r.detail.unwrap().height, r.body.height - 11);
+        // A library too big to show whole takes its share and no more.
+        let r = regions(Rect::new(0, 0, 60, 45), true, needs(52, 500));
+        assert_eq!(r.table.height, percent_of(r.body.height, TABLE_BELOW_SHARE));
     }
 
     #[test]
     fn a_standard_terminal_gets_the_compact_layout() {
-        let r = regions(Rect::new(0, 0, 80, 24), true, 0);
+        let r = regions(Rect::new(0, 0, 80, 24), true, needs(64, 12));
         assert_eq!(r.header.height, 2);
-        assert!(r.detail.is_none(), "80 columns is too narrow for the pane");
+        assert_eq!(
+            r.placement,
+            Some(Placement::Over),
+            "the pane in the list's place"
+        );
         assert_eq!(r.table_rows(), 24 - 2 - 1 - 1 - 1 - 3);
         assert!(!too_small(Rect::new(0, 0, 80, 24)));
     }
@@ -360,12 +493,72 @@ mod tests {
     /// along the bottom belong to the table.
     #[test]
     fn a_large_terminal_gets_the_pane_and_the_rows_the_strip_used_to_take() {
-        let r = regions(Rect::new(0, 0, 120, 40), true, 0);
+        let r = regions(Rect::new(0, 0, 120, 40), true, TableNeeds::default());
         assert_eq!(r.header.height, 3);
-        assert!(r.detail.is_some());
+        assert_eq!(r.placement, Some(Placement::Beside));
         assert_eq!(r.table.height, 40 - 3 - 1 - 1 - 1);
-        let r = regions(Rect::new(0, 0, 120, 40), false, 0);
+        let r = regions(Rect::new(0, 0, 120, 40), false, TableNeeds::default());
         assert!(r.detail.is_none(), "the pane can be closed");
+        assert_eq!(r.table, r.body, "and the table has the body");
+    }
+
+    /// **Every window tiles.** Whatever the size — one column, the widest a
+    /// u16 holds — the bands cover the screen in order, the table and the pane
+    /// sit inside the body and never overlap unless the pane is `Over`, and a
+    /// placement is only chosen with the room it promises.
+    #[test]
+    fn regions_tile_every_window() {
+        let mut sizes: Vec<(u16, u16)> = Vec::new();
+        for w in (1..=300).step_by(7).chain([36, 100, 862, 900, u16::MAX]) {
+            for h in (1..=100).step_by(3).chain([23, 24, 30, u16::MAX]) {
+                sizes.push((w, h));
+            }
+        }
+        for (w, h) in sizes {
+            let area = Rect::new(0, 0, w, h);
+            for open in [false, true] {
+                for need in [
+                    needs(0, 0),
+                    needs(64, 8),
+                    needs(118, 86),
+                    needs(u16::MAX, 9999),
+                ] {
+                    let r = regions(area, open, need);
+                    let bands = [r.header, r.search, r.body, r.status, r.hints];
+                    let covered: u32 = bands.iter().map(|b| b.height as u32).sum();
+                    assert!(covered <= h as u32, "{w}x{h}: the bands overflow");
+                    assert!(
+                        bands.windows(2).all(|p| p[0].y + p[0].height <= p[1].y),
+                        "{w}x{h}: the bands are in order"
+                    );
+                    assert!(inside(r.body, r.table), "{w}x{h}: {r:?}");
+                    let Some(pane) = r.detail else {
+                        assert!(!open && r.placement.is_none());
+                        assert_eq!(r.table, r.body);
+                        continue;
+                    };
+                    assert!(inside(r.body, pane), "{w}x{h}: {r:?}");
+                    match r.placement.expect("a pane has a placement") {
+                        Placement::Beside => {
+                            assert!(pane.width >= PANE_BESIDE_MIN);
+                            assert!(r.table.width >= need.min_width);
+                            assert_eq!(r.table.width + pane.width, r.body.width);
+                            assert_eq!(pane.x, r.table.x + r.table.width);
+                        }
+                        Placement::Below => {
+                            assert!(pane.height >= PANE_BELOW_MIN);
+                            assert!(r.table.height >= TABLE_BELOW_MIN);
+                            assert_eq!(r.table.height + pane.height, r.body.height);
+                            assert_eq!(r.table.width, r.body.width);
+                        }
+                        Placement::Over => {
+                            assert_eq!(r.table, r.body);
+                            assert_eq!(pane, r.body);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

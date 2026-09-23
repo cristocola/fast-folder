@@ -42,7 +42,15 @@ else ANSI. On Windows a host that announces no emulator gets the ASCII alphabet;
 `Effect::Retheme` → `Msg::Themed`, so `update` reads no environment.
 
 **Glyphs come from `Glyphs`** wherever a theme is in reach, so the ASCII alphabet
-holds (the ROADMAP lists four screens that still spell characters out). Success
+holds (the ROADMAP lists four screens that still spell characters out). **A key
+label is drawn in the alphabet too**: `Key::label_in(g)` spells an arrow as the
+word on the key (`Right`, `Up/Down`) where the terminal has no arrow to draw, and
+the hint bar, the movement pair, the help and the guide's key line all ask it;
+`Key::label` is the Unicode form, for tests and prose-free places. **No command's
+title or description carries a theme glyph**
+(`no_command_spells_a_glyph_the_theme_owns`), the rule `guide.rs` keeps for its
+prose, because the help, the palette and the action menu draw them under
+whichever alphabet the terminal has. Success
 wears the theme's tick through `App::good`, because `runtime::run_action` runs on
 a worker with no theme; the spinner is `Glyphs::spin(elapsed_ms)`; the progress
 bar is `view::modals::bar`, drawn from `Glyphs::bar_full`/`bar_empty` rather than
@@ -107,7 +115,8 @@ screen is released, `SIGTSTP` is raised, and `fg` retakes the screen and sends a
 faster than a hand types becomes one `Msg::Paste` (`collect_burst`), for
 terminals without bracketed paste; `on_paste` gives a line field the first line
 (saying how many it dropped), a text area every line, and the dashboard only a
-status line.
+status line. An edit open in the pane is a field like any other: its line takes
+the first line, a note every line, and nothing lands while its write is pending.
 
 **The app never takes the mouse**, because a terminal that reports the mouse takes
 every drag too, and selecting text would need a modifier nobody finds.
@@ -203,10 +212,44 @@ for the wrapped views (as `command::help_line_count` does for help) and
 Clamped only at draw time, a scroll runs past the end and the dialog seems frozen.
 
 `layout::panel_fits_width` settles whether a panel is coming before a dialog is
-sized, because the panel changes the height the dialog wants. The table/pane split
-favours the table (`regions`), and the pane closes under `DETAIL_PANE_MIN`. The
-templates tab splits through `layout::templates_panes`, so `studio_scroll_max` and
-the view measure one box.
+sized, because the panel changes the height the dialog wants. The templates tab
+draws in `Regions.body` and places its pane by the library's rule
+(`layout::templates_panes`, `place_shared` with its list's own claim,
+`App::templates_needs`, and a 38 % share), so `App::template_rows`,
+`studio_scroll_max` and the view measure one box, and its doors lead the bar the
+same way (`App::placement_here`).
+
+**The app draws from 40×12** (`MIN_WIDTH`, `MIN_HEIGHT`), and every band keeps
+what matters as the room goes, through `view::fit_spans` (a cut that keeps each
+span's style) and `view::first_that_fits` (candidates, most complete first):
+the header gives up the highest ID, then the base count, never the tabs; its
+second line lets an attention warning win and drops "this session" first; the
+search bar drops the sort, then "(from index)", then the filters, never the
+count or the marks; the status line is fitted; a name wider than the table is cut
+with the ellipsis (`name_col`), never by the border. A sized dialog under 72
+columns takes the window but a column each side. Key lines a dialog writes go
+through `builder::key_line`, cut at whole pairs with the way out before the
+extras; the action menu drops its description column under `DESCRIPTION_MIN`;
+the first-run prose wraps and the box is its height. The too-small screen is
+centred, unboxed, and says which side is short and by how much. The frame sweep
+(`every_state_draws_at_every_size`) holds all of it from 40×12 up.
+
+**The pane goes where the room is** (`layout::place`, one pure function of the
+body and `TableNeeds`): **beside** the table when the names fit whole with
+`PANE_BESIDE_MIN` next to them; **below** it, full width, when the body holds
+`TABLE_BELOW_MIN` + `PANE_BELOW_MIN` rows — the table as tall as its projects, up
+to its share; otherwise **over** it, `Regions.detail` being the body itself, drawn
+instead of the table while the pane has the focus. The pane used to need 100
+columns *and* 26 left by the names, so a library of long names never showed it at
+all. `place` takes no focus: the pane's width is what its rows wrap to, and a
+focus that changed it would re-wrap them under the cursor. The app asks three
+questions of it: `pane_live` (switched on, and a library with a project in it —
+the pane arrives with the first project instead of moving when the names land),
+`detail_visible` (drawn this frame) and `pane_behind_list` (over, the list
+focused). The content is read whenever the pane is live, so going into a pane
+drawn over the list is instant. `i` shows or hides, literally: a pane on screen
+is closed (beside, below) or left (over); one not on screen is opened, and gone
+into when it would be over.
 
 ## One registry
 
@@ -225,6 +268,17 @@ for every dialog, one level at a time; `Quit` and `Back` are the dashboard's. A
 text widget's own keys (Ctrl-S in a text area, Tab in a form) are the one
 exception, and its key line names them.
 
+**Enter acts, F2 edits, `+` adds, on every surface** — a promise the maintainer
+asked for in so many words, and `f2_means_edit_and_plus_means_add_wherever_they_are_bound`
+holds it: F2 is bound on the list (`ListRename`), the pane (`PaneEditText`), the
+templates tab (a key of `StudioEdit`), the builder (`BuilderEditText`) and the
+settings (`SettingsEditText`), and every command it reaches says it edits; `+` on
+the list (`ListAddTodo`), the pane (`PaneAdd`), the tab (a key of `StudioNew`) and
+the builder (a key of `BuilderAdd`). Where there is nothing to type F2 is hidden,
+never a second Enter on a verb (`builder_text_row`, `settings_text_row`). They
+are separate ids where a surface's bar has room for them and another's does
+not, since a command's hint is one flag.
+
 **A sentence that names a key reads it from here** (`command::key_of`,
 `command::NO_TEMPLATES`), so no prompt or empty state outlives a rebinding. A verb
 with no key of its own shows `Enter` in the action menu, since Enter runs the row.
@@ -235,7 +289,11 @@ base, Clear-filter with no filter). **A command may be palette-only**
 (`palette = true` with no keys — `BackToLibrary`, `ReautoTags`, the tag filter),
 so the help never lists a key that is not there.
 
-**Keys named nowhere else in this file**: `R` reindexes from anywhere (`Reindex`);
+**Keys named nowhere else in this file**: `<`/`>` in the pane walk the projects
+without leaving it (`PanePreviousProject`/`PaneNextProject`, `[Detail]` only), the
+cursor landing in the section it left (`App.pane_seek`, `pane::first_in_section`)
+once the next project's rows are there, with no pulse, since a walk is not a
+change — not `[`/`]`, which need AltGr on several European layouts; `R` reindexes from anywhere (`Reindex`);
 `C` copies to a folder outside the bases (`CopyTo`) and `p` shows the full path
 (`ShowPath`), both action-menu verbs; `i` toggles the detail pane on the lists
 (`ToggleDetail`) and the explanation panel in the builder (`BuilderExplain`); `*`
@@ -247,7 +305,12 @@ filters, marks), the hint bar advertises keys, and the status line says what a
 batch verb would act on. `MarkToggle` is `hint = true, palette = true` for that
 reason. The hint bar orders by category — this context's verbs first, then `?
 help` and `c commands`, which are the same everywhere and what a narrow window can
-afford to lose.
+afford to lose. **The doors lead**: where the pane takes the list's place, the one
+of the two out of sight is a key away with nothing on screen to say so, so
+`→ details` (from the list) or `← list` (from the pane) comes first and no width
+cuts it. The list's bottom border carries the hidden pane's figures — its notes,
+its todos done — for the same reason (`view::projects::peek`), and nothing for a
+project with neither.
 
 ## Every key line is read, and the field goes first
 
@@ -266,7 +329,9 @@ note, the first-run question) and `Context::Pick` exist so those keys are
 declared, and `Availability` hides the rest (`PromptNewline` outside a note,
 `PickToggle` outside a multi-pick). **A key line is cut at a whole pair, the way
 out before the extras** (`view::builder::key_line`), because half an entry
-advertises a key that is not one.
+advertises a key that is not one. **A bar never states one verb twice**: where
+Enter already edits a pane row, F2's `edit` is left off (it says it on a todo,
+where Enter ticks).
 
 **In a text-entry context everything printable is text**, and only a key a field
 cannot hold reaches the registry. The caret's chords are `LineEdit::CLAIMED`, and
@@ -303,7 +368,10 @@ look around, and Enter in the pane means *edit this row*. `FocusList` and
 `FocusDetail` are declared over `PANED` and dispatch on `screen`; each is
 **hidden, not a no-op**, where it has nowhere to go (`pane_has_focus`,
 `pane_can_take_focus`). The axis never quits — leaving a tab is Esc's ladder and
-`T` — and `the_horizontal_axis_only_moves_focus_or_turns_a_page` holds it. Two
+`T` — and `the_horizontal_axis_only_moves_focus_or_turns_a_page` holds it. **The
+pane is a rung of that ladder**, on both tabs: `Back` takes the focus to the list
+right after cancelling a job, because a ladder that ran out under a focused pane
+quit the app — leaving the pane the way every dialog is left closed fastf. Two
 surfaces own their left and right: a **field** (`LineEdit`, `TextArea`, a `Form`
 choice) for its caret or option, and the guide, a **reader**, whose
 `Context::Guide` declares `GuideNext`/`GuidePrevious`; forward off the last page
@@ -321,7 +389,10 @@ Enter dispatches exactly the `CommandId` a key would, and `#`/`@` restricts it t
 projects.
 
 **Every quit goes through `App::quit`** — `q`, the palette entry, the too-small
-guard — so each asks what Esc would ask before a worked-on template is lost.
+guard — so each asks what Esc would ask before a worked-on template is lost. The
+too-small guard cannot draw the dialog, so it asks in words
+(`view::render_too_small` reads the top modal): a second `q` there is an answer
+given with the question in view, never one given blind.
 `close_top` owns the question, `quit` who must ask it, and
 `ConfirmThen::DiscardTemplate` carries `then_quit` so the answer finishes the quit.
 
@@ -382,9 +453,12 @@ cannot reflow the table; the size cell is `rows::SIZE_CELL`, right-aligned, head
 included.
 
 **The base is promoted above the date when the visible rows span more than one
-base** — a question about the rows on screen, not the configuration.
-`LibraryState.many_bases` and `base_width` are measured in `recompute`, so
-`App::table_min_width` can claim that column before long names take its room.
+base** — a question about the rows on screen, not the configuration. The
+*claim* is another question: `LibraryState.widths`, `many_bases` and
+`base_width` are measured in `recompute` over the **whole library**, so
+`App::table_min_width` can claim the base column before long names take its
+room, and so a claim that shrank as a query was typed cannot move the pane on
+every keystroke; the view's `choose_columns` still measures the rows on screen.
 
 **Width is display columns, never bytes or characters** (`Проекты` is seven
 columns and fourteen bytes): `view::fit`, `view::pad`, and
@@ -673,16 +747,43 @@ asserted.
 **`pane::pane_rows` is the one answer to "what is in the pane"**, read by the view,
 the cursor arithmetic and the scroll ceiling, so which rows exist and which are
 `PaneRow::selectable` is never counted twice. One line per row and no `Wrap`,
-because the cursor and `detail_scroll` count rows.
+because the cursor and `detail_scroll` count rows. **A page is the pane's height
+in drawn rows** (`pane::page_cursor`, landing on the farthest selectable row the
+page reaches): stepping a page's worth of *selectable* rows skipped every wrapped
+line and jumped screens at a time. **The caret goes where typing lands**
+(`view::view`): a dialog's field, else the search bar while it is typed into, else
+an edit open in the pane — one owner at a time; `testing::render_with_caret`
+reads it back. A note editor never opens smaller than `NOTE_EDITOR_ROWS`: on the
+pane's last row it slides up over the rows above (`layout::box_at_row`).
+**Space in the pane marks the project it shows and stays**; on the list it steps
+through `after_selection_change`, so the next row is read like any other move.
+
+**The pane's text has one rect** (`layout::pane_text`: inside the border, a
+column of padding each side), read by `App::pane_rows` for the width it wraps to,
+by `pane_rows_on_screen` for the height the cursor and scroll count, and by the
+view; the cursor's highlight and a pulse's wash span the whole inner row, across
+the padding. **The header is never cut**: the name wraps after the joints of a
+fastf name (`wrap_name`: `_ - .` and space, inside a part only when it is wider
+than a row) into `NameLine`s, and the facts — what the project is, then what it
+holds — flow whole (`flow_facts`) into `PaneRow::Facts` rows, the size measured
+at `rows::SIZE_CELL` whatever it reads, so a size landing can never add a row
+above the cursor. Until the record is read the figures are the size alone: a
+zero count there would be a claim. **The order is by use**: header, tags, todo,
+notes, then the reference — variables and the folder's top level — so a short
+pane shows the living sections unscrolled. A pane with more rows than it shows
+has the table's scrollbar (`view::scrollbar`, in the theme's alphabet).
 
 **A note is several rows, and so is a long line**: `App::pane_rows` hands
-`pane_rows` the pane's inside width, and every line of a note is wrapped to the
+`pane_rows` the pane's text width, and every line of a note is wrapped to the
 columns after its date (`NOTE_INDENT`) by `wrap_columns`, in display columns.
 `PaneRow::Note` is the first row with the date in a ten-wide column (blank when
 undated), then `NoteLine`s up to `NOTE_LINES_SHOWN` rows, then `NoteMore`; only the
 first is selectable, and Enter edits the whole note. The latest `NOTES_SHOWN` notes
 show under `EarlierNotes(n)`, whose Enter is `ShowJournal`. A todo is a
-`PaneRow::Todo`, drawn `[x]`/`[ ]`, with the rest of a long one in `TodoLine`s.
+`PaneRow::Todo`, drawn `[x]`/`[ ]` in the text colour (the accent is focus, and
+never bold), done ones dim, with the rest of a long one in `TodoLine`s aligned
+under its text; under a `PaneRow::Phase` heading — the text colour, its
+`done/total` on the right, dim once finished — the tasks sit `PHASE_INDENT` in.
 **A row holds only what fits, so an edit reads its text from the detail**: the
 note editor opens on `detail.notes[ordinal]`, and a toggle names
 `detail.todos[ordinal]` — never a row's text, or a wrapped todo would be refused
@@ -709,6 +810,36 @@ bar's Enter names what it will do (`edit`, `toggle`, `add`, `show`) through
 `command::hint_title`. The edit lives in `App.pane_edit` beside the rows, so what
 is being changed stays in view.
 
+**Enter acts, F2 edits, `+` adds.** Enter on a todo ticks it, so rewording one
+needs a key of its own: `PaneEditText` (F2) opens a row's text in place
+(`EditTarget::Todo { ordinal, was }` on a todo, what Enter opens elsewhere, and
+hidden where there is nothing to type); `PaneAdd` (`+`) adds to the section the
+cursor is in. On the list the same keys are `ListRename` and `ListAddTodo`, off
+the hint bar — **the pane's bar is what the pane does**: `command::hints` leaves
+the verbs the pane shares with the list (open, terminal, copy, mark, new, the
+tab) to the list's bar and the action menu, which is what left room for the way
+back and help. **A todo is added where it will land**: `EditTarget::NewTodo` is a
+line edit on a `PaneRow::Adding` that `App::pane_rows` inserts
+(`pane::with_adding`) where `body::add_todos_at` will write for its `TodoPlace` —
+the last run of the cursor's phase, after the loose tasks when the cursor is on
+one, or the end. **The line takes keys while its write is on its way**: Enter
+empties it at once and records the text in `sending`, an Enter meanwhile goes to
+`queued` and is sent when the first lands (`flush_adds`), and Esc or an empty
+Enter meanwhile sets `closing`, so the line goes once everything entered is
+written — the line used to refuse keys until the answer came, and a fast typist
+lost the first letters of the next todo. **Where it landed is the writer's
+answer** (`ActionOutcome::todo_ordinal`), never the app's guess. A refusal puts
+the text back on the line when nothing was typed after it, and otherwise names
+what was not added. **Closing the line** (`close_pane_edit`, which Esc, an empty
+Enter, `set_focus` and every cancel go through) puts the cursor on the row `+` was
+pressed on, then on the last todo added — the line's own row goes with it, and
+its index was a heading's. A paste goes in at the caret: several lines are that
+many todos (what was typed before it the start of the first, list markers off,
+`pane::todo_text_of`), one line is the field's, markers off when it was empty.
+`on_paste` normalises a terminal's line breaks first: many send a bare `\r`, and
+`str::lines` splits on `\n` alone, so every multi-line paste used to arrive as
+one line.
+
 **`Context::PaneEdit` is a text-entry context**: the field has first refusal, and
 the registry answers Enter, Esc and `Ctrl-S` (`on_pane_edit_key`). So Enter on the
 list is its own id, `ActionsEnter` over `[Projects]`, hidden from the bar and the
@@ -725,8 +856,23 @@ or the selection drops an open edit untouched.
 or todo returns `DetailOnly`, which keeps the pane until the re-read lands, so no
 `reading…` frame flickers. `PaneEdit::target` (`PaneTarget`: tag text, variable
 slug or ordinal) lets `settle_pane_cursor` find the row after `apply_change`, and
-`App.pane_return` finds it again when `Msg::Detail` lands, which also re-anchors
-an open edit (`PaneEdit::set_row`) and re-clamps the cursor.
+`App.pane_return` finds it again when `Msg::Detail` lands, with a pulse.
+
+**Everything else that rebuilds the rows finds the cursor again by what it is
+on**, without a pulse, because nothing it is on changed: a re-read after an
+outside edit, a re-wrap at a new width, a discovery changing the tags above.
+`App.pane_anchor` (`pane::target_at`) is set by every cursor move and read by
+`refind_pane`, which also puts an open edit back on its row by
+`PaneEdit::anchor` — the row it was opened on, never `target`'s typed tag text,
+which is no row until the write lands and moved the editor to "add a tag" on
+every refresh. An anchor whose row is not there yet (the detail is being read)
+is kept, not overwritten. **`App.pane_for` is the project the pane's state
+belongs to**: `sync_pane` resets the cursor, scroll, pulses and an open edit only
+when the selection is another project, so a list change that keeps the selection
+keeps the pane. **A resize loses nothing** (`on_resize`): the focus leaves the pane
+only if no pane is left, the index-keyed pulses are cleared, the viewports are
+re-clamped and `refind_pane` does the rest; a resize to the size the app already
+has — one follows every `$EDITOR` note and every `fg` — is no message at all.
 
 **What the pane admits is what the file can hold**, ruled once in `core`:
 `validated::Tag` at `operations::add_tags`, `vars::rendered_values` in

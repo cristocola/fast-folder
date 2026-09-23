@@ -374,9 +374,12 @@ fn the_palette_finds_add_a_todo_from_the_list() {
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     let project = app.library.selected().unwrap().clone();
     assert!(app.modals.is_empty());
-    let expected = fastf::tui::effect::Action::AddTodo {
+    // The project's record has not been read, so there is no list on screen
+    // to type into: the prompt, and the todo goes at the end.
+    let expected = fastf::tui::effect::Action::AddTodos {
         project: Box::new(project),
-        text: "invoice".to_string(),
+        texts: vec!["invoice".to_string()],
+        place: fastf::core::body::TodoPlace::End,
     };
     assert!(
         effects
@@ -642,7 +645,7 @@ fn the_focus_ring_is_the_table_and_the_pane() {
 }
 
 #[test]
-fn the_detail_pane_is_read_once_per_project_and_only_when_visible() {
+fn the_detail_pane_is_read_once_per_project_and_only_while_it_is_on() {
     let mut app = fixture(12, 120, 40);
     let effects = press(&mut app, Key::ch('j'));
     let wanted: Vec<PathBuf> = effects
@@ -685,13 +688,16 @@ fn the_detail_pane_is_read_once_per_project_and_only_when_visible() {
         "{effects:?}"
     );
 
-    let mut narrow = fixture(12, 80, 24);
-    let effects = press(&mut narrow, Key::ch('j'));
+    // Switched off with `i`, the pane reads nothing and checks nothing.
+    let mut off = fixture(12, 120, 40);
+    press(&mut off, Key::ch('i'));
+    assert!(!off.detail_open);
+    let effects = press(&mut off, Key::ch('j'));
     assert!(
         !effects
             .iter()
             .any(|e| matches!(e, Effect::LoadDetail(_) | Effect::RefreshDetail { .. })),
-        "no pane on screen, no read and no check: {effects:?}"
+        "no pane, no read and no check: {effects:?}"
     );
 }
 
@@ -780,4 +786,122 @@ fn a_summary_that_names_a_template_no_project_uses_still_gets_a_card() {
         .collect();
     assert!(slugs.contains(&"orphan"), "{slugs:?}");
     assert_eq!(app.templates.count("orphan"), 1);
+}
+
+/// **A pane in the list's place is read before it is shown**, so going into
+/// it is instant: on a window with no room beside or under the list, moving
+/// through the list still reads the row the pane would show.
+#[test]
+fn a_small_window_still_reads_the_detail_so_the_pane_opens_at_once() {
+    let mut app = fixture(12, 80, 24);
+    assert!(
+        app.pane_behind_list(),
+        "80×24 puts the pane in the list's place"
+    );
+    let effects = press(&mut app, Key::ch('j'));
+    let selected = app.library.selected().unwrap().path.clone();
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDetail(path) if *path == selected)),
+        "the hidden pane's row is read: {effects:?}"
+    );
+}
+
+/// **Typing a search never moves the pane.** The table's claim on the width is
+/// measured over the whole library, so the one long name a query filters out
+/// does not hand the pane a new place on the next keystroke.
+#[test]
+fn typing_a_search_never_moves_the_pane() {
+    let mut app = empty_fixture(120, 40);
+    let _ = app.start();
+    let mut projects = sample_projects(6);
+    projects[0].name = format!("2026-01-01_{}_ID0001", "Extended_Directors_Cut_".repeat(4));
+    update(&mut app, Msg::Summary(Box::new(sample_summary(6))));
+    update(
+        &mut app,
+        Msg::Discovered {
+            generation: 1,
+            projects,
+        },
+    );
+    let before = app.regions();
+    assert_eq!(
+        before.placement,
+        Some(fastf::tui::layout::Placement::Below),
+        "one long name puts the pane under the list"
+    );
+    press(&mut app, Key::ch('/'));
+    for c in "lullaby".chars() {
+        press(&mut app, Key::ch(c));
+        assert_eq!(app.regions(), before, "the pane moved on `{c}`");
+    }
+}
+
+/// **The list's border peeks at a pane that is out of sight**: the selected
+/// project's notes and todos, in the pane's own words, and nothing for a
+/// project that has neither.
+#[test]
+fn the_peek_says_what_the_hidden_pane_holds() {
+    use fastf::tui::app::data::ProjectDetail;
+
+    let mut app = fixture(6, 80, 24);
+    let path = app.library.selected().unwrap().path.clone();
+    update(
+        &mut app,
+        Msg::Detail {
+            path,
+            detail: Box::new(ProjectDetail {
+                notes: vec![
+                    fastf::core::body::Note {
+                        timestamp: None,
+                        text: "one".to_string(),
+                    },
+                    fastf::core::body::Note {
+                        timestamp: None,
+                        text: "two".to_string(),
+                    },
+                ],
+                todos: (0..4)
+                    .map(|n| fastf::core::body::Todo {
+                        done: n < 1,
+                        text: format!("task {n}"),
+                        phase: None,
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+        },
+    );
+    let frame = fastf::tui::testing::render_to_string(&app, 80, 24);
+    let bottom = frame
+        .lines()
+        .find(|line| line.contains('└'))
+        .expect("the table's bottom border");
+    assert!(
+        bottom.contains("2 notes · 1/4 todos done"),
+        "the peek is on the border: {bottom}"
+    );
+
+    // A project with nothing in it: a plain border.
+    press(&mut app, Key::ch('j'));
+    let path = app.library.selected().unwrap().path.clone();
+    update(
+        &mut app,
+        Msg::Detail {
+            path,
+            detail: Box::default(),
+        },
+    );
+    let frame = fastf::tui::testing::render_to_string(&app, 80, 24);
+    let bottom = frame.lines().find(|line| line.contains('└')).unwrap();
+    assert!(
+        !bottom.contains("todo") && !bottom.contains("note"),
+        "{bottom}"
+    );
+
+    // With the pane in view, the pane says it and the border does not.
+    press(&mut app, Key::plain(KeyCode::Right));
+    let frame = fastf::tui::testing::render_to_string(&app, 80, 24);
+    assert!(!frame.contains("todos done ┘"), "{frame}");
 }

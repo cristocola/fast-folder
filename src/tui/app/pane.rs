@@ -237,14 +237,42 @@ pub fn todo_text_of(line: &str) -> String {
     rest.trim_end().to_string()
 }
 
+/// The list's `###` labels as the file has them — or, for a detail that
+/// carries only its todos, the labels they name, one where the phase changes.
+pub fn labels_of(detail: &ProjectDetail) -> Vec<crate::core::body::PhaseLabel> {
+    if !detail.phases.is_empty() {
+        return detail.phases.clone();
+    }
+    let mut labels = Vec::new();
+    let mut phase: Option<&str> = None;
+    for (ordinal, todo) in detail.todos.iter().enumerate() {
+        if todo.phase.as_deref() != phase {
+            phase = todo.phase.as_deref();
+            if let Some(name) = phase {
+                labels.push(crate::core::body::PhaseLabel {
+                    name: name.to_string(),
+                    before: ordinal,
+                });
+            }
+        }
+    }
+    labels
+}
+
 /// Where `body::add_todos_at` opens a label the list does not have: above
 /// the first `### Other`, which is where a list keeps what belongs to no
-/// phase, and otherwise after the last task, over "add a todo".
+/// phase; otherwise under the last task — above any empty labels after it —
+/// and in a list with no task, at its end, over "add a todo".
 fn new_phase_at(rows: &[PaneRow]) -> Option<usize> {
-    rows.iter()
-        .position(
-            |row| matches!(row, PaneRow::Phase { name, .. } if name.eq_ignore_ascii_case("other")),
-        )
+    let other = rows.iter().position(
+        |row| matches!(row, PaneRow::Phase { name, .. } if name.to_lowercase() == "other"),
+    );
+    let after_last_task = rows
+        .iter()
+        .rposition(|row| matches!(row, PaneRow::Todo { .. } | PaneRow::TodoLine { .. }))
+        .map(|last| last + 1);
+    other
+        .or(after_last_task)
         .or_else(|| rows.iter().position(|row| *row == PaneRow::AddTodo))
 }
 
@@ -519,30 +547,26 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
     }
 
     rows.push(PaneRow::Rule(PaneSection::Todo));
-    // A label is drawn where it changes, so an ungrouped list draws none and
-    // a grouped one draws each label once, over the run it names, with how
-    // much of the run is done.
-    let mut phase: Option<&str> = None;
-    for (ordinal, todo) in detail.todos.iter().enumerate() {
-        if todo.phase.as_deref() != phase {
-            phase = todo.phase.as_deref();
-            if let Some(name) = phase {
-                let (done, total) = detail
-                    .todos
-                    .iter()
-                    .skip(ordinal)
-                    .take_while(|t| t.phase.as_deref() == Some(name))
-                    .fold((0, 0), |(done, total), t| {
-                        (done + usize::from(t.done), total + 1)
-                    });
-                rows.push(PaneRow::Phase {
-                    name: name.to_string(),
-                    done,
-                    total,
-                });
-            }
+    // Each label is drawn where the file has it, over the run of tasks up to
+    // the next one, with how much of the run is done — a label with nothing
+    // under it too, since that is where a todo added to its phase will go.
+    let labels = labels_of(detail);
+    let push_labels = |rows: &mut Vec<PaneRow>, at: usize| {
+        for (index, label) in labels.iter().enumerate().filter(|(_, l)| l.before == at) {
+            let end = labels
+                .get(index + 1)
+                .map_or(detail.todos.len(), |next| next.before);
+            let run = detail.todos.get(at..end).unwrap_or_default();
+            rows.push(PaneRow::Phase {
+                name: label.name.clone(),
+                done: run.iter().filter(|t| t.done).count(),
+                total: run.len(),
+            });
         }
-        let phased = phase.is_some();
+    };
+    for (ordinal, todo) in detail.todos.iter().enumerate() {
+        push_labels(&mut rows, ordinal);
+        let phased = todo.phase.is_some();
         let indent = TODO_INDENT + if phased { PHASE_INDENT } else { 0 };
         let mut lines = wrap_columns(&todo.text, width.saturating_sub(indent)).into_iter();
         rows.push(PaneRow::Todo {
@@ -557,6 +581,7 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
             phased,
         }));
     }
+    push_labels(&mut rows, detail.todos.len());
     rows.push(PaneRow::AddTodo);
     rows.push(PaneRow::AddPhase);
 
@@ -1267,6 +1292,10 @@ impl App {
     /// cursor is in, with the loose tasks when it is on one, else at the end.
     pub(super) fn pane_add(&mut self) -> Vec<Effect> {
         let rows = self.pane_rows();
+        // One more of what the cursor is on: on "add a phase", a phase.
+        if rows.get(self.pane_cursor) == Some(&PaneRow::AddPhase) {
+            return self.run(CommandId::AddPhase);
+        }
         match section_at(&rows, self.pane_cursor) {
             PaneSection::Tags => self.open_add_tag(),
             PaneSection::Notes => self.run(CommandId::NoteInline),
@@ -1304,7 +1333,7 @@ impl App {
         let phased = match &place {
             TodoPlace::Phase(_) => true,
             TodoPlace::Loose => false,
-            TodoPlace::End => detail.todos.last().is_some_and(|todo| todo.phase.is_some()),
+            TodoPlace::End => !labels_of(detail).is_empty(),
         };
         // Closing the line comes back to the row `+` was pressed on — or, from
         // the list, to the row that adds a todo.
@@ -2079,6 +2108,77 @@ mod tests {
                 PaneRow::AddPhase
             ]
         );
+    }
+
+    /// A label whose tasks were all removed stays in the file, and a new
+    /// todo in its phase goes under it: the pane draws it, and draws the line
+    /// there, rather than opening a second heading at the end.
+    #[test]
+    fn an_empty_label_is_drawn_and_a_todo_for_it_lands_under_it() {
+        let label = |name: &str, before| crate::core::body::PhaseLabel {
+            name: name.to_string(),
+            before,
+        };
+        let heading = |name: &str, total: usize| PaneRow::Phase {
+            name: name.to_string(),
+            done: 0,
+            total,
+        };
+        let todo_rows = |rows: Vec<PaneRow>| -> Vec<PaneRow> {
+            rows.into_iter()
+                .skip_while(|r| *r != PaneRow::Rule(PaneSection::Todo))
+                .skip(1)
+                .take_while(|r| *r != PaneRow::Rule(PaneSection::Notes))
+                .map(|r| match r {
+                    PaneRow::Todo { ordinal, .. } => PaneRow::More(ordinal),
+                    other => other,
+                })
+                .collect()
+        };
+        let detail = ProjectDetail {
+            todos: vec![crate::core::body::Todo {
+                done: false,
+                text: "a".to_string(),
+                phase: Some("Setup".to_string()),
+            }],
+            phases: vec![label("Grade", 0), label("Setup", 0), label("Review", 1)],
+            ..Default::default()
+        };
+        let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
+        assert_eq!(
+            todo_rows(rows.clone()),
+            vec![
+                heading("Grade", 0),
+                heading("Setup", 1),
+                PaneRow::More(0),
+                heading("Review", 0),
+                PaneRow::AddTodo,
+                PaneRow::AddPhase
+            ]
+        );
+        assert_eq!(
+            todo_rows(with_adding(
+                rows.clone(),
+                &TodoPlace::Phase("grade".to_string())
+            ))[1],
+            PaneRow::Adding,
+            "under the empty label the writer will find"
+        );
+        // A new phase opens under the last task, above the empty label after it.
+        assert_eq!(
+            todo_rows(with_naming(rows.clone()))[3],
+            PaneRow::Adding,
+            "{:?}",
+            todo_rows(with_naming(rows))
+        );
+
+        // An empty `### Other` at the top: a new phase opens above it.
+        let other_first = ProjectDetail {
+            phases: vec![label("Other", 0), label("Setup", 0)],
+            ..detail
+        };
+        let rows = pane_rows(&project(&[], "client"), Some(&other_first), 0);
+        assert_eq!(todo_rows(with_naming(rows))[0], PaneRow::Adding);
     }
 
     #[test]

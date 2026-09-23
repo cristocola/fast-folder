@@ -123,14 +123,7 @@ fn heading_name(line: &str) -> Option<&str> {
 /// reaches here, because a section ends where the next one starts.
 fn phase_name(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("###")?;
-    label_of(rest.trim_start_matches('#'))
-}
-
-/// A phase name as a reader will read it back: trimmed, and without the
-/// hashes or the trailing colon somebody may type with it.
-fn label_of(text: &str) -> Option<&str> {
-    let name = text
-        .trim()
+    let name = rest
         .trim_start_matches('#')
         .trim()
         .trim_end_matches(':')
@@ -139,13 +132,49 @@ fn label_of(text: &str) -> Option<&str> {
 }
 
 /// What `text` names as a phase — the label a writer puts after `### ` so
-/// the reader reads back exactly that: `"## Grade:"` is `Grade`. `None` when
-/// it names nothing; a line break is not a phase either.
+/// that the reader reads back exactly that: `"## Grade:"` is `Grade`.
+/// Every hash and space is taken off the front and every colon and space
+/// off the end, all at once, since a name that still ended in `:` would be
+/// written as one label and read as another, and each later todo would open
+/// it again. `None` when it names nothing; a line break is not a phase either.
 pub fn phase_label(text: &str) -> Option<String> {
     if text.contains(['\n', '\r']) {
         return None;
     }
-    label_of(text).map(str::to_string)
+    let name = text
+        .trim_start_matches(|c: char| c == '#' || c.is_whitespace())
+        .trim_end_matches(|c: char| c == ':' || c.is_whitespace());
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// One `###` label of the todo list: its name, and how many tasks sit above
+/// it — so a label with nothing under it, which no task's `phase` names, is
+/// still somewhere a reader can draw and a writer will find.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PhaseLabel {
+    pub name: String,
+    pub before: usize,
+}
+
+/// Every `###` label in `content`'s todo list, in file order, empty ones
+/// included.
+pub fn phase_labels_in(content: &str) -> Vec<PhaseLabel> {
+    let Some(span) = section_span(content, Section::Todo) else {
+        return Vec::new();
+    };
+    let mut labels = Vec::new();
+    let mut tasks = 0;
+    for (_, line) in section_lines(content, &span) {
+        if let Some(name) = phase_name(line) {
+            labels.push(PhaseLabel {
+                name: name.to_string(),
+                before: tasks,
+            });
+        } else if task_line(line).is_some() {
+            tasks += 1;
+        }
+    }
+    labels
 }
 
 /// Whether `line` starts a section — any `##` heading, whatever it says.
@@ -632,6 +661,13 @@ pub fn todos_in(content: &str) -> Vec<Todo> {
 pub fn read_todos(project_root: &Path) -> Result<Vec<Todo>> {
     let content = crate::core::project_info::read(project_root)?;
     Ok(todos_in(&content))
+}
+
+/// Every task of the project at `project_root` and every phase label, from
+/// one read, so the two agree.
+pub fn read_todo_list(project_root: &Path) -> Result<(Vec<Todo>, Vec<PhaseLabel>)> {
+    let content = crate::core::project_info::read(project_root)?;
+    Ok((todos_in(&content), phase_labels_in(&content)))
 }
 
 /// Flip task `ordinal` between open and done by rewriting the one character
@@ -1187,6 +1223,30 @@ mod tests {
     }
 
     #[test]
+    fn every_label_is_read_with_the_tasks_above_it_empty_ones_too() {
+        let content = doc(concat!(
+            "## Todo\n\n",
+            "- [ ] loose\n\n",
+            "### Grade\n\n",
+            "### Setup\n",
+            "- [ ] a\n",
+            "- [x] b\n",
+            "###\n",
+            "### Other\n",
+        ));
+        let label = |name: &str, before| PhaseLabel {
+            name: name.to_string(),
+            before,
+        };
+        assert_eq!(
+            phase_labels_in(&content),
+            vec![label("Grade", 1), label("Setup", 1), label("Other", 3)],
+            "an empty label is kept; a bare `###` is no label"
+        );
+        assert!(phase_labels_in(&doc("## Notes\n\n- a\n")).is_empty());
+    }
+
+    #[test]
     fn a_phase_is_written_as_the_name_it_reads_back_as() {
         assert_eq!(phase_label("  Grade "), Some("Grade".to_string()));
         assert_eq!(phase_label("## Grade:"), Some("Grade".to_string()));
@@ -1194,6 +1254,18 @@ mod tests {
         assert_eq!(phase_label(" # : "), None);
         assert_eq!(phase_label(""), None);
         assert_eq!(phase_label("two\nlines"), None);
+        // Whatever is typed, the label written reads back as the name given.
+        for typed in [
+            "Grade: :",
+            "# # Grade",
+            "Grade ::",
+            "#Grade",
+            "  ###  Grade  :  ",
+        ] {
+            let name = phase_label(typed).unwrap();
+            assert_eq!(name, "Grade", "{typed:?}");
+            assert_eq!(phase_name(&format!("### {name}")), Some(name.as_str()));
+        }
 
         // Typed with its markdown, it still reads back as what was meant.
         let plain = doc("## Todo\n\n- [ ] read the order\n");

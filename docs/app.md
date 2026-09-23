@@ -113,8 +113,9 @@ the list has one. Type its name and Enter: the heading is drawn and the todo
 line opens under it, and from there it is the list above. The phase is written
 to the file as `### Name` with its first todo; leave without typing one and
 nothing is written, and the status line says so. A name the list already has,
-in any case, adds to that phase. With the pane switched off, `P` asks for the
-name, then the first todo. What you can type is what the file can hold: a tag is one
+in any case, adds to that phase, and a heading whose todos were all removed is
+still in the file and in the pane, where new todos for it go. With the pane
+switched off, `P` asks for the name, then the first todo. What you can type is what the file can hold: a tag is one
 word (letters, digits, `- _ . /`), a variable is one line and a `select` is one
 of its options, a todo is one line, and an undated note may not start a line
 with `##` (that is how the file marks where a section ends). A refusal names

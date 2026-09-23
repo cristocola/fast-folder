@@ -796,8 +796,12 @@ its first todo**, because a `###` label with no task under it is no phase to the
 reader: `P` (`AddPhase`) names it on a line where the writer will open the label
 (`EditTarget::NewPhase`, `pane::with_naming`), and Enter turns that line into the
 `NewTodo` line for `TodoPlace::Phase`, over a heading `with_adding` draws, without
-a count, until the file has one. `body::phase_label` is the one normalisation of
-what was typed. Closed with nothing written (`landed`), the line says so on the
+a count, until the file has one. **The pane draws every label the file has**,
+empty ones included (`ProjectDetail.phases`, from `body::phase_labels_in`;
+`pane::labels_of` derives them from the todos in a fixture), because the writer
+finds an empty label and the line must be drawn where the todo will land.
+`body::phase_label` is the one normalisation of what was typed, stripped whole
+so the label written is the label read. Closed with nothing written (`landed`), the line says so on the
 status line.
 
 **Nothing edits until Enter, and Esc leaves the row as it was.** The cursor walks

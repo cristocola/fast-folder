@@ -466,7 +466,12 @@ needed. **It answers the ordinal the first todo got** — read back from what it
 wrote, from where the block starts — because the app's guess at it was wrong
 wherever a label's name repeated or differed in case, and the pane settles its
 cursor on that answer. `add_todos_in`, `add_todo_in` and `add_todo` are it with a
-phase or none, so there is one placement rule.
+phase or none, so there is one placement rule. A phase name goes through
+`phase_label` first, which strips every leading `#`/space and trailing `:`/space
+at once: a name written as `### Grade:` reads back as `Grade`, and would open a
+new label on every add. `phase_labels_in` reads every label with the tasks above
+it, empty ones included, for a reader that must draw where the writer will put
+a task.
 
 **A file saved with `\r\n` keeps them** (`with_line_endings_of`): the adders, the
 note appender and `replace_note` make their edit on the file's `\n` reading and

@@ -605,8 +605,11 @@ pub fn detail(path: &Path) -> ProjectDetail {
         Ok(notes) => detail.notes = notes,
         Err(err) => problems.push(format!("notes: {err:#}")),
     }
-    match crate::core::body::read_todos(path) {
-        Ok(todos) => detail.todos = todos,
+    match crate::core::body::read_todo_list(path) {
+        Ok((todos, phases)) => {
+            detail.todos = todos;
+            detail.phases = phases;
+        }
         Err(err) => problems.push(format!("todos: {err:#}")),
     }
 

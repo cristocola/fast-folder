@@ -1800,3 +1800,22 @@ fn without_the_list_on_screen_a_phase_is_two_prompts() {
         "{effects:?}"
     );
 }
+
+/// `+` on "add a phase" is one more phase, as on "add a tag" it is a tag.
+#[test]
+fn plus_on_add_a_phase_adds_a_phase() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| matches!(row, PaneRow::AddPhase));
+    press(&mut app, Key::ch('+'));
+    assert!(
+        matches!(
+            app.pane_edit,
+            Some(PaneEdit::Line {
+                target: fastf::tui::app::pane::EditTarget::NewPhase { .. },
+                ..
+            })
+        ),
+        "{:?}",
+        app.pane_edit
+    );
+}

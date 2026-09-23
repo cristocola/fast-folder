@@ -14,6 +14,20 @@ pub const ADD_TAG_PROMPT: &str = "Tag to add (e.g. draft  or  client/Acme)";
 /// `Todo to add`. One line; the pane toggles it once it is there.
 pub const ADD_TODO_PROMPT: &str = "Todo to add";
 
+/// The todo prompt when it will land under a phase, naming it.
+pub fn add_todo_in_prompt(phase: &str) -> String {
+    format!("Todo to add under {phase} — the phase is written with it")
+}
+
+/// A new phase's name, where the pane cannot show the list.
+pub const ADD_PHASE_PROMPT: &str = "Name of the new phase (e.g. Main Edit)";
+
+/// A phase name that is all markdown and no name.
+pub const PHASE_NAMELESS: &str = "a phase needs a name";
+
+/// The add line closed under a phase that was only drawn.
+pub const PHASE_NOT_WRITTEN: &str = "no todo, so no phase — a phase is written with its first todo";
+
 /// The copy destination. It names the rule rather than leaving it to be
 /// discovered by refusal: a folder inside a base is the one answer that cannot
 /// work, and it is the first one a reader reaches for.

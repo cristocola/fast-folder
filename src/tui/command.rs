@@ -366,6 +366,8 @@ pub enum CommandId {
     NoteInline,
     /// One task onto the list — what the pane's add row does, findable.
     AddTodo,
+    /// A new `###` phase on the list, written with its first todo.
+    AddPhase,
     Rename,
     /// Enter on the project list: the action menu, as `a` opens it. Its own
     /// id because the pane's Enter means something else.
@@ -426,7 +428,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 105] = [
+    pub const ALL: [CommandId; 106] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -490,6 +492,7 @@ impl CommandId {
         CommandId::AddNote,
         CommandId::NoteInline,
         CommandId::AddTodo,
+        CommandId::AddPhase,
         CommandId::Rename,
         CommandId::ActionsEnter,
         CommandId::PaneEdit,
@@ -738,7 +741,7 @@ fn single_and_not_busy(app: &App) -> Availability {
 /// A todo goes to one list: marks would make "which one" a guess.
 fn one_project(app: &App) -> Availability {
     if !app.library.marks.is_empty() {
-        return Availability::Disabled("one project at a time — clear the marks (-) to add a todo");
+        return Availability::Disabled("one project at a time — clear the marks (-) first");
     }
     selection_and_not_busy(app)
 }
@@ -1728,6 +1731,17 @@ pub static COMMANDS: &[Command] = &[
         one_project
     ),
     cmd!(
+        AddPhase,
+        "Add a phase",
+        "name a new phase for this project's todos and type them under it; the phase is written with its first todo",
+        ACTIONS,
+        [Key::ch('P')],
+        Project,
+        palette = true,
+        hint = false,
+        one_project
+    ),
+    cmd!(
         Rename,
         "Rename folder",
         "change the folder's name on disk",
@@ -2352,12 +2366,29 @@ fn adding(app: &App) -> bool {
         .is_some_and(crate::tui::app::pane::PaneEdit::is_adding)
 }
 
+/// Whether the edit open in the pane is the line a new phase is named on.
+fn naming(app: &App) -> bool {
+    matches!(
+        app.pane_edit,
+        Some(crate::tui::app::pane::PaneEdit::Line {
+            target: crate::tui::app::pane::EditTarget::NewPhase { .. },
+            ..
+        })
+    )
+}
+
 /// What Enter does on the pane row under the cursor, in one word.
 fn pane_verb(app: &App) -> &'static str {
     use crate::tui::app::pane::PaneRow;
     match app.pane_rows().get(app.pane_cursor) {
         Some(PaneRow::Todo { .. }) => "toggle",
-        Some(PaneRow::AddTag | PaneRow::AddNote | PaneRow::AddTodo | PaneRow::Adding) => "add",
+        Some(
+            PaneRow::AddTag
+            | PaneRow::AddNote
+            | PaneRow::AddTodo
+            | PaneRow::AddPhase
+            | PaneRow::Adding,
+        ) => "add",
         Some(PaneRow::EarlierNotes(_)) => "show",
         _ => "edit",
     }
@@ -2442,6 +2473,8 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         // On the add line Enter writes one more and opens the next, and Esc
         // is the end of the run, not the loss of anything.
         CommandId::PaneEditConfirm if adding(app) => "add",
+        // Naming a phase, Enter goes on to its first todo.
+        CommandId::PaneEditConfirm if naming(app) => "next",
         CommandId::PaneEditConfirm => "keep",
         CommandId::PaneEditSave => "save",
         CommandId::PaneEditCancel if adding(app) => "done",

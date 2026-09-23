@@ -90,7 +90,7 @@ cursor in place — on a todo that is how you reword it, since Enter ticks it;
 emptied and Enter, the todo is removed — and on the name, a tag, a variable or
 a note it opens what Enter opens. Every section that can grow ends in a row that
 adds to it: **add a tag**, **add a note** (the quick note — Enter saves,
-Alt-Enter breaks a line), **add a todo**; and **`+` adds one more of whatever
+Alt-Enter breaks a line), **add a todo** and **add a phase**; and **`+` adds one more of whatever
 the cursor is among**, from anywhere in that section. Esc leaves the row as it
 was, and so does moving away.
 
@@ -104,7 +104,18 @@ todo is being written, so nothing typed is lost to the disk; Enter on an empty
 line, or Esc, is done. Paste a list onto the line — lines from a brief, a checklist copied with
 its `- [ ]` boxes, a numbered list — and every line is a todo, the markers taken
 off, in one write. With the pane switched off, `+` asks for one todo in a
-prompt instead. What you can type is what the file can hold: a tag is one
+prompt instead.
+
+**A phase is a heading over its todos.** `P`, Enter on **add a phase**, or
+**Add a phase** in the palette or the action menu opens a line where the
+heading will go — at the end of the list, or above an `### Other` phase when
+the list has one. Type its name and Enter: the heading is drawn and the todo
+line opens under it, and from there it is the list above. The phase is written
+to the file as `### Name` with its first todo; leave without typing one and
+nothing is written, and the status line says so. A name the list already has,
+in any case, adds to that phase, and a heading whose todos were all removed is
+still in the file and in the pane, where new todos for it go. With the pane
+switched off, `P` asks for the name, then the first todo. What you can type is what the file can hold: a tag is one
 word (letters, digits, `- _ . /`), a variable is one line and a `select` is one
 of its options, a todo is one line, and an undated note may not start a line
 with `##` (that is how the file marks where a section ends). A refusal names

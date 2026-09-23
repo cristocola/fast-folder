@@ -158,6 +158,12 @@ pub struct ProjectDetail {
     pub notes: Vec<crate::core::body::Note>,
     /// Every todo, in file order.
     pub todos: Vec<crate::core::body::Todo>,
+    /// Every `###` label of the todo list, in file order, with the tasks
+    /// above it — empty ones included, because a new todo in a phase whose
+    /// label has nothing under it goes there, and the pane draws it where it
+    /// will land. Empty in a fixture that sets only `todos`: the labels are
+    /// then the ones the todos name (`pane::labels_of`).
+    pub phases: Vec<crate::core::body::PhaseLabel>,
     /// Directories first, then files, both sorted; `PROJECT_INFO.md` hidden.
     pub listing: Vec<Entry>,
     /// The template's variables, in its order and with their types, so the

@@ -2334,6 +2334,7 @@ impl App {
             CommandId::AddTodo | CommandId::ListAddTodo => {
                 self.start_adding(crate::core::body::TodoPlace::End)
             }
+            CommandId::AddPhase => self.start_phase(),
             CommandId::PaneAdd => self.pane_add(),
             CommandId::PaneEditText => self.pane_edit_text(),
             CommandId::ListRename => self.run(CommandId::Rename),

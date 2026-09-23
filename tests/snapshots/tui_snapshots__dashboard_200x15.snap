@@ -9,7 +9,7 @@ expression: frame
 "│  ID     PROJECT                                            SIZE CREATED    BASE     TEMPLATE       TAGS              ││ 2026-08-28_Lullaby_Remix_ID0248                                              █"
 "│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248               scanning… 2026-08-28 projects music-video    draft             █│ music-video   ·   projects   ·   created 2026-08-28                          █"
 "│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247      scanning… 2026-08-27 projects general        client/Acme draft █│ scanning…   ·   2 notes   ·   2/4 todos done                                 █"
-"│  ID0246 2026-08-26_Old_Shoot_ID0246                   scanning… 2026-08-26 projects client-project                   █│ ── tags ──────────────────────────────────────────────────────────────────── █"
+"│  ID0246 2026-08-26_Old_Shoot_ID0246                   scanning… 2026-08-26 projects client-project                   █│ ── tags ──────────────────────────────────────────────────────────────────── ║"
 "│  ID0245 2026-08-25_Test_Run_ID0245                    scanning… 2026-08-25 projects music-video    draft             █│ ● draft                                                                      ║"
 "│  ID0244 2026-08-24_Spring_Campaign_ID0244             scanning… 2026-08-24 projects general        client/Acme draft ║│ · add a tag                                                                  ║"
 "│  ID0243 2026-08-23_Live_Session_ID0243                scanning… 2026-08-23 projects client-project                   ║│ ── todo ──────────────────────────────────────────────────────────────────── ║"

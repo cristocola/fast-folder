@@ -25,9 +25,12 @@
 //!
 //! **The writer changes the bytes it is about and no others.** An append
 //! lands at the end of its section; an edit splices over the note's own lines;
-//! a toggle rewrites the one character inside the brackets. A single-line
-//! note writes the bytes every earlier version wrote, so a diff over an old
-//! file shows only the line that was added.
+//! a toggle rewrites the one character inside the brackets; a reworded todo
+//! keeps everything up to and including its brackets, and its line ending; a
+//! removal takes the item's own lines, and a blank line only where it would
+//! otherwise be left doubled. A single-line note writes the bytes every
+//! earlier version wrote, so a diff over an old file shows only the line that
+//! was added.
 
 use std::fs;
 use std::ops::Range;
@@ -494,12 +497,17 @@ pub fn replace_note(path: &Path, ordinal: usize, expected: &str, text: &str) -> 
 }
 
 /// `content` without the lines in `span`, and without the blank line that
-/// removing them would leave doubled.
+/// removing them would leave doubled — in either line ending, since a file
+/// saved on Windows has its blank lines as `\r\n`.
 fn remove_lines(content: &str, span: Range<usize>) -> String {
     let mut out = splice(content, span.clone(), "");
     let at = span.start;
-    if out[..at].ends_with("\n\n") && out[at..].starts_with('\n') {
-        out.remove(at);
+    let blank_above = out[..at].ends_with("\n\n") || out[..at].ends_with("\n\r\n");
+    let blank_below = ["\n", "\r\n"]
+        .into_iter()
+        .find(|ending| out[at..].starts_with(ending));
+    if let (true, Some(ending)) = (blank_above, blank_below) {
+        out.replace_range(at..at + ending.len(), "");
     }
     out
 }
@@ -508,11 +516,16 @@ fn remove_lines(content: &str, span: Range<usize>) -> String {
 // Todos
 // ---------------------------------------------------------------------------
 
-/// A task as it sits in the file: the task, and where the character inside
-/// its brackets is (an empty range for `[]`).
+/// A task as it sits in the file: the task; its whole line, the line ending
+/// included when there is one, which is what a removal takes; its text, from
+/// just after the `]` to before the line ending, which is what a rewording
+/// replaces; and the character inside its brackets (an empty range for `[]`),
+/// which is what a toggle rewrites.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PlacedTodo {
     todo: Todo,
+    line: Range<usize>,
+    text: Range<usize>,
     marker: Range<usize>,
 }
 
@@ -551,12 +564,21 @@ fn place_todos(content: &str) -> Vec<PlacedTodo> {
         let Some((done, marker_at, inside, text)) = task_line(line) else {
             continue;
         };
+        // A section stops short of the `\n` before the next heading, so its
+        // last line is handed over without one; the line is still the line.
+        let mut whole = range.clone();
+        if content[whole.end..].starts_with('\n') && !content[whole.clone()].ends_with('\n') {
+            whole.end += 1;
+        }
+        let text_at = range.start + marker_at + inside + 1;
         placed.push(PlacedTodo {
             todo: Todo {
                 done,
                 text: text.to_string(),
                 phase: phase.clone(),
             },
+            line: whole,
+            text: text_at..range.start + line.len(),
             marker: range.start + marker_at..range.start + marker_at + inside,
         });
     }
@@ -599,6 +621,36 @@ pub fn toggle_todo(path: &Path, ordinal: usize, expected: &str) -> Result<bool> 
     Ok(done)
 }
 
+/// Reword task `ordinal` — its index in [`todos_in`]'s order — as `text`, or
+/// remove its line when `text` is empty. `expected` is the text the caller
+/// last read — see [`replace_note`].
+///
+/// A rewording replaces the text after the brackets and nothing else: the
+/// indent, the list marker, what is inside the brackets and the line ending
+/// (a `\r\n` included) stay as they were. A removal takes the whole line, and
+/// the blank line it would leave doubled. A `###` phase label is never
+/// touched, even when the last task under it goes.
+pub fn replace_todo(path: &Path, ordinal: usize, expected: &str, text: &str) -> Result<()> {
+    if text.contains(['\n', '\r']) {
+        bail!("a todo is one line");
+    }
+    let content = read_document(path, "edit a todo")?;
+    let placed = place_todos(&content);
+    let Some(current) = placed.get(ordinal) else {
+        bail!("the todo is no longer there — reload and try again");
+    };
+    if current.todo.text != expected {
+        bail!("the todo changed meanwhile — reload and try again");
+    }
+    let text = text.trim();
+    let new_content = if text.is_empty() {
+        remove_lines(&content, current.line.clone())
+    } else {
+        splice(&content, current.text.clone(), &format!(" {text}"))
+    };
+    crate::util::atomic::write(path, new_content.as_bytes())
+}
+
 /// Add an open task at the end of `## Todo`, opening the section at the end
 /// of the file when there is none. One line.
 pub fn add_todo(path: &Path, text: &str) -> Result<()> {
@@ -614,27 +666,47 @@ pub fn add_todo(path: &Path, text: &str) -> Result<()> {
 /// case. A list whose labels repeat takes the task into the last block of that
 /// name, because that is where the eye goes.
 pub fn add_todo_in(path: &Path, text: &str, phase: Option<&str>) -> Result<()> {
-    if text.contains(['\n', '\r']) {
+    add_todos_in(path, &[text.to_string()], phase)
+}
+
+/// Add several open todos, in the order given, where [`add_todo_in`] would
+/// put one — together, as one run — in **one** atomic write, so a list
+/// pasted in is in the file whole or not at all. Each text is trimmed and an
+/// empty one skipped; a text with a line break in it refuses the lot, since a
+/// second line would not be a todo.
+pub fn add_todos_in(path: &Path, texts: &[String], phase: Option<&str>) -> Result<()> {
+    if texts.iter().any(|text| text.contains(['\n', '\r'])) {
         bail!("a todo is one line");
     }
-    let text = text.trim();
-    if text.is_empty() {
+    let lines: Vec<&str> = texts
+        .iter()
+        .map(|text| text.trim())
+        .filter(|text| !text.is_empty())
+        .collect();
+    if lines.is_empty() {
         bail!("the todo is empty — nothing written");
     }
     let phase = phase.map(str::trim).filter(|p| !p.is_empty());
     if phase.is_some_and(|name| name.contains(['\n', '\r'])) {
         bail!("a phase is one line");
     }
-    let content = read_document(path, "add a todo")?;
-    let line = format!("- [ ] {text}\n");
+    let content = read_document(
+        path,
+        if lines.len() == 1 {
+            "add a todo"
+        } else {
+            "add todos"
+        },
+    )?;
+    let block: String = lines.iter().map(|text| format!("- [ ] {text}\n")).collect();
     let new_content = match (section_span(&content, Section::Todo), phase) {
-        (Some(span), Some(name)) => insert_under_phase(&content, &span, name, &line),
+        (Some(span), Some(name)) => insert_under_phase(&content, &span, name, &block),
         (Some(span), None) => {
             let has_items = !place_todos(&content).is_empty();
-            append_in_section(&content, &span, has_items, &line)
+            append_in_section(&content, &span, has_items, &block)
         }
-        (None, Some(name)) => open_section(&content, TODO_HEADING, &format!("### {name}\n{line}")),
-        (None, None) => open_section(&content, TODO_HEADING, &line),
+        (None, Some(name)) => open_section(&content, TODO_HEADING, &format!("### {name}\n{block}")),
+        (None, None) => open_section(&content, TODO_HEADING, &block),
     };
     crate::util::atomic::write(path, new_content.as_bytes())
 }
@@ -1166,13 +1238,328 @@ mod tests {
     }
 
     #[test]
+    fn replace_todo_keeps_indent_marker_and_state() {
+        // Every shape `task_line` reads: both list markers, every bracket
+        // state, a space indent and a tab one, and text with room around it.
+        // A numbered item is not a task, so it is not here.
+        let before = doc(concat!(
+            "## Todo\n\n",
+            "- [ ] plain\n",
+            "* [x] starred and done\n",
+            "  - [X] indented, capital\n",
+            "- [] empty brackets\n",
+            "\t* [ ]   spaced out  \n",
+        ));
+        let (_dir, path) = file(&before);
+        replace_todo(&path, 0, "plain", "  reworded ").unwrap();
+        replace_todo(&path, 1, "starred and done", "still done").unwrap();
+        replace_todo(&path, 2, "indented, capital", "still indented").unwrap();
+        replace_todo(&path, 3, "empty brackets", "still empty").unwrap();
+        replace_todo(&path, 4, "spaced out", "tabbed").unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after,
+            doc(concat!(
+                "## Todo\n\n",
+                "- [ ] reworded\n",
+                "* [x] still done\n",
+                "  - [X] still indented\n",
+                "- [] still empty\n",
+                "\t* [ ] tabbed\n",
+            ))
+        );
+        let done: Vec<bool> = todos_in(&after).iter().map(|t| t.done).collect();
+        assert_eq!(done, [false, true, true, false, false]);
+    }
+
+    #[test]
+    fn replace_todo_removes_the_line_without_a_doubled_blank() {
+        let before = doc(concat!(
+            "## Todo\n\n",
+            "- [ ] first\n\n",
+            "### Shoot\n",
+            "- [ ] only one\n\n",
+            "### Deliver\n",
+            "- [x] a\n",
+            "- [ ] b\n\n",
+            "## Archive\n\nmine\n",
+        ));
+        let (_dir, path) = file(&before);
+
+        // The first task, between the heading's blank line and the next one.
+        replace_todo(&path, 0, "first", "").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            before.replace("## Todo\n\n- [ ] first\n\n", "## Todo\n\n")
+        );
+        // The last of a phase: the label is the user's line and stays.
+        replace_todo(&path, 0, "only one", "   ").unwrap();
+        // The last of the section, above the user's own.
+        replace_todo(&path, 1, "b", "").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            doc(concat!(
+                "## Todo\n\n",
+                "### Shoot\n\n",
+                "### Deliver\n",
+                "- [x] a\n\n",
+                "## Archive\n\nmine\n",
+            ))
+        );
+
+        // A last task with the next heading right under it: the section
+        // stops short of that line's `\n`, and the removal still takes it.
+        let tight = doc("## Todo\n- [ ] a\n- [ ] b\n## Archive\n");
+        let (_dir, path) = file(&tight);
+        replace_todo(&path, 1, "b", "").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            doc("## Todo\n- [ ] a\n## Archive\n")
+        );
+        // And the only task, at the end of a file with no final newline.
+        let bare = doc("## Todo\n\n- [ ] a");
+        let (_dir, path) = file(&bare);
+        replace_todo(&path, 0, "a", "").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), doc("## Todo\n\n"));
+    }
+
+    #[test]
+    fn replace_todo_refuses_a_todo_changed_meanwhile() {
+        let before = doc("## Todo\n\n- [ ] one\n- [x] two\n");
+        let (_dir, path) = file(&before);
+        for text in ["reworded", ""] {
+            let err = replace_todo(&path, 0, "two", text).unwrap_err().to_string();
+            assert!(err.contains("changed meanwhile"), "{err}");
+            let err = replace_todo(&path, 2, "one", text).unwrap_err().to_string();
+            assert!(err.contains("no longer there"), "{err}");
+        }
+        // The wording is the toggle's, so the two read as one refusal.
+        let toggled = toggle_todo(&path, 0, "two").unwrap_err().to_string();
+        let replaced = replace_todo(&path, 0, "two", "x").unwrap_err().to_string();
+        assert_eq!(toggled, replaced);
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn replace_todo_keeps_crlf() {
+        let before = doc(concat!(
+            "## Todo\r\n\r\n",
+            "- [ ] one\r\n",
+            "  * [x] two\r\n\r\n",
+            "- [ ] three\r\n\r\n",
+            "## Archive\r\n",
+            "- [ ] not a todo\r\n",
+        ));
+        let (_dir, path) = file(&before);
+        replace_todo(&path, 0, "one", "uno").unwrap();
+        replace_todo(&path, 1, "two", "dos").unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after,
+            before
+                .replace("- [ ] one\r\n", "- [ ] uno\r\n")
+                .replace("  * [x] two\r\n", "  * [x] dos\r\n")
+        );
+        assert_eq!(todos_in(&after)[1].text, "dos", "no `\\r` in the text");
+
+        // A removal takes the `\r\n`, and a blank `\r\n` line is a blank line.
+        replace_todo(&path, 2, "three", "").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            after.replace("\r\n\r\n- [ ] three\r\n\r\n", "\r\n\r\n")
+        );
+        replace_todo(&path, 1, "dos", "").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            doc("## Todo\r\n\r\n- [ ] uno\r\n\r\n## Archive\r\n- [ ] not a todo\r\n")
+        );
+
+        // The last task right above the next heading keeps its `\r\n` too.
+        let tight = doc("## Todo\r\n- [ ] a\r\n## Archive\r\n");
+        let (_dir, path) = file(&tight);
+        replace_todo(&path, 0, "a", "b").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            doc("## Todo\r\n- [ ] b\r\n## Archive\r\n")
+        );
+    }
+
+    #[test]
+    fn replace_todo_leaves_phases_and_every_other_byte() {
+        let before = "---\nid: ID0001\ntemplate: t\nobsidian_folder: Work/Clients\n---\n\n\
+             # Project Info\n\n| Variable | Value |\n|---|---|\n| Artist | Aria |\n\n\
+             ## Notes\n\n- 2026-01-01T00:00:00Z — a note\n  - [ ] not a todo\n\n\
+             ## Todo\n\nsome prose first\n\n\
+             - [x] read the order\n\n\
+             ### Main Edit\n\
+             - [ ] cut the first minute\n\
+             - [ ] colour grade\n\
+             #### Grade:\n\
+             - [ ] match the cameras\n\n\
+             ## Archive\n\n- [ ] not a todo either\n";
+        let (_dir, path) = file(before);
+        let phases_before: Vec<Option<String>> =
+            todos_in(before).into_iter().map(|t| t.phase).collect();
+
+        replace_todo(&path, 2, "colour grade", "grade the colour").unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        let old = "- [ ] colour grade\n";
+        let new = "- [ ] grade the colour\n";
+        let at = before.find(old).unwrap();
+        assert_eq!(after[..at], before[..at], "every byte above the line");
+        assert_eq!(after[at..at + new.len()], *new);
+        assert_eq!(
+            after[at + new.len()..],
+            before[at + old.len()..],
+            "every byte below it"
+        );
+        let todos = todos_in(&after);
+        assert_eq!(
+            todos.iter().map(|t| t.phase.clone()).collect::<Vec<_>>(),
+            phases_before,
+            "every task keeps its phase and its number"
+        );
+        assert_eq!(todos[2].text, "grade the colour");
+        assert_eq!(notes_in(&after), notes_in(before));
+    }
+
+    #[test]
+    fn replace_todo_refuses_two_lines() {
+        let before = doc("## Todo\n\n- [ ] one\n");
+        let (_dir, path) = file(&before);
+        for bad in ["two\nlines", "two\r\nlines", "a\rb", "\n"] {
+            let err = replace_todo(&path, 0, "one", bad).unwrap_err().to_string();
+            assert_eq!(err, "a todo is one line", "{bad:?}");
+        }
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn add_todos_in_writes_several_in_order_under_a_phase() {
+        let grouped = doc(concat!(
+            "## Todo\n\n",
+            "- [x] read the order\n\n",
+            "### Setup\n",
+            "- [x] download\n\n",
+            "### Other\n",
+            "- [ ] chase the invoice\n",
+        ));
+        let three = ["one".to_string(), "two".to_string(), "three".to_string()];
+        let run = "- [ ] one\n- [ ] two\n- [ ] three\n";
+
+        // An existing label: the end of its run, all three together.
+        let (_d, path) = file(&grouped);
+        add_todos_in(&path, &three, Some("setup")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            grouped.replace("- [x] download\n", &format!("- [x] download\n{run}"))
+        );
+        // A new label, above `### Other`.
+        let (_d, path) = file(&grouped);
+        add_todos_in(&path, &three, Some("Shoot")).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            grouped.replace("### Other\n", &format!("### Shoot\n{run}\n### Other\n"))
+        );
+        // No phase: the end of the section.
+        let (_d, path) = file(&grouped);
+        add_todos_in(&path, &three, None).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("{grouped}{run}")
+        );
+        // No section: the heading, the label and the run.
+        let bare = doc("## Notes\n\n- 2026-01-01 — a\n");
+        let (_d, path) = file(&bare);
+        add_todos_in(&path, &three, Some("Setup")).unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(after, format!("{bare}\n## Todo\n\n### Setup\n{run}"));
+        assert_eq!(
+            todos_in(&after)
+                .iter()
+                .map(|t| t.text.as_str())
+                .collect::<Vec<_>>(),
+            ["one", "two", "three"]
+        );
+    }
+
+    #[test]
+    fn add_todos_in_skips_empty_and_refuses_a_newline() {
+        let before = doc("## Todo\n\n- [ ] first\n");
+        let (_dir, path) = file(&before);
+        let texts = ["  a ", "", "   ", "b"].map(String::from);
+        add_todos_in(&path, &texts, None).unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(after, format!("{before}- [ ] a\n- [ ] b\n"));
+
+        // One bad line refuses the lot: nothing is half-written.
+        let err = add_todos_in(&path, &["fine".to_string(), "two\nlines".to_string()], None)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "a todo is one line");
+        for empty in [vec![], vec![String::new(), "  ".to_string()]] {
+            let err = add_todos_in(&path, &empty, None).unwrap_err().to_string();
+            assert_eq!(err, "the todo is empty — nothing written");
+        }
+        let err = add_todos_in(&path, &["a".to_string()], Some("two\nlines"))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "a phase is one line");
+        assert_eq!(fs::read_to_string(&path).unwrap(), after);
+    }
+
+    #[test]
+    fn add_todo_in_is_add_todos_in_with_one_text() {
+        // `add_todo_in` is one text through `add_todos_in` now; the bytes it
+        // writes and the words it refuses with are the ones it always had.
+        let shapes = [
+            doc("## Todo\n\n- [x] read the order\n\n### Setup\n- [x] download\n\n### Other\n"),
+            doc("## Todo\n## Archive\n"),
+            doc("## Notes\n\n- 2026-01-01 — a\n"),
+            doc("# Project Info\n\nprose"),
+        ];
+        for shape in &shapes {
+            for phase in [None, Some("setup"), Some("Main Edit")] {
+                let (_a, one) = file(shape);
+                let (_b, several) = file(shape);
+                add_todo_in(&one, "  a task ", phase).unwrap();
+                add_todos_in(&several, &["  a task ".to_string()], phase).unwrap();
+                assert_eq!(
+                    fs::read_to_string(&one).unwrap(),
+                    fs::read_to_string(&several).unwrap(),
+                    "{shape:?} under {phase:?}"
+                );
+            }
+        }
+        let (_dir, path) = file(&shapes[1]);
+        add_todo_in(&path, "one", None).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            doc("## Todo\n\n- [ ] one\n\n## Archive\n")
+        );
+        for (text, phase, refusal) in [
+            ("two\nlines", None, "a todo is one line"),
+            ("  ", None, "the todo is empty — nothing written"),
+            ("a", Some("x\ny"), "a phase is one line"),
+        ] {
+            let err = add_todo_in(&path, text, phase).unwrap_err().to_string();
+            assert_eq!(err, refusal);
+        }
+        let (_dir, bare) = file("# no frontmatter\n");
+        let err = add_todo_in(&bare, "x", None).unwrap_err().to_string();
+        assert!(err.ends_with("cannot add a todo"), "{err}");
+    }
+
+    #[test]
     fn a_file_without_frontmatter_is_refused_by_every_writer() {
         let (_dir, path) = file("# no frontmatter\n\n## Notes\n\n- 2026-01-01 — a\n");
         for err in [
             append_journal_entry(&path, "x").unwrap_err(),
             replace_note(&path, 0, "a", "b").unwrap_err(),
             toggle_todo(&path, 0, "").unwrap_err(),
+            replace_todo(&path, 0, "", "x").unwrap_err(),
             add_todo(&path, "x").unwrap_err(),
+            add_todos_in(&path, &["x".to_string(), "y".to_string()], None).unwrap_err(),
         ] {
             assert!(err.to_string().contains("no YAML frontmatter"), "{err}");
         }

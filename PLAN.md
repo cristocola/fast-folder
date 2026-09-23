@@ -174,21 +174,21 @@ Defects 1, 2, 13, 14.
 
 ## Phase 3 — core and command line: reword, remove, add several
 
-- [ ] `core/body.rs`: `PlacedTodo` gains `line` and `text` ranges; `replace_todo(path,
+- [x] `core/body.rs`: `PlacedTodo` gains `line` and `text` ranges; `replace_todo(path,
   ordinal, expected, text)` beside `toggle_todo` (`:583`) — mirrors `replace_note`: empty
   removes the line with `remove_lines`, otherwise splices the text keeping indent, list
   marker, bracket state and `\r`; refuses two lines and a todo changed meanwhile, worded
   like `toggle_todo`'s. `add_todos_in(path, texts, phase)` — one atomic write.
-- [ ] `core/operations.rs`: `replace_todo`, `add_todos_in` — one-line check before the
+- [x] `core/operations.rs`: `replace_todo`, `add_todos_in` — one-line check before the
   lock, then `DataLock`, `revalidate_project`, body.
-- [ ] CLI: `TodoAction::Edit { query, number, text }` and `Remove { query, number }`
+- [x] CLI: `TodoAction::Edit { query, number, text }` and `Remove { query, number }`
   (`main.rs:709-738`, help `:518`, dispatch `:1169`); `cli/todo.rs` pulls the numbering
   refusal out of `done` (`:144-158`) into one helper; each verb prints one ✓ line.
-- [ ] Tests: `body.rs` — keeps indent/marker/state, removes without a doubled blank,
+- [x] Tests: `body.rs` — keeps indent/marker/state, removes without a doubled blank,
   refuses a changed todo, keeps CRLF, leaves phases and every other byte, refuses two
   lines; `add_todos_in` into a phase and at the end. `tests/cli_output.rs`:
   `todo_edit_rewords_and_remove_removes_by_number` (0 and out-of-range refused).
-- [ ] Docs: `docs/cli.md` (table and Todos section), `docs/projects.md` (what each writer
+- [x] Docs: `docs/cli.md` (table and Todos section), `docs/projects.md` (what each writer
   touches), `src/core/CLAUDE.md` "Notes and todos". No `pub` doc may link the private
   `PlacedTodo`.
 
@@ -355,7 +355,9 @@ console for F2, `+`, `<` and `>`.
 
 ## Parking lot
 
-(nothing yet)
+- `fastf show --help` prints twelve stray spaces before every line after the first of
+  its `after_help` (`main.rs`, the `Show` variant): the literal has no `\` line
+  continuations. `todo --help` had the same and was rewritten in Phase 3.
 
 ## Phase log
 
@@ -374,3 +376,17 @@ console for F2, `+`, `<` and `>`.
   every cursor move — a target taken *after* the rows were rebuilt is already the
   wrong one, so it cannot be computed at the moment a list change lands. The four
   new tests fail on the phase-1 build and pass on this one.
+- **Phase 3** (2026-09-23): `body::replace_todo` and `add_todos_in`, their locked
+  `operations` wrappers, and `fastf todo edit` / `remove` (`rm`), with `done`'s
+  numbering refusal shared by all three. `add_todo_in` is now `add_todos_in` with one
+  text; a test pins that the two write the same bytes and refuse in the same words.
+  Two things the plan did not foresee: `section_span` stops short of the `\n` before
+  the next heading, so the last task above another section is handed over without its
+  newline and `PlacedTodo.line` extends it by that byte (else a removal left the
+  newline behind); and `remove_lines` knew only `\n\n` as a blank line, so a removal in
+  a CRLF file left a doubled blank — it now counts `\r\n` too, which `replace_note`
+  gains as well. `task_line` reads only `-` and `*` items, so a numbered `1. [ ]` is not
+  a task and is not tested. On the command line an empty `edit` is refused and pointed
+  at `remove`, and rewording to the text a task already has writes nothing and says so,
+  as `done` does for a tick. `todo --help` lost the twelve stray spaces its
+  `after_help` printed on every continuation line.

@@ -515,7 +515,18 @@ enum Commands {
     /// A project's task list
     #[command(
         name = "todo",
-        after_help = "The numbers are the ones `list` prints, counted from one over the\n            tasks alone — a `###` phase label is not a task and takes no number.\n\n            Examples:\n              fastf todo list ID0047\n              fastf todo add ID0047 \"colour grade\"\n              fastf todo add ID0047 \"cut the first minute\" --phase \"Main Edit\"\n              fastf todo done ID0047 3\n              fastf todo done ID0047 3 --undo"
+        after_help = "The numbers are the ones `list` prints, counted from one over the\n\
+            tasks alone — a `###` phase label is not a task and takes no number.\n\
+            `done`, `edit` and `remove` read the list first and refuse a task\n\
+            whose text changed meanwhile, rather than touch the wrong line.\n\n\
+            Examples:\n  \
+            fastf todo list ID0047\n  \
+            fastf todo add ID0047 \"colour grade\"\n  \
+            fastf todo add ID0047 \"cut the first minute\" --phase \"Main Edit\"\n  \
+            fastf todo done ID0047 3\n  \
+            fastf todo done ID0047 3 --undo\n  \
+            fastf todo edit ID0047 3 \"grade the colour\"\n  \
+            fastf todo remove ID0047 3"
     )]
     Todo {
         #[command(subcommand)]
@@ -734,6 +745,23 @@ enum TodoAction {
         /// Mark it open again instead
         #[arg(long)]
         undo: bool,
+    },
+    /// Reword a task by its number — one line, ticked or not as it was
+    Edit {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// The number `fastf todo list` printed
+        number: usize,
+        /// The new text
+        text: String,
+    },
+    /// Remove a task by its number
+    #[command(visible_alias = "rm")]
+    Remove {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// The number `fastf todo list` printed
+        number: usize,
     },
 }
 
@@ -1182,6 +1210,18 @@ fn run() -> Result<()> {
                 number,
                 undo,
             }),
+            TodoAction::Edit {
+                query,
+                number,
+                text,
+            } => cli::todo::edit(cli::todo::EditArgs {
+                query,
+                number,
+                text,
+            }),
+            TodoAction::Remove { query, number } => {
+                cli::todo::remove(cli::todo::RemoveArgs { query, number })
+            }
         },
 
         Some(Commands::Notes { query, since }) => {

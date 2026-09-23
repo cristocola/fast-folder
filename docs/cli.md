@@ -26,7 +26,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf tag add/remove/list/reauto` | Manage project tags |
 | `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
 | `fastf notes <id>` | Show a project's notes |
-| `fastf todo list/add/done <id>` | A project's task list |
+| `fastf todo list/add/done/edit/remove <id>` | A project's task list |
 | `fastf show <query>` | Everything fastf knows about one project |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
@@ -541,6 +541,8 @@ fastf todo add ID0047 "colour grade"              # at the end
 fastf todo add ID0047 "cut" --phase "Main Edit"   # under a phase label
 fastf todo done ID0047 3                          # tick number 3
 fastf todo done ID0047 3 --undo                   # untick it again
+fastf todo edit ID0047 3 "grade the colour"       # reword number 3
+fastf todo remove ID0047 3                        # take number 3 out (or `rm`)
 ```
 
 Todos live under a `## Todo` heading in the project's `PROJECT_INFO.md`, as
@@ -570,10 +572,20 @@ there is one, since that is where a list keeps what belongs to no phase, and at
 the end otherwise.
 
 **The numbers are the ones `list` prints**, counted from one over the tasks
-alone, so a label takes no number and adding a phase renumbers nothing. `done`
-reads the list first and refuses if that task's text changed meanwhile, rather
-than ticking the wrong line; ticking what is already ticked says so and writes
-nothing.
+alone, so a label takes no number and adding a phase renumbers nothing. A
+number of 0, or one past the end of the list, is refused with the way to see
+the list. `done`, `edit` and `remove` read the list first and refuse if that
+task's text changed meanwhile — edited by hand, or by the app — rather than
+touch the wrong line; ticking what is already ticked, or rewording a task to
+the text it already has, says so and writes nothing.
+
+`edit` rewrites the text after the brackets and nothing else: the indent, the
+`-` or `*`, the tick and the line ending stay as they were, and the task keeps
+its phase. The new text is one line, and an empty one is refused and pointed at
+`remove`, since on the command line an empty argument is more often a variable
+that was never set than a wish to delete. `remove` takes the task's whole line,
+and the blank line it would otherwise leave doubled; a phase label stays even
+when the last task under it goes, because the label is a line of your own.
 
 ## Templates
 

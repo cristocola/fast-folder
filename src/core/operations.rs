@@ -681,6 +681,25 @@ pub fn toggle_todo(project: &Project, ordinal: usize, expected: &str) -> Result<
     body::toggle_todo(&project_info::pinfo_path(&project.path), ordinal, expected)
 }
 
+/// Reword todo `ordinal` — its index in `body::todos_in`'s order — as
+/// `text`, keeping its indent, list marker and brackets, or remove its line
+/// when `text` is empty. `expected` is the text the caller last read; a todo
+/// that changed meanwhile is refused, not overwritten (`body::replace_todo`).
+pub fn replace_todo(project: &Project, ordinal: usize, expected: &str, text: &str) -> Result<()> {
+    if text.contains(['\n', '\r']) {
+        bail!("a todo is one line");
+    }
+    let _mutation_lock = DataLock::acquire()?;
+    let config = Config::load()?;
+    let project = library::revalidate_project(&config, project)?;
+    body::replace_todo(
+        &project_info::pinfo_path(&project.path),
+        ordinal,
+        expected,
+        text,
+    )
+}
+
 /// Add an open todo, one line, at the end of `## Todo` — opening the
 /// section when there is none (`body::add_todo`).
 pub fn add_todo(project: &Project, text: &str) -> Result<()> {
@@ -690,16 +709,24 @@ pub fn add_todo(project: &Project, text: &str) -> Result<()> {
 /// Add an open todo under a `### phase` label, opening the label and the
 /// section as needed (`body::add_todo_in`). `None` is the plain append.
 pub fn add_todo_in(project: &Project, text: &str, phase: Option<&str>) -> Result<()> {
-    if text.contains(['\n', '\r']) {
+    add_todos_in(project, &[text.to_string()], phase)
+}
+
+/// Add several open todos, in order, where `add_todo_in` would put one, in
+/// one write — a pasted list lands whole or not at all
+/// (`body::add_todos_in`). Empty texts are skipped; one with a line break
+/// refuses the lot.
+pub fn add_todos_in(project: &Project, texts: &[String], phase: Option<&str>) -> Result<()> {
+    if texts.iter().any(|text| text.contains(['\n', '\r'])) {
         bail!("a todo is one line");
     }
-    if text.trim().is_empty() {
+    if texts.iter().all(|text| text.trim().is_empty()) {
         bail!("the todo is empty — nothing written");
     }
     let _mutation_lock = DataLock::acquire()?;
     let config = Config::load()?;
     let project = library::revalidate_project(&config, project)?;
-    body::add_todo_in(&project_info::pinfo_path(&project.path), text, phase)
+    body::add_todos_in(&project_info::pinfo_path(&project.path), texts, phase)
 }
 
 pub fn rename(project: &Project, folder: &str) -> Result<Project> {

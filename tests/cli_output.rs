@@ -1568,6 +1568,103 @@ fn todo_lists_adds_under_a_phase_and_ticks_by_number() {
     assert!(err.contains("empty"), "{err}");
 }
 
+/// `edit` and `remove` take the number `list` prints, as `done` does, and
+/// refuse the same wrong numbers in the same words. A reworded todo keeps its
+/// tick and its phase; an empty rewording is refused and pointed at
+/// `remove`, because on the command line it is more likely an unset variable
+/// than a wish.
+#[test]
+fn todo_edit_rewords_and_remove_removes_by_number() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let pinfo = dir.join("PROJECT_INFO.md");
+    sb.ok(&["todo", "add", "ID0001", "read the order"]);
+    for task in ["download the files", "copy the audio", "sort the clips"] {
+        sb.ok(&["todo", "add", "ID0001", task, "--phase", "Setup"]);
+    }
+    sb.ok(&["todo", "done", "ID0001", "2"]);
+
+    let reworded = sb.ok(&["todo", "edit", "ID0001", "2", "  fetch the files "]);
+    assert!(
+        reworded.contains("Reworded in ID0001: fetch the files"),
+        "{reworded}"
+    );
+    let body = fs::read_to_string(&pinfo).unwrap();
+    assert!(
+        body.contains("### Setup\n- [x] fetch the files\n- [ ] copy the audio\n"),
+        "the tick and the phase stay, and only the text moved:\n{body}"
+    );
+    // The same text again writes nothing and says so.
+    let same = sb.ok(&["todo", "edit", "ID0001", "2", "fetch the files"]);
+    assert!(same.contains("already reads"), "{same}");
+
+    let removed = sb.ok(&["todo", "remove", "ID0001", "3"]);
+    assert!(
+        removed.contains("Removed from ID0001: copy the audio"),
+        "{removed}"
+    );
+    let removed = sb.ok(&["todo", "rm", "ID0001", "1"]);
+    assert!(
+        removed.contains("Removed from ID0001: read the order"),
+        "`rm` is `remove`: {removed}"
+    );
+
+    let listed = sb.ok(&["todo", "list", "ID0001"]);
+    assert!(
+        listed.contains("fetch the files") && listed.contains("sort the clips"),
+        "{listed}"
+    );
+    assert!(
+        !listed.contains("copy the audio") && !listed.contains("read the order"),
+        "{listed}"
+    );
+    assert!(listed.contains("1/2 done"), "{listed}");
+    assert!(
+        fs::read_to_string(&pinfo)
+            .unwrap()
+            .contains("### Setup\n- [x] fetch the files\n- [ ] sort the clips\n"),
+        "the label stays over what is left"
+    );
+
+    // Wrong numbers are refused by every verb in `done`'s words.
+    let before = fs::read_to_string(&pinfo).unwrap();
+    for verb in [
+        &["todo", "done", "ID0001"][..],
+        &["todo", "remove", "ID0001"][..],
+        &["todo", "edit", "ID0001"][..],
+    ] {
+        let with = |number: &str| {
+            let mut args = verb.to_vec();
+            args.push(number);
+            if verb[1] == "edit" {
+                args.push("new text");
+            }
+            sb.fails(&args)
+        };
+        let err = with("0");
+        assert!(err.contains("numbered from 1"), "{verb:?} 0: {err}");
+        let err = with("3");
+        assert!(
+            err.contains("2 todos") && err.contains("todo list ID0001"),
+            "{verb:?} 3: {err}"
+        );
+    }
+
+    // An empty rewording is not a removal here: it says which verb is.
+    let err = sb.fails(&["todo", "edit", "ID0001", "1", "   "]);
+    assert!(
+        err.contains("empty") && err.contains("fastf todo remove ID0001 1"),
+        "{err}"
+    );
+    let err = sb.fails(&["todo", "edit", "ID0001", "1", "two\nlines"]);
+    assert!(err.contains("one line"), "{err}");
+    assert_eq!(
+        fs::read_to_string(&pinfo).unwrap(),
+        before,
+        "nothing refused wrote anything"
+    );
+}
+
 /// `--json` and `fastf show`: the machine surface. An array for a list, one
 /// object for a project, and never a picker whatever the terminal is.
 #[test]

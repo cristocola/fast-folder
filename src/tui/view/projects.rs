@@ -642,8 +642,14 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             // how much of it is done on the right; a finished phase recedes
             // with its tasks. Its tasks sit two columns in from it.
             PaneRow::Phase { name, done, total } => {
-                let finished = done == total;
-                let count = format!("{done}/{total}");
+                // A heading with nothing under it is one being added: it has
+                // no count yet, and it is not finished.
+                let finished = *total > 0 && done == total;
+                let count = if *total > 0 {
+                    format!("{done}/{total}")
+                } else {
+                    String::new()
+                };
                 let room = width.saturating_sub(count.width() + 1);
                 let label = fit(name, room, g.ellipsis);
                 let gap = width.saturating_sub(label.width() + count.width());
@@ -696,6 +702,9 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             PaneRow::Adding => Line::default(),
             PaneRow::AddTodo => {
                 Line::from(Span::styled(format!("{} add a todo", g.sep), theme.dim()))
+            }
+            PaneRow::AddPhase => {
+                Line::from(Span::styled(format!("{} add a phase", g.sep), theme.dim()))
             }
         };
         // A row an edit just landed on wears the wash, under the cursor —
@@ -789,6 +798,9 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                 EditTarget::NewTodo { phased, .. } => {
                     format!("{}[ ] ", " ".repeat(if *phased { PHASE_INDENT } else { 0 }))
                 }
+                // A heading is named where it will be written, and the dim
+                // word says what the empty line is asking for.
+                EditTarget::NewPhase { .. } => "phase ".to_string(),
             };
             let line_area = Rect::new(text.x, row_y, text.width, 1);
             frame.render_widget(Paragraph::new(""), line_area);

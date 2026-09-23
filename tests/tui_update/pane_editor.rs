@@ -5,6 +5,7 @@
 use crate::harness::*;
 use fastf::core::project_info::Metadata;
 use fastf::core::template::{Transform, VarType, Variable};
+use fastf::tui::app::actions::TextThen;
 use fastf::tui::app::data::ProjectDetail;
 use fastf::tui::app::pane::{PaneEdit, PaneRow};
 use fastf::tui::command::Context;
@@ -1661,5 +1662,141 @@ fn a_walk_to_a_project_without_the_section_forgets_it() {
     assert!(
         !matches!(app.pane_rows()[app.pane_cursor], PaneRow::Variable { .. }),
         "the cursor did not jump to a variable nobody asked for"
+    );
+}
+
+/// **A phase is named where its heading will be, then filled.** `P` opens a
+/// line at the end of the list; Enter on a name draws the heading and opens
+/// the todo line under it; the first todo is sent into that phase, which the
+/// writer opens with it. Nothing is written before a todo is.
+#[test]
+fn p_names_a_phase_where_it_will_land_and_its_first_todo_writes_it() {
+    let mut app = editing_fixture();
+    with_todos(&mut app, &[(false, "read the order", None)]);
+    press(&mut app, Key::ch('P'));
+    assert_eq!(app.context(), Context::PaneEdit, "the line takes the keys");
+    let rows = app.pane_rows();
+    let at = rows.iter().position(|row| *row == PaneRow::Adding).unwrap();
+    assert!(matches!(rows[at - 1], PaneRow::Todo { ordinal: 0, .. }));
+    assert_eq!(rows[at + 1], PaneRow::AddTodo);
+
+    type_text(&mut app, "## Grade:");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(sent(&effects).is_none(), "a name alone writes nothing");
+    let rows = app.pane_rows();
+    let at = rows.iter().position(|row| *row == PaneRow::Adding).unwrap();
+    assert_eq!(
+        rows[at - 1],
+        PaneRow::Phase {
+            name: "Grade".to_string(),
+            done: 0,
+            total: 0
+        },
+        "the heading reads as the file will"
+    );
+    assert_eq!(app.pane_cursor, at, "the cursor is on the todo line");
+
+    type_text(&mut app, "match the reference");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(
+            sent(&effects),
+            Some(Action::AddTodos { texts, place: fastf::core::body::TodoPlace::Phase(name), .. })
+                if texts == &["match the reference"] && name == "Grade"
+        ),
+        "{effects:?}"
+    );
+    added(&mut app, 1);
+    assert!(app.pane_edit.is_some(), "the line stays for the next todo");
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(app.pane_edit.is_none());
+    assert!(
+        !app.status.text.contains("no phase"),
+        "a phase with a todo in it was written: {}",
+        app.status.text
+    );
+}
+
+/// Left without a todo, the heading was only drawn, and the status says so.
+/// An empty name is a cancel; a name that is only markdown is refused.
+#[test]
+fn a_phase_left_empty_is_not_written_and_says_so() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| matches!(row, PaneRow::AddPhase));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(sent(&effects).is_none());
+    assert!(app.pane_edit.is_some(), "Enter on the row opens the line");
+
+    type_text(&mut app, "##");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    match &app.pane_edit {
+        Some(PaneEdit::Line { error, input, .. }) => {
+            assert_eq!(error.as_deref(), Some("a phase needs a name"));
+            assert_eq!(input.text(), "##", "the text is kept");
+        }
+        other => panic!("the naming line: {other:?}"),
+    }
+    press(&mut app, Key::plain(KeyCode::Backspace));
+    press(&mut app, Key::plain(KeyCode::Backspace));
+    type_text(&mut app, "Delivery");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    let effects = press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(sent(&effects).is_none());
+    assert!(app.pane_edit.is_none());
+    assert!(
+        app.status.text.contains("no todo, so no phase"),
+        "{}",
+        app.status.text
+    );
+    assert!(
+        !app.pane_rows()
+            .iter()
+            .any(|row| matches!(row, PaneRow::Phase { .. })),
+        "the drawn heading goes with the line"
+    );
+    assert_eq!(
+        app.pane_rows()[app.pane_cursor],
+        PaneRow::AddPhase,
+        "back where it started"
+    );
+
+    // An empty Enter on the name is a cancel, and says nothing.
+    press(&mut app, Key::ch('P'));
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(app.pane_edit.is_none());
+}
+
+/// Where the pane cannot show the list, the name and the first todo are
+/// asked for in turn, and written together.
+#[test]
+fn without_the_list_on_screen_a_phase_is_two_prompts() {
+    let mut app = fixture(6, 120, 40);
+    press(&mut app, Key::ch('P'));
+    assert!(
+        matches!(
+            app.modals.top(),
+            Some(Modal::TextPrompt(prompt)) if prompt.then == TextThen::AddPhase
+        ),
+        "no detail read: the name is asked for"
+    );
+    type_text(&mut app, "Main Edit");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    match app.modals.top() {
+        Some(Modal::TextPrompt(prompt)) => assert!(
+            prompt.title.contains("Main Edit"),
+            "the todo prompt names its phase: {}",
+            prompt.title
+        ),
+        other => panic!("the todo prompt: {other:?}"),
+    }
+    type_text(&mut app, "cut the first minute");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(
+            sent(&effects),
+            Some(Action::AddTodos { texts, place: fastf::core::body::TodoPlace::Phase(name), .. })
+                if texts == &["cut the first minute"] && name == "Main Edit"
+        ),
+        "{effects:?}"
     );
 }

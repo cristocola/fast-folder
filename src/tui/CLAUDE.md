@@ -297,7 +297,8 @@ change — not `[`/`]`, which need AltGr on several European layouts; `R` reinde
 `C` copies to a folder outside the bases (`CopyTo`) and `p` shows the full path
 (`ShowPath`), both action-menu verbs; `i` toggles the detail pane on the lists
 (`ToggleDetail`) and the explanation panel in the builder (`BuilderExplain`); `*`
-marks every row in view (`MarkAll`) and `-` clears the marks (`MarkNone`).
+marks every row in view (`MarkAll`) and `-` clears the marks (`MarkNone`); `P`
+adds a phase (`AddPhase`) from the list, the pane or the action menu.
 
 **Each fact is stated once**, because one count in three formats reads as three
 facts: the search bar reports the list (counts, the `(from index)` spinner, sort,
@@ -789,8 +790,15 @@ note editor opens on `detail.notes[ordinal]`, and a toggle names
 `detail.todos[ordinal]` — never a row's text, or a wrapped todo would be refused
 as changed. **Rules are
 never selectable, and every section that can grow ends in an add row** (`AddTag`,
-`AddNote`, `AddTodo`), so the three sections behave alike. `Figures` counts the
-notes and the todos done.
+`AddNote`, `AddTodo`, and `AddPhase` under it), so the three sections behave
+alike. `Figures` counts the notes and the todos done. **A phase is written with
+its first todo**, because a `###` label with no task under it is no phase to the
+reader: `P` (`AddPhase`) names it on a line where the writer will open the label
+(`EditTarget::NewPhase`, `pane::with_naming`), and Enter turns that line into the
+`NewTodo` line for `TodoPlace::Phase`, over a heading `with_adding` draws, without
+a count, until the file has one. `body::phase_label` is the one normalisation of
+what was typed. Closed with nothing written (`landed`), the line says so on the
+status line.
 
 **Nothing edits until Enter, and Esc leaves the row as it was.** The cursor walks
 the selectable rows (`pane::step_cursor`), and `CommandId::PaneEdit` dispatches on

@@ -54,8 +54,12 @@ pub enum TextThen {
     /// destructive verb at a different project from the one on screen.
     Rename(std::path::PathBuf),
     AddTag,
-    /// A todo for the selected project, from the pane's add row.
-    AddTodo,
+    /// A todo for the selected project, where the pane cannot show its list:
+    /// written at `TodoPlace`, under a phase when one was named first.
+    AddTodo(crate::core::body::TodoPlace),
+    /// A new phase's name, where the pane cannot show the list; its first
+    /// todo is asked for next, and the two are written together.
+    AddPhase,
     /// Type the word `delete` to confirm; nothing else deletes. The prompt
     /// names the folder — or the folders, over marks — so what is being
     /// confirmed is on screen, and the word is the same every time.
@@ -271,7 +275,22 @@ impl App {
                     },
                 )
             }
-            TextThen::AddTodo => {
+            TextThen::AddPhase => {
+                if text.trim().is_empty() {
+                    self.modals.pop();
+                    return Vec::new();
+                }
+                let Some(name) = crate::core::body::phase_label(&text) else {
+                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                        prompt.error = Some(validators::PHASE_NAMELESS.to_string());
+                    }
+                    return Vec::new();
+                };
+                self.modals.pop();
+                self.start_adding(crate::core::body::TodoPlace::Phase(name))
+            }
+            TextThen::AddTodo(place) => {
+                let place = place.clone();
                 self.modals.pop();
                 if text.trim().is_empty() {
                     return Vec::new();
@@ -289,7 +308,7 @@ impl App {
                     Action::AddTodos {
                         project: Box::new(project),
                         texts: vec![text],
-                        place: crate::core::body::TodoPlace::End,
+                        place,
                     },
                 );
                 if !effects.is_empty() {

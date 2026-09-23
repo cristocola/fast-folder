@@ -70,6 +70,46 @@ fn a_toggle_writes_its_key_with_no_dialog_at_all() {
     );
 }
 
+/// Motion goes off and comes back on. The row cycled from a value it never
+/// read back, so every press wrote `off` and the second one did nothing.
+#[test]
+fn motion_turns_off_and_the_next_press_turns_it_back_on() {
+    let mut app = fixture(6, 120, 40);
+    open(&mut app);
+    go_to(&mut app, "Motion");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(action_of(&effects), Action::SetConfig { key, value }
+            if *key == "motion" && value == "off"),
+        "{effects:?}"
+    );
+    let id = run_id(&effects);
+    // What the write stored comes back with the re-read.
+    let _ = update(
+        &mut app,
+        Msg::ActionDone {
+            id,
+            outcome: Ok(Box::new(
+                fastf::tui::effect::ActionOutcome::new(ListChange::SummaryOnly, "Set motion = off")
+                    .settings(),
+            )),
+        },
+    );
+    let off = Settings {
+        motion: "off".to_string(),
+        ..sample()
+    };
+    let _ = update(&mut app, Msg::SettingsLoaded(Box::new(off)));
+    assert_eq!(state(&app).row().unwrap().label, "Motion");
+    assert_eq!(state(&app).row().unwrap().value, "off");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(action_of(&effects), Action::SetConfig { key, value }
+            if *key == "motion" && value == "on"),
+        "{effects:?}"
+    );
+}
+
 #[test]
 fn a_text_field_opens_edits_and_writes_the_config_key() {
     let mut app = fixture(6, 120, 40);

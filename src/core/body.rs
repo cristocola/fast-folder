@@ -123,12 +123,29 @@ fn heading_name(line: &str) -> Option<&str> {
 /// reaches here, because a section ends where the next one starts.
 fn phase_name(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("###")?;
-    let name = rest
+    label_of(rest.trim_start_matches('#'))
+}
+
+/// A phase name as a reader will read it back: trimmed, and without the
+/// hashes or the trailing colon somebody may type with it.
+fn label_of(text: &str) -> Option<&str> {
+    let name = text
+        .trim()
         .trim_start_matches('#')
         .trim()
         .trim_end_matches(':')
         .trim();
     (!name.is_empty()).then_some(name)
+}
+
+/// What `text` names as a phase — the label a writer puts after `### ` so
+/// the reader reads back exactly that: `"## Grade:"` is `Grade`. `None` when
+/// it names nothing; a line break is not a phase either.
+pub fn phase_label(text: &str) -> Option<String> {
+    if text.contains(['\n', '\r']) {
+        return None;
+    }
+    label_of(text).map(str::to_string)
 }
 
 /// Whether `line` starts a section — any `##` heading, whatever it says.
@@ -730,9 +747,11 @@ pub fn add_todos_at(path: &Path, texts: &[String], place: &TodoPlace) -> Result<
         bail!("the todo is empty — nothing written");
     }
     let place = match place {
-        TodoPlace::Phase(name) if name.trim().is_empty() => TodoPlace::End,
         TodoPlace::Phase(name) if name.contains(['\n', '\r']) => bail!("a phase is one line"),
-        TodoPlace::Phase(name) => TodoPlace::Phase(name.trim().to_string()),
+        TodoPlace::Phase(name) => match phase_label(name) {
+            Some(name) => TodoPlace::Phase(name),
+            None => TodoPlace::End,
+        },
         other => other.clone(),
     };
     let content = read_document(
@@ -1165,6 +1184,28 @@ mod tests {
             "{err}"
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), after);
+    }
+
+    #[test]
+    fn a_phase_is_written_as_the_name_it_reads_back_as() {
+        assert_eq!(phase_label("  Grade "), Some("Grade".to_string()));
+        assert_eq!(phase_label("## Grade:"), Some("Grade".to_string()));
+        assert_eq!(phase_label("### Main Edit"), Some("Main Edit".to_string()));
+        assert_eq!(phase_label(" # : "), None);
+        assert_eq!(phase_label(""), None);
+        assert_eq!(phase_label("two\nlines"), None);
+
+        // Typed with its markdown, it still reads back as what was meant.
+        let plain = doc("## Todo\n\n- [ ] read the order\n");
+        let (_d, path) = file(&plain);
+        add_todo_in(&path, "grade the reel", Some("## Grade:")).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("\n### Grade\n- [ ] grade the reel\n"),
+            "{written}"
+        );
+        let todos = todos_in(&written);
+        assert_eq!(todos[1].phase.as_deref(), Some("Grade"));
     }
 
     #[test]

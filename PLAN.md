@@ -445,3 +445,14 @@ console for F2, `+`, `<` and `>`.
   The form's, the note's and the confirm's key lines go through `key_line`. The
   frame sweep now covers seventeen states, the first run, the template pane and an
   add line among them, and draws real frames at 40×12.
+- **Review and release** (2026-09-23): an independent review of the finished branch
+  found the add line refusing keys while its write was on its way (the next todo's
+  first letters were lost), the app guessing where an add landed (wrong wherever a
+  phase's name repeats or differs in case), the cursor left on a heading when an add
+  line closed, `+` on a loose todo adding to the last phase, and the templates tab
+  paging by the library's height. All fixed: the line takes keys throughout,
+  `body::add_todos_at` answers the ordinal it wrote, placements are a `TodoPlace`,
+  closing goes through `close_pane_edit`. CRLF files keep their line endings on
+  every add and note rewrite; every command's help sits at the margin. The install
+  lab passed all source builds against the tree (2 CPUs, 4 GB, CachyOS 3 GB and
+  6 GB). The README shows the todo list; 3.9.0's notes are written.

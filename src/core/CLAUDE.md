@@ -456,12 +456,23 @@ a blank line too. A phase label is never removed with the last task under it: it
 is the user's line. A todo is one line; `replace_todo` and the adders refuse
 `\n`/`\r` before reading, and the `operations` wrappers before the lock.
 
-`add_todos_in(path, texts, phase)` is **one** atomic write of the whole run —
-trimmed, empties skipped, one line each or nothing written — placed where one
-todo would go: after the last task of a `### phase` run (matched ignoring case),
-under a new label above `### Other` or at the section's end, or appended at the end
-of `## Todo` with no phase, opening the section when needed. `add_todo_in` and
-`add_todo` are that with one text, so there is one placement rule.
+`add_todos_at(path, texts, place)` is **one** atomic write of the whole run —
+trimmed, empties skipped, one line each or nothing written — at a `TodoPlace`:
+`Phase(name)`, after the last task of the last run of that label (matched ignoring
+case), or under a new label above `### Other` or at the section's end; `Loose`,
+after the last task that sits under no label, or above the first label when there
+is none; `End`, appended at the end of `## Todo`; each opening the section when
+needed. **It answers the ordinal the first todo got** — read back from what it
+wrote, from where the block starts — because the app's guess at it was wrong
+wherever a label's name repeated or differed in case, and the pane settles its
+cursor on that answer. `add_todos_in`, `add_todo_in` and `add_todo` are it with a
+phase or none, so there is one placement rule.
+
+**A file saved with `\r\n` keeps them** (`with_line_endings_of`): the adders, the
+note appender and `replace_note` make their edit on the file's `\n` reading and
+give it back in `\r\n` when every line of the file ended that way; a file mixing
+the two is written as it is, since there is no one ending to keep. `replace_todo`
+and the toggle touch no line ending at all.
 
 **A list opens under a blank line**: `append_in_section` writes `\n\n` before the
 first item of a section that has none and `\n` before later ones, so the shape is

@@ -892,9 +892,9 @@ fn run_action(
         Action::AddTodos {
             project,
             texts,
-            phase,
+            place,
         } => {
-            crate::core::operations::add_todos_in(&project, &texts, phase.as_deref())?;
+            let first = crate::core::operations::add_todos_at(&project, &texts, &place)?;
             let added = texts.iter().filter(|text| !text.trim().is_empty()).count();
             Ok(ActionOutcome::new(
                 ListChange::DetailOnly {
@@ -904,7 +904,8 @@ fn run_action(
                     1 => "Todo added.".to_string(),
                     n => format!("{n} todos added."),
                 },
-            ))
+            )
+            .todo(first + added.saturating_sub(1)))
         }
         Action::ReautoTags(project) => {
             let derived = crate::core::operations::replace_auto_tags(&project)?;

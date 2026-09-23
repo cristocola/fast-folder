@@ -938,3 +938,43 @@ fn todos_typed_in_a_row_on_the_add_line_land_in_the_file_in_order() {
     let second = file.find("- [ ] second task").expect("the second todo");
     assert!(first < second, "in the order they were typed:\n{file}");
 }
+
+/// **Typed faster than a write lands, nothing is lost.** Three todos and their
+/// Enters arrive in one burst — no pause for the first write to land — and all
+/// three are in the file, in order. The line used to refuse keys while its
+/// write was on its way, and dropped the start of the next todo.
+#[test]
+fn todos_typed_in_one_burst_all_land_in_order() {
+    let sb = Sandbox::new();
+    let root = plant_dated_project(&sb, "Burst", "ID0001", "2026-01-01T00:00:00Z", 256);
+    let script = pty::Script::new()
+        .pause(1500)
+        .key("+")
+        .pause(300)
+        .key("first\rsecond\rthird\r")
+        .pause(1500)
+        .esc()
+        .pause(300)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+    assert_eq!(code, 0, "{}", pty::plain(&out));
+    let file = fs::read_to_string(root.join("PROJECT_INFO.md")).unwrap();
+    let at = |text: &str| {
+        file.find(&format!("- [ ] {text}\n"))
+            .unwrap_or_else(|| panic!("{text} was lost:\n{file}"))
+    };
+    assert!(
+        at("first") < at("second") && at("second") < at("third"),
+        "{file}"
+    );
+}

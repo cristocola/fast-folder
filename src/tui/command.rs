@@ -685,9 +685,10 @@ fn pane_text_row(app: &App) -> Availability {
     use crate::tui::app::pane::PaneRow;
     match selection_and_not_busy(app) {
         Availability::Enabled => match app.pane_rows().get(app.pane_cursor) {
+            // The name is the rename, with the rename's own rule about marks.
+            Some(PaneRow::Name(_)) => single_and_not_busy(app),
             Some(
-                PaneRow::Name(_)
-                | PaneRow::Tag(_)
+                PaneRow::Tag(_)
                 | PaneRow::Variable { .. }
                 | PaneRow::Note { .. }
                 | PaneRow::Todo { .. },

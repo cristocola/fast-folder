@@ -818,16 +818,27 @@ cursor is in. On the list the same keys are `ListRename` and `ListAddTodo`, off
 the hint bar — **the pane's bar is what the pane does**: `command::hints` leaves
 the verbs the pane shares with the list (open, terminal, copy, mark, new, the
 tab) to the list's bar and the action menu, which is what left room for the way
-back and help. **A todo is added where it will land**: `EditTarget::NewTodo {
-phase, ordinal }` is a line edit on a `PaneRow::Adding` that `App::pane_rows`
-inserts (`pane::with_adding`) at the end of the cursor's phase, or at the end of
-the list — which is the last phase, when the list ends in one. When it lands,
-`on_action_done` opens the next line under it before the re-read shows the new
-todo, and `refind_pane` keeps the cursor on the line — an open edit is where the
-cursor is. A paste of several lines onto the line is `Action::AddTodos` at once
-(`pane::todo_text_of` takes the list markers off). `on_paste` normalises a
-terminal's line breaks first: many send a bare `\r`, and `str::lines` splits on
-`\n` alone, so every multi-line paste used to arrive as one line.
+back and help. **A todo is added where it will land**: `EditTarget::NewTodo` is a
+line edit on a `PaneRow::Adding` that `App::pane_rows` inserts
+(`pane::with_adding`) where `body::add_todos_at` will write for its `TodoPlace` —
+the last run of the cursor's phase, after the loose tasks when the cursor is on
+one, or the end. **The line takes keys while its write is on its way**: Enter
+empties it at once and records the text in `sending`, an Enter meanwhile goes to
+`queued` and is sent when the first lands (`flush_adds`), and Esc or an empty
+Enter meanwhile sets `closing`, so the line goes once everything entered is
+written — the line used to refuse keys until the answer came, and a fast typist
+lost the first letters of the next todo. **Where it landed is the writer's
+answer** (`ActionOutcome::todo_ordinal`), never the app's guess. A refusal puts
+the text back on the line when nothing was typed after it, and otherwise names
+what was not added. **Closing the line** (`close_pane_edit`, which Esc, an empty
+Enter, `set_focus` and every cancel go through) puts the cursor on the row `+` was
+pressed on, then on the last todo added — the line's own row goes with it, and
+its index was a heading's. A paste goes in at the caret: several lines are that
+many todos (what was typed before it the start of the first, list markers off,
+`pane::todo_text_of`), one line is the field's, markers off when it was empty.
+`on_paste` normalises a terminal's line breaks first: many send a bare `\r`, and
+`str::lines` splits on `\n` alone, so every multi-line paste used to arrive as
+one line.
 
 **`Context::PaneEdit` is a text-entry context**: the field has first refusal, and
 the registry answers Enter, Esc and `Ctrl-S` (`on_pane_edit_key`). So Enter on the

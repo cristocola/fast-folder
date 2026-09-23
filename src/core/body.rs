@@ -411,7 +411,12 @@ fn splice(content: &str, span: Range<usize>, with: &str) -> String {
 /// the section holds no item yet (only its heading, or only prose), so the
 /// shape stays `## Notes`, a blank line, the list — and a single `\n` when a
 /// list is already there to continue.
-fn append_in_section(content: &str, span: &Range<usize>, has_items: bool, line: &str) -> String {
+fn append_in_section(
+    content: &str,
+    span: &Range<usize>,
+    has_items: bool,
+    line: &str,
+) -> (String, usize) {
     let mut out = String::with_capacity(content.len() + line.len() + 2);
     out.push_str(&content[..span.end]);
     if !out.ends_with('\n') {
@@ -420,14 +425,15 @@ fn append_in_section(content: &str, span: &Range<usize>, has_items: bool, line: 
     if !has_items && !out.ends_with("\n\n") {
         out.push('\n');
     }
+    let at = out.len();
     out.push_str(line);
     out.push_str(&content[span.end..]);
-    out
+    (out, at)
 }
 
 /// A new section at the end of the file: a blank line, the heading, a blank
 /// line, the first line.
-fn open_section(content: &str, heading: &str, line: &str) -> String {
+fn open_section(content: &str, heading: &str, line: &str) -> (String, usize) {
     let mut out = String::with_capacity(content.len() + heading.len() + line.len() + 4);
     out.push_str(content);
     if !out.is_empty() && !out.ends_with('\n') {
@@ -438,8 +444,9 @@ fn open_section(content: &str, heading: &str, line: &str) -> String {
     }
     out.push_str(heading);
     out.push_str("\n\n");
+    let at = out.len();
     out.push_str(line);
-    out
+    (out, at)
 }
 
 // ---------------------------------------------------------------------------
@@ -454,15 +461,15 @@ fn open_section(content: &str, heading: &str, line: &str) -> String {
 pub fn append_journal_entry(path: &Path, message: &str) -> Result<()> {
     let content = read_document(path, "append a note")?;
     let entry = render_entry(&crate::util::time::now_iso8601(), message.trim());
-    let new_content = match notes_span(&content) {
+    let new_content = with_line_endings_of(&content, |content| match notes_span(content) {
         Some(span) => {
-            let dated = notes_in_section(&content, &span)
+            let dated = notes_in_section(content, &span)
                 .iter()
                 .any(|placed| placed.note.timestamp.is_some());
-            append_in_section(&content, &span, dated, &entry)
+            append_in_section(content, &span, dated, &entry).0
         }
-        None => open_section(&content, NOTES_HEADING, &entry),
-    };
+        None => open_section(content, NOTES_HEADING, &entry).0,
+    });
     crate::util::atomic::write(path, new_content.as_bytes())
 }
 
@@ -484,15 +491,26 @@ pub fn replace_note(path: &Path, ordinal: usize, expected: &str, text: &str) -> 
         bail!("the note changed meanwhile — reload and edit it again");
     }
     let text = text.trim();
-    let new_content = if text.is_empty() {
-        remove_lines(&content, current.span.clone())
+    let rendered = if text.is_empty() {
+        None
     } else {
-        let rendered = match &current.note.timestamp {
+        Some(match &current.note.timestamp {
             Some(timestamp) => render_entry(timestamp, text),
             None => render_preamble(text)?,
-        };
-        splice(&content, current.span.clone(), &rendered)
+        })
     };
+    // The note is found again in the text the edit is made on — the file's
+    // own, or its `\n` reading when it was saved with `\r\n` — where line
+    // endings do not change which note is which.
+    let new_content = with_line_endings_of(&content, |content| {
+        let Some(span) = place_notes(content).get(ordinal).map(|p| p.span.clone()) else {
+            return content.to_string();
+        };
+        match &rendered {
+            None => remove_lines(content, span),
+            Some(rendered) => splice(content, span, rendered),
+        }
+    });
     crate::util::atomic::write(path, new_content.as_bytes())
 }
 
@@ -675,6 +693,31 @@ pub fn add_todo_in(path: &Path, text: &str, phase: Option<&str>) -> Result<()> {
 /// empty one skipped; a text with a line break in it refuses the lot, since a
 /// second line would not be a todo.
 pub fn add_todos_in(path: &Path, texts: &[String], phase: Option<&str>) -> Result<()> {
+    let place = match phase.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(name) => TodoPlace::Phase(name.to_string()),
+        None => TodoPlace::End,
+    };
+    add_todos_at(path, texts, &place).map(|_| ())
+}
+
+/// Where new todos go in a list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TodoPlace {
+    /// The end of the section: the plain append. A list whose last run sits
+    /// under a `###` label takes them into that run.
+    End,
+    /// Under this `###` label — the last block of that name, ignoring case —
+    /// opening the label when the list has none by that name.
+    Phase(String),
+    /// With the tasks that belong to no label: after the last of them, or
+    /// above the first label when there are none.
+    Loose,
+}
+
+/// [`add_todos_in`], at `place`, answering the ordinal the first of them got
+/// — where the writer put it, so a caller that shows the list need not
+/// predict it. A file saved with `\r\n` line endings keeps them.
+pub fn add_todos_at(path: &Path, texts: &[String], place: &TodoPlace) -> Result<usize> {
     if texts.iter().any(|text| text.contains(['\n', '\r'])) {
         bail!("a todo is one line");
     }
@@ -686,10 +729,12 @@ pub fn add_todos_in(path: &Path, texts: &[String], phase: Option<&str>) -> Resul
     if lines.is_empty() {
         bail!("the todo is empty — nothing written");
     }
-    let phase = phase.map(str::trim).filter(|p| !p.is_empty());
-    if phase.is_some_and(|name| name.contains(['\n', '\r'])) {
-        bail!("a phase is one line");
-    }
+    let place = match place {
+        TodoPlace::Phase(name) if name.trim().is_empty() => TodoPlace::End,
+        TodoPlace::Phase(name) if name.contains(['\n', '\r']) => bail!("a phase is one line"),
+        TodoPlace::Phase(name) => TodoPlace::Phase(name.trim().to_string()),
+        other => other.clone(),
+    };
     let content = read_document(
         path,
         if lines.len() == 1 {
@@ -699,20 +744,86 @@ pub fn add_todos_in(path: &Path, texts: &[String], phase: Option<&str>) -> Resul
         },
     )?;
     let block: String = lines.iter().map(|text| format!("- [ ] {text}\n")).collect();
-    let new_content = match (section_span(&content, Section::Todo), phase) {
-        (Some(span), Some(name)) => insert_under_phase(&content, &span, name, &block),
-        (Some(span), None) => {
-            let has_items = !place_todos(&content).is_empty();
-            append_in_section(&content, &span, has_items, &block)
-        }
-        (None, Some(name)) => open_section(&content, TODO_HEADING, &format!("### {name}\n{block}")),
-        (None, None) => open_section(&content, TODO_HEADING, &block),
-    };
-    crate::util::atomic::write(path, new_content.as_bytes())
+    let mut first = 0;
+    let new_content = with_line_endings_of(&content, |content| {
+        let (written, at) = place_block(content, &block, &place);
+        // The block's first line starts at `at` in what was written: every
+        // task above it keeps its ordinal.
+        first = place_todos(&written)
+            .iter()
+            .take_while(|placed| placed.line.start < at)
+            .count();
+        written
+    });
+    crate::util::atomic::write(path, new_content.as_bytes())?;
+    Ok(first)
 }
 
-/// `line`, placed under `phase` inside the todo section at `span`.
-fn insert_under_phase(content: &str, span: &Range<usize>, phase: &str, line: &str) -> String {
+/// `block` — whole task lines — placed in `content` at `place`, and where in
+/// the result its first line starts.
+fn place_block(content: &str, block: &str, place: &TodoPlace) -> (String, usize) {
+    match (section_span(content, Section::Todo), place) {
+        (Some(span), TodoPlace::Phase(name)) => insert_under_phase(content, &span, name, block),
+        (Some(span), TodoPlace::Loose) => insert_loose(content, &span, block),
+        (Some(span), TodoPlace::End) => {
+            let has_items = !place_todos(content).is_empty();
+            append_in_section(content, &span, has_items, block)
+        }
+        (None, TodoPlace::Phase(name)) => {
+            let label = format!("### {name}\n");
+            let (written, at) = open_section(content, TODO_HEADING, &format!("{label}{block}"));
+            (written, at + label.len())
+        }
+        (None, _) => open_section(content, TODO_HEADING, block),
+    }
+}
+
+/// `block` with the tasks that belong to no label: after the last of them,
+/// or, when there are none, above the first label with a blank line under
+/// it. A list with no labels at all is the plain append.
+fn insert_loose(content: &str, span: &Range<usize>, block: &str) -> (String, usize) {
+    if let Some(last) = place_todos(content)
+        .iter()
+        .rfind(|placed| placed.todo.phase.is_none())
+    {
+        let at = last.line.end;
+        let text = with_newline_before(content, at, block);
+        let offset = at + text.len() - block.len();
+        return (splice(content, at..at, &text), offset);
+    }
+    match section_lines(content, span)
+        .into_iter()
+        .find(|(_, line)| phase_name(line).is_some())
+    {
+        Some((label, _)) => (
+            splice(content, label.start..label.start, &format!("{block}\n")),
+            label.start,
+        ),
+        None => append_in_section(content, span, false, block),
+    }
+}
+
+/// `edit` applied to `content` as if its lines ended in `\n`, and the result
+/// given back in the file's own endings: a file saved with `\r\n` throughout
+/// keeps them on every line a writer adds. A file that mixes the two is
+/// handed over as it is, since there is no one ending to keep.
+fn with_line_endings_of(content: &str, edit: impl FnOnce(&str) -> String) -> String {
+    let lines = content.matches('\n').count();
+    let crlf = lines > 0 && content.matches("\r\n").count() == lines;
+    if !crlf {
+        return edit(content);
+    }
+    edit(&content.replace("\r\n", "\n")).replace('\n', "\r\n")
+}
+
+/// `line`, placed under `phase` inside the todo section at `span`, and where
+/// in the result it starts.
+fn insert_under_phase(
+    content: &str,
+    span: &Range<usize>,
+    phase: &str,
+    line: &str,
+) -> (String, usize) {
     let wanted = phase.to_lowercase();
     let mut in_wanted = false;
     let mut at: Option<usize> = None;
@@ -738,12 +849,18 @@ fn insert_under_phase(content: &str, span: &Range<usize>, phase: &str, line: &st
     }
     // A label of that name: the task joins the end of its run.
     if let Some(at) = at {
-        return splice(content, at..at, &with_newline_before(content, at, line));
+        let text = with_newline_before(content, at, line);
+        let offset = at + text.len() - line.len();
+        return (splice(content, at..at, &text), offset);
     }
     // No such label. Open one where a reader would look for it.
-    let block = format!("### {phase}\n{line}");
+    let label = format!("### {phase}\n");
+    let block = format!("{label}{line}");
     if let Some(start) = other_at {
-        return splice(content, start..start, &format!("{block}\n"));
+        return (
+            splice(content, start..start, &format!("{block}\n")),
+            start + label.len(),
+        );
     }
     let at = last_task_end.unwrap_or(span.end).max(span.start);
     let blank = if content[..at].ends_with("\n\n") {
@@ -751,11 +868,9 @@ fn insert_under_phase(content: &str, span: &Range<usize>, phase: &str, line: &st
     } else {
         "\n"
     };
-    splice(
-        content,
-        at..at,
-        &with_newline_before(content, at, &format!("{blank}{block}")),
-    )
+    let text = with_newline_before(content, at, &format!("{blank}{block}"));
+    let offset = at + text.len() - line.len();
+    (splice(content, at..at, &text), offset)
 }
 
 /// `text`, with the newline the line before it is missing — a section whose
@@ -1563,5 +1678,139 @@ mod tests {
         ] {
             assert!(err.to_string().contains("no YAML frontmatter"), "{err}");
         }
+    }
+
+    /// Add `texts` at `place` in a file holding `body`, and answer what the
+    /// writer said and what the file then reads as.
+    fn add_at(body: &str, texts: &[&str], place: TodoPlace) -> (usize, String) {
+        let (_dir, path) = file(&doc(body));
+        let texts: Vec<String> = texts.iter().map(|t| t.to_string()).collect();
+        let first = add_todos_at(&path, &texts, &place).unwrap();
+        (first, fs::read_to_string(&path).unwrap())
+    }
+
+    fn ordinal_of(content: &str, text: &str) -> usize {
+        todos_in(content)
+            .iter()
+            .position(|t| t.text == text)
+            .unwrap_or_else(|| panic!("{text} is in the list:\n{content}"))
+    }
+
+    /// **The ordinal a writer answers is where the todo is.** Whatever the
+    /// shape of the list — a label named twice, in another case, empty at the
+    /// end, missing, an `### Other` — the number `add_todos_at` gives back is
+    /// the one the file reads the new todo at.
+    #[test]
+    fn the_ordinal_an_add_answers_is_where_the_file_has_it() {
+        let cases: &[(&str, TodoPlace)] = &[
+            ("## Todo\n\n- [ ] a\n- [ ] b\n", TodoPlace::End),
+            (
+                "## Todo\n\n### Shoot\n- [ ] a\n\n### Deliver\n- [ ] b\n\n### Shoot\n- [ ] c\n",
+                TodoPlace::Phase("Shoot".to_string()),
+            ),
+            (
+                "## Todo\n\n### Shoot\n- [ ] a\n\n### Deliver\n- [ ] b\n",
+                TodoPlace::Phase("shoot".to_string()),
+            ),
+            (
+                "## Todo\n\n### Shoot\n- [ ] a\n\n### shoot\n",
+                TodoPlace::Phase("Shoot".to_string()),
+            ),
+            (
+                "## Todo\n\n### Edit\n- [ ] a\n\n### Other\n- [ ] z\n",
+                TodoPlace::Phase("Deliver".to_string()),
+            ),
+            (
+                "## Todo\n\n### Edit\n- [ ] a\n",
+                TodoPlace::Phase("Deliver".to_string()),
+            ),
+            ("# Notes only\n", TodoPlace::Phase("Deliver".to_string())),
+            ("# Notes only\n", TodoPlace::End),
+            (
+                "## Todo\n\n- [ ] loose one\n- [ ] loose two\n\n### Edit\n- [ ] cut\n",
+                TodoPlace::Loose,
+            ),
+            ("## Todo\n\n### Edit\n- [ ] cut\n", TodoPlace::Loose),
+            ("## Todo\n\n- [ ] a\n", TodoPlace::Loose),
+            ("## Todo\n\n- [ ] a\n## Notes\n\n- one\n", TodoPlace::End),
+        ];
+        for (body, place) in cases {
+            let (first, content) = add_at(body, &["new one", "new two"], place.clone());
+            assert_eq!(
+                first,
+                ordinal_of(&content, "new one"),
+                "{place:?} in\n{body}\n→\n{content}"
+            );
+            assert_eq!(
+                first + 1,
+                ordinal_of(&content, "new two"),
+                "{place:?}:\n{content}"
+            );
+        }
+    }
+
+    /// Loose tasks go with the loose tasks: after the last of them, never into
+    /// the label below; with none, above the first label.
+    #[test]
+    fn a_loose_todo_lands_with_the_loose_ones() {
+        let (_, content) = add_at(
+            "## Todo\n\n- [ ] loose\n\n### Edit\n- [ ] cut\n",
+            &["another"],
+            TodoPlace::Loose,
+        );
+        assert!(
+            content.ends_with("## Todo\n\n- [ ] loose\n- [ ] another\n\n### Edit\n- [ ] cut\n"),
+            "{content}"
+        );
+        let todos = todos_in(&content);
+        assert_eq!(todos[1].phase, None, "not under Edit");
+
+        let (_, content) = add_at(
+            "## Todo\n\n### Edit\n- [ ] cut\n",
+            &["first"],
+            TodoPlace::Loose,
+        );
+        assert!(
+            content.ends_with("## Todo\n\n- [ ] first\n\n### Edit\n- [ ] cut\n"),
+            "{content}"
+        );
+    }
+
+    /// A file saved with `\r\n` throughout keeps them on every line a writer
+    /// adds — a todo, a label, a note — and on a note it rewrites.
+    #[test]
+    fn a_crlf_file_keeps_its_line_endings_when_written_to() {
+        let body =
+            "## Notes\r\n\r\n- 2026-01-01T00:00:00Z — began\r\n\r\n## Todo\r\n\r\n- [ ] a\r\n";
+        let content = doc(body).replace('\n', "\r\n").replace("\r\r\n", "\r\n");
+        let (_dir, path) = file(&content);
+        let crlf_only = |text: &str| text.matches('\n').count() == text.matches("\r\n").count();
+        assert!(crlf_only(&content), "the fixture is CRLF throughout");
+
+        add_todos_at(
+            &path,
+            &["b".to_string()],
+            &TodoPlace::Phase("Deliver".to_string()),
+        )
+        .unwrap();
+        append_journal_entry(&path, "a second note\nwith two lines").unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(
+            crlf_only(&written),
+            "every line is still CRLF:\n{written:?}"
+        );
+        let notes = notes_in(&written);
+        replace_note(&path, 0, &notes[0].text, "began again\nover two lines").unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(crlf_only(&written), "and after a rewrite:\n{written:?}");
+        assert_eq!(notes_in(&written)[0].text, "began again\nover two lines");
+        assert_eq!(todos_in(&written).len(), 2);
+
+        // A file that mixes the two keeps what it has and gains `\n` lines.
+        let mixed = doc("## Todo\r\n\r\n- [ ] a\n");
+        let (_dir, path) = file(&mixed);
+        add_todos_at(&path, &["b".to_string()], &TodoPlace::End).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.ends_with("- [ ] a\n- [ ] b\n"), "{written:?}");
     }
 }

@@ -97,9 +97,11 @@ was, and so does moving away.
 **Adding todos is typing a list.** `+` on the list or in the pane, Enter on
 **add a todo**, or **Add a todo** in the palette or the action menu opens an
 empty line in the todo list itself, where the todo will land — under the phase
-the cursor is in, or at the end. Enter writes it and opens the next line under
-it, so a list goes in one after another; Enter on an empty line, or Esc, is
-done. Paste a list onto the line — lines from a brief, a checklist copied with
+the cursor is in, beside the todos that sit under no phase when the cursor is on
+one of them, or at the end. Enter writes it and opens the next line under
+it, so a list goes in one after another — the line keeps taking keys while a
+todo is being written, so nothing typed is lost to the disk; Enter on an empty
+line, or Esc, is done. Paste a list onto the line — lines from a brief, a checklist copied with
 its `- [ ]` boxes, a numbered list — and every line is a todo, the markers taken
 off, in one write. With the pane switched off, `+` asks for one todo in a
 prompt instead. What you can type is what the file can hold: a tag is one

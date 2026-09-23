@@ -289,7 +289,7 @@ impl App {
                     Action::AddTodos {
                         project: Box::new(project),
                         texts: vec![text],
-                        phase: None,
+                        place: crate::core::body::TodoPlace::End,
                     },
                 );
                 if !effects.is_empty() {

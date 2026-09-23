@@ -379,7 +379,7 @@ fn the_palette_finds_add_a_todo_from_the_list() {
     let expected = fastf::tui::effect::Action::AddTodos {
         project: Box::new(project),
         texts: vec!["invoice".to_string()],
-        phase: None,
+        place: fastf::core::body::TodoPlace::End,
     };
     assert!(
         effects

@@ -475,3 +475,28 @@ fn angle_brackets_walk_the_projects_from_the_pane_and_keep_the_section() {
     assert!(effects.is_empty());
     assert_eq!(app.library.selected_index(), Some(0));
 }
+
+/// **The template pane pages by its own height.** It paged by the library
+/// table's, which is a different box once each tab places its pane by its own
+/// rule — at 60×45 the library's table is eleven rows under a pane, while the
+/// templates tab's pane is beside a short card list.
+#[test]
+fn the_template_pane_pages_by_its_own_height() {
+    let mut app = fixture(8, 60, 45);
+    press(&mut app, Key::ch('T'));
+    press(&mut app, Key::plain(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Detail);
+    app.studio.lines = (0..200).map(|n| format!("line {n}")).collect();
+    let pane = app.template_panes().1;
+    press(&mut app, Key::plain(KeyCode::PageDown));
+    assert_eq!(
+        app.studio.scroll,
+        (pane.height - 2) as usize,
+        "one page is the template pane's text height"
+    );
+    assert_ne!(
+        app.studio.scroll,
+        app.regions().table_rows(),
+        "not the library table's"
+    );
+}

@@ -17,6 +17,7 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::App;
+use crate::core::body::TodoPlace;
 use crate::core::library::Project;
 use crate::core::template::VarType;
 use crate::tui::app::data::{Entry, ProjectDetail};
@@ -183,21 +184,32 @@ fn flow_facts(facts: Vec<Fact>, project: &Project, width: usize) -> Vec<Vec<Fact
     rows
 }
 
-/// The phase the todo under `at` sits in: the nearest heading above it inside
-/// the todo section. `None` on the rows of an ungrouped list, on the row that
-/// adds a todo (the end of the list), and outside the section.
-fn phase_at(rows: &[PaneRow], at: usize) -> Option<String> {
+/// Where `+` on row `at` puts a new todo, as the file will have it: under the
+/// phase the cursor is in; with the tasks that belong to no phase when the
+/// cursor is on one of them and the list has phases below; at the end of the
+/// list otherwise — which, for a list ending in a phase, is that phase.
+fn place_at(rows: &[PaneRow], at: usize) -> TodoPlace {
     if !matches!(
         rows.get(at),
         Some(PaneRow::Todo { .. } | PaneRow::TodoLine { .. } | PaneRow::Phase { .. })
     ) {
-        return None;
+        return TodoPlace::End;
     }
-    rows.iter().take(at + 1).rev().find_map(|row| match row {
-        PaneRow::Phase { name, .. } => Some(Some(name.clone())),
-        PaneRow::Rule(_) | PaneRow::Todo { phased: false, .. } => Some(None),
-        _ => None,
-    })?
+    let heading = rows
+        .iter()
+        .take(at + 1)
+        .rev()
+        .find_map(|row| match row {
+            PaneRow::Phase { name, .. } => Some(Some(name.clone())),
+            PaneRow::Rule(_) => Some(None),
+            _ => None,
+        })
+        .flatten();
+    match heading {
+        Some(name) => TodoPlace::Phase(name),
+        None if rows.iter().any(|row| matches!(row, PaneRow::Phase { .. })) => TodoPlace::Loose,
+        None => TodoPlace::End,
+    }
 }
 
 /// One pasted line as the todo it lists: the checklist or list marker it was
@@ -225,43 +237,37 @@ pub fn todo_text_of(line: &str) -> String {
     rest.trim_end().to_string()
 }
 
-/// `rows` with the line a new todo is typed on, where the todo will land:
-/// after the last task of `phase` when the list has that phase, else at the
-/// end of the list, over "add a todo".
-pub fn with_adding(mut rows: Vec<PaneRow>, phase: Option<&str>) -> Vec<PaneRow> {
+/// `rows` with the line a new todo is typed on, where `body::add_todos_at`
+/// will write it: after the last run of the phase — the last heading of that
+/// name, ignoring case, as the writer matches it — after the tasks that belong
+/// to no phase, or at the end of the list, over "add a todo".
+pub fn with_adding(mut rows: Vec<PaneRow>, place: &TodoPlace) -> Vec<PaneRow> {
     let Some(add) = rows.iter().position(|row| *row == PaneRow::AddTodo) else {
         return rows;
     };
-    let at = phase
-        .and_then(|wanted| {
-            let heading = rows
-                .iter()
-                .position(|row| matches!(row, PaneRow::Phase { name, .. } if name == wanted))?;
-            Some(
-                rows.iter()
-                    .enumerate()
-                    .skip(heading + 1)
-                    .find(|(_, row)| matches!(row, PaneRow::Phase { .. } | PaneRow::AddTodo))
-                    .map_or(add, |(index, _)| index),
-            )
-        })
-        .unwrap_or(add);
+    // The next heading after `from`, or "add a todo": where a run ends.
+    let run_end = |from: usize| {
+        rows.iter()
+            .enumerate()
+            .skip(from)
+            .find(|(_, row)| matches!(row, PaneRow::Phase { .. } | PaneRow::AddTodo))
+            .map_or(add, |(index, _)| index)
+    };
+    let at = match place {
+        TodoPlace::Phase(wanted) => {
+            let wanted = wanted.to_lowercase();
+            rows.iter()
+                .rposition(|row| matches!(row, PaneRow::Phase { name, .. } if name.to_lowercase() == wanted))
+                .map_or(add, |heading| run_end(heading + 1))
+        }
+        TodoPlace::Loose => rows
+            .iter()
+            .position(|row| *row == PaneRow::Rule(PaneSection::Todo))
+            .map_or(add, |rule| run_end(rule + 1)),
+        TodoPlace::End => add,
+    };
     rows.insert(at, PaneRow::Adding);
     rows
-}
-
-/// The ordinal a todo added under `phase` gets: after the last task of that
-/// phase, or after every task when the list has no such phase — which is
-/// where `body::add_todos_in` writes it.
-pub fn ordinal_for_new_todo(todos: &[crate::core::body::Todo], phase: Option<&str>) -> usize {
-    phase
-        .and_then(|wanted| {
-            todos
-                .iter()
-                .rposition(|todo| todo.phase.as_deref() == Some(wanted))
-                .map(|last| last + 1)
-        })
-        .unwrap_or(todos.len())
 }
 
 /// A folder name as rows no wider than `width`, broken **after** a `_`, `-`,
@@ -638,12 +644,23 @@ pub enum EditTarget {
     /// when the edit opened, so a todo that changed meanwhile is refused
     /// rather than rewritten; emptied, it is removed.
     Todo { ordinal: usize, was: String },
-    /// A new todo, typed where it will land: under `phase`, or at the end of
-    /// the list. `ordinal` is where it will be once written, so the cursor
-    /// can follow it and the next line open under it.
+    /// The line new todos are typed on, where they will land (`place`),
+    /// drawn in from the heading when they will sit under one (`phased`).
+    ///
+    /// **It takes keys while a write is on its way**, so a person typing a
+    /// list never loses the first letters of the next todo to the write of
+    /// the last: `sending` holds what is on its way, `queued` what was entered
+    /// after it and goes next, and `closing` a close asked for while either
+    /// is waiting — the line goes once they have landed. `from` is where the
+    /// cursor goes when the line closes: the row `+` was pressed on, then the
+    /// last todo that landed.
     NewTodo {
-        phase: Option<String>,
-        ordinal: usize,
+        place: TodoPlace,
+        phased: bool,
+        from: PaneTarget,
+        sending: Vec<String>,
+        queued: Vec<String>,
+        closing: bool,
     },
 }
 
@@ -797,12 +814,26 @@ impl PaneEdit {
                 target: EditTarget::Todo { ordinal, .. },
                 ..
             } => PaneTarget::Todo(*ordinal),
+            // Where an add lands is the writer's answer, not a guess
+            // (`ActionOutcome::todo_ordinal`); until then, the line.
             PaneEdit::Line {
-                target: EditTarget::NewTodo { ordinal, .. },
+                target: EditTarget::NewTodo { .. },
                 ..
-            } => PaneTarget::Todo(*ordinal),
+            } => PaneTarget::Adding,
             PaneEdit::Note { ordinal, .. } => PaneTarget::Note(*ordinal),
         }
+    }
+
+    /// Whether this is the line a new todo is typed on, with a write of it
+    /// on its way.
+    pub fn adding_in_flight(&self) -> bool {
+        matches!(
+            self,
+            PaneEdit::Line {
+                target: EditTarget::NewTodo { sending, .. },
+                ..
+            } if !sending.is_empty()
+        )
     }
 
     /// Whether this is the line a new todo is typed on.
@@ -1076,6 +1107,9 @@ impl App {
     /// unless nothing changed, which is a cancel, or a tag is not a tag, which
     /// is a refusal under the line.
     pub(super) fn pane_edit_confirm(&mut self) -> Vec<Effect> {
+        if self.pane_edit.as_ref().is_some_and(PaneEdit::is_adding) {
+            return self.add_line_enter();
+        }
         let Some(PaneEdit::Line { target, input, .. }) = &self.pane_edit else {
             return Vec::new();
         };
@@ -1091,8 +1125,10 @@ impl App {
                 value: text,
             },
             EditTarget::Todo { ordinal, was } => {
-                if text == *was {
-                    self.pane_edit = None;
+                // Unchanged is a cancel — except a todo with no words, where
+                // the empty line kept is how it is removed.
+                if text == *was && !text.is_empty() {
+                    self.close_pane_edit();
                     return Vec::new();
                 }
                 Action::ReplaceTodo {
@@ -1102,21 +1138,10 @@ impl App {
                     text,
                 }
             }
-            // An empty line ends a run of adds; anything else is one more.
-            EditTarget::NewTodo { phase, .. } => {
-                if text.is_empty() {
-                    self.pane_edit = None;
-                    return Vec::new();
-                }
-                Action::AddTodos {
-                    project: Box::new(project),
-                    texts: vec![text],
-                    phase: phase.clone(),
-                }
-            }
+            EditTarget::NewTodo { .. } => return Vec::new(),
             EditTarget::Tag(from) => {
                 if text == *from {
-                    self.pane_edit = None;
+                    self.close_pane_edit();
                     return Vec::new();
                 }
                 let to = if text.is_empty() {
@@ -1173,7 +1198,7 @@ impl App {
 
     /// `+` in the pane: one more of whatever the cursor is among — a tag, a
     /// note, or a todo, typed on a line where it will land: in the phase the
-    /// cursor is in, else at the end of the list.
+    /// cursor is in, with the loose tasks when it is on one, else at the end.
     pub(super) fn pane_add(&mut self) -> Vec<Effect> {
         let rows = self.pane_rows();
         match section_at(&rows, self.pane_cursor) {
@@ -1188,8 +1213,8 @@ impl App {
                     self.warn(format!("Add a todo: {reason}"));
                     return Vec::new();
                 }
-                let phase = phase_at(&rows, self.pane_cursor);
-                self.start_adding(phase)
+                let place = place_at(&rows, self.pane_cursor);
+                self.start_adding(place)
             }
         }
     }
@@ -1197,7 +1222,7 @@ impl App {
     /// Open the line a new todo is typed on, in the pane, with the focus
     /// there. Falls back to the prompt when the pane cannot show the list —
     /// switched off, or its record not read yet.
-    pub(super) fn start_adding(&mut self, phase: Option<String>) -> Vec<Effect> {
+    pub(super) fn start_adding(&mut self, place: TodoPlace) -> Vec<Effect> {
         let read = self
             .library
             .selected()
@@ -1205,31 +1230,42 @@ impl App {
         let Some(detail) = read else {
             return self.prompt_for_a_todo();
         };
-        // The end of a list whose last run sits under a phase *is* that phase:
-        // a task appended there reads as the phase's own, so the line opens
-        // under the heading it will belong to.
-        let phase = phase.or_else(|| detail.todos.last().and_then(|todo| todo.phase.clone()));
-        let ordinal = ordinal_for_new_todo(&detail.todos, phase.as_deref());
         if !self.pane_live() || self.screen != super::Screen::Library {
             return self.prompt_for_a_todo();
         }
+        // Drawn in from a heading when the todo will sit under one — at the
+        // end of a list whose last run is a phase, too.
+        let phased = match &place {
+            TodoPlace::Phase(_) => true,
+            TodoPlace::Loose => false,
+            TodoPlace::End => detail.todos.last().is_some_and(|todo| todo.phase.is_some()),
+        };
+        // Closing the line comes back to the row `+` was pressed on — or, from
+        // the list, to the row that adds a todo.
+        let from = if self.focus == super::Focus::Detail {
+            target_at(&self.pane_rows(), self.pane_cursor).unwrap_or(PaneTarget::AddTodo)
+        } else {
+            PaneTarget::AddTodo
+        };
         self.set_focus(super::Focus::Detail);
-        self.open_adding(phase, ordinal);
-        Vec::new()
-    }
-
-    /// The add line itself, under `phase`, for the todo that will have
-    /// `ordinal` — placed on its row, with the cursor on it and in view.
-    pub(super) fn open_adding(&mut self, phase: Option<String>, ordinal: usize) {
+        self.close_pane_edit();
         self.pane_edit = Some(PaneEdit::Line {
             row: 0,
             input: crate::tui::widgets::input::LineEdit::new(),
-            target: EditTarget::NewTodo { phase, ordinal },
+            target: EditTarget::NewTodo {
+                place,
+                phased,
+                from,
+                sending: Vec::new(),
+                queued: Vec::new(),
+                closing: false,
+            },
             error: None,
             pending: false,
         });
         self.pane_anchor = Some(PaneTarget::Adding);
         self.refind_pane();
+        Vec::new()
     }
 
     /// The one-line prompt for a todo — what adding is where the pane cannot
@@ -1243,35 +1279,238 @@ impl App {
         Vec::new()
     }
 
-    /// A list pasted onto the add line: one todo per line, in one write, the
-    /// list markers a checklist is copied with stripped. `None` when the
-    /// paste is one line, which the field takes like any other.
-    pub(super) fn paste_todos(&mut self, text: &str) -> Option<Vec<Effect>> {
-        let texts: Vec<String> = text
-            .lines()
-            .map(todo_text_of)
-            .filter(|line| !line.is_empty())
-            .collect();
-        if texts.len() < 2 {
-            return None;
-        }
+    /// Enter on the add line: what was typed goes to the file, and the line
+    /// empties for the next — at once, so the keys that follow land in it
+    /// while the write is on its way. Entered while one is, it waits its turn.
+    /// An empty Enter is done: now, or once what is waiting has landed.
+    pub(super) fn add_line_enter(&mut self) -> Vec<Effect> {
         let Some(PaneEdit::Line {
-            target: EditTarget::NewTodo { phase, ordinal },
+            input,
+            error,
+            target:
+                EditTarget::NewTodo {
+                    sending,
+                    queued,
+                    closing,
+                    ..
+                },
+            ..
+        }) = &mut self.pane_edit
+        else {
+            return Vec::new();
+        };
+        let text = input.text().trim().to_string();
+        if text.is_empty() {
+            if sending.is_empty() && queued.is_empty() {
+                self.close_pane_edit();
+            } else {
+                *closing = true;
+            }
+            return Vec::new();
+        }
+        *error = None;
+        input.set_text("");
+        if !sending.is_empty() {
+            queued.push(text);
+            return Vec::new();
+        }
+        self.send_adds(vec![text])
+    }
+
+    /// A paste onto the add line goes in at the caret, as into any field; a
+    /// paste of several lines makes that many todos, in one write, the list
+    /// markers a checklist is copied with taken off — and what was typed on
+    /// the line before it is the first of them. A single line is the field's,
+    /// markers taken off when the line was empty. `None` when this is not the
+    /// add line's to take.
+    pub(super) fn paste_todos(&mut self, text: &str) -> Option<Vec<Effect>> {
+        let Some(PaneEdit::Line {
+            input,
+            error,
+            target: EditTarget::NewTodo {
+                sending, queued, ..
+            },
             ..
         }) = &mut self.pane_edit
         else {
             return None;
         };
-        // The cursor follows the last of them, and the next line opens
-        // under it.
-        *ordinal += texts.len() - 1;
-        let phase = phase.clone();
-        let project = self.library.selected().cloned()?;
-        Some(self.send_pane_edit(Action::AddTodos {
-            project: Box::new(project),
-            texts,
-            phase,
-        }))
+        if !text.contains('\n') {
+            if input.is_empty() {
+                input.set_text(todo_text_of(text));
+                *error = None;
+                return Some(Vec::new());
+            }
+            return None;
+        }
+        let typed = input.text().to_string();
+        let at = typed
+            .char_indices()
+            .nth(input.cursor())
+            .map_or(typed.len(), |(byte, _)| byte);
+        let whole = format!("{}{text}{}", &typed[..at], &typed[at..]);
+        let texts: Vec<String> = whole
+            .lines()
+            .map(todo_text_of)
+            .filter(|line| !line.is_empty())
+            .collect();
+        input.set_text("");
+        *error = None;
+        if texts.is_empty() {
+            return Some(Vec::new());
+        }
+        if !sending.is_empty() {
+            queued.extend(texts);
+            return Some(Vec::new());
+        }
+        Some(self.send_adds(texts))
+    }
+
+    /// Send `texts` from the add line. Refused before it left — something
+    /// else is being written — they wait their turn instead, and go when that
+    /// has landed (`flush_adds`).
+    fn send_adds(&mut self, texts: Vec<String>) -> Vec<Effect> {
+        let Some(project) = self.library.selected().cloned() else {
+            return Vec::new();
+        };
+        let Some(PaneEdit::Line {
+            target: EditTarget::NewTodo { place, sending, .. },
+            ..
+        }) = &mut self.pane_edit
+        else {
+            return Vec::new();
+        };
+        let place = place.clone();
+        sending.clone_from(&texts);
+        let effects = self.run_action(
+            "writing…",
+            Action::AddTodos {
+                project: Box::new(project),
+                texts: texts.clone(),
+                place,
+            },
+        );
+        if effects.is_empty()
+            && let Some(PaneEdit::Line {
+                target:
+                    EditTarget::NewTodo {
+                        sending, queued, ..
+                    },
+                ..
+            }) = &mut self.pane_edit
+        {
+            sending.clear();
+            let later = std::mem::take(queued);
+            *queued = texts;
+            queued.extend(later);
+        }
+        effects
+    }
+
+    /// After a write has landed: send what was entered while it was on its
+    /// way, or close the line if that was asked for meanwhile.
+    pub(super) fn flush_adds(&mut self) -> Vec<Effect> {
+        let Some(PaneEdit::Line {
+            target:
+                EditTarget::NewTodo {
+                    sending,
+                    queued,
+                    closing,
+                    ..
+                },
+            ..
+        }) = &mut self.pane_edit
+        else {
+            return Vec::new();
+        };
+        if !sending.is_empty() || self.busy.is_some() {
+            return Vec::new();
+        }
+        if !queued.is_empty() {
+            let texts = std::mem::take(queued);
+            return self.send_adds(texts);
+        }
+        if *closing {
+            self.close_pane_edit();
+        }
+        Vec::new()
+    }
+
+    /// The add line's write has landed at `ordinal` (the last todo written):
+    /// the line stays open, and closing it now comes back to that todo.
+    pub(super) fn adds_landed(&mut self, ordinal: Option<usize>) {
+        if let Some(PaneEdit::Line {
+            target: EditTarget::NewTodo { sending, from, .. },
+            ..
+        }) = &mut self.pane_edit
+        {
+            sending.clear();
+            if let Some(ordinal) = ordinal {
+                *from = PaneTarget::Todo(ordinal);
+            }
+        }
+    }
+
+    /// The add line's write was refused. What was sent comes back to the
+    /// field when nothing was typed after it; otherwise the refusal names what
+    /// was not written, so nothing entered is lost without a word. What was
+    /// waiting behind it is not sent: the refusal is the person's to read.
+    pub(super) fn adds_refused(&mut self, message: String) {
+        let Some(PaneEdit::Line {
+            input,
+            error,
+            target:
+                EditTarget::NewTodo {
+                    sending,
+                    queued,
+                    closing,
+                    ..
+                },
+            ..
+        }) = &mut self.pane_edit
+        else {
+            return;
+        };
+        let unsent: Vec<String> = sending.drain(..).chain(queued.drain(..)).collect();
+        *closing = false;
+        if unsent.len() == 1 && input.is_empty() {
+            input.set_text(unsent[0].clone());
+            *error = Some(message);
+        } else {
+            *error = Some(format!("{message} — not added: {}", unsent.join(", ")));
+        }
+    }
+
+    /// Close the edit open in the pane, leaving its row as it was. The add
+    /// line gives the cursor back to where it came from — the row `+` was
+    /// pressed on, or the last todo it added — rather than to its own row,
+    /// which goes with it; a write of it still on its way settles the cursor
+    /// when it lands; and anything entered that could not be sent yet is
+    /// named rather than dropped in silence.
+    pub(super) fn close_pane_edit(&mut self) {
+        let Some(edit) = self.pane_edit.take() else {
+            return;
+        };
+        if let PaneEdit::Line {
+            target:
+                EditTarget::NewTodo {
+                    from,
+                    sending,
+                    queued,
+                    ..
+                },
+            ..
+        } = edit
+        {
+            if !sending.is_empty() {
+                self.pane_pending = Some(PaneTarget::Adding);
+            }
+            if !queued.is_empty() {
+                self.warn(format!("not added: {}", queued.join(", ")));
+            }
+            self.pane_anchor = Some(from);
+        }
+        self.refind_pane();
     }
 
     /// `Ctrl-S` on the pane's note editor: the note, rewritten — or, emptied,
@@ -1332,9 +1571,9 @@ impl App {
         let rows = pane_rows(project, self.details.get(&project.path), width);
         match &self.pane_edit {
             Some(PaneEdit::Line {
-                target: EditTarget::NewTodo { phase, .. },
+                target: EditTarget::NewTodo { place, .. },
                 ..
-            }) => with_adding(rows, phase.as_deref()),
+            }) => with_adding(rows, place),
             _ => rows,
         }
     }
@@ -1420,6 +1659,11 @@ impl App {
         };
         let rows = self.pane_rows();
         let Some(row) = first_in_section(&rows, section) else {
+            // Read, and the project has no such section: the seek is over,
+            // so a later refresh that brings one in moves nothing unasked.
+            if !rows.contains(&PaneRow::Reading) {
+                self.pane_seek = None;
+            }
             return;
         };
         self.pane_seek = None;
@@ -2095,8 +2339,9 @@ mod tests {
         }
     }
 
-    /// The add line opens where the todo will land, and the ordinal it gets is
-    /// the one `body::add_todos_in` gives it.
+    /// The add line opens where `body::add_todos_at` will write: the last run
+    /// of the phase, whatever the case of its name; after the loose tasks;
+    /// or at the end.
     #[test]
     fn the_add_line_opens_where_the_todo_will_land() {
         let todo = |text: &str, phase: Option<&str>| crate::core::body::Todo {
@@ -2104,44 +2349,48 @@ mod tests {
             text: text.to_string(),
             phase: phase.map(str::to_string),
         };
-        let todos = vec![
-            todo("loose", None),
-            todo("brief", Some("Setup")),
-            todo("room", Some("Setup")),
-            todo("cut", Some("Edit")),
-        ];
         let detail = ProjectDetail {
-            todos: todos.clone(),
+            todos: vec![
+                todo("loose", None),
+                todo("brief", Some("Setup")),
+                todo("room", Some("Setup")),
+                todo("cut", Some("Edit")),
+                todo("again", Some("setup")),
+            ],
             ..Default::default()
         };
         let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
+        let around = |place: TodoPlace| {
+            let rows = with_adding(rows.clone(), &place);
+            let at = rows.iter().position(|r| *r == PaneRow::Adding).unwrap();
+            (rows[at - 1].clone(), rows[at + 1].clone())
+        };
+        let (above, below) = around(TodoPlace::Phase("Setup".to_string()));
+        assert!(
+            matches!(above, PaneRow::Todo { ordinal: 4, .. }) && below == PaneRow::AddTodo,
+            "the last run named setup, in any case: {above:?} / {below:?}"
+        );
+        let (above, below) = around(TodoPlace::Loose);
+        assert!(matches!(above, PaneRow::Todo { ordinal: 0, .. }));
+        assert!(matches!(below, PaneRow::Phase { .. }), "{below:?}");
+        let (_, below) = around(TodoPlace::End);
+        assert_eq!(below, PaneRow::AddTodo);
+        let (_, below) = around(TodoPlace::Phase("Deliver".to_string()));
+        assert_eq!(below, PaneRow::AddTodo, "a phase not there yet: the end");
 
-        let into_setup = with_adding(rows.clone(), Some("Setup"));
-        let at = into_setup
-            .iter()
-            .position(|r| *r == PaneRow::Adding)
-            .unwrap();
-        assert!(matches!(
-            into_setup[at - 1],
-            PaneRow::Todo { ordinal: 2, .. }
-        ));
-        assert!(matches!(into_setup[at + 1], PaneRow::Phase { .. }));
-        assert_eq!(ordinal_for_new_todo(&todos, Some("Setup")), 3);
-
-        let at_end = with_adding(rows.clone(), None);
-        let at = at_end.iter().position(|r| *r == PaneRow::Adding).unwrap();
-        assert_eq!(at_end[at + 1], PaneRow::AddTodo);
-        assert_eq!(ordinal_for_new_todo(&todos, None), 4);
-
-        // A phase the list does not have yet: the end of the list, where
-        // `add_todos_in` opens it.
-        let new_phase = with_adding(rows, Some("Deliver"));
-        let at = new_phase
-            .iter()
-            .position(|r| *r == PaneRow::Adding)
-            .unwrap();
-        assert_eq!(new_phase[at + 1], PaneRow::AddTodo);
-        assert_eq!(ordinal_for_new_todo(&todos, Some("Deliver")), 4);
+        // `+` chooses the place from the row it is pressed on.
+        let on = |wanted: &dyn Fn(&PaneRow) -> bool| {
+            place_at(&rows, rows.iter().position(wanted).unwrap())
+        };
+        assert_eq!(
+            on(&|r| matches!(r, PaneRow::Todo { ordinal: 0, .. })),
+            TodoPlace::Loose
+        );
+        assert_eq!(
+            on(&|r| matches!(r, PaneRow::Todo { ordinal: 3, .. })),
+            TodoPlace::Phase("Edit".to_string())
+        );
+        assert_eq!(on(&|r| *r == PaneRow::AddTodo), TodoPlace::End);
     }
 
     /// A phase heading counts what is done under it, and its tasks sit in from

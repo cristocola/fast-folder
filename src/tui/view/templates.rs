@@ -34,9 +34,12 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
     let panes = [list_area, pane_area];
     // Where the pane takes the list's place, one of the two is drawn: the
     // pane while it has the focus, the list otherwise.
+    // Which of the two is drawn follows the focus alone, not whether a dialog
+    // is up: help opened over the template must not swap the list in behind it.
     let over = placement == layout::Placement::Over;
-    let draw_list = !over || !pane_focused;
-    let draw_pane = !over || pane_focused;
+    let in_pane = app.focus == Focus::Detail;
+    let draw_list = !over || !in_pane;
+    let draw_pane = !over || in_pane;
 
     // --- the list ---------------------------------------------------------
     if draw_list {

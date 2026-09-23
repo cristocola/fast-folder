@@ -197,12 +197,11 @@ pub enum Action {
         was: String,
         text: String,
     },
-    /// Add open todos, in order, in one write: under `phase` when there is
-    /// one, else at the end of the list.
+    /// Add open todos, in order, in one write, at `place`.
     AddTodos {
         project: Box<Project>,
         texts: Vec<String>,
-        phase: Option<String>,
+        place: crate::core::body::TodoPlace,
     },
     Rename {
         project: Box<Project>,
@@ -336,6 +335,9 @@ pub struct ActionOutcome {
     /// Re-read the settings: this action changed one of them, and the screen
     /// showing them is a function of what is on disk, not of what was typed.
     pub reload_settings: bool,
+    /// Where an add put the last todo it wrote — the writer's answer, so the
+    /// pane's cursor lands on it rather than on a guess.
+    pub todo_ordinal: Option<usize>,
 }
 
 impl ActionOutcome {
@@ -350,7 +352,14 @@ impl ActionOutcome {
             select: None,
             follow_up: None,
             reload_settings: false,
+            todo_ordinal: None,
         }
+    }
+
+    /// The last todo an add wrote is at `ordinal`.
+    pub fn todo(mut self, ordinal: usize) -> Self {
+        self.todo_ordinal = Some(ordinal);
+        self
     }
 
     /// The settings screen re-reads itself after this.

@@ -717,6 +717,16 @@ pub fn add_todo_in(project: &Project, text: &str, phase: Option<&str>) -> Result
 /// (`body::add_todos_in`). Empty texts are skipped; one with a line break
 /// refuses the lot.
 pub fn add_todos_in(project: &Project, texts: &[String], phase: Option<&str>) -> Result<()> {
+    let place = match phase.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(name) => body::TodoPlace::Phase(name.to_string()),
+        None => body::TodoPlace::End,
+    };
+    add_todos_at(project, texts, &place).map(|_| ())
+}
+
+/// Add several open todos at `place`, in one write, answering the ordinal
+/// the first of them got (`body::add_todos_at`).
+pub fn add_todos_at(project: &Project, texts: &[String], place: &body::TodoPlace) -> Result<usize> {
     if texts.iter().any(|text| text.contains(['\n', '\r'])) {
         bail!("a todo is one line");
     }
@@ -726,7 +736,7 @@ pub fn add_todos_in(project: &Project, texts: &[String], phase: Option<&str>) ->
     let _mutation_lock = DataLock::acquire()?;
     let config = Config::load()?;
     let project = library::revalidate_project(&config, project)?;
-    body::add_todos_in(&project_info::pinfo_path(&project.path), texts, phase)
+    body::add_todos_at(&project_info::pinfo_path(&project.path), texts, place)
 }
 
 pub fn rename(project: &Project, folder: &str) -> Result<Project> {

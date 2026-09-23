@@ -786,10 +786,9 @@ pub fn detail(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
                     ),
                     _ => "[ ] ".to_string(),
                 },
-                EditTarget::NewTodo { phase, .. } => format!(
-                    "{}[ ] ",
-                    " ".repeat(if phase.is_some() { PHASE_INDENT } else { 0 })
-                ),
+                EditTarget::NewTodo { phased, .. } => {
+                    format!("{}[ ] ", " ".repeat(if *phased { PHASE_INDENT } else { 0 }))
+                }
             };
             let line_area = Rect::new(text.x, row_y, text.width, 1);
             frame.render_widget(Paragraph::new(""), line_area);

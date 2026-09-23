@@ -752,6 +752,15 @@ impl App {
             return false;
         }
         self.pane_for = now;
+        if let Some(pane::PaneEdit::Line {
+            target: pane::EditTarget::NewTodo { queued, .. },
+            ..
+        }) = &self.pane_edit
+            && !queued.is_empty()
+        {
+            let unsent = queued.join(", ");
+            self.warn(format!("not added: {unsent}"));
+        }
         self.detail_scroll = 0;
         self.pane_cursor = 0;
         self.pane_anchor = None;
@@ -787,6 +796,7 @@ impl App {
         if self.screen == Screen::Templates {
             let rows = self.studio.rows(self.search.input.text());
             self.studio.clamp_viewport(&rows, self.template_rows());
+            self.studio.scroll = self.studio.scroll.min(self.studio_scroll_max());
         }
         self.refind_pane();
         self.selection_effects()
@@ -1289,37 +1299,39 @@ impl App {
                 // which is the one row nobody who just changed a variable is
                 // looking at.
                 //
-                // **A todo added on the add line opens the next one under
-                // it**, so a list is typed in one go: the cursor settles on
-                // the new todo — and pulses — once the re-read shows it, and
-                // the next line is already open for the keys that follow.
-                let next_add = match &self.pane_edit {
-                    Some(pane::PaneEdit::Line {
-                        target: pane::EditTarget::NewTodo { phase, ordinal },
-                        pending: true,
-                        ..
-                    }) => Some((phase.clone(), ordinal + 1)),
-                    _ => None,
-                };
-                let landed = self
+                // **The add line stays open** — it took keys all along — and
+                // the todo it sent pulses where the writer says it put it
+                // (`todo_ordinal`), once the re-read shows it; a guess at that
+                // place was wrong wherever a phase's name repeats.
+                let landed = if self
                     .pane_edit
-                    .take_if(|edit| edit.pending())
-                    .map(|edit| edit.target())
-                    .or_else(|| self.pane_pending.take());
+                    .as_ref()
+                    .is_some_and(pane::PaneEdit::adding_in_flight)
+                {
+                    self.adds_landed(outcome.todo_ordinal);
+                    outcome.todo_ordinal.map(pane::PaneTarget::Todo)
+                } else {
+                    self.pane_edit
+                        .take_if(|edit| edit.pending())
+                        .map(|edit| edit.target())
+                        .or_else(|| self.pane_pending.take())
+                        .map(|target| match outcome.todo_ordinal {
+                            Some(ordinal) => pane::PaneTarget::Todo(ordinal),
+                            None => target,
+                        })
+                };
                 let mut effects = self.apply_change(outcome.change);
                 if let Some(target) = landed {
-                    // Settled now only where its row is already there; the
-                    // new todo's row is not, until the re-read lands.
-                    if next_add.is_none() {
-                        self.settle_pane_cursor(&target);
-                    }
+                    // Settled now where its row is already there; the new
+                    // todo's is not, until the re-read lands.
+                    self.settle_pane_cursor(&target);
                     // The detail was just dropped and will be read again;
                     // the cursor finds the row once more when it lands.
                     self.pane_return = Some(target);
                 }
-                if let Some((phase, ordinal)) = next_add {
-                    self.open_adding(phase, ordinal);
-                }
+                // What was entered on the add line while this was written
+                // goes next, or the line closes as it was asked to.
+                effects.extend(self.flush_adds());
                 if let Some(FollowUp::PostCreate {
                     root,
                     template_slug,
@@ -1343,6 +1355,14 @@ impl App {
                 // A refusal belongs on the field that earned it, wherever one
                 // is open: `config set`'s own message, under the value that is
                 // still there to be corrected.
+                if self
+                    .pane_edit
+                    .as_ref()
+                    .is_some_and(pane::PaneEdit::adding_in_flight)
+                {
+                    self.adds_refused(error);
+                    return Vec::new();
+                }
                 if let Some(edit) = &mut self.pane_edit
                     && edit.pending()
                 {
@@ -1702,7 +1722,11 @@ impl App {
     fn page_rows(&self) -> usize {
         let rows = match (self.screen, self.focus) {
             (Screen::Library, Focus::Detail) => self.pane_rows_on_screen(),
-            _ => self.rows_on_screen(),
+            (Screen::Library, Focus::Projects) => self.rows_on_screen(),
+            (Screen::Templates, Focus::Projects) => self.template_rows(),
+            (Screen::Templates, Focus::Detail) => {
+                self.template_panes().1.height.saturating_sub(2) as usize
+            }
         };
         rows.max(1)
     }
@@ -2149,7 +2173,26 @@ impl App {
             CommandId::PaneEditConfirm => self.pane_edit_confirm(),
             CommandId::PaneEditSave => self.pane_edit_save(),
             CommandId::PaneEditCancel => {
-                self.pane_edit = None;
+                // Esc on the add line is "done": now, or once what it sent
+                // has landed. Anywhere else it leaves the row as it was.
+                if let Some(pane::PaneEdit::Line {
+                    input,
+                    target:
+                        pane::EditTarget::NewTodo {
+                            sending,
+                            queued,
+                            closing,
+                            ..
+                        },
+                    ..
+                }) = &mut self.pane_edit
+                    && !(sending.is_empty() && queued.is_empty())
+                {
+                    input.set_text("");
+                    *closing = true;
+                    return Vec::new();
+                }
+                self.close_pane_edit();
                 Vec::new()
             }
             CommandId::OpenFolder => self.spawn_for_selection(SpawnKind::Reveal),
@@ -2288,7 +2331,9 @@ impl App {
             // Where the pane can show the list, a todo is typed into it,
             // at the end, on a line that opens the next once it lands; where
             // it cannot, the prompt.
-            CommandId::AddTodo | CommandId::ListAddTodo => self.start_adding(None),
+            CommandId::AddTodo | CommandId::ListAddTodo => {
+                self.start_adding(crate::core::body::TodoPlace::End)
+            }
             CommandId::PaneAdd => self.pane_add(),
             CommandId::PaneEditText => self.pane_edit_text(),
             CommandId::ListRename => self.run(CommandId::Rename),
@@ -2463,8 +2508,8 @@ impl App {
             self.focus_moved_at = Some(self.elapsed_ms);
             // An edit belongs to the row it was opened on; leaving the pane
             // leaves the row as it was.
-            self.pane_edit = None;
             self.pane_pending = None;
+            self.close_pane_edit();
         }
         self.focus = focus;
     }

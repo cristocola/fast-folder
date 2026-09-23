@@ -38,10 +38,12 @@ What each suite guards — the intent, not the case list:
   output. `tests/tui_pty/screenshot.rs` is a tool, not a test:
   `FASTF_SHOT_KEYS="down enter" cargo test --test tui_pty screenshot -- --ignored
   --nocapture` prints the frame those keys leave in a planted sandbox
-  (`FASTF_SHOT_REAL=1` for your own library, `FASTF_SHOT_ARGS="copy shared"` for a
-  subcommand's inline prompt, `FASTF_SHOT_SIZE=80x24`, `FASTF_SHOT_SVG=<path>` for
-  the README's SVG — sandbox only). **Look at every screen this way before writing
-  its snapshot.**
+  (`FASTF_SHOT_REAL=1` for your own library, read through a private copy of the
+  data directory so the session the app saves on exit never lands in yours;
+  `FASTF_SHOT_LONG=1` for folder names of ninety characters;
+  `FASTF_SHOT_ARGS="copy shared"` for a subcommand's inline prompt,
+  `FASTF_SHOT_SIZE=80x24`, `FASTF_SHOT_SVG=<path>` for the README's SVG — sandbox
+  only). **Look at every screen this way before writing its snapshot.**
 - `relaunch.rs` (unix) — when fastf opens a terminal for itself and, mostly, when
   it must not (a pipe, a redirect, ssh, no display, either off switch, the loop
   guard). **Every test pins `config set terminal <recorder>` first**, so no run can

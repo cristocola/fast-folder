@@ -376,6 +376,13 @@ pub fn raw_value(settings: &Settings, key: &str) -> String {
         "editor" => settings.editor.clone(),
         "terminal" => settings.terminal.clone(),
         "theme" => or(&settings.theme, "auto"),
+        // Read the way the app reads it, so a hand-written `true` or `0` is
+        // still one of the row's two answers — and the cycle has somewhere
+        // to go from it.
+        "motion" => crate::tui::motion::Motion::parse(&settings.motion)
+            .unwrap_or(crate::tui::motion::Motion::On)
+            .name()
+            .to_string(),
         "default-template" => settings.default_template.clone(),
         "date-format" => settings.date_format.clone(),
         "register-naming-pattern" => settings.register_naming_pattern.clone(),
@@ -518,7 +525,7 @@ pub fn rows(s: &Settings) -> Vec<Row> {
         },
         Row {
             label: "Motion",
-            value: or(&s.motion, "on"),
+            value: raw_value(s, "motion"),
             hint: "a row a verb just changed lights up and fades, the focus eases between the panes, a message arrives and dims on its way out — off makes every frame a hard cut; a theme with no colour is always off",
             kind: Kind::Choice("motion", MOTION),
         },
@@ -834,6 +841,56 @@ mod tests {
         assert_eq!(
             state.immediate_write(),
             Some(("on-name-collision", "error".to_string()))
+        );
+    }
+
+    /// A choice finds where it is by the value `raw_value` reads back, so a
+    /// key missing there cycles from nowhere: Motion wrote `off` on every
+    /// press and could never be turned back on.
+    #[test]
+    fn every_toggle_and_choice_reads_back_as_one_of_its_answers() {
+        let mut settings = sample();
+        settings.motion = "off".to_string();
+        settings.theme = "rich".to_string();
+        for row in rows(&settings) {
+            match row.kind {
+                Kind::Choice(key, options) => assert!(
+                    options.contains(&raw_value(&settings, key).as_str()),
+                    "{key} reads back as {:?}, not one of {options:?}",
+                    raw_value(&settings, key)
+                ),
+                Kind::Bool(key) => assert!(
+                    matches!(raw_value(&settings, key).as_str(), "true" | "false"),
+                    "{key} reads back as {:?}",
+                    raw_value(&settings, key)
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn motion_turns_off_and_back_on() {
+        let at_motion = |settings: Settings| {
+            let mut state = SettingsState::new(settings);
+            while state.row().unwrap().label != "Motion" {
+                state.step(1);
+            }
+            state.immediate_write()
+        };
+        assert_eq!(at_motion(sample()), Some(("motion", "off".to_string())));
+        let off = Settings {
+            motion: "off".to_string(),
+            ..sample()
+        };
+        assert_eq!(at_motion(off), Some(("motion", "on".to_string())));
+        let written_by_hand = Settings {
+            motion: "false".to_string(),
+            ..sample()
+        };
+        assert_eq!(
+            at_motion(written_by_hand),
+            Some(("motion", "on".to_string()))
         );
     }
 

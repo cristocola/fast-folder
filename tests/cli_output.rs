@@ -1757,3 +1757,57 @@ fn apply_renders_the_id_of_the_folder_it_is_applied_to() {
         "project {id}\n"
     );
 }
+
+/// **Every command's own help text sits at the margin.** The prose after the
+/// options is a string in `main.rs`, and one written without `\` line
+/// continuations prints every line after the first with the source file's
+/// indent in front of it — `show` and `copy-to` both did. Examples are indented
+/// two columns; only a hanging line of an indented item goes further.
+#[test]
+fn every_help_text_sits_at_the_margin() {
+    let sb = Sandbox::new();
+    let commands = |args: &[&str]| -> Vec<String> {
+        let mut help = args.to_vec();
+        help.push("--help");
+        let text = sb.ok(&help);
+        text.lines()
+            .skip_while(|line| *line != "Commands:")
+            .skip(1)
+            .take_while(|line| !line.is_empty())
+            .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+            .filter(|name| name != "help")
+            .collect()
+    };
+    let mut every: Vec<Vec<String>> = Vec::new();
+    for command in commands(&[]) {
+        let nested = commands(&[command.as_str()]);
+        every.push(vec![command.clone()]);
+        every.extend(nested.into_iter().map(|sub| vec![command.clone(), sub]));
+    }
+    assert!(every.len() > 20, "the walk found the commands: {every:?}");
+    for path in every {
+        let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
+        // `-h`: one line per option, so the first blank line after `Options:`
+        // is where the command's own prose begins.
+        args.push("-h");
+        let text = sb.ok(&args);
+        // What follows the options block is the command's own prose.
+        let prose: Vec<&str> = text
+            .lines()
+            .skip_while(|line| *line != "Options:")
+            .skip_while(|line| !line.is_empty())
+            .collect();
+        // A line may sit further in only to continue an item that is itself
+        // indented — a numbered step, a table row. What the missing `\`
+        // produced was the source's indent under a line at the margin.
+        let indent = |line: &str| line.len() - line.trim_start().len();
+        for pair in prose.windows(2) {
+            let (above, line) = (pair[0], pair[1]);
+            assert!(
+                indent(line) < 3 || indent(above) >= 2,
+                "`fastf {}` prints its help indented: {line:?}",
+                path.join(" ")
+            );
+        }
+    }
+}

@@ -106,6 +106,10 @@ fn palette_open() {
     snap("palette_open", render_to_string(&app, 100, 30));
 }
 
+// Recorded where help lists `Ctrl-z Suspend`; Windows has no job control and
+// leaves that row out (`tui_commands::help_lists_suspend_only_where_there_is_job_control`),
+// and is otherwise the same frame.
+#[cfg(unix)]
 #[test]
 fn help_open() {
     let mut app = fixture(12, 100, 30);
@@ -301,6 +305,10 @@ fn dashboard_60x16() {
 
 /// The help at 80 columns: the columns are measured from the commands, and a
 /// description that does not fit continues under itself.
+// Recorded where help lists `Ctrl-z Suspend`; Windows has no job control and
+// leaves that row out (`tui_commands::help_lists_suspend_only_where_there_is_job_control`),
+// and is otherwise the same frame.
+#[cfg(unix)]
 #[test]
 fn help_80x24() {
     let mut app = fixture(12, 80, 24);

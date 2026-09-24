@@ -88,6 +88,12 @@ format. `Runtime::init` calls `tty::mark_interactive_surface` and installs a
 screen-restoring panic hook for the **main thread only**; `spawn_worker` turns a
 worker's panic into a warning rather than tearing down a live session.
 
+**A frame is one write.** The backend is a `BufWriter` over stderr, because
+ratatui queues a write per changed cell and on Windows each write is a round
+trip through the console host — 45 ms first frames and 117 ms fade frames in
+Windows Terminal, under 1 ms and 7 ms buffered. `Terminal::draw` and `execute!`
+flush, so nothing is left waiting.
+
 **Two modules take the terminal** (`tests/layering.rs`): `runtime.rs` the
 alternate screen, `inline.rs` a few rows at the cursor for a command-line prompt.
 A third owner would be two unsynchronised writers on one tty. `Suspended` has two

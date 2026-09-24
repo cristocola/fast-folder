@@ -81,8 +81,14 @@ pub struct Env {
     pub term: String,
     pub colorterm: String,
     pub term_program: String,
-    /// Windows Terminal announces itself with `WT_SESSION`.
+    /// Windows Terminal announces itself with `WT_SESSION` — when it opened
+    /// the shell. Given a program started from the Start menu, it does not.
     pub wt_session: bool,
+    /// The console is a pseudoconsole (`util::tty::pseudo_console`): a terminal
+    /// emulator draws it, not the legacy console window. With no `TERM`, that
+    /// is Windows Terminal or its like on this machine; over ssh `TERM` is the
+    /// client's and says more.
+    pub pseudo_console: bool,
     pub fastf_theme: Option<String>,
     pub fastf_ascii: Option<String>,
     /// `FASTF_MOTION`, the per-session escape hatch for the `motion` setting.
@@ -103,6 +109,7 @@ impl Env {
             colorterm: var("COLORTERM"),
             term_program: var("TERM_PROGRAM"),
             wt_session: set("WT_SESSION"),
+            pseudo_console: crate::util::tty::pseudo_console(),
             fastf_theme: std::env::var("FASTF_THEME").ok(),
             fastf_ascii: std::env::var("FASTF_ASCII").ok(),
             fastf_motion: std::env::var("FASTF_MOTION").ok(),
@@ -204,7 +211,14 @@ fn announces_truecolor(env: &Env) -> bool {
     if PROGRAMS.contains(&program.as_str()) {
         return true;
     }
-    env.wt_session || env.alacritty || env.wezterm
+    env.wt_session || local_emulator(env) || env.alacritty || env.wezterm
+}
+
+/// A pseudoconsole with no `TERM`: an emulator on this machine drew the
+/// window, and on Windows that is Windows Terminal unless something set a
+/// variable of its own.
+fn local_emulator(env: &Env) -> bool {
+    env.pseudo_console && env.term.trim().is_empty()
 }
 
 /// The characters the frames are drawn with. Few, and each with one job:
@@ -538,8 +552,8 @@ impl Theme {
 /// legacy Windows console, or an explicit request. `FASTF_ASCII=1` asks for
 /// them anywhere and `FASTF_ASCII=0` refuses them anywhere; without it, only a
 /// Windows host that is none of the emulators known to draw Unicode — Windows
-/// Terminal, Alacritty, WezTerm, ConEmu, anything that sets `TERM_PROGRAM` or
-/// `TERM` — is taken for the legacy console.
+/// Terminal, Alacritty, WezTerm, ConEmu, any pseudoconsole, anything that sets
+/// `TERM_PROGRAM` or `TERM` — is taken for the legacy console.
 pub fn ascii_wanted(env: &Env) -> bool {
     match env
         .fastf_ascii
@@ -553,6 +567,7 @@ pub fn ascii_wanted(env: &Env) -> bool {
     }
     cfg!(windows)
         && !env.wt_session
+        && !env.pseudo_console
         && env.term_program.trim().is_empty()
         && env.term.trim().is_empty()
         && !env.alacritty
@@ -610,6 +625,20 @@ mod tests {
             ..Env::default()
         };
         assert_eq!(choose(&windows_terminal, None).0, ThemeKind::Rich);
+        // Started from the Start menu, Windows Terminal sets no WT_SESSION;
+        // the pseudoconsole is what says it is there.
+        let from_the_start_menu = Env {
+            pseudo_console: true,
+            ..Env::default()
+        };
+        assert_eq!(choose(&from_the_start_menu, None).0, ThemeKind::Rich);
+        // Over ssh the console is a pseudoconsole too, and the client's TERM
+        // decides.
+        let over_ssh = Env {
+            pseudo_console: true,
+            ..env("xterm-256color", "")
+        };
+        assert_eq!(choose(&over_ssh, None).0, ThemeKind::Ansi);
     }
 
     #[test]
@@ -707,6 +736,10 @@ mod tests {
             },
             Env {
                 conemu: true,
+                ..Env::default()
+            },
+            Env {
+                pseudo_console: true,
                 ..Env::default()
             },
             env("xterm-256color", ""),

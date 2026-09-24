@@ -8,7 +8,7 @@
 //! while `App::needs_tick` says something on screen is moving.
 
 use std::collections::HashMap;
-use std::io::{self, Stderr, Write};
+use std::io::{self, BufWriter, Stderr, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -81,7 +81,18 @@ pub fn run(
     Ok(exit)
 }
 
-type Screen = Terminal<CrosstermBackend<Stderr>>;
+/// **Frames are buffered, and a frame is one write.** ratatui queues a cursor
+/// move, a colour and a symbol per changed cell, and `Stderr` is unbuffered, so
+/// each became its own write. On Windows every write is a round trip through
+/// the console host: a first frame took 45 ms and a fade's frames up to 117 ms
+/// in Windows Terminal — the lag, and the half-drawn frames, of the app on
+/// Windows. Buffered, the same frames take under 1 ms and 7 ms at worst.
+/// `Terminal::draw` flushes at the end of every frame and `execute!` after
+/// every command, so nothing waits in the buffer.
+type Screen = Terminal<CrosstermBackend<BufWriter<Stderr>>>;
+
+/// A full frame of a large window, colours and all, fits with room to spare.
+const FRAME_BUFFER: usize = 64 * 1024;
 
 struct Runtime {
     terminal: Screen,
@@ -197,6 +208,17 @@ impl Runtime {
         loop {
             if let Some(exit) = self.perform(&mut app, std::mem::take(&mut effects))? {
                 return Ok((exit, Session::capture(&app, &remembered)));
+            }
+            // A painted canvas is also the colour a clear erases to: a resize
+            // clears the screen before the frame that follows, and on the
+            // terminal's own background that clear is a flash of it.
+            if let ratatui::style::Color::Rgb(r, g, b) = app.theme.canvas {
+                let _ = ratatui::crossterm::queue!(
+                    self.terminal.backend_mut(),
+                    ratatui::crossterm::style::SetBackgroundColor(
+                        ratatui::crossterm::style::Color::Rgb { r, g, b }
+                    )
+                );
             }
             self.terminal.draw(|frame| view::view(&app, frame))?;
 
@@ -650,7 +672,7 @@ fn restore_on_signal() {
         return;
     }
     // Paste off, leave the alternate screen, show the cursor.
-    tty::write_raw(b"\x1b[?2004l\x1b[?1049l\x1b[?25h");
+    tty::write_raw(b"\x1b[0m\x1b[?2004l\x1b[?1049l\x1b[?25h");
     #[cfg(unix)]
     tty::restore_cooked_mode();
 }
@@ -683,7 +705,11 @@ fn take_screen() -> Result<Screen> {
     // and the alternate screen starts blank — so nothing to clear. Deliberately
     // not `Terminal::clear`: that asks the terminal where its cursor is and
     // waits for the answer, which a pty under test never sends.
-    Terminal::new(CrosstermBackend::new(stderr)).context("opening the terminal")
+    Terminal::new(CrosstermBackend::new(BufWriter::with_capacity(
+        FRAME_BUFFER,
+        stderr,
+    )))
+    .context("opening the terminal")
 }
 
 /// Back to the main screen in cooked mode with the cursor shown. Idempotent.
@@ -716,6 +742,7 @@ fn install_panic_hook() {
             let _ = disable_raw_mode();
             let _ = execute!(
                 io::stderr(),
+                ratatui::crossterm::style::ResetColor,
                 DisableBracketedPaste,
                 LeaveAlternateScreen,
                 cursor::Show
@@ -1007,10 +1034,7 @@ fn run_action(
                     base_dir_override: request.base_dir_override.clone(),
                 })?;
             drop(created.take_mutation_lock());
-            let root = created
-                .plan
-                .root_path
-                .canonicalize()
+            let root = crate::util::paths::canonical(&created.plan.root_path)
                 .unwrap_or_else(|_| created.plan.root_path.clone());
             let id = created.plan.id_str.clone();
             let outcome = ActionOutcome::new(

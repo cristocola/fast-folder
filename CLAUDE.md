@@ -188,6 +188,13 @@ and canonicalizes. Extra `bases` use the first, because creating a missing one
 would plant an empty directory at an unmounted mount point. Neither takes the
 lock (`DataLock` is not reentrant, and `config::set` holds it).
 
+**Canonicalize through `util::paths::canonical`, never `Path::canonicalize`**
+(`tests/layering.rs` enforces it). On Windows the std call fails with os error
+1005 for every path on a drive the mount manager does not know — rclone and
+other WinFsp mounts, RAM disks — so each mutation's base check refused there.
+The helper walks such a path itself and refuses a link it cannot follow;
+`FASTF_FAULT=paths:unnamed-volume` sends every call down that walk on any OS.
+
 **A path that will be stored goes through `util::paths::storable`**, which refuses
 non-UTF-8 rather than recording the `?`-substituted path `display()` produces.
 `effective_bases()` memoizes against the configuration it was computed from, so a

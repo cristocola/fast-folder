@@ -61,10 +61,11 @@ impl Project {
 
 /// Short display label for a base directory: its last path component (e.g.
 /// `01_PROJECTS` for `/mnt/projects/01_PROJECTS`, `alice` for `/home/alice`).
-/// Falls back to the full path for roots like `/`.
+/// Falls back to the full path for roots like `/` — as it reads, so a drive
+/// root is `S:\`, not the canonical `\\?\S:\`.
 pub fn base_label(base: &Path) -> String {
     base.file_name()
         .and_then(|s| s.to_str())
         .map(str::to_string)
-        .unwrap_or_else(|| base.display().to_string())
+        .unwrap_or_else(|| crate::util::paths::display_path(base))
 }

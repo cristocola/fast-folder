@@ -611,11 +611,18 @@ fn in_a_multi_pick(app: &App) -> Availability {
 
 /// Job control is a unix thing; on Windows the key is not bound at all.
 fn unix_only(_: &App) -> Availability {
-    if cfg!(unix) {
+    if exists_here(CommandId::Suspend) {
         Availability::Enabled
     } else {
         Availability::Hidden
     }
+}
+
+/// Whether this platform has the command at all, whatever the app's state —
+/// what the help overlay, which has no app to ask, must know. Job control is
+/// the one command a platform lacks.
+pub fn exists_here(id: CommandId) -> bool {
+    cfg!(unix) || id != CommandId::Suspend
 }
 
 /// A verb that starts a window — the file manager, a terminal — needs a
@@ -2531,6 +2538,7 @@ pub fn help_sections(ctx: Context) -> Vec<(Category, Vec<&'static Command>)> {
                 .iter()
                 .filter(|c| c.category == *category)
                 .filter(|c| c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global))
+                .filter(|c| exists_here(c.id))
                 .collect();
             (*category, commands)
         })

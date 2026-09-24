@@ -166,7 +166,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             options.path.display()
         );
     }
-    let canonical = options.path.canonicalize().with_context(|| {
+    let canonical = crate::util::paths::canonical(&options.path).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
             options.path.display()
@@ -241,7 +241,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
         let id = Counters::format_id(&template.id.prefix, template.id.digits, id_value);
 
         for configured in config.effective_bases() {
-            let Ok(configured) = configured.canonicalize() else {
+            let Ok(configured) = crate::util::paths::canonical(&configured) else {
                 continue;
             };
             for existing in library::scan_base(&configured) {
@@ -342,7 +342,7 @@ fn configured_parent(config: &Config, canonical: &Path) -> Result<PathBuf> {
         .parent()
         .context("registration target has no parent directory")?;
     for configured in config.effective_bases() {
-        let Ok(configured) = configured.canonicalize() else {
+        let Ok(configured) = crate::util::paths::canonical(&configured) else {
             continue;
         };
         if configured == parent {

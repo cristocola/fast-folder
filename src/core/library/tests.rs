@@ -229,6 +229,24 @@ fn multi_base_union_sorted_newest_first() {
     assert_eq!(projects[1].id, "ID0010");
 }
 
+/// A script makes several projects inside one second, so they share a
+/// `created` stamp; newest first still means the higher ID first, not the
+/// name that sorts first (`Project_38` above `Project_60`).
+#[test]
+fn newest_first_breaks_a_shared_second_by_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (folder, id) in [
+        ("b_ID0009", "ID0009"),
+        ("a_ID0010", "ID0010"),
+        ("c_ID0008", "ID0008"),
+    ] {
+        write_project(tmp.path(), folder, id, "gen", "2026-06-01T10:00:00Z");
+    }
+    let cfg = cfg_for(tmp.path(), &[]);
+    let ids: Vec<String> = discover(&cfg).into_iter().map(|p| p.id).collect();
+    assert_eq!(ids, ["ID0010", "ID0009", "ID0008"]);
+}
+
 #[test]
 fn max_id_across_bases() {
     let tmp1 = tempfile::tempdir().unwrap();
@@ -286,6 +304,9 @@ fn resolve_by_id_prefix_and_name() {
     assert_eq!(resolve(&cfg, "ID004").unwrap().id, "ID0042");
     // Name substring (case-insensitive).
     assert_eq!(resolve(&cfg, "BETA").unwrap().id, "ID0100");
+    // The name as it was typed, before a transform put `_` in the folder.
+    assert_eq!(resolve(&cfg, "Music Video").unwrap().id, "ID0042");
+    assert_eq!(resolve(&cfg, "video-alpha").unwrap().id, "ID0042");
     // No match.
     assert!(resolve(&cfg, "nope").is_err());
 }
@@ -1269,4 +1290,18 @@ fn resolve_matches_reports_many_without_erroring() {
         resolve_matches(&cfg_for(empty.path(), &[]), "anything"),
         Resolution::NoProjects
     ));
+}
+
+/// A drive-root base has no last component, and its label is the whole path
+/// as it reads — the list showed `\\?\S:\` for an rclone drive.
+#[test]
+fn a_root_base_is_labelled_as_it_reads() {
+    #[cfg(windows)]
+    assert_eq!(base_label(Path::new(r"\\?\S:\")), r"S:\");
+    #[cfg(unix)]
+    assert_eq!(base_label(Path::new("/")), "/");
+    assert_eq!(
+        base_label(Path::new("/mnt/projects/01_PROJECTS")),
+        "01_PROJECTS"
+    );
 }

@@ -13,7 +13,7 @@
 //! - a **wash** under a status message as it arrives, and a **fade** as it goes;
 //! - one **activity indicator** wherever something is pending (`Glyphs::spin`).
 //!
-//! A pulse fades toward the rich palette's `ground` with an ease-out rather than
+//! A pulse fades toward an RGB palette's `ground` with an ease-out rather than
 //! snapping off, because a terminal cell has no alpha; the sixteen ANSI colours
 //! hold the wash and let go, and mono never moves.
 //!
@@ -128,7 +128,7 @@ pub fn mix(from: Color, to: Color, t: f32) -> Color {
 ///
 /// **A background, and one that fades.** Every cell in a row sets its own
 /// foreground, so a foreground set on the row loses to all of them; a
-/// background is the one thing the cells leave alone. On the rich palette it
+/// background is the one thing the cells leave alone. On an RGB palette it
 /// mixes from `theme.pulse` toward `theme.ground` with an ease-out; on the
 /// sixteen colours it is held for `ANSI_HOLD` of the pulse and then let go,
 /// because there is nothing to fade along; under `Motion::Off` and in mono
@@ -137,11 +137,10 @@ pub fn wash(theme: &Theme, phase: f32, motion: Motion) -> Option<Style> {
     if !motion.is_on() || theme.kind == ThemeKind::Mono {
         return None;
     }
-    match theme.kind {
-        ThemeKind::Rich => {
-            Some(Style::default().bg(mix(theme.pulse, theme.ground, ease_out(phase))))
-        }
-        _ => (phase < ANSI_HOLD).then(|| Style::default().bg(theme.pulse)),
+    if theme.kind.is_rgb() {
+        Some(Style::default().bg(mix(theme.pulse, theme.ground, ease_out(phase))))
+    } else {
+        (phase < ANSI_HOLD).then(|| Style::default().bg(theme.pulse))
     }
 }
 
@@ -233,7 +232,7 @@ fn eased(
     motion: Motion,
 ) -> Color {
     let (from, to) = if focused { (rest, lit) } else { (lit, rest) };
-    if !motion.is_on() || theme.kind != ThemeKind::Rich {
+    if !motion.is_on() || !theme.kind.is_rgb() {
         return to;
     }
     match moved_at.and_then(|at| phase(at, now, FOCUS_MS)) {

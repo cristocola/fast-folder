@@ -115,6 +115,43 @@ pub fn has_display() -> bool {
         .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
+/// Whether this console is a **pseudoconsole** — drawn by a terminal emulator
+/// (Windows Terminal, VS Code, an ssh client) rather than the legacy console
+/// window. Windows 11 hands a program started from the Start menu or a
+/// shortcut to Windows Terminal *without* setting `WT_SESSION`, so the variable
+/// alone takes Windows Terminal for the legacy console there. A pseudoconsole's
+/// window is a hidden `PseudoConsoleWindow`; the legacy one is a
+/// `ConsoleWindowClass`. Always `false` off Windows.
+#[cfg(windows)]
+pub fn pseudo_console() -> bool {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetConsoleWindow() -> *mut core::ffi::c_void;
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetClassNameW(hwnd: *mut core::ffi::c_void, name: *mut u16, capacity: i32) -> i32;
+    }
+    const PSEUDO: &str = "PseudoConsoleWindow";
+    let mut name = [0u16; 64];
+    // SAFETY: `GetConsoleWindow` takes nothing and may answer null, which is
+    // checked; `GetClassNameW` writes at most `capacity` units into `name`,
+    // which is that long, and answers how many it wrote.
+    let written = unsafe {
+        let window = GetConsoleWindow();
+        if window.is_null() {
+            return false;
+        }
+        GetClassNameW(window, name.as_mut_ptr(), name.len() as i32)
+    };
+    usize::try_from(written).is_ok_and(|len| String::from_utf16_lossy(&name[..len]) == PSEUDO)
+}
+
+#[cfg(not(windows))]
+pub fn pseudo_console() -> bool {
+    false
+}
+
 pub fn mark_interactive_surface() {
     SURFACE_RAN.store(true, Ordering::Relaxed);
 }

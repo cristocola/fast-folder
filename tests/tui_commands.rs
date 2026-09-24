@@ -111,7 +111,8 @@ fn every_bound_command_appears_in_its_contexts_help() {
         // A command fires here if it names this context or is global.
         let fires_here = COMMANDS
             .iter()
-            .filter(|c| c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global));
+            .filter(|c| c.contexts.contains(&ctx) || c.contexts.contains(&Context::Global))
+            .filter(|c| fastf::tui::command::exists_here(c.id));
         for command in fires_here {
             assert!(
                 drawn.contains(command.title),
@@ -124,6 +125,18 @@ fn every_bound_command_appears_in_its_contexts_help() {
     for command in COMMANDS {
         assert!(Category::ALL.contains(&command.category));
     }
+}
+
+/// Help listed `Ctrl-z Suspend … fg brings fastf back` on Windows, where
+/// there is no job control and the key is bound to nothing.
+#[test]
+fn help_lists_suspend_only_where_there_is_job_control() {
+    let listed = help_lines(Context::Projects, 100, &fastf::tui::theme::Glyphs::unicode())
+        .into_iter()
+        .any(|line| {
+            matches!(line, fastf::tui::command::HelpLine::Command { title, .. } if title == "Suspend")
+        });
+    assert_eq!(listed, cfg!(unix));
 }
 
 #[test]

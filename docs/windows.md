@@ -107,9 +107,12 @@ automatically: `>` `*` `*` `/` `!`. Box-drawing borders stay, because the
 console has always had those.
 
 The detection is "a Windows host that announces no emulator": no `WT_SESSION`
-(Windows Terminal), no `TERM_PROGRAM`, no `TERM`, and none of the variables
-Alacritty, WezTerm and ConEmu set. Those all draw Unicode and keep it. Force
-it either way:
+(Windows Terminal), no `TERM_PROGRAM`, no `TERM`, none of the variables
+Alacritty, WezTerm and ConEmu set, and a console that is not a pseudoconsole.
+That last check is what finds Windows Terminal when the Start menu or a
+shortcut opened fastf: Windows 11 hands the program to Windows Terminal without
+setting `WT_SESSION`, but the console is then a pseudoconsole, which the legacy
+console never is. Force the alphabet either way:
 
 ```powershell
 $env:FASTF_ASCII = "1"    # plain ASCII, wherever you are
@@ -117,12 +120,24 @@ $env:FASTF_ASCII = "0"    # the Unicode alphabet, even in the old console
 ```
 
 Colour follows the same rule the app uses everywhere: `NO_COLOR` turns it off,
-a terminal that announces truecolor (`COLORTERM=truecolor`, Windows Terminal,
-a `TERM` or `TERM_PROGRAM` that names a truecolor emulator) gets the muted RGB
-palette, and anything else gets the sixteen ANSI colours used sparingly.
-`fastf config set theme mono|ansi|rich` pins one, and `FASTF_THEME` pins one
-for a single run.
+a terminal that announces truecolor (`COLORTERM=truecolor`, Windows Terminal
+however it was opened, a `TERM` or `TERM_PROGRAM` that names a truecolor
+emulator) gets Doom One, the default look, and anything else gets the sixteen ANSI
+colours used sparingly. `fastf config set theme doom-one|rich|ansi|mono` pins
+one, and `FASTF_THEME` pins one for a single run.
 
+
+## Drives that rclone, WinFsp or a RAM disk provide
+
+A drive letter that a user-mode filesystem mounts — `rclone mount` of an S3 or
+SFTP remote, any other WinFsp mount such as a Cryptomator vault, an ImDisk RAM
+disk — is not registered with Windows' mount manager, so Windows cannot give
+its paths their final drive-letter name. fastf works on such a drive like on
+any other: it resolves paths there itself, checking that each folder on the way
+exists and is not a link. A junction or symbolic link inside a base on such a
+drive is refused rather than followed, because only the name Windows cannot
+give would say where it leads. The rclone cache modes (`off`, `writes`,
+`full`) all work.
 
 ## The mouse
 

@@ -9,8 +9,10 @@
 //!
 //! The palette is semantic — *accent*, *dim*, *good*, *bad* — and the
 //! environment decides what each one is: `NO_COLOR` or a dumb terminal gets
-//! none, a terminal that announces truecolor gets the muted RGB version,
-//! everything else gets the sixteen ANSI colours used sparingly. The choice is
+//! none, a terminal that announces truecolor gets **Doom One** (the default
+//! look: Doom Emacs's palette on its own painted background), everything else
+//! gets the sixteen ANSI colours used sparingly. The muted slate palette
+//! described above is `rich`, one setting away. The choice is
 //! a pure function of an [`Env`] (`choose`), so it is tested without touching
 //! the process environment; `FASTF_THEME` and the `theme` config key override
 //! it for the terminals that announce nothing — an ssh session forwards no
@@ -26,6 +28,8 @@ pub enum ThemeKind {
     Mono,
     Ansi,
     Rich,
+    /// Doom Emacs's Doom One, the default wherever truecolor is announced.
+    DoomOne,
 }
 
 impl ThemeKind {
@@ -34,7 +38,14 @@ impl ThemeKind {
             ThemeKind::Mono => "mono",
             ThemeKind::Ansi => "ansi",
             ThemeKind::Rich => "rich",
+            ThemeKind::DoomOne => "doom-one",
         }
+    }
+
+    /// A 24-bit palette: its colours can be mixed, so a wash fades and focus
+    /// eases rather than being held and let go.
+    pub fn is_rgb(self) -> bool {
+        matches!(self, ThemeKind::Rich | ThemeKind::DoomOne)
     }
 }
 
@@ -50,16 +61,20 @@ pub enum ThemeChoice {
 impl ThemeChoice {
     /// The spellings `config set theme` accepts, in the order the settings
     /// screen cycles them.
-    pub const NAMES: [&'static str; 4] = ["auto", "mono", "ansi", "rich"];
+    pub const NAMES: [&'static str; 5] = ["auto", "doom-one", "rich", "ansi", "mono"];
 
-    /// `None` for anything that is not one of the four; the empty string is
-    /// `auto`, which is what an unset config key reads as.
+    /// `None` for anything that is not one of the five; the empty string is
+    /// `auto`, which is what an unset config key reads as. Doom One also
+    /// answers to the ways people type it (`doom`, `doomone`, `doom one`).
     pub fn parse(text: &str) -> Option<Self> {
         match text.trim().to_ascii_lowercase().as_str() {
             "" | "auto" => Some(ThemeChoice::Auto),
             "mono" => Some(ThemeChoice::Kind(ThemeKind::Mono)),
             "ansi" => Some(ThemeChoice::Kind(ThemeKind::Ansi)),
             "rich" => Some(ThemeChoice::Kind(ThemeKind::Rich)),
+            "doom-one" | "doom_one" | "doom one" | "doomone" | "doom" => {
+                Some(ThemeChoice::Kind(ThemeKind::DoomOne))
+            }
             _ => None,
         }
     }
@@ -81,8 +96,14 @@ pub struct Env {
     pub term: String,
     pub colorterm: String,
     pub term_program: String,
-    /// Windows Terminal announces itself with `WT_SESSION`.
+    /// Windows Terminal announces itself with `WT_SESSION` — when it opened
+    /// the shell. Given a program started from the Start menu, it does not.
     pub wt_session: bool,
+    /// The console is a pseudoconsole (`util::tty::pseudo_console`): a terminal
+    /// emulator draws it, not the legacy console window. With no `TERM`, that
+    /// is Windows Terminal or its like on this machine; over ssh `TERM` is the
+    /// client's and says more.
+    pub pseudo_console: bool,
     pub fastf_theme: Option<String>,
     pub fastf_ascii: Option<String>,
     /// `FASTF_MOTION`, the per-session escape hatch for the `motion` setting.
@@ -103,6 +124,7 @@ impl Env {
             colorterm: var("COLORTERM"),
             term_program: var("TERM_PROGRAM"),
             wt_session: set("WT_SESSION"),
+            pseudo_console: crate::util::tty::pseudo_console(),
             fastf_theme: std::env::var("FASTF_THEME").ok(),
             fastf_ascii: std::env::var("FASTF_ASCII").ok(),
             fastf_motion: std::env::var("FASTF_MOTION").ok(),
@@ -165,7 +187,7 @@ pub fn choose(env: &Env, preference: Option<&str>) -> (ThemeKind, Glyphs) {
         return (kind, glyphs);
     }
     if announces_truecolor(env) {
-        (ThemeKind::Rich, glyphs)
+        (ThemeKind::DoomOne, glyphs)
     } else {
         (ThemeKind::Ansi, glyphs)
     }
@@ -204,7 +226,14 @@ fn announces_truecolor(env: &Env) -> bool {
     if PROGRAMS.contains(&program.as_str()) {
         return true;
     }
-    env.wt_session || env.alacritty || env.wezterm
+    env.wt_session || local_emulator(env) || env.alacritty || env.wezterm
+}
+
+/// A pseudoconsole with no `TERM`: an emulator on this machine drew the
+/// window, and on Windows that is Windows Terminal unless something set a
+/// variable of its own.
+fn local_emulator(env: &Env) -> bool {
+    env.pseudo_console && env.term.trim().is_empty()
 }
 
 /// The characters the frames are drawn with. Few, and each with one job:
@@ -325,7 +354,8 @@ pub struct Theme {
     /// — so a foreground set on the row loses to all of them and shows almost
     /// nowhere. A background is the one thing the cells leave alone.
     pub pulse: Color,
-    /// What a wash fades *toward*: the dark the rich palette is drawn on.
+    /// What a wash fades *toward*: the dark an RGB palette is drawn on — the
+    /// canvas itself, for Doom One.
     ///
     /// A terminal cell has no alpha and `Color::Reset` has no RGB, so a fade
     /// needs a colour to end near. The rich palette presumes a dark terminal
@@ -333,6 +363,13 @@ pub struct Theme {
     /// pulse spends the end of its fade close to it, so the last step to
     /// nothing is not seen. `Reset` on the palettes that cannot fade.
     pub ground: Color,
+    /// The background the whole app is painted on, or `Reset` to leave the
+    /// terminal's own. Only Doom One paints: `view::view` gives every cell
+    /// still on `Reset` this colour, in one pass after everything is drawn.
+    pub canvas: Color,
+    /// A dialog's background, a shade off the canvas (Doom's popups wear
+    /// `bg-alt`). `Reset` where there is no canvas.
+    pub surface: Color,
     /// The highlighted row.
     pub selection: Style,
     /// Colours a tag hashes onto.
@@ -359,7 +396,22 @@ impl Theme {
             ThemeKind::Mono => Self::mono(),
             ThemeKind::Ansi => Self::ansi(),
             ThemeKind::Rich => Self::rich(),
+            ThemeKind::DoomOne => Self::doom_one(),
         }
+    }
+
+    /// The same palette for rows drawn on the terminal's own background —
+    /// the command line's inline prompts, which live in the shell and paint no
+    /// canvas. A canvas theme's text colour was chosen for its canvas, and on
+    /// a light terminal Doom's light grey all but disappears, so the text
+    /// gives way to the terminal's own; the accents keep their colours.
+    pub fn without_canvas(mut self) -> Self {
+        if self.canvas != Color::Reset {
+            self.text = Color::Reset;
+            self.canvas = Color::Reset;
+            self.surface = Color::Reset;
+        }
+        self
     }
 
     /// The same palette with a different alphabet — what the conhost check and
@@ -388,6 +440,8 @@ impl Theme {
             // Never drawn: motion is off wherever there is no colour.
             pulse: Color::Reset,
             ground: Color::Reset,
+            canvas: Color::Reset,
+            surface: Color::Reset,
             selection: Style::default().add_modifier(Modifier::REVERSED),
             tags: [Color::Reset; 6],
         }
@@ -414,6 +468,8 @@ impl Theme {
             // no ramp between them, so a wash is held and let go, never faded.
             pulse: Color::DarkGray,
             ground: Color::Reset,
+            canvas: Color::Reset,
+            surface: Color::Reset,
             mark: Color::Yellow,
             selection: Style::default().add_modifier(Modifier::REVERSED),
             tags: [
@@ -458,6 +514,54 @@ impl Theme {
                 Color::Rgb(160, 140, 162),
                 Color::Rgb(182, 160, 130),
                 Color::Rgb(140, 150, 170),
+            ],
+            ..Self::ansi()
+        }
+    }
+
+    /// **Doom One**, after Doom Emacs's flagship theme (doom-themes, MIT,
+    /// Henrik Lissner), itself after Atom's One Dark. The colours are its own:
+    /// `bg` painted under everything, `bg-alt` under a dialog as under Doom's
+    /// popups, `region` for the current row as in its completion lists, and
+    /// its blue, magenta, green, yellow, red and orange for the roles Doom
+    /// gives them. What recedes (dates, hints, a done todo) is `base7`, lighter
+    /// than Doom's comment grey, because it is read on the selected row's
+    /// `region` too, where the comment grey all but vanishes.
+    pub fn doom_one() -> Self {
+        const BG: Color = Color::Rgb(0x28, 0x2c, 0x34);
+        const BLUE: Color = Color::Rgb(0x51, 0xaf, 0xef);
+        const MAGENTA: Color = Color::Rgb(0xc6, 0x78, 0xdd);
+        const GREEN: Color = Color::Rgb(0x98, 0xbe, 0x65);
+        const YELLOW: Color = Color::Rgb(0xec, 0xbe, 0x7b);
+        const ORANGE: Color = Color::Rgb(0xda, 0x85, 0x48);
+        Self {
+            kind: ThemeKind::DoomOne,
+            accent: BLUE,
+            accent_alt: MAGENTA,
+            text: Color::Rgb(0xbb, 0xc2, 0xcf),
+            dim: Color::Rgb(0x9c, 0xa0, 0xa4),
+            good: GREEN,
+            bad: Color::Rgb(0xff, 0x6c, 0x6b),
+            warn: YELLOW,
+            border: Color::Rgb(0x3f, 0x44, 0x4a),
+            border_focus: BLUE,
+            mark: ORANGE,
+            // Doom's `dark-blue`, its own selection colour: a wash that is
+            // plainly Doom's, fading to the canvas it sits on.
+            pulse: Color::Rgb(0x22, 0x57, 0xa0),
+            ground: BG,
+            canvas: BG,
+            surface: Color::Rgb(0x21, 0x24, 0x2b),
+            selection: Style::default()
+                .bg(Color::Rgb(0x42, 0x45, 0x4b))
+                .add_modifier(Modifier::BOLD),
+            tags: [
+                BLUE,
+                MAGENTA,
+                GREEN,
+                ORANGE,
+                Color::Rgb(0x4d, 0xb5, 0xbd),
+                Color::Rgb(0xa9, 0xa1, 0xe1),
             ],
             ..Self::ansi()
         }
@@ -538,8 +642,8 @@ impl Theme {
 /// legacy Windows console, or an explicit request. `FASTF_ASCII=1` asks for
 /// them anywhere and `FASTF_ASCII=0` refuses them anywhere; without it, only a
 /// Windows host that is none of the emulators known to draw Unicode — Windows
-/// Terminal, Alacritty, WezTerm, ConEmu, anything that sets `TERM_PROGRAM` or
-/// `TERM` — is taken for the legacy console.
+/// Terminal, Alacritty, WezTerm, ConEmu, any pseudoconsole, anything that sets
+/// `TERM_PROGRAM` or `TERM` — is taken for the legacy console.
 pub fn ascii_wanted(env: &Env) -> bool {
     match env
         .fastf_ascii
@@ -553,6 +657,7 @@ pub fn ascii_wanted(env: &Env) -> bool {
     }
     cfg!(windows)
         && !env.wt_session
+        && !env.pseudo_console
         && env.term_program.trim().is_empty()
         && env.term.trim().is_empty()
         && !env.alacritty
@@ -563,6 +668,7 @@ pub fn ascii_wanted(env: &Env) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{Env, Glyphs, Theme, ThemeChoice, ThemeKind, ascii_wanted, choose};
+    use ratatui::style::Color;
 
     #[test]
     fn a_tag_colour_is_stable_and_anagrams_differ() {
@@ -586,30 +692,44 @@ mod tests {
         assert_eq!(choose(&env("xterm-256color", ""), None).0, ThemeKind::Ansi);
         assert_eq!(
             choose(&env("xterm-256color", "truecolor"), None).0,
-            ThemeKind::Rich
+            ThemeKind::DoomOne
         );
         assert_eq!(
             choose(&env("xterm-256color", "24bit"), None).0,
-            ThemeKind::Rich
+            ThemeKind::DoomOne
         );
     }
 
     #[test]
     fn an_emulator_that_names_itself_is_truecolor_without_colorterm() {
         // What an ssh session looks like: TERM forwarded, COLORTERM not.
-        assert_eq!(choose(&env("xterm-kitty", ""), None).0, ThemeKind::Rich);
-        assert_eq!(choose(&env("foot", ""), None).0, ThemeKind::Rich);
-        assert_eq!(choose(&env("xterm-direct", ""), None).0, ThemeKind::Rich);
+        assert_eq!(choose(&env("xterm-kitty", ""), None).0, ThemeKind::DoomOne);
+        assert_eq!(choose(&env("foot", ""), None).0, ThemeKind::DoomOne);
+        assert_eq!(choose(&env("xterm-direct", ""), None).0, ThemeKind::DoomOne);
         let vscode = Env {
             term_program: "vscode".to_string(),
             ..env("xterm-256color", "")
         };
-        assert_eq!(choose(&vscode, None).0, ThemeKind::Rich);
+        assert_eq!(choose(&vscode, None).0, ThemeKind::DoomOne);
         let windows_terminal = Env {
             wt_session: true,
             ..Env::default()
         };
-        assert_eq!(choose(&windows_terminal, None).0, ThemeKind::Rich);
+        assert_eq!(choose(&windows_terminal, None).0, ThemeKind::DoomOne);
+        // Started from the Start menu, Windows Terminal sets no WT_SESSION;
+        // the pseudoconsole is what says it is there.
+        let from_the_start_menu = Env {
+            pseudo_console: true,
+            ..Env::default()
+        };
+        assert_eq!(choose(&from_the_start_menu, None).0, ThemeKind::DoomOne);
+        // Over ssh the console is a pseudoconsole too, and the client's TERM
+        // decides.
+        let over_ssh = Env {
+            pseudo_console: true,
+            ..env("xterm-256color", "")
+        };
+        assert_eq!(choose(&over_ssh, None).0, ThemeKind::Ansi);
     }
 
     #[test]
@@ -639,7 +759,7 @@ mod tests {
         for pref in ["auto", "", "purple"] {
             assert_eq!(
                 choose(&env("xterm-kitty", ""), Some(pref)).0,
-                ThemeKind::Rich,
+                ThemeKind::DoomOne,
                 "{pref:?}"
             );
         }
@@ -661,17 +781,45 @@ mod tests {
     }
 
     #[test]
-    fn the_four_names_parse_and_nothing_else_does() {
+    fn every_name_parses_and_nothing_else_does() {
         assert_eq!(ThemeChoice::parse("Auto"), Some(ThemeChoice::Auto));
         assert_eq!(ThemeChoice::parse(""), Some(ThemeChoice::Auto));
         assert_eq!(
             ThemeChoice::parse(" rich "),
             Some(ThemeChoice::Kind(ThemeKind::Rich))
         );
-        assert_eq!(ThemeChoice::parse("purple"), None);
-        for name in ThemeChoice::NAMES {
-            assert!(ThemeChoice::parse(name).is_some(), "{name}");
+        for doom in ["doom-one", "Doom One", "doom_one", "doomone", "DOOM"] {
+            assert_eq!(
+                ThemeChoice::parse(doom),
+                Some(ThemeChoice::Kind(ThemeKind::DoomOne)),
+                "{doom}"
+            );
         }
+        assert_eq!(ThemeChoice::parse("purple"), None);
+        // Every name the settings screen cycles parses back to itself, so a
+        // stored value reads back as the row's own answer.
+        for name in ThemeChoice::NAMES {
+            assert_eq!(ThemeChoice::parse(name).map(ThemeChoice::name), Some(name));
+        }
+    }
+
+    /// Only Doom One paints: a canvas under everything and a surface under a
+    /// dialog. The other palettes leave the terminal's background alone, and
+    /// a wash on Doom One fades to exactly the colour it is painted on.
+    #[test]
+    fn only_doom_one_paints_and_its_wash_ends_on_its_canvas() {
+        for kind in [ThemeKind::Mono, ThemeKind::Ansi, ThemeKind::Rich] {
+            let theme = Theme::from_kind(kind);
+            assert_eq!(theme.canvas, Color::Reset, "{kind:?}");
+            assert_eq!(theme.surface, Color::Reset, "{kind:?}");
+        }
+        let doom = Theme::doom_one();
+        assert!(matches!(doom.canvas, Color::Rgb(..)));
+        assert!(matches!(doom.surface, Color::Rgb(..)));
+        assert_ne!(doom.canvas, doom.surface);
+        assert_eq!(doom.ground, doom.canvas);
+        assert!(ThemeKind::DoomOne.is_rgb() && ThemeKind::Rich.is_rgb());
+        assert!(!ThemeKind::Ansi.is_rgb() && !ThemeKind::Mono.is_rgb());
     }
 
     #[test]
@@ -707,6 +855,10 @@ mod tests {
             },
             Env {
                 conemu: true,
+                ..Env::default()
+            },
+            Env {
+                pseudo_console: true,
                 ..Env::default()
             },
             env("xterm-256color", ""),

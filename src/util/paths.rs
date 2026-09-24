@@ -69,7 +69,7 @@ pub fn install_dir() -> PathBuf {
 /// Portable-mode probe: the canonicalized directory of the running binary,
 /// iff it already holds fastf data (`config.toml` or `templates/`).
 fn portable_dir() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let exe = canonical(&std::env::current_exe().ok()?).ok()?;
     let dir = exe.parent()?;
     if is_portable_data_dir(dir) {
         Some(dir.to_path_buf())
@@ -221,6 +221,144 @@ pub fn require_real_directory(path: &Path, label: &str) -> Result<()> {
         bail!("{label} is not a real directory: {}", display_path(path));
     }
     Ok(())
+}
+
+/// **The one way to canonicalize a path.** `Path::canonicalize`, except where
+/// Windows cannot give the volume a DOS name.
+///
+/// On Windows, `canonicalize` opens the path and asks for its final name *as a
+/// drive letter*, which only the mount manager knows. A drive that a user-mode
+/// filesystem mounts without it — rclone and every other WinFsp mount (S3,
+/// SFTP, Cryptomator vaults), ImDisk RAM disks — answers `ERROR_UNRECOGNIZED_VOLUME`
+/// (1005) or `ERROR_INVALID_FUNCTION` (1) for every path on it, although the
+/// files are right there. Every mutation canonicalizes its base, so on such a
+/// drive fastf could create and list projects but change none of them.
+///
+/// For those errors the path is canonicalized by walking it: made absolute,
+/// every component from the root down checked to exist and to be **no link**,
+/// and put in the verbatim form `canonicalize` answers with. Following a link
+/// is the one thing this cannot do on such a volume, so it refuses a path
+/// through one rather than trust it — the containment checks built on this
+/// keep their meaning. Anywhere else the answer is `canonicalize`'s own, so
+/// the two forms never meet on one volume.
+pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    // A decision, not a crash: the suites take the walking path on any
+    // platform with this armed, so every caller is exercised through it.
+    if crate::util::faults::is_armed("paths:unnamed-volume") {
+        return canonical_by_walking(path);
+    }
+    match path.canonicalize() {
+        Ok(found) => Ok(found),
+        Err(err) if volume_has_no_dos_name(&err) => canonical_by_walking(path),
+        Err(err) => Err(err),
+    }
+}
+
+/// `ERROR_INVALID_FUNCTION`, `ERROR_NOT_SUPPORTED` and
+/// `ERROR_UNRECOGNIZED_VOLUME`: what `GetFinalPathNameByHandleW` answers on a
+/// volume the mount manager does not know. The same numbers mean other things
+/// on unix, where `canonicalize` has no such gap.
+fn volume_has_no_dos_name(err: &std::io::Error) -> bool {
+    cfg!(windows) && matches!(err.raw_os_error(), Some(1 | 50 | 1005))
+}
+
+fn canonical_by_walking(path: &Path) -> std::io::Result<PathBuf> {
+    use std::path::Component;
+
+    let absolute = std::path::absolute(path)?;
+    let mut walked = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => walked.push(component),
+            Component::CurDir => {}
+            // Lexical, and sound: every component below was checked to be no
+            // link, so `..` climbs to exactly the directory it names.
+            Component::ParentDir => {
+                walked.pop();
+            }
+            Component::Normal(name) => {
+                walked.push(name);
+                let metadata = std::fs::symlink_metadata(&walked)?;
+                // The name as stored, as `canonicalize` gives it: on a
+                // case-insensitive drive `projects` opens `Projects`, and
+                // every containment check compares names byte for byte.
+                if let Some(stored) = stored_name(&walked) {
+                    walked.set_file_name(stored);
+                }
+                if is_link_like(&metadata) {
+                    return Err(std::io::Error::other(format!(
+                        "{} is a link on a drive whose volume Windows cannot name, \
+                         so fastf cannot follow it safely",
+                        display_path(&walked)
+                    )));
+                }
+            }
+        }
+    }
+    // The root alone has no component to check: it must still be there.
+    std::fs::symlink_metadata(&walked)?;
+    Ok(verbatim(walked))
+}
+
+/// The last component of an existing `path` as the filesystem stores it, when
+/// that differs only in case from how it was typed; `None` when it is stored
+/// as typed, or cannot be read. Read from the parent's listing, because a
+/// WinFsp filesystem answers `FindFirstFileW` on an exact path with the name as
+/// it was asked for. Only the walk calls this, so only an unnamed volume pays
+/// for the listing.
+#[cfg(windows)]
+fn stored_name(path: &Path) -> Option<std::ffi::OsString> {
+    let typed = path.file_name()?.to_str()?;
+    let wanted = typed.to_lowercase();
+    let mut stored = None;
+    for entry in std::fs::read_dir(verbatim(path.parent()?.to_path_buf())).ok()? {
+        let name = entry.ok()?.file_name();
+        match name.to_str() {
+            Some(text) if text == typed => return None,
+            Some(text) if stored.is_none() && text.to_lowercase() == wanted => {
+                stored = Some(name.clone())
+            }
+            _ => {}
+        }
+    }
+    stored
+}
+
+#[cfg(not(windows))]
+fn stored_name(_: &Path) -> Option<std::ffi::OsString> {
+    None
+}
+
+/// The `\\?\` form `canonicalize` answers with on Windows; unchanged elsewhere.
+fn verbatim(path: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return path;
+    }
+    match path.to_str() {
+        Some(text) => PathBuf::from(verbatim_text(text)),
+        None => path,
+    }
+}
+
+/// The string half of [`verbatim`], so Windows-shaped inputs can be unit-tested
+/// on any platform.
+fn verbatim_text(text: &str) -> String {
+    if text.starts_with(r"\\?\") || text.starts_with(r"\\.\") {
+        // Already verbatim, or a device path (`NUL` absolutises to `\\.\NUL`).
+        text.to_string()
+    } else if let Some(share) = text.strip_prefix(r"\\") {
+        format!(r"\\?\UNC\{share}")
+    } else {
+        // `s:\x` and `S:\x` are one drive; show and store the letter as
+        // `canonicalize` does.
+        let mut chars = text.chars();
+        match (chars.next(), chars.next()) {
+            (Some(letter), Some(':')) => {
+                format!(r"\\?\{}{}", letter.to_ascii_uppercase(), &text[1..])
+            }
+            _ => format!(r"\\?\{text}"),
+        }
+    }
 }
 
 /// **Every Windows reparse point counts as a link**, not only the ones std
@@ -566,6 +704,68 @@ mod tests {
         assert_eq!(strip_verbatim(r"C:\already\plain"), r"C:\already\plain");
         assert_eq!(strip_verbatim("/home/user/projects"), "/home/user/projects");
         assert_eq!(strip_verbatim(""), "");
+    }
+
+    #[test]
+    fn verbatim_is_the_form_canonicalize_answers_with() {
+        assert_eq!(verbatim_text(r"S:\projects"), r"\\?\S:\projects");
+        assert_eq!(verbatim_text(r"S:\"), r"\\?\S:\");
+        assert_eq!(verbatim_text(r"\\nas\share\p"), r"\\?\UNC\nas\share\p");
+        assert_eq!(verbatim_text(r"\\?\S:\already"), r"\\?\S:\already");
+        assert_eq!(verbatim_text(r"s:\lower"), r"\\?\S:\lower");
+        assert_eq!(verbatim_text(r"\\.\NUL"), r"\\.\NUL");
+        // And `display_path` takes every one of them back to what was typed.
+        assert_eq!(
+            strip_verbatim(&verbatim_text(r"S:\projects")),
+            r"S:\projects"
+        );
+        assert_eq!(
+            strip_verbatim(&verbatim_text(r"\\nas\share\p")),
+            r"\\nas\share\p"
+        );
+    }
+
+    /// Where both can answer, the walk and `canonicalize` must agree — the
+    /// promise that lets the two forms share one library.
+    #[test]
+    fn walking_agrees_with_canonicalize_where_both_answer() {
+        let tmp = std::env::temp_dir().join(format!("fastf-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("a").join("b")).unwrap();
+        // Start from canonical text so a Windows 8.3 temp name is already long.
+        let root = PathBuf::from(display_path(&tmp.canonicalize().unwrap()));
+        let messy = root.join("a").join(".").join("b").join("..").join("b");
+        assert_eq!(
+            canonical_by_walking(&messy).unwrap(),
+            messy.canonicalize().unwrap()
+        );
+        assert!(canonical_by_walking(&root.join("missing")).is_err());
+        // Typed in another case on a case-insensitive filesystem, the walk
+        // still answers the stored name, or `S:\projects` and `S:\Projects`
+        // would be two bases to every containment check.
+        #[cfg(windows)]
+        {
+            std::fs::create_dir_all(tmp.join("Stored")).unwrap();
+            assert_eq!(
+                canonical_by_walking(&root.join("STORED").join("..").join("stored")).unwrap(),
+                root.join("Stored").canonicalize().unwrap()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walking_refuses_a_link_it_cannot_follow() {
+        let tmp = std::env::temp_dir().join(format!("fastf-walk-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("real")).unwrap();
+        std::os::unix::fs::symlink(tmp.join("real"), tmp.join("link")).unwrap();
+        let root = tmp.canonicalize().unwrap();
+        assert!(canonical_by_walking(&root.join("real")).is_ok());
+        let refused = canonical_by_walking(&root.join("link")).unwrap_err();
+        assert!(refused.to_string().contains("is a link"), "{refused}");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

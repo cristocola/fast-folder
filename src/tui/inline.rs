@@ -126,7 +126,7 @@ impl Inline {
             .unwrap_or(80)
             .max(20);
         let inline = Self {
-            theme: Theme::detect_with(theme_preference().as_deref()),
+            theme: Theme::detect_with(theme_preference().as_deref()).without_canvas(),
             height,
             columns,
             open: true,
@@ -562,6 +562,16 @@ mod tests {
             "truecolor first, then bold, then a reset"
         );
         assert_eq!(foreground(Color::Indexed(9)), "38;5;9");
+    }
+
+    /// The prompts are rows in the shell, on whatever background it has: a
+    /// palette that paints a canvas in the app gives its text colour back to
+    /// the terminal here, or Doom's light grey vanishes on a light terminal.
+    #[test]
+    fn a_prompt_writes_its_text_in_the_terminals_own_colour() {
+        let theme = crate::tui::theme::Theme::doom_one().without_canvas();
+        assert_eq!(paint_span("typed", theme.text()), "\x1b[39mtyped\x1b[0m");
+        assert!(paint_span("id", theme.accent()).contains("38;2;81;175;239"));
     }
 
     #[test]

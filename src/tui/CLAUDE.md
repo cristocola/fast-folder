@@ -12,11 +12,23 @@ screen. The root `CLAUDE.md` has the layering rule and the module list,
 A command centre, not a demo. **Muted and cool, minimal and sophisticated,
 robust as a rock.** The rules, in the order they matter:
 
-- The terminal's own text colour carries the content. Slate grey recedes. One
+- The text colour carries the content (the terminal's own, or the painted
+  palette's, never a decoration). Slate grey recedes. One
   steel-blue accent says what has focus. Green, amber and red appear only where
-  they *mean* success, a warning, a failure — never as decoration. In truecolor
-  (`Theme::rich`) every colour is desaturated; in ANSI the same roles map to
-  the plain sixteen, used sparingly. No magenta, no rainbow tags.
+  they *mean* success, a warning, a failure — never as decoration. In `rich`
+  every colour is desaturated; in ANSI the same roles map to the plain
+  sixteen, used sparingly. No magenta, no rainbow tags — in those two.
+- **The default is Doom One** (`Theme::doom_one`), the maintainer's choice:
+  Doom Emacs's palette as it is, magenta and all, on its own painted
+  background. The roles and the restraint are the same — one accent for focus,
+  the meaning colours only where they mean something — but the colours are
+  Doom's, so do not "mute" them. It is the one palette with a **canvas**:
+  `view::view` draws, then `paint_canvas` gives every cell still on the
+  terminal's own background or text colour the theme's, in one pass, so a
+  `Clear` or a gap can never leave a hole. A dialog blanks its box with
+  `view::clear`, which lays the theme's `surface` (Doom's `bg-alt`) under it;
+  never call `render_widget(Clear, …)` for a dialog directly. The command
+  line's inline prompts paint no background: they are rows in the shell.
 - Bold is rare — the app's name, the selected row — so it keeps its weight.
 - Glyphs are few and each has one job (`▸` the cursor, `✓` a mark, `●` a tag,
   `⚠` a warning, `⌕` search). No decorative symbols in titles or counters.
@@ -37,8 +49,8 @@ robust as a rock.** The rules, in the order they matter:
 **The theme is a pure function of an `Env`** (`theme::choose`): `FASTF_THEME`,
 then `NO_COLOR`/`TERM=dumb`, then the config's `theme`, then what the terminal
 announces (`COLORTERM`, a truecolor `TERM`/`TERM_PROGRAM`, Windows Terminal),
-else ANSI. On Windows a host that announces no emulator gets the ASCII alphabet;
-`FASTF_ASCII=0` forces Unicode. A theme set on the settings screen lands through
+which picks Doom One, else ANSI. On Windows a host that announces no emulator
+gets the ASCII alphabet; `FASTF_ASCII=0` forces Unicode. A theme set on the settings screen lands through
 `Effect::Retheme` → `Msg::Themed`, so `update` reads no environment.
 
 **Glyphs come from `Glyphs`** wherever a theme is in reach, so the ASCII alphabet
@@ -87,6 +99,12 @@ stderr**, so `fastf > log` still opens the app and stdout keeps choosing output
 format. `Runtime::init` calls `tty::mark_interactive_surface` and installs a
 screen-restoring panic hook for the **main thread only**; `spawn_worker` turns a
 worker's panic into a warning rather than tearing down a live session.
+
+**A frame is one write.** The backend is a `BufWriter` over stderr, because
+ratatui queues a write per changed cell and on Windows each write is a round
+trip through the console host — 45 ms first frames and 117 ms fade frames in
+Windows Terminal, under 1 ms and 7 ms buffered. `Terminal::draw` and `execute!`
+flush, so nothing is left waiting.
 
 **Two modules take the terminal** (`tests/layering.rs`): `runtime.rs` the
 alternate screen, `inline.rs` a few rows at the cursor for a command-line prompt.
@@ -693,8 +711,9 @@ asserts the frame it makes at a chosen millisecond.
 
 **A pulse is a background**, because every cell sets its own foreground, which
 would override a row's. **It fades rather than flashes**, because a background
-snapping on and off looks like a broken terminal: `motion::wash` eases
-(`ease_out`, `mix`) from `pulse` toward `Theme.ground` over `PULSE_MS`. The sixteen
+snapping on and off looks like a broken terminal: on an RGB palette
+(`ThemeKind::is_rgb` — doom-one, rich) `motion::wash` eases (`ease_out`, `mix`)
+from `pulse` toward `Theme.ground` over `PULSE_MS`. The sixteen
 ANSI colours have no ramp, so there the wash holds for `ANSI_HOLD` and lets go;
 mono never moves. One `wash` serves the table's rows, the pane's rows and the
 status line.

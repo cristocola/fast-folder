@@ -176,7 +176,7 @@ pub fn base_row(base: &Path, is_default: bool) -> String {
     format!(
         "{}  ({}){}",
         library::base_label(base),
-        base.display(),
+        crate::util::paths::display_path(base),
         if is_default { "  (default)" } else { "" }
     )
 }

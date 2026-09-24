@@ -43,7 +43,8 @@ What each suite guards — the intent, not the case list:
   `FASTF_SHOT_LONG=1` for folder names of ninety characters;
   `FASTF_SHOT_ARGS="copy shared"` for a subcommand's inline prompt,
   `FASTF_SHOT_SIZE=80x24`, `FASTF_SHOT_SVG=<path>` for the README's SVG — sandbox
-  only). **Look at every screen this way before writing its snapshot.**
+  only — drawn in `FASTF_SHOT_THEME`, default `doom-one`). **Look at every
+  screen this way before writing its snapshot.**
 - `relaunch.rs` (unix) — when fastf opens a terminal for itself and, mostly, when
   it must not (a pipe, a redirect, ssh, no display, either off switch, the loop
   guard). **Every test pins `config set terminal <recorder>` first**, so no run can

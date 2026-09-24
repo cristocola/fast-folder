@@ -161,7 +161,7 @@ that finds anything:
    prefix, and above the prefix tier, because otherwise `4` matches everything
    from `ID0040` to `ID0049`.
 3. **ID prefix** — `ID004` finds `ID0047` when nothing else starts that way.
-4. **Name substring**, case-insensitive — `lullaby`.
+4. **Name substring**, case-insensitive, with a space, `_` and `-` all the same separator — `lullaby`, or `"my crate"` for `2026-09-24_My_Crate_ID0042`.
 
 A query that matches several projects is ambiguous; what happens then depends
 on where you typed it — see [Ambiguous queries](#ambiguous-queries).

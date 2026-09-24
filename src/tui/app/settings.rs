@@ -375,7 +375,12 @@ pub fn raw_value(settings: &Settings, key: &str) -> String {
         "base-dir" => settings.base_dir.clone(),
         "editor" => settings.editor.clone(),
         "terminal" => settings.terminal.clone(),
-        "theme" => or(&settings.theme, "auto"),
+        // The canonical name, so a hand-written `doom` or `Doom One` is the
+        // row's own `doom-one` and Enter moves on from it.
+        "theme" => crate::tui::theme::ThemeChoice::parse(&settings.theme)
+            .unwrap_or_default()
+            .name()
+            .to_string(),
         // Read the way the app reads it, so a hand-written `true` or `0` is
         // still one of the row's two answers — and the cycle has somewhere
         // to go from it.
@@ -520,7 +525,7 @@ pub fn rows(s: &Settings) -> Vec<Row> {
         Row {
             label: "Theme",
             value: or(&s.theme, "auto (follows the terminal)"),
-            hint: "auto follows what the terminal announces; mono, ansi or rich force a palette — FASTF_THEME overrides for one run",
+            hint: "auto is Doom One where the terminal draws 24-bit colour, else ansi; doom-one, rich, ansi or mono force one — FASTF_THEME overrides for one run",
             kind: Kind::Choice("theme", THEMES),
         },
         Row {

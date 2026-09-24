@@ -67,9 +67,8 @@ pub fn from_folder(
         bail!("template '{slug}' already exists — re-run with --force to overwrite");
     }
 
-    let source = source
-        .canonicalize()
-        .with_context(|| format!("resolving {}", source.display()))?;
+    let source =
+        paths::canonical(source).with_context(|| format!("resolving {}", source.display()))?;
     let mut plan = ImportPlan::default();
     plan.structure = scan_dir(&source, &source, bundle_assets, &mut plan)?;
     materialize(plan, &source, slug, force)

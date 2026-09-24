@@ -36,7 +36,7 @@ pub enum Resolution {
 /// Resolve a query against the library, reporting the candidates as data.
 ///
 /// Tiers, first non-empty wins: exact ID → **numeric** → ID prefix →
-/// case-insensitive name substring.
+/// name substring, ignoring case and which separator a name was written with.
 ///
 /// The numeric tier is what makes `fastf open 37` find `ID0037`: an all-digits
 /// query is read as an ID *number* and compared with [`Project::number`], so
@@ -65,12 +65,12 @@ pub fn resolve_matches(cfg: &Config, query: &str) -> Resolution {
             .filter(|p| p.id.starts_with(query))
             .collect();
     }
-    // 4. Name substring (case-insensitive).
+    // 4. Name substring (case-insensitive, any separator for any other).
     if matches.is_empty() {
-        let q = query.to_lowercase();
+        let q = loose_name(query);
         matches = projects
             .iter()
-            .filter(|p| p.name.to_lowercase().contains(&q))
+            .filter(|p| loose_name(&p.name).contains(&q))
             .collect();
     }
 
@@ -79,6 +79,16 @@ pub fn resolve_matches(cfg: &Config, query: &str) -> Resolution {
         1 => Resolution::One(Box::new(matches[0].clone())),
         _ => Resolution::Many(matches.into_iter().cloned().collect()),
     }
+}
+
+/// A name as a query compares it: lowercase, with a space, `_` or `-` all the
+/// same separator — a transform wrote `Cloud_One` for the `Cloud One` that was
+/// typed, and typing it again has to find it.
+fn loose_name(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|c| if c == ' ' || c == '-' { '_' } else { c })
+        .collect()
 }
 
 /// An all-ASCII-digits query as a number, or `None` when it is not one — which

@@ -35,10 +35,8 @@ pub fn run(args: MoveArgs) -> Result<()> {
     let cfg = Config::load()?;
     let project = library::resolve(&cfg, &args.query)?;
 
-    let current = project
-        .base
-        .canonicalize()
-        .unwrap_or_else(|_| project.base.clone());
+    let current =
+        crate::util::paths::canonical(&project.base).unwrap_or_else(|_| project.base.clone());
     // Mounted configured bases the project could move to. Probed rather than
     // `is_dir`-ed: a dead network mount answers `is_dir()` only after the
     // operating system's own timeout, and nothing on screen says why.
@@ -63,7 +61,7 @@ pub fn run(args: MoveArgs) -> Result<()> {
     let target = match &args.base {
         Some(raw) => {
             let wanted = PathBuf::from(raw);
-            let wanted = wanted.canonicalize().unwrap_or(wanted);
+            let wanted = crate::util::paths::canonical(&wanted).unwrap_or(wanted);
             if wanted == current {
                 anyhow::bail!(
                     "'{}' is already in base {}",

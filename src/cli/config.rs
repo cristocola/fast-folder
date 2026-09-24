@@ -313,7 +313,10 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                         ) => "the terminal's sixteen colours",
                         crate::tui::theme::ThemeChoice::Kind(
                             crate::tui::theme::ThemeKind::Rich,
-                        ) => "24-bit colour",
+                        ) => "24-bit colour, muted, on the terminal's own background",
+                        crate::tui::theme::ThemeChoice::Kind(
+                            crate::tui::theme::ThemeKind::DoomOne,
+                        ) => "Doom One: 24-bit colour on its own dark background",
                     }
                 )
             }

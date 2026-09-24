@@ -19,6 +19,45 @@ use crate::tui::app::App;
 use crate::tui::layout;
 
 pub fn view(app: &App, frame: &mut Frame) {
+    draw(app, frame);
+    paint_canvas(frame.buffer_mut(), &app.theme);
+}
+
+/// **A theme with a canvas paints it here, once, after everything is drawn.**
+/// Every cell still on the terminal's own background gets the canvas, and every
+/// cell still in the terminal's own text colour gets the theme's — so a
+/// `Clear` under a dialog, a gap between widgets or a widget added later can
+/// never leave a hole in it. Only Doom One has a canvas; the other palettes
+/// leave the terminal's colours alone and this does nothing.
+pub fn paint_canvas(buffer: &mut ratatui::buffer::Buffer, theme: &crate::tui::theme::Theme) {
+    use ratatui::style::Color;
+    if theme.canvas == Color::Reset {
+        return;
+    }
+    for cell in buffer.content.iter_mut() {
+        if cell.bg == Color::Reset {
+            cell.bg = theme.canvas;
+        }
+        if cell.fg == Color::Reset {
+            cell.fg = theme.text;
+        }
+    }
+}
+
+/// Blank `area` for a dialog: `Clear`, then the theme's `surface` under it,
+/// so a dialog on a painted canvas sits on a shade of its own (Doom's popups
+/// wear `bg-alt`). Where there is no canvas the terminal's background stays.
+pub(crate) fn clear(frame: &mut Frame, area: Rect, theme: &crate::tui::theme::Theme) {
+    frame.render_widget(ratatui::widgets::Clear, area);
+    if theme.surface != ratatui::style::Color::Reset {
+        frame.render_widget(
+            ratatui::widgets::Block::default().style(Style::default().bg(theme.surface)),
+            area,
+        );
+    }
+}
+
+fn draw(app: &App, frame: &mut Frame) {
     let area = frame.area();
     if layout::too_small(area) {
         render_too_small(app, frame, area);

@@ -51,10 +51,11 @@ fastf config set editor nvim
 fastf config set terminal kitty
 fastf config set terminal none                   # never relaunch (fastf term still works)
 
-# The app's palette. auto follows what the terminal announces; pin one for a
-# terminal that announces nothing (an ssh session forwards no COLORTERM) or
-# lies. NO_COLOR still wins; FASTF_THEME overrides for one run.
-fastf config set theme rich                      # auto | mono | ansi | rich
+# The app's palette. auto is Doom One wherever the terminal announces 24-bit
+# colour, and the sixteen ANSI colours elsewhere; pin one for a terminal that
+# announces nothing (an ssh session forwards no COLORTERM) or lies. NO_COLOR
+# still wins; FASTF_THEME overrides for one run.
+fastf config set theme doom-one                  # auto | doom-one | rich | ansi | mono
 
 # Whether the app moves. A row a verb just changed lights up, and a message
 # dims on its way out; off makes every frame a hard cut. A palette with no
@@ -107,11 +108,11 @@ questions about a different one. Fix the file, or delete it to start over.
 |---|---|
 | `FASTF_INSTALL_DIR` | Overrides where fastf keeps config, templates, and its counter |
 | `FASTF_NO_RELAUNCH` | Set to anything to stop fastf ever opening a terminal for itself |
-| `FASTF_THEME` | `mono`, `ansi` or `rich`: the app's palette for this run, above the `theme` setting and `NO_COLOR` |
+| `FASTF_THEME` | `doom-one`, `rich`, `ansi` or `mono`: the app's palette for this run, above the `theme` setting and `NO_COLOR` |
 | `FASTF_ASCII` | `1` draws the app with plain ASCII glyphs; `0` keeps the Unicode ones even in the legacy Windows console |
 | `FASTF_MOTION` | `0` stops the app moving for this run, above the `motion` setting |
 | `NO_COLOR` | Set to anything non-empty: no colour anywhere, in the app and on the command line |
-| `COLORTERM` | `truecolor` or `24bit` picks the muted RGB palette; a `TERM`/`TERM_PROGRAM` naming kitty, foot, Alacritty, WezTerm, Ghostty, iTerm2, VS Code or Windows Terminal does the same |
+| `COLORTERM` | `truecolor` or `24bit` lets `auto` pick Doom One; a `TERM`/`TERM_PROGRAM` naming kitty, foot, Alacritty, WezTerm, Ghostty, iTerm2, VS Code or Windows Terminal does the same |
 | `FASTF_PROJECT_PATH` | Set by fastf for a template's post-create commands: the new project's absolute path |
 | `TERMINAL` | Consulted when `terminal` is not configured |
 | `EDITOR` | Used when `editor` is not configured |

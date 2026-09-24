@@ -104,8 +104,9 @@ pub struct Config {
     #[serde(default)]
     pub terminal: String,
 
-    /// The guided app's palette: `auto` (follow what the terminal announces),
-    /// `mono`, `ansi` or `rich`. Empty = `auto`. `FASTF_THEME` overrides it
+    /// The guided app's palette: `auto` (follow what the terminal announces:
+    /// Doom One where it draws 24-bit colour), `doom-one`, `rich`, `ansi` or
+    /// `mono`. Empty = `auto`. `FASTF_THEME` overrides it
     /// for one session; `NO_COLOR` still wins over it. Parsed leniently — an
     /// unknown word here reads as `auto`, because a typo sitting in a config
     /// file must not stop every command — while `config set theme` refuses it.
@@ -297,7 +298,7 @@ impl Config {
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for c in candidates {
-            let norm = c.canonicalize().unwrap_or(c);
+            let norm = paths::canonical(&c).unwrap_or(c);
             if seen.insert(norm.clone()) {
                 out.push(norm);
             }
@@ -420,7 +421,7 @@ pub fn resolve_base_dir_input(raw: &str) -> Result<std::path::PathBuf> {
     // Stored canonical, rendered readable at the display sites. Keeping the
     // verbatim form is what preserves long-path support when this base is later
     // used for filesystem work.
-    Ok(expanded.canonicalize().unwrap_or(expanded))
+    Ok(paths::canonical(&expanded).unwrap_or(expanded))
 }
 
 /// First-run onboarding core: validate via [`resolve_base_dir_input`] and

@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::app::App;
@@ -132,7 +132,7 @@ pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(" Ctrl-C cancels", theme.dim())),
     ];
     let area = centered_fixed(area, width, lines.len() as u16 + 2);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let block = frame_block(app, " moving ".to_string(), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -203,7 +203,7 @@ pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
     // guessed at the widest case left blank rows under a two-line batch and
     // cut the cancel line off the tall one.
     let area = centered_fixed(area, width, lines.len() as u16 + 2);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let block = frame_block(app, format!(" {} ", job.kind.verb()), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -221,7 +221,7 @@ fn render_palette(app: &App, palette: &PaletteState, frame: &mut Frame, area: Re
     let theme = &app.theme;
     let g = theme.glyphs;
     let area = centered(area, 70, 70);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let block = frame_block(app, " commands ".to_string(), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -299,7 +299,7 @@ fn render_pick(app: &App, pick: &PickState, frame: &mut Frame, area: Rect) -> Po
     let g = theme.glyphs;
     let area = crate::tui::layout::pick_box(area, pick.ranked.len());
 
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let block = frame_block(app, format!(" {} ", pick.title), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -356,7 +356,7 @@ fn render_actions(
     let g = theme.glyphs;
     let entries = crate::tui::app::actions::action_entries(app);
     let area = crate::tui::layout::actions_box(area, entries.len());
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let project = app.library.selected();
     // Over marks the verbs act on every one of them, and the title says so.
     let marked = app.library.marks.len();
@@ -462,7 +462,7 @@ fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: R
     // folders names all six.
     let (width, prompt_rows) = question_size(area, &prompt.title, 62, 6);
     let area = centered_fixed(area, width, prompt_rows + 6);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let block = frame_block(app, format!(" {} ", verb), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -542,7 +542,7 @@ fn render_note(
     let g = theme.glyphs;
     let rows = (note.area.lines().len() as u16).clamp(3, 8);
     let area = centered_fixed(area, 62, rows + 5);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let title = if note.count > 1 {
         format!(" note {} {} projects ", g.sep, note.count)
     } else {
@@ -617,7 +617,7 @@ fn render_confirm(app: &App, confirm: &Confirm, frame: &mut Frame, area: Rect) -
     // Sized to its question, which names every folder it is about.
     let (width, rows) = question_size(area, &confirm.prompt, 64, 5);
     let area = centered_fixed(area, width, rows + 5);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let block = frame_block(app, " confirm ".to_string(), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -650,7 +650,7 @@ fn render_multi_pick(
     let g = theme.glyphs;
     let height = (pick.items.len() as u16 + 4).clamp(5, 16);
     let area = centered_fixed(area, 44, height);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let block = frame_block(app, format!(" {} ", pick.title), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -737,7 +737,7 @@ pub(crate) fn preview_max_scroll(app: &App, flow: &Flow) -> usize {
 fn render_flow(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<Position> {
     let theme = &app.theme;
     let area = flow_rect(area, flow);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let title = match flow.step {
         Step::Form => format!(" {} ", flow.kind.title()),
         Step::Preview => format!(" {} {} preview ", flow.kind.title(), theme.glyphs.sep),
@@ -1123,7 +1123,7 @@ fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Fram
     let theme = &app.theme;
     let g = theme.glyphs;
     let area = crate::tui::layout::help_box(area);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let block = frame_block(app, format!(" help {} {} ", g.sep, ctx.label()), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1295,7 +1295,7 @@ fn render_message(
 ) {
     let theme = &app.theme;
     let area = crate::tui::layout::message_box(area);
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let style = match level {
         MessageLevel::Info => theme.accent(),
         MessageLevel::Warn => theme.warn(),

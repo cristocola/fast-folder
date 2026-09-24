@@ -1811,3 +1811,45 @@ fn every_help_text_sits_at_the_margin() {
         }
     }
 }
+
+/// **Every verb works on a drive Windows cannot name.** On an rclone or other
+/// WinFsp mount, `Path::canonicalize` fails for every path, and every mutation
+/// canonicalizes its base, so a project there could be created and listed but
+/// not changed — `resolving project base S:\: The volume does not contain a
+/// recognized file system`. The `paths:unnamed-volume` failpoint sends every
+/// canonicalization down the walking path `util::paths::canonical` falls back
+/// to there, on any platform, so this is the whole library living on such a
+/// drive. Debug-only, like every failpoint.
+#[cfg(debug_assertions)]
+#[test]
+fn every_verb_works_where_windows_cannot_name_the_volume() {
+    let sb = Sandbox::new();
+    let cloud = sb.with_bases(&["cloud"]).remove(0);
+    sb.plant_project(&sb.base, "proj", "ID0001");
+    let walking = |args: &[&str]| {
+        let out = sb
+            .command()
+            .args(args)
+            .env("FASTF_FAULT", "paths:unnamed-volume")
+            .output()
+            .expect("running fastf");
+        assert!(
+            out.status.success(),
+            "`fastf {}` failed where the volume has no name:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    walking(&["todo", "add", "ID0001", "check the render"]);
+    walking(&["tag", "add", "ID0001", "client"]);
+    walking(&["note", "add", "ID0001", "first note"]);
+    walking(&["rename", "ID0001", "renamed", "--yes"]);
+    assert!(sb.base.join("renamed").is_dir(), "the rename must land");
+    walking(&["move", "ID0001", &cloud.display().to_string(), "--yes"]);
+    let moved = fs::read_to_string(cloud.join("renamed").join("PROJECT_INFO.md"))
+        .expect("the move must land in the other base");
+    assert!(moved.contains("check the render") && moved.contains("first note"));
+    walking(&["delete", "ID0001", "--yes"]);
+    assert!(!cloud.join("renamed").exists(), "the delete must land");
+}

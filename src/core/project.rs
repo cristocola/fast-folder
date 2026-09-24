@@ -547,10 +547,8 @@ fn provision_project(
 
     crate::util::faults::check("create:before-counter-save")?;
 
-    let abs_path = plan
-        .root_path
-        .canonicalize()
-        .unwrap_or_else(|_| plan.root_path.clone());
+    let abs_path =
+        crate::util::paths::canonical(&plan.root_path).unwrap_or_else(|_| plan.root_path.clone());
 
     // Persist the new high-water mark: into the base this project landed in (so
     // every OS that mounts the drive sees it) and into this machine's data

@@ -178,7 +178,7 @@ pub struct Incomplete {
 pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
     let mut out = Vec::new();
     for configured in cfg.effective_bases() {
-        let Ok(base) = configured.canonicalize() else {
+        let Ok(base) = crate::util::paths::canonical(&configured) else {
             continue;
         };
         if crate::util::paths::require_real_directory(&base, "configured base").is_err() {
@@ -331,7 +331,7 @@ impl ReconcileReport {
 pub fn reconcile_unlocked(cfg: &Config) -> ReconcileReport {
     let mut report = ReconcileReport::default();
     for configured in cfg.effective_bases() {
-        let base = match configured.canonicalize() {
+        let base = match crate::util::paths::canonical(&configured) {
             Ok(base)
                 if crate::util::paths::require_real_directory(&base, "configured base").is_ok() =>
             {
@@ -946,11 +946,10 @@ fn finish_cleanup_pending(
 }
 
 fn configured_real_base(cfg: &Config, wanted: &Path) -> Result<PathBuf> {
-    let wanted = wanted
-        .canonicalize()
+    let wanted = crate::util::paths::canonical(wanted)
         .with_context(|| format!("resolving configured base {}", wanted.display()))?;
     for candidate in cfg.effective_bases() {
-        let Ok(candidate) = candidate.canonicalize() else {
+        let Ok(candidate) = crate::util::paths::canonical(&candidate) else {
             continue;
         };
         if candidate == wanted {

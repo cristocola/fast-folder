@@ -355,6 +355,39 @@ fn the_surfaces_do_not_write_templates_themselves() {
     );
 }
 
+/// **Paths are canonicalized through `util::paths::canonical`**, never
+/// `Path::canonicalize`. On Windows the std call fails for every path on a
+/// drive the mount manager does not know — an rclone or other WinFsp mount, a
+/// RAM disk — and one direct call left in a mutation is a verb that works
+/// everywhere except there. Test modules may compare against std's answer.
+#[test]
+fn every_canonicalization_goes_through_the_helper() {
+    let mut offenders = Vec::new();
+    for layer in ["cli", "core", "tui", "util"] {
+        for path in sources(layer) {
+            let name = path.file_name().unwrap();
+            if name == "tests.rs" || path.ends_with(Path::new("util").join("paths.rs")) {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            for (number, line) in text.lines().enumerate() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("mod tests") {
+                    break;
+                }
+                if !trimmed.starts_with("//") && trimmed.contains(".canonicalize()") {
+                    offenders.push(format!("{}:{}: {}", path.display(), number + 1, trimmed));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "call util::paths::canonical instead:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// **Environment mutation lives in exactly one place per binary.**
 ///
 /// `setenv` is not thread-safe at the libc level, so two mutexes over the same

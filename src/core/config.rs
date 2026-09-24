@@ -297,7 +297,7 @@ impl Config {
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for c in candidates {
-            let norm = c.canonicalize().unwrap_or(c);
+            let norm = paths::canonical(&c).unwrap_or(c);
             if seen.insert(norm.clone()) {
                 out.push(norm);
             }
@@ -420,7 +420,7 @@ pub fn resolve_base_dir_input(raw: &str) -> Result<std::path::PathBuf> {
     // Stored canonical, rendered readable at the display sites. Keeping the
     // verbatim form is what preserves long-path support when this base is later
     // used for filesystem work.
-    Ok(expanded.canonicalize().unwrap_or(expanded))
+    Ok(paths::canonical(&expanded).unwrap_or(expanded))
 }
 
 /// First-run onboarding core: validate via [`resolve_base_dir_input`] and

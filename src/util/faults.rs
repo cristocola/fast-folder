@@ -179,6 +179,9 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "copy:after-staging",
     "copy:after-verify",
     "template:mid-save",
+    // A decision, like `move:force-staged`: canonicalize every path the way a
+    // drive Windows cannot name forces (`util::paths::canonical`).
+    "paths:unnamed-volume",
 ];
 
 #[cfg(all(test, debug_assertions))]

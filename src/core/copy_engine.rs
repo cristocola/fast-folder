@@ -62,7 +62,7 @@ pub fn copy_project_configured(
 /// Returns the canonical destination *folder* — `destination/<the project's
 /// folder name>` — which is what gets published.
 pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) -> Result<PathBuf> {
-    let root = destination.canonicalize().with_context(|| {
+    let root = crate::util::paths::canonical(destination).with_context(|| {
         format!(
             "resolving the copy destination {}",
             crate::util::paths::display_path(destination)
@@ -70,10 +70,8 @@ pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) 
     })?;
     crate::util::paths::require_real_directory(&root, "copy destination")?;
 
-    let source = project
-        .path
-        .canonicalize()
-        .unwrap_or_else(|_| project.path.clone());
+    let source =
+        crate::util::paths::canonical(&project.path).unwrap_or_else(|_| project.path.clone());
     if root == source || root.starts_with(&source) {
         anyhow::bail!(
             "'{}' is inside the project being copied",
@@ -82,7 +80,7 @@ pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) 
     }
 
     for base in cfg.effective_bases() {
-        let Ok(base) = base.canonicalize() else {
+        let Ok(base) = crate::util::paths::canonical(&base) else {
             continue;
         };
         if root == base || root.starts_with(&base) {
@@ -127,9 +125,7 @@ fn copy_unlocked(
         .parent()
         .map(Path::to_path_buf)
         .context("the copy destination has no parent")?;
-    let source_base = project
-        .base
-        .canonicalize()
+    let source_base = crate::util::paths::canonical(&project.base)
         .with_context(|| format!("resolving project base {}", project.base.display()))?;
     let folder = project
         .path

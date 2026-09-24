@@ -18,14 +18,12 @@ use std::fs;
 /// child of a currently configured base, and its real `PROJECT_INFO.md` must
 /// carry the same ID as the candidate supplied by the caller.
 pub fn revalidate_project(cfg: &Config, candidate: &Project) -> Result<Project> {
-    let candidate_base = candidate
-        .base
-        .canonicalize()
+    let candidate_base = crate::util::paths::canonical(&candidate.base)
         .with_context(|| format!("resolving project base {}", candidate.base.display()))?;
     let configured = cfg
         .effective_bases()
         .into_iter()
-        .filter_map(|base| base.canonicalize().ok())
+        .filter_map(|base| crate::util::paths::canonical(&base).ok())
         .find(|base| *base == candidate_base)
         .ok_or_else(|| {
             anyhow::anyhow!(
@@ -79,9 +77,7 @@ pub fn revalidate_for_read(project: &Project) -> Result<()> {
 /// The compatibility-library boundary does not own a [`Config`], but it still
 /// refuses stale, forged, linked, or non-child project records.
 pub(crate) fn revalidate_recorded_project(candidate: &Project) -> Result<Project> {
-    let base = candidate
-        .base
-        .canonicalize()
+    let base = crate::util::paths::canonical(&candidate.base)
         .with_context(|| format!("resolving project base {}", candidate.base.display()))?;
     revalidate_project_in_base(candidate, &base)
 }
@@ -89,9 +85,7 @@ pub(crate) fn revalidate_recorded_project(candidate: &Project) -> Result<Project
 pub(crate) fn revalidate_project_in_base(candidate: &Project, base: &Path) -> Result<Project> {
     crate::util::paths::require_real_directory(base, "project base")?;
     crate::util::paths::require_real_directory(&candidate.path, "project source")?;
-    let path = candidate
-        .path
-        .canonicalize()
+    let path = crate::util::paths::canonical(&candidate.path)
         .with_context(|| format!("resolving project {}", candidate.path.display()))?;
     if path.parent() != Some(base) {
         anyhow::bail!(

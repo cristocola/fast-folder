@@ -74,13 +74,12 @@ pub fn move_project_configured_with_outcome(
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let cfg = Config::load()?;
     let project = revalidate_project(&cfg, project)?;
-    let wanted = new_base
-        .canonicalize()
+    let wanted = crate::util::paths::canonical(new_base)
         .with_context(|| format!("resolving target base {}", new_base.display()))?;
     let target = cfg
         .effective_bases()
         .into_iter()
-        .filter_map(|base| base.canonicalize().ok())
+        .filter_map(|base| crate::util::paths::canonical(&base).ok())
         .find(|base| *base == wanted)
         .ok_or_else(|| {
             anyhow::anyhow!(
@@ -100,18 +99,15 @@ pub fn move_project_staged_for_test(project: &Project, new_base: &Path) -> Resul
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let cfg = Config::load()?;
     let project = revalidate_project(&cfg, project)?;
-    let wanted = new_base
-        .canonicalize()
+    let wanted = crate::util::paths::canonical(new_base)
         .with_context(|| format!("resolving target base {}", new_base.display()))?;
     let target = cfg
         .effective_bases()
         .into_iter()
-        .filter_map(|base| base.canonicalize().ok())
+        .filter_map(|base| crate::util::paths::canonical(&base).ok())
         .find(|base| *base == wanted)
         .ok_or_else(|| anyhow::anyhow!("'{}' is not a configured base", new_base.display()))?;
-    let old_base = project
-        .base
-        .canonicalize()
+    let old_base = crate::util::paths::canonical(&project.base)
         .with_context(|| format!("resolving source base {}", project.base.display()))?;
     if target == old_base {
         anyhow::bail!("move target is the source base");
@@ -137,12 +133,9 @@ fn move_project_unlocked(
     cancel: &AtomicBool,
 ) -> Result<MoveOutcome> {
     crate::util::paths::require_real_directory(new_base, "target base")?;
-    let new_base = new_base
-        .canonicalize()
+    let new_base = crate::util::paths::canonical(new_base)
         .with_context(|| format!("resolving target base {}", new_base.display()))?;
-    let old_base = project
-        .base
-        .canonicalize()
+    let old_base = crate::util::paths::canonical(&project.base)
         .with_context(|| format!("resolving source base {}", project.base.display()))?;
     if new_base == old_base {
         anyhow::bail!(
@@ -249,9 +242,7 @@ pub(crate) fn staged_copy_verify_commit(
 ) -> Result<MoveOutcome> {
     use std::sync::atomic::Ordering;
 
-    let old_base = project
-        .base
-        .canonicalize()
+    let old_base = crate::util::paths::canonical(&project.base)
         .with_context(|| format!("resolving source base {}", project.base.display()))?;
     let folder = project
         .path
@@ -442,9 +433,7 @@ fn finish_move_bookkeeping(
 
 fn moved_view(project: &Project, new_base: &Path, new_path: &Path) -> Project {
     let mut moved = project.clone();
-    moved.path = new_path
-        .canonicalize()
-        .unwrap_or_else(|_| new_path.to_path_buf());
+    moved.path = crate::util::paths::canonical(new_path).unwrap_or_else(|_| new_path.to_path_buf());
     moved.base = new_base.to_path_buf();
     moved
 }

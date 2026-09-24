@@ -160,8 +160,7 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Vec<No
     // print_path: the absolute path on its own line so shell pipelines can use
     // it. Last, so noisy command output never trails it.
     if actions.print_path {
-        let canonical = project_path
-            .canonicalize()
+        let canonical = crate::util::paths::canonical(project_path)
             .unwrap_or_else(|_| project_path.to_path_buf());
         notes.push(Note::Path(canonical.display().to_string()));
     }

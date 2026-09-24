@@ -109,9 +109,7 @@ pub fn run(args: NewArgs) -> Result<()> {
     render::print_success(&plan, &tmpl);
 
     if !args.no_post {
-        let root = plan
-            .root_path
-            .canonicalize()
+        let root = crate::util::paths::canonical(&plan.root_path)
             .unwrap_or_else(|_| plan.root_path.clone());
         let notes = project::run_post_create(&root, &tmpl, &config);
         crate::cli::render::print_post_create_notes(&notes);
@@ -120,9 +118,7 @@ pub fn run(args: NewArgs) -> Result<()> {
     // "Open project folder?" prompt — skip in non-interactive / headless modes
     // and when `reveal` would already run as a post-create action (avoid double-open).
     if should_prompt_open(&args, &tmpl, &config) {
-        let abs_path = plan
-            .root_path
-            .canonicalize()
+        let abs_path = crate::util::paths::canonical(&plan.root_path)
             .unwrap_or_else(|_| plan.root_path.clone());
         println!();
         if let Err(e) = prompt_and_reveal(&abs_path) {

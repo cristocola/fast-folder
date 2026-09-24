@@ -330,7 +330,7 @@ pub fn stub_template() -> Template {
 pub fn run(args: RegisterArgs) -> Result<()> {
     // Resolve template + interactive var prompts up front (the engine itself
     // never prompts). Without a template, use the registered stub.
-    let canonical = args.path.canonicalize().with_context(|| {
+    let canonical = crate::util::paths::canonical(&args.path).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
             args.path.display()
@@ -478,7 +478,7 @@ pub struct RecursiveArgs {
 /// variable values, so a template with required variables needs them passed as
 /// `--slug=value` on the command line.
 pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
-    let base = args.base.canonicalize().with_context(|| {
+    let base = crate::util::paths::canonical(&args.base).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
             args.base.display()

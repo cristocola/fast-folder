@@ -77,14 +77,10 @@ pub fn delete_project_configured(project: &Project) -> Result<()> {
 }
 
 pub(crate) fn delete_project_inner(project: &Project) -> Result<()> {
-    let path = project
-        .path
-        .canonicalize()
-        .unwrap_or_else(|_| project.path.clone());
-    let base = project
-        .base
-        .canonicalize()
-        .unwrap_or_else(|_| project.base.clone());
+    let path =
+        crate::util::paths::canonical(&project.path).unwrap_or_else(|_| project.path.clone());
+    let base =
+        crate::util::paths::canonical(&project.base).unwrap_or_else(|_| project.base.clone());
     if path.parent() != Some(base.as_path()) {
         anyhow::bail!(
             "refusing to delete: {} is not a direct child of its base {}",
@@ -180,10 +176,8 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
         anyhow::bail!("'{}' is already the folder's name", sanitized);
     }
 
-    let base = project
-        .base
-        .canonicalize()
-        .unwrap_or_else(|_| project.base.clone());
+    let base =
+        crate::util::paths::canonical(&project.base).unwrap_or_else(|_| project.base.clone());
     let new_path = base.join(&sanitized);
 
     // A rename that only changes capitalisation is legitimate — and common, when
@@ -237,7 +231,7 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
     }
 
     let mut renamed = project.clone();
-    renamed.path = new_path.canonicalize().unwrap_or(new_path);
+    renamed.path = crate::util::paths::canonical(&new_path).unwrap_or(new_path);
     renamed.name = sanitized.clone();
     renamed.base = base.clone();
 
@@ -263,10 +257,8 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
 /// Drop a project's entry from its base cache, best-effort (mirrors the
 /// old-side bookkeeping of a completed move).
 pub(crate) fn remove_from_base_cache(project: &Project) {
-    let base = project
-        .base
-        .canonicalize()
-        .unwrap_or_else(|_| project.base.clone());
+    let base =
+        crate::util::paths::canonical(&project.base).unwrap_or_else(|_| project.base.clone());
     let dir = project
         .path
         .strip_prefix(&base)

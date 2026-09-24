@@ -393,8 +393,7 @@ fn existing_directory(
             format!("not a folder: {}", paths::display_path(path)),
         ));
     }
-    path.canonicalize()
-        .map_err(|error| PreviewRefusal::on(field, format!("{error}")))
+    paths::canonical(path).map_err(|error| PreviewRefusal::on(field, format!("{error}")))
 }
 
 fn template_card(t: &template::Template) -> TemplateCard {

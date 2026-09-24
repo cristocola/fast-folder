@@ -8,7 +8,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::tui::app::App;
 use crate::tui::app::settings::{Editing, SettingsState};
@@ -78,7 +78,7 @@ pub(crate) fn frame_parts(
     frame: &mut Frame,
     area: Rect,
 ) -> Option<(Rect, Rect, Rect)> {
-    frame.render_widget(Clear, area);
+    super::clear(frame, area, &app.theme);
     let outer = block(app, title);
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
@@ -747,7 +747,7 @@ pub fn render_settings(
     // text is, the footer is a fixed row that nothing can push off the end,
     // and the list stays whole underneath so you can watch it narrow.
     if matches!(state.editing, Some(Editing::Filter)) {
-        frame.render_widget(Clear, footer);
+        super::clear(frame, footer, &app.theme);
         let caret = state.filter.render_line(
             footer,
             frame.buffer_mut(),
@@ -823,7 +823,7 @@ fn render_setting_editor(
         Editing::Filter => None,
         Editing::Value { label, input, .. } => {
             let line = Rect::new(body.x, body.y + row, body.width, 1);
-            frame.render_widget(Clear, line);
+            super::clear(frame, line, &app.theme);
             input.render_line(
                 line,
                 frame.buffer_mut(),
@@ -844,7 +844,7 @@ fn render_setting_editor(
                 crate::tui::layout::box_at_row(body, row, area.lines().len() as u16 + 2, 4);
             // The whole band, not just the box: half a label showing past the
             // edge of an editor reads as a drawing fault.
-            frame.render_widget(Clear, box_area);
+            super::clear(frame, box_area, &app.theme);
             let outer = block(app, " one base per line ".to_string());
             let inner = outer.inner(box_area);
             frame.render_widget(outer, box_area);

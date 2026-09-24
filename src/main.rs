@@ -655,7 +655,7 @@ enum ConfigAction {
             bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             terminal                    Terminal emulator to open when launched without one (default: $TERMINAL, else probe; \"none\" disables)\n  \
-            theme                       The app's palette: auto, mono, ansi or rich (default: auto — follow the terminal)\n  \
+            theme                       The app's palette: auto, doom-one, rich, ansi or mono (default: auto — Doom One where the terminal draws 24-bit colour)\n  \
             motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \
             date-format                 strftime format for the {date} token (default: %Y-%m-%d)\n  \

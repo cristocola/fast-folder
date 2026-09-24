@@ -12,8 +12,24 @@ use ratatui::style::Color as RColor;
 const CELL_W: f32 = 8.4;
 const CELL_H: f32 = 18.0;
 const FONT_SIZE: u32 = 14;
+/// The page under a theme that leaves the terminal's own colours: a dark
+/// terminal's. A theme with a canvas brings its own (`page`).
 const FG: &str = "#c9ced4";
 const BG: &str = "#14181e";
+
+/// The page's text and background: the theme's own where it paints a canvas,
+/// so the margin around the frame is the frame's colour, else a dark
+/// terminal's.
+fn page(theme: &Theme) -> (String, String) {
+    let hex = |c: RColor| match c {
+        RColor::Rgb(r, g, b) => Some(format!("#{r:02x}{g:02x}{b:02x}")),
+        _ => None,
+    };
+    match (hex(theme.text), hex(theme.canvas)) {
+        (Some(fg), Some(bg)) => (fg, bg),
+        _ => (FG.to_string(), BG.to_string()),
+    }
+}
 
 /// One run of same-styled cells on a row.
 struct Run {
@@ -29,12 +45,13 @@ pub(crate) fn render(screen: &vt100::Screen, theme: &Theme) -> String {
     let (rows, cols) = screen.size();
     let width = f32::from(cols) * CELL_W + 16.0;
     let height = f32::from(rows) * CELL_H + 16.0;
+    let (page_fg, page_bg) = page(theme);
     let mut out = String::new();
     out.push_str(&format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width:.0}\" height=\"{height:.0}\" viewBox=\"0 0 {width:.0} {height:.0}\" font-family=\"ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace\" font-size=\"{FONT_SIZE}\">\n"
     ));
     out.push_str(&format!(
-        "<rect width=\"100%\" height=\"100%\" rx=\"6\" fill=\"{BG}\"/>\n"
+        "<rect width=\"100%\" height=\"100%\" rx=\"6\" fill=\"{page_bg}\"/>\n"
     ));
     for row in 0..rows {
         let mut runs: Vec<Run> = Vec::new();
@@ -46,10 +63,11 @@ pub(crate) fn render(screen: &vt100::Screen, theme: &Theme) -> String {
                 continue;
             }
             let text = cell.contents().to_string();
-            let mut fg = color(cell.fgcolor(), theme, true).unwrap_or_else(|| FG.to_string());
-            let mut bg = color(cell.bgcolor(), theme, false);
+            let mut fg = color(cell.fgcolor(), theme, true, &page_fg, &page_bg)
+                .unwrap_or_else(|| page_fg.clone());
+            let mut bg = color(cell.bgcolor(), theme, false, &page_fg, &page_bg);
             if cell.inverse() {
-                let swapped_fg = bg.clone().unwrap_or_else(|| BG.to_string());
+                let swapped_fg = bg.clone().unwrap_or_else(|| page_bg.clone());
                 bg = Some(fg.clone());
                 fg = swapped_fg;
             }
@@ -123,11 +141,17 @@ pub(crate) fn render(screen: &vt100::Screen, theme: &Theme) -> String {
 /// sixteen indexed colours are mapped onto the theme's roles so a frame taken
 /// under `FASTF_THEME=ansi` still looks like the app. `None` for a default
 /// background, which the page already has.
-fn color(color: vt100::Color, theme: &Theme, foreground: bool) -> Option<String> {
+fn color(
+    color: vt100::Color,
+    theme: &Theme,
+    foreground: bool,
+    page_fg: &str,
+    page_bg: &str,
+) -> Option<String> {
     let role = match color {
         vt100::Color::Rgb(r, g, b) => return Some(format!("#{r:02x}{g:02x}{b:02x}")),
-        vt100::Color::Default => return foreground.then(|| FG.to_string()),
-        vt100::Color::Idx(0) => return foreground.then(|| BG.to_string()),
+        vt100::Color::Default => return foreground.then(|| page_fg.to_string()),
+        vt100::Color::Idx(0) => return foreground.then(|| page_bg.to_string()),
         vt100::Color::Idx(1 | 9) => theme.bad,
         vt100::Color::Idx(2 | 10) => theme.good,
         vt100::Color::Idx(3 | 11) => theme.warn,
@@ -135,11 +159,11 @@ fn color(color: vt100::Color, theme: &Theme, foreground: bool) -> Option<String>
         vt100::Color::Idx(5 | 13) => theme.tags[3],
         vt100::Color::Idx(6 | 14) => theme.accent_alt,
         vt100::Color::Idx(8) => theme.dim,
-        vt100::Color::Idx(_) => return foreground.then(|| FG.to_string()),
+        vt100::Color::Idx(_) => return foreground.then(|| page_fg.to_string()),
     };
     match role {
         RColor::Rgb(r, g, b) => Some(format!("#{r:02x}{g:02x}{b:02x}")),
-        _ => foreground.then(|| FG.to_string()),
+        _ => foreground.then(|| page_fg.to_string()),
     }
 }
 

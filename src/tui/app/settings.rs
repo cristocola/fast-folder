@@ -520,7 +520,7 @@ pub fn rows(s: &Settings) -> Vec<Row> {
         Row {
             label: "Theme",
             value: or(&s.theme, "auto (follows the terminal)"),
-            hint: "auto follows what the terminal announces; mono, ansi or rich force a palette — FASTF_THEME overrides for one run",
+            hint: "auto is Doom One where the terminal draws 24-bit colour, else ansi; doom-one, rich, ansi or mono force one — FASTF_THEME overrides for one run",
             kind: Kind::Choice("theme", THEMES),
         },
         Row {

@@ -122,10 +122,9 @@ $env:FASTF_ASCII = "0"    # the Unicode alphabet, even in the old console
 Colour follows the same rule the app uses everywhere: `NO_COLOR` turns it off,
 a terminal that announces truecolor (`COLORTERM=truecolor`, Windows Terminal
 however it was opened, a `TERM` or `TERM_PROGRAM` that names a truecolor
-emulator) gets the muted RGB
-palette, and anything else gets the sixteen ANSI colours used sparingly.
-`fastf config set theme mono|ansi|rich` pins one, and `FASTF_THEME` pins one
-for a single run.
+emulator) gets Doom One, the default look, and anything else gets the sixteen ANSI
+colours used sparingly. `fastf config set theme doom-one|rich|ansi|mono` pins
+one, and `FASTF_THEME` pins one for a single run.
 
 
 ## Drives that rclone, WinFsp or a RAM disk provide

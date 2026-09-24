@@ -104,8 +104,9 @@ pub struct Config {
     #[serde(default)]
     pub terminal: String,
 
-    /// The guided app's palette: `auto` (follow what the terminal announces),
-    /// `mono`, `ansi` or `rich`. Empty = `auto`. `FASTF_THEME` overrides it
+    /// The guided app's palette: `auto` (follow what the terminal announces:
+    /// Doom One where it draws 24-bit colour), `doom-one`, `rich`, `ansi` or
+    /// `mono`. Empty = `auto`. `FASTF_THEME` overrides it
     /// for one session; `NO_COLOR` still wins over it. Parsed leniently — an
     /// unknown word here reads as `auto`, because a typo sitting in a config
     /// file must not stop every command — while `config set theme` refuses it.

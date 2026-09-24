@@ -28,6 +28,9 @@
 //! `FASTF_SHOT_SIZE=80x24` runs the app in that window instead of the suite's
 //! 120×40, which is how the compact layout is looked at.
 //!
+//! `FASTF_SHOT_THEME=rich` picks the SVG's palette (default `doom-one`, the
+//! app's own default look).
+//!
 //! `FASTF_SHOT_SVG=docs/img/dashboard.svg` also writes the frame as an SVG in
 //! the app's truecolor palette — the README's screenshot, taken from the real
 //! binary. Sandbox only: the repository is public.
@@ -153,17 +156,28 @@ fn screenshot() {
         );
     }
     let mut env = env;
-    // An SVG wants the truecolor palette whatever this terminal announces.
+    // An SVG is drawn in one palette whatever this terminal announces: the
+    // default look unless `FASTF_SHOT_THEME` names another.
+    let theme_name = std::env::var("FASTF_SHOT_THEME")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "doom-one".to_string());
+    let theme = match fastf::tui::theme::ThemeChoice::parse(&theme_name) {
+        Some(fastf::tui::theme::ThemeChoice::Kind(kind)) => {
+            fastf::tui::theme::Theme::from_kind(kind)
+        }
+        _ => panic!("FASTF_SHOT_THEME is doom-one, rich, ansi or mono, not {theme_name:?}"),
+    };
     if svg_path.is_some() {
         env.push(("COLORTERM", std::path::Path::new("truecolor")));
-        env.push(("FASTF_THEME", std::path::Path::new("rich")));
+        env.push(("FASTF_THEME", std::path::Path::new(theme.kind.name())));
     }
     let (chunks, code) =
         pty::run_chunked_sized(cols, rows, common::FASTF, &argv, &env, &script, DEADLINE);
     let screen = screen_at_sized(&chunks, taken, cols, rows);
     if let Some(path) = svg_path {
         let parser = parser_at_sized(&chunks, taken, cols, rows);
-        let svg = super::svg::render(parser.screen(), &fastf::tui::theme::Theme::rich());
+        let svg = super::svg::render(parser.screen(), &theme);
         let sandbox = sb.tmp.path().display().to_string();
         assert!(
             !svg.contains(&sandbox),

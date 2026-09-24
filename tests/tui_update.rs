@@ -48,5 +48,7 @@ mod settings;
 mod studio;
 #[path = "tui_update/terminal.rs"]
 mod terminal;
+#[path = "tui_update/theme.rs"]
+mod theme;
 #[path = "tui_update/verbs.rs"]
 mod verbs;

@@ -368,6 +368,27 @@ paste is ignored and said so. A terminal that cannot announce a paste delivers
 it as keystrokes; a run of them faster than a hand can type is taken as a paste
 all the same, so a paragraph pasted onto the dashboard never runs as commands.
 
+## The look
+
+There are four palettes, and `config set theme` (or the settings screen) picks
+one:
+
+| theme | what it is |
+|---|---|
+| `doom-one` | Doom One, the flagship theme of Doom Emacs: its dark blue-grey background painted under the whole app, its darker shade under dialogs, and its blue, magenta, green, yellow, red and orange for focus, search hits and meaning. The default wherever the terminal draws 24-bit colour. |
+| `rich` | A muted slate palette on the terminal's own background: steel blue for focus, desaturated everything else. |
+| `ansi` | The terminal's sixteen colours, used sparingly. What `auto` picks where 24-bit colour is not announced. |
+| `mono` | No colour at all: bold and reverse video carry the structure. What `NO_COLOR` gives. |
+
+`auto`, the default, is Doom One where the terminal announces 24-bit colour and
+`ansi` everywhere else, because a terminal that cannot draw 24-bit colour
+garbles it and every terminal draws the sixteen. Only the full-screen app paints
+a background: the command line's prompts are rows in your shell, so they wear
+Doom One's colours on the terminal's own background.
+
+The Doom One palette is from [doom-themes](https://github.com/doomemacs/themes)
+by Henrik Lissner (MIT), itself after Atom's One Dark.
+
 ## What moves, and why
 
 Motion here has one job: to take the eye to the one thing that just changed,
@@ -397,8 +418,8 @@ seen at once and fades, or eases from one resting state to the other.
 
 Nothing else moves: no sliding dialogs, no eased scrolling, no cursor trails.
 
-In truecolor the fades are real: the wash mixes toward the dark the palette is
-drawn on. In the sixteen ANSI colours there is no ramp, so a wash is held for a
+In 24-bit colour (`doom-one`, `rich`) the fades are real: the wash mixes
+toward the dark the palette is drawn on. In the sixteen ANSI colours there is no ramp, so a wash is held for a
 moment and let go, and the focus lands at once. `config set motion off` turns
 all of it off and every frame becomes a hard cut; `FASTF_MOTION=0` does the
 same for one run. A palette with no colour (`mono`, or `NO_COLOR`) is always
@@ -412,7 +433,7 @@ draws nothing but a glance at the selected project's file.
 ## On a bare terminal
 
 Nothing in the app needs a desktop: it draws with the sixteen colours where
-truecolor is not announced (`config set theme` pins a palette), with plain
+24-bit colour is not announced (`config set theme` pins a palette), with plain
 ASCII where the alphabet is not there (`FASTF_ASCII=1`) — key labels too,
 where an arrow key is the word on it — and in a 40×12 window. What it cannot do without a desktop session it says so about: with no
 `DISPLAY` or `WAYLAND_DISPLAY` — over ssh, on a console — `o` and `t` are dimmed

@@ -166,6 +166,8 @@ fn screenshot() {
         Some(fastf::tui::theme::ThemeChoice::Kind(kind)) => {
             fastf::tui::theme::Theme::from_kind(kind)
         }
+        // Only a picture needs one; a text frame has no colours to get wrong.
+        _ if svg_path.is_none() => fastf::tui::theme::Theme::doom_one(),
         _ => panic!("FASTF_SHOT_THEME is doom-one, rich, ansi or mono, not {theme_name:?}"),
     };
     if svg_path.is_some() {

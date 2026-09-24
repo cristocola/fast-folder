@@ -12,7 +12,8 @@ screen. The root `CLAUDE.md` has the layering rule and the module list,
 A command centre, not a demo. **Muted and cool, minimal and sophisticated,
 robust as a rock.** The rules, in the order they matter:
 
-- The terminal's own text colour carries the content. Slate grey recedes. One
+- The text colour carries the content (the terminal's own, or the painted
+  palette's, never a decoration). Slate grey recedes. One
   steel-blue accent says what has focus. Green, amber and red appear only where
   they *mean* success, a warning, a failure — never as decoration. In `rich`
   every colour is desaturated; in ANSI the same roles map to the plain
@@ -48,8 +49,8 @@ robust as a rock.** The rules, in the order they matter:
 **The theme is a pure function of an `Env`** (`theme::choose`): `FASTF_THEME`,
 then `NO_COLOR`/`TERM=dumb`, then the config's `theme`, then what the terminal
 announces (`COLORTERM`, a truecolor `TERM`/`TERM_PROGRAM`, Windows Terminal),
-which picks Doom One, else ANSI. On Windows a host that announces no emulator gets the ASCII alphabet;
-`FASTF_ASCII=0` forces Unicode. A theme set on the settings screen lands through
+which picks Doom One, else ANSI. On Windows a host that announces no emulator
+gets the ASCII alphabet; `FASTF_ASCII=0` forces Unicode. A theme set on the settings screen lands through
 `Effect::Retheme` → `Msg::Themed`, so `update` reads no environment.
 
 **Glyphs come from `Glyphs`** wherever a theme is in reach, so the ASCII alphabet

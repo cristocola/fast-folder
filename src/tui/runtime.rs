@@ -209,6 +209,17 @@ impl Runtime {
             if let Some(exit) = self.perform(&mut app, std::mem::take(&mut effects))? {
                 return Ok((exit, Session::capture(&app, &remembered)));
             }
+            // A painted canvas is also the colour a clear erases to: a resize
+            // clears the screen before the frame that follows, and on the
+            // terminal's own background that clear is a flash of it.
+            if let ratatui::style::Color::Rgb(r, g, b) = app.theme.canvas {
+                let _ = ratatui::crossterm::queue!(
+                    self.terminal.backend_mut(),
+                    ratatui::crossterm::style::SetBackgroundColor(
+                        ratatui::crossterm::style::Color::Rgb { r, g, b }
+                    )
+                );
+            }
             self.terminal.draw(|frame| view::view(&app, frame))?;
 
             let Some(first) = self.wait(&app) else {
@@ -661,7 +672,7 @@ fn restore_on_signal() {
         return;
     }
     // Paste off, leave the alternate screen, show the cursor.
-    tty::write_raw(b"\x1b[?2004l\x1b[?1049l\x1b[?25h");
+    tty::write_raw(b"\x1b[0m\x1b[?2004l\x1b[?1049l\x1b[?25h");
     #[cfg(unix)]
     tty::restore_cooked_mode();
 }
@@ -731,6 +742,7 @@ fn install_panic_hook() {
             let _ = disable_raw_mode();
             let _ = execute!(
                 io::stderr(),
+                ratatui::crossterm::style::ResetColor,
                 DisableBracketedPaste,
                 LeaveAlternateScreen,
                 cursor::Show

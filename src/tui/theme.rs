@@ -354,7 +354,8 @@ pub struct Theme {
     /// — so a foreground set on the row loses to all of them and shows almost
     /// nowhere. A background is the one thing the cells leave alone.
     pub pulse: Color,
-    /// What a wash fades *toward*: the dark the rich palette is drawn on.
+    /// What a wash fades *toward*: the dark an RGB palette is drawn on — the
+    /// canvas itself, for Doom One.
     ///
     /// A terminal cell has no alpha and `Color::Reset` has no RGB, so a fade
     /// needs a colour to end near. The rich palette presumes a dark terminal
@@ -397,6 +398,20 @@ impl Theme {
             ThemeKind::Rich => Self::rich(),
             ThemeKind::DoomOne => Self::doom_one(),
         }
+    }
+
+    /// The same palette for rows drawn on the terminal's own background —
+    /// the command line's inline prompts, which live in the shell and paint no
+    /// canvas. A canvas theme's text colour was chosen for its canvas, and on
+    /// a light terminal Doom's light grey all but disappears, so the text
+    /// gives way to the terminal's own; the accents keep their colours.
+    pub fn without_canvas(mut self) -> Self {
+        if self.canvas != Color::Reset {
+            self.text = Color::Reset;
+            self.canvas = Color::Reset;
+            self.surface = Color::Reset;
+        }
+        self
     }
 
     /// The same palette with a different alphabet — what the conhost check and
@@ -509,8 +524,9 @@ impl Theme {
     /// `bg` painted under everything, `bg-alt` under a dialog as under Doom's
     /// popups, `region` for the current row as in its completion lists, and
     /// its blue, magenta, green, yellow, red and orange for the roles Doom
-    /// gives them. Sizes and dates are `base6`, a step lighter than Doom's
-    /// comment grey, so they recede and stay readable.
+    /// gives them. What recedes (dates, hints, a done todo) is `base7`, lighter
+    /// than Doom's comment grey, because it is read on the selected row's
+    /// `region` too, where the comment grey all but vanishes.
     pub fn doom_one() -> Self {
         const BG: Color = Color::Rgb(0x28, 0x2c, 0x34);
         const BLUE: Color = Color::Rgb(0x51, 0xaf, 0xef);
@@ -523,7 +539,7 @@ impl Theme {
             accent: BLUE,
             accent_alt: MAGENTA,
             text: Color::Rgb(0xbb, 0xc2, 0xcf),
-            dim: Color::Rgb(0x73, 0x79, 0x7e),
+            dim: Color::Rgb(0x9c, 0xa0, 0xa4),
             good: GREEN,
             bad: Color::Rgb(0xff, 0x6c, 0x6b),
             warn: YELLOW,

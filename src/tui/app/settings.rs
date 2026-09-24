@@ -375,7 +375,12 @@ pub fn raw_value(settings: &Settings, key: &str) -> String {
         "base-dir" => settings.base_dir.clone(),
         "editor" => settings.editor.clone(),
         "terminal" => settings.terminal.clone(),
-        "theme" => or(&settings.theme, "auto"),
+        // The canonical name, so a hand-written `doom` or `Doom One` is the
+        // row's own `doom-one` and Enter moves on from it.
+        "theme" => crate::tui::theme::ThemeChoice::parse(&settings.theme)
+            .unwrap_or_default()
+            .name()
+            .to_string(),
         // Read the way the app reads it, so a hand-written `true` or `0` is
         // still one of the row's two answers — and the cycle has somewhere
         // to go from it.

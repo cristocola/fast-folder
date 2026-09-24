@@ -418,12 +418,13 @@ seen at once and fades, or eases from one resting state to the other.
 
 Nothing else moves: no sliding dialogs, no eased scrolling, no cursor trails.
 
-In 24-bit colour (`doom-one`, `rich`) the fades are real: the wash mixes
-toward the dark the palette is drawn on. In the sixteen ANSI colours there is no ramp, so a wash is held for a
-moment and let go, and the focus lands at once. `config set motion off` turns
-all of it off and every frame becomes a hard cut; `FASTF_MOTION=0` does the
-same for one run. A palette with no colour (`mono`, or `NO_COLOR`) is always
-off — a colour wash with no colour is a flicker rather than a cue.
+In 24-bit colour (`doom-one`, `rich`) the fades are real: the wash mixes toward
+the dark the palette is drawn on. In the sixteen ANSI colours there is no ramp,
+so a wash is held for a moment and let go, and the focus lands at once.
+`config set motion off` turns all of it off and every frame becomes a hard cut;
+`FASTF_MOTION=0` does the same for one run. A palette with no colour (`mono`,
+or `NO_COLOR`) is always off — a colour wash with no colour is a flicker rather
+than a cue.
 
 The app still costs nothing while idle. It wakes twenty times a second only
 while something is actually fading, five times a second while a spinner is

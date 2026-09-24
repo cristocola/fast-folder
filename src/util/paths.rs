@@ -69,7 +69,7 @@ pub fn install_dir() -> PathBuf {
 /// Portable-mode probe: the canonicalized directory of the running binary,
 /// iff it already holds fastf data (`config.toml` or `templates/`).
 fn portable_dir() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let exe = canonical(&std::env::current_exe().ok()?).ok()?;
     let dir = exe.parent()?;
     if is_portable_data_dir(dir) {
         Some(dir.to_path_buf())
@@ -278,7 +278,14 @@ fn canonical_by_walking(path: &Path) -> std::io::Result<PathBuf> {
             }
             Component::Normal(name) => {
                 walked.push(name);
-                if is_link_like(&std::fs::symlink_metadata(&walked)?) {
+                let metadata = std::fs::symlink_metadata(&walked)?;
+                // The name as stored, as `canonicalize` gives it: on a
+                // case-insensitive drive `projects` opens `Projects`, and
+                // every containment check compares names byte for byte.
+                if let Some(stored) = stored_name(&walked) {
+                    walked.set_file_name(stored);
+                }
+                if is_link_like(&metadata) {
                     return Err(std::io::Error::other(format!(
                         "{} is a link on a drive whose volume Windows cannot name, \
                          so fastf cannot follow it safely",
@@ -291,6 +298,35 @@ fn canonical_by_walking(path: &Path) -> std::io::Result<PathBuf> {
     // The root alone has no component to check: it must still be there.
     std::fs::symlink_metadata(&walked)?;
     Ok(verbatim(walked))
+}
+
+/// The last component of an existing `path` as the filesystem stores it, when
+/// that differs only in case from how it was typed; `None` when it is stored
+/// as typed, or cannot be read. Read from the parent's listing, because a
+/// WinFsp filesystem answers `FindFirstFileW` on an exact path with the name as
+/// it was asked for. Only the walk calls this, so only an unnamed volume pays
+/// for the listing.
+#[cfg(windows)]
+fn stored_name(path: &Path) -> Option<std::ffi::OsString> {
+    let typed = path.file_name()?.to_str()?;
+    let wanted = typed.to_lowercase();
+    let mut stored = None;
+    for entry in std::fs::read_dir(verbatim(path.parent()?.to_path_buf())).ok()? {
+        let name = entry.ok()?.file_name();
+        match name.to_str() {
+            Some(text) if text == typed => return None,
+            Some(text) if stored.is_none() && text.to_lowercase() == wanted => {
+                stored = Some(name.clone())
+            }
+            _ => {}
+        }
+    }
+    stored
+}
+
+#[cfg(not(windows))]
+fn stored_name(_: &Path) -> Option<std::ffi::OsString> {
+    None
 }
 
 /// The `\\?\` form `canonicalize` answers with on Windows; unchanged elsewhere.
@@ -307,12 +343,21 @@ fn verbatim(path: PathBuf) -> PathBuf {
 /// The string half of [`verbatim`], so Windows-shaped inputs can be unit-tested
 /// on any platform.
 fn verbatim_text(text: &str) -> String {
-    if text.starts_with(r"\\?\") {
+    if text.starts_with(r"\\?\") || text.starts_with(r"\\.\") {
+        // Already verbatim, or a device path (`NUL` absolutises to `\\.\NUL`).
         text.to_string()
     } else if let Some(share) = text.strip_prefix(r"\\") {
         format!(r"\\?\UNC\{share}")
     } else {
-        format!(r"\\?\{text}")
+        // `s:\x` and `S:\x` are one drive; show and store the letter as
+        // `canonicalize` does.
+        let mut chars = text.chars();
+        match (chars.next(), chars.next()) {
+            (Some(letter), Some(':')) => {
+                format!(r"\\?\{}{}", letter.to_ascii_uppercase(), &text[1..])
+            }
+            _ => format!(r"\\?\{text}"),
+        }
     }
 }
 
@@ -667,6 +712,8 @@ mod tests {
         assert_eq!(verbatim_text(r"S:\"), r"\\?\S:\");
         assert_eq!(verbatim_text(r"\\nas\share\p"), r"\\?\UNC\nas\share\p");
         assert_eq!(verbatim_text(r"\\?\S:\already"), r"\\?\S:\already");
+        assert_eq!(verbatim_text(r"s:\lower"), r"\\?\S:\lower");
+        assert_eq!(verbatim_text(r"\\.\NUL"), r"\\.\NUL");
         // And `display_path` takes every one of them back to what was typed.
         assert_eq!(
             strip_verbatim(&verbatim_text(r"S:\projects")),
@@ -693,6 +740,17 @@ mod tests {
             messy.canonicalize().unwrap()
         );
         assert!(canonical_by_walking(&root.join("missing")).is_err());
+        // Typed in another case on a case-insensitive filesystem, the walk
+        // still answers the stored name, or `S:\projects` and `S:\Projects`
+        // would be two bases to every containment check.
+        #[cfg(windows)]
+        {
+            std::fs::create_dir_all(tmp.join("Stored")).unwrap();
+            assert_eq!(
+                canonical_by_walking(&root.join("STORED").join("..").join("stored")).unwrap(),
+                root.join("Stored").canonicalize().unwrap()
+            );
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

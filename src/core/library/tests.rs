@@ -1300,5 +1300,8 @@ fn a_root_base_is_labelled_as_it_reads() {
     assert_eq!(base_label(Path::new(r"\\?\S:\")), r"S:\");
     #[cfg(unix)]
     assert_eq!(base_label(Path::new("/")), "/");
-    assert_eq!(base_label(Path::new("/mnt/projects/01_PROJECTS")), "01_PROJECTS");
+    assert_eq!(
+        base_label(Path::new("/mnt/projects/01_PROJECTS")),
+        "01_PROJECTS"
+    );
 }

@@ -366,14 +366,19 @@ fn every_canonicalization_goes_through_the_helper() {
     for layer in ["cli", "core", "tui", "util"] {
         for path in sources(layer) {
             let name = path.file_name().unwrap();
-            if name == "tests.rs" || path.ends_with(Path::new("util").join("paths.rs")) {
+            if name == "tests.rs" {
                 continue;
             }
+            // The helper's own call is the one allowed.
+            let helper = path.ends_with(Path::new("util").join("paths.rs"));
             let text = fs::read_to_string(&path).unwrap();
             for (number, line) in text.lines().enumerate() {
                 let trimmed = line.trim_start();
                 if trimmed.starts_with("mod tests") {
                     break;
+                }
+                if helper && trimmed == "match path.canonicalize() {" {
+                    continue;
                 }
                 if !trimmed.starts_with("//") && trimmed.contains(".canonicalize()") {
                     offenders.push(format!("{}:{}: {}", path.display(), number + 1, trimmed));

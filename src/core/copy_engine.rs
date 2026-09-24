@@ -80,8 +80,17 @@ pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) 
     }
 
     for base in cfg.effective_bases() {
-        let Ok(base) = crate::util::paths::canonical(&base) else {
-            continue;
+        // An unplugged base holds nothing to collide with. Any other failure
+        // refuses: a base that cannot be resolved cannot be proven apart from
+        // the destination, and a skipped check is a copy into the library.
+        let base = match crate::util::paths::canonical(&base) {
+            Ok(base) => base,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => anyhow::bail!(
+                "cannot resolve the configured base {} ({err}), so the copy cannot \
+                 be checked against it",
+                crate::util::paths::display_path(&base)
+            ),
         };
         if root == base || root.starts_with(&base) {
             anyhow::bail!(

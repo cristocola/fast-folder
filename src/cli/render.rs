@@ -162,31 +162,30 @@ pub fn print_success(plan: &ProjectPlan, template: &Template) {
     println!("  {} {}", "ID:".dimmed(), plan.id_str);
     println!();
     // Canonicalize now that the folder exists, for the real absolute path
-    let resolved = plan
-        .root_path
-        .canonicalize()
-        .unwrap_or_else(|_| plan.root_path.clone());
+    let resolved =
+        crate::util::paths::canonical(&plan.root_path).unwrap_or_else(|_| plan.root_path.clone());
     print_project_path(&resolved, &plan.folder_name);
 }
 
 /// Display a project path with the parent directory dimmed and the folder name bold.
 fn print_project_path(path: &std::path::Path, folder_name: &str) {
-    let parent = path
-        .parent()
-        .map(|p| {
-            format!(
-                "{}{}",
-                crate::util::paths::display_path(p),
-                std::path::MAIN_SEPARATOR
-            )
-        })
-        .unwrap_or_default();
+    let parent = path.parent().map(parent_prefix).unwrap_or_default();
     println!(
         "  {} {}{}",
         "→".cyan().bold(),
         parent.dimmed(),
         folder_name.bold().white()
     );
+}
+
+/// A parent directory as the text in front of a folder name: readable, and
+/// ending in exactly one separator — a drive root (`S:\`, `/`) already has one.
+pub(crate) fn parent_prefix(parent: &std::path::Path) -> String {
+    let mut shown = crate::util::paths::display_path(parent);
+    if !shown.ends_with(std::path::MAIN_SEPARATOR) {
+        shown.push(std::path::MAIN_SEPARATOR);
+    }
+    shown
 }
 
 /// Print a folder tree.
@@ -249,5 +248,26 @@ pub fn print_post_create_notes(notes: &[Note]) {
             }
             Note::Path(path) => println!("{path}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parent_prefix;
+    use std::path::Path;
+
+    /// `new` printed `S:\\2026-…` for a project in a drive-root base.
+    #[cfg(unix)]
+    #[test]
+    fn a_root_parent_is_not_given_a_second_separator() {
+        assert_eq!(parent_prefix(Path::new("/")), "/");
+        assert_eq!(parent_prefix(Path::new("/mnt/projects")), "/mnt/projects/");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_root_parent_is_not_given_a_second_separator() {
+        assert_eq!(parent_prefix(Path::new(r"\\?\S:\")), r"S:\");
+        assert_eq!(parent_prefix(Path::new(r"S:\projects")), r"S:\projects\");
     }
 }

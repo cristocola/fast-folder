@@ -505,8 +505,7 @@ impl LibraryState {
     ) -> std::cmp::Ordering {
         let pa = &self.snapshot[a.0];
         let pb = &self.snapshot[b.0];
-        let newest =
-            |x: &Project, y: &Project| y.created.cmp(&x.created).then_with(|| x.name.cmp(&y.name));
+        let newest = library::newest_first;
         match sort {
             Order::Newest => newest(pa, pb),
             Order::Oldest => newest(pb, pa),

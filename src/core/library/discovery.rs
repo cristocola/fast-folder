@@ -27,10 +27,19 @@ pub fn discover(cfg: &Config) -> Vec<Project> {
         }
         all.extend(discover_base(&base));
     }
-    // Sort by created desc; ISO-8601 sorts lexicographically. Ties broken by
-    // name for stable ordering.
-    all.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| a.name.cmp(&b.name)));
+    all.sort_by(newest_first);
     all
+}
+
+/// Newest first: `created` descending (ISO-8601 sorts as text). `created` has
+/// one-second resolution, so a script that makes several projects shares one
+/// stamp among them; the higher ID is the later one, and the name keeps the
+/// order stable after that.
+pub fn newest_first(a: &Project, b: &Project) -> std::cmp::Ordering {
+    b.created
+        .cmp(&a.created)
+        .then_with(|| b.number().cmp(&a.number()))
+        .then_with(|| a.name.cmp(&b.name))
 }
 
 /// Cache-first discovery for a single base with the staleness gate applied.

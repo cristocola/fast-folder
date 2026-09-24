@@ -443,7 +443,7 @@ pub fn run(args: RegisterArgs) -> Result<()> {
     let parent_display = project
         .path
         .parent()
-        .map(|p| format!("{}{}", p.display(), std::path::MAIN_SEPARATOR))
+        .map(crate::cli::render::parent_prefix)
         .unwrap_or_default();
     println!(
         "  {} {}{}",

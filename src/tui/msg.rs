@@ -85,6 +85,12 @@ pub enum Msg {
         field: Option<String>,
         error: String,
     },
+    /// The activity screen's files were read: every message kept, and the
+    /// log's last events, both oldest first.
+    ActivityLoaded {
+        messages: Vec<crate::util::messages::Message>,
+        log: Vec<String>,
+    },
     /// A read-only view's content landed.
     ViewLoaded {
         title: String,

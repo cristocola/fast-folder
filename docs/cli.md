@@ -31,6 +31,8 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
 | `fastf reconcile` | Recover scoped v2 work and report obsolete pre-v2 markers |
+| `fastf messages` | What fastf said to you, in the app and here, from every session |
+| `fastf log` | Everything fastf did: every step of every move and reconcile, every warning |
 | `fastf config show` / `set` | View and edit [configuration](config.md) |
 | `fastf id show` / `sync` / `set` | Inspect, synchronize, and raise the [ID counter](config.md#the-id-counter) |
 | `fastf paths` | Show where fastf keeps its data and why |
@@ -593,6 +595,35 @@ migrates, resumes, rolls back, or deletes through them. It also never sweeps
 files merely because their names end in `.tmp` or `.part`. Inspect source and
 destination manually and remove an obsolete marker only after deciding which
 copy is authoritative.
+
+## Messages and the log
+
+```bash
+fastf messages              # the last 20 things fastf said, newest last
+fastf messages -n 100
+fastf log                   # the last 40 events
+fastf log -n 500
+fastf log --follow          # and keep printing new ones until Ctrl-C
+```
+
+**Messages and the log are two things.** A message is a sentence fastf said to
+you, with what to do next when there is something to do: the app's status
+lines, and what `move`, `copy-to` and `reconcile` printed at the end. They are
+kept from every session in the data folder, so what the app said yesterday is
+still there, and `L` in the app shows the same list.
+
+The log is everything, one line per event:
+
+```
+2026-09-25T14:03:11.123Z INFO  - 48213 move ID0047 2026-07-26_Shoot_ID0047 to /mnt/projects: copied 1301 files
+```
+
+— the time (UTC), the level, the job, the process, and what happened. Every
+step of every move, copy and reconcile is there with its count, and so is every
+warning. With `config set log-level debug` it also holds a line for every entry
+a move touches, which is what to read when a removal on a network drive seems
+slow. `--follow` keeps printing new events, from any fastf process, until
+Ctrl-C. See [config.md](config.md) for where both files live.
 
 ## Todos
 

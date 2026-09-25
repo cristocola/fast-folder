@@ -17,6 +17,14 @@ pub fn run() -> Result<()> {
     let report = crate::cli::progress::run_watched("reconcile", |progress, cancel| {
         crate::core::operations::reconcile_with(progress, cancel)
     })?;
+    crate::cli::log::keep(
+        if report.needs_a_look() {
+            crate::util::messages::Level::Warn
+        } else {
+            crate::util::messages::Level::Good
+        },
+        report.summary(),
+    );
 
     if report.is_empty() {
         println!(

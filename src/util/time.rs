@@ -13,6 +13,24 @@ pub fn now_iso8601() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// Current UTC timestamp with milliseconds, for a log line: fixed width, so a
+/// log still sorts as text, and fine enough to order the steps of one move.
+pub fn now_iso8601_millis() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// An ISO-8601 stamp as a person reads it here: local time, to the second,
+/// `2026-09-25 16:03:11`. Anything that does not parse is shown as it is.
+pub fn local_readable(stamp: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(stamp) {
+        Ok(at) => at
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string(),
+        Err(_) => stamp.to_string(),
+    }
+}
+
 /// The local wall-clock time as `HH:MM:SS` — what a message log stamps a
 /// line with, for a person reading it back a minute later.
 pub fn now_hms() -> String {

@@ -49,8 +49,16 @@ pub fn copy_project_configured(
     cancel: &AtomicBool,
 ) -> Result<CopyOutcome> {
     let result = (|| {
-        Ticker::new(progress, cancel).phase(JobPhase::Waiting, 0);
-        let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+        let ticker = Ticker::new(progress, cancel);
+        ticker.subject(format!(
+            "copy {} {} to {}",
+            project.id,
+            project.name,
+            crate::util::paths::display_path(destination)
+        ));
+        let _data_lock = crate::util::lockfile::DataLock::acquire_then(|| {
+            ticker.phase(JobPhase::Waiting, 0);
+        })?;
         let cfg = Config::load()?;
         let project = revalidate_project(&cfg, project)?;
         let destination = resolve_destination(&cfg, &project, destination)?;

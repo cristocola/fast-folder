@@ -66,6 +66,9 @@ fn delivered(level: Level, message: &str) -> bool {
 /// `warning:` prefix — this adds it, so every one of them looks the same.
 pub fn warn(message: impl std::fmt::Display) {
     let message = message.to_string();
+    // Kept whichever surface shows it: a warning is exactly what a person
+    // reads the log for afterwards.
+    crate::util::log::warn(&message);
     if delivered(Level::Warn, &message) {
         return;
     }
@@ -82,6 +85,7 @@ pub fn warn(message: impl std::fmt::Display) {
 /// is the one piece of code that knows a folder was removed saying so.
 pub fn note(message: impl std::fmt::Display) {
     let message = message.to_string();
+    crate::util::log::info(format!("note: {message}"));
     if delivered(Level::Note, &message) {
         return;
     }
@@ -94,6 +98,7 @@ pub fn note(message: impl std::fmt::Display) {
 /// the two paths that cannot return one: an armed failpoint calling `abort`, and
 /// a data directory that cannot be resolved at all.
 pub fn fatal(message: impl std::fmt::Display) {
+    crate::util::log::error(format!("fastf: {message}"));
     eprintln!("fastf: {message}");
 }
 

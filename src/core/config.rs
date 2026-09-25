@@ -123,6 +123,13 @@ pub struct Config {
     #[serde(default)]
     pub motion: String,
 
+    /// How much the log (`<data dir>/logs/fastf.log`) keeps: `debug` (every
+    /// entry a job touches), `info` (default: every step, every warning),
+    /// `warn`, `error` or `off`. A job's own log keeps everything whatever
+    /// this says. Parsed leniently for the reason `theme` is.
+    #[serde(default)]
+    pub log_level: String,
+
     /// What to do when the resolved folder name is already taken:
     /// `"suffix"` (default) appends `_2`, `_3`… , `"error"` refuses.
     ///
@@ -202,6 +209,7 @@ impl Default for Config {
             terminal: String::new(),
             theme: String::new(),
             motion: String::new(),
+            log_level: String::new(),
             default_template: String::new(),
             date_format: default_date_format(),
             preview_lines: default_preview_lines(),

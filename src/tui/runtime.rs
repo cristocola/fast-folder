@@ -116,6 +116,8 @@ struct Runtime {
     /// When the selected project's detail was last checked against the disk
     /// — once a second at most, whatever the wake.
     last_watch: Option<Instant>,
+    /// When the activity screen was last read, while it is open.
+    last_activity: Option<Instant>,
 }
 
 /// The runtime's half of a running move: the progress handle it snapshots and
@@ -161,6 +163,7 @@ impl Runtime {
             started: Instant::now(),
             next_tick: None,
             last_watch: None,
+            last_activity: None,
         })
     }
 
@@ -242,7 +245,50 @@ impl Runtime {
     /// an expiry already in the past.
     fn dispatch(&mut self, app: &mut App, msg: Msg) -> Vec<Effect> {
         app.elapsed_ms = self.started.elapsed().as_millis() as u64;
-        app::update(app, msg)
+        let effects = app::update(app, msg);
+        self.keep_messages(app);
+        effects
+    }
+
+    /// Write what the app said to the messages file, on a worker: the data
+    /// directory is local as a rule, but a portable one may be on a stick.
+    fn keep_messages(&mut self, app: &mut App) {
+        if app.outbox.is_empty() {
+            return;
+        }
+        let mut said = std::mem::take(&mut app.outbox);
+        spawn_worker("fastf-messages", move || {
+            let at = crate::util::time::now_iso8601();
+            for message in &mut said {
+                message.at.clone_from(&at);
+                crate::util::messages::append(message);
+            }
+        });
+    }
+
+    /// Read the activity screen again once a second while it is open, so a
+    /// step another fastf logs, or a message it keeps, shows up in it.
+    fn watch_activity(&mut self, app: &App) {
+        if !app.activity_open() {
+            self.last_activity = None;
+            return;
+        }
+        if self
+            .last_activity
+            .is_some_and(|at| at.elapsed() < WATCH_EVERY)
+        {
+            return;
+        }
+        self.last_activity = Some(Instant::now());
+        self.load_activity();
+    }
+
+    fn load_activity(&self) {
+        let tx = self.tx.clone();
+        spawn_worker("fastf-activity", move || {
+            let (messages, log) = loaders::activity();
+            let _ = tx.send(Msg::ActivityLoaded { messages, log });
+        });
     }
 
     /// Block for the next message. `None` means a wake with nothing to do.
@@ -257,6 +303,7 @@ impl Runtime {
     /// delivered after.
     fn wait(&mut self, app: &App) -> Option<Msg> {
         self.watch_detail(app);
+        self.watch_activity(app);
         let Some(interval) = app.tick_interval() else {
             self.next_tick = None;
             return self.idle_wait();
@@ -365,6 +412,10 @@ impl Runtime {
         for effect in effects {
             match effect {
                 Effect::Quit(exit) => return Ok(Some(exit)),
+                Effect::LoadActivity => {
+                    self.last_activity = Some(Instant::now());
+                    self.load_activity();
+                }
                 Effect::LoadSummary => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-summary", move || match loaders::summary() {
@@ -1257,28 +1308,7 @@ fn run_action(
         }
         Action::Reconcile => {
             let report = crate::core::operations::reconcile_with(progress, cancel)?;
-            let message = if report.cancelled {
-                format!(
-                    "Reconcile stopped: {} resumed, {} finished, {} rolled back, {} restored, \
-                     {} cleared before it did; the rest is as it was",
-                    report.resumed,
-                    report.completed,
-                    report.rolled_back,
-                    report.restored,
-                    report.cleared
-                )
-            } else if report.is_empty() {
-                "Nothing to reconcile — every project is fully provisioned.".to_string()
-            } else {
-                format!(
-                    "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared",
-                    report.resumed,
-                    report.completed,
-                    report.rolled_back,
-                    report.restored,
-                    report.cleared
-                )
-            };
+            let message = report.summary();
             let outcome = ActionOutcome::new(ListChange::Reload, message).settings();
             let mut notes = Vec::new();
             if !report.incomplete.is_empty() {

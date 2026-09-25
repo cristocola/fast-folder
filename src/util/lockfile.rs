@@ -48,6 +48,17 @@ impl DataLock {
         Self::acquire_at(&lock_path(), DEFAULT_TIMEOUT)
     }
 
+    /// [`Self::acquire`], calling `waiting` first when another process holds
+    /// the lock — so a job's progress says it is waiting only when it is.
+    pub fn acquire_then(waiting: impl FnOnce()) -> Result<Self> {
+        let path = lock_path();
+        if let Some(lock) = Self::try_acquire_at(&path)? {
+            return Ok(lock);
+        }
+        waiting();
+        Self::acquire_at(&path, DEFAULT_TIMEOUT)
+    }
+
     /// Lock `path`, waiting up to `timeout`. Exposed for tests.
     pub fn acquire_at(path: &Path, timeout: Duration) -> Result<Self> {
         if let Some(parent) = path.parent()
@@ -102,6 +113,26 @@ impl DataLock {
             }
             std::thread::sleep(POLL_INTERVAL);
         }
+    }
+
+    /// One attempt at `path`, never waiting: `None` when another process
+    /// holds it. What a lock that only guards housekeeping — rotating a log —
+    /// wants, since the holder is doing the same work; and, for a lock a
+    /// process holds for its whole life, the OS's own answer to "is it still
+    /// running".
+    pub fn try_acquire_at(path: &Path) -> Result<Option<Self>> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        Ok(try_lock(path)
+            .with_context(|| format!("locking {}", path.display()))?
+            .map(|file| Self {
+                _file: file,
+                path: path.to_path_buf(),
+            }))
     }
 
     /// Path of the held lock file.

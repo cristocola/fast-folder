@@ -367,6 +367,39 @@ impl ReconcileReport {
             && self.obsolete.is_empty()
             && !self.cancelled
     }
+
+    /// The pass in one sentence, the same on every surface: what it did, and
+    /// whether it stopped before the end.
+    pub fn summary(&self) -> String {
+        if self.cancelled {
+            format!(
+                "Reconcile stopped: {} resumed, {} finished, {} rolled back, {} restored, \
+                 {} cleared before it did; the rest is as it was",
+                self.resumed, self.completed, self.rolled_back, self.restored, self.cleared
+            )
+        } else if self.is_empty() {
+            "Nothing to reconcile — every project is fully provisioned.".to_string()
+        } else {
+            format!(
+                "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared{}",
+                self.resumed,
+                self.completed,
+                self.rolled_back,
+                self.restored,
+                self.cleared,
+                match self.unrecoverable.len() + self.leftovers.len() {
+                    0 => String::new(),
+                    1 => "; 1 needs a look".to_string(),
+                    n => format!("; {n} need a look"),
+                }
+            )
+        }
+    }
+
+    /// Whether anything is left for a person to look at.
+    pub fn needs_a_look(&self) -> bool {
+        self.cancelled || !self.unrecoverable.is_empty() || !self.leftovers.is_empty()
+    }
 }
 
 /// Reconcile scoped v2 state and report obsolete v1 markers without parsing or
@@ -443,8 +476,10 @@ pub fn reconcile_locked() -> ReconcileReport {
 /// [`reconcile_unlocked_with`].
 pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
     let mut report = ReconcileReport::default();
-    ticker.phase(JobPhase::Waiting, 0);
-    let _data_lock = match crate::util::lockfile::DataLock::acquire() {
+    ticker.subject("reconcile".to_string());
+    let _data_lock = match crate::util::lockfile::DataLock::acquire_then(|| {
+        ticker.phase(JobPhase::Waiting, 0);
+    }) {
         Ok(lock) => lock,
         Err(error) => {
             report

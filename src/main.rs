@@ -342,6 +342,38 @@ enum Commands {
     )]
     Reconcile,
 
+    /// Show the log: every step of every move and reconcile, every warning
+    #[command(
+        about = "Show the log: every step of every move and reconcile, every warning",
+        long_about = "The log is everything fastf did, one line per event, with a timestamp,\n\
+            a level, the job it belongs to and the process that wrote it — every step\n\
+            of a move with its count, every warning. It lives in the data directory\n\
+            under logs/ and is rotated as it grows; `config set log-level` decides\n\
+            how much it keeps. `fastf messages` is the short version: the sentences\n\
+            fastf said to you."
+    )]
+    Log {
+        /// How many events to show, newest last
+        #[arg(short = 'n', long, default_value_t = 40)]
+        lines: usize,
+        /// Keep showing new events as they are written, until Ctrl-C
+        #[arg(short, long)]
+        follow: bool,
+    },
+
+    /// Show the messages fastf said, in the app and here, from every session
+    #[command(
+        about = "Show the messages fastf said, in the app and here, from every session",
+        long_about = "Every status line the app showed and every outcome the command line\n\
+            printed for a move, a copy, a delete or a reconcile, kept across sessions,\n\
+            newest last. `fastf log` has everything else."
+    )]
+    Messages {
+        /// How many to show, newest last
+        #[arg(short = 'n', long, default_value_t = 20)]
+        lines: usize,
+    },
+
     /// Onboard an existing folder by writing its PROJECT_INFO.md (no folder is created)
     #[command(
         about = "Onboard an existing folder by writing its PROJECT_INFO.md (no folder is created)",
@@ -657,6 +689,7 @@ enum ConfigAction {
             terminal                    Terminal emulator to open when launched without one (default: $TERMINAL, else probe; \"none\" disables)\n  \
             theme                       The app's palette: auto, doom-one, rich, ansi or mono (default: auto — Doom One where the terminal draws 24-bit colour)\n  \
             motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
+            log-level                   How much the log keeps: debug, info, warn, error or off (default: info)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \
             date-format                 strftime format for the {date} token (default: %Y-%m-%d)\n  \
             preview-lines               Lines per file in dry-run preview (default: 8, 0 = none)\n  \
@@ -992,6 +1025,18 @@ fn run() -> Result<()> {
         Some(Commands::Completions { .. }) | Some(Commands::Mangen { .. })
     ) {
         bootstrap::ensure_bootstrapped()?;
+        // The log keeps what `log_level` asks for; `util` may not read the
+        // configuration, so it is told. A configuration that does not parse
+        // is the command's own error to report, a moment from now.
+        if let Ok(config) = fastf::core::config::Config::load()
+            && let Some(level) = fastf::util::log::Level::parse(&config.log_level)
+        {
+            fastf::util::log::set_level(level);
+        }
+        fastf::util::log::debug(format!(
+            "fastf {}",
+            std::env::args().skip(1).collect::<Vec<_>>().join(" ")
+        ));
     }
 
     match cli.command {
@@ -1120,6 +1165,8 @@ fn run() -> Result<()> {
 
         Some(Commands::Reindex) => cli::reindex::run(),
         Some(Commands::Reconcile) => cli::reconcile::run(),
+        Some(Commands::Log { lines, follow }) => cli::log::log(lines, follow),
+        Some(Commands::Messages { lines }) => cli::log::messages(lines),
 
         Some(Commands::Register {
             path,

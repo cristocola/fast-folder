@@ -79,7 +79,7 @@ He asked for three things:
     seen            created by the first surface that reported the outcome
     log             this job's full log, debug level, every file
   logs/fastf.log    every process, info level; rotated at 4 MiB, 3 kept
-  messages.log      curated lines, JSON per line; rotated at 512 KiB, 1 kept
+  messages.log      curated lines, JSON per line; rotated at 512 KiB
 ```
 
 The job id uses the operation-id shape (`transactions::next_operation_id`). One
@@ -266,25 +266,25 @@ its count moving; "finalizing" is gone from every surface.
 
 ## Phase 2 — messages and logs on disk
 
-- [ ] `util::log`: levels `error warn info debug`; one line per event
+- [x] `util::log`: levels `error warn info debug`; one line per event
   (`2026-09-25T14:03:11.123Z INFO  <job|-> <pid> text`); appended with one
   `write` per line (`O_APPEND`, `FILE_APPEND_DATA`), so several processes
   interleave whole lines; rotation under a try-lock that skips when busy. A
   process-global current job routes debug lines to `jobs/<id>/log`. The config
   key `log_level` defaults to `info` for the central log; a job's own log is
   always debug.
-- [ ] `diag::warn`/`note` also append to the log. Engine phases log at info,
+- [x] `diag::warn`/`note` also append to the log. Engine phases log at info,
   entries at debug through the `Ticker`, and failures at error with their cause.
-- [ ] `util::messages`: append, read the last N, tolerant reader. The CLI's
+- [x] `util::messages`: append, read the last N, tolerant reader. The CLI's
   outcome lines and the app's status lines are messages, with the source
   (`app`, `cli`, a job id).
-- [ ] `fastf log` and `fastf messages` (`src/cli/log.rs`). They read the data
+- [x] `fastf log` and `fastf messages` (`src/cli/log.rs`). They read the data
   dir, so they stay out of the bootstrap guard.
-- [ ] The app: `set_status` also emits `Effect::AppendMessage`, since `update`
+- [x] The app: `set_status` also emits `Effect::AppendMessage`, since `update`
   does no I/O. `L` opens the activity screen with Messages and Log tabs, read by
   a loader and refreshed while open. `LOG_CAP` stays as the in-session mirror
   the status line counts from.
-- [ ] Tests: two processes appending 1,000 lines each leave 2,000 whole lines;
+- [x] Tests: two processes appending 1,000 lines each leave 2,000 whole lines;
   rotation keeps the newest; a torn last line is skipped by the reader; `fastf
   log --lines 5` prints five; the activity screen's tabs, snapshots looked at
   first; `layering.rs` still holds (`log.rs` writes files, never stdout).
@@ -420,3 +420,22 @@ there with its count; kill that app too, and the move still finishes.
   can wait 20 s on `EIO`), and `complete_destination`'s copies. The late-cancel
   test was run against a build whose removal honoured the cancel, and caught it.
   Gates green: fmt, clippy debug/release/windows-gnu, test debug/release, doc.
+- 2026-09-25 — Phase 2. `util::log` (levels, `format_line`, one `write` per
+  event on an append-mode file, rotation under `DataLock::try_acquire_at`,
+  `tail` reading only the file's end, `set_job` ready for Phase 3) and
+  `util::messages` (JSON lines, tolerant reader, every message also logged).
+  `diag` writes to the log; the `Ticker` logs each step once
+  `Ticker::subject` names the job, each entry at debug. `log_level` is a config
+  key and a settings row; `main` passes it to the log, since `util` may not
+  read `Config`. `fastf log [-n] [--follow]`, `fastf messages [-n]`; `move`,
+  `copy-to` and `reconcile` keep their outcome (and a failure) as messages, and
+  reconcile's one sentence moved to `ReconcileReport::summary` so both surfaces
+  say it alike. The app hands every status line to `App.outbox`, which the
+  runtime writes after each `update`; `L` is `Modal::Activity`, two pages read
+  from disk and re-read once a second while open. Decided on the way: Tab turns
+  its page (it is the global `FocusNext` key, so no second binding), the page
+  on show wears the cursor glyph so mono can tell; the waiting step is entered
+  only when the lock is really held (`DataLock::acquire_then`), since the log
+  said "waiting for another fastf" on every move; a unit's name agrees with its
+  count ("1 file"). Messages rotate like the log (three kept). Verified with
+  the screenshot tool in a real pty. Gates green.

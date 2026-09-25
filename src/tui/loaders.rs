@@ -19,6 +19,17 @@ use crate::tui::app::wizard::{
 use crate::tui::effect::{ApplyRequest, CreateRequest, Request};
 use crate::util::paths;
 
+/// The activity screen's two pages: every message kept, the last of the log.
+/// Both oldest first; the screen turns them round.
+pub fn activity() -> (Vec<crate::util::messages::Message>, Vec<String>) {
+    const SHOWN: usize = 2000;
+    let messages = crate::util::messages::last(SHOWN);
+    let log = crate::util::log::path()
+        .map(|path| crate::util::log::tail(&path, SHOWN))
+        .unwrap_or_default();
+    (messages, log)
+}
+
 /// The header, from the indexes: no base is scanned to draw it. Each base is
 /// probed with a timeout rather than `is_dir`-ed, so a dead network mount costs
 /// `PROBE_TIMEOUT` once instead of a frozen screen.
@@ -92,6 +103,7 @@ pub fn settings() -> Result<crate::tui::app::data::Settings> {
         terminal: cfg.terminal.clone(),
         theme: cfg.theme.clone(),
         motion: cfg.motion.clone(),
+        log_level: cfg.log_level.clone(),
         default_template: cfg.default_template.clone(),
         date_preview: chrono::Local::now().format(&cfg.date_format).to_string(),
         date_format: cfg.date_format.clone(),

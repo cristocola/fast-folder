@@ -31,17 +31,79 @@ fn every_status_line_is_logged_and_l_reads_them_back_newest_first() {
     assert!(matches!(app.log.back(), Some(entry) if entry.level == StatusLevel::Warn));
     let _ = press(&mut app, Key::plain(KeyCode::Esc));
 
-    let _ = press(&mut app, Key::ch('L'));
-    let Some(Modal::Message { title, lines, .. }) = app.modals.top() else {
+    let effects = press(&mut app, Key::ch('L'));
+    assert_eq!(
+        effects,
+        vec![Effect::LoadActivity],
+        "and asks for every session's"
+    );
+    let Some(Modal::Activity(activity)) = app.modals.top() else {
         panic!("L opens the messages");
     };
-    assert_eq!(title, "messages");
+    let lines = &activity.messages;
     assert!(
         lines[0].starts_with("10:00:00") && lines[0].contains("disk is full"),
-        "newest first, stamped: {:?}",
+        "this session's at once, newest first, stamped: {:?}",
         lines.first()
     );
     assert_eq!(app.unseen_warnings, 0, "reading the log clears the count");
+}
+
+/// Every status line is handed to the runtime to keep, in the order it was
+/// said — `update` writes nothing itself.
+#[test]
+fn every_status_line_is_handed_over_to_be_kept() {
+    use fastf::util::messages::Level;
+
+    let mut app = fixture(3, 120, 40);
+    app.outbox.clear();
+    let _ = update(
+        &mut app,
+        Msg::Diag(fastf::util::diag::Level::Warn, "disk is full".to_string()),
+    );
+    let kept = app.outbox.last().expect("the warning was handed over");
+    assert_eq!(kept.level, Level::Warn);
+    assert_eq!(kept.source, "app");
+    assert!(kept.text.contains("disk is full"));
+}
+
+/// Tab turns the activity screen's page, and each page keeps its own place;
+/// a read landing while it is open fills both pages in.
+#[test]
+fn the_activity_screen_turns_its_page_and_fills_in_when_read() {
+    use fastf::tui::app::modal::ActivityPage;
+    use fastf::util::messages::{Level, Message};
+
+    let mut app = fixture(3, 120, 40);
+    let _ = press(&mut app, Key::ch('L'));
+    let _ = update(
+        &mut app,
+        Msg::ActivityLoaded {
+            messages: vec![Message {
+                at: "then".to_string(),
+                level: Level::Good,
+                source: "cli".to_string(),
+                text: "moved ID0001".to_string(),
+            }],
+            log: (0..300).map(|n| format!("T INFO  - 1 event {n}")).collect(),
+        },
+    );
+    let _ = press(&mut app, Key::plain(KeyCode::Tab));
+    let _ = press(&mut app, Key::plain(KeyCode::PageDown));
+    let Some(Modal::Activity(activity)) = app.modals.top() else {
+        panic!("still open");
+    };
+    assert_eq!(activity.page, ActivityPage::Log);
+    assert!(activity.log[0].ends_with("event 299"), "newest first");
+    assert!(activity.scroll[1] > 0 && activity.scroll[0] == 0);
+    assert!(
+        activity.messages[0].contains("moved ID0001") && activity.messages[0].contains("(cli)")
+    );
+    let _ = press(&mut app, Key::plain(KeyCode::BackTab));
+    let Some(Modal::Activity(activity)) = app.modals.top() else {
+        panic!("still open");
+    };
+    assert_eq!(activity.page, ActivityPage::Messages);
 }
 
 #[test]

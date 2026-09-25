@@ -65,6 +65,13 @@ impl<'a> Ticker<'a> {
         }
     }
 
+    /// Say what the job is, for its log: every step it starts and finishes is
+    /// a line there, every entry it touches one more at debug.
+    pub fn subject(self, subject: String) {
+        crate::util::log::info(format!("{subject}: started"));
+        self.update(|state| state.subject = subject);
+    }
+
     /// Say which steps the job will pass through.
     pub fn plan(self, steps: &[JobPhase]) {
         self.update(|state| state.steps = steps.to_vec());
@@ -84,6 +91,19 @@ impl<'a> Ticker<'a> {
                     phase: previous,
                     count: state.step_done,
                 });
+                log_finished(state, previous, state.step_done);
+            }
+            if previous != phase && !state.subject.is_empty() {
+                let count = if total > 0 {
+                    crate::core::assets::count_text(phase, 0, total).replacen("0 of ", "", 1)
+                } else {
+                    String::new()
+                };
+                crate::util::log::info(if count.is_empty() {
+                    format!("{}: {}", state.subject, phase.as_str())
+                } else {
+                    format!("{}: {} ({count})", state.subject, phase.as_str())
+                });
             }
             state.phase = phase;
             state.step_done = 0;
@@ -99,6 +119,16 @@ impl<'a> Ticker<'a> {
             state.step_done += 1;
             state.current_file.clear();
             state.current_file.push_str(&current.to_string_lossy());
+            if !state.subject.is_empty()
+                && crate::util::log::enabled(crate::util::log::Level::Debug)
+            {
+                crate::util::log::debug(format!(
+                    "{}: {} {}",
+                    state.subject,
+                    state.phase.as_str(),
+                    state.current_file
+                ));
+            }
         });
         !self.cancelled()
     }
@@ -111,6 +141,9 @@ impl<'a> Ticker<'a> {
             state.items = state.items.max(state.item);
             state.item_label.clear();
             state.item_label.push_str(label);
+            if !state.subject.is_empty() {
+                crate::util::log::info(format!("{}: {} {label}", state.subject, state.item_text()));
+            }
         });
     }
 }
@@ -129,17 +162,42 @@ pub fn settle<T>(progress: &Mutex<Progress>, cancel: &AtomicBool, result: &anyho
             {
                 let count = state.step_done;
                 state.finished.push(FinishedStep { phase: last, count });
+                log_finished(&state, last, count);
             }
             state.status = JobStatus::Done;
             state.phase = JobPhase::Done;
+            if !state.subject.is_empty() {
+                crate::util::log::info(format!("{}: done", state.subject));
+            }
         }
-        Err(_) if cancel.load(Ordering::Relaxed) => state.status = JobStatus::Cancelled,
+        Err(error) if cancel.load(Ordering::Relaxed) => {
+            state.status = JobStatus::Cancelled;
+            if !state.subject.is_empty() {
+                crate::util::log::info(format!("{}: cancelled ({error:#})", state.subject));
+            }
+        }
         Err(error) => {
             state.status = JobStatus::Failed;
             state.error = Some(format!("{error:#}"));
+            if !state.subject.is_empty() {
+                crate::util::log::error(format!("{}: failed: {error:#}", state.subject));
+            }
         }
     }
     state.touch();
+}
+
+/// A finished step's line in the log: `move … : copied 1301 files`.
+fn log_finished(state: &Progress, phase: JobPhase, count: usize) {
+    if state.subject.is_empty() {
+        return;
+    }
+    let counted = crate::core::assets::count_text(phase, count, 0);
+    crate::util::log::info(if counted.is_empty() {
+        format!("{}: {}", state.subject, phase.past())
+    } else {
+        format!("{}: {} {counted}", state.subject, phase.past())
+    });
 }
 
 #[cfg(test)]

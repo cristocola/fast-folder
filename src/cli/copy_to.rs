@@ -62,8 +62,25 @@ pub fn run(args: CopyToArgs) -> Result<()> {
         }
     }
 
-    let outcome = run_with_progress(&project, &destination)?;
+    let outcome = run_with_progress(&project, &destination).inspect_err(|error| {
+        crate::cli::log::keep(
+            crate::util::messages::Level::Error,
+            format!(
+                "the copy of {} {} failed: {error:#}",
+                project.id, project.name
+            ),
+        )
+    })?;
     report(&project, &outcome);
+    crate::cli::log::keep(
+        crate::util::messages::Level::Good,
+        format!(
+            "copied {} {} to {}; the original is untouched",
+            project.id,
+            project.name,
+            crate::util::paths::display_path(&outcome.path)
+        ),
+    );
     Ok(())
 }
 

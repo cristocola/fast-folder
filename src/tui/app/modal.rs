@@ -160,6 +160,105 @@ impl GuideState {
     }
 }
 
+/// `L`: what fastf said and what it did, one page each, read from the data
+/// directory so every session's are there — not only this one's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activity {
+    pub page: ActivityPage,
+    /// Newest first, drawn as they stand.
+    pub messages: Vec<String>,
+    /// Newest first; an event of several lines is several.
+    pub log: Vec<String>,
+    /// Each page keeps its own place.
+    pub scroll: [usize; 2],
+    /// Whether the files have been read yet; until then the messages page
+    /// holds this session's, from memory.
+    pub loaded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityPage {
+    Messages = 0,
+    Log = 1,
+}
+
+impl ActivityPage {
+    pub const ALL: [ActivityPage; 2] = [ActivityPage::Messages, ActivityPage::Log];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            ActivityPage::Messages => "messages",
+            ActivityPage::Log => "log",
+        }
+    }
+}
+
+impl Activity {
+    /// The page on show.
+    pub fn lines(&self) -> &[String] {
+        match self.page {
+            ActivityPage::Messages => &self.messages,
+            ActivityPage::Log => &self.log,
+        }
+    }
+
+    pub fn scroll_mut(&mut self) -> &mut usize {
+        &mut self.scroll[self.page as usize]
+    }
+
+    pub fn turn(&mut self, delta: isize) {
+        let count = ActivityPage::ALL.len() as isize;
+        let next = (self.page as isize + delta).rem_euclid(count);
+        self.page = ActivityPage::ALL[next as usize];
+    }
+}
+
+/// The messages page's rows, newest first: when, how it read, what it said,
+/// and who said it when that was not this app.
+pub fn message_rows(
+    messages: &[crate::util::messages::Message],
+    glyphs: &crate::tui::theme::Glyphs,
+) -> Vec<String> {
+    use crate::util::messages::Level;
+    if messages.is_empty() {
+        return vec!["No messages yet.".to_string()];
+    }
+    let mut rows = Vec::new();
+    for message in messages.iter().rev() {
+        let mark = match message.level {
+            Level::Warn => format!("{} ", glyphs.warn),
+            Level::Error => format!("{} ", glyphs.cross),
+            Level::Good => format!("{} ", glyphs.check),
+            Level::Info => String::new(),
+        };
+        let source = if message.source == "app" || message.source.is_empty() {
+            String::new()
+        } else {
+            format!("   ({})", message.source)
+        };
+        let mut lines = message.text.lines();
+        rows.push(format!(
+            "{}  {mark}{}{source}",
+            crate::util::time::local_readable(&message.at),
+            lines.next().unwrap_or("")
+        ));
+        rows.extend(lines.map(|line| format!("{:21}{line}", "")));
+    }
+    rows
+}
+
+/// The log page's rows, newest event first, each event's own lines in order.
+pub fn log_rows(events: &[String]) -> Vec<String> {
+    if events.is_empty() {
+        return vec!["The log is empty.".to_string()];
+    }
+    events
+        .iter()
+        .rev()
+        .flat_map(|event| event.lines().map(str::to_string))
+        .collect()
+}
+
 #[derive(Debug)]
 pub enum Modal {
     Palette(PaletteState),
@@ -196,6 +295,8 @@ pub enum Modal {
         level: MessageLevel,
         scroll: usize,
     },
+    /// `L`: messages and the log.
+    Activity(Box<Activity>),
 }
 
 impl Modal {
@@ -435,7 +536,7 @@ impl App {
 
     /// Scroll whatever dialog is on top by `delta` rows, clamped to its
     /// content. `isize::MIN` and `isize::MAX` are the ends.
-    fn scroll_top_modal(&mut self, delta: isize) -> Vec<Effect> {
+    pub(super) fn scroll_top_modal(&mut self, delta: isize) -> Vec<Effect> {
         let area = self.area();
         let Some(top) = self.modals.top_mut() else {
             return Vec::new();
@@ -475,6 +576,17 @@ impl App {
                 ),
                 layout::message_box(area).height.saturating_sub(2) as usize,
             ),
+            Modal::Activity(activity) => {
+                let rows = crate::tui::view::modals::message_rows(
+                    activity.lines(),
+                    crate::tui::view::modals::message_text_width(area),
+                );
+                (
+                    activity.scroll_mut(),
+                    rows,
+                    crate::tui::view::modals::activity_body_rows(area),
+                )
+            }
             _ => return Vec::new(),
         };
         let max = lines.saturating_sub(rows);
@@ -525,7 +637,9 @@ impl App {
                 state.clamp_viewport(layout::settings_rows(area));
                 Vec::new()
             }
-            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.scroll_top_modal(delta),
+            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) | Some(Modal::Activity(_)) => {
+                self.scroll_top_modal(delta)
+            }
             _ => Vec::new(),
         }
     }
@@ -556,9 +670,10 @@ impl App {
                 state.clamp_viewport(layout::settings_rows(area));
                 Vec::new()
             }
-            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) | Some(Modal::Guide(_)) => {
-                self.scroll_top_modal(delta)
-            }
+            Some(Modal::Help { .. })
+            | Some(Modal::Message { .. })
+            | Some(Modal::Activity(_))
+            | Some(Modal::Guide(_)) => self.scroll_top_modal(delta),
             _ => Vec::new(),
         }
     }

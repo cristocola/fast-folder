@@ -1058,8 +1058,8 @@ pub static COMMANDS: &[Command] = &[
     ),
     cmd!(
         ShowLog,
-        "Show messages",
-        "every status line and warning this session, newest first, with the time it arrived",
+        "Messages and log",
+        "what fastf said and what it did, from every session, newest first — the log has every step of every move",
         G,
         [Key::ch('L')],
         Help,
@@ -1283,7 +1283,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         FocusNext,
         "Next pane",
-        "move focus between the list and its pane",
+        "move focus between the list and its pane — on the messages and log screen, turn the page",
         G,
         [Key::plain(KeyCode::Tab)],
         Navigate,

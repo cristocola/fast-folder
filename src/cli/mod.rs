@@ -7,6 +7,7 @@ pub mod folder_verbs;
 
 pub mod id;
 pub mod json;
+pub mod log;
 pub mod move_project;
 pub mod new;
 pub mod note;

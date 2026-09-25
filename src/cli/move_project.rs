@@ -119,7 +119,15 @@ pub fn run(args: MoveArgs) -> Result<()> {
         }
     }
 
-    let outcome = run_with_progress(&project, &target)?;
+    let outcome = run_with_progress(&project, &target).inspect_err(|error| {
+        crate::cli::log::keep(
+            crate::util::messages::Level::Error,
+            format!(
+                "the move of {} {} failed: {error:#}",
+                project.id, project.name
+            ),
+        )
+    })?;
     let moved = &outcome.project;
 
     println!(
@@ -155,9 +163,31 @@ pub fn run(args: MoveArgs) -> Result<()> {
     for note in &outcome.link_notes {
         eprintln!("{} {note}", "note:".cyan().bold());
     }
-    if let Some(warning) = outcome.source.warning(&project.path) {
+    let warning = outcome.source.warning(&project.path);
+    if let Some(warning) = &warning {
         eprintln!("{} {warning}", "warning:".yellow().bold());
     }
+    crate::cli::log::keep(
+        if warning.is_some() {
+            crate::util::messages::Level::Warn
+        } else {
+            crate::util::messages::Level::Good
+        },
+        match &warning {
+            Some(warning) => format!(
+                "moved {} {} to {}; {warning}",
+                moved.id,
+                moved.name,
+                crate::util::paths::display_path(&moved.path)
+            ),
+            None => format!(
+                "moved {} {} to {}",
+                moved.id,
+                moved.name,
+                crate::util::paths::display_path(&moved.path)
+            ),
+        },
+    );
     Ok(())
 }
 

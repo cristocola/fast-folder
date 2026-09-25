@@ -74,6 +74,8 @@ pub struct Progress {
     pub items: usize,
     /// What the current item is about.
     pub item_label: String,
+    /// What the job is, for its log lines: `move ID0047 Shoot to /mnt/b`.
+    pub subject: String,
     /// The move record's operation id, once there is one.
     pub operation: Option<String>,
     /// The job is past its point of no return: a move has published, and what
@@ -241,10 +243,20 @@ impl Progress {
     }
 }
 
-/// `count` in a step's unit, against `total` when it is known.
+/// `count` in a step's unit, against `total` when it is known. The unit
+/// agrees with the number it counts: `1 entry`, `2 of 1473 entries`.
 pub fn count_text(phase: JobPhase, count: usize, total: usize) -> String {
     let Some(unit) = phase.unit() else {
         return String::new();
+    };
+    let unit = if total.max(count) == 1 || (total == 0 && count == 1) {
+        match unit {
+            "entries" => "entry",
+            "files" => "file",
+            other => other,
+        }
+    } else {
+        unit
     };
     if total > 0 {
         format!("{count} of {total} {unit}")
@@ -1158,5 +1170,8 @@ mod tests {
         );
         assert_eq!(count_text(JobPhase::Copying, 2, 0), "2 files");
         assert_eq!(count_text(JobPhase::Publishing, 1, 1), "");
+        assert_eq!(count_text(JobPhase::Copying, 1, 0), "1 file");
+        assert_eq!(count_text(JobPhase::Removing, 1, 1), "1 of 1 entry");
+        assert_eq!(count_text(JobPhase::Removing, 1, 2), "1 of 2 entries");
     }
 }

@@ -14,6 +14,8 @@ pub struct ActionId(pub u64);
 pub enum Effect {
     /// Probe the bases, read the indexes, list the templates — the header.
     LoadSummary,
+    /// Read the messages and the log for the activity screen (`L`).
+    LoadActivity,
     /// `library::discover` on a worker. The generation tells a late answer
     /// from a current one.
     Discover {

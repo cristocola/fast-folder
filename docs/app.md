@@ -187,7 +187,7 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
 | `!` | reconcile: check and recover from what a crash or a failed move left — what `⚠ n needs attention` means |
-| `L` | the session's messages, newest first with the time each arrived — a warning that flashed under a dialog is counted on the status line until you read them |
+| `L` | messages and the log: every message fastf showed you, from every session, and every step of every move and reconcile — Tab turns the page, both newest first, and both keep up while open. A warning that flashed under a dialog is counted on the status line until you read them |
 | F5, Ctrl-R | reload: read every base again |
 | `R` | reindex: rescan every base from its folders and rebuild the caches |
 | Ctrl-Z | suspend to the shell, as in any program; `fg` brings the app back with its screen retaken (unix) |

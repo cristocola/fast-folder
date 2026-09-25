@@ -84,6 +84,10 @@ tell you.
   violations, and the read-only attribute a publish must set aside), `interrupt`
   (Ctrl-C rollback, SIGHUP, and the `set_restore` hook for the second signal),
   `faults` (failpoints), `trace` (work counting), `diag` (the one warning sink),
+  `log` (the log on disk: one line per event, appended by every process at
+  once, rotated; its level is *set* by `main`, since `util` may not read
+  `Config`), `messages` (the sentences a person was shown, kept across
+  sessions),
   `yaml` (the one place the YAML crate is named), `time` (one clock), `paths`
   (data-dir resolution, `display_path`, the boundary checks including
   `contained_destination` and `is_link_like`, base probing), `shell_open`

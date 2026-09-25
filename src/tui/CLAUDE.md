@@ -575,9 +575,17 @@ line say the job finishes by itself and `request_cancel` log
 The `$EDITOR` note suspends into `Suspended::Note` and the CLI's own
 `cli::note::note_from_editor`. The metadata and notes views load through
 `loaders.rs` and render read-only, notes in file order. **The message log**
-(`App.log`, `L`) keeps every status line and `diag` warning, stamped by
+(`App.log`) keeps every status line and `diag` warning this session, stamped by
 `App.clock` (the wall clock in the runtime, a fixed string in fixtures), with a
-count of the warnings that arrived under a dialog.
+count of the warnings that arrived under a dialog. Each also lands in
+`App.outbox`, which `Runtime::keep_messages` drains after every `update` onto
+`messages.log` on a worker — `update` writes nothing. **`L` is the activity
+screen** (`Modal::Activity`): the messages of every session and the log, a page
+each, newest first. It goes up with this session's messages at once
+(`Effect::LoadActivity` reads the files), and `Runtime::watch_activity` reads
+them again once a second while it is open. Tab turns the page — it is the
+`FocusNext` key, the screen's "next pane" — and the page on show wears the
+cursor glyph, so mono can tell which.
 
 ## The flows that build something
 

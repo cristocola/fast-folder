@@ -719,4 +719,15 @@ the header, and every caller must say which side of the commit it is on.
 `util::diag` is the one sink for `core` and `util`: `warn` for a best-effort
 failure that must not change the outcome, `note` for something the caller could
 not have known (a partial project rolled back), `fatal` for the two paths with no
-`Result` (an armed failpoint's `abort`, an unresolvable data directory).
+`Result` (an armed failpoint's `abort`, an unresolvable data directory). Each is
+also written to the log (`util::log`), whichever surface shows it.
+
+**The log is facts, messages are sentences.** `util::log` writes
+`<data dir>/logs/fastf.log`, one line per event (`stamp LEVEL job pid text`,
+continuation lines indented), with one `write` on an append-mode file so
+processes interleave whole lines, and rotates past 4 MiB under a try-lock.
+A job's steps reach it through the `Ticker`, which logs each step at info once
+`Ticker::subject` names the job, and each entry at debug. `util::messages` keeps
+what a person was shown (`messages.log`, JSON lines, a tolerant reader) and
+writes each to the log too. In a `cfg(test)` build the log writes only where
+`FASTF_INSTALL_DIR` is set, so `cargo test` never fills the developer's own.

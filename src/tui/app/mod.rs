@@ -49,7 +49,7 @@ use crate::util::diag::Level;
 use crate::util::size_scan::SizeCell;
 use data::{ProjectDetail, Summary, TemplateCard};
 use library::{LibraryState, Order, Sort};
-use modal::{MessageLevel, Modal, ModalStack, PickItem, PickState, Then};
+use modal::{Activity, ActivityPage, MessageLevel, Modal, ModalStack, PickItem, PickState, Then};
 use search::SearchState;
 use settings::Editing;
 use studio::{Builder, Open, Studio};
@@ -261,6 +261,10 @@ pub struct App {
     /// Warnings that arrived while a dialog covered the status line, not yet
     /// looked at: the status line and the hint bar say so until `L` is pressed.
     pub unseen_warnings: usize,
+    /// Messages said since the runtime last looked, for it to keep on disk —
+    /// `update` does no I/O, so a status line is handed over rather than
+    /// written. Stamped with the time when they are written.
+    pub outbox: Vec<crate::util::messages::Message>,
     /// The clock a log line is stamped with. The runtime's is the wall clock;
     /// a fixture's stands still, so a snapshot never depends on the hour.
     pub clock: fn() -> String,
@@ -366,6 +370,7 @@ impl App {
             status: Status::default(),
             log: std::collections::VecDeque::new(),
             unseen_warnings: 0,
+            outbox: Vec::new(),
             clock: crate::util::time::now_hms,
             data_dir: None,
             has_display: true,
@@ -629,6 +634,17 @@ impl App {
         while self.log.len() > LOG_CAP {
             self.log.pop_front();
         }
+        self.outbox.push(crate::util::messages::Message {
+            at: String::new(),
+            level: match level {
+                StatusLevel::Info => crate::util::messages::Level::Info,
+                StatusLevel::Good => crate::util::messages::Level::Good,
+                StatusLevel::Warn => crate::util::messages::Level::Warn,
+                StatusLevel::Error => crate::util::messages::Level::Error,
+            },
+            source: "app".to_string(),
+            text: text.clone(),
+        });
         // A warning under a full-height dialog is a warning nobody saw.
         if matches!(level, StatusLevel::Warn | StatusLevel::Error) && !self.modals.is_empty() {
             self.unseen_warnings += 1;
@@ -641,12 +657,17 @@ impl App {
         };
     }
 
-    /// `L`: the session's messages, newest first, as a scrollable dialog.
+    /// `L`: the activity screen — every session's messages, and the log.
+    ///
+    /// It goes up at once with this session's messages, from memory, and
+    /// fills in from the data directory when the read lands; the runtime
+    /// reads again while it stays open, so a move running in another fastf
+    /// shows up in it.
     fn open_log(&mut self) -> Vec<Effect> {
         self.unseen_warnings = 0;
         let g = self.theme.glyphs;
-        let body = if self.log.is_empty() {
-            "nothing yet".to_string()
+        let messages = if self.log.is_empty() {
+            vec!["No messages yet.".to_string()]
         } else {
             self.log
                 .iter()
@@ -655,16 +676,27 @@ impl App {
                     let mark = match entry.level {
                         StatusLevel::Warn => format!("{} ", g.warn),
                         StatusLevel::Error => format!("{} ", g.cross),
-                        StatusLevel::Good | StatusLevel::Info => String::new(),
+                        StatusLevel::Good => format!("{} ", g.check),
+                        StatusLevel::Info => String::new(),
                     };
                     format!("{}  {mark}{}", entry.at, entry.text)
                 })
-                .collect::<Vec<_>>()
-                .join("\n")
+                .collect()
         };
-        self.modals
-            .push(Modal::message("messages", body, MessageLevel::Info));
-        Vec::new()
+        self.modals.push(Modal::Activity(Box::new(Activity {
+            page: ActivityPage::Messages,
+            messages,
+            log: vec!["reading…".to_string()],
+            scroll: [0, 0],
+            loaded: false,
+        })));
+        vec![Effect::LoadActivity]
+    }
+
+    /// Whether the activity screen is on top, for the runtime to keep it
+    /// fresh.
+    pub fn activity_open(&self) -> bool {
+        matches!(self.modals.top(), Some(Modal::Activity(_)))
     }
 
     fn info(&mut self, text: impl Into<String>) {
@@ -1200,6 +1232,16 @@ impl App {
                 flow.form.fail(field.as_deref(), error);
                 Vec::new()
             }
+            Msg::ActivityLoaded { messages, log } => {
+                let g = self.theme.glyphs;
+                if let Some(Modal::Activity(activity)) = self.modals.top_mut() {
+                    activity.messages = crate::tui::app::modal::message_rows(&messages, &g);
+                    activity.log = crate::tui::app::modal::log_rows(&log);
+                    activity.loaded = true;
+                }
+                // A page that shrank must not leave its scroll past the end.
+                self.scroll_top_modal(0)
+            }
             Msg::ViewLoaded { title, lines } => {
                 // The dialog went up when the key was pressed, saying it was
                 // reading; fill it in if it is still the one on top, else
@@ -1671,7 +1713,9 @@ impl App {
             Some(Modal::Settings(_)) => self.on_settings_key(key),
             Some(Modal::Onboarding(_)) => self.on_onboarding_key(key),
             Some(Modal::Guide(_)) => self.on_guide_key(key),
-            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.on_scroll_modal_key(key),
+            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) | Some(Modal::Activity(_)) => {
+                self.on_scroll_modal_key(key)
+            }
             None => Vec::new(),
         }
     }
@@ -1963,6 +2007,11 @@ impl App {
             CommandId::Reindex => self.run_action("reindexing…", Action::Reindex),
             CommandId::FocusNext | CommandId::FocusPrevious => {
                 let forward = id == CommandId::FocusNext;
+                // On the activity screen the next pane is the next page.
+                if let Some(Modal::Activity(activity)) = self.modals.top_mut() {
+                    activity.turn(if forward { 1 } else { -1 });
+                    return Vec::new();
+                }
                 let next = self.next_focus(forward);
                 self.set_focus(next);
                 Vec::new()

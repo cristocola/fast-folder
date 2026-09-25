@@ -386,6 +386,44 @@ fn messages_open() {
     snap("messages_open", render_to_string(&app, 100, 30));
 }
 
+/// `L` once the files are read, turned to the log page: every event, newest
+/// first, each with its time, level, job and process — what the messages page
+/// summarises.
+#[test]
+fn activity_log_page() {
+    use fastf::util::messages::{Level, Message};
+    let mut app = fixture(12, 100, 30);
+    let _ = update(&mut app, Msg::Key(Key::ch('L')));
+    let message = |level, text: &str| Message {
+        // Not a stamp `local_readable` can turn: a snapshot may not depend on
+        // the machine's time zone.
+        at: "2026-09-25 16:03".to_string(),
+        level,
+        source: "cli".to_string(),
+        text: text.to_string(),
+    };
+    let _ = update(
+        &mut app,
+        Msg::ActivityLoaded {
+            messages: vec![
+                message(Level::Good, "moved ID0248 Lullaby to /mnt/projects/b"),
+                message(Level::Warn, "the original is still there, whole"),
+            ],
+            log: vec![
+                "2026-09-25T14:03:11.123Z INFO  - 4242 move ID0248 Lullaby to /mnt/projects/b: started".to_string(),
+                "2026-09-25T14:03:11.200Z INFO  - 4242 move ID0248 Lullaby to /mnt/projects/b: scanned 41 entries".to_string(),
+                "2026-09-25T14:03:19.004Z WARN  - 4242 the moved copy could not be re-read\n    second line of it".to_string(),
+            ],
+        },
+    );
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("moved ID0248"), "{frame}");
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("scanned 41 entries"), "{frame}");
+    snap("activity_log_page", frame);
+}
+
 /// A small window: two header lines, the pane in the list's place.
 #[test]
 fn dashboard_60x16() {

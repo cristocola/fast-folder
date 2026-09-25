@@ -14,7 +14,7 @@ use crate::tui::app::palette::PaletteState;
 use crate::tui::app::wizard::{Flow, Preview, Step};
 use crate::tui::command::{self, Availability, CommandId, Context};
 use crate::tui::layout::{centered, centered_fixed};
-use crate::tui::view::{fit, highlighted, pad, split_line};
+use crate::tui::view::{fit, fit_spans, highlighted, pad, split_line};
 
 /// Draw the top modal, if any. Returns where its caret is.
 pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
@@ -42,6 +42,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         }
         Modal::Guide(state) => {
             render_guide(app, state, frame, area);
+            None
+        }
+        Modal::Activity(activity) => {
+            render_activity(app, activity, frame, area);
             None
         }
         Modal::Message {
@@ -1446,6 +1450,87 @@ fn render_message(
         .wrap(Wrap { trim: false })
         .scroll((scroll.min(max_scroll) as u16, 0));
     frame.render_widget(paragraph, target);
+}
+
+/// The activity screen (`L`): the message box, a row naming the pages with
+/// the one on show in the accent and the key that turns them, a blank row, and
+/// the page — the same wrapped paragraph a message is.
+fn render_activity(
+    app: &App,
+    activity: &crate::tui::app::modal::Activity,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    use crate::tui::app::modal::ActivityPage;
+    let theme = &app.theme;
+    let box_ = crate::tui::layout::message_box(area);
+    super::clear(frame, box_, &app.theme);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(" activity ", theme.accent()))
+        .border_style(theme.accent());
+    let inner = block.inner(box_);
+    frame.render_widget(block, box_);
+    let target = inset(inner);
+
+    // The page on show wears the cursor as well as the accent, so a theme
+    // with no colour still says which it is.
+    let mut tabs = Vec::new();
+    for page in ActivityPage::ALL {
+        if page == activity.page {
+            tabs.push(Span::styled(
+                format!("{} {}", theme.glyphs.cursor, page.title()),
+                theme.accent(),
+            ));
+        } else {
+            tabs.push(Span::styled(format!("  {}", page.title()), theme.dim()));
+        }
+        tabs.push(Span::raw("   "));
+    }
+    let key = command::key_of_in(CommandId::FocusNext, &theme.glyphs);
+    tabs.push(Span::styled(
+        format!("{key} turns the page · newest first"),
+        theme.dim(),
+    ));
+    let header = Rect {
+        height: 1.min(target.height),
+        ..target
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(fit_spans(
+            tabs,
+            target.width as usize,
+            theme.glyphs.ellipsis,
+        ))),
+        header,
+    );
+
+    let body = Rect {
+        y: target.y + 2.min(target.height),
+        height: target.height.saturating_sub(2),
+        ..target
+    };
+    let lines = activity.lines();
+    let text: Vec<Line> = lines
+        .iter()
+        .map(|line| Line::from(Span::styled(line.clone(), Style::default().fg(theme.text))))
+        .collect();
+    let max_scroll = message_rows(lines, body.width as usize).saturating_sub(body.height as usize);
+    let scroll = activity.scroll[activity.page as usize].min(max_scroll);
+    frame.render_widget(
+        Paragraph::new(text)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll as u16, 0)),
+        body,
+    );
+}
+
+/// How many rows of a page the activity screen shows: the message box's,
+/// less its border and the row of page names with the blank one under it.
+pub(crate) fn activity_body_rows(area: Rect) -> usize {
+    crate::tui::layout::message_box(area)
+        .height
+        .saturating_sub(4) as usize
 }
 
 /// How many rows a message takes once it is wrapped, which is not how many

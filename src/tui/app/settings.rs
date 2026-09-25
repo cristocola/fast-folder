@@ -78,7 +78,7 @@ impl Job {
             Job::RaiseCounter => "raising the counter…",
             Job::SyncCounters => "syncing the counters…",
             Job::Reindex => "reindexing…",
-            Job::Reconcile => "checking and recovering…",
+            Job::Reconcile => "reconciling…",
             Job::DataLocations => "reading…",
         }
     }
@@ -597,14 +597,14 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             "rescan every base from its folders and rebuild the caches",
         ),
         run(
-            "Check and recover",
+            "Reconcile",
             Job::Reconcile,
             match s.attention {
                 0 => String::new(),
                 1 => "1 needs attention".to_string(),
                 n => format!("{n} need attention"),
             },
-            "finish or roll back work a crash left half-done",
+            "check and recover: finish or roll back work a crash or a failed move left half-done",
         ),
         run(
             "Data locations",

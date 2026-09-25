@@ -913,10 +913,16 @@ fn reconcile_transaction(
     // the destination there, a `ReadyToCommit` beside one is a publish whose
     // later phases a power loss took back — the rename reached the disk and
     // the journal did not — and it is finished as what it was.
-    let phase = if journal.phase == MovePhase::ReadyToCommit
+    // A destination that already holds this project's `PROJECT_INFO.md` is
+    // published, whatever the record says: a copy made in its final place is
+    // published the moment that file lands, and a crash right after leaves
+    // `Copying`; a record on a cloud mount may hold the phase the mount
+    // managed to upload rather than the one fastf reached.
+    let phase = if (journal.phase == MovePhase::ReadyToCommit
         && entry_exists_quiet(&retired)
         && !entry_exists_quiet(&staging)
-        && entry_exists_quiet(&final_path)
+        && entry_exists_quiet(&final_path))
+        || (journal.phase == MovePhase::Copying && transaction.final_is_published())
     {
         MovePhase::CleanupPending
     } else {
@@ -941,12 +947,22 @@ fn reconcile_transaction(
                 return;
             }
             if entry_exists_quiet(&final_path) {
-                report.unrecoverable.push(format!(
-                    "{subject}: an unfinished move's destination {} is taken by something \
-                     else; fastf changed nothing",
-                    shown(&final_path)
-                ));
-                return;
+                // Made in place and not published: fastf's own unfinished
+                // copy, which `remove` takes with the record. Anything with a
+                // readable identity of its own there is somebody else's.
+                let ours = journal.in_place
+                    && crate::core::project_info::read_metadata(&final_path)
+                        .ok()
+                        .flatten()
+                        .is_none();
+                if !ours {
+                    report.unrecoverable.push(format!(
+                        "{subject}: an unfinished move's destination {} is taken by something \
+                         else; fastf changed nothing",
+                        shown(&final_path)
+                    ));
+                    return;
+                }
             }
             match transaction.remove() {
                 Ok(()) => report.rolled_back += 1,
@@ -954,6 +970,12 @@ fn reconcile_transaction(
                     "{subject}: could not discard an unfinished move's copy ({error:#})"
                 )),
             }
+        }
+        MovePhase::ReadyToCommit if journal.in_place => {
+            report.unrecoverable.push(format!(
+                "{subject}: the record is in a state this version never writes; fastf changed \
+                 nothing"
+            ));
         }
         MovePhase::ReadyToCommit => {
             if let Err(error) =
@@ -1081,21 +1103,13 @@ fn reconcile_transaction(
                 let mut notes = Vec::new();
                 bookkeep(&source_base, &journal, target_base, &final_path, &mut notes);
                 report.unrecoverable.append(&mut notes);
-                match transaction.remove() {
-                    Ok(()) => {
-                        report.completed += 1;
-                        report.unrecoverable.push(format!(
-                            "{subject}: moved to {}; the folder now at {} is a different \
-                             project, so fastf left it alone and the move is finished.",
-                            shown(&final_path),
-                            shown(&source)
-                        ));
-                    }
-                    Err(error) => report.unrecoverable.push(format!(
-                        "{subject}: the move is complete, but its record could not be \
-                         cleared ({error:#})"
-                    )),
-                }
+                report.unrecoverable.push(format!(
+                    "{subject}: moved to {}; the folder now at {} is a different project, so \
+                     fastf left it alone.",
+                    shown(&final_path),
+                    shown(&source)
+                ));
+                finish_record(transaction, operation_dir, &subject, report);
                 return;
             }
             if !retired_exists && (journal.phase == MovePhase::Retired || !source_exists) {
@@ -1104,13 +1118,7 @@ fn reconcile_transaction(
                 let mut notes = Vec::new();
                 bookkeep(&source_base, &journal, target_base, &final_path, &mut notes);
                 report.unrecoverable.append(&mut notes);
-                match transaction.remove() {
-                    Ok(()) => report.completed += 1,
-                    Err(error) => report.unrecoverable.push(format!(
-                        "{subject}: the move is complete, but its record could not be \
-                         cleared ({error:#})"
-                    )),
-                }
+                finish_record(transaction, operation_dir, &subject, report);
                 return;
             }
             let Some(manifest) = read_manifest_or_report(operation_dir, &subject, report) else {
@@ -1159,6 +1167,60 @@ fn reconcile_transaction(
             report.unrecoverable.append(&mut notes);
             record_fate(fate, &subject, &source, &final_path, report);
         }
+    }
+}
+
+/// Clear a completed move's record — after any file a cloud mount put in a
+/// 3.12.0 record's staging folder late has been moved into place. One that
+/// cannot be keeps the record, and is named; nothing under it is deleted.
+fn finish_record(
+    transaction: transactions::MoveTransaction,
+    operation_dir: &Path,
+    subject: &str,
+    report: &mut ReconcileReport,
+) {
+    if transaction
+        .old_staging_path()
+        .is_some_and(|staging| entry_exists_quiet(&staging))
+    {
+        let staging_shown = crate::util::paths::display_path(&transaction.staging_path());
+        // The same mount may have lost the manifest; the sweep then places
+        // only what the moved copy lacks.
+        let manifest = transactions::read_manifest(operation_dir).ok();
+        match transaction.sweep_strays(manifest.as_ref()) {
+            Ok((moved, left)) if left.is_empty() => {
+                if moved > 0 {
+                    report.unrecoverable.push(format!(
+                        "{subject}: {moved} file{} the mount had put in the move's old staging \
+                         folder after it was renamed away {} moved into place.",
+                        if moved == 1 { "" } else { "s" },
+                        if moved == 1 { "was" } else { "were" }
+                    ));
+                }
+            }
+            Ok((moved, left)) => {
+                report.leftovers.push(format!(
+                    "{subject}: {moved} moved into place; {} left in the move's old staging \
+                     folder at {staging_shown} that fastf will not remove: {}",
+                    left.len(),
+                    left.iter().take(10).cloned().collect::<Vec<_>>().join("; ")
+                ));
+                return;
+            }
+            Err(error) => {
+                report.leftovers.push(format!(
+                    "{subject}: could not look through the move's old staging folder at \
+                     {staging_shown} ({error:#}); fastf keeps it."
+                ));
+                return;
+            }
+        }
+    }
+    match transaction.remove() {
+        Ok(()) => report.completed += 1,
+        Err(error) => report.unrecoverable.push(format!(
+            "{subject}: the move is complete, but its record could not be cleared ({error:#})"
+        )),
     }
 }
 
@@ -1234,16 +1296,15 @@ fn record_fate(
             redundant: false,
         } => report.leftovers.push(format!(
             "{subject}: moved to {}; the original's retired copy at {} was kept whole, \
-             because {reason}. Look inside, delete it yourself once nothing in it is \
-             needed, then run `fastf reconcile`.",
+             because {reason}. fastf keeps it until you have looked; once nothing in it \
+             is needed, remove it and run `fastf reconcile`.",
             shown(final_path),
             shown(&path)
         )),
         SourceFate::KeptWhole { reason } => report.unrecoverable.push(format!(
             "{subject}: moved to {}, but the original at {} is still there and fastf \
-             removed nothing: {reason}. When that is resolved, `fastf reconcile` finishes \
-             the move; or, if the moved copy is the one you want, delete the original \
-             yourself and run `fastf reconcile`.",
+             removed nothing: {reason}. `fastf reconcile` tries again once that is \
+             resolved; until then both copies are listed.",
             shown(final_path),
             shown(source)
         )),
@@ -1322,20 +1383,33 @@ mod tests {
         root
     }
 
+    /// A record as 3.12.0 wrote it: the copy staged under the transaction and
+    /// renamed into place. Most of these tests are about finishing what that
+    /// version left; a new record stages in its final place.
+    fn as_staged_under_the_record(mut transaction: MoveTransaction) -> MoveTransaction {
+        transaction.journal.in_place = false;
+        edit_journal(&transaction.operation_dir, |journal| {
+            journal.remove("in_place");
+        });
+        transaction
+    }
+
     fn prepared_transaction(
         source_base: &Path,
         target_base: &Path,
     ) -> (PathBuf, MoveManifest, MoveTransaction) {
         let source = write_project(source_base, "project", "ID0001");
-        let transaction = MoveTransaction::begin(
-            source_base,
-            Path::new("project"),
-            target_base,
-            Path::new("project"),
-            "ID0001",
-            Operation::Move,
-        )
-        .unwrap();
+        let transaction = as_staged_under_the_record(
+            MoveTransaction::begin(
+                source_base,
+                Path::new("project"),
+                target_base,
+                Path::new("project"),
+                "ID0001",
+                Operation::Move,
+            )
+            .unwrap(),
+        );
         let manifest = MoveManifest::scan(&source).unwrap();
         transaction.write_manifest(&manifest).unwrap();
         (source, manifest, transaction)
@@ -1457,15 +1531,17 @@ mod tests {
         assert!(!target_base.join("project").exists());
 
         let manifest = MoveManifest::scan(&source).unwrap();
-        let mut transaction = MoveTransaction::begin(
-            &source_base,
-            Path::new("project"),
-            &target_base,
-            Path::new("project"),
-            "ID0001",
-            Operation::Move,
-        )
-        .unwrap();
+        let mut transaction = as_staged_under_the_record(
+            MoveTransaction::begin(
+                &source_base,
+                Path::new("project"),
+                &target_base,
+                Path::new("project"),
+                "ID0001",
+                Operation::Move,
+            )
+            .unwrap(),
+        );
         transaction.write_manifest(&manifest).unwrap();
         let staging = fill_staging(&source, &manifest, &transaction);
         transaction.set_phase(MovePhase::ReadyToCommit).unwrap();
@@ -1569,6 +1645,7 @@ mod tests {
             journal.remove("operation");
             journal.remove("host");
             journal.remove("machine");
+            journal.remove("in_place");
         });
     }
 
@@ -1994,6 +2071,312 @@ mod tests {
         assert!(report.unrecoverable.is_empty(), "{report:?}");
         assert!(!operation.exists());
         assert!(source_base.join("project/payload.part").is_file());
+    }
+
+    /// **The Drive case.** A cloud mount misplaced three uploads while the
+    /// staging folder was renamed into place, so the moved copy was published
+    /// missing three files. The original is whole and unchanged and holds
+    /// them, so reconcile puts them back itself — folder, file and link alike
+    /// — and finishes the move. Nobody copies files by hand.
+    #[test]
+    fn a_moved_copy_missing_entries_is_completed_from_the_original() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let source = write_project(&source_base, "project", "ID0001");
+        fs::create_dir_all(source.join("node_modules/three/src")).unwrap();
+        fs::write(source.join("node_modules/three/src/Water2.js"), "water").unwrap();
+        fs::write(source.join("node_modules/three/src/Uniform.js"), "uniform").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../src/Water2.js", source.join("node_modules/three/link"))
+            .unwrap();
+        let mut transaction = as_staged_under_the_record(
+            MoveTransaction::begin(
+                &source_base,
+                Path::new("project"),
+                &target_base,
+                Path::new("project"),
+                "ID0001",
+                Operation::Move,
+            )
+            .unwrap(),
+        );
+        let manifest = MoveManifest::scan(&source).unwrap();
+        transaction.write_manifest(&manifest).unwrap();
+        let staging = fill_staging(&source, &manifest, &transaction);
+        let staged = manifest.verify_destination(&staging).unwrap();
+        transaction.write_published(&staged).unwrap();
+        transaction.set_phase(MovePhase::ReadyToCommit).unwrap();
+        fs::rename(staging, target_base.join("project")).unwrap();
+        transaction.set_phase(MovePhase::CleanupPending).unwrap();
+        let final_path = target_base.join("project");
+        // What the mount lost: a file, a whole folder, and a link.
+        fs::remove_file(final_path.join("node_modules/three/src/Uniform.js")).unwrap();
+        fs::remove_dir_all(final_path.join("empty")).unwrap();
+        #[cfg(unix)]
+        fs::remove_file(final_path.join("node_modules/three/link")).unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert!(report.unrecoverable.is_empty(), "{report:?}");
+        assert_eq!(
+            fs::read_to_string(final_path.join("node_modules/three/src/Uniform.js")).unwrap(),
+            "uniform"
+        );
+        assert!(final_path.join("empty").is_dir());
+        #[cfg(unix)]
+        assert_eq!(
+            fs::read_link(final_path.join("node_modules/three/link")).unwrap(),
+            Path::new("../src/Water2.js")
+        );
+        assert!(
+            !source.exists(),
+            "the original left, once the copy was whole"
+        );
+        assert!(hidden_folders(&source_base).is_empty());
+        assert_eq!(
+            fs::read_dir(transactions::transaction_root(&target_base))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    /// A moved copy that holds an *older* file than was published — restored
+    /// from a backup taken before the move — is not something fastf overwrites
+    /// or removes the original for. Both are kept, and nobody is told to
+    /// delete anything.
+    #[test]
+    fn a_moved_copy_older_than_published_keeps_both_and_advises_no_deletion() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, final_path, _transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(86_400);
+        let file = fs::File::options()
+            .write(true)
+            .open(final_path.join("payload.part"))
+            .unwrap();
+        file.set_modified(old).unwrap();
+        drop(file);
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 0, "{report:?}");
+        let said = report.unrecoverable.join("\n");
+        assert!(said.contains("older in the moved copy"), "{said}");
+        assert!(said.contains("both copies are listed"), "{said}");
+        assert!(!said.contains("delete"), "{said}");
+        assert!(source.join("payload.part").is_file(), "kept whole");
+    }
+
+    /// A copy made in its final place and killed before `PROJECT_INFO.md`
+    /// landed is fastf's own unfinished folder: not a project, and taken away
+    /// with the record. The original is untouched.
+    #[test]
+    fn an_in_place_copy_killed_before_its_publish_is_rolled_back() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let source = write_project(&source_base, "project", "ID0001");
+        let transaction = MoveTransaction::begin(
+            &source_base,
+            Path::new("project"),
+            &target_base,
+            Path::new("project"),
+            "ID0001",
+            Operation::Move,
+        )
+        .unwrap();
+        let manifest = MoveManifest::scan(&source).unwrap();
+        transaction.write_manifest(&manifest).unwrap();
+        let staging = transaction.claim_staging().unwrap();
+        assert_eq!(
+            staging,
+            target_base.join("project"),
+            "made in its final place"
+        );
+        transactions::copy_to_staging(
+            &manifest.without_root_metadata(),
+            &source,
+            &staging,
+            &Mutex::new(Progress::new(&[])),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(staging.join("payload.part").is_file());
+        assert!(
+            !staging.join("PROJECT_INFO.md").exists(),
+            "not a project yet"
+        );
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.rolled_back, 1, "{report:?}");
+        assert!(!staging.exists(), "the unfinished copy is gone");
+        assert!(
+            source.join("payload.part").is_file(),
+            "the original is whole"
+        );
+        assert_eq!(
+            fs::read_dir(transactions::transaction_root(&target_base))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    /// Killed the instant after `PROJECT_INFO.md` landed, before the record
+    /// could say so: the copy is a project, so the move is finished from
+    /// there.
+    #[test]
+    fn an_in_place_copy_published_before_its_record_said_so_is_finished() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let source = write_project(&source_base, "project", "ID0001");
+        let transaction = MoveTransaction::begin(
+            &source_base,
+            Path::new("project"),
+            &target_base,
+            Path::new("project"),
+            "ID0001",
+            Operation::Move,
+        )
+        .unwrap();
+        let manifest = MoveManifest::scan(&source).unwrap();
+        transaction.write_manifest(&manifest).unwrap();
+        let staging = transaction.claim_staging().unwrap();
+        transactions::copy_to_staging(
+            &manifest,
+            &source,
+            &staging,
+            &Mutex::new(Progress::new(&[])),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert!(!source.exists(), "the original left");
+        assert!(staging.join("PROJECT_INFO.md").is_file());
+        assert!(hidden_folders(&source_base).is_empty());
+    }
+
+    /// **What the Drive run left.** A 3.12.0 record whose original is gone,
+    /// and whose old staging folder holds two files the mount uploaded there
+    /// after the rename — the one durable copy of each. They are moved into
+    /// place, never deleted, and only then does the record go.
+    #[test]
+    fn files_a_mount_left_in_an_old_records_staging_are_moved_into_place() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, final_path, mut transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        fs::remove_dir_all(&source).unwrap();
+        transaction.set_phase(MovePhase::Retired).unwrap();
+        let operation = transaction.operation_dir.clone();
+        // The stray upload: recorded, at its recorded size, at the old path.
+        let stray_dir = operation.join(transactions::STAGING_DIR);
+        fs::create_dir_all(&stray_dir).unwrap();
+        fs::write(stray_dir.join("payload.part"), [0_u8, 1, 255]).unwrap();
+        fs::remove_file(final_path.join("payload.part")).unwrap();
+        // And one the move never recorded: kept, and the record with it.
+        fs::write(stray_dir.join("unrecorded.tmp"), b"?").unwrap();
+
+        let first = reconcile_unlocked(&cfg);
+        assert_eq!(first.completed, 0, "{first:?}");
+        assert_eq!(
+            fs::read(final_path.join("payload.part")).unwrap(),
+            [0_u8, 1, 255],
+            "the stray is in place"
+        );
+        assert_eq!(fs::read(stray_dir.join("unrecorded.tmp")).unwrap(), b"?");
+        assert!(
+            operation.is_dir(),
+            "the record stays while something is left"
+        );
+        assert!(
+            first.leftovers.join("\n").contains("unrecorded.tmp"),
+            "{first:?}"
+        );
+
+        fs::remove_file(stray_dir.join("unrecorded.tmp")).unwrap();
+        let second = reconcile_unlocked(&cfg);
+        assert_eq!(second.completed, 1, "{second:?}");
+        assert!(!operation.exists());
+    }
+
+    /// The same, with the manifest gone too (the mount misplaced its rename
+    /// as well): a stray goes where the moved copy holds nothing, and one the
+    /// moved copy already has a file for is kept, since nothing says which is
+    /// right.
+    #[test]
+    fn strays_are_placed_without_a_manifest_only_where_nothing_is() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, final_path, mut transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        fs::remove_dir_all(&source).unwrap();
+        transaction.set_phase(MovePhase::Retired).unwrap();
+        let operation = transaction.operation_dir.clone();
+        fs::remove_file(operation.join(transactions::MANIFEST_FILE)).unwrap();
+        let stray_dir = operation.join(transactions::STAGING_DIR);
+        fs::create_dir_all(stray_dir.join("empty")).unwrap();
+        fs::write(stray_dir.join("payload.part"), [0_u8, 1, 255]).unwrap();
+        fs::remove_file(final_path.join("payload.part")).unwrap();
+        fs::write(stray_dir.join("PROJECT_INFO.md"), b"a late upload").unwrap();
+        // The same bytes as the moved copy already holds: moved over it.
+        fs::create_dir_all(stray_dir.join("empty")).unwrap();
+        let same = fs::read(final_path.join("PROJECT_INFO.md")).unwrap();
+        fs::create_dir_all(stray_dir.join("sub")).unwrap();
+        fs::write(stray_dir.join("sub/twin.md"), &same).unwrap();
+        fs::create_dir_all(final_path.join("sub")).unwrap();
+        fs::write(final_path.join("sub/twin.md"), &same).unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(
+            fs::read(final_path.join("payload.part")).unwrap(),
+            [0_u8, 1, 255],
+            "placed where nothing was"
+        );
+        assert!(
+            !stray_dir.join("sub/twin.md").exists(),
+            "the twin was moved over"
+        );
+        assert!(
+            fs::read_to_string(final_path.join("PROJECT_INFO.md"))
+                .unwrap()
+                .contains("id: ID0001"),
+            "the moved copy's own file was not replaced"
+        );
+        assert!(stray_dir.join("PROJECT_INFO.md").is_file(), "kept");
+        assert!(operation.is_dir(), "and the record with it: {report:?}");
+        assert!(report.leftovers.join("\n").contains("PROJECT_INFO.md"));
+    }
+
+    /// A record written by 3.12.0 on a cloud mount can say `Copying` about a
+    /// move that published and retired long ago: each later phase was a
+    /// rename the mount misplaced. A destination that holds the project's
+    /// `PROJECT_INFO.md` is published, whatever the record says, and with the
+    /// original gone the move is finished from there.
+    #[test]
+    fn a_stale_copying_record_of_a_published_move_is_finished() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, final_path, transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        let operation = transaction.operation_dir.clone();
+        fs::remove_dir_all(&source).unwrap();
+        // The record as the mount kept it: the first write, and nothing after.
+        edit_journal(&operation, |journal| {
+            journal.insert("phase".into(), serde_json::json!("Copying"));
+        });
+        for entry in fs::read_dir(&operation).unwrap().flatten() {
+            if entry.file_name().to_string_lossy().starts_with("phase.") {
+                fs::remove_file(entry.path()).unwrap();
+            }
+        }
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert!(final_path.join("PROJECT_INFO.md").is_file());
+        assert!(!operation.exists());
     }
 
     /// A deleted project's hidden folder is finished by the next pass.

@@ -439,9 +439,14 @@ impl Runtime {
                     }
                     let tx = self.tx.clone();
                     spawn_worker("fastf-action", move || {
-                        let outcome = run_action(*action, &progress, &cancel)
-                            .map(Box::new)
-                            .map_err(|e| format!("{e:#}"));
+                        let outcome = match run_action(*action, &progress, &cancel) {
+                            Ok(mut outcome) => {
+                                outcome.message = for_the_app(&outcome.message);
+                                outcome.warning = outcome.warning.map(|w| for_the_app(&w));
+                                Ok(Box::new(outcome))
+                            }
+                            Err(e) => Err(for_the_app(&format!("{e:#}"))),
+                        };
                         let _ = tx.send(Msg::ActionDone { id, outcome });
                     });
                 }
@@ -769,6 +774,13 @@ fn spawn_worker(name: &'static str, work: impl FnOnce() + Send + 'static) {
 
 /// One mutation through `core::operations`, on a worker. `progress` and
 /// `cancel` are the move job's handles — ignored by every other verb.
+/// The engine's messages name the command line's verb; in the app the same
+/// verb is the `!` key, and a person reading a dialog here should be told the
+/// key, not sent to a terminal.
+fn for_the_app(text: &str) -> String {
+    text.replace("`fastf reconcile`", "Reconcile (`!`)")
+}
+
 fn run_action(
     action: Action,
     progress: &Mutex<Progress>,
@@ -1717,5 +1729,16 @@ impl DetailWorker {
         let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
         state.stop = true;
         changed.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod wording_tests {
+    #[test]
+    fn the_app_names_its_own_key_for_reconcile() {
+        assert_eq!(
+            super::for_the_app("fastf removed nothing; `fastf reconcile` finishes the move."),
+            "fastf removed nothing; Reconcile (`!`) finishes the move."
+        );
     }
 }

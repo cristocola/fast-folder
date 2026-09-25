@@ -243,7 +243,7 @@ fn apply_fills_in_a_folder_from_the_preview() {
 }
 
 /// Maintenance: the three commands the menu could only reach by leaving it —
-/// reindex, check and recover, and where fastf keeps its things.
+/// reindex, reconcile, and where fastf keeps its things.
 #[test]
 fn maintenance_runs_reindex_recover_and_data_locations() {
     let sb = Sandbox::new();
@@ -265,9 +265,9 @@ fn maintenance_runs_reindex_recover_and_data_locations() {
         // search is typing rather than retyping; Ctrl-U starts again.
         .key("/")
         .key("\x15")
-        .key("check")
+        .key("reconcile")
         .enter()
-        .enter() // → Check and recover
+        .enter() // → Reconcile
         .pause(1200)
         .key("/")
         .key("\x15")

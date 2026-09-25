@@ -243,7 +243,32 @@ rename error returns unchanged — never broaden that match. The rename probe sk
 `fs_retry`, because its failure is the signal to stage and retrying would add the
 backoff to every cross-drive move.
 
-Staged moves live at `.fastf-transactions/<timestamp-pid-counter>/` in the target
+**The copy is made in its final place, and `PROJECT_INFO.md` is written last**
+(`MoveManifest::without_root_metadata` / `only_root_metadata`,
+`MoveTransaction::staging_path` = the final path for an `in_place` record). Until
+that file lands the folder is not a project, so the publish is one file write and
+**no folder on the target is ever renamed**: 3.12.0 staged under the transaction
+and renamed the tree into place, and rclone's Drive mount put files of a moved
+project back under the staging path it had just left while its cache said all
+was well. `MoveTransaction::remove` takes an unpublished in-place copy with the
+record and leaves a published one (`final_is_published`) alone; a record without
+`in_place` (3.12.0) is finished the old way, and `sweep_strays` moves any file the
+mount put in its old staging folder late into place before the record goes —
+never deleting one.
+
+**Nothing in the record is ever renamed either.** `move.json`, `manifest.json`
+and `published.json` are each written once, `create_new` (`write_record_file`),
+and a phase is a marker file `phase.<Name>` created and never touched again
+(`set_phase`; `read_journal` takes the highest marker present over what
+`move.json` says). 3.12.0 rewrote `move.json` through an atomic rename for each
+phase, and the Drive mount kept `Copying` on the remote about a move that had
+retired its original; the only write a cloud mount cannot misplace is one that
+creates a file. The one rename left is the version-2 → 3 rewrite of a 3.11
+record. `MoveTransaction::remove` waits up to twenty seconds through `EIO`,
+which is a cloud mount still uploading the record's last files, and refuses
+while a published record's old staging folder still holds files.
+
+The record lives at `.fastf-transactions/<timestamp-pid-counter>/` in the target
 base. `move.json` (version 3; version 2 is read) holds version, operation id,
 project id, source base, validated folder components, the phase
 (`Copying | ReadyToCommit | CleanupPending | Retired`), `operation` (`Move |
@@ -315,6 +340,17 @@ second copy. `MoveOutcome.source` says what became of it (`Removed`, `Leftover`,
 surfaces print. `fastf delete` retires through `.fastf-deleted-<operation>` the
 same way.
 
+**The original is the authority until it is retired**
+(`move_cleanup::complete_destination`): a moved copy missing entries the original
+still holds exactly as recorded gets them back from the original — folders,
+files through `atomic::copy` (an atomic sibling and a rename, so a crash mid-copy
+never leaves a half-written file the next pass would take for the user's newer
+one), links — before the rule below is asked again. Only *missing* entries are
+put back; an entry that is there but differs (older than published, another
+kind) is somebody's decision, and both copies are kept and listed. Found on a
+real rclone Drive mount: it misplaced three uploads while the staging folder was
+renamed into place. No message ever advises deleting anything.
+
 **One rule decides removal, in-process and in reconcile**
 (`move_cleanup::check_removable`): every entry is one the move recorded,
 unchanged (`is_clean` for a version-3 source, `is_residue` for a retired copy and
@@ -336,11 +372,17 @@ operation answers "can fastf write here" on a network mount whose server decides
 and a link that reads back as a file means the mount resolves links itself (sshfs
 `follow_symlinks`), which is refused; a sticky base holding another user's folder
 is refused; `util::disk_space` refuses a copy that cannot fit, and an answer it
-cannot give (`None`) never refuses. Then `copy_to_staging` makes **every name
-before any content** — folders with `create_dir` in manifest order, empty files
-with `create_new`, links last — so a name the target will not hold (a case clash:
-`AlreadyExists` in a staging folder fastf made empty; `EINVAL`/123; too long) is
-found in seconds, all of them together (`name_refusal`). Reconcile clears a probe
+cannot give (`None`) never refuses. Then `copy_to_staging` makes **every folder and
+link before any content, and writes each file once** — folders with `create_dir`
+in manifest order, links last, then each file `create_new` with its contents. It
+asks the target once whether it ignores case (`target_ignores_case`, a probe
+pair in staging) and, if so, reads the record for names that differ only in case
+(`case_clashes`) before copying. 3.12.0 made every file empty first and filled
+it in a second pass: on a cloud mount that uploaded each file twice, the second
+write cancelling the first a thousand times over, and with rclone's
+`--vfs-cache-mode off` the second open is refused outright. A file name the
+target will not take is now found when the file is reached (`name_refusal`),
+still before anything is published. Reconcile clears a probe
 a killed move left, and only the names a probe holds.
 
 **Every removal asks first whether the mount hides links**
@@ -394,13 +436,16 @@ transaction (S source, R retired copy, T staging, F destination):
 | any | `host` is another machine's | report only |
 | any | `operation = Copy` | discard T if unpublished, clear the record; never touch S |
 | Copying, ReadyToCommit | R present | report |
-| Copying | S ours, no F | discard |
+| Copying | S ours; F absent, or fastf's own unfinished in-place copy (no readable identity) | discard, F included |
+| Copying (in place) | F holds our `PROJECT_INFO.md` | published an instant before the crash: as CleanupPending |
+| Copying | otherwise | report |
+| ReadyToCommit (in place) | any | never written by this version: report |
 | ReadyToCommit | T, no F | discard |
 | ReadyToCommit | F ours, no T | exact source + content, then as CleanupPending |
 | CleanupPending, Retired | F not ours | report; with R present, say R may be the only copy |
 | CleanupPending | R present | write `Retired`, bookkeeping, remove R |
 | CleanupPending | S present | check, retire, `Retired`, bookkeeping, remove R |
-| CleanupPending, Retired | no R, and no S or `Retired` | bookkeeping, clear the record |
+| CleanupPending, Retired | no R, and no S or `Retired` | bookkeeping, sweep the old staging's strays into place (`finish_record`), clear the record |
 
 `reconcile_base` and `list_incomplete` never look inside `.fastf-moved-*` or
 `.fastf-deleted-*` for a create to resume. A retired folder no transaction owns is

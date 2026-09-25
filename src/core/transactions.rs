@@ -7,6 +7,16 @@
 //! they are ever joined to a base. So is where a source goes when it leaves
 //! the library: `<source base>/.fastf-moved-<operation-id>`, named by nothing
 //! but the operation.
+//!
+//! **A copy is made in its final place, and `PROJECT_INFO.md` is written
+//! last.** Until that file lands the folder is not a project — discovery
+//! never lists it, and the record says whose it is — so the publish is still
+//! one step, and **no folder on the target is ever renamed**. 3.12.0 staged
+//! under the transaction and renamed the tree into place, and on a cloud
+//! mount that renames a folder while its uploads are still in flight some
+//! of them land at the old path: found on a real rclone Drive mount, which
+//! put three files of a moved project back under the staging path it had
+//! just left, and whose cache said everything was fine.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -22,6 +32,13 @@ use crate::core::assets::Progress;
 
 pub const TRANSACTIONS_DIR: &str = ".fastf-transactions";
 pub const JOURNAL_FILE: &str = "move.json";
+/// A phase reached, as a file whose name says which: `phase.CleanupPending`.
+/// **Created, never renamed.** A phase used to be a rewrite of the journal
+/// through an atomic sibling and a rename, and a cloud mount that misplaces
+/// renames left `move.json` on the remote saying `Copying` about a move that
+/// had long since retired its original. A file that is only ever created
+/// cannot be misplaced, and the phase is the highest marker present.
+const PHASE_PREFIX: &str = "phase.";
 pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 pub const STAGING_DIR: &str = "staging";
 /// The destination as it was published: the walk of the verified staging tree,
@@ -50,6 +67,22 @@ const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 pub(crate) const LISTED: usize = 10;
 
 static OPERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// How long a record's removal waits for a cloud mount to finish uploading
+/// the record's own files.
+const RECORD_REMOVAL_WAIT_MS: u64 = 20_000;
+
+/// `EIO`: what a FUSE mount answers when it cannot do what was asked yet.
+fn is_io_error(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::EIO)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MovePhase {
@@ -107,6 +140,11 @@ pub struct MoveJournal {
     /// demands whole.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub legacy_cleanup: bool,
+    /// The copy is made at its final path, `PROJECT_INFO.md` last (3.12.1
+    /// and later). A record without it staged under the transaction and
+    /// renamed into place, and recovery treats that staging the old way.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_place: bool,
 }
 
 impl MoveJournal {
@@ -423,6 +461,36 @@ impl MoveManifest {
         self.verify_destination(destination).map(drop)
     }
 
+    /// The root `PROJECT_INFO.md`, which is written last: it is what makes the
+    /// copy a project.
+    pub fn root_metadata(&self) -> Option<&ManifestEntry> {
+        self.entry(Path::new(crate::core::project_info::RESERVED_FILENAME))
+    }
+
+    /// This manifest without the root `PROJECT_INFO.md`: everything that is
+    /// copied before the publish, and what the copy is verified against then.
+    pub fn without_root_metadata(&self) -> MoveManifest {
+        MoveManifest {
+            version: self.version,
+            entries: self
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.path != Path::new(crate::core::project_info::RESERVED_FILENAME)
+                })
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Only the root `PROJECT_INFO.md`, for the publish.
+    pub fn only_root_metadata(&self) -> MoveManifest {
+        MoveManifest {
+            version: self.version,
+            entries: self.root_metadata().cloned().into_iter().collect(),
+        }
+    }
+
     /// The recorded entry at `path`.
     pub fn entry(&self, path: &Path) -> Option<&ManifestEntry> {
         self.entries
@@ -729,6 +797,32 @@ impl Problem {
             Self::OtherFilesystem => "a different filesystem".to_string(),
             Self::NotUnicode => "a name that is not valid Unicode".to_string(),
             Self::TooDeep => "too deep to walk".to_string(),
+        }
+    }
+}
+
+impl MovePhase {
+    /// The order phases are reached in.
+    fn rank(self) -> u8 {
+        match self {
+            Self::Copying => 0,
+            Self::ReadyToCommit => 1,
+            Self::CleanupPending => 2,
+            Self::Retired => 3,
+        }
+    }
+
+    fn marker_name(self) -> String {
+        format!("{PHASE_PREFIX}{self:?}")
+    }
+
+    fn from_marker(name: &str) -> Option<Self> {
+        match name.strip_prefix(PHASE_PREFIX)? {
+            "Copying" => Some(Self::Copying),
+            "ReadyToCommit" => Some(Self::ReadyToCommit),
+            "CleanupPending" => Some(Self::CleanupPending),
+            "Retired" => Some(Self::Retired),
+            _ => None,
         }
     }
 }
@@ -1085,12 +1179,10 @@ impl MoveTransaction {
                             host: this_host(),
                             machine: crate::util::machine::id(),
                             legacy_cleanup: false,
+                            in_place: true,
                         };
-                        crate::util::atomic::write_json(
-                            &operation_dir.join(JOURNAL_FILE),
-                            &journal,
-                        )
-                        .context("writing Copying move journal")?;
+                        write_record_file(&operation_dir.join(JOURNAL_FILE), &journal)
+                            .context("writing Copying move journal")?;
                         Ok(Self {
                             target_base: target_base.to_path_buf(),
                             operation_dir: operation_dir.clone(),
@@ -1116,8 +1208,20 @@ impl MoveTransaction {
         )
     }
 
+    /// Where the copy is made: the final path itself, or, for a record 3.12.0
+    /// wrote, a folder under the transaction.
     pub fn staging_path(&self) -> PathBuf {
-        self.operation_dir.join(STAGING_DIR)
+        if self.journal.in_place {
+            self.final_path()
+        } else {
+            self.operation_dir.join(STAGING_DIR)
+        }
+    }
+
+    /// The staging folder a 3.12.0 record renamed into place, where a cloud
+    /// mount may still have put files after the rename.
+    pub fn old_staging_path(&self) -> Option<PathBuf> {
+        (!self.journal.in_place).then(|| self.operation_dir.join(STAGING_DIR))
     }
 
     pub fn final_path(&self) -> PathBuf {
@@ -1140,7 +1244,7 @@ impl MoveTransaction {
             entries: walk.entries.clone(),
         };
         published.validate()?;
-        crate::util::atomic::write_json(&self.operation_dir.join(PUBLISHED_FILE), &published)
+        write_record_file(&self.operation_dir.join(PUBLISHED_FILE), &published)
             .context("writing the published record")?;
         Ok(published)
     }
@@ -1163,7 +1267,7 @@ impl MoveTransaction {
 
     pub fn write_manifest(&self, manifest: &MoveManifest) -> Result<()> {
         manifest.validate()?;
-        crate::util::atomic::write_json(&self.operation_dir.join(MANIFEST_FILE), manifest)
+        write_record_file(&self.operation_dir.join(MANIFEST_FILE), manifest)
             .context("writing move manifest")
     }
 
@@ -1171,19 +1275,36 @@ impl MoveTransaction {
         read_manifest(&self.operation_dir)
     }
 
-    /// Record `phase`. **Always as this build's version**: a version-2 journal
-    /// is rewritten as version 3 here, before its source is renamed, so an
-    /// older binary cannot then find no source, call the move finished and
-    /// leave the retired folder behind with nothing recording it.
+    /// Record `phase`: a marker file, created and never renamed (the doc on
+    /// `PHASE_PREFIX` says why). A version-2 journal is also rewritten as version 3
+    /// here, before its source is renamed, so an older binary cannot then find
+    /// no source, call the move finished and leave the retired folder behind
+    /// with nothing recording it.
     pub fn set_phase(&mut self, phase: MovePhase) -> Result<()> {
         let mut next = self.journal.clone();
         next.phase = phase;
-        next.version = MOVE_VERSION;
-        crate::util::atomic::write_json(&self.operation_dir.join(JOURNAL_FILE), &next)
-            .with_context(|| format!("writing {:?} move phase", phase))?;
-        // The phase is written by a rename into this folder, and the retire it
-        // comes before is a rename on another filesystem: only a synced folder
-        // keeps a power loss from keeping the retire and losing the phase.
+        if self.journal.version < MOVE_VERSION {
+            next.version = MOVE_VERSION;
+            crate::util::atomic::write_json(&self.operation_dir.join(JOURNAL_FILE), &next)
+                .with_context(|| format!("writing {:?} move phase", phase))?;
+        }
+        let marker = self.operation_dir.join(phase.marker_name());
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+        {
+            Ok(file) => {
+                let _ = file.sync_all();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("recording {:?} move phase", phase));
+            }
+        }
+        // The retire this comes before is a rename on another filesystem:
+        // only a synced folder keeps a power loss from keeping the retire and
+        // losing the phase.
         crate::core::move_cleanup::sync_dir(&self.operation_dir);
         self.journal = next;
         Ok(())
@@ -1196,8 +1317,153 @@ impl MoveTransaction {
         Ok(staging)
     }
 
-    /// Remove only this exclusively-created operation directory.
+    /// Whether the copy at the final path has been published: it holds a
+    /// `PROJECT_INFO.md` that reads as this move's project.
+    pub fn final_is_published(&self) -> bool {
+        crate::core::project_info::read_metadata(&self.final_path())
+            .ok()
+            .flatten()
+            .is_some_and(|metadata| metadata.id == self.journal.project_id)
+    }
+
+    /// Move into place any file a cloud mount uploaded to a 3.12.0 record's
+    /// staging folder after that folder was renamed away. Each one the move
+    /// recorded, at its recorded size, is renamed over whatever the final path
+    /// holds there — the same bytes, and the one durable copy if the mount's
+    /// cache was lying — and **nothing is ever deleted**: anything else stays,
+    /// and the record with it. Returns what was moved and what was left.
+    ///
+    /// Without the manifest (the same mount may have misplaced that too), a
+    /// stray is moved where the final path holds nothing, or a file with the
+    /// same bytes: the staging folder was fastf's own, so what is in it is
+    /// what the copy wrote, and neither can take anything away — and the
+    /// same bytes at the final path may be only the mount's cache, while the
+    /// stray is what the remote has.
+    pub fn sweep_strays(&self, manifest: Option<&MoveManifest>) -> Result<(usize, Vec<String>)> {
+        let Some(staging) = self.old_staging_path() else {
+            return Ok((0, Vec::new()));
+        };
+        if fs::symlink_metadata(&staging).is_err() {
+            return Ok((0, Vec::new()));
+        }
+        let final_path = self.final_path();
+        let walk = Walk::of(&staging, "old staging")?;
+        let mut moved = 0;
+        let mut left = Vec::new();
+        for entry in walk
+            .entries
+            .iter()
+            .filter(|entry| entry.kind != ManifestKind::Directory)
+        {
+            let placeable = match manifest {
+                Some(manifest) => manifest.entry(&entry.path).is_some_and(|recorded| {
+                    recorded.kind == entry.kind
+                        && recorded.bytes == entry.bytes
+                        && recorded.link_target == entry.link_target
+                }),
+                None => {
+                    let there = final_path.join(&entry.path);
+                    match fs::symlink_metadata(&there) {
+                        Err(_) => true,
+                        Ok(metadata) => {
+                            entry.kind == ManifestKind::File
+                                && metadata.file_type().is_file()
+                                && metadata.len() == entry.bytes
+                                && same_bytes(&staging.join(&entry.path), &there)
+                        }
+                    }
+                }
+            };
+            if !placeable {
+                left.push(format!(
+                    "{}: {}",
+                    entry.path.display(),
+                    if manifest.is_some() {
+                        "not as the move recorded it"
+                    } else {
+                        "the moved copy holds something different there, and the record of \
+                         what was moved is missing"
+                    }
+                ));
+                continue;
+            }
+            let destination =
+                match crate::util::paths::contained_destination(&final_path, &entry.path) {
+                    Ok(destination) => destination,
+                    Err(error) => {
+                        left.push(format!("{}: {error:#}", entry.path.display()));
+                        continue;
+                    }
+                };
+            if let Some(parent) = destination.parent()
+                && let Err(error) = fs::create_dir_all(parent)
+            {
+                left.push(format!("{}: {error}", entry.path.display()));
+                continue;
+            }
+            match crate::util::fs_retry::rename(&staging.join(&entry.path), &destination) {
+                Ok(()) => moved += 1,
+                Err(error) => left.push(format!("{}: {error}", entry.path.display())),
+            }
+        }
+        for problem in &walk.problems {
+            left.push(format!("{}: {}", problem.path.display(), problem.problem));
+        }
+        // Empty folders go; a folder something was left in stays.
+        for entry in walk
+            .entries
+            .iter()
+            .rev()
+            .filter(|entry| entry.kind == ManifestKind::Directory)
+        {
+            let _ = fs::remove_dir(staging.join(&entry.path));
+        }
+        if left.is_empty() {
+            let _ = fs::remove_dir(&staging);
+        }
+        Ok((moved, left))
+    }
+
+    /// Remove only this exclusively-created operation directory — and, for a
+    /// copy made in its final place that was never published, that copy. A
+    /// published one (its `PROJECT_INFO.md` reads as this project, whatever
+    /// phase the record reached) is left exactly as it is.
     pub fn remove(self) -> Result<()> {
+        if self.journal.in_place && self.journal.phase == MovePhase::Copying {
+            let staging = self.final_path();
+            if fs::symlink_metadata(&staging).is_ok() && !self.final_is_published() {
+                crate::util::paths::require_real_directory(&staging, "unpublished copy")?;
+                if let crate::core::move_cleanup::Removal::Leftover { reason, .. } =
+                    crate::core::move_cleanup::remove_tree(
+                        &staging,
+                        None,
+                        crate::core::move_cleanup::Purpose::Delete,
+                    )
+                {
+                    bail!(
+                        "removing the unpublished copy at {}: {reason}",
+                        staging.display()
+                    );
+                }
+            }
+        }
+        // A published record's old staging folder may hold the one durable
+        // copy of a file a cloud mount uploaded there late; those are swept
+        // into place first (`sweep_strays`), and whatever that could not take
+        // keeps the record.
+        if let Some(staging) = self.old_staging_path()
+            && self.journal.phase.rank() >= MovePhase::CleanupPending.rank()
+            && Walk::of(&staging, "old staging").is_ok_and(|walk| {
+                walk.entries
+                    .iter()
+                    .any(|e| e.kind != ManifestKind::Directory)
+            })
+        {
+            bail!(
+                "refusing to remove the record while its old staging folder {} still holds files",
+                staging.display()
+            );
+        }
         let expected_root = transaction_root(&self.target_base);
         if self.operation_dir.parent() != Some(expected_root.as_path())
             || self
@@ -1212,9 +1478,55 @@ impl MoveTransaction {
             );
         }
         crate::util::paths::require_real_directory(&self.operation_dir, "move transaction")?;
-        crate::util::fs_retry::remove_dir_all(&self.operation_dir)
-            .with_context(|| format!("removing move transaction {}", self.operation_dir.display()))
+        // A cloud mount refuses to remove a folder whose files it is still
+        // uploading — the record's last files were written seconds ago — and
+        // says so with an I/O error that clears once they are up.
+        let mut waited = 0;
+        loop {
+            match crate::util::fs_retry::remove_dir_all(&self.operation_dir) {
+                Ok(()) => return Ok(()),
+                Err(error) if is_io_error(&error) && waited < RECORD_REMOVAL_WAIT_MS => {
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                    waited += 1000;
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("removing move transaction {}", self.operation_dir.display())
+                    });
+                }
+            }
+        }
     }
+}
+
+/// Whether two files hold the same bytes, read whole; `false` when either
+/// cannot be read.
+fn same_bytes(one: &Path, other: &Path) -> bool {
+    match (fs::read(one), fs::read(other)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Write one of the record's files **once, in place**: created new and
+/// synced, never renamed into position. The folder is fastf's own and was
+/// created exclusively a moment ago, so a name is free; and on a cloud mount
+/// a rename is what a background upload can misplace. A crash mid-write
+/// leaves a file that does not parse, which recovery reports and never acts
+/// on.
+fn write_record_file<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
+    let raw = serde_json::to_string_pretty(value)
+        .with_context(|| format!("serializing {}", path.display()))?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(raw.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing {}", path.display()))?;
+    Ok(())
 }
 
 pub fn ensure_transaction_root(target_base: &Path) -> Result<PathBuf> {
@@ -1274,6 +1586,7 @@ pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
             || journal.host.is_some()
             || journal.machine.is_some()
             || journal.legacy_cleanup
+            || journal.in_place
             || journal.operation != Operation::Move
         {
             bail!(
@@ -1300,6 +1613,17 @@ pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
             journal.operation_id,
             directory_name
         );
+    }
+    // The phase is the highest marker present, or the journal's own for a
+    // record written before markers existed.
+    if let Ok(entries) = fs::read_dir(operation_dir) {
+        for entry in entries.flatten() {
+            if let Some(phase) = entry.file_name().to_str().and_then(MovePhase::from_marker)
+                && phase.rank() > journal.phase.rank()
+            {
+                journal.phase = phase;
+            }
+        }
     }
     Ok(journal)
 }
@@ -1329,12 +1653,16 @@ pub fn transaction_from_journal(
 /// Copy from a manifest with one reusable bounded buffer. Files are written
 /// directly into private staging, so no sibling `.part` convention exists.
 ///
-/// **Two passes: every name first, then every file's contents.** A name the
-/// target's filesystem will not hold — two that differ only in case on a drive
-/// that ignores it, a `:` on one that forbids it, a name too long — used to be
-/// found file by file during the copy, possibly hours in. Making every folder
-/// and every (empty) file first finds all of them in seconds, before a byte of
-/// content has moved, and names them together.
+/// **Every folder and every link first, then each file once.** A folder the
+/// target's filesystem will not hold — two whose names differ only in case on
+/// a drive that ignores it, a `:` on one that forbids it — is found before a
+/// byte of content moves, and so is a clash between two *file* names, by
+/// asking the target once whether it ignores case and then reading the record
+/// ([`case_clashes`]). Each file is then written exactly once: making every
+/// file empty first and filling it in a second pass, as 3.12.0 did, wrote each
+/// one twice, which on a cloud mount is two uploads — the second cancelling
+/// the first, a thousand times over — and on one that caches nothing, a second
+/// open it refuses.
 pub fn copy_to_staging(
     manifest: &MoveManifest,
     source: &Path,
@@ -1345,17 +1673,80 @@ pub fn copy_to_staging(
     crate::util::paths::require_real_directory(source, "move source")?;
     crate::util::paths::require_real_directory(staging, "move staging")?;
     manifest.validate()?;
+    if target_ignores_case(staging) {
+        let clashes = case_clashes(manifest);
+        if !clashes.is_empty() {
+            let count = clashes.len();
+            let mut message = format!(
+                "the filesystem where the project is going ignores case, and the project \
+                 holds {count} {} that differ only in case:",
+                if count == 1 {
+                    "pair of names"
+                } else {
+                    "pairs of names"
+                }
+            );
+            for (one, other) in clashes.iter().take(LISTED) {
+                message.push_str(&format!("\n  {} and {}", one.display(), other.display()));
+            }
+            if count > LISTED {
+                message.push_str(&format!("\n  and {} more", count - LISTED));
+            }
+            message.push_str("\nNothing was copied.");
+            bail!("{message}");
+        }
+    }
     create_names(manifest, staging, cancel)?;
     copy_contents(manifest, source, staging, progress, cancel)
 }
 
-/// The first pass: every folder, every file (empty), and — last, so no later
-/// write can pass through one — every link.
+/// Whether the filesystem holding `staging` — a folder fastf made empty a
+/// moment ago — takes two names that differ only in case for one.
+fn target_ignores_case(staging: &Path) -> bool {
+    let upper = staging.join(".Fastf-Case-Probe");
+    let lower = staging.join(".fastf-case-probe");
+    let Ok(()) = fs::write(&upper, b"") else {
+        return false;
+    };
+    let ignores = fs::symlink_metadata(&lower).is_ok();
+    let _ = fs::remove_file(&upper);
+    ignores
+}
+
+/// Pairs of recorded names that a filesystem ignoring case would take for
+/// one: the same folder, the same name once lowercased.
+pub fn case_clashes(manifest: &MoveManifest) -> Vec<(PathBuf, PathBuf)> {
+    let mut seen: HashMap<(PathBuf, String), &Path> = HashMap::new();
+    let mut clashes = Vec::new();
+    for entry in &manifest.entries {
+        let parent = entry
+            .path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let name = entry
+            .path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        match seen.get(&(parent.clone(), name.clone())) {
+            Some(first) => clashes.push((first.to_path_buf(), entry.path.clone())),
+            None => {
+                seen.insert((parent, name), entry.path.as_path());
+            }
+        }
+    }
+    clashes
+}
+
+/// The first pass: every folder, and — last, so no later write can pass
+/// through one — every link.
 fn create_names(manifest: &MoveManifest, staging: &Path, cancel: &AtomicBool) -> Result<()> {
     let ordered = manifest
         .entries
         .iter()
-        .filter(|entry| !entry.kind.is_link())
+        .filter(|entry| entry.kind == ManifestKind::Directory)
         .chain(manifest.entries.iter().filter(|entry| entry.kind.is_link()));
     let mut refused: Vec<(PathBuf, String)> = Vec::new();
     for entry in ordered {
@@ -1370,11 +1761,7 @@ fn create_names(manifest: &MoveManifest, staging: &Path, cancel: &AtomicBool) ->
         let destination = staging.join(&entry.path);
         let made = match entry.kind {
             ManifestKind::Directory => fs::create_dir(&destination),
-            ManifestKind::File => OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&destination)
-                .map(drop),
+            ManifestKind::File => Ok(()),
             ManifestKind::Symlink | ManifestKind::DirSymlink | ManifestKind::Junction => {
                 match &entry.link_target {
                     Some(target) => make_link(entry.kind, target, &destination),
@@ -1445,7 +1832,7 @@ pub(crate) fn name_refusal(error: &std::io::Error) -> String {
 
 /// Make `link` again, pointing exactly where the original did — the target
 /// text, never resolved, and never required to exist.
-fn make_link(kind: ManifestKind, target: &Path, link: &Path) -> std::io::Result<()> {
+pub(crate) fn make_link(kind: ManifestKind, target: &Path, link: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         let _ = kind;
@@ -1469,11 +1856,18 @@ fn make_link(kind: ManifestKind, target: &Path, link: &Path) -> std::io::Result<
 /// Why the target's filesystem would not make a link, in words.
 pub(crate) fn link_refusal(error: &std::io::Error) -> String {
     #[cfg(unix)]
-    if matches!(
-        error.raw_os_error(),
-        Some(libc::EPERM) | Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS)
-    ) {
-        return "the filesystem there cannot hold links".to_string();
+    match error.raw_os_error() {
+        Some(libc::EPERM) | Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS) => {
+            return "the filesystem there cannot hold links".to_string();
+        }
+        // What an rclone mount answers for a link unless it was mounted with
+        // `--links`, which stores each one as a `.rclonelink` file.
+        Some(libc::EIO) => {
+            return "the filesystem there could not make a link (Input/output error); an \
+                    rclone mount holds links only when mounted with `--links`"
+                .to_string();
+        }
+        _ => {}
     }
     #[cfg(windows)]
     match error.raw_os_error() {
@@ -1490,8 +1884,10 @@ pub(crate) fn link_refusal(error: &std::io::Error) -> String {
     name_refusal(error)
 }
 
-/// The second pass: each file's contents, into the empty file the first pass
-/// made — opened without following a link, though none can be there.
+/// The second pass: each file, written once, into a folder the first pass
+/// made — created new, and opened without following a link, though none can
+/// be there yet. A name the target will not take is found here, still before
+/// anything is published.
 fn copy_contents(
     manifest: &MoveManifest,
     source: &Path,
@@ -1523,15 +1919,19 @@ fn copy_contents(
         let mut reader = fs::File::open(&source_path)
             .with_context(|| format!("opening {}", source_path.display()))?;
         let mut options = OpenOptions::new();
-        options.write(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NOFOLLOW);
         }
-        let mut writer = options
-            .open(&destination_path)
-            .with_context(|| format!("opening {}", destination_path.display()))?;
+        let mut writer = options.open(&destination_path).map_err(|error| {
+            anyhow::anyhow!(
+                "{} cannot be made where the project is going: {}",
+                entry.path.display(),
+                name_refusal(&error)
+            )
+        })?;
         loop {
             if cancel.load(Ordering::Relaxed) {
                 bail!("move cancelled");
@@ -1834,6 +2234,9 @@ mod tests {
     fn a_refused_link_is_said_in_words() {
         let refusal = link_refusal(&std::io::Error::from_raw_os_error(libc::EPERM));
         assert!(refusal.contains("cannot hold links"), "{refusal}");
+        // What an rclone mount answers without `--links`, found on a real one.
+        let refusal = link_refusal(&std::io::Error::from_raw_os_error(libc::EIO));
+        assert!(refusal.contains("--links"), "{refusal}");
     }
 
     /// A missing source is an error, never an empty manifest that would verify
@@ -1910,8 +2313,10 @@ mod tests {
         assert_eq!(transaction.final_path(), target_base.join("project"));
         assert_eq!(
             transaction.staging_path(),
-            transaction.operation_dir.join(STAGING_DIR)
+            transaction.final_path(),
+            "a copy is made in its final place"
         );
+        assert_eq!(transaction.old_staging_path(), None);
         let raw = fs::read_to_string(transaction.operation_dir.join(JOURNAL_FILE)).unwrap();
         assert!(!raw.contains("staging"));
         assert!(!raw.contains(&target_base.display().to_string()));
@@ -2122,46 +2527,100 @@ mod tests {
     /// fastf made empty is how a case-insensitive drive refuses `README` beside
     /// `readme`; planting the clash is how a test on a case-sensitive one gets
     /// there.
+    /// Every folder the target will not hold is found before any content is
+    /// copied, and named together; a file name it will not hold is found when
+    /// the file is reached, named the same way, still before anything is
+    /// published. A name already taken in a staging folder fastf made empty is
+    /// how a case-insensitive drive refuses `README` beside `readme`; planting
+    /// the clash is how a test on a case-sensitive one gets there.
     #[test]
-    fn the_names_pass_refuses_every_name_before_copying_a_byte() {
+    fn the_names_pass_refuses_every_folder_and_a_file_is_refused_when_reached() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
         let staging = temp.path().join("staging");
         fs::create_dir_all(source.join("sub")).unwrap();
+        fs::create_dir_all(source.join("other")).unwrap();
         fs::write(source.join("a.txt"), "aaa").unwrap();
         fs::write(source.join("c.txt"), "ccc").unwrap();
         fs::write(source.join("sub/b.txt"), "bbb").unwrap();
         fs::create_dir(&staging).unwrap();
         let manifest = MoveManifest::scan(&source).unwrap();
-        fs::write(staging.join("a.txt"), "").unwrap();
         fs::write(staging.join("sub"), "").unwrap();
+        fs::write(staging.join("other"), "").unwrap();
 
-        let error = copy_to_staging(
-            &manifest,
-            &source,
-            &staging,
-            &Mutex::new(Progress::new(&[])),
-            &AtomicBool::new(false),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            error.contains("2 names"),
-            "the folder's own entries are not counted: {error}"
-        );
-        assert!(
-            error.contains("a.txt: the filesystem there takes this name"),
-            "{error}"
-        );
+        let run = || {
+            copy_to_staging(
+                &manifest,
+                &source,
+                &staging,
+                &Mutex::new(Progress::new(&[])),
+                &AtomicBool::new(false),
+            )
+            .map_err(|error| error.to_string())
+        };
+        let error = run().unwrap_err();
+        assert!(error.contains("2 names"), "{error}");
         assert!(
             error.contains("sub: the filesystem there takes this name"),
             "{error}"
         );
+        assert!(
+            error.contains("other: the filesystem there takes this name"),
+            "{error}"
+        );
         assert!(error.contains("No file's contents were copied"), "{error}");
+        assert!(!staging.join("a.txt").exists(), "no file was made");
+
+        fs::remove_file(staging.join("sub")).unwrap();
+        fs::remove_file(staging.join("other")).unwrap();
+        fs::write(staging.join("c.txt"), "").unwrap();
+        let error = run().unwrap_err();
+        assert!(error.contains("c.txt cannot be made"), "{error}");
+        assert!(error.contains("takes this name"), "{error}");
         assert_eq!(
-            fs::read(staging.join("c.txt")).unwrap(),
-            b"",
-            "made, and left empty: the contents pass never ran"
+            fs::read(staging.join("a.txt")).unwrap(),
+            b"aaa",
+            "written once, whole"
+        );
+    }
+
+    /// Two names that differ only in case are found by reading the record,
+    /// once the target has said it ignores case — before anything is copied.
+    #[test]
+    fn names_that_differ_only_in_case_are_found_in_the_record() {
+        // The record as a case-keeping filesystem would have produced it —
+        // built by hand, since a Windows tree could not hold both `Docs`.
+        let entry = |path: &str, kind| ManifestEntry {
+            path: PathBuf::from(path),
+            kind,
+            bytes: 0,
+            source_modified: ModifiedTime::from_system_time(UNIX_EPOCH),
+            link_target: None,
+        };
+        let manifest = MoveManifest {
+            version: MANIFEST_VERSION,
+            entries: vec![
+                entry("Docs", ManifestKind::Directory),
+                entry("Docs/README.md", ManifestKind::File),
+                entry("docs", ManifestKind::Directory),
+                entry("docs/other.md", ManifestKind::File),
+                entry("docs/readme.md", ManifestKind::File),
+            ],
+        };
+        assert_eq!(
+            case_clashes(&manifest),
+            vec![(PathBuf::from("Docs"), PathBuf::from("docs"))],
+            "a clash between folders, and none between files in different folders"
+        );
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            target_ignores_case(temp.path()),
+            cfg!(windows),
+            "Windows ignores case; this unix filesystem keeps it"
+        );
+        assert!(
+            !temp.path().join(".Fastf-Case-Probe").exists(),
+            "the probe is gone"
         );
     }
 
@@ -2212,6 +2671,7 @@ mod tests {
             journal.remove("operation");
             journal.remove("host");
             journal.remove("machine");
+            journal.remove("in_place");
         });
         let legacy = read_journal(&operation).unwrap();
         assert!(legacy.source_may_be_partial());
@@ -2237,6 +2697,7 @@ mod tests {
             write(&|journal| {
                 journal.remove("host");
                 journal.remove("machine");
+                journal.remove("in_place");
                 for (key, value) in bad.as_object().unwrap() {
                     journal.insert(key.clone(), value.clone());
                 }
@@ -2244,6 +2705,43 @@ mod tests {
             let error = format!("{:#}", read_journal(&operation).unwrap_err());
             assert!(error.contains(why), "expected '{why}', got: {error}");
         }
+    }
+
+    /// A phase is a file created, never a rename: the highest marker present
+    /// is the phase, above whatever `move.json` says — which on a cloud mount
+    /// may be the only write of it that arrived.
+    #[test]
+    fn a_phase_is_a_marker_file_and_the_highest_one_wins() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_base = temp.path().join("source-base");
+        let target_base = temp.path().join("target-base");
+        fs::create_dir(&source_base).unwrap();
+        fs::create_dir(&target_base).unwrap();
+        let mut transaction = MoveTransaction::begin(
+            &source_base,
+            Path::new("project"),
+            &target_base,
+            Path::new("project"),
+            "ID0001",
+            Operation::Move,
+        )
+        .unwrap();
+        let operation = transaction.operation_dir.clone();
+        let journal_bytes = fs::read(operation.join(JOURNAL_FILE)).unwrap();
+        transaction.set_phase(MovePhase::CleanupPending).unwrap();
+        transaction.set_phase(MovePhase::Retired).unwrap();
+        assert_eq!(
+            fs::read(operation.join(JOURNAL_FILE)).unwrap(),
+            journal_bytes,
+            "move.json is written once"
+        );
+        assert!(operation.join("phase.CleanupPending").is_file());
+        assert!(operation.join("phase.Retired").is_file());
+        assert_eq!(read_journal(&operation).unwrap().phase, MovePhase::Retired);
+        // Setting a phase already reached again is fine, and lower markers
+        // never lower the phase.
+        transaction.set_phase(MovePhase::CleanupPending).unwrap();
+        assert_eq!(read_journal(&operation).unwrap().phase, MovePhase::Retired);
     }
 
     #[test]

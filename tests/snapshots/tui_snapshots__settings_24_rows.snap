@@ -21,7 +21,7 @@ expression: frame
 "│  ID023│   Sync every base                                                                │       │"
 "│       │ Maintenance                                                                      │       │"
 "│       │   Reindex                                                                        │       │"
-"│       │   Check and recover                                                              │       │"
+"│       │   Reconcile                                                                      │       │"
 "│       │▸  Data locations              /home/user/.config/fastf                           │       │"
 "└───────│ where the config, the counter and the templates live, and how that was decided   │───────┘"
 "        │ ↑↓ choose   / filter   Enter change / run   Esc close   ? help   c commands      │        "

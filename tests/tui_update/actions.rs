@@ -314,7 +314,16 @@ fn a_copy_and_a_reconcile_are_jobs_with_the_dialog_up() {
         app.shown_progress().is_none(),
         "not while the folder is being typed"
     );
-    type_text(&mut app, "/mnt/backup");
+    // An absolute path where the test runs: `/mnt/backup` is not one on
+    // Windows, and the prompt refuses it there.
+    type_text(
+        &mut app,
+        if cfg!(windows) {
+            r"C:\backup"
+        } else {
+            "/mnt/backup"
+        },
+    );
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(matches!(job_started(&effects), Some((JobKind::Copy, [_]))));
     assert!(

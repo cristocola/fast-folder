@@ -298,10 +298,12 @@ fn two_moves_at_once_take_turns() {
     project(&sb, &sb.base, 20);
     let second = sb.plant_project(&sb.base, "2026-01-02_Other_ID0002", "ID0002");
     let target = other.display().to_string();
+    // Slow enough that the second is started while the first still copies,
+    // on a runner where starting a process takes a second.
     let first = start(
         &sb,
         &["move", "ID0001", &target, "--yes"],
-        "move:force-staged,move:each-file:delay-50",
+        "move:force-staged,move:each-file:delay-400",
     );
     wait_until("the first copy", 20, || in_phase(&sb, "copying"));
     let out = sb
@@ -339,7 +341,16 @@ fn a_detached_move_is_followed_by_watch() {
         .unwrap();
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(said.contains("started job"), "{said}");
-    let watched = sb.ok(&["jobs", "watch"]);
+    // By its id: on a slow runner the job may have ended before `watch`
+    // starts, and following an ended job prints its outcome all the same.
+    let id = said
+        .split("started job ")
+        .nth(1)
+        .and_then(|rest| rest.split(':').next())
+        .expect("the id")
+        .trim()
+        .to_string();
+    let watched = sb.ok(&["jobs", "watch", &id]);
     assert!(watched.contains("Moved"), "{watched}");
     assert!(watched.contains("copied"), "{watched}");
 }

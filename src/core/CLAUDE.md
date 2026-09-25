@@ -253,6 +253,19 @@ arrived. No hashes, no advanced metadata. Links are refused only on the staged
 path; a rename preserves them. Every walked name is payload — there is no
 transient-suffix filter.
 
+**`transactions::Walk` never stops at an odd entry**: it records what a manifest
+can hold and, beside it, every `Problem` (listed but not examinable, unreadable
+folder, link, special, a folder on another filesystem, a non-Unicode name, too
+deep), so a refusal names all of them and a comparison can say "a link now, was a
+312-byte file". **`MoveManifest::compare(&walk, Match)` is the one comparison**
+and it compares **entries only** — never the manifest's `version`, or every
+version-1 manifest an older binary left would read as changed forever. `Match`
+is `Exact` (the source before publish), `Whole` (folder times ignored, since
+removing a child moves them) or `Content` (a copy); `ManifestDiff::is_clean` and
+`is_residue` (everything left is recorded and unchanged, entries may be missing)
+are the two questions asked of it. Folder devices are compared on unix only, and
+only folders: on overlayfs a file reports the device of its layer.
+
 Before publication, a cancel or failure removes only the owned transaction. After
 it, cancel is too late, and a failed source removal keeps `CleanupPending` and
 reports the destination published.

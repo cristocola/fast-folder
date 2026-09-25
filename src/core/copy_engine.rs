@@ -30,6 +30,10 @@ pub struct CopyOutcome {
     pub path: PathBuf,
     /// Files and bytes copied.
     pub copied: (usize, u64),
+    /// Links carried as links.
+    pub links: usize,
+    /// Links whose meaning the new place may change (`MoveManifest::link_notes`).
+    pub link_notes: Vec<String>,
 }
 
 /// Copy `project` into `destination`, keeping its folder name and its id.
@@ -152,7 +156,7 @@ fn copy_unlocked(
         Operation::Copy,
     )?;
 
-    let staged = (|| -> Result<(usize, u64)> {
+    let staged = (|| -> Result<((usize, u64), usize, Vec<String>)> {
         // Deny-by-default, exactly as a cross-drive move is: a link cannot be
         // reproduced faithfully somewhere else, and following one would
         // silently restructure the copy.
@@ -161,7 +165,11 @@ fn copy_unlocked(
         // A copy removes nothing, so it needs no write access to its source —
         // only the room to land.
         crate::core::move_preflight::check_space(&root, manifest.total_bytes())?;
-        let totals = (manifest.total_files(), manifest.total_bytes());
+        let totals = (
+            (manifest.total_files(), manifest.total_bytes()),
+            manifest.total_links(),
+            manifest.link_notes(&project.path),
+        );
         {
             let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
             state.phase = JobPhase::Copying;
@@ -207,7 +215,7 @@ fn copy_unlocked(
     // state here: a move keeps its transaction when the *source* could not be
     // removed, and a copy removes no source.
     let removal = transaction.remove();
-    let copied = staged?;
+    let (copied, links, link_notes) = staged?;
     if let Err(error) = removal {
         crate::util::diag::warn(format!(
             "could not clear the completed copy transaction: {error:#}"
@@ -218,6 +226,8 @@ fn copy_unlocked(
     Ok(CopyOutcome {
         path: target.to_path_buf(),
         copied,
+        links,
+        link_notes,
     })
 }
 

@@ -297,10 +297,9 @@ fn transient_sharing_violation_is_retried_not_fatal() {
 /// A same-filesystem move of a project containing a junction must succeed and
 /// keep the junction — `fs::rename` copies nothing, so there is nothing to lose.
 ///
-/// This is the counterpart to the refusal: the guard is deliberately scoped to
-/// the staged (copying) path, because refusing here would block the common case
-/// for no benefit. The staged refusal itself is covered in `library`'s unit
-/// tests, which can reach the private path without needing two real filesystems.
+/// The staged (copying) path carries a junction as a junction; that is covered
+/// in `library`'s unit tests, which can reach the private path without needing
+/// two real filesystems.
 #[cfg(windows)]
 #[test]
 fn same_filesystem_move_preserves_a_junction() {

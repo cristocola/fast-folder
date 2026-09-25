@@ -101,6 +101,10 @@ pub struct MoveOutcome {
     pub staged: bool,
     /// What was copied, when it staged: files and bytes.
     pub copied: Option<(usize, u64)>,
+    /// Links carried as links, when it staged.
+    pub links: usize,
+    /// Links whose meaning the new place may change (`MoveManifest::link_notes`).
+    pub link_notes: Vec<String>,
 }
 
 impl MoveOutcome {
@@ -256,6 +260,8 @@ fn move_project_unlocked(
                     source: SourceOutcome::Removed,
                     staged: false,
                     copied: None,
+                    links: 0,
+                    link_notes: Vec::new(),
                 }
             }
             Err(error) if is_cross_device_error(&error) => {
@@ -425,6 +431,8 @@ pub(crate) fn staged_copy_verify_commit(
                 },
                 staged: true,
                 copied: Some(copied),
+                links: 0,
+                link_notes: Vec::new(),
             });
         }
     };
@@ -500,6 +508,8 @@ pub(crate) fn staged_copy_verify_commit(
         source,
         staged: true,
         copied: Some(copied),
+        links: manifest.total_links(),
+        link_notes: manifest.link_notes(&project.path),
     })
 }
 

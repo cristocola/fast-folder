@@ -330,6 +330,50 @@ impl MoveManifest {
             .count()
     }
 
+    pub fn total_links(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.kind.is_link())
+            .count()
+    }
+
+    /// The links whose meaning the new place may change, as sentences. A link
+    /// is kept exactly — that is the promise — so one that climbs out of the
+    /// project now climbs out somewhere else, and one naming the original
+    /// folder by its full path still names it.
+    pub fn link_notes(&self, original: &Path) -> Vec<String> {
+        let original_shown = crate::util::paths::display_path(original);
+        self.entries
+            .iter()
+            .filter(|entry| entry.kind.is_link())
+            .filter_map(|entry| {
+                let target = entry.link_target.as_ref()?;
+                let into_original = target.starts_with(original)
+                    || Path::new(&crate::util::paths::display_path(target))
+                        .starts_with(&original_shown);
+                if target.is_absolute() || target.has_root() {
+                    into_original.then(|| {
+                        format!(
+                            "{} points into the original folder by its full path ({}); it is \
+                             kept exactly, so it still points there, not into the new copy",
+                            entry.path.display(),
+                            target.display()
+                        )
+                    })
+                } else {
+                    climbs_out(&entry.path, target).then(|| {
+                        format!(
+                            "{} points outside the project ({}); it is kept exactly, so from \
+                             the new place it may point somewhere else",
+                            entry.path.display(),
+                            target.display()
+                        )
+                    })
+                }
+            })
+            .collect()
+    }
+
     /// Verify exact relative paths, entry types, regular-file lengths and link
     /// targets. Destination modification times are intentionally not compared:
     /// fastf promises content topology and byte lengths, not metadata
@@ -445,6 +489,38 @@ impl MoveManifest {
             .collect();
         diff
     }
+}
+
+/// What a staged copy carried, in words: "1473 files and 3 links, 60.2 MB".
+pub fn copied_summary(files: usize, links: usize, bytes: u64) -> String {
+    let files = format!("{files} file{}", if files == 1 { "" } else { "s" });
+    let links = match links {
+        0 => String::new(),
+        1 => " and 1 link".to_string(),
+        many => format!(" and {many} links"),
+    };
+    format!(
+        "{files}{links}, {}",
+        crate::util::human_bytes::human_bytes(bytes)
+    )
+}
+
+/// Whether a relative link at `link` (relative to the project) resolves, by
+/// its text alone, to somewhere above the project.
+fn climbs_out(link: &Path, target: &Path) -> bool {
+    let mut depth = link
+        .parent()
+        .map_or(0, |parent| parent.components().count());
+    for component in target.components() {
+        match component {
+            Component::ParentDir if depth == 0 => return true,
+            Component::ParentDir => depth -= 1,
+            Component::Normal(_) => depth += 1,
+            Component::CurDir => {}
+            Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    false
 }
 
 /// How an entry a walk found must agree with the one recorded at its path.
@@ -610,13 +686,12 @@ pub enum Problem {
     /// The folder lists it, and `lstat` cannot examine it. A network mount
     /// that resolves links on the server (sshfs `follow_symlinks`) shows a
     /// dangling link exactly like this.
-    Unexaminable {
-        error: String,
-        not_found: bool,
-    },
+    Unexaminable { error: String, not_found: bool },
     /// A folder whose entries cannot be listed.
     Unreadable(String),
-    Link,
+    /// A link fastf cannot make again, and why: on Windows, a reparse point
+    /// of a kind other than a symbolic link or a junction.
+    UnsupportedLink(String),
     /// A socket, FIFO or device node.
     Special,
     /// A folder on a different filesystem from the walked root: a mount, or a
@@ -635,7 +710,7 @@ impl Problem {
         match self {
             Self::Unexaminable { error, .. } => format!("listed but not examinable ({error})"),
             Self::Unreadable(error) => format!("a folder that cannot be listed ({error})"),
-            Self::Link => "a link".to_string(),
+            Self::UnsupportedLink(what) => what.clone(),
             Self::Special => "a socket, pipe or device".to_string(),
             Self::OtherFilesystem => "a different filesystem".to_string(),
             Self::NotUnicode => "a name that is not valid Unicode".to_string(),
@@ -660,7 +735,7 @@ impl std::fmt::Display for Problem {
                 "listed by the filesystem, but it cannot be examined ({error})"
             ),
             Self::Unreadable(error) => write!(f, "its contents cannot be listed ({error})"),
-            Self::Link => f.write_str("a link; links are not supported by cross-drive moves"),
+            Self::UnsupportedLink(what) => write!(f, "{what}"),
             Self::Special => {
                 f.write_str("a socket, pipe or device, which is not a file fastf can copy")
             }
@@ -826,14 +901,11 @@ fn walk_at(
 /// records for it, or why it cannot. The walk and the removal of a retired
 /// folder both ask here, so what one records the other recognises.
 fn entry_for(
-    _path: &Path,
+    path: &Path,
     relative: &Path,
     metadata: &fs::Metadata,
 ) -> std::result::Result<ManifestEntry, Problem> {
     let file_type = metadata.file_type();
-    if file_type.is_symlink() {
-        return Err(Problem::Link);
-    }
     let modified = metadata
         .modified()
         .map(ModifiedTime::from_system_time)
@@ -841,6 +913,32 @@ fn entry_for(
             not_found: false,
             error: error.to_string(),
         })?;
+    if file_type.is_symlink() {
+        // **A link is content: recorded by its target text, never followed.**
+        // It is what `mv` does and what the same-filesystem rename already
+        // did; a dangling link is as good as any, since nothing is read
+        // through it.
+        let kind = link_kind(path, metadata)?;
+        let target = fs::read_link(path).map_err(|error| Problem::Unexaminable {
+            not_found: error.kind() == std::io::ErrorKind::NotFound,
+            error: error.to_string(),
+        })?;
+        if target.to_str().is_none() {
+            return Err(Problem::NotUnicode);
+        }
+        if target.as_os_str().is_empty() {
+            return Err(Problem::UnsupportedLink(
+                "a link with an empty target".to_string(),
+            ));
+        }
+        return Ok(ManifestEntry {
+            path: relative.to_path_buf(),
+            kind,
+            bytes: 0,
+            source_modified: modified,
+            link_target: Some(target),
+        });
+    }
     let (kind, bytes) = if file_type.is_dir() {
         (ManifestKind::Directory, 0)
     } else if file_type.is_file() {
@@ -855,6 +953,49 @@ fn entry_for(
         source_modified: modified,
         link_target: None,
     })
+}
+
+/// Which kind of link `path` is. Every symbolic link on unix; on Windows the
+/// reparse tag decides, because a junction and a directory symbolic link look
+/// alike to `std` and are made differently — and a mounted volume or a WSL
+/// link look like links too.
+#[cfg(not(windows))]
+fn link_kind(_path: &Path, _metadata: &fs::Metadata) -> std::result::Result<ManifestKind, Problem> {
+    Ok(ManifestKind::Symlink)
+}
+
+#[cfg(windows)]
+fn link_kind(path: &Path, metadata: &fs::Metadata) -> std::result::Result<ManifestKind, Problem> {
+    use crate::util::win_reparse::{IO_REPARSE_TAG_MOUNT_POINT, IO_REPARSE_TAG_SYMLINK};
+    use std::os::windows::fs::FileTypeExt;
+    let tag =
+        crate::util::win_reparse::reparse_tag(path).map_err(|error| Problem::Unexaminable {
+            not_found: error.kind() == std::io::ErrorKind::NotFound,
+            error: error.to_string(),
+        })?;
+    match tag {
+        IO_REPARSE_TAG_SYMLINK if metadata.file_type().is_symlink_dir() => {
+            Ok(ManifestKind::DirSymlink)
+        }
+        IO_REPARSE_TAG_SYMLINK => Ok(ManifestKind::Symlink),
+        IO_REPARSE_TAG_MOUNT_POINT => {
+            // A mount point naming a volume by GUID is a whole other drive
+            // mounted inside the project, not a link to a folder.
+            let target = fs::read_link(path).unwrap_or_default();
+            if target
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .starts_with(r"\\?\volume{")
+            {
+                Err(Problem::OtherFilesystem)
+            } else {
+                Ok(ManifestKind::Junction)
+            }
+        }
+        other => Err(Problem::UnsupportedLink(format!(
+            "a Windows link of a kind fastf cannot make again (reparse tag {other:#010x})"
+        ))),
+    }
 }
 
 /// What is at `path` now, as a walk would record it; `None` for what a
@@ -1194,12 +1335,22 @@ fn create_names(manifest: &MoveManifest, staging: &Path, cancel: &AtomicBool) ->
                 .create_new(true)
                 .open(&destination)
                 .map(drop),
-            ManifestKind::Symlink | ManifestKind::DirSymlink | ManifestKind::Junction => Err(
-                std::io::Error::other("links are not supported by cross-drive moves"),
-            ),
+            ManifestKind::Symlink | ManifestKind::DirSymlink | ManifestKind::Junction => {
+                match &entry.link_target {
+                    Some(target) => make_link(entry.kind, target, &destination),
+                    None => Err(std::io::Error::other(
+                        "the record of this link has no target",
+                    )),
+                }
+            }
         };
         if let Err(error) = made {
-            refused.push((entry.path.clone(), name_refusal(&error)));
+            let why = if entry.kind.is_link() {
+                link_refusal(&error)
+            } else {
+                name_refusal(&error)
+            };
+            refused.push((entry.path.clone(), why));
         }
     }
     if refused.is_empty() {
@@ -1250,6 +1401,53 @@ pub(crate) fn name_refusal(error: &std::io::Error) -> String {
         _ => {}
     }
     error.to_string()
+}
+
+/// Make `link` again, pointing exactly where the original did — the target
+/// text, never resolved, and never required to exist.
+fn make_link(kind: ManifestKind, target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let _ = kind;
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        match kind {
+            ManifestKind::Junction => crate::util::win_reparse::create_junction(target, link),
+            ManifestKind::DirSymlink => std::os::windows::fs::symlink_dir(target, link),
+            _ => std::os::windows::fs::symlink_file(target, link),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (kind, target, link);
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+
+/// Why the target's filesystem would not make a link, in words.
+pub(crate) fn link_refusal(error: &std::io::Error) -> String {
+    #[cfg(unix)]
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::EPERM) | Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS)
+    ) {
+        return "the filesystem there cannot hold links".to_string();
+    }
+    #[cfg(windows)]
+    match error.raw_os_error() {
+        // ERROR_PRIVILEGE_NOT_HELD
+        Some(1314) => {
+            return "Windows lets this account make symbolic links only with Developer Mode \
+                    on (Settings, System, For developers)"
+                .to_string();
+        }
+        // ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED
+        Some(1) | Some(50) => return "the filesystem there cannot hold links".to_string(),
+        _ => {}
+    }
+    name_refusal(error)
 }
 
 /// The second pass: each file's contents, into the empty file the first pass
@@ -1450,10 +1648,11 @@ mod tests {
     /// The data-loss regression, now guarded where the invariant lives. A
     /// junction inside a project was once invisible to the walk, so a staged
     /// move copied around it, verification walked the same blind way and
-    /// reported success, and the source was deleted. The scan refuses the whole
-    /// move instead: a link is neither followed nor silently omitted.
+    /// reported success, and the source was deleted. A link is now recorded by
+    /// its target — never followed, never silently omitted — so what is behind
+    /// it is neither copied nor, when the original is removed, deleted.
     #[test]
-    fn scan_refuses_a_link_rather_than_skipping_it() {
+    fn scan_records_a_link_by_its_target_and_never_follows_it() {
         let temp = tempfile::tempdir().unwrap();
         let target = temp.path().join("real_asset_library");
         fs::create_dir_all(&target).unwrap();
@@ -1467,11 +1666,124 @@ mod tests {
             return;
         }
 
-        let error = MoveManifest::scan(&source).unwrap_err().to_string();
-        assert!(
-            error.contains("links are not supported") && error.contains("linked"),
-            "the scan must name the link it refuses, got: {error}"
+        let manifest = MoveManifest::scan(&source).unwrap();
+        let linked = manifest.entry(Path::new("linked")).expect("recorded");
+        assert!(linked.kind.is_link(), "{linked:?}");
+        #[cfg(unix)]
+        assert_eq!(linked.kind, ManifestKind::Symlink);
+        #[cfg(windows)]
+        assert_eq!(linked.kind, ManifestKind::Junction);
+        assert_eq!(
+            fs::read_link(source.join("linked")).ok(),
+            linked.link_target.clone()
         );
+        assert!(
+            manifest.entries.iter().all(|entry| !entry
+                .path
+                .parent()
+                .is_some_and(|parent| parent.starts_with("linked"))),
+            "nothing behind the link is walked: {manifest:?}"
+        );
+    }
+
+    /// Links cross as links — relative, absolute, dangling — and verification
+    /// compares their target text: a retargeted link, or a file where a link
+    /// was, is a copy that does not match.
+    #[cfg(unix)]
+    #[test]
+    fn links_are_copied_as_links_and_verified_by_their_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(source.join("node_modules/.bin")).unwrap();
+        fs::write(source.join("real.txt"), "real").unwrap();
+        let links = [
+            ("node_modules/.bin/vite", "../vite/bin/vite.js"),
+            ("to_real", "real.txt"),
+            ("absolute", "/nonexistent/fastf/test/target"),
+        ];
+        for (link, target) in links {
+            std::os::unix::fs::symlink(target, source.join(link)).unwrap();
+        }
+        fs::create_dir(&staging).unwrap();
+
+        let manifest = MoveManifest::scan(&source).unwrap();
+        assert_eq!(manifest.total_links(), 3);
+        copy_to_staging(
+            &manifest,
+            &source,
+            &staging,
+            &Mutex::new(Progress::new(&[])),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        manifest.verify_destination(&staging).unwrap();
+        for (link, target) in links {
+            assert_eq!(
+                fs::read_link(staging.join(link)).unwrap(),
+                Path::new(target)
+            );
+        }
+
+        fs::remove_file(staging.join("to_real")).unwrap();
+        std::os::unix::fs::symlink("elsewhere.txt", staging.join("to_real")).unwrap();
+        let error = format!("{:#}", manifest.verify_destination(&staging).unwrap_err());
+        assert!(
+            error.contains("to_real: a link to elsewhere.txt now, was a link to real.txt"),
+            "{error}"
+        );
+        fs::remove_file(staging.join("to_real")).unwrap();
+        fs::write(staging.join("to_real"), "real").unwrap();
+        let error = format!("{:#}", manifest.verify_destination(&staging).unwrap_err());
+        assert!(error.contains("to_real: a 4-byte file now"), "{error}");
+    }
+
+    /// A link is kept exactly, so one that climbs out of the project, or names
+    /// the original folder by its full path, may mean something else after the
+    /// move — and the outcome says which.
+    #[test]
+    fn links_whose_meaning_the_new_place_may_change_are_named() {
+        let original = Path::new("/projects/base/Album_ID0001");
+        let link = |path: &str, target: &str| ManifestEntry {
+            path: PathBuf::from(path),
+            kind: ManifestKind::Symlink,
+            bytes: 0,
+            source_modified: ModifiedTime::from_system_time(UNIX_EPOCH),
+            link_target: Some(PathBuf::from(target)),
+        };
+        let manifest = MoveManifest {
+            version: MANIFEST_VERSION,
+            entries: vec![
+                link("inside", "sub/file"),
+                link("sub/sibling", "../other"),
+                link("sub/up_and_out", "../../shared"),
+                link("out", "../shared_assets"),
+                link("self", "/projects/base/Album_ID0001/sub/file"),
+                link("elsewhere", "/mnt/library/stock"),
+            ],
+        };
+        let notes = manifest.link_notes(original).join("\n");
+        assert!(
+            !notes.contains("inside") && !notes.contains("sub/sibling"),
+            "{notes}"
+        );
+        assert!(notes.contains("sub/up_and_out points outside"), "{notes}");
+        assert!(notes.contains("out points outside"), "{notes}");
+        assert!(
+            notes.contains("self points into the original folder"),
+            "{notes}"
+        );
+        assert!(
+            !notes.contains("elsewhere"),
+            "an absolute link elsewhere still works: {notes}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_link_is_said_in_words() {
+        let refusal = link_refusal(&std::io::Error::from_raw_os_error(libc::EPERM));
+        assert!(refusal.contains("cannot hold links"), "{refusal}");
     }
 
     /// A missing source is an error, never an empty manifest that would verify
@@ -1711,7 +2023,7 @@ mod tests {
         assert!(summary.contains("gone.txt: missing"), "{summary}");
         assert!(summary.contains("new.txt: not in the record"), "{summary}");
         assert!(
-            summary.contains("sub/was_a_file: a link now, was a 3-byte file"),
+            summary.contains("sub/was_a_file: a link to elsewhere now, was a 3-byte file"),
             "{summary}"
         );
         assert!(!diff.is_residue());

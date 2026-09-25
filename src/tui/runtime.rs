@@ -972,17 +972,28 @@ fn run_action(
             // doubt an instant finish creates.
             let message = match outcome.copied {
                 Some((files, bytes)) => format!(
-                    "Moved to {} — copied {files} file{}, {}, verified",
+                    "Moved to {} — copied {}, verified",
                     display_path(&moved.path),
-                    if files == 1 { "" } else { "s" },
-                    crate::util::human_bytes::human_bytes(bytes)
+                    crate::core::transactions::copied_summary(files, outcome.links, bytes)
                 ),
                 None => format!(
                     "Moved to {} — renamed on the same filesystem, nothing copied",
                     display_path(&moved.path)
                 ),
             };
-            let warning = outcome.source.warning(&project.path);
+            // The notes about links ride with the warning: both are things to
+            // read, and a long one opens the report dialog.
+            let warning = outcome
+                .source
+                .warning(&project.path)
+                .into_iter()
+                .chain(
+                    outcome
+                        .link_notes
+                        .iter()
+                        .map(|note| format!("note: {note}")),
+                )
+                .reduce(|all, next| format!("{all}\n\n{next}"));
             let session = format!("moved {} → {}", moved.id, base_label(&moved.base));
             let stale = vec![project.path.clone(), moved.path.clone()];
             Ok(ActionOutcome::new(
@@ -1003,19 +1014,24 @@ fn run_action(
             let outcome =
                 crate::core::operations::copy_project(&project, &destination, progress, cancel)?;
             let (files, bytes) = outcome.copied;
+            let notes = outcome
+                .link_notes
+                .iter()
+                .map(|note| format!("note: {note}"))
+                .reduce(|all, next| format!("{all}\n\n{next}"));
             // **No `ListChange`.** The copy lands outside every base by rule, so
             // no row changed and nothing needs re-reading; a `Reload` here would
             // walk the whole library to learn that.
             Ok(ActionOutcome::new(
                 ListChange::None,
                 format!(
-                    "Copied {} to {} — {files} file{}, {}, verified",
+                    "Copied {} to {} — {}, verified",
                     project.id,
                     display_path(&outcome.path),
-                    if files == 1 { "" } else { "s" },
-                    crate::util::human_bytes::human_bytes(bytes)
+                    crate::core::transactions::copied_summary(files, outcome.links, bytes)
                 ),
             )
+            .warning(notes)
             .session(format!("copied {}", project.id)))
         }
         Action::Create(request) => {

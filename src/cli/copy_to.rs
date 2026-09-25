@@ -90,12 +90,14 @@ fn report(project: &library::Project, outcome: &CopyOutcome) {
     println!(
         "   {}",
         format!(
-            "{files} file{}, {}, verified — the original is untouched",
-            if files == 1 { "" } else { "s" },
-            crate::util::human_bytes::human_bytes(bytes)
+            "{}, verified — the original is untouched",
+            crate::core::transactions::copied_summary(files, outcome.links, bytes)
         )
         .dimmed()
     );
+    for note in &outcome.link_notes {
+        eprintln!("{} {note}", "note:".cyan().bold());
+    }
 }
 
 /// The copy on a worker, the progress line on this thread — the same shape

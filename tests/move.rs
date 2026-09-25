@@ -340,9 +340,9 @@ fn two_bases_with_one_id_list_as_two_rows() {
 
 /// A same-filesystem move preserves a symlink inside the project.
 ///
-/// The staged path refuses links deny-by-default, and refusing them on the
-/// rename too would block the common case for no benefit — a rename copies
-/// nothing and preserves them perfectly. That guarantee was pinned only by
+/// A rename copies nothing, so it preserves links perfectly; the staged path
+/// now carries them as links too, by their target text. The rename's half of
+/// that guarantee was pinned only by
 /// `windows_semantics.rs`'s `#[cfg(windows)]` junction test and by the opt-in
 /// `windows_live.rs`, and `tests/CLAUDE.md` legislates against exactly that:
 /// "a suite CI never runs cannot be the only guard on a fix". This is the unix
@@ -390,6 +390,70 @@ fn a_same_filesystem_move_preserves_a_symlink_inside_the_project() {
             fs::read_link(&moved).unwrap(),
             std::path::Path::new("PROJECT_INFO.md"),
             "and pointing where it pointed"
+        );
+    });
+}
+
+/// A copy carries links as links, by their target text — a dangling one
+/// included, as `node_modules/.bin` leaves them — and never copies what is
+/// behind one.
+#[cfg(unix)]
+#[test]
+fn a_copy_carries_links_as_links() {
+    sandboxed(|install| {
+        write_template(install, "test", &minimal_template_yaml("test"));
+        let base = install.join("projects");
+        let backup = install.join("backup");
+        let library_folder = install.join("asset_library");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&backup).unwrap();
+        fs::create_dir_all(&library_folder).unwrap();
+        fs::write(library_folder.join("stock.mov"), vec![1_u8; 2048]).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.base_dir = base.display().to_string();
+        cfg.save().unwrap();
+        let tmpl = template::find_by_slug("test").unwrap();
+        let mut counters = Counters::load().unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("name".to_string(), "linked".to_string());
+        let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+        project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+        let project = library::discover(&cfg).remove(0);
+        fs::create_dir_all(project.path.join("node_modules/.bin")).unwrap();
+        std::os::unix::fs::symlink(
+            "../vite/bin/vite.js",
+            project.path.join("node_modules/.bin/vite"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&library_folder, project.path.join("assets")).unwrap();
+
+        let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let outcome =
+            fastf::core::operations::copy_project(&project, &backup, &progress, &cancel).unwrap();
+
+        let landed = outcome.path.clone();
+        assert_eq!(outcome.links, 2);
+        assert_eq!(
+            fs::read_link(landed.join("node_modules/.bin/vite")).unwrap(),
+            Path::new("../vite/bin/vite.js")
+        );
+        assert_eq!(
+            fs::read_link(landed.join("assets")).unwrap(),
+            library_folder
+        );
+        assert!(
+            fs::symlink_metadata(landed.join("assets"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "a link, not the folder behind it"
+        );
+        let (_, bytes) = outcome.copied;
+        assert!(
+            bytes < 2048,
+            "what is behind the link was not copied: {bytes}"
         );
     });
 }

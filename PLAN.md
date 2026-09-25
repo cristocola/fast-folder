@@ -336,14 +336,14 @@ move states what is on disk.
 
 ## Phase 4 — links are content
 
-- [ ] Manifest link kinds live: scan records them, the names pass creates them last,
+- [x] Manifest link kinds live: scan records them, the names pass creates them last,
   verification compares target text, the redundancy rule and GC treat them as entries
   (GC unlinks, never follows).
-- [ ] `paths::classify` (unix and Windows), `src/util/win_reparse.rs` (tag read,
+- [x] `paths::classify` (unix and Windows), `src/util/win_reparse.rs` (tag read,
   junction create). The scan uses `classify` (defect 8).
-- [ ] Outcome notes for outward links and absolute self-links; rendered by the CLI and
+- [x] Outcome notes for outward links and absolute self-links; rendered by the CLI and
   the app.
-- [ ] Tests: relative, absolute, dangling and directory symlinks round-trip through a
+- [x] Tests: relative, absolute, dangling and directory symlinks round-trip through a
   staged move and `copy-to`; a retargeted link and a link replaced by a file fail
   verification; flip `staged_move_pre_flight_refuses_links` (`library/tests.rs:905`),
   `scan_refuses_a_link_rather_than_skipping_it` (`transactions.rs:678`), the
@@ -417,3 +417,16 @@ move states what is on disk.
   once, to `<probe>-renamed`, which shares the prefix. The design's "reconcile's
   Copying arm removes P" became "reconcile removes any probe" — a pass holds the
   lock, so no move is mid-probe. Gates green.
+- 2026-09-25 — Phase 4. Links are manifest entries (`entry_for` + `link_kind`;
+  `paths::classify` was not needed — the one classification already lived in
+  `entry_for`, and `is_link_like` stays the write-safety check), made last by the
+  names pass (`make_link`, `link_refusal`), verified by target text, unlinked by
+  `remove_tree`. `util::win_reparse` reads the tag and makes junctions (buffer
+  layout unit-tested on every platform's Windows build, a real junction on the
+  VM). `copied_summary` names links beside files; `link_notes` in both outcomes.
+  The Windows VM ran all 455 unit tests green, including a staged junction
+  that removal never went through, a directory symlink (the VM's ssh session is
+  elevated, so it was really made), and a file held open with read-only sharing
+  keeping the original whole until reconcile. Two Windows-only test mistakes
+  fixed on the way: `read_link` answers the plain `C:\` form, and a moved
+  project's path is canonical. Gates green.

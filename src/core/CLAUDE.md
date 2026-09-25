@@ -250,11 +250,27 @@ project id, source base, validated folder components, the phase
 Copy`), the `host` that began it, and `legacy_cleanup`; paths derive from the
 transaction's own location, the retired name from the operation. `MoveManifest::scan` is
 **deny-by-default** — a link or special entry fails the whole move — and
-`verify_destination` compares the exact path/type/size manifest, because a
-verification narrower than the copy could remove a source that never fully
-arrived. No hashes, no advanced metadata. Links are refused only on the staged
-path; a rename preserves them. Every walked name is payload — there is no
-transient-suffix filter.
+`verify_destination` compares the exact path/type/size/link-target manifest,
+because a verification narrower than the copy could remove a source that never
+fully arrived. No hashes, no advanced metadata. Every walked name is payload —
+there is no transient-suffix filter.
+
+**Links are content** (manifest version 2): recorded by their target text, never
+followed, dangling allowed — what `mv` does, and what the rename always did. The
+walk never descends into one, the names pass makes them last (so no later write
+can pass through one), verification compares `read_link` text, and
+`remove_tree` unlinks them. `transactions::entry_for` is the one classification:
+every unix symlink is `Symlink`; on Windows the reparse tag decides
+(`util::win_reparse`) — `SYMLINK` is `Symlink` or `DirSymlink` by the link's own
+directory attribute (its target may not exist), `MOUNT_POINT` is `Junction`
+unless it names a volume (`OtherFilesystem`), anything else is
+`UnsupportedLink`. Cloud placeholders are not name surrogates, so `std` reads them
+as files and they are copied as data. `std::fs::read_link` turns `\??\C:\x` into
+the plain `C:\x` wherever it can, for the original and the copy alike, which is
+what lets the two compare; `win_reparse::create_junction` takes either form.
+`MoveManifest::link_notes` names the links whose meaning a new place may change
+(relative ones that climb out, absolute ones into the original), and both
+surfaces print them.
 
 **`transactions::Walk` never stops at an odd entry**: it records what a manifest
 can hold and, beside it, every `Problem` (listed but not examinable, unreadable

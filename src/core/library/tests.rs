@@ -8,7 +8,7 @@ use crate::core::move_engine::{SourceOutcome, is_cross_device_error, staged_copy
 use crate::core::project_info;
 #[cfg(debug_assertions)]
 use crate::core::provisioning;
-use crate::core::transactions::{self, MoveManifest};
+use crate::core::transactions;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -923,14 +923,17 @@ fn empty_created_falls_back_to_the_folder_timestamp() {
     );
 }
 
-/// The staged (copying) move must refuse a project containing links.
+/// The staged (copying) move carries a link as a link — and, removing the
+/// original afterwards, never deletes through it.
 ///
-/// Reached through the private pre-flight because the public entry point
-/// only consults it after `fs::rename` fails, and a test cannot conjure a
-/// second filesystem. The same-filesystem path is covered separately in
-/// `tests/windows_semantics.rs`, where the junction is expected to survive.
+/// This is the data-loss regression the refusal used to guard: a link to an
+/// asset library inside a project, a staged move, and the original removed.
+/// Were the removal to follow the link, the library's own files would go with
+/// it. Reached through the private staged path because the public entry point
+/// only stages after `fs::rename` fails, and a test cannot conjure a second
+/// filesystem.
 #[test]
-fn staged_move_pre_flight_refuses_links() {
+fn a_staged_move_carries_a_link_and_never_deletes_through_it() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path();
     write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
@@ -968,23 +971,50 @@ fn staged_move_pre_flight_refuses_links() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&target, &link).expect("creating a symlink");
 
-    let project = scan_base(base).into_iter().next().unwrap();
-    let err = MoveManifest::scan(&project.path)
-        .expect_err("a copying move cannot reproduce a link and must refuse")
-        .to_string();
-    assert!(
-        err.contains("linked"),
-        "the error must name the offending link, got: {err}"
-    );
-    assert!(project.path.is_dir(), "manifest scanning must be read-only");
+    fs::write(target.join("payload.txt"), "irreplaceable").unwrap();
+    let recorded_target = fs::read_link(&link).unwrap();
 
-    // A project with no links is waved through.
-    write_project(base, "proj_b", "ID0002", "gen", "2026-01-02T00:00:00Z");
-    let plain = scan_base(base)
+    let other = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(base, &[other.path()]);
+    let project = discover(&cfg)
         .into_iter()
-        .find(|p| p.name == "proj_b")
+        .find(|found| found.name == "proj_a")
         .unwrap();
-    assert!(MoveManifest::scan(&plain.path).is_ok());
+    let new_path = other.path().join("proj_a");
+    let outcome = staged_copy_verify_commit(
+        &project,
+        other.path(),
+        &new_path,
+        &Mutex::new(Progress::new(&[])),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    assert_eq!(outcome.links, 1);
+    assert!(!base.join("proj_a").exists());
+    assert_eq!(
+        fs::read_to_string(target.join("payload.txt")).unwrap(),
+        "irreplaceable",
+        "removing the original never went through the link"
+    );
+    let moved_link = new_path.join("linked");
+    assert!(
+        fs::symlink_metadata(&moved_link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a link, not a copy of what is behind it"
+    );
+    assert_eq!(fs::read_link(&moved_link).unwrap(), recorded_target);
+    assert_eq!(
+        fs::read_to_string(moved_link.join("payload.txt")).unwrap(),
+        "irreplaceable",
+        "and it still leads there"
+    );
+    // Still nothing named for it: an absolute link to outside the project
+    // points where it always did.
+    assert!(outcome.link_notes.is_empty(), "{:?}", outcome.link_notes);
 }
 
 /// The stranded-rename message must name the path the folder is actually at.
@@ -1279,8 +1309,12 @@ fn a_removal_stopped_part_way_leaves_only_a_hidden_leftover() {
         "the leftover is never listed as a project"
     );
     assert!(
-        outcome.project.path.starts_with(new_base),
-        "the project is the moved copy"
+        outcome
+            .project
+            .path
+            .starts_with(crate::util::paths::canonical(new_base).unwrap()),
+        "the project is the moved copy: {}",
+        outcome.project.path.display()
     );
 
     let report = provisioning::reconcile_unlocked(&cfg);
@@ -1550,4 +1584,98 @@ fn a_root_base_is_labelled_as_it_reads() {
         base_label(Path::new("/mnt/projects/01_PROJECTS")),
         "01_PROJECTS"
     );
+}
+
+/// A directory symbolic link crosses as a directory symbolic link — made with
+/// the link's own directory attribute, since its target may not exist to ask.
+/// Windows lets an account make one only with Developer Mode on; without it
+/// the move names that before copying anything.
+#[cfg(windows)]
+#[test]
+fn a_staged_move_carries_a_directory_symlink_or_names_developer_mode() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let link = old_base.join("proj_a").join("dangling_dir_link");
+    match std::os::windows::fs::symlink_dir(r"..\nowhere", &link) {
+        Ok(()) => {}
+        // No Developer Mode here: the move's own refusal is what the test
+        // below would meet too, and a symlink cannot be planted to prove it.
+        Err(error) if error.raw_os_error() == Some(1314) => return,
+        Err(error) => panic!("{error}"),
+    }
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let outcome = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_path,
+        &Mutex::new(Progress::new(&[])),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    let moved = new_path.join("dangling_dir_link");
+    use std::os::windows::fs::FileTypeExt;
+    assert!(
+        fs::symlink_metadata(&moved)
+            .unwrap()
+            .file_type()
+            .is_symlink_dir()
+    );
+    assert_eq!(fs::read_link(&moved).unwrap(), Path::new(r"..\nowhere"));
+}
+
+/// **A file a program holds open keeps the original whole.** Windows will not
+/// rename a folder while anything in it is open without delete sharing — an
+/// editor's project file, a video in a timeline. The move publishes, cannot
+/// retire the original, says so, and removes nothing from it; once the file is
+/// closed, reconcile finishes the move without copying again.
+#[cfg(windows)]
+#[test]
+fn a_file_held_open_keeps_the_original_whole_until_reconcile() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let held_path = old_base.join("proj_a").join("timeline.prproj");
+    fs::write(&held_path, vec![5_u8; 4096]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+
+    // Readable by others, never deletable: what an editor holding a file does.
+    const FILE_SHARE_READ: u32 = 0x1;
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&held_path)
+        .unwrap();
+    let outcome = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_path,
+        &Mutex::new(Progress::new(&[])),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let SourceOutcome::KeptWhole { reason } = &outcome.source else {
+        panic!("expected the original kept whole: {:?}", outcome.source);
+    };
+    assert!(reason.contains("open"), "{reason}");
+    assert_eq!(fs::read(&held_path).unwrap(), vec![5_u8; 4096], "whole");
+    assert_eq!(
+        fs::read(new_path.join("timeline.prproj")).unwrap(),
+        vec![5_u8; 4096]
+    );
+    assert!(retired_folders(old_base).is_empty());
+
+    drop(held);
+    let report = crate::core::provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(report.completed, 1, "{report:?}");
+    assert!(!old_base.join("proj_a").exists());
+    assert_eq!(v2_transaction_count(new_base), 0);
 }

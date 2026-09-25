@@ -34,8 +34,8 @@ fn every_status_line_is_logged_and_l_reads_them_back_newest_first() {
     let effects = press(&mut app, Key::ch('L'));
     assert_eq!(
         effects,
-        vec![Effect::LoadActivity],
-        "and asks for every session's"
+        vec![Effect::LoadActivity, Effect::WatchJobs],
+        "and asks for every session's, and the jobs"
     );
     let Some(Modal::Activity(activity)) = app.modals.top() else {
         panic!("L opens the messages");
@@ -89,13 +89,14 @@ fn the_activity_screen_turns_its_page_and_fills_in_when_read() {
         },
     );
     let _ = press(&mut app, Key::plain(KeyCode::Tab));
+    let _ = press(&mut app, Key::plain(KeyCode::Tab));
     let _ = press(&mut app, Key::plain(KeyCode::PageDown));
     let Some(Modal::Activity(activity)) = app.modals.top() else {
         panic!("still open");
     };
     assert_eq!(activity.page, ActivityPage::Log);
     assert!(activity.log[0].ends_with("event 299"), "newest first");
-    assert!(activity.scroll[1] > 0 && activity.scroll[0] == 0);
+    assert!(activity.scroll[2] > 0 && activity.scroll[0] == 0);
     assert!(
         activity.messages[0].contains("moved ID0001") && activity.messages[0].contains("(cli)")
     );
@@ -103,7 +104,7 @@ fn the_activity_screen_turns_its_page_and_fills_in_when_read() {
     let Some(Modal::Activity(activity)) = app.modals.top() else {
         panic!("still open");
     };
-    assert_eq!(activity.page, ActivityPage::Messages);
+    assert_eq!(activity.page, ActivityPage::Jobs);
 }
 
 #[test]

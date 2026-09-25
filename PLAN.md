@@ -335,21 +335,21 @@ after the CLI is killed.
 
 ## Phase 4 — the app watches jobs
 
-- [ ] The runtime's jobs watcher beside `watch_detail`, on a worker thread,
+- [x] The runtime's jobs watcher beside `watch_detail`, on a worker thread,
   latest wins; `Msg::Jobs`; `App.jobs`; `tick_interval` asks for the slow tick
   while a shown job is live.
-- [ ] `Action::Move`, `CopyTo`, `Delete`, `Reconcile` and the batch verbs spawn
+- [x] `Action::Move`, `CopyTo`, `Delete`, `Reconcile` and the batch verbs spawn
   jobs (`Effect::StartJob`, `Msg::JobStarted`); `MovingJob`, `move_progress` and
   the in-app batch runner for those kinds go. Tag, note and the other quick
   verbs stay in-process batches.
-- [ ] The job dialog (steps, Esc hides, Ctrl-C cancels or says "too late"); the
+- [x] The job dialog (steps, Esc hides, Ctrl-C cancels or says "too late"); the
   header chip; the Jobs tab of the activity screen with Enter on a job opening
   its log; outcomes of jobs nobody watched as messages at startup; a job's end
   reloads the list and the summary.
-- [ ] Availability: the verbs that take the data lock are `Disabled("a move
+- [x] Availability: the verbs that take the data lock are `Disabled("a move
   holds the library until it is copied — L shows it")` while a live job says
   `holds_lock`; `command.rs` declares the new keys, `guide.rs` any new words.
-- [ ] Tests: `tui_update` (a job's progress drives the dialog; Esc hides it and
+- [x] Tests: `tui_update` (a job's progress drives the dialog; Esc hides it and
   the chip stays; a finished unseen job becomes one message; a lock-holding job
   disables the right verbs); snapshots of the dialog in each step, the chip and
   all three tabs at 40×12 and up (`every_state_draws_at_every_size`); pty:
@@ -464,3 +464,23 @@ there with its count; kill that app too, and the move still finishes.
   whose in-process driver still covers every abort point. Verified by hand:
   `kill -9` on `fastf move` mid-copy, and the job finished the move. Gates
   green, the Windows clippy leg included.
+- 2026-09-25 — Phase 4. `app::background` (the jobs the app knows of, the one
+  its dialog follows, start/started/ended, hide and cancel), the runtime's
+  `watch_jobs` and `Effect::{StartJob, WatchJobs, CancelJob, MarkSeen,
+  LoadJobLog}`; `MovingJob`, `move_progress` and the in-process `Move`,
+  `CopyTo`, `Delete` and `Reconcile` actions are gone, and the in-app batch
+  runner keeps only the quick verbs. The dialog reads the followed job's state;
+  Esc hides it, Ctrl-C cancels or says too late, `q` quits and leaves the job;
+  the header's chip (`moving ID0248 · copying 12 of 34 files`); `L` gained a
+  jobs page with a cursor, Enter opening that job's own log; `not_busy` dims
+  the mutating verbs while a live job holds the lock. Decided on the way: a
+  finished delete drops its rows by path (no rescan, the promise the pty suite
+  keeps), a finished move reloads (its rows land in another base, and a job's
+  state says where, not what the row now is — the batch-move pty test now
+  expects that one read); jobs other surfaces started are reported only as a
+  reload, except on the first look, when what ended unseen while no app was
+  open is said. New tests: the state machine (start, follow, end, the startup
+  report, the dimmed verbs), snapshots of the jobs page and the chip, the frame
+  sweep over three job states, and a pty test that quits the app mid-move,
+  starts a second app that shows the same job, and waits for the move to
+  finish without either. Gates green.

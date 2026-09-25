@@ -4,7 +4,7 @@ assertion_line: 26
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
-" → projects 12   archive not mounted                                            ⚠ 1 needs attention "
+"◜ reconciling · 1 of 2 · removing the old copy 312 of 1473 entries    → projec… ⚠ 1 needs attention "
 "                                                                                                    "
 " ⌕ / to search                                                                       12/12 · newest "
 "┌ projects ────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────┐"
@@ -20,7 +20,7 @@ expression: frame
 "│  ID0240 2026-08-2│   ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  21% │                  │"
 "│  ID0239 2026-08-1│   node_modules/vite/dist                                   │                  │"
 "│  ID0238 2026-08-1│                                                            │                  │"
-"│  ID0237 2026-08-1│ Ctrl-C cancels                                             │                  │"
+"│  ID0237 2026-08-1│ Esc hides · Ctrl-c cancels · it goes on if fastf closes    │                  │"
 "│                  └────────────────────────────────────────────────────────────┘                  │"
 "│                                                              ││                                  │"
 "│                                                              ││                                  │"
@@ -31,5 +31,5 @@ expression: frame
 "│                                                              ││                                  │"
 "│                                                              ││                                  │"
 "└──────────────────────────────────────────────────────────────┘└──────────────────────────────────┘"
-" ◜ reconciling…                                                                                     "
+"                                                                                                    "
 " / search  a actions  o open  t terminal  y copy path  Space mark  n new  T templates  → pane       "

@@ -11,6 +11,7 @@
 //! `impl App` for the keys and answers that belong to it.
 
 pub mod actions;
+pub mod background;
 pub mod data;
 pub mod jobs;
 pub mod library;
@@ -29,7 +30,6 @@ use std::path::{Path, PathBuf};
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 
-use crate::core::assets::Progress;
 use crate::core::library::Project;
 use crate::tui::app::actions::{
     Confirm, ConfirmThen, MultiPick, MultiThen, NoteState, TextPrompt, TextThen,
@@ -251,7 +251,9 @@ pub struct App {
     pub busy_id: Option<ActionId>,
     /// The latest snapshot of the move job that is running, for the progress
     /// modal; `None` when no move is in flight.
-    pub move_progress: Option<Progress>,
+    /// Jobs — moves, copies, deletes, reconciles in processes of their own —
+    /// and which one the progress dialog follows.
+    pub background: background::Background,
     /// A batch job over the marked projects, while one is running.
     pub job: Option<jobs::Job>,
     pub status: Status,
@@ -365,7 +367,7 @@ impl App {
             modals: ModalStack::default(),
             busy: None,
             busy_id: None,
-            move_progress: None,
+            background: background::Background::default(),
             job: None,
             status: Status::default(),
             log: std::collections::VecDeque::new(),
@@ -603,7 +605,10 @@ impl App {
         // A message about to go dims on its way out, which is a fade too — but
         // only for its last half second, so the slow wake is asked to cover it
         // rather than the fast one being held for six seconds.
+        // A job the app follows, or any that is running: the dialog's count
+        // and the chip's spinner move with it.
         let slow = self.busy.is_some()
+            || self.background.watching()
             || self.status.expires_at.is_some()
             || (self.library.loaded && self.library.sizes_pending(self.rows_on_screen()));
         slow.then(|| std::time::Duration::from_millis(SLOW_FRAME_MS))
@@ -687,10 +692,60 @@ impl App {
             page: ActivityPage::Messages,
             messages,
             log: vec!["reading…".to_string()],
-            scroll: [0, 0],
+            jobs: Vec::new(),
+            job_ids: Vec::new(),
+            job_cursor: 0,
+            scroll: [0, 0, 0],
             loaded: false,
         })));
-        vec![Effect::LoadActivity]
+        self.refresh_activity_jobs();
+        vec![Effect::LoadActivity, Effect::WatchJobs]
+    }
+
+    /// Put the jobs the app knows of on the activity screen's jobs page, if
+    /// it is open, keeping the cursor on the job it was on.
+    pub(super) fn refresh_activity_jobs(&mut self) {
+        let (rows, ids) = modal::job_rows(&self.background.jobs);
+        if let Some(Modal::Activity(activity)) = self.modals.top_mut() {
+            let was = activity.job_at_cursor().map(str::to_string);
+            activity.jobs = rows;
+            activity.job_cursor = was
+                .and_then(|was| ids.iter().position(|id| *id == was))
+                .unwrap_or(0);
+            activity.job_ids = ids;
+        }
+    }
+
+    /// Keys on the activity screen: on the jobs page the arrows move the
+    /// cursor and Enter opens that job's own log; elsewhere it reads like any
+    /// message.
+    fn on_activity_key(&mut self, key: Key) -> Vec<Effect> {
+        let on_jobs = matches!(
+            self.modals.top(),
+            Some(Modal::Activity(activity)) if activity.page == ActivityPage::Jobs
+        );
+        if on_jobs && key == Key::plain(KeyCode::Enter) {
+            let Some(Modal::Activity(activity)) = self.modals.top() else {
+                return Vec::new();
+            };
+            let Some(id) = activity.job_at_cursor().map(str::to_string) else {
+                return Vec::new();
+            };
+            let title = format!(
+                "log · {}",
+                self.background
+                    .job(&id)
+                    .map(|job| job.title())
+                    .unwrap_or_else(|| id.clone())
+            );
+            self.modals.push(Modal::message(
+                title.clone(),
+                "reading…",
+                MessageLevel::Info,
+            ));
+            return vec![Effect::LoadJobLog { id, title }];
+        }
+        self.on_scroll_modal_key(key)
     }
 
     /// Whether the activity screen is on top, for the runtime to keep it
@@ -1159,12 +1214,8 @@ impl App {
                 self.recompute();
                 self.after_rows_changed()
             }
-            Msg::MoveProgress(progress) => {
-                if self.move_progress.is_some() {
-                    self.move_progress = Some(progress);
-                }
-                Vec::new()
-            }
+            Msg::Jobs(jobs) => self.on_jobs(jobs),
+            Msg::JobStarted(started) => self.on_job_started(started),
             Msg::TemplateLoaded { slug, result } => self.on_template_loaded(&slug, result),
             Msg::TemplateSourceLoaded { slug, result } => {
                 let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
@@ -1304,7 +1355,6 @@ impl App {
         }
         self.busy = None;
         self.busy_id = None;
-        self.move_progress = None;
         if self.job.is_some() {
             return self.on_job_item_done(outcome);
         }
@@ -1713,9 +1763,8 @@ impl App {
             Some(Modal::Settings(_)) => self.on_settings_key(key),
             Some(Modal::Onboarding(_)) => self.on_onboarding_key(key),
             Some(Modal::Guide(_)) => self.on_guide_key(key),
-            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) | Some(Modal::Activity(_)) => {
-                self.on_scroll_modal_key(key)
-            }
+            Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.on_scroll_modal_key(key),
+            Some(Modal::Activity(_)) => self.on_activity_key(key),
             None => Vec::new(),
         }
     }
@@ -1808,8 +1857,13 @@ impl App {
                 // Anything running is cancelled first: a batch job and a
                 // single move alike, before a keystroke can clear something
                 // the user was looking at.
-                if self.job.is_some() || self.move_progress.is_some() {
+                if self.job.is_some() {
                     return self.request_cancel();
+                }
+                // The progress dialog is the first rung: Esc hides it, and the
+                // job goes on — the chip in the header keeps saying so.
+                if self.job_dialog_up() {
+                    return self.hide_job_dialog();
                 }
                 // The pane is a level, like a tab: Esc leaves it for the list
                 // before it clears anything the list shows — and long before
@@ -1864,8 +1918,11 @@ impl App {
                 // A job or a move is running: Ctrl-C cancels it rather than
                 // quitting under a worker that is still mutating the
                 // filesystem.
-                if self.job.is_some() || self.move_progress.is_some() {
+                if self.job.is_some() {
                     return self.request_cancel();
+                }
+                if self.job_dialog_up() {
+                    return self.cancel_followed_job();
                 }
                 // Here Ctrl-C is a close, and a close may not throw away a
                 // template that has been worked on — the one gesture that
@@ -2417,10 +2474,6 @@ impl App {
             CommandId::Move => self.open_move_picker(),
             CommandId::CopyTo => {
                 let mut prompt = TextPrompt::new(validators::COPY_TO_PROMPT, TextThen::CopyTo);
-                // The move progress modal is what a copy reports through too:
-                // it is the same staged copy underneath. It goes up when the
-                // copy starts, not while its destination is being typed.
-                self.move_progress = None;
                 prompt.input = crate::tui::widgets::input::LineEdit::default();
                 self.modals.push(Modal::TextPrompt(prompt));
                 Vec::new()
@@ -2500,8 +2553,10 @@ impl App {
     /// while Esc on the same screen asked. `close_top` owns the question;
     /// this owns who has to ask it.
     fn quit(&mut self, exit: Exit) -> Vec<Effect> {
-        // Quitting under a running move would abandon it mid-write.
-        if self.job.is_some() || self.move_progress.is_some() {
+        // Quitting under a running batch would abandon it between items.
+        // A move, a copy, a delete or a reconcile is a job of its own and
+        // goes on without the app.
+        if self.job.is_some() {
             return self.request_cancel();
         }
         let dirty_builder = matches!(
@@ -2610,12 +2665,6 @@ impl App {
         let id = ActionId(self.next_action);
         self.busy = Some(what);
         self.busy_id = Some(id);
-        // Armed here, the one door every action passes, and only once it is
-        // really running: a refused action never leaves a dialog up for a job
-        // that is not there, for every later quit gesture to read as one.
-        if action.reports_progress() {
-            self.move_progress = Some(crate::core::assets::Progress::new(&[]));
-        }
         vec![Effect::Run(id, Box::new(action))]
     }
 

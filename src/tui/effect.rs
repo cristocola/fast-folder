@@ -78,8 +78,23 @@ pub enum Effect {
     /// Answered by `Msg::Previewed`, or by `Msg::PreviewFailed` naming the
     /// field that was wrong.
     Preview(Box<Request>),
-    /// Cancel the move job that is running.
-    CancelMove,
+    /// Start a job — a move, a copy, a delete, a reconcile — in a process of
+    /// its own.
+    StartJob {
+        kind: crate::core::jobs::JobKind,
+        items: Vec<crate::core::jobs::JobItem>,
+    },
+    /// Read `jobs/` now, rather than at the next watch.
+    WatchJobs,
+    /// Ask a job to stop.
+    CancelJob(String),
+    /// Say that a job's outcome has been shown.
+    MarkSeen(String),
+    /// Read a job's own log into the message dialog titled `title`.
+    LoadJobLog {
+        id: String,
+        title: String,
+    },
     /// Give the terminal back, run something that needs it, take it again.
     Suspend(Suspended),
     Quit(Exit),
@@ -154,8 +169,6 @@ pub enum Action {
     RaiseCounter(u64),
     /// Make every mounted base agree on the highest ID seen anywhere.
     SyncCounters,
-    /// Finish or roll back work a crash left half-done.
-    Reconcile,
     AddTag {
         project: Box<Project>,
         tag: String,
@@ -209,36 +222,11 @@ pub enum Action {
         project: Box<Project>,
         name: String,
     },
-    /// A single move, one item for the one-item job runner. The runtime owns
-    /// the progress and cancel handles.
-    Move {
-        project: Box<Project>,
-        target: PathBuf,
-    },
-    /// Copy a project to a folder outside every base, keeping its id.
-    CopyTo {
-        project: Box<Project>,
-        destination: PathBuf,
-    },
     Unregister(Box<Project>),
-    Delete(Box<Project>),
     AppendNote {
         project: Box<Project>,
         text: String,
     },
-}
-
-impl Action {
-    /// The long jobs, which report progress and take a cancel: a move, a copy
-    /// out of the library (a move that keeps its source) and a reconcile,
-    /// which removes old copies too. The app arms its progress dialog and the
-    /// runtime its handles on this one answer, so the two cannot disagree.
-    pub fn reports_progress(&self) -> bool {
-        matches!(
-            self,
-            Action::Move { .. } | Action::CopyTo { .. } | Action::Reconcile
-        )
-    }
 }
 
 /// Which read-only view `LoadView` is asking for.

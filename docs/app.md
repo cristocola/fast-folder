@@ -26,7 +26,9 @@ Top to bottom:
 - **The header** — two lines. The two tabs, `library` and `templates`, with
   the one you are on underlined, then how many bases there are and the
   highest ID; then each base with how many projects its index holds or that
-  it is not mounted, and on the right `⚠ n needs attention` when an
+  it is not mounted — led, while a job runs, by what it is and its step
+  (`moving ID0047 · copying 312 of 1473 files`) — and on the right
+  `⚠ n needs attention` when an
   interrupted create or move, or a hidden folder a moved or deleted project
   left behind, is waiting for `fastf reconcile` (else the last few things this
   session did).
@@ -187,7 +189,7 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
 | `!` | reconcile: check and recover from what a crash or a failed move left — what `⚠ n needs attention` means |
-| `L` | messages and the log: every message fastf showed you, from every session, and every step of every move and reconcile — Tab turns the page, both newest first, and both keep up while open. A warning that flashed under a dialog is counted on the status line until you read them |
+| `L` | messages, jobs and the log: every message fastf showed you, from every session; every move, copy, delete and reconcile, running or done — Enter opens a job's own log; and every step of every one. Tab turns the page, all newest first, and all keep up while open. A warning that flashed under a dialog is counted on the status line until you read them |
 | F5, Ctrl-R | reload: read every base again |
 | `R` | reindex: rescan every base from its folders and rebuild the caches |
 | Ctrl-Z | suspend to the shell, as in any program; `fg` brings the app back with its screen retaken (unix) |
@@ -335,13 +337,22 @@ every key beside its verb. A tag you pick where the library already knows some,
 or type where it does not; remove-tags lists every tag on the project with a
 space to mark each; delete names the folder and asks you to type the word
 `delete` — a typo keeps your text and says why it was refused; `y` or `n`
-answers a yes/no without Enter. A move shows its progress while it runs, one
-row per step: the steps done ticked with what they counted, the current one
-with its count, its bar and the entry it is at, the rest dimmed. A copy to a
-folder (`C`) and a reconcile (`!`) show theirs the same way; a reconcile names
-which item of how many it is on. Esc or Ctrl-C cancels until a move publishes
-its `PROJECT_INFO.md`; after that the dialog's last line says it is past the
-point of no return, and the move finishes by itself. `N` drops out of the terminal into
+answers a yes/no without Enter.
+
+**A move, a copy to a folder (`C`), a delete and a reconcile (`!`) each run as
+a job of their own**, which the app follows but does not own. The dialog shows
+one row per step: the steps done ticked with what they counted, the current
+one with its count, its bar and the entry it is at, the rest dimmed; over
+several marked projects it names which of how many it is on. **Esc hides the
+dialog and the job goes on** — the header says what is running, with its step
+— and **quitting the app leaves it to finish**; start fastf again, or open it in
+another terminal, and the same job is there. Ctrl-C cancels until a move
+publishes its `PROJECT_INFO.md`; after that the dialog says it finishes by
+itself. When a job ends the status line says how it went, a warning opens in a
+dialog, and the list is read again; a job that ended while no fastf was open is
+reported when the next one starts. While a move copies it holds the library,
+so the verbs that change a project are dimmed and say why — browsing, search
+and the pane go on. `N` drops out of the terminal into
 your `$EDITOR` and appends whatever you save as one note when you come back;
 `M` and `J` open the metadata and the notes, scrollable with the arrow keys.
 

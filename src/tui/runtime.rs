@@ -26,7 +26,6 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::crossterm::{cursor, execute};
 
-use crate::core::assets::{JobStatus, Progress};
 use crate::tui::app::{self, App};
 use crate::tui::effect::{
     Action, ActionOutcome, Effect, Exit, FollowUp, ListChange, SpawnKind, Suspended,
@@ -103,9 +102,6 @@ struct Runtime {
     /// The size cells last handed to the app, so a tick reports only news.
     reported: HashMap<PathBuf, Option<u64>>,
     detail: DetailWorker,
-    /// The move job in flight, if any: its progress to snapshot per tick and
-    /// its cancel flag.
-    moving: Option<MovingJob>,
     /// **The one clock in the app.** `update` reads no environment and asks no
     /// clock; every duration on screen is measured against the milliseconds
     /// this hands the app on each tick.
@@ -118,13 +114,9 @@ struct Runtime {
     last_watch: Option<Instant>,
     /// When the activity screen was last read, while it is open.
     last_activity: Option<Instant>,
-}
-
-/// The runtime's half of a running move: the progress handle it snapshots and
-/// the cancel flag a Ctrl-C flips.
-struct MovingJob {
-    progress: Arc<Mutex<Progress>>,
-    cancel: Arc<AtomicBool>,
+    /// When `jobs/` was last read, and whether a read is on its way.
+    last_jobs: Option<Instant>,
+    reading_jobs: Arc<AtomicBool>,
 }
 
 impl Runtime {
@@ -159,11 +151,12 @@ impl Runtime {
             scanner: SizeScanner::new(),
             reported: HashMap::new(),
             detail,
-            moving: None,
             started: Instant::now(),
             next_tick: None,
             last_watch: None,
             last_activity: None,
+            last_jobs: None,
+            reading_jobs: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -171,9 +164,7 @@ impl Runtime {
         diag::clear_sink();
         self.input.stop();
         self.detail.stop();
-        if let Some(moving) = self.moving.take() {
-            moving.cancel.store(true, Ordering::SeqCst);
-        }
+        // A job the app started is not the app's: it goes on after this.
         release_screen(&mut self.terminal);
         interrupt::clear_restore();
     }
@@ -304,6 +295,7 @@ impl Runtime {
     fn wait(&mut self, app: &App) -> Option<Msg> {
         self.watch_detail(app);
         self.watch_activity(app);
+        self.watch_jobs(app);
         let Some(interval) = app.tick_interval() else {
             self.next_tick = None;
             return self.idle_wait();
@@ -331,7 +323,6 @@ impl Runtime {
     fn emit_tick(&mut self, app: &App, interval: Duration) -> Msg {
         self.next_tick = Some(Instant::now() + interval);
         self.report_sizes(app);
-        self.report_move_progress();
         Msg::Tick
     }
 
@@ -389,22 +380,32 @@ impl Runtime {
         }
     }
 
-    /// Hand the app the move job's progress, once per tick, and forgets the
-    /// job once it is no longer running.
-    fn report_move_progress(&mut self) {
-        let Some(moving) = &self.moving else {
-            return;
+    /// Read `jobs/` on a worker: five times a second while a job the app
+    /// shows is running or starting, once a second otherwise — the idle wake
+    /// is a second already. One read at a time; a slow disk never piles them.
+    fn watch_jobs(&mut self, app: &App) {
+        let every = if app.background.watching() {
+            Duration::from_millis(200)
+        } else {
+            WATCH_EVERY
         };
-        let snapshot = moving
-            .progress
-            .lock()
-            .map(|progress| progress.clone())
-            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
-        let done = !matches!(snapshot.status, JobStatus::Running);
-        let _ = self.tx.send(Msg::MoveProgress(snapshot));
-        if done {
-            self.moving = None;
+        if self.last_jobs.is_some_and(|at| at.elapsed() < every) {
+            return;
         }
+        self.read_jobs();
+    }
+
+    fn read_jobs(&mut self) {
+        if self.reading_jobs.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.last_jobs = Some(Instant::now());
+        let (tx, reading) = (self.tx.clone(), Arc::clone(&self.reading_jobs));
+        spawn_worker("fastf-jobs", move || {
+            let jobs = crate::core::jobs::list();
+            reading.store(false, Ordering::SeqCst);
+            let _ = tx.send(Msg::Jobs(jobs));
+        });
     }
 
     /// Run every effect. `Some(exit)` ends the app.
@@ -479,18 +480,9 @@ impl Runtime {
                     }
                 }
                 Effect::Run(id, action) => {
-                    let moving = action.reports_progress();
-                    let progress = Arc::new(Mutex::new(Progress::new(&[])));
-                    let cancel = Arc::new(AtomicBool::new(false));
-                    if moving {
-                        self.moving = Some(MovingJob {
-                            progress: Arc::clone(&progress),
-                            cancel: Arc::clone(&cancel),
-                        });
-                    }
                     let tx = self.tx.clone();
                     spawn_worker("fastf-action", move || {
-                        let outcome = match run_action(*action, &progress, &cancel) {
+                        let outcome = match run_action(*action) {
                             Ok(mut outcome) => {
                                 outcome.message = for_the_app(&outcome.message);
                                 outcome.warning = outcome.warning.map(|w| for_the_app(&w));
@@ -575,10 +567,37 @@ impl Runtime {
                         let _ = tx.send(msg);
                     });
                 }
-                Effect::CancelMove => {
-                    if let Some(moving) = &self.moving {
-                        moving.cancel.store(true, Ordering::SeqCst);
+                Effect::StartJob { kind, items } => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-start-job", move || {
+                        let started = crate::core::jobs::start(kind, items)
+                            .map_err(|error| for_the_app(&format!("{error:#}")));
+                        let _ = tx.send(Msg::JobStarted(started));
+                    });
+                }
+                Effect::WatchJobs => self.read_jobs(),
+                Effect::CancelJob(id) => {
+                    if let Err(error) = crate::core::jobs::request_cancel(&id) {
+                        diag::warn(format!("could not ask the job to stop: {error:#}"));
                     }
+                }
+                Effect::MarkSeen(id) => crate::core::jobs::mark_seen(&id),
+                Effect::LoadJobLog { id, title } => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-job-log", move || {
+                        let lines = crate::core::jobs::dir(&id)
+                            .map(|dir| crate::util::log::tail(&dir.join("log"), 5000))
+                            .unwrap_or_default();
+                        let lines = if lines.is_empty() {
+                            vec!["This job's log is empty.".to_string()]
+                        } else {
+                            lines
+                                .iter()
+                                .flat_map(|event| event.lines().map(str::to_string))
+                                .collect()
+                        };
+                        let _ = tx.send(Msg::ViewLoaded { title, lines });
+                    });
                 }
                 Effect::Suspend(Suspended::Note(project)) => {
                     let resumed = self.run_note_editor(project)?;
@@ -829,16 +848,10 @@ fn spawn_worker(name: &'static str, work: impl FnOnce() + Send + 'static) {
 /// verb is the `!` key, and a person reading a dialog here should be told the
 /// key, not sent to a terminal.
 fn for_the_app(text: &str) -> String {
-    text.replace("`fastf reconcile`", "Reconcile (`!`)")
+    crate::tui::app::background::for_the_app(text)
 }
 
-fn run_action(
-    action: Action,
-    progress: &Mutex<Progress>,
-    cancel: &AtomicBool,
-) -> Result<ActionOutcome> {
-    use crate::core::library::base_label;
-    use crate::core::move_engine::SourceOutcome;
+fn run_action(action: Action) -> Result<ActionOutcome> {
     use crate::util::paths::display_path;
 
     match action {
@@ -1024,89 +1037,6 @@ fn run_action(
                 format!("Renamed to {}", renamed.name),
             )
             .session(format!("renamed {} → {}", renamed.id, renamed.name)))
-        }
-        Action::Move { project, target } => {
-            let outcome =
-                crate::core::operations::move_project(&project, &target, progress, cancel)?;
-            let moved = outcome.project;
-            // **Say which kind of move it was.** A same-filesystem rename is
-            // instant however large the folder is, and a message that only
-            // names the destination reads the same whether two hundred
-            // gigabytes were copied or nothing was — which is exactly the
-            // doubt an instant finish creates.
-            let message = match outcome.copied {
-                Some((files, bytes)) => format!(
-                    "Moved to {} — copied {}, verified",
-                    display_path(&moved.path),
-                    crate::core::transactions::copied_summary(files, outcome.links, bytes)
-                ),
-                None => format!(
-                    "Moved to {} — renamed on the same filesystem, nothing copied",
-                    display_path(&moved.path)
-                ),
-            };
-            // The notes about links ride with the warning: both are things to
-            // read, and a long one opens the report dialog.
-            let warning = outcome
-                .source
-                .warning(&project.path)
-                .into_iter()
-                .chain(
-                    outcome
-                        .link_notes
-                        .iter()
-                        .map(|note| format!("note: {note}")),
-                )
-                .reduce(|all, next| format!("{all}\n\n{next}"));
-            let session = format!("moved {} → {}", moved.id, base_label(&moved.base));
-            let stale = vec![project.path.clone(), moved.path.clone()];
-            // **An original kept whole is still a project.** Until reconcile
-            // finishes, the library holds it and its moved copy, one id in two
-            // bases — so the list reads both again rather than patching the
-            // original's row into the moved one and hiding what is on disk.
-            let kept = matches!(
-                outcome.source,
-                SourceOutcome::KeptWhole { .. } | SourceOutcome::Unknown { .. }
-            );
-            let change = if kept {
-                ListChange::Reload
-            } else {
-                ListChange::Patched {
-                    project: Box::new(moved),
-                    was: project.path.clone(),
-                    stale,
-                }
-            };
-            Ok(ActionOutcome::new(change, message)
-                .warning(warning)
-                .session(session))
-        }
-        Action::CopyTo {
-            project,
-            destination,
-        } => {
-            let outcome =
-                crate::core::operations::copy_project(&project, &destination, progress, cancel)?;
-            let (files, bytes) = outcome.copied;
-            let notes = outcome
-                .link_notes
-                .iter()
-                .map(|note| format!("note: {note}"))
-                .reduce(|all, next| format!("{all}\n\n{next}"));
-            // **No `ListChange`.** The copy lands outside every base by rule, so
-            // no row changed and nothing needs re-reading; a `Reload` here would
-            // walk the whole library to learn that.
-            Ok(ActionOutcome::new(
-                ListChange::None,
-                format!(
-                    "Copied {} to {} — {}, verified",
-                    project.id,
-                    display_path(&outcome.path),
-                    crate::core::transactions::copied_summary(files, outcome.links, bytes)
-                ),
-            )
-            .warning(notes)
-            .session(format!("copied {}", project.id)))
         }
         Action::Create(request) => {
             // The plan is recomputed under the data lock inside `create`: the
@@ -1306,46 +1236,6 @@ fn run_action(
             )
             .settings())
         }
-        Action::Reconcile => {
-            let report = crate::core::operations::reconcile_with(progress, cancel)?;
-            let message = report.summary();
-            let outcome = ActionOutcome::new(ListChange::Reload, message).settings();
-            let mut notes = Vec::new();
-            if !report.incomplete.is_empty() {
-                notes.push(format!(
-                    "{} project(s) were never finished being created and cannot be rebuilt \
-                     automatically: {}",
-                    report.incomplete.len(),
-                    report.incomplete.join(", ")
-                ));
-            }
-            if !report.leftovers.is_empty() {
-                notes.push(format!(
-                    "{} old folder(s) not removed yet:\n{}",
-                    report.leftovers.len(),
-                    report.leftovers.join("\n")
-                ));
-            }
-            if !report.unrecoverable.is_empty() {
-                notes.push(format!(
-                    "{} need a look:\n{}",
-                    report.unrecoverable.len(),
-                    report.unrecoverable.join("\n")
-                ));
-            }
-            if !report.obsolete.is_empty() {
-                notes.push(format!(
-                    "{} obsolete v1 marker(s) left alone for manual inspection: {}",
-                    report.obsolete.len(),
-                    report.obsolete.join(", ")
-                ));
-            }
-            Ok(if notes.is_empty() {
-                outcome
-            } else {
-                outcome.warning(Some(notes.join("\n\n")))
-            })
-        }
         Action::Unregister(project) => {
             crate::core::operations::unregister(&project)?;
             Ok(ActionOutcome::new(
@@ -1355,16 +1245,6 @@ fn run_action(
                 format!("Unregistered {}", project.name),
             )
             .session(format!("unregistered {}", project.id)))
-        }
-        Action::Delete(project) => {
-            crate::core::operations::delete(&project)?;
-            Ok(ActionOutcome::new(
-                ListChange::Removed {
-                    path: project.path.clone(),
-                },
-                format!("Deleted {}", display_path(&project.path)),
-            )
-            .session(format!("deleted {}", project.id)))
         }
         Action::AppendNote { project, text } => {
             crate::core::operations::append_note(&project, &text)?;

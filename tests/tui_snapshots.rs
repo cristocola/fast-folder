@@ -17,7 +17,6 @@ use fastf::tui::entry::Entry;
 use fastf::tui::msg::Msg;
 use fastf::tui::testing::{
     empty_fixture, fixture, render_to_string, sample_projects, sample_summary,
-    sample_summary_moveable,
 };
 use fastf::tui::theme::Theme;
 use ratatui::crossterm::event::KeyCode;
@@ -273,8 +272,7 @@ fn removing_move() -> fastf::core::assets::Progress {
 #[test]
 fn move_progress_modal() {
     let mut app = fixture(12, 100, 30);
-    app.move_progress = Some(copying_move());
-    app.busy = Some("moving…");
+    fastf::tui::testing::follow_job(&mut app, fastf::core::jobs::JobKind::Move, copying_move());
     let frame = render_to_string(&app, 100, 30);
     assert!(frame.contains("scanned"), "{frame}");
     snap("move_progress", frame);
@@ -285,11 +283,10 @@ fn move_progress_modal() {
 #[test]
 fn move_progress_removing_the_old_copy() {
     let mut app = fixture(12, 100, 30);
-    app.move_progress = Some(removing_move());
-    app.busy = Some("moving…");
+    fastf::tui::testing::follow_job(&mut app, fastf::core::jobs::JobKind::Move, removing_move());
     let frame = render_to_string(&app, 100, 30);
     assert!(frame.contains("17 of 41 entries"), "{frame}");
-    assert!(frame.contains("point of no return"), "{frame}");
+    assert!(frame.contains("finishes by itself"), "{frame}");
     snap("move_progress_removing", frame);
 }
 
@@ -297,11 +294,10 @@ fn move_progress_removing_the_old_copy() {
 #[test]
 fn move_progress_in_a_short_window() {
     let mut app = fixture(12, 60, 12);
-    app.move_progress = Some(removing_move());
-    app.busy = Some("moving…");
+    fastf::tui::testing::follow_job(&mut app, fastf::core::jobs::JobKind::Move, removing_move());
     let frame = render_to_string(&app, 60, 12);
     assert!(frame.contains("removing the old copy"), "{frame}");
-    assert!(frame.contains("point of no return"), "{frame}");
+    assert!(frame.contains("finishes by itself"), "{frame}");
     snap("move_progress_short", frame);
 }
 
@@ -320,8 +316,7 @@ fn reconcile_progress_modal() {
     progress.step_done = 312;
     progress.step_total = 1473;
     progress.current_file = "node_modules/vite/dist".to_string();
-    app.move_progress = Some(progress);
-    app.busy = Some("reconciling…");
+    fastf::tui::testing::follow_job(&mut app, fastf::core::jobs::JobKind::Reconcile, progress);
     let frame = render_to_string(&app, 100, 30);
     assert!(frame.contains("1 of 2"), "{frame}");
     snap("reconcile_progress", frame);
@@ -419,9 +414,43 @@ fn activity_log_page() {
     let frame = render_to_string(&app, 100, 30);
     assert!(frame.contains("moved ID0248"), "{frame}");
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
     let frame = render_to_string(&app, 100, 30);
     assert!(frame.contains("scanned 41 entries"), "{frame}");
     snap("activity_log_page", frame);
+}
+
+/// `L`, turned to the jobs page: one row a job, newest first, the cursor on
+/// the one Enter opens the log of.
+#[test]
+fn activity_jobs_page() {
+    use fastf::core::assets::{JobStatus, Progress};
+    use fastf::core::jobs::JobKind;
+    use fastf::tui::testing::job_view;
+
+    let mut app = fixture(12, 100, 30);
+    fastf::tui::testing::follow_job(&mut app, JobKind::Move, copying_move());
+    let mut done = job_view(
+        "18d8-0-0",
+        JobKind::Reconcile,
+        &[],
+        Progress::new(&[]),
+        false,
+        JobStatus::Done,
+    );
+    done.seen = true;
+    done.state.as_mut().unwrap().summary =
+        "Reconciled: 0 resumed, 1 finished, 0 rolled back, 0 restored, 0 cleared".to_string();
+    app.background.jobs.push(done);
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Esc)));
+    let _ = update(&mut app, Msg::Key(Key::ch('L')));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
+    let frame = render_to_string(&app, 100, 30);
+    assert!(
+        frame.contains("running") && frame.contains("done"),
+        "{frame}"
+    );
+    snap("activity_jobs_page", frame);
 }
 
 /// A small window: two header lines, the pane in the list's place.
@@ -542,51 +571,46 @@ fn wide_names_120x40() {
     snap("wide_names_120x40", render_to_string(&app, 120, 40));
 }
 
-/// A running delete job over three marks, one item in flight.
+/// A running unregister batch over three marks, one item in flight.
 #[test]
 fn job_progress_modal() {
     let mut app = fixture(12, 100, 30);
     for _ in 0..3 {
         let _ = update(&mut app, Msg::Key(Key::ch(' ')));
     }
-    let _ = update(&mut app, Msg::Key(Key::ch('D')));
-    for c in "delete".chars() {
-        let _ = update(&mut app, Msg::Key(Key::ch(c)));
-    }
-    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+    let _ = update(&mut app, Msg::Key(Key::ch('u')));
+    let _ = update(&mut app, Msg::Key(Key::ch('y')));
     let job = app.job.as_ref().expect("the job is running");
     assert_eq!(job.pending.len(), 2);
     assert!(job.inflight.is_some());
     snap("job_progress", render_to_string(&app, 100, 30));
 }
 
-/// A moving job with a real byte count under it.
+/// A move over two marked projects is one job: the dialog names the item it
+/// is on, of how many, above that item's steps.
 #[test]
 fn job_progress_with_bytes_modal() {
     let mut app = fixture(12, 100, 30);
-    app.summary = Some(sample_summary_moveable(12));
-    let _ = update(&mut app, Msg::Key(Key::ch(' ')));
-    let _ = update(&mut app, Msg::Key(Key::ch(' ')));
-    let _ = update(&mut app, Msg::Key(Key::ch('m')));
-    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
-    assert!(app.job.is_some(), "the marks started a move job");
-    app.move_progress = Some(copying_move());
-    snap("job_progress_move", render_to_string(&app, 100, 30));
+    let mut progress = copying_move();
+    progress.item = 1;
+    progress.items = 2;
+    progress.item_label = "2026-08-28_Lullaby_Remix_ID0248".to_string();
+    fastf::tui::testing::follow_job(&mut app, fastf::core::jobs::JobKind::Move, progress);
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("1 of 2"), "{frame}");
+    snap("job_progress_move", frame);
 }
 
-/// The report after a two-item delete job where one item failed: the failed
-/// row is named, the clean one is not the story.
+/// The report after a two-item unregister batch where one item failed: the
+/// failed row is named, the clean one is not the story.
 #[test]
 fn job_report_with_failures() {
     let mut app = fixture(12, 100, 30);
     for _ in 0..2 {
         let _ = update(&mut app, Msg::Key(Key::ch(' ')));
     }
-    let _ = update(&mut app, Msg::Key(Key::ch('D')));
-    for c in "delete".chars() {
-        let _ = update(&mut app, Msg::Key(Key::ch(c)));
-    }
-    let effects = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+    let _ = update(&mut app, Msg::Key(Key::ch('u')));
+    let effects = update(&mut app, Msg::Key(Key::ch('y')));
     let id1 = match effects.as_slice() {
         [fastf::tui::effect::Effect::Run(id, _)] => *id,
         other => panic!("expected one run, got {other:?}"),
@@ -596,7 +620,7 @@ fn job_report_with_failures() {
         &mut app,
         Msg::ActionDone {
             id: id1,
-            outcome: Err("injected fault at 'delete:mid-copy'".to_string()),
+            outcome: Err("injected fault at 'unregister:mid-copy'".to_string()),
         },
     );
     let id2 = match effects.as_slice() {
@@ -1211,34 +1235,47 @@ mod settings {
         snap("onboarding", render_to_string(&app, 100, 30));
     }
 
-    /// What `Reconcile` reports when it found something.
+    /// What `Reconcile` reports when it found something: its job ends, and
+    /// the report's notes open in a dialog.
     #[test]
     fn reconcile_report() {
+        use fastf::core::assets::{JobStatus, Progress};
+        use fastf::core::jobs::JobKind;
+        use fastf::core::provisioning::ReconcileReport;
+
         let mut app = fixture(12, 100, 30);
         open(&mut app);
         go_to(&mut app, "Reconcile");
         let effects = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
-        let id = match &effects[..] {
-            [fastf::tui::effect::Effect::Run(id, _)] => *id,
-            other => panic!("expected the reconcile action, got {other:?}"),
-        };
-        let _ = update(
-            &mut app,
-            Msg::ActionDone {
-                id,
-                outcome: Ok(Box::new(
-                    ActionOutcome::new(
-                        ListChange::None,
-                        "✓  Reconciled: 1 resumed, 0 committed, 1 rolled back",
-                    )
-                    .warning(Some(
-                        "1 project(s) were never finished being created and cannot be rebuilt \
-                         automatically: 2026-09-01_Half_Made_ID0250"
-                            .to_string(),
-                    )),
-                )),
-            },
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                fastf::tui::effect::Effect::StartJob {
+                    kind: JobKind::Reconcile,
+                    ..
+                }
+            )),
+            "{effects:?}"
         );
+        let _ = update(&mut app, Msg::JobStarted(Ok("18d8-1-0".to_string())));
+        let mut ended = fastf::tui::testing::job_view(
+            "18d8-1-0",
+            JobKind::Reconcile,
+            &[],
+            Progress::new(&[]),
+            false,
+            JobStatus::Done,
+        );
+        let report = ReconcileReport {
+            resumed: 1,
+            rolled_back: 1,
+            incomplete: vec!["2026-09-01_Half_Made_ID0250".to_string()],
+            ..ReconcileReport::default()
+        };
+        let state = ended.state.as_mut().unwrap();
+        state.summary = report.summary();
+        state.reconcile = Some(report);
+        let _ = update(&mut app, Msg::Jobs(vec![ended]));
         snap("reconcile_report", render_to_string(&app, 100, 30));
     }
 }
@@ -1616,6 +1653,37 @@ fn every_state_draws_at_every_size() {
         ("help", || {
             let mut app = fixture(12, 120, 40);
             press_key(&mut app, Key::ch('?'));
+            app
+        }),
+        ("a job's dialog", || {
+            let mut app = fixture(12, 120, 40);
+            fastf::tui::testing::follow_job(
+                &mut app,
+                fastf::core::jobs::JobKind::Move,
+                removing_move(),
+            );
+            app
+        }),
+        ("a job behind its chip", || {
+            let mut app = fixture(12, 120, 40);
+            fastf::tui::testing::follow_job(
+                &mut app,
+                fastf::core::jobs::JobKind::Move,
+                copying_move(),
+            );
+            press_key(&mut app, Key::plain(KeyCode::Esc));
+            app
+        }),
+        ("the jobs page", || {
+            let mut app = fixture(12, 120, 40);
+            fastf::tui::testing::follow_job(
+                &mut app,
+                fastf::core::jobs::JobKind::Move,
+                copying_move(),
+            );
+            press_key(&mut app, Key::plain(KeyCode::Esc));
+            press_key(&mut app, Key::ch('L'));
+            press_key(&mut app, Key::plain(KeyCode::Tab));
             app
         }),
         ("actions", || {

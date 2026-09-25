@@ -664,6 +664,12 @@ fn batch_target(app: &App) -> Availability {
 fn not_busy(app: &App) -> Availability {
     if app.busy.is_some() || app.job.is_some() {
         Availability::Disabled("working…")
+    } else if app.background.starting.is_some() {
+        Availability::Disabled("starting a job…")
+    } else if app.background.lock_holder().is_some() {
+        // A job holds the library while it copies; every change would only
+        // wait for it. Browsing and reading go on.
+        Availability::Disabled("a job holds the library until it has copied — L shows it")
     } else {
         Availability::Enabled
     }

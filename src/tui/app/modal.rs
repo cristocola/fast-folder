@@ -10,7 +10,6 @@ use ratatui::crossterm::event::KeyCode;
 
 use super::App;
 use crate::tui::app::actions::{ActionsState, Confirm, MultiPick, NoteState, TextPrompt, TextThen};
-use crate::tui::app::jobs;
 use crate::tui::app::library::Sort;
 use crate::tui::app::palette::PaletteState;
 use crate::tui::app::pane;
@@ -169,8 +168,13 @@ pub struct Activity {
     pub messages: Vec<String>,
     /// Newest first; an event of several lines is several.
     pub log: Vec<String>,
+    /// One line per job, newest first, and the id of each.
+    pub jobs: Vec<String>,
+    pub job_ids: Vec<String>,
+    /// The job Enter opens the log of.
+    pub job_cursor: usize,
     /// Each page keeps its own place.
-    pub scroll: [usize; 2],
+    pub scroll: [usize; 3],
     /// Whether the files have been read yet; until then the messages page
     /// holds this session's, from memory.
     pub loaded: bool,
@@ -179,15 +183,21 @@ pub struct Activity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityPage {
     Messages = 0,
-    Log = 1,
+    Jobs = 1,
+    Log = 2,
 }
 
 impl ActivityPage {
-    pub const ALL: [ActivityPage; 2] = [ActivityPage::Messages, ActivityPage::Log];
+    pub const ALL: [ActivityPage; 3] = [
+        ActivityPage::Messages,
+        ActivityPage::Jobs,
+        ActivityPage::Log,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
             ActivityPage::Messages => "messages",
+            ActivityPage::Jobs => "jobs",
             ActivityPage::Log => "log",
         }
     }
@@ -198,8 +208,14 @@ impl Activity {
     pub fn lines(&self) -> &[String] {
         match self.page {
             ActivityPage::Messages => &self.messages,
+            ActivityPage::Jobs => &self.jobs,
             ActivityPage::Log => &self.log,
         }
+    }
+
+    /// The job under the cursor on the jobs page.
+    pub fn job_at_cursor(&self) -> Option<&str> {
+        self.job_ids.get(self.job_cursor).map(String::as_str)
     }
 
     pub fn scroll_mut(&mut self) -> &mut usize {
@@ -245,6 +261,52 @@ pub fn message_rows(
         rows.extend(lines.map(|line| format!("{:21}{line}", "")));
     }
     rows
+}
+
+/// The jobs page's rows, newest first — when it started, how it stands, what
+/// it is, and its step or its outcome — with the id of each.
+pub fn job_rows(jobs: &[crate::core::jobs::JobView]) -> (Vec<String>, Vec<String>) {
+    use crate::core::assets::JobStatus;
+    if jobs.is_empty() {
+        return (vec!["No jobs yet.".to_string()], Vec::new());
+    }
+    let mut rows = Vec::new();
+    let mut ids = Vec::new();
+    for job in jobs {
+        let state = job.state.as_ref();
+        let (word, detail) = if job.interrupted() {
+            (
+                "stopped",
+                "its process ended part of the way; Reconcile finishes it".to_string(),
+            )
+        } else {
+            match state.map(|state| state.status) {
+                Some(JobStatus::Running) | None => {
+                    ("running", crate::tui::app::background::step_of(job))
+                }
+                Some(JobStatus::Done) => {
+                    ("done", state.map(|s| s.summary.clone()).unwrap_or_default())
+                }
+                Some(JobStatus::Failed) => (
+                    "failed",
+                    state.map(|s| s.summary.clone()).unwrap_or_default(),
+                ),
+                Some(JobStatus::Cancelled) => (
+                    "cancelled",
+                    state.map(|s| s.summary.clone()).unwrap_or_default(),
+                ),
+            }
+        };
+        let started = state
+            .map(|state| crate::util::time::local_readable(&state.started))
+            .unwrap_or_default();
+        rows.push(format!(
+            "{started}  {word:<9}  {}  {detail}",
+            crate::tui::app::background::short_title(job)
+        ));
+        ids.push(job.id.clone());
+    }
+    (rows, ids)
 }
 
 /// The log page's rows, newest event first, each event's own lines in order.
@@ -446,7 +508,8 @@ impl App {
                 // mark set is what "batch tagging does nothing" was, and
                 // this was the last caller still asking it.
                 if self.batching() {
-                    self.start_job(jobs::JobKind::Move, Some(target))
+                    let targets = self.library.targets();
+                    self.start_background(crate::core::jobs::JobKind::Move, targets, Some(target))
                 } else {
                     self.run_move(target)
                 }
@@ -635,6 +698,24 @@ impl App {
             Some(Modal::Settings(state)) => {
                 state.step(delta);
                 state.clamp_viewport(layout::settings_rows(area));
+                Vec::new()
+            }
+            Some(Modal::Activity(activity)) if activity.page == ActivityPage::Jobs => {
+                activity.job_cursor = crate::tui::widgets::nav::step(
+                    Some(activity.job_cursor),
+                    activity.job_ids.len(),
+                    delta,
+                )
+                .unwrap_or(0);
+                // One row per job, so the cursor's row is its index; keep it
+                // in view.
+                let rows = crate::tui::view::modals::activity_body_rows(area);
+                let scroll = &mut activity.scroll[ActivityPage::Jobs as usize];
+                if activity.job_cursor < *scroll {
+                    *scroll = activity.job_cursor;
+                } else if rows > 0 && activity.job_cursor >= *scroll + rows {
+                    *scroll = activity.job_cursor + 1 - rows;
+                }
                 Vec::new()
             }
             Some(Modal::Help { .. }) | Some(Modal::Message { .. }) | Some(Modal::Activity(_)) => {

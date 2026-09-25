@@ -57,9 +57,7 @@ fn a_delete_whose_project_left_the_library_does_not_delete_a_neighbour() {
     }
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::Run(_, action) if matches!(**action, Action::Delete(_)))),
+        !effects.iter().any(|e| matches!(e, Effect::StartJob { .. })),
         "nothing may be deleted once the named project is gone: {effects:?}"
     );
 }

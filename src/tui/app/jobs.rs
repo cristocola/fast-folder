@@ -24,13 +24,12 @@ use crate::tui::effect::{Action, ActionOutcome, Effect};
 /// What one batch does to each of its items. The answer the verb needed —
 /// the tag, the note, the base — was asked once and travels with the kind.
 #[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// A move, a copy and a delete over marks are not batches here: each is one
+/// job in a process of its own (`app::background`), which goes on if the app
+/// is closed.
 pub enum JobKind {
-    Delete,
     Unregister,
-    /// Move every item into the one picked base.
-    Move,
-    /// Copy every item into the one folder, keeping each id.
-    CopyTo(PathBuf),
     /// Add the one tag to every item.
     AddTag(String),
     /// Take the picked tags off every item that has them.
@@ -45,10 +44,7 @@ impl JobKind {
     /// The progress wording, in the imperative the runtime uses.
     pub fn verb(&self) -> &'static str {
         match self {
-            JobKind::Delete => "deleting",
             JobKind::Unregister => "unregistering",
-            JobKind::Move => "moving",
-            JobKind::CopyTo(_) => "copying",
             JobKind::AddTag(_) => "tagging",
             JobKind::RemoveTags(_) => "untagging",
             JobKind::ReautoTags => "re-deriving tags for",
@@ -59,10 +55,7 @@ impl JobKind {
     /// The busy label while one item runs, matching the single-verb wording.
     pub fn busy(&self) -> &'static str {
         match self {
-            JobKind::Delete => "deleting…",
             JobKind::Unregister => "unregistering…",
-            JobKind::Move => "moving…",
-            JobKind::CopyTo(_) => "copying…",
             JobKind::AddTag(_) => "tagging…",
             JobKind::RemoveTags(_) => "removing tags…",
             JobKind::ReautoTags => "re-deriving tags…",
@@ -73,10 +66,7 @@ impl JobKind {
     /// The finished report's headline, e.g. "3 deleted".
     pub fn done(&self, count: usize) -> String {
         let noun = match self {
-            JobKind::Delete => "deleted",
             JobKind::Unregister => "unregistered",
-            JobKind::Move => "moved",
-            JobKind::CopyTo(_) => "copied",
             JobKind::AddTag(_) => "tagged",
             JobKind::RemoveTags(_) => "untagged",
             JobKind::ReautoTags => "re-derived",
@@ -88,10 +78,7 @@ impl JobKind {
     /// The report modal's title.
     pub fn report_title(&self) -> String {
         let noun = match self {
-            JobKind::Delete => "delete",
             JobKind::Unregister => "unregister",
-            JobKind::Move => "move",
-            JobKind::CopyTo(_) => "copy",
             JobKind::AddTag(_) => "tag",
             JobKind::RemoveTags(_) => "untag",
             JobKind::ReautoTags => "re-derive",
@@ -172,12 +159,7 @@ impl Job {
     pub fn action_for(&self, project: &Project) -> Action {
         let project = Box::new(project.clone());
         match &self.kind {
-            JobKind::Delete => Action::Delete(project),
             JobKind::Unregister => Action::Unregister(project),
-            JobKind::Move => Action::Move {
-                project,
-                target: self.target.clone().expect("a move job carries its target"),
-            },
             JobKind::AddTag(tag) => Action::AddTag {
                 project,
                 tag: tag.clone(),
@@ -185,10 +167,6 @@ impl Job {
             JobKind::RemoveTags(tags) => Action::RemoveTags {
                 project,
                 tags: tags.clone(),
-            },
-            JobKind::CopyTo(destination) => Action::CopyTo {
-                project,
-                destination: destination.clone(),
             },
             JobKind::ReautoTags => Action::ReautoTags(project),
             JobKind::Note(text) => Action::AppendNote {
@@ -351,7 +329,6 @@ impl App {
         let Some(job) = self.job.take() else {
             return Vec::new();
         };
-        self.move_progress = None;
         let mut headline = job.kind.done(job.done);
         if !job.failed.is_empty() {
             headline.push_str(&format!(", {} failed", job.failed.len()));
@@ -377,23 +354,10 @@ impl App {
         Vec::new()
     }
 
-    /// Stop after the current item: the in-flight move is told to cancel, and
-    /// the job marks itself as cancelled so the rest stay marked. A bare
-    /// single move (no job) just cancels at the runtime.
-    ///
-    /// A move past its publish cannot be undone, and the dialog already says
-    /// so; the answer here is that sentence in the log, not a cancel that
-    /// would pretend to stop it.
+    /// Stop after the current item: the job marks itself as cancelled so the
+    /// rest stay marked.
     pub(super) fn request_cancel(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
-        match &self.move_progress {
-            Some(progress) if progress.committed => {
-                let late = too_late(progress);
-                self.info(late);
-            }
-            Some(_) => effects.push(Effect::CancelMove),
-            None => {}
-        }
         match &mut self.job {
             Some(job) => job.cancelled = true,
             None => return effects,
@@ -430,7 +394,7 @@ mod tests {
         // The app hands `targets()` over in display order — newest first, as
         // the list shows them — and the job must keep that order.
         let projects = sample_projects(3);
-        let mut job = Job::new(JobKind::Delete, projects.clone(), None);
+        let mut job = Job::new(JobKind::Unregister, projects.clone(), None);
         let mut order: Vec<String> = Vec::new();
         while let Some(item) = job.begin_next() {
             order.push(item.id.clone());
@@ -444,7 +408,7 @@ mod tests {
 
     #[test]
     fn a_cancelled_job_stops_beginning_items() {
-        let mut job = Job::new(JobKind::Delete, sample_projects(3), None);
+        let mut job = Job::new(JobKind::Unregister, sample_projects(3), None);
         assert!(job.begin_next().is_some());
         job.take_inflight();
         job.cancelled = true;
@@ -457,24 +421,9 @@ mod tests {
         let projects = sample_projects(1);
         let item = projects[0].clone();
         assert!(matches!(
-            Job::new(JobKind::Delete, projects.clone(), None).action_for(&item),
-            Action::Delete(_)
-        ));
-        assert!(matches!(
             Job::new(JobKind::Unregister, projects.clone(), None).action_for(&item),
             Action::Unregister(_)
         ));
-        let target = PathBuf::from("/mnt/archive");
-        match Job::new(JobKind::Move, projects.clone(), Some(target.clone())).action_for(&item) {
-            Action::Move {
-                project,
-                target: got,
-            } => {
-                assert_eq!(*project, item);
-                assert_eq!(got, target);
-            }
-            other => panic!("expected a move, got {other:?}"),
-        }
         // The tag and the note were asked once and ride with the kind.
         match Job::new(JobKind::AddTag("draft".into()), projects.clone(), None).action_for(&item) {
             Action::AddTag { project, tag } => {
@@ -496,11 +445,7 @@ mod tests {
 
     #[test]
     fn the_report_names_failures_and_leftover_marks() {
-        let mut job = Job::new(
-            JobKind::Move,
-            sample_projects(3),
-            Some("/mnt/archive".into()),
-        );
+        let mut job = Job::new(JobKind::Unregister, sample_projects(3), None);
         // One clean, one failed, one never run (cancelled).
         job.begin_next();
         job.take_inflight();
@@ -519,7 +464,7 @@ mod tests {
         assert!(job.begin_next().is_none());
 
         let (title, body) = job.report().expect("a report is due");
-        assert_eq!(title, "move report");
+        assert_eq!(title, "unregister report");
         assert!(body.contains("1 failed"), "{body}");
         assert!(body.contains(&second_id), "{body}");
         assert!(body.contains("injected fault"), "{body}");
@@ -528,7 +473,7 @@ mod tests {
 
     #[test]
     fn a_clean_job_needs_no_report() {
-        let mut job = Job::new(JobKind::Delete, sample_projects(2), None);
+        let mut job = Job::new(JobKind::Unregister, sample_projects(2), None);
         while job.begin_next().is_some() {
             job.take_inflight();
             job.done += 1;

@@ -135,7 +135,10 @@ fn a_delete_drops_its_row_without_rescanning_the_library() {
     let screen = app_screen(&out);
 
     assert_eq!(code, 0, "a delete should return to the dashboard:\n{text}");
-    assert!(text.contains("Deleted"), "the delete did not run:\n{text}");
+    assert!(
+        text.contains("deleted ID0002"),
+        "the delete did not run:\n{text}"
+    );
     assert!(
         !sb.base.join("Doomed_Project").exists(),
         "the folder should be gone:\n{text}"
@@ -588,7 +591,7 @@ fn a_batch_move_reports_each_item_and_patches_its_rows() {
         .key("m")
         .pause(400)
         .enter() // → the one other mounted base
-        .pause(2000) // two renames and their row patches
+        .pause(3000) // a job of its own: two renames, then the app reads it ended
         .key(KEY_QUIT)
         .build();
     let (out, code) = launch_traced(&sb, script, &trace);
@@ -596,7 +599,10 @@ fn a_batch_move_reports_each_item_and_patches_its_rows() {
     let screen = app_screen(&out);
 
     assert_eq!(code, 0, "a batch move should end at the dashboard:\n{text}");
-    assert!(text.contains("2 moved"), "the batch should report:\n{text}");
+    assert!(
+        text.contains("moved 2 of 2"),
+        "the batch should report:\n{text}"
+    );
     assert!(
         !sb.base.join("Batch_B").exists() && !sb.base.join("Batch_A").exists(),
         "the source folders should be gone:\n{text}"
@@ -614,10 +620,12 @@ fn a_batch_move_reports_each_item_and_patches_its_rows() {
                 .any(|l| l.contains("Batch_A") && l.contains("alt")),
         "both rows should show the new base:\n{screen}"
     );
+    // One read at the start, and one when the job has ended: the rows land
+    // in another base, and a move's job says where, not what the row is now.
     assert_eq!(
         traced(&trace, "discover"),
-        1,
-        "a batch move must not rescan the library"
+        2,
+        "a batch move reads the library once when it ends"
     );
 }
 
@@ -678,7 +686,7 @@ fn a_move_that_keeps_its_original_says_why_in_a_dialog() {
     );
     let rows: Vec<&str> = screen
         .lines()
-        .filter(|line| line.contains("ID0001 Solo"))
+        .filter(|line| line.starts_with('│') && line.contains("ID0001 Solo"))
         .collect();
     assert_eq!(
         rows.len(),
@@ -733,7 +741,7 @@ fn a_failed_move_surfaces_in_the_ui_and_leaves_the_list_consistent() {
         "a failed move should return to the dashboard:\n{text}"
     );
     assert!(
-        text.contains("move report") && text.contains("failed") && text.contains("after-staging"),
+        text.contains("failed") && text.contains("after-staging"),
         "the report should name the failure:\n{text}"
     );
     assert!(
@@ -1043,4 +1051,56 @@ fn todos_typed_in_one_burst_all_land_in_order() {
         at("first") < at("second") && at("second") < at("third"),
         "{file}"
     );
+}
+
+/// **Quitting the app mid-move leaves the move running.** The move is a job
+/// of its own: the app started it and followed it, and `q` leaves it to
+/// finish. A second app started meanwhile shows the same job in its header.
+#[cfg(debug_assertions)]
+#[test]
+fn quitting_mid_move_leaves_the_move_to_finish_and_a_second_app_sees_it() {
+    let sb = Sandbox::new();
+    let alt = sb.with_bases(&["alt"])[0].clone();
+    plant_dated_project(&sb, "Slow", "ID0001", "2026-01-01T00:00:00Z", 64);
+    // One file, three seconds to copy: long enough to quit in the middle.
+    let fault = std::path::Path::new("move:force-staged,move:each-file:delay-3000");
+    let env = [
+        ("FASTF_INSTALL_DIR", sb.install.as_path()),
+        ("HOME", sb.tmp.path()),
+        ("FASTF_FAULT", fault),
+    ];
+
+    let first = pty::Script::new()
+        .pause(800)
+        .key("m")
+        .pause(400)
+        .enter() // → the one other mounted base
+        .pause(1000)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = pty::run(common::FASTF, &[], &env, &first, DEADLINE);
+    assert_eq!(code, 0, "{}", pty::plain(&out));
+    assert!(
+        sb.base.join("Slow").is_dir(),
+        "the app quit before the move could have finished"
+    );
+
+    // A second app, while the job is still copying: its header says so.
+    let second = pty::Script::new().pause(1200).key(KEY_QUIT).build();
+    let (out, code) = pty::run(common::FASTF, &[], &env, &second, DEADLINE);
+    assert_eq!(code, 0);
+    assert!(
+        some_frame_shows(&out, &["moving ID0001", "copying"]),
+        "the second app shows the running job:\n{}",
+        pty::plain(&out)
+    );
+
+    let started = std::time::Instant::now();
+    while !alt.join("Slow/PROJECT_INFO.md").is_file() || sb.base.join("Slow").exists() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the move did not finish without the app"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }

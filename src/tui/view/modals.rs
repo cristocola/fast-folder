@@ -105,9 +105,10 @@ pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
     if app.job.is_some() {
         return;
     }
-    let Some(progress) = &app.move_progress else {
+    let Some(progress) = app.shown_progress() else {
         return;
     };
+    let progress = &progress;
     let theme = &app.theme;
     let width = 62.min(area.width);
     let inner_width = (width as usize).saturating_sub(2);
@@ -118,12 +119,16 @@ pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
         lines = progress_lines(app, progress, inner_width, false);
     }
     lines.push(Line::from(""));
+    // The way out, read from the registry: Esc hides the dialog and the job
+    // goes on; Ctrl-C cancels, until the job is past its point of no return.
+    let hide = command::key_of_in(CommandId::Back, &theme.glyphs);
+    let cancel = command::key_of_in(CommandId::Interrupt, &theme.glyphs);
     lines.push(Line::from(Span::styled(
         fit(
-            if progress.committed {
-                " past the point of no return: this finishes by itself"
+            &if progress.committed {
+                format!(" {hide} hides · it finishes by itself, even if fastf closes")
             } else {
-                " Ctrl-C cancels"
+                format!(" {hide} hides · {cancel} cancels · it goes on if fastf closes")
             },
             inner_width,
             theme.glyphs.ellipsis,
@@ -136,10 +141,10 @@ pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     let title = app
-        .busy
-        .map(|busy| busy.trim_end_matches('…').trim_end_matches("...").trim())
-        .filter(|busy| !busy.is_empty())
-        .unwrap_or("working");
+        .shown_title()
+        .trim_end_matches('…')
+        .trim_end_matches("...")
+        .trim();
     let area = centered_fixed(area, width, lines.len() as u16 + 2);
     super::clear(frame, area, &app.theme);
     let block = frame_block(app, format!(" {title} "), true);
@@ -314,11 +319,6 @@ pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
             theme.text(),
         )),
     ];
-    if let Some(progress) = &app.move_progress {
-        // The item's own step, so a batch shows where the current move is as
-        // well as how many are left.
-        lines.extend(progress_lines(app, progress, width as usize - 2, false));
-    }
     if !job.failed.is_empty() {
         lines.push(Line::from(Span::styled(
             format!(" {} failed so far", job.failed.len()),
@@ -1511,9 +1511,34 @@ fn render_activity(
         ..target
     };
     let lines = activity.lines();
+    let on_jobs = activity.page == ActivityPage::Jobs && !activity.job_ids.is_empty();
     let text: Vec<Line> = lines
         .iter()
-        .map(|line| Line::from(Span::styled(line.clone(), Style::default().fg(theme.text))))
+        .enumerate()
+        .map(|(index, line)| {
+            if !on_jobs {
+                return Line::from(Span::styled(line.clone(), Style::default().fg(theme.text)));
+            }
+            // The job Enter opens: the cursor and the selection style, which
+            // mono draws reversed.
+            // One line a job, cut to fit: a list, not a paragraph.
+            let line = fit(
+                line,
+                (body.width as usize).saturating_sub(2),
+                theme.glyphs.ellipsis,
+            );
+            if index == activity.job_cursor {
+                Line::from(Span::styled(
+                    format!("{} {line}", theme.glyphs.cursor),
+                    theme.selection,
+                ))
+            } else {
+                Line::from(Span::styled(
+                    format!("  {line}"),
+                    Style::default().fg(theme.text),
+                ))
+            }
+        })
         .collect();
     let max_scroll = message_rows(lines, body.width as usize).saturating_sub(body.height as usize);
     let scroll = activity.scroll[activity.page as usize].min(max_scroll);

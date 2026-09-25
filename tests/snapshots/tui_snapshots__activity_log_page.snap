@@ -12,7 +12,7 @@ expression: frame
 "│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ music-video   ·   projects       │"
 "│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ created 2026-08-28               │"
 "│  ID0246 2026-┌ activity ──────────────────────────────────────────────────────────┐              │"
-"│  ID0245 2026-│   messages   ▸ log   Tab turns the page · newest first             │───────────── │"
+"│  ID0245 2026-│   messages     jobs   ▸ log   Tab turns the page · newest first    │───────────── │"
 "│  ID0244 2026-│                                                                    │              │"
 "│  ID0243 2026-│ 2026-09-25T14:03:19.004Z WARN  - 4242 the moved copy could not be  │              │"
 "│  ID0242 2026-│ re-read                                                            │              │"

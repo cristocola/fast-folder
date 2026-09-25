@@ -78,3 +78,13 @@ pub fn item_done(id: fastf::tui::effect::ActionId, change: ListChange) -> Msg {
         ))),
     }
 }
+
+/// The job the effects start, if one does: its kind and items.
+pub fn job_started(
+    effects: &[Effect],
+) -> Option<(fastf::core::jobs::JobKind, &[fastf::core::jobs::JobItem])> {
+    effects.iter().find_map(|effect| match effect {
+        Effect::StartJob { kind, items } => Some((*kind, items.as_slice())),
+        _ => None,
+    })
+}

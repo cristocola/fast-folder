@@ -1,5 +1,6 @@
 ---
 source: tests/tui_snapshots.rs
+assertion_line: 26
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -13,8 +14,8 @@ expression: frame
 "│✓ ID0246 2026-08-26_Old_Shoot_ID0246                scanning… ││ scanning…                        │"
 "│▸ ID0245 2026-08-25_Test_Run_ID0245                 scanning… ││ ── tags ──────────────────────── │"
 "│  ID0244 2026-08-24_Spring_Campaign_ID0244          scanning… ││ ● draft                          │"
-"│  ID0243 2026-0┌ deleting ────────────────────────────────────────────────────────┐               │"
-"│  ID0242 2026-0│ deleting 1 of 3                                                  │               │"
+"│  ID0243 2026-0┌ unregistering ───────────────────────────────────────────────────┐               │"
+"│  ID0242 2026-0│ unregistering 1 of 3                                             │               │"
 "│  ID0241 2026-0│ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0% │               │"
 "│  ID0240 2026-0│ 2026-08-28_Lullaby_Remix_ID0248                                  │               │"
 "│  ID0239 2026-0│                                                                  │               │"
@@ -30,5 +31,5 @@ expression: frame
 "│                                                              ││                                  │"
 "│                                                              ││                                  │"
 "└──────────────────────────────────────────────────────────────┘└──────────────────────────────────┘"
-" ◜ deleting…                                                                                        "
+" ◜ unregistering…                                                                                   "
 " / search  a actions  o open  t terminal  y copy path  Space mark  n new  T templates  → pane       "

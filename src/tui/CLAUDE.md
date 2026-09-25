@@ -551,26 +551,34 @@ sentence saying what to press first.
 A finished verb patches its row by the **path it had** (`ListChange::Patched`
 carries `was`) before the id, because `copy-to` can put one id in two bases.
 
-**A move is a job** on a worker with a shared `Progress` and a cancel flag, so
-Ctrl-C during a move cancels it instead of quitting. So are a copy to a folder
-and a reconcile: `Action::reports_progress` is the one answer to "is this a long
-job", read by `App::run_action` (which arms `App.move_progress` only once the
-action really runs, so a refused one leaves no dialog behind) and by the runtime
-(which registers the handles). `MoveOutcome::staged` and `copied` tell both
-surfaces whether it was an instant rename or a verified copy of so many files,
-and `JobStatus` reaches `Done`, `Failed` or `Cancelled` on every path
-(`core::progress::settle`), so `Runtime.moving` clears and a later
-`Effect::CancelMove` touches nothing.
+**A move, a copy, a delete and a reconcile are jobs** (`core::jobs`), processes
+of their own the app starts (`Effect::StartJob` → `Msg::JobStarted`) and follows
+but does not own (`app::background`). The runtime reads `jobs/` on a worker
+(`Runtime::watch_jobs`: five times a second while `Background::watching`, once
+a second otherwise, one read at a time) and hands `Msg::Jobs` to `update`. The
+dialog follows one job (`Background.following`) and draws its
+`state.progress`; **Esc hides it** (`Back`'s first rung while it is up) and the
+header's chip keeps saying what runs; **Ctrl-C asks the job to stop**
+(`Effect::CancelJob` writes its `cancel` file) or, past `Progress.committed`,
+logs `jobs::too_late`; **`q` quits and leaves the job running** — `Runtime`
+cancels nothing on the way out. A job that ends is reported once
+(`on_jobs`/`report_job`): this session's always, and on the first read any that
+ended unseen while no app was open; its summary on the status line, its
+warnings or failures in a dialog, a delete's rows dropped by path and anything
+else a `Reload`, marks cleared for the items that went through, and
+`Effect::MarkSeen`. `not_busy` dims every mutating verb while a live job
+`holds_lock` — the change would only wait — and browsing goes on. The in-app
+batch runner (`app/jobs.rs`) is for the quick verbs only: tag, note, unregister.
+`MoveOutcome::staged` and `copied` still tell the command line whether a move
+renamed or copied.
 
 **The dialog draws one row per step** (`view::modals::progress_lines`) from
 `Progress.steps` and `Progress.finished`: done steps ticked with what they
 counted, the current one with its count, bar and entry, the rest dim — or the
 current step alone when the window is too short, or the job plans none (a
 reconcile, which names its item instead). A copy's bar measures bytes and says
-them after it; every other step's bar measures its count. **A cancel after the
-publish is answered, not sent**: `Progress.committed` makes the dialog's last
-line say the job finishes by itself and `request_cancel` log
-`jobs::too_late` instead of emitting `Effect::CancelMove`.
+them after it; every other step's bar measures its count. Its last line reads
+Esc and Ctrl-C from the registry and says the job goes on if fastf closes.
 
 The `$EDITOR` note suspends into `Suspended::Note` and the CLI's own
 `cli::note::note_from_editor`. The metadata and notes views load through
@@ -581,7 +589,9 @@ count of the warnings that arrived under a dialog. Each also lands in
 `App.outbox`, which `Runtime::keep_messages` drains after every `update` onto
 `messages.log` on a worker — `update` writes nothing. **`L` is the activity
 screen** (`Modal::Activity`): the messages of every session and the log, a page
-each, newest first. It goes up with this session's messages at once
+each — and a jobs page between them, one line a job with a cursor, Enter
+opening that job's own log (`Effect::LoadJobLog`) — newest first. It goes up
+with this session's messages at once
 (`Effect::LoadActivity` reads the files), and `Runtime::watch_activity` reads
 them again once a second while it is open. Tab turns the page — it is the
 `FocusNext` key, the screen's "next pane" — and the page on show wears the

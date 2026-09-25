@@ -351,19 +351,15 @@ impl App {
                         return Vec::new();
                     }
                 };
-                if self.batching() {
-                    return self.start_job(jobs::JobKind::CopyTo(destination), None);
-                }
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
+                let targets = if self.batching() {
+                    self.library.targets()
+                } else {
+                    match self.library.selected().cloned() {
+                        Some(project) => vec![project],
+                        None => return Vec::new(),
+                    }
                 };
-                self.run_action(
-                    "copying…",
-                    Action::CopyTo {
-                        project: Box::new(project),
-                        destination,
-                    },
-                )
+                self.start_background(crate::core::jobs::JobKind::Copy, targets, Some(destination))
             }
             TextThen::RaiseCounter => {
                 self.modals.pop();
@@ -388,12 +384,17 @@ impl App {
                 }
                 self.modals.pop();
                 if self.batching() {
-                    return self.start_job(jobs::JobKind::Delete, None);
+                    let targets = self.library.targets();
+                    return self.start_background(
+                        crate::core::jobs::JobKind::Delete,
+                        targets,
+                        None,
+                    );
                 }
                 let Some(project) = self.project_at(&path) else {
                     return self.gone_from_the_library();
                 };
-                self.run_action("deleting…", Action::Delete(Box::new(project)))
+                self.start_background(crate::core::jobs::JobKind::Delete, vec![project], None)
             }
         }
     }
@@ -515,7 +516,10 @@ impl App {
                     None => Vec::new(),
                 }
             }
-            ConfirmThen::DeleteBatch => self.start_job(jobs::JobKind::Delete, None),
+            ConfirmThen::DeleteBatch => {
+                let targets = self.library.targets();
+                self.start_background(crate::core::jobs::JobKind::Delete, targets, None)
+            }
             ConfirmThen::UnregisterBatch => self.start_job(jobs::JobKind::Unregister, None),
         }
     }
@@ -638,12 +642,10 @@ impl App {
         let Some(project) = self.library.selected().cloned() else {
             return Vec::new();
         };
-        self.run_action(
-            "moving…",
-            Action::Move {
-                project: Box::new(project),
-                target,
-            },
+        self.start_background(
+            crate::core::jobs::JobKind::Move,
+            vec![project],
+            Some(target),
         )
     }
 

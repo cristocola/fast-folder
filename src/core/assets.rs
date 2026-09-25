@@ -84,6 +84,9 @@ pub struct Progress {
     /// reconcile never sets it — it can stop between items, and inside a
     /// removal.
     pub committed: bool,
+    /// The job holds the data lock right now, so every other fastf's changes
+    /// wait for it: while a move copies, not while it removes an old copy.
+    pub holds_lock: bool,
     /// Why a job that ended [`JobStatus::Failed`] failed.
     pub error: Option<String>,
     /// Unix-epoch milliseconds of the last observed movement: written on every
@@ -232,6 +235,16 @@ impl Progress {
     /// Whether the current step has a total to draw a bar against.
     pub fn has_total(&self) -> bool {
         self.step_total > 0 && self.phase.unit().is_some()
+    }
+
+    /// The current step and its count: `copying 312 of 1473 files`.
+    pub fn step_text(&self) -> String {
+        let count = self.count_text();
+        if count.is_empty() {
+            self.phase.as_str().to_string()
+        } else {
+            format!("{} {count}", self.phase.as_str())
+        }
     }
 
     /// `item 2 of 5`, or nothing for a job that is one thing.

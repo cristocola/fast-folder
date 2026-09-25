@@ -17,7 +17,7 @@ use std::sync::atomic::AtomicBool;
 use crate::core::assets::{self, CopyJob, JobPhase, Progress};
 use crate::core::config::Config;
 use crate::core::library;
-use crate::core::move_cleanup::{self, Cleanup, Purpose, Removal, SourceFate};
+use crate::core::move_cleanup::{self, Cleanup, SetAside, SourceFate};
 use crate::core::progress::Ticker;
 use crate::core::template;
 use crate::core::transactions::{self, MoveJournal, MoveManifest, MovePhase, Operation};
@@ -182,6 +182,10 @@ pub struct Incomplete {
 /// Cheap read-only discovery used by CLI/UI state. Invalid v2 journals are
 /// surfaced by their owned path and are never followed.
 pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
+    // A job running now is not something that needs attention: its records
+    // are its own until it ends.
+    let live = crate::core::jobs::live_workers();
+    let mine = |operation: &str| crate::core::jobs::owned_by(operation, &live);
     let mut out = Vec::new();
     let mut operations = HashSet::new();
     let mut retired = Vec::new();
@@ -203,7 +207,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
             };
             if name == transactions::TRANSACTIONS_DIR {
                 if file_type.is_dir() && !file_type.is_symlink() {
-                    list_move_transactions(&base, &path, &mut out, &mut operations);
+                    list_move_transactions(&base, &path, &mut out, &mut operations, &live);
                 } else {
                     out.push(Incomplete {
                         path: path.display().to_string(),
@@ -226,9 +230,12 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                     retired.push((path, operation.to_string()));
                     continue;
                 }
-                if move_cleanup::deleted_operation(&name).is_some()
-                    || crate::core::move_preflight::probe_operation(&name).is_some()
-                {
+                let hidden = move_cleanup::deleted_operation(&name)
+                    .or_else(|| crate::core::move_preflight::probe_operation(&name));
+                if hidden.is_some_and(mine) {
+                    continue;
+                }
+                if hidden.is_some() {
                     out.push(Incomplete {
                         path: path.display().to_string(),
                         kind: IncompleteKind::Leftover,
@@ -275,7 +282,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
     // A retired folder with a transaction is that transaction's; one without
     // is a leftover of its own.
     for (path, operation) in retired {
-        if !operations.contains(&operation) {
+        if !operations.contains(&operation) && !mine(&operation) {
             out.push(Incomplete {
                 path: path.display().to_string(),
                 kind: IncompleteKind::Leftover,
@@ -291,6 +298,7 @@ fn list_move_transactions(
     root: &Path,
     out: &mut Vec<Incomplete>,
     operations: &mut HashSet<String>,
+    live: &HashSet<u32>,
 ) {
     if crate::util::paths::require_real_directory(root, "transaction root").is_err() {
         out.push(Incomplete {
@@ -310,6 +318,9 @@ fn list_move_transactions(
             .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink());
         if let Some(name) = operation_dir.file_name().and_then(|name| name.to_str()) {
             operations.insert(name.to_string());
+            if crate::core::jobs::owned_by(name, live) {
+                continue;
+            }
         }
         if valid_dir {
             match transactions::read_journal(&operation_dir) {
@@ -334,7 +345,8 @@ fn list_move_transactions(
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ReconcileReport {
     pub resumed: usize,
     pub completed: usize,
@@ -423,6 +435,41 @@ pub fn reconcile_unlocked(cfg: &Config) -> ReconcileReport {
 /// inside a removal, whose leftover the next pass finishes.
 #[doc(hidden)]
 pub fn reconcile_unlocked_with(cfg: &Config, ticker: Ticker) -> ReconcileReport {
+    let mut pass = Pass {
+        ticker,
+        live: crate::core::jobs::live_workers(),
+        deferred: None,
+    };
+    reconcile_pass(cfg, &mut pass)
+}
+
+/// What one pass carries: its progress, the live jobs whose records it leaves
+/// alone, and — when it is to hand removals on until its lock is released —
+/// where it puts them.
+struct Pass<'a> {
+    ticker: Ticker<'a>,
+    live: HashSet<u32>,
+    deferred: Option<Vec<Deferred>>,
+}
+
+impl Pass<'_> {
+    /// A record or folder a live job made is that job's until it ends.
+    fn leaves(&self, operation: &str) -> bool {
+        crate::core::jobs::owned_by(operation, &self.live)
+    }
+}
+
+/// A removal a reconcile decided on under its lock and runs after it.
+struct Deferred {
+    housekeeping: move_cleanup::Housekeeping,
+    /// For a move: what `record_fate` names.
+    subject: String,
+    source: PathBuf,
+    final_path: PathBuf,
+}
+
+fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
+    let ticker = pass.ticker;
     let mut report = ReconcileReport::default();
     let expected = list_incomplete(cfg).len();
     ticker.update(|state| state.items = expected);
@@ -450,10 +497,14 @@ pub fn reconcile_unlocked_with(cfg: &Config, ticker: Ticker) -> ReconcileReport 
         if report.cancelled {
             break;
         }
-        reconcile_base(cfg, &base, &mut report, &mut seen, &mut retired, ticker);
+        reconcile_base(cfg, &base, &mut report, &mut seen, &mut retired, pass);
     }
     for (path, operation) in retired {
-        if !report.cancelled && !seen.contains(&operation) && entry_exists_quiet(&path) {
+        if !report.cancelled
+            && !seen.contains(&operation)
+            && !pass.leaves(&operation)
+            && entry_exists_quiet(&path)
+        {
             report.leftovers.push(format!(
                 "{}: a moved project's retired original, with no record of the move left; \
                  fastf will not remove it without one. Look inside, and delete it yourself \
@@ -477,9 +528,11 @@ pub fn reconcile_locked() -> ReconcileReport {
 pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
     let mut report = ReconcileReport::default();
     ticker.subject("reconcile".to_string());
-    let _data_lock = match crate::util::lockfile::DataLock::acquire_then(|| {
+    let data_lock = crate::util::lockfile::DataLock::acquire_then(|| {
         ticker.phase(JobPhase::Waiting, 0);
-    }) {
+    });
+    ticker.update(|state| state.holds_lock = data_lock.is_ok());
+    let _data_lock = match data_lock {
         Ok(lock) => lock,
         Err(error) => {
             report
@@ -497,7 +550,48 @@ pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
             return report;
         }
     };
-    reconcile_unlocked_with(&config, ticker)
+    let mut pass = Pass {
+        ticker,
+        live: crate::core::jobs::live_workers(),
+        deferred: Some(Vec::new()),
+    };
+    let mut report = reconcile_pass(&config, &mut pass);
+    ticker.update(|state| state.holds_lock = false);
+    drop(_data_lock);
+    // The removals decided above, now that nothing else waits for them:
+    // each re-checks everything it removes, and a record a job started since
+    // is not one of these.
+    for deferred in pass.deferred.take().unwrap_or_default() {
+        if ticker.cancelled() {
+            report.cancelled = true;
+            break;
+        }
+        finish_deferred(deferred, ticker, &mut report);
+    }
+    report
+}
+
+/// Run a deferred removal and report it as the pass would have.
+fn finish_deferred(deferred: Deferred, ticker: Ticker, report: &mut ReconcileReport) {
+    match deferred.housekeeping {
+        move_cleanup::Housekeeping::Deleted(path) => {
+            let fate = move_cleanup::Housekeeping::Deleted(path.clone()).run(ticker);
+            report_deleted(&path, fate, report);
+        }
+        housekeeping => {
+            ticker.update(|state| {
+                state.item_label = format!("the old copy of {}", deferred.subject);
+            });
+            let fate = housekeeping.run(ticker);
+            record_fate(
+                fate,
+                &deferred.subject,
+                &deferred.source,
+                &deferred.final_path,
+                report,
+            );
+        }
+    }
 }
 
 fn reconcile_base(
@@ -506,8 +600,9 @@ fn reconcile_base(
     report: &mut ReconcileReport,
     seen: &mut HashSet<String>,
     retired: &mut Vec<(PathBuf, String)>,
-    ticker: Ticker,
+    pass: &mut Pass,
 ) {
+    let ticker = pass.ticker;
     let entries = match fs::read_dir(base) {
         Ok(entries) => entries,
         Err(error) => {
@@ -559,12 +654,19 @@ fn reconcile_base(
                 retired.push((path, operation.to_string()));
                 continue;
             }
-            if move_cleanup::deleted_operation(&name).is_some() {
+            if let Some(operation) = move_cleanup::deleted_operation(&name) {
+                if pass.leaves(operation) {
+                    continue;
+                }
                 ticker.item("a deleted project's folder");
-                reconcile_deleted(&path, report, ticker);
+                reconcile_deleted(&path, report, pass);
                 continue;
             }
-            if crate::core::move_preflight::probe_operation(&name).is_some() {
+            if let Some(operation) = crate::core::move_preflight::probe_operation(&name) {
+                // A live move is mid-probe: its own to clear.
+                if pass.leaves(operation) {
+                    continue;
+                }
                 // A move's probe outlives it only when the move was killed
                 // mid-probe; this pass holds the lock, so no move is running.
                 ticker.item("a move's probe folder");
@@ -594,30 +696,41 @@ fn reconcile_base(
         }
     }
     if let Some(root) = transaction_root {
-        reconcile_transactions(cfg, base, &root, report, seen, ticker);
+        reconcile_transactions(cfg, base, &root, report, seen, pass);
     }
 }
 
 /// Finish removing a deleted project's folder. The user confirmed the delete
 /// by typing the word, and only `fastf delete` writes the name.
-fn reconcile_deleted(path: &Path, report: &mut ReconcileReport, ticker: Ticker) {
-    ticker.phase(JobPhase::Removing, 0);
-    match move_cleanup::remove_tree(path, None, Purpose::Delete, ticker) {
-        Removal::Removed => report.cleared += 1,
-        Removal::Leftover {
-            remaining,
-            reason,
-            kept_on_purpose,
+fn reconcile_deleted(path: &Path, report: &mut ReconcileReport, pass: &mut Pass) {
+    let housekeeping = move_cleanup::Housekeeping::Deleted(path.to_path_buf());
+    if let Some(deferred) = pass.deferred.as_mut() {
+        deferred.push(Deferred {
+            housekeeping,
+            subject: String::new(),
+            source: path.to_path_buf(),
+            final_path: path.to_path_buf(),
+        });
+        return;
+    }
+    let fate = housekeeping.run(pass.ticker);
+    report_deleted(path, fate, report);
+}
+
+fn report_deleted(path: &Path, fate: SourceFate, report: &mut ReconcileReport) {
+    match fate {
+        SourceFate::Leftover {
+            reason, redundant, ..
         } => report.leftovers.push(format!(
-            "{}: a deleted project's folder is not fully removed yet ({remaining} left: \
-             {reason}); {}",
+            "{}: a deleted project's folder is not fully removed yet ({reason}); {}",
             crate::util::paths::display_path(path),
-            if kept_on_purpose {
-                "fastf keeps what it cannot remove safely — look, and delete it yourself."
-            } else {
+            if redundant {
                 "`fastf reconcile` tries again, or delete it yourself."
+            } else {
+                "fastf keeps what it cannot remove safely — look, and delete it yourself."
             }
         )),
+        _ => report.cleared += 1,
     }
 }
 
@@ -857,8 +970,9 @@ fn reconcile_transactions(
     root: &Path,
     report: &mut ReconcileReport,
     seen: &mut HashSet<String>,
-    ticker: Ticker,
+    pass: &mut Pass,
 ) {
+    let ticker = pass.ticker;
     if let Err(error) = crate::util::paths::require_real_directory(root, "transaction root") {
         report.unrecoverable.push(format!(
             "{}: {error:#}; fastf changed nothing",
@@ -897,6 +1011,9 @@ fn reconcile_transactions(
         // not an orphan to report twice.
         if let Some(name) = operation_dir.file_name().and_then(|name| name.to_str()) {
             seen.insert(name.to_string());
+            if pass.leaves(name) {
+                continue;
+            }
         }
         let journal = match transactions::read_journal(&operation_dir) {
             Ok(journal) => journal,
@@ -909,7 +1026,7 @@ fn reconcile_transactions(
             }
         };
         ticker.item(&journal.target_folder.display().to_string());
-        reconcile_transaction(cfg, target_base, &operation_dir, journal, report, ticker);
+        reconcile_transaction(cfg, target_base, &operation_dir, journal, report, pass);
     }
 }
 
@@ -925,8 +1042,9 @@ fn reconcile_transaction(
     operation_dir: &Path,
     journal: MoveJournal,
     report: &mut ReconcileReport,
-    ticker: Ticker,
+    pass: &mut Pass,
 ) {
+    let ticker = pass.ticker;
     // Which project, and where its record is and what state it was left in:
     // a record fastf cannot finish is one the user may have to remove.
     let subject = format!(
@@ -1118,11 +1236,11 @@ fn reconcile_transaction(
                 ticker,
             };
             let mut notes = Vec::new();
-            let fate = move_cleanup::retire_and_remove(transaction, &cleanup, || {
+            let set = move_cleanup::set_aside(transaction, &cleanup, || {
                 bookkeep(&source_base, &journal, target_base, &final_path, &mut notes)
             });
             report.unrecoverable.append(&mut notes);
-            record_fate(fate, &subject, &source, &final_path, report);
+            settle_or_defer(set, &cleanup, pass, &subject, report);
         }
         MovePhase::CleanupPending | MovePhase::Retired => {
             let retired_exists = entry_exists_quiet(&retired);
@@ -1241,15 +1359,43 @@ fn reconcile_transaction(
                     return;
                 }
                 bookkeep(&source_base, &journal, target_base, &final_path, &mut notes);
-                move_cleanup::remove_retired(transaction, &cleanup)
+                SetAside::Retired(transaction)
             } else {
-                move_cleanup::retire_and_remove(transaction, &cleanup, || {
+                move_cleanup::set_aside(transaction, &cleanup, || {
                     bookkeep(&source_base, &journal, target_base, &final_path, &mut notes)
                 })
             };
             report.unrecoverable.append(&mut notes);
-            record_fate(fate, &subject, &source, &final_path, report);
+            settle_or_defer(fate, &cleanup, pass, &subject, report);
         }
+    }
+}
+
+/// A record set aside is finished now, or — when the pass hands removals on
+/// until its lock is released — later, by [`finish_deferred`].
+fn settle_or_defer(
+    set: SetAside,
+    cleanup: &Cleanup,
+    pass: &mut Pass,
+    subject: &str,
+    report: &mut ReconcileReport,
+) {
+    match set {
+        SetAside::Settled(fate) => {
+            record_fate(fate, subject, cleanup.source, cleanup.final_path, report)
+        }
+        SetAside::Retired(transaction) => match pass.deferred.as_mut() {
+            Some(deferred) => deferred.push(Deferred {
+                housekeeping: move_cleanup::Housekeeping::old_copy(transaction, cleanup),
+                subject: subject.to_string(),
+                source: cleanup.source.to_path_buf(),
+                final_path: cleanup.final_path.to_path_buf(),
+            }),
+            None => {
+                let fate = move_cleanup::remove_retired(transaction, cleanup);
+                record_fate(fate, subject, cleanup.source, cleanup.final_path, report);
+            }
+        },
     }
 }
 

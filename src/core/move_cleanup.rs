@@ -359,17 +359,29 @@ fn destination_covers(
     Err(gaps)
 }
 
+/// How setting the original aside ended.
+pub(crate) enum SetAside {
+    /// Nothing more to do here: the fate is decided.
+    Settled(SourceFate),
+    /// The original is out of the library and `Retired` is recorded; its old
+    /// copy is what is left, for [`remove_retired`] — as housekeeping, once
+    /// the data lock is released.
+    Retired(MoveTransaction),
+}
+
 /// Publish-then-retire, from `CleanupPending` with the source at its path:
-/// check, retire, record `Retired`, keep the books, remove the retired copy.
-///
-/// `bookkeeping` runs once the source has left the library, whether or not
-/// removing its retired copy then succeeds: from that moment the project is
-/// the moved copy.
-pub(crate) fn retire_and_remove(
+/// check, retire, record `Retired`, keep the books — `bookkeeping` runs once
+/// the source has left the library, since from that moment the project is the
+/// moved copy. **The move is done here**; removing the old copy is
+/// housekeeping ([`Housekeeping`]), which needs no data lock — the copy is
+/// hidden and redundant by construction, and a record whose job is alive is
+/// left alone by every reconcile.
+pub(crate) fn set_aside(
     mut transaction: MoveTransaction,
     cleanup: &Cleanup,
     bookkeeping: impl FnOnce(),
-) -> SourceFate {
+) -> SetAside {
+    use SetAside::Settled;
     let source = cleanup.source;
     // Two walks: the original, then the moved copy it is compared against.
     cleanup
@@ -379,55 +391,161 @@ pub(crate) fn retire_and_remove(
     if (has_identity || !cleanup.residue_allowed)
         && let Err(error) = confirm_identity(source, cleanup.project_id, "original")
     {
-        return SourceFate::KeptWhole {
+        return Settled(SourceFate::KeptWhole {
             reason: format!("{error:#}"),
-        };
+        });
     }
     if let Err(reason) = check_removable(source, cleanup.residue_allowed, cleanup) {
-        return SourceFate::KeptWhole { reason };
+        return Settled(SourceFate::KeptWhole { reason });
     }
     // Rewrites a 3.11 journal as version 3 *before* the rename — see
     // `MoveTransaction::set_phase`.
     if let Err(error) = transaction.set_phase(MovePhase::CleanupPending) {
-        return SourceFate::KeptWhole {
+        return Settled(SourceFate::KeptWhole {
             reason: format!("the cleanup could not be recorded ({error:#})"),
-        };
+        });
     }
     if let Err(error) = crate::util::faults::check("move:before-retire") {
-        return SourceFate::KeptWhole {
+        return Settled(SourceFate::KeptWhole {
             reason: format!("{error:#}"),
-        };
+        });
     }
     let retired = transaction.retired_path();
     // A retire that fails, for a test to reach.
     if let Err(error) = crate::util::faults::check("move:source-cleanup") {
-        return SourceFate::KeptWhole {
+        return Settled(SourceFate::KeptWhole {
             reason: format!("{error:#}"),
-        };
+        });
     }
     match retire(source, &retired) {
         Retire::Done => {}
-        Retire::KeptWhole(reason) => return SourceFate::KeptWhole { reason },
-        Retire::Unknown(reason) => return SourceFate::Unknown { reason },
+        Retire::KeptWhole(reason) => return Settled(SourceFate::KeptWhole { reason }),
+        Retire::Unknown(reason) => return Settled(SourceFate::Unknown { reason }),
     }
     if let Err(error) = crate::util::faults::check("move:after-retire") {
         bookkeeping();
-        return SourceFate::Leftover {
+        return Settled(SourceFate::Leftover {
             path: retired,
             reason: format!("{error:#}"),
             redundant: true,
-        };
+        });
     }
     if let Err(error) = transaction.set_phase(MovePhase::Retired) {
         bookkeeping();
-        return SourceFate::Leftover {
+        return Settled(SourceFate::Leftover {
             path: retired,
             reason: format!("the retirement could not be recorded ({error:#})"),
             redundant: true,
-        };
+        });
     }
     bookkeeping();
-    remove_retired(transaction, cleanup)
+    SetAside::Retired(transaction)
+}
+
+/// Work left after a move or a delete that needs no data lock: removing an
+/// old copy that is out of the library. Owned, so it outlives the lock and
+/// the borrowed [`Cleanup`] it was made from.
+#[derive(Debug)]
+pub enum Housekeeping {
+    /// A move's retired original, and the facts its removal is checked
+    /// against again.
+    OldCopy(Box<OldCopy>),
+    /// A deleted project's hidden folder.
+    Deleted(PathBuf),
+}
+
+#[derive(Debug)]
+pub struct OldCopy {
+    transaction: MoveTransaction,
+    manifest: MoveManifest,
+    published: Option<MoveManifest>,
+    source: PathBuf,
+    final_path: PathBuf,
+    project_id: String,
+    residue_allowed: bool,
+}
+
+impl Housekeeping {
+    /// The old copy of a move `cleanup` describes, retired by `transaction`.
+    pub(crate) fn old_copy(transaction: MoveTransaction, cleanup: &Cleanup) -> Self {
+        Self::OldCopy(Box::new(OldCopy {
+            transaction,
+            manifest: cleanup.manifest.clone(),
+            published: cleanup.published.cloned(),
+            source: cleanup.source.to_path_buf(),
+            final_path: cleanup.final_path.to_path_buf(),
+            project_id: cleanup.project_id.to_string(),
+            residue_allowed: cleanup.residue_allowed,
+        }))
+    }
+
+    /// The operation whose record or folder this is — what a job lists as
+    /// its own, so no reconcile touches it while the job is alive.
+    pub fn operation(&self) -> String {
+        match self {
+            Self::OldCopy(old) => old.transaction.journal.operation_id.clone(),
+            Self::Deleted(path) => path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(deleted_operation)
+                .unwrap_or_default()
+                .to_string(),
+        }
+    }
+
+    /// The folder being removed.
+    pub fn path(&self) -> PathBuf {
+        match self {
+            Self::OldCopy(old) => old.transaction.retired_path(),
+            Self::Deleted(path) => path.clone(),
+        }
+    }
+
+    /// Where the project is now, for a move; nothing for a delete.
+    pub fn moved_to(&self) -> Option<&Path> {
+        match self {
+            Self::OldCopy(old) => Some(&old.final_path),
+            Self::Deleted(_) => None,
+        }
+    }
+
+    /// Do it. The removal re-checks everything it removes; see
+    /// [`remove_retired`] and [`remove_tree`].
+    pub(crate) fn run(self, ticker: Ticker) -> SourceFate {
+        match self {
+            Self::OldCopy(old) => {
+                let old = *old;
+                let cleanup = Cleanup {
+                    manifest: &old.manifest,
+                    published: old.published.as_ref(),
+                    source: &old.source,
+                    final_path: &old.final_path,
+                    project_id: &old.project_id,
+                    residue_allowed: old.residue_allowed,
+                    ticker,
+                };
+                remove_retired(old.transaction, &cleanup)
+            }
+            Self::Deleted(path) => {
+                ticker.phase(JobPhase::Removing, 0);
+                match remove_tree(&path, None, Purpose::Delete, ticker) {
+                    Removal::Removed => SourceFate::Removed { record_kept: None },
+                    Removal::Leftover {
+                        remaining,
+                        reason,
+                        kept_on_purpose,
+                    } => SourceFate::Leftover {
+                        path,
+                        reason: format!(
+                            "{remaining} {} left: {reason}",
+                            if remaining == 1 { "entry" } else { "entries" }
+                        ),
+                        redundant: !kept_on_purpose,
+                    },
+                }
+            }
+        }
+    }
 }
 
 /// From `Retired`: remove the retired copy if it is still provably redundant,

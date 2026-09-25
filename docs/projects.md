@@ -284,6 +284,19 @@ deferred files only when identity, type, and byte-length checks pass, then clear
 the project's provisioning flag before removing the journal. A provisioning
 flag without a usable v2 journal is reported for manual inspection.
 
+**A move, a copy, a delete and a reconcile each run in a process of their own**
+— a *job* — started by the app or the command line and followed by it, but
+not owned by it. Closing the terminal, quitting the app or killing either
+leaves the job to finish, and any fastf started meanwhile sees it: `fastf jobs`
+lists it, `L` in the app shows it. A job killed itself (a power cut, a
+`kill -9`) leaves its record, and `fastf reconcile` finishes it by the table
+below. While a job runs, reconcile leaves its records alone and the header does
+not count them as needing attention.
+
+A move holds the library's lock only until the original is set aside;
+removing the old copy — the slow part on a cloud mount, one request per entry
+— runs after, so a tag or a note added meanwhile lands at once.
+
 Cross-filesystem moves use a private transaction beneath the target base:
 
 - `Copying`: the source is authoritative. A folder at the destination without
@@ -339,7 +352,9 @@ moment can mint the same ID.
 all of them configuration rather than input: a template's `post_create`
 commands, your editor, the file manager for Reveal, a clipboard tool
 (`wl-copy`, `xclip`, `xsel`, `clip`, `pbcopy`), and — unix only — a terminal
-emulator plus `notify-send`. The emulator is started only when fastf has been
+emulator plus `notify-send`. It also starts itself: a move, a copy, a delete
+and a reconcile each run as a copy of fastf, detached from the terminal, with
+nothing on its command line but the job it is to read from the data folder. The emulator is started only when fastf has been
 asked for something interactive and can prove nothing can read its output, and
 it is given fastf's own arguments as arguments, never through a shell.
 

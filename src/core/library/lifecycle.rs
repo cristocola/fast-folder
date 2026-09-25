@@ -64,19 +64,79 @@ pub(crate) fn unregister_project_inner(project: &Project) -> Result<()> {
 #[doc(hidden)]
 pub fn delete_project_unlocked(project: &Project) -> Result<()> {
     let project = revalidate_recorded_project(project)?;
-    delete_project_inner(&project)
+    let housekeeping = delete_project_inner(&project)?;
+    finish_delete(
+        &project.name,
+        housekeeping,
+        crate::core::progress::Ticker::none(),
+    );
+    Ok(())
 }
 
 /// Application entry point for deletion with configured-base and identity
-/// validation performed under the mutation lock.
+/// validation performed under the mutation lock. The folder's removal runs
+/// after the lock is released.
 pub fn delete_project_configured(project: &Project) -> Result<()> {
+    let housekeeping = delete_project_in_parts(project)?;
+    finish_delete(
+        &project.name,
+        housekeeping,
+        crate::core::progress::Ticker::none(),
+    );
+    Ok(())
+}
+
+/// Delete up to the moment the project is out of the library — one rename
+/// under the data lock — and hand back the removal of its hidden folder,
+/// which needs no lock and can take minutes on a cloud mount.
+pub fn delete_project_in_parts(
+    project: &Project,
+) -> Result<crate::core::move_cleanup::Housekeeping> {
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let config = Config::load()?;
     let project = revalidate_project(&config, project)?;
     delete_project_inner(&project)
 }
 
-pub(crate) fn delete_project_inner(project: &Project) -> Result<()> {
+/// Remove a deleted project's hidden folder, and say so if any of it stays.
+/// Answers whether all of it went, and why not.
+pub fn finish_delete(
+    name: &str,
+    housekeeping: crate::core::move_cleanup::Housekeeping,
+    ticker: crate::core::progress::Ticker,
+) -> Option<String> {
+    let retired = housekeeping.path();
+    let fate = match crate::util::faults::check("delete:after-retire") {
+        Err(error) => crate::core::move_cleanup::SourceFate::Leftover {
+            path: retired.clone(),
+            reason: format!("{error:#}"),
+            redundant: true,
+        },
+        Ok(()) => housekeeping.run(ticker),
+    };
+    let crate::core::move_cleanup::SourceFate::Leftover {
+        reason, redundant, ..
+    } = fate
+    else {
+        return None;
+    };
+    let next = if redundant {
+        "`fastf reconcile` finishes it"
+    } else {
+        "fastf keeps it until you have looked"
+    };
+    let warning = format!(
+        "deleted '{name}', but its folder, hidden at {}, is not fully removed yet ({reason}); \
+         {next}",
+        crate::util::paths::display_path(&retired)
+    );
+    crate::util::diag::warn(&warning);
+    Some(warning)
+}
+
+pub(crate) fn delete_project_inner(
+    project: &Project,
+) -> Result<crate::core::move_cleanup::Housekeeping> {
     let path =
         crate::util::paths::canonical(&project.path).unwrap_or_else(|_| project.path.clone());
     let base =
@@ -142,38 +202,7 @@ pub(crate) fn delete_project_inner(project: &Project) -> Result<()> {
         }
     }
     remove_from_base_cache(project);
-    let removal = match crate::util::faults::check("delete:after-retire") {
-        Err(error) => crate::core::move_cleanup::Removal::Leftover {
-            remaining: 0,
-            reason: format!("{error:#}"),
-            kept_on_purpose: false,
-        },
-        Ok(()) => crate::core::move_cleanup::remove_tree(
-            &retired,
-            None,
-            crate::core::move_cleanup::Purpose::Delete,
-            crate::core::progress::Ticker::none(),
-        ),
-    };
-    if let crate::core::move_cleanup::Removal::Leftover {
-        reason,
-        kept_on_purpose,
-        ..
-    } = removal
-    {
-        let next = if kept_on_purpose {
-            "fastf keeps it until you have looked"
-        } else {
-            "`fastf reconcile` finishes it"
-        };
-        crate::util::diag::warn(format!(
-            "deleted '{}', but its folder, hidden at {}, is not fully removed yet ({reason}); \
-             {next}",
-            project.name,
-            crate::util::paths::display_path(&retired)
-        ));
-    }
-    Ok(())
+    Ok(crate::core::move_cleanup::Housekeeping::Deleted(retired))
 }
 
 /// Rename a project's folder in place (same base). Same-parent `fs::rename`

@@ -6,6 +6,9 @@ pub mod extra;
 pub mod folder_verbs;
 
 pub mod id;
+#[doc(hidden)]
+pub mod job_worker;
+pub mod jobs;
 pub mod json;
 pub mod log;
 pub mod move_project;

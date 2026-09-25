@@ -12,10 +12,8 @@
 
 use anyhow::Result;
 use colored::Colorize;
-use std::path::Path;
 
 use crate::core::config::Config;
-use crate::core::copy_engine::CopyOutcome;
 use crate::core::library;
 
 pub struct CopyToArgs {
@@ -25,6 +23,8 @@ pub struct CopyToArgs {
     pub destination: String,
     /// Skip the confirmation prompt.
     pub yes: bool,
+    /// Start the copy and return; `fastf jobs` follows it.
+    pub detach: bool,
 }
 
 pub fn run(args: CopyToArgs) -> Result<()> {
@@ -62,61 +62,9 @@ pub fn run(args: CopyToArgs) -> Result<()> {
         }
     }
 
-    let outcome = run_with_progress(&project, &destination).inspect_err(|error| {
-        crate::cli::log::keep(
-            crate::util::messages::Level::Error,
-            format!(
-                "the copy of {} {} failed: {error:#}",
-                project.id, project.name
-            ),
-        )
-    })?;
-    report(&project, &outcome);
-    crate::cli::log::keep(
-        crate::util::messages::Level::Good,
-        format!(
-            "copied {} {} to {}; the original is untouched",
-            project.id,
-            project.name,
-            crate::util::paths::display_path(&outcome.path)
-        ),
-    );
-    Ok(())
-}
-
-fn report(project: &library::Project, outcome: &CopyOutcome) {
-    let (files, bytes) = outcome.copied;
-    println!(
-        "{}  Copied {} {}",
-        "✓".green().bold(),
-        project.id.green().bold(),
-        project.name.bold()
-    );
-    println!(
-        "   {} {}",
-        "to".dimmed(),
-        crate::util::paths::display_path(&outcome.path)
-    );
-    println!(
-        "   {}",
-        format!(
-            "{}, verified — the original is untouched",
-            crate::core::transactions::copied_summary(files, outcome.links, bytes)
-        )
-        .dimmed()
-    );
-    for note in &outcome.link_notes {
-        eprintln!("{} {note}", "note:".cyan().bold());
+    let item = crate::core::jobs::JobItem::of(&project, Some(&destination))?;
+    match crate::cli::jobs::start(crate::core::jobs::JobKind::Copy, vec![item], args.detach)? {
+        crate::cli::jobs::Followed::Ended(state) => crate::cli::jobs::finish(&state),
+        _ => Ok(()),
     }
-}
-
-/// The copy on a worker, the progress on this thread — the same shape `move`
-/// uses, and for the same reason: a copy runs for minutes and a silent
-/// terminal is indistinguishable from a hung one. Ctrl-C feeds the engine's
-/// cancel flag, so an interrupted copy leaves nothing but its own transaction
-/// to remove.
-fn run_with_progress(project: &library::Project, destination: &Path) -> Result<CopyOutcome> {
-    crate::cli::progress::run_watched("copy", |progress, cancel| {
-        crate::core::operations::copy_project(project, destination, progress, cancel)
-    })
 }

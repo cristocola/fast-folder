@@ -157,8 +157,10 @@ The engine API keeps `&Mutex<Progress>` and `&AtomicBool`. What changes:
 - **Cancel** before `published` rolls back, as today. After it, the answer is
   "too late: X is moved; the old copy's removal carries on" (defect 9). The
   publish copy no longer polls cancel.
-- **Reconcile and `list_incomplete` skip a record whose job is alive.** They
-  read the live jobs' `operation` from `jobs/` (`util::job::live_operations`).
+- **Reconcile and `list_incomplete` skip a record whose job is alive.** An
+  operation id carries its maker's pid, and a worker writes its pid first, so
+  a record made by a live worker is that job's (`jobs::live_workers`,
+  `jobs::owned_by`).
   The header counts running jobs apart from attention (defect 8). Reconcile
   decides and retires under the lock, then runs its removals as housekeeping
   after it, the same shape as a move.
@@ -294,22 +296,22 @@ Acceptance: after any move, `fastf log` shows its phases with counts and
 
 ## Phase 3 — the job: a process of its own
 
-- [ ] `util::job`: the files above, `spawn` (unix `setsid`; Windows flags with
+- [x] `util::job`: the files above, `spawn` (unix `setsid`; Windows flags with
   the breakaway retry), `JobLock` (the `DataLock` shape, made `pub(crate)` and
   reused), `list`, `live_operations`, `request_cancel`, `mark_seen`, `prune`.
-- [ ] `main.rs` strips `--fastf-job <id>` before clap; `cli::job_worker::run`
+- [x] `main.rs` strips `--fastf-job <id>` before clap; `cli::job_worker::run`
   is the worker as designed.
-- [ ] The lock split and `Housekeeping`; reconcile and delete run their
+- [x] The lock split and `Housekeeping`; reconcile and delete run their
   removals after the lock; reconcile and `list_incomplete` skip live jobs'
   records (defects 7, 8, 14). `DataLock::acquire_waiting(cancel)`; the 30 s wait
   names the job (defect 12).
-- [ ] `Progress.holds_lock`, set while the worker holds the data lock.
-- [ ] Batch jobs in the worker: moves first, housekeeping after, the lock taken
+- [x] `Progress.holds_lock`, set while the worker holds the data lock.
+- [x] Batch jobs in the worker: moves first, housekeeping after, the lock taken
   per item.
-- [ ] CLI: `move`, `copy-to`, `delete`, `reconcile` through the worker, attached;
+- [x] CLI: `move`, `copy-to`, `delete`, `reconcile` through the worker, attached;
   `--detach`; `fastf jobs [watch|cancel]`. The worker gets its data dir
   explicitly, so the test harness's `NOT_INHERITED` list needs no new entry.
-- [ ] Tests, as real processes:
+- [x] Tests, as real processes:
   - a SIGKILLed CLI `move` leaves the worker to finish (poll `progress.json`,
     then read both bases from the disk);
   - a SIGKILLed worker mid-copy reads as interrupted, and reconcile rolls it back;
@@ -439,3 +441,26 @@ there with its count; kill that app too, and the move still finishes.
   said "waiting for another fastf" on every move; a unit's name agrees with its
   count ("1 file"). Messages rotate like the log (three kept). Verified with
   the screenshot tool in a real pty. Gates green.
+- 2026-09-25 — Phase 3. `core::jobs` (request, `state.json`, lock, cancel,
+  seen, prune; `start` spawns `fastf --fastf-job <id>` detached — `setsid` on
+  unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` with a breakaway attempt on
+  Windows — and reaps it on a thread), `cli::job_worker` (moves first,
+  housekeeping after, per-item progress, a watcher thread writing state four
+  times a second and turning `cancel` into the flag, patient for the data
+  lock), `cli::jobs` (follow a state file with `cli::progress::Printer`, Ctrl-C
+  cancels or lets go, `finish` prints what the verbs always printed) and `fastf
+  jobs [watch|cancel]`, `--detach` on the four verbs. The lock split:
+  `move_project_in_parts` / `finish_housekeeping`, `move_cleanup::set_aside` +
+  `Housekeeping` (old copy or deleted folder), `delete_project_in_parts` /
+  `finish_delete`, and reconcile's `Deferred` removals after its lock. Decided
+  on the way: **a live job's records are found by pid, not by a list of
+  operations** — the operation id carries its maker's pid and a worker writes
+  its pid before any work, so there is no window between a record's birth and
+  its owner being known, which a state rewritten four times a second would
+  leave; `SourceOutcome::SetAside` for "done, old copy going"; a lock wait
+  names its holder through a hook `main` sets, since `util` may not read
+  `core`. The worker-as-subject cases live in the new `tests/jobs.rs` (nine
+  process tests, stable over five runs) rather than in `crash_recovery.rs`,
+  whose in-process driver still covers every abort point. Verified by hand:
+  `kill -9` on `fastf move` mid-copy, and the job finished the move. Gates
+  green, the Windows clippy leg included.

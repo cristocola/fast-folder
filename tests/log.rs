@@ -98,7 +98,17 @@ fn a_move_leaves_its_steps_in_the_log_and_its_outcome_in_the_messages() {
         messages.contains("moved ID0001 2026-01-01_Shoot_ID0001 to"),
         "{messages}"
     );
-    assert!(messages.contains("cli"), "who said it: {messages}");
+    // Said by the job that did it, named by its id.
+    let job = sb.ok(&["jobs"]);
+    let id = job
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        !id.is_empty() && messages.contains(&id),
+        "who said it: {messages}\n{job}"
+    );
 }
 
 /// Nothing written yet reads as an empty log, not an error.

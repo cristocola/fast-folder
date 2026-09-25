@@ -66,7 +66,9 @@ tell you.
 - `src/bootstrap.rs` — first-run setup. Ships two deliberately universal
   templates (`general`, `client-project`); `examples/templates/` is a gallery to
   copy from, not bundled.
-- `src/core/` — the library proper. `library/` (filesystem-as-truth discovery, a
+- `src/core/` — the library proper. `jobs.rs` (a long operation as a process of
+  its own: `jobs/<id>/` in the data dir, the detached worker, liveness by lock),
+  `progress.rs` (the `Ticker` every step counts through). `library/` (filesystem-as-truth discovery, a
   facade over `model` / `discovery` / `cache` / `guard` / `lifecycle` /
   `resolve`), `move_engine.rs` (the staged move the facade delegates to — it
   needs transactions, staged copies and progress, which nothing else in the
@@ -97,7 +99,10 @@ tell you.
   (the one env-mutation guard, test-only), `tree_size`, `size_scan`,
   `human_bytes`, `clipboard`, `tty` (`require_tty`, `has_display`, the remembered
   cooked mode a signal handler restores).
-- `src/cli/` — one module per subcommand (`folder_verbs.rs` is `rename`,
+- `src/cli/` — `job_worker.rs` is not a subcommand but the worker a job runs
+  (`fastf --fastf-job <id>`, taken off argv in `main`); `jobs.rs` starts and
+  follows jobs for `move`/`copy-to`/`delete`/`reconcile` and is `fastf jobs`;
+  `progress.rs` prints a job's steps. One module per subcommand (`folder_verbs.rs` is `rename`,
   `unregister` and `delete`), plus `render.rs`, the only module that prints a
   plan, a create or an apply; `target.rs` (resolve a query to one project, asking
   when it is ambiguous — shared by `open`/`copy`/`path`/`term` and the folder

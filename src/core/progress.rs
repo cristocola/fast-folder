@@ -112,6 +112,22 @@ impl<'a> Ticker<'a> {
         });
     }
 
+    /// Keep the step under way among the finished ones, when it was planned
+    /// and is not there yet: what a job does when it hands the rest of its
+    /// work to a later part with a progress of its own.
+    pub fn close_step(self) {
+        self.update(|state| {
+            let phase = state.phase;
+            if state.steps.contains(&phase)
+                && !state.finished.iter().any(|step| step.phase == phase)
+            {
+                let count = state.step_done;
+                state.finished.push(FinishedStep { phase, count });
+                log_finished(state, phase, count);
+            }
+        });
+    }
+
     /// One more entry done, at `current`. Answers `false` when the job has
     /// been cancelled and this ticker honours it, so the caller stops.
     pub fn tick(self, current: &Path) -> bool {

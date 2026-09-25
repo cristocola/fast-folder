@@ -31,6 +31,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
 | `fastf reconcile` | Recover scoped v2 work and report obsolete pre-v2 markers |
+| `fastf jobs` / `watch` / `cancel` | Moves, copies, deletes and reconciles running now or lately |
 | `fastf messages` | What fastf said to you, in the app and here, from every session |
 | `fastf log` | Everything fastf did: every step of every move and reconcile, every warning |
 | `fastf config show` / `set` | View and edit [configuration](config.md) |
@@ -459,12 +460,16 @@ error: /mnt/share/2026-07-26_Shoot_ID0047 holds 2 entries that cannot be copied 
   media: a different filesystem inside the project (a mount, or a separate btrfs subvolume)
 ```
 
+**The move runs as a job of its own** — see [Jobs](#jobs): the terminal only
+follows it. Closing the terminal, or killing `fastf move`, leaves the move to
+finish. `--detach` starts it and returns at once.
+
 **Ctrl-C cancels it safely before publication**: fastf removes only the private
 transaction owned by that operation and leaves the source untouched. Once
 `PROJECT_INFO.md` is being published, cancellation is too late: the moved copy
 is the project, and what is left — setting the original aside, removing it —
-carries on. Ctrl-C then says so rather than stopping part of the way; a second
-Ctrl-C ends fastf, and `fastf reconcile` finishes whatever it left. If the moved copy turns out to be
+carries on. Ctrl-C then stops following and says how to follow it again; the
+move finishes without the terminal. If the moved copy turns out to be
 missing anything, fastf copies it again from the original, which stays whole
 until the copy is complete. If the original cannot then be set aside — a
 program has a file in it open — the move says that the original is still there,
@@ -595,6 +600,32 @@ migrates, resumes, rolls back, or deletes through them. It also never sweeps
 files merely because their names end in `.tmp` or `.part`. Inspect source and
 destination manually and remove an obsolete marker only after deciding which
 copy is authoritative.
+
+## Jobs
+
+```bash
+fastf jobs                  # every job, newest first: running, done, failed, stopped
+fastf jobs watch            # follow the newest running job until it ends
+fastf jobs watch <id>
+fastf jobs cancel           # ask the newest running job to stop
+fastf move ID0047 archive --yes --detach   # start it and return at once
+```
+
+A move, a copy to a folder, a delete and a reconcile each run in a process of
+their own — a *job* — which the command that started it follows, printing its
+steps as they finish. The job is not that command's: closing the terminal,
+killing the command or quitting the app that started it leaves it running, and
+any other fastf can follow it (`fastf jobs watch`, `L` in the app) or cancel
+it. `move`, `copy-to`, `delete` and `reconcile` all take `--detach`.
+
+A cancel undoes a move or a copy until it publishes its `PROJECT_INFO.md`;
+after that it is too late, and `fastf jobs cancel` says so. A reconcile stops
+between items. A job whose process was killed shows as `stopped`;
+`fastf reconcile` finishes what it left, whole.
+
+While a move copies it holds the library's lock, so a change made elsewhere
+meanwhile — a tag, a note — waits, and says which job it waits for. Removing
+the old copy afterwards does not hold it.
 
 ## Messages and the log
 

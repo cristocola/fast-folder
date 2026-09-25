@@ -22,6 +22,14 @@ What each suite guards — the intent, not the case list:
   differently, a config field read raw).
 - `crash_recovery.rs` — every create failpoint against the same invariants, plus
   subprocesses killed with abort. Debug-only.
+- `jobs.rs` — a move, copy, delete or reconcile as a process of its own: the
+  command line killed mid-move, the worker killed mid-copy and mid-removal,
+  a cancel from a second process, reconcile beside a live job, the data lock's
+  waits. Real processes, each slowed with a `delay-<ms>` failpoint and read
+  back from `jobs/<id>/state.json`, so debug-only.
+- `log.rs` — the log and the messages: two processes appending at once (this
+  binary started again as a writer), `fastf log` and `fastf messages` after a
+  real move.
 - `concurrency.rs` — races real **processes**: a thread test passes against an
   in-process `Mutex` while production stays broken.
 - `tui_update.rs` — the app's state machine with no terminal: a `tui::testing`

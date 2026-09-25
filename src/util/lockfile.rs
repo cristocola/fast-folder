@@ -33,6 +33,33 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Poll interval while waiting. Short enough to feel instant on release.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+/// Set by a job's worker: wait for the lock as long as it takes, stopping
+/// only for this flag. A worker was started to do one thing and has nobody to
+/// give up to; 30 seconds is a person's patience, not a job's.
+static PATIENT: std::sync::OnceLock<&'static std::sync::atomic::AtomicBool> =
+    std::sync::OnceLock::new();
+
+/// Who holds the lock, in words, when something can tell — a live job says
+/// what it is doing. Set by `main`, because `util` may not read `core`.
+static HOLDER: std::sync::OnceLock<fn() -> Option<String>> = std::sync::OnceLock::new();
+
+/// Make every later wait in this process patient, until `cancel` is set.
+pub fn wait_patiently(cancel: &'static std::sync::atomic::AtomicBool) {
+    let _ = PATIENT.set(cancel);
+}
+
+/// Name the holder in what a wait says.
+pub fn describe_holder_with(describe: fn() -> Option<String>) {
+    let _ = HOLDER.set(describe);
+}
+
+fn holder() -> String {
+    HOLDER
+        .get()
+        .and_then(|describe| describe())
+        .unwrap_or_else(|| "another fastf process".to_string())
+}
+
 /// An acquired lock. Releasing happens on drop (the file handle closes), and
 /// the OS releases it on process death, so there is no stale-lock recovery path
 /// to get wrong.
@@ -71,15 +98,17 @@ impl DataLock {
         let deadline = Instant::now() + timeout;
         let started = Instant::now();
         let mut said = false;
+        let patient = PATIENT.get();
         loop {
             // A second of silence is long enough to wonder; say what is
             // being waited for, once, through the one sink every surface
             // shows — the app's status line, the command line's stderr.
             if !said && started.elapsed() >= Duration::from_secs(1) {
                 said = true;
-                crate::util::diag::note(
-                    "waiting for another fastf process to finish (it holds the data lock)",
-                );
+                crate::util::diag::note(format!(
+                    "waiting for {} to finish (it holds the data lock)",
+                    holder()
+                ));
             }
             match try_lock(path) {
                 Ok(Some(file)) => {
@@ -94,7 +123,11 @@ impl DataLock {
                     return Err(err).with_context(|| format!("locking {}", path.display()));
                 }
             }
-            if Instant::now() >= deadline {
+            if let Some(cancel) = patient {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    anyhow::bail!("cancelled while waiting for {}", holder());
+                }
+            } else if Instant::now() >= deadline {
                 // Never suggest deleting the file. On Unix the lock is `flock`
                 // on the *inode*: unlinking the path does not release it, and
                 // the next process creates a new inode and locks that instead —
@@ -103,10 +136,11 @@ impl DataLock {
                 // stale lock to clear either way; the OS drops it when the
                 // holder dies.
                 anyhow::bail!(
-                    "another fastf process is busy (waited {}s for {}). \
+                    "{} is busy (waited {}s for {}). \
                      It still holds the data lock — close it or wait, then retry. \
                      Deleting the lock file does not help: the lock belongs to \
                      the process, not the file.",
+                    holder(),
                     timeout.as_secs(),
                     path.display()
                 );

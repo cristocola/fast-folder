@@ -1,85 +1,76 @@
-//! The command line's side of a long job: the job on a worker thread, and on
-//! this one a live line naming the step and its count, with a line of record
-//! for every step as it finishes.
+//! The command line's side of a long job: a live line naming the step and its
+//! count, with a line of record for every step as it finishes.
 //!
-//! `move`, `copy-to` and `reconcile` all run through [`run_watched`], so a
-//! step is worded the same by each ([`JobPhase::as_str`], [`JobPhase::past`])
-//! and the same as the app says it.
+//! `move`, `copy-to`, `delete` and `reconcile` all follow their job through a
+//! [`Printer`] (`cli::jobs`), so a step is worded the same by each
+//! ([`JobPhase::as_str`], [`JobPhase::past`]) and the same as the app says it.
 
-use anyhow::Result;
 use colored::Colorize;
 use std::io::{IsTerminal, Write};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use crate::core::assets::{FinishedStep, JobPhase, Progress, count_text};
 
-/// How often the progress line is redrawn. Fast enough to look live, slow
-/// enough that a network copy is not competing with the terminal for I/O.
-const TICK: Duration = Duration::from_millis(200);
+/// What the command line shows of a job's progress: a line of record for
+/// every step as it finishes, and a live line for the one under way — which
+/// only a terminal gets. Fed snapshots, however they arrive: from the worker's
+/// state file, a few times a second.
+pub(crate) struct Printer {
+    live: bool,
+    printed: usize,
+    drew: bool,
+    /// The item the finished steps counted belong to.
+    item: (usize, String),
+}
 
-/// Run `work` on a worker, drawing its progress here until it answers.
-///
-/// Ctrl-C feeds the job's cancel flag rather than killing the process, so an
-/// interrupted move stops *before* its original is touched. From the publish
-/// on a cancel cannot undo anything (`Progress::committed`), and the line
-/// says so once rather than pretending to stop. Every finished step is printed
-/// as a line of its own, on a terminal or not, so a log of the run says what
-/// happened in order; the live line is for a terminal only.
-pub(crate) fn run_watched<T: Send>(
-    what: &str,
-    work: impl FnOnce(&Mutex<Progress>, &AtomicBool) -> Result<T> + Send,
-) -> Result<T> {
-    let progress = Mutex::new(Progress::new(&[]));
-    let cancel = AtomicBool::new(false);
-    let live = std::io::stdout().is_terminal();
-
-    let answered = std::thread::scope(|scope| {
-        let worker = scope.spawn(|| work(&progress, &cancel));
-        let mut printed = 0;
-        let mut drew = false;
-        let mut said_too_late = false;
-        let mut watch = |finished_too: bool| {
-            let snapshot = progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            if crate::util::interrupt::is_set() {
-                cancel.store(true, Ordering::Relaxed);
-                if snapshot.committed && !said_too_late {
-                    said_too_late = true;
-                    clear_line(live && drew);
-                    drew = false;
-                    println!(
-                        "  {} too late to cancel: the {what} is past its point of no \
-                         return, and what is left carries on",
-                        "note:".cyan().bold()
-                    );
-                }
-            }
-            if snapshot.finished.len() > printed {
-                clear_line(live && drew);
-                drew = false;
-                for step in &snapshot.finished[printed..] {
-                    println!("  {} {}", "✓".green(), finished_line(step));
-                }
-                printed = snapshot.finished.len();
-            }
-            if live && !finished_too && !matches!(snapshot.phase, JobPhase::Starting) {
-                draw(&snapshot);
-                drew = true;
-            }
-        };
-        while !worker.is_finished() {
-            watch(false);
-            std::thread::sleep(TICK);
+impl Printer {
+    pub(crate) fn new() -> Self {
+        Self {
+            live: std::io::stdout().is_terminal(),
+            printed: 0,
+            drew: false,
+            item: (0, String::new()),
         }
-        watch(true);
-        clear_line(live && drew);
-        worker.join()
-    });
+    }
 
-    match answered {
-        Ok(result) => result,
-        Err(_) => anyhow::bail!("the {what} thread panicked"),
+    pub(crate) fn show(&mut self, snapshot: &Progress) {
+        let item = (snapshot.item, snapshot.item_label.clone());
+        if item != self.item {
+            self.item = item;
+            self.printed = 0;
+            if snapshot.items > 1 || !snapshot.item_label.is_empty() && snapshot.item > 0 {
+                self.clear();
+                println!(
+                    "  {} {}",
+                    snapshot.item_text().dimmed(),
+                    snapshot.item_label.bold()
+                );
+            }
+        }
+        if snapshot.finished.len() > self.printed {
+            self.clear();
+            for step in &snapshot.finished[self.printed..] {
+                println!("  {} {}", "✓".green(), finished_line(step));
+            }
+            self.printed = snapshot.finished.len();
+        }
+        if self.live
+            && !matches!(snapshot.phase, JobPhase::Starting | JobPhase::Done)
+            && snapshot.status == crate::core::assets::JobStatus::Running
+        {
+            draw(snapshot);
+            self.drew = true;
+        }
+    }
+
+    /// Say something on a line of its own, above the live line.
+    pub(crate) fn say(&mut self, text: &str) {
+        self.clear();
+        println!("{text}");
+    }
+
+    pub(crate) fn clear(&mut self) {
+        clear_line(self.live && self.drew);
+        self.drew = false;
     }
 }
 

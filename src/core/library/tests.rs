@@ -1737,7 +1737,11 @@ fn a_delete_never_removes_what_a_link_points_at() {
     );
     let project = scan_base(&base).remove(0);
 
-    delete_project_inner(&project).unwrap();
+    // Out of the library in one rename; then the hidden folder's removal,
+    // which a caller runs once the data lock is released.
+    delete_project_inner(&project)
+        .unwrap()
+        .run(crate::core::progress::Ticker::none());
 
     assert!(!base.join("proj").exists());
     assert!(retired_folders(&base).is_empty());

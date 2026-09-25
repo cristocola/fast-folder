@@ -94,9 +94,3 @@ pub fn messages(lines: usize) -> Result<()> {
     }
     Ok(())
 }
-
-/// Keep a message the command line is about to print, for `fastf messages`
-/// and the app's `L`.
-pub(crate) fn keep(level: Level, text: impl Into<String>) {
-    crate::util::messages::append(&crate::util::messages::Message::now(level, "cli", text));
-}

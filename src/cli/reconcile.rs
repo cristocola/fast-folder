@@ -13,18 +13,20 @@
 use anyhow::Result;
 use colored::Colorize;
 
-pub fn run() -> Result<()> {
-    let report = crate::cli::progress::run_watched("reconcile", |progress, cancel| {
-        crate::core::operations::reconcile_with(progress, cancel)
-    })?;
-    crate::cli::log::keep(
-        if report.needs_a_look() {
-            crate::util::messages::Level::Warn
-        } else {
-            crate::util::messages::Level::Good
-        },
-        report.summary(),
-    );
+use crate::core::config::Config;
+
+pub fn run(detach: bool) -> Result<()> {
+    // A job of its own, like a move: its removals on a cloud mount can take
+    // minutes, and closing this terminal must not stop one part of the way.
+    Config::load()?;
+    let state =
+        match crate::cli::jobs::start(crate::core::jobs::JobKind::Reconcile, Vec::new(), detach)? {
+            crate::cli::jobs::Followed::Ended(state) => state,
+            _ => return Ok(()),
+        };
+    let Some(report) = state.reconcile.clone() else {
+        anyhow::bail!("{}", state.summary);
+    };
 
     if report.is_empty() {
         println!(

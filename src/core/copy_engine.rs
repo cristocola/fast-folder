@@ -59,10 +59,15 @@ pub fn copy_project_configured(
         let _data_lock = crate::util::lockfile::DataLock::acquire_then(|| {
             ticker.phase(JobPhase::Waiting, 0);
         })?;
-        let cfg = Config::load()?;
-        let project = revalidate_project(&cfg, project)?;
-        let destination = resolve_destination(&cfg, &project, destination)?;
-        copy_unlocked(&project, &destination, progress, cancel)
+        ticker.update(|state| state.holds_lock = true);
+        let copied = (|| {
+            let cfg = Config::load()?;
+            let project = revalidate_project(&cfg, project)?;
+            let destination = resolve_destination(&cfg, &project, destination)?;
+            copy_unlocked(&project, &destination, progress, cancel)
+        })();
+        ticker.update(|state| state.holds_lock = false);
+        copied
     })();
     crate::core::progress::settle(progress, cancel, &result);
     result

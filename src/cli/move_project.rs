@@ -20,6 +20,8 @@ pub struct MoveArgs {
     pub base: Option<String>,
     /// Skip the confirmation prompt.
     pub yes: bool,
+    /// Start the move and return; `fastf jobs` follows it.
+    pub detach: bool,
 }
 
 pub fn run(args: MoveArgs) -> Result<()> {
@@ -119,88 +121,11 @@ pub fn run(args: MoveArgs) -> Result<()> {
         }
     }
 
-    let outcome = run_with_progress(&project, &target).inspect_err(|error| {
-        crate::cli::log::keep(
-            crate::util::messages::Level::Error,
-            format!(
-                "the move of {} {} failed: {error:#}",
-                project.id, project.name
-            ),
-        )
-    })?;
-    let moved = &outcome.project;
-
-    println!(
-        "{}  Moved {} {}",
-        "✓".green().bold(),
-        moved.id.green().bold(),
-        moved.name.bold()
-    );
-    println!(
-        "   {} {}",
-        "from".dimmed(),
-        crate::util::paths::display_path(&project.path).dimmed()
-    );
-    println!(
-        "   {} {}",
-        "to  ".dimmed(),
-        crate::util::paths::display_path(&moved.path)
-    );
-    // Which kind of move it was. Without it a rename and a two-hundred-gigabyte
-    // staged copy print the same three lines, and the instant one reads as
-    // though nothing happened.
-    println!(
-        "   {}",
-        match outcome.copied {
-            Some((files, bytes)) => format!(
-                "copied {}, verified",
-                crate::core::transactions::copied_summary(files, outcome.links, bytes)
-            ),
-            None => "renamed on the same filesystem, nothing copied".to_string(),
-        }
-        .dimmed()
-    );
-    for note in &outcome.link_notes {
-        eprintln!("{} {note}", "note:".cyan().bold());
+    // A job of its own: this terminal follows it, and closing it or killing
+    // this process leaves the move to finish (`cli::jobs`).
+    let item = crate::core::jobs::JobItem::of(&project, Some(&target))?;
+    match crate::cli::jobs::start(crate::core::jobs::JobKind::Move, vec![item], args.detach)? {
+        crate::cli::jobs::Followed::Ended(state) => crate::cli::jobs::finish(&state),
+        _ => Ok(()),
     }
-    let warning = outcome.source.warning(&project.path);
-    if let Some(warning) = &warning {
-        eprintln!("{} {warning}", "warning:".yellow().bold());
-    }
-    crate::cli::log::keep(
-        if warning.is_some() {
-            crate::util::messages::Level::Warn
-        } else {
-            crate::util::messages::Level::Good
-        },
-        match &warning {
-            Some(warning) => format!(
-                "moved {} {} to {}; {warning}",
-                moved.id,
-                moved.name,
-                crate::util::paths::display_path(&moved.path)
-            ),
-            None => format!(
-                "moved {} {} to {}",
-                moved.id,
-                moved.name,
-                crate::util::paths::display_path(&moved.path)
-            ),
-        },
-    );
-    Ok(())
-}
-
-/// Run the move on a worker thread and report progress from this one.
-///
-/// A cross-filesystem move can copy for minutes and remove for longer;
-/// without this the command line would sit silent for the whole of it.
-/// `cli::progress` draws it the way the app does.
-fn run_with_progress(
-    project: &library::Project,
-    target: &std::path::Path,
-) -> Result<library::MoveOutcome> {
-    crate::cli::progress::run_watched("move", |progress, cancel| {
-        crate::core::operations::move_project(project, target, progress, cancel)
-    })
 }

@@ -425,6 +425,41 @@ indexer holding a freshly written tree; the short one discarded a verified stagi
 copy at publish. On Windows a refused folder rename means a program has something
 in it open (`describe_rename_error`).
 
+## Jobs, and the lock split
+
+**A long operation is a job: a process of its own, described by files in the
+data dir** (`core::jobs`). `fastf move`/`copy-to`/`delete`/`reconcile` — and,
+from Phase 4 of the plan, the app — write `jobs/<id>/request.json` and start
+this binary as `fastf --fastf-job <id>` (`core::jobs::WORKER_FLAG`, taken off
+argv in `main` before clap), detached: `setsid` on unix, `DETACHED_PROCESS |
+CREATE_NEW_PROCESS_GROUP` plus a breakaway attempt on Windows, reaped on a
+thread so a long-lived app leaves no zombie. The worker (`cli::job_worker`)
+holds `jobs/<id>/lock` for its whole life — **alive means the lock is held**,
+the OS's answer, so a reused pid cannot lie — keeps `state.json` current from a
+watcher thread, turns a `cancel` file into the engine's flag, waits patiently
+for the data lock (`lockfile::wait_patiently`), and logs every line to
+`jobs/<id>/log`. Surfaces follow the state file; none owns the job.
+
+**The move is done when the original is set aside.**
+`move_engine::move_project_in_parts` runs under the data lock up to
+`move_cleanup::set_aside` and hands back a `Housekeeping` (the old copy's
+removal, owned, so it outlives the lock); `finish_housekeeping` runs it after
+the lock is released. `delete_project_in_parts` does the same for a delete, and
+`reconcile_locked_with` defers its removals (`Deferred`, `finish_deferred`)
+until its lock is dropped. The combined entry points (`move_project_configured_
+with_outcome`, `delete_project_configured`, `reconcile_unlocked`) run both halves
+in-process, so library callers and tests keep their meaning.
+`SourceOutcome::SetAside` is what a move says before its housekeeping has run.
+
+**A live job's records are its own.** An operation id carries the pid of the
+process that minted it, and a worker writes its pid before it does anything,
+so reconcile and `list_incomplete` skip any record, retired folder, deleted
+folder or probe whose id names a live worker (`jobs::live_workers`,
+`jobs::owned_by`) — no window in which a record exists and its job cannot be
+told. `Progress.holds_lock` says when a job holds the data lock, and
+`jobs::lock_holder` is what a lock wait says instead of "another fastf
+process" (`lockfile::describe_holder_with`, set by `main`).
+
 ## Copying projects out
 
 `copy_engine::copy_project_configured` is a move that keeps its source: the same

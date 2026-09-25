@@ -201,6 +201,10 @@ enum Commands {
         /// Skip the confirmation prompt
         #[arg(long)]
         yes: bool,
+
+        /// Start the copy and return at once; `fastf jobs` follows it
+        #[arg(long)]
+        detach: bool,
     },
 
     /// Print a project's folder path on stdout, and nothing else
@@ -261,6 +265,10 @@ enum Commands {
         /// Skip the confirmation prompt (for scripts).
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Start the move and return at once; `fastf jobs` follows it
+        #[arg(long)]
+        detach: bool,
     },
 
     /// Rename a project's folder on disk
@@ -316,6 +324,10 @@ enum Commands {
         /// Skip the confirmation (for scripts).
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Start the delete and return at once; `fastf jobs` follows it
+        #[arg(long)]
+        detach: bool,
     },
 
     /// Rebuild the project-library cache by rescanning every base
@@ -340,7 +352,26 @@ enum Commands {
             lists each obsolete marker for manual inspection and leaves it plus\n\
             all related paths untouched. Reconciliation is explicit and idempotent."
     )]
-    Reconcile,
+    Reconcile {
+        /// Start the reconcile and return at once; `fastf jobs` follows it
+        #[arg(long)]
+        detach: bool,
+    },
+
+    /// Moves, copies, deletes and reconciles running now or lately
+    #[command(
+        about = "Moves, copies, deletes and reconciles running now or lately",
+        long_about = "A move, a copy, a delete and a reconcile each run in a process of their\n\
+            own, so closing the terminal or the app that started one never stops it\n\
+            part of the way, and any fastf can follow it. `fastf jobs` lists them,\n\
+            newest first; `watch` follows one (the newest running, by default) and\n\
+            `cancel` asks one to stop — which undoes a move only until it has\n\
+            published its copy. After that it finishes by itself."
+    )]
+    Jobs {
+        #[command(subcommand)]
+        action: Option<JobsAction>,
+    },
 
     /// Show the log: every step of every move and reconcile, every warning
     #[command(
@@ -816,6 +847,20 @@ enum TodoAction {
 }
 
 #[derive(Subcommand)]
+enum JobsAction {
+    /// Follow a job until it ends — the newest running one, without an id
+    Watch {
+        /// The job's id, as `fastf jobs` lists it
+        id: Option<String>,
+    },
+    /// Ask a job to stop — the newest running one, without an id
+    Cancel {
+        /// The job's id, as `fastf jobs` lists it
+        id: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum IdAction {
     /// Show the current global ID counter value and what the next project ID will be
     Show,
@@ -887,6 +932,17 @@ fn main() {
     // create unwinds and rolls its partial folder back rather than being killed
     // part-way through copying a template's assets.
     fastf::util::interrupt::install();
+
+    // A wait for the data lock names the job that holds it, where one does.
+    fastf::util::lockfile::describe_holder_with(fastf::core::jobs::lock_holder);
+
+    // `fastf --fastf-job <id>` is a job's worker, started detached by another
+    // fastf. Taken off argv before clap, like `--relaunched`, so no shell
+    // completion ever offers it.
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if argv.len() == 3 && argv[1] == fastf::core::jobs::WORKER_FLAG {
+        std::process::exit(cli::job_worker::run(&argv[2].to_string_lossy()));
+    }
 
     let outcome = run();
 
@@ -1149,22 +1205,39 @@ fn run() -> Result<()> {
             query,
             destination,
             yes,
+            detach,
         }) => cli::copy_to::run(cli::copy_to::CopyToArgs {
             query,
             destination,
             yes,
+            detach,
         }),
         Some(Commands::Path { query }) => cli::path_cmd::run(&query),
         Some(Commands::Term { query }) => cli::term_cmd::run(&query),
-        Some(Commands::Move { query, base, yes }) => {
-            cli::move_project::run(cli::move_project::MoveArgs { query, base, yes })
-        }
+        Some(Commands::Move {
+            query,
+            base,
+            yes,
+            detach,
+        }) => cli::move_project::run(cli::move_project::MoveArgs {
+            query,
+            base,
+            yes,
+            detach,
+        }),
         Some(Commands::Rename { query, name, yes }) => cli::folder_verbs::rename(&query, name, yes),
         Some(Commands::Unregister { query, yes }) => cli::folder_verbs::unregister(&query, yes),
-        Some(Commands::Delete { query, yes }) => cli::folder_verbs::delete(&query, yes),
+        Some(Commands::Delete { query, yes, detach }) => {
+            cli::folder_verbs::delete(&query, yes, detach)
+        }
 
         Some(Commands::Reindex) => cli::reindex::run(),
-        Some(Commands::Reconcile) => cli::reconcile::run(),
+        Some(Commands::Reconcile { detach }) => cli::reconcile::run(detach),
+        Some(Commands::Jobs { action }) => match action {
+            None => cli::jobs::list(),
+            Some(JobsAction::Watch { id }) => cli::jobs::watch(id),
+            Some(JobsAction::Cancel { id }) => cli::jobs::cancel(id),
+        },
         Some(Commands::Log { lines, follow }) => cli::log::log(lines, follow),
         Some(Commands::Messages { lines }) => cli::log::messages(lines),
 

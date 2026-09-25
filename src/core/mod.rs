@@ -3,6 +3,7 @@ pub mod body;
 pub mod config;
 pub mod copy_engine;
 pub mod counter;
+pub mod jobs;
 pub mod library;
 pub(crate) mod move_cleanup;
 pub mod move_engine;

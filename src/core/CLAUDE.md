@@ -439,7 +439,11 @@ child inherits its starter's cgroup, and a launcher's service with systemd's
 default `ExitType=main` SIGTERMs the whole group when the app quits — measured:
 the move was cancelled. KDE's launcher asks for `ExitType=cgroup` and waits;
 nothing promises another will. `systemd-run` that exits before the worker
-writes its state falls back to the plain start. The worker (`cli::job_worker`)
+writes its state falls back to the plain start. On Windows the worker is started with
+fastf's own standard handles made non-inheritable for the moment
+(`StdHandlesNotInherited`): Windows hands a child every inheritable handle, so a
+command whose output a script captured through a pipe kept that pipe open for
+the worker's whole life, and `$(fastf move … --detach)` waited for the move. The worker (`cli::job_worker`)
 holds `jobs/<id>/lock` for its whole life — **alive means the lock is held**,
 the OS's answer, so a reused pid cannot lie — keeps `state.json` current from a
 watcher thread, turns a `cancel` file into the engine's flag, waits patiently

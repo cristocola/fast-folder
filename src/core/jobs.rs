@@ -325,6 +325,7 @@ fn spawn_worker(id: &str) -> Result<()> {
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+        let _held_back = StdHandlesNotInherited::now();
         command()
             .creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB)
             .spawn()
@@ -401,6 +402,71 @@ fn started_in_its_scope(child: &mut std::process::Child, id: &str) -> bool {
         std::thread::sleep(Duration::from_millis(20));
     }
     true
+}
+
+/// This process's standard handles, made non-inheritable for as long as the
+/// value lives, then put back.
+///
+/// **Windows hands a child every inheritable handle its starter has**, and
+/// std's `Command` asks for inheritance whenever it sets the child's stdio. A
+/// command run with its output captured through a pipe — `$(fastf move …
+/// --detach)`, a test harness — has an inheritable pipe as its stdout, so the
+/// worker held it open, and whoever read the command's output waited until the
+/// job ended. Found on CI's Windows runner; a console never shows it.
+#[cfg(windows)]
+struct StdHandlesNotInherited(Vec<(*mut std::ffi::c_void, u32)>);
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetStdHandle(which: u32) -> *mut std::ffi::c_void;
+    fn GetHandleInformation(handle: *mut std::ffi::c_void, flags: *mut u32) -> i32;
+    fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
+}
+
+#[cfg(windows)]
+impl StdHandlesNotInherited {
+    const HANDLE_FLAG_INHERIT: u32 = 0x1;
+
+    fn now() -> Self {
+        // STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE.
+        const WHICH: [u32; 3] = [-10i32 as u32, -11i32 as u32, -12i32 as u32];
+        let mut changed = Vec::new();
+        for which in WHICH {
+            // SAFETY: plain Win32 calls on this process's own standard
+            // handles; a null or invalid one is skipped.
+            unsafe {
+                let handle = GetStdHandle(which);
+                if handle.is_null() || handle as isize == -1 {
+                    continue;
+                }
+                let mut flags = 0u32;
+                if GetHandleInformation(handle, &mut flags) != 0
+                    && flags & Self::HANDLE_FLAG_INHERIT != 0
+                    && SetHandleInformation(handle, Self::HANDLE_FLAG_INHERIT, 0) != 0
+                {
+                    changed.push((handle, flags));
+                }
+            }
+        }
+        Self(changed)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for StdHandlesNotInherited {
+    fn drop(&mut self) {
+        for (handle, _) in &self.0 {
+            // SAFETY: the same handles `now` changed, put back as they were.
+            unsafe {
+                SetHandleInformation(
+                    *handle,
+                    Self::HANDLE_FLAG_INHERIT,
+                    Self::HANDLE_FLAG_INHERIT,
+                );
+            }
+        }
+    }
 }
 
 pub fn read_request(id: &str) -> Option<JobRequest> {

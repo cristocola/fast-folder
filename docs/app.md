@@ -335,8 +335,13 @@ every key beside its verb. A tag you pick where the library already knows some,
 or type where it does not; remove-tags lists every tag on the project with a
 space to mark each; delete names the folder and asks you to type the word
 `delete` — a typo keeps your text and says why it was refused; `y` or `n`
-answers a yes/no without Enter. A move shows its progress (phase and bytes)
-while it runs, cancelled with Esc or Ctrl-C. `N` drops out of the terminal into
+answers a yes/no without Enter. A move shows its progress while it runs, one
+row per step: the steps done ticked with what they counted, the current one
+with its count, its bar and the entry it is at, the rest dimmed. A copy to a
+folder (`C`) and a reconcile (`!`) show theirs the same way; a reconcile names
+which item of how many it is on. Esc or Ctrl-C cancels until a move publishes
+its `PROJECT_INFO.md`; after that the dialog's last line says it is past the
+point of no return, and the move finishes by itself. `N` drops out of the terminal into
 your `$EDITOR` and appends whatever you save as one note when you come back;
 `M` and `J` open the metadata and the notes, scrollable with the arrow keys.
 

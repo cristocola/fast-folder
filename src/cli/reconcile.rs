@@ -14,7 +14,9 @@ use anyhow::Result;
 use colored::Colorize;
 
 pub fn run() -> Result<()> {
-    let report = crate::core::operations::reconcile()?;
+    let report = crate::cli::progress::run_watched("reconcile", |progress, cancel| {
+        crate::core::operations::reconcile_with(progress, cancel)
+    })?;
 
     if report.is_empty() {
         println!(
@@ -27,7 +29,14 @@ pub fn run() -> Result<()> {
     // Not a green tick over a report that may be nothing but "could not
     // inspect": the tick means something worked, and here it only means the
     // pass ran.
-    let clean = report.unrecoverable.is_empty() && report.leftovers.is_empty();
+    let clean = report.unrecoverable.is_empty() && report.leftovers.is_empty() && !report.cancelled;
+    if report.cancelled {
+        println!(
+            "{}  Reconcile stopped when asked. What it finished is below; what it had \
+             not reached is as it was — run `fastf reconcile` again to finish it.",
+            "⚠".yellow().bold()
+        );
+    }
     println!(
         "{}  Reconcile report complete.",
         if clean {

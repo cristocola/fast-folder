@@ -22,6 +22,7 @@ use crate::core::library::{
     revalidate_recorded_project, to_forward_slashes,
 };
 use crate::core::move_cleanup::{self, Cleanup, SourceFate};
+use crate::core::progress::Ticker;
 use crate::core::project_info;
 use crate::core::transactions::{self, MoveManifest, MovePhase, MoveTransaction, Operation};
 
@@ -150,23 +151,28 @@ pub fn move_project_configured_with_outcome(
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<MoveOutcome> {
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    let cfg = Config::load()?;
-    let project = revalidate_project(&cfg, project)?;
-    let wanted = crate::util::paths::canonical(new_base)
-        .with_context(|| format!("resolving target base {}", new_base.display()))?;
-    let target = cfg
-        .effective_bases()
-        .into_iter()
-        .filter_map(|base| crate::util::paths::canonical(&base).ok())
-        .find(|base| *base == wanted)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "'{}' is not a currently configured base",
-                new_base.display()
-            )
-        })?;
-    move_project_unlocked(&project, &target, progress, cancel)
+    let result = (|| {
+        Ticker::new(progress, cancel).phase(JobPhase::Waiting, 0);
+        let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+        let cfg = Config::load()?;
+        let project = revalidate_project(&cfg, project)?;
+        let wanted = crate::util::paths::canonical(new_base)
+            .with_context(|| format!("resolving target base {}", new_base.display()))?;
+        let target = cfg
+            .effective_bases()
+            .into_iter()
+            .filter_map(|base| crate::util::paths::canonical(&base).ok())
+            .find(|base| *base == wanted)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "'{}' is not a currently configured base",
+                    new_base.display()
+                )
+            })?;
+        move_project_unlocked(&project, &target, progress, cancel)
+    })();
+    crate::core::progress::settle(progress, cancel, &result);
+    result
 }
 
 /// Exercise the private copy transaction even when the test's two bases share
@@ -255,7 +261,6 @@ fn move_project_unlocked(
         match fs::rename(&project.path, &new_path) {
             Ok(()) => {
                 let moved = finish_move_bookkeeping(project, &old_base, &new_base, &new_path);
-                finish_progress(progress);
                 MoveOutcome {
                     project: moved,
                     source: SourceOutcome::Removed,
@@ -319,11 +324,30 @@ fn report_cleanup_pending(outcome: &MoveOutcome, source: &Path) {
     }
 }
 
+/// The steps a staged move passes through, in order.
+pub const MOVE_STEPS: &[JobPhase] = &[
+    JobPhase::Scanning,
+    JobPhase::Probing,
+    JobPhase::Copying,
+    JobPhase::Verifying,
+    JobPhase::Publishing,
+    JobPhase::SettingAside,
+    JobPhase::Checking,
+    JobPhase::Removing,
+    JobPhase::Clearing,
+];
+
 /// The staged cross-filesystem move body. All pre-publication state lives in
 /// one exclusively-created operation directory; cancellation or an ordinary
 /// error before publication removes exactly that directory and leaves the
-/// source untouched. Once publication begins cancellation is deliberately too
-/// late.
+/// source untouched.
+///
+/// **Cancel is honoured up to the publish and not after it** — not even by
+/// the publish's own one-file copy, which used to poll the flag and could
+/// stop the moment that makes the copy the project. From there on the moved
+/// copy is the project; setting the original aside and removing it are
+/// housekeeping, run with a ticker that cannot cancel, and a surface answers a
+/// late cancel with "too late" ([`Progress::committed`]).
 pub(crate) fn staged_copy_verify_commit(
     project: &Project,
     new_base: &Path,
@@ -333,6 +357,8 @@ pub(crate) fn staged_copy_verify_commit(
 ) -> Result<MoveOutcome> {
     use std::sync::atomic::Ordering;
 
+    let ticker = Ticker::new(progress, cancel);
+    ticker.plan(MOVE_STEPS);
     let old_base = crate::util::paths::canonical(&project.base)
         .with_context(|| format!("resolving source base {}", project.base.display()))?;
     let folder = project
@@ -349,10 +375,13 @@ pub(crate) fn staged_copy_verify_commit(
         &project.id,
         Operation::Move,
     )?;
+    ticker.update(|state| state.operation = Some(transaction.journal.operation_id.clone()));
     let mut published = false;
     let pre_publication = (|| -> Result<(MoveManifest, MoveManifest)> {
-        let manifest = MoveManifest::scan(&project.path)?;
+        ticker.phase(JobPhase::Scanning, 0);
+        let manifest = MoveManifest::scan_with(&project.path, ticker)?;
         transaction.write_manifest(&manifest)?;
+        ticker.phase(JobPhase::Probing, 0);
         // Before a byte is copied: can the original be taken out of its base
         // afterwards, and does the target have the room?
         crate::core::move_preflight::probe_source_base(
@@ -361,19 +390,22 @@ pub(crate) fn staged_copy_verify_commit(
             &transaction.journal.operation_id,
         )?;
         crate::core::move_preflight::check_space(new_base, manifest.total_bytes())?;
-        {
-            let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
-            state.phase = crate::core::assets::JobPhase::Copying;
+        if ticker.cancelled() {
+            anyhow::bail!("move of '{}' cancelled", project.name);
+        }
+        // Everything but `PROJECT_INFO.md`, which the publish writes: the
+        // step counts what it copies, so its bar reaches its end.
+        let body = manifest.without_root_metadata();
+        ticker.phase(JobPhase::Copying, body.total_files());
+        ticker.update(|state| {
             state.total_bytes = manifest.total_bytes();
             state.total_files = manifest.total_files();
             state.done_files = 0;
             state.copied_bytes = 0;
-            state.touch();
-        }
+        });
         // The copy is made at its final path, everything but the root
         // `PROJECT_INFO.md`: until that lands the folder is not a project.
         let staging = transaction.claim_staging()?;
-        let body = manifest.without_root_metadata();
         if let Err(error) =
             transactions::copy_to_staging(&body, &project.path, &staging, progress, cancel)
         {
@@ -385,28 +417,41 @@ pub(crate) fn staged_copy_verify_commit(
             });
         }
         crate::util::faults::check("move:after-staging")?;
-        set_phase(progress, JobPhase::Verifying);
-        let mut staged = body.verify_destination(&staging)?;
-        manifest.verify_source_unchanged(&project.path)?;
+        // Two walks: the copy, then the original again.
+        ticker.phase(
+            JobPhase::Verifying,
+            body.entries.len() + manifest.entries.len(),
+        );
+        let verified = body
+            .verify_destination_with(&staging, ticker)
+            .and_then(|staged| {
+                manifest
+                    .verify_source_unchanged_with(&project.path, ticker)
+                    .map(|()| staged)
+            });
+        if verified.is_err() && ticker.cancelled() {
+            anyhow::bail!("move of '{}' cancelled", project.name);
+        }
+        let mut staged = verified?;
         crate::util::faults::check("move:after-verify")?;
         crate::util::faults::check("move:post-verification")?;
 
-        if cancel.load(Ordering::Relaxed) {
-            anyhow::bail!("move of '{}' cancelled", project.name);
-        }
-        set_phase(progress, JobPhase::Finalizing);
         crate::util::faults::check("move:before-commit-rename")?;
+        // The last moment a cancel undoes the move.
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("move of '{}' cancelled", project.name);
         }
+        ticker.phase(JobPhase::Publishing, 0);
+        ticker.update(|state| state.committed = true);
         // The publish: one file, written once. No folder on the target is
         // renamed, which is what a cloud mount with uploads in flight needs.
+        // Its copy is handed a flag nobody sets: once it starts, it finishes.
         transactions::copy_to_staging(
             &manifest.only_root_metadata(),
             &project.path,
             &staging,
             progress,
-            cancel,
+            &AtomicBool::new(false),
         )
         .with_context(|| format!("publishing '{}' in {}", project.name, new_base.display()))?;
         published = true;
@@ -440,7 +485,6 @@ pub(crate) fn staged_copy_verify_commit(
                 let state = progress.lock().unwrap_or_else(|error| error.into_inner());
                 (state.total_files, state.total_bytes)
             };
-            finish_progress(progress);
             return Ok(MoveOutcome {
                 project: moved,
                 source: SourceOutcome::KeptWhole {
@@ -483,6 +527,7 @@ pub(crate) fn staged_copy_verify_commit(
             final_path: new_path,
             project_id: &project.id,
             residue_allowed: false,
+            ticker: ticker.uncancellable(),
         };
         move_cleanup::retire_and_remove(transaction, &cleanup, || {
             moved = Some(finish_move_bookkeeping(
@@ -514,12 +559,10 @@ pub(crate) fn staged_copy_verify_commit(
         SourceFate::Unknown { reason } => SourceOutcome::Unknown { reason },
     };
     let moved = moved.unwrap_or_else(|| moved_view(project, new_base, new_path));
-    set_phase(progress, JobPhase::Done);
     let copied = {
         let state = progress.lock().unwrap_or_else(|error| error.into_inner());
         (state.total_files, state.total_bytes)
     };
-    finish_progress(progress);
     Ok(MoveOutcome {
         project: moved,
         source,
@@ -584,25 +627,4 @@ pub(crate) fn finish_recovered_move(
     let original = project_from_meta(metadata, source_base, &source_base.join(source_folder));
     finish_move_bookkeeping(&original, source_base, target_base, final_path);
     Ok(())
-}
-
-/// The job is over. **`JobStatus` was assigned `Running` at construction and
-/// never changed anywhere in the crate**, so the runtime's "is it done yet"
-/// was always false: `Runtime.moving` was never cleared, a finished move kept
-/// emitting progress, and a later cancel set the flag on a dead job's handle.
-fn finish_progress(progress: &Mutex<Progress>) {
-    if let Ok(mut p) = progress.lock() {
-        p.status = crate::core::assets::JobStatus::Done;
-        p.phase = JobPhase::Done;
-        p.touch();
-    }
-}
-
-fn set_phase(progress: &Mutex<Progress>, phase: JobPhase) {
-    if let Ok(mut p) = progress.lock() {
-        p.phase = phase;
-        // A phase change is real movement: without it, verifying a large tree
-        // looks identical to a dead worker to anything reading the timestamp.
-        p.touch();
-    }
 }

@@ -1,5 +1,6 @@
 ---
 source: tests/tui_snapshots.rs
+assertion_line: 26
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -16,12 +17,12 @@ expression: frame
 "│  ID0243 2026-0│ moving 1 of 2                                                    │               │"
 "│  ID0242 2026-0│ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0% │               │"
 "│  ID0241 2026-0│ 2026-08-28_Lullaby_Remix_ID0248                                  │               │"
-"│  ID0240 2026-0│ copying 1.1 MB of 3.3 MB                                         │               │"
-"│  ID0239 2026-0│ ████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  34% │               │"
-"│  ID0238 2026-0│                                                                  │               │"
-"│  ID0237 2026-0│ Esc or Ctrl-C cancels — the rest stay marked                     │               │"
+"│  ID0240 2026-0│ ▸ copying  12 of 34 files                                        │               │"
+"│  ID0239 2026-0│   █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░  34%  1.1 MB of 3.3 MB │               │"
+"│  ID0238 2026-0│   03_Assets/raw/footage_A001.mov                                 │               │"
+"│  ID0237 2026-0│                                                                  │               │"
+"│               │ Esc or Ctrl-C cancels — the rest stay marked                     │               │"
 "│               └──────────────────────────────────────────────────────────────────┘               │"
-"│                                                              ││                                  │"
 "│                                                              ││                                  │"
 "│                                                              ││                                  │"
 "│                                                              ││                                  │"

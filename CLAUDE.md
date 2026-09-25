@@ -45,6 +45,8 @@ cargo build --release --target x86_64-pc-windows-gnu
 # Fault injection — trip a named boundary deterministically:
 FASTF_FAULT=create:mid-copy cargo test            # returns an error there
 FASTF_FAULT=move:before-commit-rename:abort ...   # kills the process there
+FASTF_FAULT=move:force-staged,remove:each-entry:delay-400 fastf move ...
+                                                  # a local move at a cloud mount's pace
 
 # Work counting — how many times an expensive thing happened:
 FASTF_TRACE_FILE=/tmp/counts cargo test           # one line per traced operation

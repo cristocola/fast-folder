@@ -226,6 +226,19 @@ pub enum Action {
     },
 }
 
+impl Action {
+    /// The long jobs, which report progress and take a cancel: a move, a copy
+    /// out of the library (a move that keeps its source) and a reconcile,
+    /// which removes old copies too. The app arms its progress dialog and the
+    /// runtime its handles on this one answer, so the two cannot disagree.
+    pub fn reports_progress(&self) -> bool {
+        matches!(
+            self,
+            Action::Move { .. } | Action::CopyTo { .. } | Action::Reconcile
+        )
+    }
+}
+
 /// Which read-only view `LoadView` is asking for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewKind {

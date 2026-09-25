@@ -249,6 +249,49 @@ fn quit_keys_cancel_a_running_move() {
     assert_eq!(press(&mut app, Key::ch('q')), vec![Effect::CancelMove]);
 }
 
+/// Past the publish a cancel cannot undo a move, and the app does not pretend
+/// it can: no cancel is sent, the move carries on, and the log says why.
+#[test]
+fn a_cancel_after_the_publish_is_answered_not_sent() {
+    use fastf::core::assets::{JobPhase, Progress};
+
+    let mut app = fixture(12, 80, 24);
+    let mut progress = Progress::new(&[]);
+    progress.phase = JobPhase::Removing;
+    progress.committed = true;
+    app.move_progress = Some(progress);
+
+    assert_eq!(press(&mut app, Key::ctrl('c')), vec![]);
+    assert!(app.move_progress.is_some(), "the move is still running");
+    let said = app
+        .log
+        .back()
+        .map(|entry| entry.text.clone())
+        .unwrap_or_default();
+    assert!(said.contains("too late to cancel"), "{said}");
+}
+
+/// A copy out of the library and a reconcile are long jobs too: each puts up
+/// the progress dialog as it starts, and only then.
+#[test]
+fn a_copy_and_a_reconcile_put_the_progress_dialog_up() {
+    let mut app = fixture(12, 80, 24);
+    let effects = press(&mut app, Key::ch('!'));
+    assert!(matches!(action_of(&effects), Action::Reconcile));
+    assert!(app.move_progress.is_some(), "reconcile shows its progress");
+
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch('C'));
+    assert!(
+        app.move_progress.is_none(),
+        "not while the folder is being typed"
+    );
+    type_text(&mut app, "/mnt/backup");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(action_of(&effects), Action::CopyTo { .. }));
+    assert!(app.move_progress.is_some(), "the copy shows its progress");
+}
+
 /// A move that could not remove its original says why in a paragraph, and a
 /// refused move lists every entry it cannot copy; the status line shows one
 /// line, so either arrives whole in a dialog instead of as its first words.

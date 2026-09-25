@@ -215,26 +215,116 @@ fn journal_view_open() {
     snap("journal_view", render_to_string(&app, 100, 30));
 }
 
+/// A staged move part of the way through its copy: the steps before it
+/// ticked with their counts, the copy with its bar and file, the rest dim.
+fn copying_move() -> fastf::core::assets::Progress {
+    use fastf::core::assets::{FinishedStep, JobPhase, Progress};
+    use fastf::core::move_engine::MOVE_STEPS;
+
+    let mut progress = Progress::new(&[]);
+    progress.steps = MOVE_STEPS.to_vec();
+    progress.finished = vec![
+        FinishedStep {
+            phase: JobPhase::Scanning,
+            count: 41,
+        },
+        FinishedStep {
+            phase: JobPhase::Probing,
+            count: 0,
+        },
+    ];
+    progress.phase = JobPhase::Copying;
+    progress.total_bytes = 3_500_000;
+    progress.copied_bytes = 1_200_000;
+    progress.total_files = 34;
+    progress.done_files = 12;
+    progress.step_done = 12;
+    progress.step_total = 34;
+    progress.current_file = "03_Assets/raw/footage_A001.mov".to_string();
+    progress
+}
+
+/// The same move removing its old copy — the step that used to run under a
+/// full bar and the word "finalizing" for ten minutes on a cloud mount.
+fn removing_move() -> fastf::core::assets::Progress {
+    use fastf::core::assets::{FinishedStep, JobPhase};
+
+    let mut progress = copying_move();
+    progress.finished = [
+        (JobPhase::Scanning, 41),
+        (JobPhase::Probing, 0),
+        (JobPhase::Copying, 34),
+        (JobPhase::Verifying, 81),
+        (JobPhase::Publishing, 1),
+        (JobPhase::SettingAside, 82),
+        (JobPhase::Checking, 82),
+    ]
+    .into_iter()
+    .map(|(phase, count)| FinishedStep { phase, count })
+    .collect();
+    progress.phase = JobPhase::Removing;
+    progress.committed = true;
+    progress.step_done = 17;
+    progress.step_total = 41;
+    progress.current_file = "03_Assets/raw".to_string();
+    progress
+}
+
 #[test]
 fn move_progress_modal() {
-    use fastf::core::assets::{JobPhase, JobStatus, Progress};
+    let mut app = fixture(12, 100, 30);
+    app.move_progress = Some(copying_move());
+    app.busy = Some("moving…");
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("scanned"), "{frame}");
+    snap("move_progress", frame);
+}
+
+/// Past the publish: every step so far ticked, the removal counted, and the
+/// last line says a cancel is too late rather than offering one.
+#[test]
+fn move_progress_removing_the_old_copy() {
+    let mut app = fixture(12, 100, 30);
+    app.move_progress = Some(removing_move());
+    app.busy = Some("moving…");
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("17 of 41 entries"), "{frame}");
+    assert!(frame.contains("point of no return"), "{frame}");
+    snap("move_progress_removing", frame);
+}
+
+/// A window too short for every step shows the current one, and the way out.
+#[test]
+fn move_progress_in_a_short_window() {
+    let mut app = fixture(12, 60, 12);
+    app.move_progress = Some(removing_move());
+    app.busy = Some("moving…");
+    let frame = render_to_string(&app, 60, 12);
+    assert!(frame.contains("removing the old copy"), "{frame}");
+    assert!(frame.contains("point of no return"), "{frame}");
+    snap("move_progress_short", frame);
+}
+
+/// A reconcile has no plan of steps — each record needs what it needs — so
+/// it shows which item it is on and that item's current step.
+#[test]
+fn reconcile_progress_modal() {
+    use fastf::core::assets::{JobPhase, Progress};
 
     let mut app = fixture(12, 100, 30);
-    app.move_progress = Some(Progress {
-        total_bytes: 3_500_000,
-        copied_bytes: 1_200_000,
-        total_files: 34,
-        done_files: 12,
-        current_file: "03_Assets/raw/footage_A001.mov".to_string(),
-        status: JobStatus::Running,
-        phase: JobPhase::Copying,
-        error: None,
-        cleanup_pending: false,
-        warning: None,
-        last_progress_at: 0,
-    });
-    app.busy = Some("moving…");
-    snap("move_progress", render_to_string(&app, 100, 30));
+    let mut progress = Progress::new(&[]);
+    progress.item = 1;
+    progress.items = 2;
+    progress.item_label = "ID0012_Lullaby".to_string();
+    progress.phase = JobPhase::Removing;
+    progress.step_done = 312;
+    progress.step_total = 1473;
+    progress.current_file = "node_modules/vite/dist".to_string();
+    app.move_progress = Some(progress);
+    app.busy = Some("reconciling…");
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("1 of 2"), "{frame}");
+    snap("reconcile_progress", frame);
 }
 
 // --- marks and batch jobs ------------------------------------------------
@@ -435,8 +525,6 @@ fn job_progress_modal() {
 /// A moving job with a real byte count under it.
 #[test]
 fn job_progress_with_bytes_modal() {
-    use fastf::core::assets::{JobPhase, JobStatus, Progress};
-
     let mut app = fixture(12, 100, 30);
     app.summary = Some(sample_summary_moveable(12));
     let _ = update(&mut app, Msg::Key(Key::ch(' ')));
@@ -444,19 +532,7 @@ fn job_progress_with_bytes_modal() {
     let _ = update(&mut app, Msg::Key(Key::ch('m')));
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
     assert!(app.job.is_some(), "the marks started a move job");
-    app.move_progress = Some(Progress {
-        total_bytes: 3_500_000,
-        copied_bytes: 1_200_000,
-        total_files: 34,
-        done_files: 12,
-        current_file: "03_Assets/raw/footage_A001.mov".to_string(),
-        status: JobStatus::Running,
-        phase: JobPhase::Copying,
-        error: None,
-        cleanup_pending: false,
-        warning: None,
-        last_progress_at: 0,
-    });
+    app.move_progress = Some(copying_move());
     snap("job_progress_move", render_to_string(&app, 100, 30));
 }
 

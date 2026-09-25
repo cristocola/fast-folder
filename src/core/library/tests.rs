@@ -460,15 +460,45 @@ fn staged_move_copies_verifies_commits_and_removes_source() {
 
     staged_copy_verify_commit(&project, new_base, &new_path, &progress, &cancel).unwrap();
 
-    // Progress must actually advance. The phase and the per-file counter are
-    // the only feedback during a multi-minute network copy, so a counter
-    // that silently stops updating looks exactly like a hung move.
+    // Progress must actually advance, through every step in order. The steps
+    // and their counts are the only feedback during a multi-minute network
+    // move, and a step that says nothing — removing the old copy used to run
+    // under "finalizing" with the bar full — looks exactly like a hung one.
+    crate::core::progress::settle(&progress, &cancel, &Ok(()));
     {
+        use crate::core::assets::JobPhase;
         let p = progress.lock().unwrap();
+        assert_eq!(p.phase, JobPhase::Done, "the phase should have advanced");
+        let passed: Vec<JobPhase> = p.finished.iter().map(|step| step.phase).collect();
         assert_eq!(
-            p.phase,
-            crate::core::assets::JobPhase::Done,
-            "the phase should have advanced"
+            passed,
+            crate::core::move_engine::MOVE_STEPS.to_vec(),
+            "every step, in order"
+        );
+        let counted = |phase| {
+            p.finished
+                .iter()
+                .find(|step| step.phase == phase)
+                .map(|step| step.count)
+                .unwrap()
+        };
+        let recorded = counted(JobPhase::Scanning);
+        assert!(recorded >= 7, "the scan counts every entry: {recorded}");
+        assert_eq!(
+            counted(JobPhase::Copying),
+            p.total_files - 1,
+            "every file but the one the publish writes"
+        );
+        assert_eq!(counted(JobPhase::Verifying), recorded * 2 - 1);
+        assert_eq!(
+            counted(JobPhase::Removing),
+            recorded,
+            "the old copy's removal counts every entry it takes"
+        );
+        assert_eq!(p.status, crate::core::assets::JobStatus::Done);
+        assert!(
+            p.committed,
+            "a published move is past its point of no return"
         );
         assert!(p.total_files >= 3, "files counted: {}", p.total_files);
         assert_eq!(

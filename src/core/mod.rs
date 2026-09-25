@@ -11,6 +11,7 @@ pub mod naming;
 pub mod operations;
 pub mod plan;
 pub mod post_create;
+pub mod progress;
 pub mod project;
 pub mod project_info;
 pub mod provisioning;

@@ -428,7 +428,7 @@ impl Runtime {
                     }
                 }
                 Effect::Run(id, action) => {
-                    let moving = matches!(*action, Action::Move { .. });
+                    let moving = action.reports_progress();
                     let progress = Arc::new(Mutex::new(Progress::new(&[])));
                     let cancel = Arc::new(AtomicBool::new(false));
                     if moving {
@@ -1256,8 +1256,18 @@ fn run_action(
             .settings())
         }
         Action::Reconcile => {
-            let report = crate::core::operations::reconcile()?;
-            let message = if report.is_empty() {
+            let report = crate::core::operations::reconcile_with(progress, cancel)?;
+            let message = if report.cancelled {
+                format!(
+                    "Reconcile stopped: {} resumed, {} finished, {} rolled back, {} restored, \
+                     {} cleared before it did; the rest is as it was",
+                    report.resumed,
+                    report.completed,
+                    report.rolled_back,
+                    report.restored,
+                    report.cleared
+                )
+            } else if report.is_empty() {
                 "Nothing to reconcile — every project is fully provisioned.".to_string()
             } else {
                 format!(

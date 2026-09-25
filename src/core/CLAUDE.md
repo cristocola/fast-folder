@@ -321,7 +321,29 @@ are the two questions asked of it. Folder devices are compared on unix only, and
 only folders: on overlayfs a file reports the device of its layer.
 
 Before publication, a cancel or failure removes only the owned transaction. After
-it, cancel is too late.
+it, cancel is too late — **and the engine means it**: the publish's one-file copy
+is handed a flag nobody sets, and every step after it runs on
+`Ticker::uncancellable()`, so a late Ctrl-C can never stop a removal part of the
+way. `Progress.committed` is set as the publish starts, and is what surfaces
+read to answer "too late" instead of pretending to stop.
+
+**Every step of a long job is named and counted** (`core::progress::Ticker`,
+handed to `Walk::of_with`, `MoveManifest::scan_with`/`verify_*_with`,
+`Cleanup.ticker` and `remove_tree`). A staged move passes through
+`move_engine::MOVE_STEPS` in order — scanning, probing, copying, verifying,
+publishing, setting the original aside, checking the old copy, removing it,
+clearing the record — each counting what it touches, and `Ticker::phase` keeps
+the finished ones in `Progress.finished` with their counts. 3.12 ran everything
+after the copy under one "finalizing" with a full bar, and removing 1473 entries
+through a Drive mount took ten minutes there. **A check never stops for a
+cancel** (`check_removable` walks on `cleanup.ticker.uncancellable()`), because a
+check stopped part of the way reads as one that failed; the removal after it
+stops when its ticker honours one, leaving a redundant leftover. The public entry
+points (`move_project_configured_with_outcome`, `copy_project_configured`,
+`operations::reconcile_with`) end the progress through
+`core::progress::settle`: `Done`, `Cancelled` when the flag stopped it, `Failed`
+with the reason. `Ticker::none()` is what every caller with nobody to tell
+passes, and changes nothing.
 
 **After publication the source is retired, not deleted** (`core::move_cleanup`):
 renamed in one step to `<source base>/.fastf-moved-<operation>` — same folder, so
@@ -428,8 +450,13 @@ reported for inspection. Creates defer no copies, but the resume branch stays fo
 a journal an older binary left on a shared drive, resuming after identity, type
 and length checks.
 
-**Reconcile** holds `DataLock` for the whole pass and is idempotent. By
-transaction (S source, R retired copy, T staging, F destination):
+**Reconcile** holds `DataLock` for the whole pass and is idempotent. Its
+progress (`reconcile_unlocked_with`) counts items — what `list_incomplete`
+counts, the header's "needs attention", growing if it finds more — each named
+as it is taken, with that item's steps under it; a cancel is honoured between
+items and inside a removal, and sets `ReconcileReport.cancelled`, which is never
+an empty report. By transaction (S source, R retired copy, T staging, F
+destination):
 
 | phase | on disk | action |
 |---|---|---|

@@ -12,6 +12,7 @@ pub mod new;
 pub mod note;
 pub mod path_cmd;
 pub mod paths_cmd;
+pub(crate) mod progress;
 pub mod recent;
 pub mod reconcile;
 pub mod register;

@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use ratatui::crossterm::event::KeyCode;
 
 use super::{App, Focus};
-use crate::core::assets::Progress;
 use crate::tui::app::jobs;
 use crate::tui::app::modal::{MessageLevel, Modal, PickItem, PickState, Then};
 use crate::tui::app::pane;
@@ -639,7 +638,6 @@ impl App {
         let Some(project) = self.library.selected().cloned() else {
             return Vec::new();
         };
-        self.move_progress = Some(Progress::new(&[]));
         self.run_action(
             "moving…",
             Action::Move {

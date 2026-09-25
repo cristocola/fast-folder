@@ -34,6 +34,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::core::assets::JobPhase;
+use crate::core::progress::{CANCELLED, Ticker};
 use crate::core::transactions::{
     self, LISTED, ManifestEntry, ManifestKind, Match, MoveManifest, MovePhase, MoveTransaction,
     Walk,
@@ -84,6 +86,10 @@ pub(crate) struct Cleanup<'a> {
     /// recorded. A version-3 source is never partly removed, so it must be
     /// whole.
     pub residue_allowed: bool,
+    /// Where each step says how far it has got. Its checks never stop for a
+    /// cancel; the removal does when this ticker honours one, and a move hands
+    /// the steps after its publish one that does not — they are housekeeping.
+    pub ticker: Ticker<'a>,
 }
 
 /// The project at `path` carries `expected` as its id.
@@ -111,7 +117,11 @@ pub(crate) fn check_removable(
     residue_allowed: bool,
     cleanup: &Cleanup,
 ) -> std::result::Result<Walk, String> {
-    let walk = Walk::of(tree, "folder").map_err(|error| format!("{error:#}"))?;
+    // A check only reads, and one stopped part of the way would be reported
+    // as a tree that failed it: checks never stop for a cancel. The removal
+    // after them does, when its ticker honours one.
+    let walk = Walk::of_with(tree, "folder", cleanup.ticker.uncancellable())
+        .map_err(|error| format!("{error:#}"))?;
     let diff = cleanup.manifest.compare(&walk, Match::Whole);
     let fits = if residue_allowed {
         diff.is_residue()
@@ -291,7 +301,11 @@ fn destination_covers(
         ));
         return Err(gaps);
     }
-    let moved = match Walk::of(cleanup.final_path, "moved copy") {
+    let moved = match Walk::of_with(
+        cleanup.final_path,
+        "moved copy",
+        cleanup.ticker.uncancellable(),
+    ) {
         Ok(moved) => moved,
         Err(error) => {
             gaps.other.push(format!("{error:#}"));
@@ -357,6 +371,10 @@ pub(crate) fn retire_and_remove(
     bookkeeping: impl FnOnce(),
 ) -> SourceFate {
     let source = cleanup.source;
+    // Two walks: the original, then the moved copy it is compared against.
+    cleanup
+        .ticker
+        .phase(JobPhase::SettingAside, cleanup.manifest.entries.len() * 2);
     let has_identity = crate::core::project_info::pinfo_path(source).is_file();
     if (has_identity || !cleanup.residue_allowed)
         && let Err(error) = confirm_identity(source, cleanup.project_id, "original")
@@ -418,6 +436,8 @@ pub(crate) fn retire_and_remove(
 pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) -> SourceFate {
     let retired = transaction.retired_path();
     if entry_exists(&retired) {
+        let recorded = cleanup.manifest.entries.len();
+        cleanup.ticker.phase(JobPhase::Checking, recorded * 2);
         if let Err(reason) = check_removable(&retired, true, cleanup) {
             return SourceFate::Leftover {
                 path: retired,
@@ -429,8 +449,15 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
             remaining,
             reason,
             kept_on_purpose,
-        } = remove_tree(&retired, Some(cleanup.manifest), Purpose::Move)
-        {
+        } = {
+            cleanup.ticker.phase(JobPhase::Removing, recorded);
+            remove_tree(
+                &retired,
+                Some(cleanup.manifest),
+                Purpose::Move,
+                cleanup.ticker,
+            )
+        } {
             return SourceFate::Leftover {
                 path: retired,
                 reason: format!(
@@ -446,6 +473,7 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
             };
         }
     }
+    cleanup.ticker.phase(JobPhase::Clearing, 0);
     // A 3.12.0 record's old staging folder may hold files the mount put
     // there late; they go into place before the record goes, and anything
     // that cannot keeps the record (`MoveTransaction::sweep_strays`).
@@ -583,10 +611,17 @@ pub(crate) enum Purpose {
 /// the 3.11 husk. This one carries on past a failure (everything here is
 /// already somewhere else, or was asked to go), gives a folder it may not
 /// write its owner's permission back, and counts what it had to leave.
+///
+/// `ticker` counts every entry removed — on a cloud mount each one is an API
+/// call, and 1473 of them took ten minutes that used to show as nothing — and
+/// a cancel it honours stops the removal where it is; what is left is a
+/// redundant leftover the next reconcile finishes. The caller starts the
+/// step, since it knows the total.
 pub(crate) fn remove_tree(
     root: &Path,
     recorded: Option<&MoveManifest>,
     purpose: Purpose,
+    ticker: Ticker,
 ) -> Removal {
     let count = |root: &Path| {
         Walk::of(root, "folder")
@@ -613,6 +648,7 @@ pub(crate) fn remove_tree(
         recorded,
         device,
         purpose,
+        ticker,
         removed_one: false,
         stopped: None,
         kept_on_purpose: false,
@@ -650,6 +686,7 @@ struct Removing<'a> {
     recorded: Option<&'a MoveManifest>,
     device: Option<u64>,
     purpose: Purpose,
+    ticker: Ticker<'a>,
     removed_one: bool,
     /// Set when a failpoint stops the removal; everything after is left.
     stopped: Option<String>,
@@ -756,6 +793,10 @@ impl Removing<'_> {
     /// Remove one entry: a folder (already emptied) or a folder link with
     /// `remove_dir`, anything else with `remove_file`. Never through a link.
     fn remove(&mut self, path: &Path, what: Removed) {
+        if let Err(error) = crate::util::faults::check("remove:each-entry") {
+            self.stopped = Some(format!("{error:#}"));
+            return;
+        }
         let attempt = || match what {
             Removed::Folder | Removed::FolderLink => crate::util::fs_retry::remove_dir(path),
             Removed::Other => crate::util::fs_retry::remove_file(path),
@@ -779,6 +820,11 @@ impl Removing<'_> {
                 self.note(path, &error.to_string());
                 return;
             }
+        }
+        let relative = path.strip_prefix(self.root).unwrap_or(path);
+        if !self.ticker.tick(relative) {
+            self.stopped = Some(CANCELLED.to_string());
+            return;
         }
         if !self.removed_one {
             self.removed_one = true;
@@ -884,7 +930,10 @@ mod tests {
         tree(&root);
         std::os::unix::fs::symlink(&outside, root.join("sub/linked")).unwrap();
 
-        assert_eq!(remove_tree(&root, None, Purpose::Delete), Removal::Removed);
+        assert_eq!(
+            remove_tree(&root, None, Purpose::Delete, Ticker::none()),
+            Removal::Removed
+        );
         assert!(!root.exists());
         assert_eq!(
             fs::read_to_string(outside.join("keep.txt")).unwrap(),
@@ -906,7 +955,7 @@ mod tests {
             kept_on_purpose,
             reason,
             ..
-        } = remove_tree(&root, Some(&manifest), Purpose::Move)
+        } = remove_tree(&root, Some(&manifest), Purpose::Move, Ticker::none())
         else {
             panic!("a changed entry must be kept");
         };

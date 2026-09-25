@@ -14,10 +14,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use crate::core::assets::{self, CopyJob, Progress};
+use crate::core::assets::{self, CopyJob, JobPhase, Progress};
 use crate::core::config::Config;
 use crate::core::library;
 use crate::core::move_cleanup::{self, Cleanup, Purpose, Removal, SourceFate};
+use crate::core::progress::Ticker;
 use crate::core::template;
 use crate::core::transactions::{self, MoveJournal, MoveManifest, MovePhase, Operation};
 use crate::core::validated::TemplateSlug;
@@ -348,6 +349,9 @@ pub struct ReconcileReport {
     pub leftovers: Vec<String>,
     pub unrecoverable: Vec<String>,
     pub obsolete: Vec<String>,
+    /// The pass stopped for a cancel before it had looked at everything;
+    /// what it did not reach is as it was, and the next pass takes it up.
+    pub cancelled: bool,
 }
 
 impl ReconcileReport {
@@ -361,6 +365,7 @@ impl ReconcileReport {
             && self.leftovers.is_empty()
             && self.unrecoverable.is_empty()
             && self.obsolete.is_empty()
+            && !self.cancelled
     }
 }
 
@@ -376,7 +381,18 @@ impl ReconcileReport {
 /// [`DataLock`]: crate::util::lockfile::DataLock
 #[doc(hidden)]
 pub fn reconcile_unlocked(cfg: &Config) -> ReconcileReport {
+    reconcile_unlocked_with(cfg, Ticker::none())
+}
+
+/// [`reconcile_unlocked`], saying how far it has got: its items are what
+/// [`list_incomplete`] counts — the header's "needs attention" — and each
+/// item's steps are the move's own. A cancel is honoured between items and
+/// inside a removal, whose leftover the next pass finishes.
+#[doc(hidden)]
+pub fn reconcile_unlocked_with(cfg: &Config, ticker: Ticker) -> ReconcileReport {
     let mut report = ReconcileReport::default();
+    let expected = list_incomplete(cfg).len();
+    ticker.update(|state| state.items = expected);
     // Operations with a transaction anywhere, and retired folders anywhere:
     // a retired folder lives in its source base and its transaction in the
     // target base, so which retired folders are orphans is only known once
@@ -398,10 +414,13 @@ pub fn reconcile_unlocked(cfg: &Config) -> ReconcileReport {
                 continue;
             }
         };
-        reconcile_base(cfg, &base, &mut report, &mut seen, &mut retired);
+        if report.cancelled {
+            break;
+        }
+        reconcile_base(cfg, &base, &mut report, &mut seen, &mut retired, ticker);
     }
     for (path, operation) in retired {
-        if !seen.contains(&operation) && entry_exists_quiet(&path) {
+        if !report.cancelled && !seen.contains(&operation) && entry_exists_quiet(&path) {
             report.leftovers.push(format!(
                 "{}: a moved project's retired original, with no record of the move left; \
                  fastf will not remove it without one. Look inside, and delete it yourself \
@@ -417,7 +436,14 @@ pub fn reconcile_unlocked(cfg: &Config) -> ReconcileReport {
 /// configuration beneath it: which bases get walked is the whole question, and
 /// a snapshot taken before the lock could already be stale.
 pub fn reconcile_locked() -> ReconcileReport {
+    reconcile_locked_with(Ticker::none())
+}
+
+/// [`reconcile_locked`], saying how far it has got; see
+/// [`reconcile_unlocked_with`].
+pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
     let mut report = ReconcileReport::default();
+    ticker.phase(JobPhase::Waiting, 0);
     let _data_lock = match crate::util::lockfile::DataLock::acquire() {
         Ok(lock) => lock,
         Err(error) => {
@@ -436,7 +462,7 @@ pub fn reconcile_locked() -> ReconcileReport {
             return report;
         }
     };
-    reconcile_unlocked(&config)
+    reconcile_unlocked_with(&config, ticker)
 }
 
 fn reconcile_base(
@@ -445,6 +471,7 @@ fn reconcile_base(
     report: &mut ReconcileReport,
     seen: &mut HashSet<String>,
     retired: &mut Vec<(PathBuf, String)>,
+    ticker: Ticker,
 ) {
     let entries = match fs::read_dir(base) {
         Ok(entries) => entries,
@@ -457,6 +484,10 @@ fn reconcile_base(
     };
     let mut transaction_root = None;
     for entry in entries.flatten() {
+        if ticker.cancelled() {
+            report.cancelled = true;
+            return;
+        }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         let file_type = match entry.file_type() {
@@ -485,6 +516,7 @@ fn reconcile_base(
             // A case-only rename first: its staging name carries the
             // project's own name, which may begin like one of fastf's.
             if is_stranded_case_rename(&name, &path) {
+                ticker.item(&name);
                 reconcile_case_rename(base, &name, &path, report);
                 continue;
             }
@@ -493,12 +525,14 @@ fn reconcile_base(
                 continue;
             }
             if move_cleanup::deleted_operation(&name).is_some() {
-                reconcile_deleted(&path, report);
+                ticker.item("a deleted project's folder");
+                reconcile_deleted(&path, report, ticker);
                 continue;
             }
             if crate::core::move_preflight::probe_operation(&name).is_some() {
                 // A move's probe outlives it only when the move was killed
                 // mid-probe; this pass holds the lock, so no move is running.
+                ticker.item("a move's probe folder");
                 match crate::core::move_preflight::clear_probe(&path) {
                     Ok(()) => report.cleared += 1,
                     Err(why) => report.leftovers.push(format!(
@@ -515,6 +549,7 @@ fn reconcile_base(
             }
             let create_v2 = create_journal_path(&path);
             if entry_exists_quiet(&create_v2) {
+                ticker.item(&name);
                 reconcile_create(&path, report);
             } else if crate::core::project_info::is_provisioning(&path) {
                 report.incomplete.push(path.display().to_string());
@@ -524,14 +559,15 @@ fn reconcile_base(
         }
     }
     if let Some(root) = transaction_root {
-        reconcile_transactions(cfg, base, &root, report, seen);
+        reconcile_transactions(cfg, base, &root, report, seen, ticker);
     }
 }
 
 /// Finish removing a deleted project's folder. The user confirmed the delete
 /// by typing the word, and only `fastf delete` writes the name.
-fn reconcile_deleted(path: &Path, report: &mut ReconcileReport) {
-    match move_cleanup::remove_tree(path, None, Purpose::Delete) {
+fn reconcile_deleted(path: &Path, report: &mut ReconcileReport, ticker: Ticker) {
+    ticker.phase(JobPhase::Removing, 0);
+    match move_cleanup::remove_tree(path, None, Purpose::Delete, ticker) {
         Removal::Removed => report.cleared += 1,
         Removal::Leftover {
             remaining,
@@ -786,6 +822,7 @@ fn reconcile_transactions(
     root: &Path,
     report: &mut ReconcileReport,
     seen: &mut HashSet<String>,
+    ticker: Ticker,
 ) {
     if let Err(error) = crate::util::paths::require_real_directory(root, "transaction root") {
         report.unrecoverable.push(format!(
@@ -805,6 +842,10 @@ fn reconcile_transactions(
         }
     };
     for entry in entries.flatten() {
+        if ticker.cancelled() {
+            report.cancelled = true;
+            return;
+        }
         let operation_dir = entry.path();
         if !entry
             .file_type()
@@ -832,7 +873,8 @@ fn reconcile_transactions(
                 continue;
             }
         };
-        reconcile_transaction(cfg, target_base, &operation_dir, journal, report);
+        ticker.item(&journal.target_folder.display().to_string());
+        reconcile_transaction(cfg, target_base, &operation_dir, journal, report, ticker);
     }
 }
 
@@ -848,6 +890,7 @@ fn reconcile_transaction(
     operation_dir: &Path,
     journal: MoveJournal,
     report: &mut ReconcileReport,
+    ticker: Ticker,
 ) {
     // Which project, and where its record is and what state it was left in:
     // a record fastf cannot finish is one the user may have to remove.
@@ -1017,7 +1060,10 @@ fn reconcile_transaction(
             let Some(manifest) = read_manifest_or_report(operation_dir, &subject, report) else {
                 return;
             };
-            if let Err(error) = manifest.verify_recovery_pair(&source, &final_path) {
+            ticker.phase(JobPhase::Verifying, manifest.entries.len() * 2);
+            if let Err(error) =
+                manifest.verify_recovery_pair(&source, &final_path, ticker.uncancellable())
+            {
                 report.unrecoverable.push(format!(
                     "{subject}: moved to {}, but the original at {} cannot be matched to \
                      it ({error:#}); fastf removed nothing",
@@ -1034,6 +1080,7 @@ fn reconcile_transaction(
                 final_path: &final_path,
                 project_id: &journal.project_id,
                 residue_allowed: false,
+                ticker,
             };
             let mut notes = Vec::new();
             let fate = move_cleanup::retire_and_remove(transaction, &cleanup, || {
@@ -1143,6 +1190,7 @@ fn reconcile_transaction(
                 // 3.11 deleted in place, so its transactions' originals may be
                 // part-removed already; a version-3 original never is.
                 residue_allowed: journal.source_may_be_partial(),
+                ticker,
             };
             let mut notes = Vec::new();
             let fate = if retired_exists {
@@ -2390,6 +2438,91 @@ mod tests {
 
         let report = reconcile_unlocked(&config_for(&base));
         assert_eq!(report.cleared, 1, "{report:?}");
+        assert!(!deleted.exists());
+    }
+
+    fn deleted_folder(base: &Path, operation: &str, files: usize) -> PathBuf {
+        let deleted = base.join(format!(".fastf-deleted-{operation}"));
+        fs::create_dir_all(deleted.join("sub")).unwrap();
+        for index in 0..files {
+            fs::write(deleted.join(format!("sub/file{index}")), b"x").unwrap();
+        }
+        deleted
+    }
+
+    /// A reconcile counts what the header counted as needing attention, names
+    /// each item as it takes it, and counts what each removal takes.
+    #[test]
+    fn a_reconcile_counts_its_items_and_what_each_removes() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("base");
+        deleted_folder(&base, "18d863aff116f53c-47fa4-9", 3);
+        deleted_folder(&base, "18d863aff116f53c-47fa4-a", 2);
+        let cfg = config_for(&base);
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(false);
+
+        let report = reconcile_unlocked_with(&cfg, Ticker::new(&progress, &cancel));
+
+        assert_eq!(report.cleared, 2, "{report:?}");
+        let state = progress.lock().unwrap().clone();
+        assert_eq!((state.item, state.items), (2, 2));
+        assert_eq!(state.item_label, "a deleted project's folder");
+        assert_eq!(state.phase, JobPhase::Removing);
+        assert!(state.step_done >= 3, "the last removal counted: {state:?}");
+    }
+
+    /// A cancel before a pass reaches an item leaves it exactly as it was, and
+    /// the report says the pass stopped — never that there was nothing to do.
+    #[test]
+    fn a_cancelled_reconcile_stops_between_items() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("base");
+        let first = deleted_folder(&base, "18d863aff116f53c-47fa4-9", 3);
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(true);
+
+        let report = reconcile_unlocked_with(&config_for(&base), Ticker::new(&progress, &cancel));
+
+        assert!(report.cancelled);
+        assert!(!report.is_empty(), "a stopped pass is not a clean one");
+        assert_eq!(report.cleared, 0);
+        assert_eq!(fs::read_dir(first.join("sub")).unwrap().count(), 3);
+    }
+
+    /// A cancel mid-removal stops it where it is. What is left is a leftover
+    /// the report names, and the next pass finishes it.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_cancel_stops_a_removal_and_the_next_pass_finishes_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("base");
+        let deleted = deleted_folder(&base, "18d863aff116f53c-47fa4-9", 40);
+        let cfg = config_for(&base);
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(false);
+
+        let report = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for _ in 0..2500 {
+                    if progress.lock().unwrap().step_done >= 3 {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            });
+            crate::util::faults::with_thread_fault("remove:each-entry:delay-10", || {
+                reconcile_unlocked_with(&cfg, Ticker::new(&progress, &cancel))
+            })
+        });
+
+        assert_eq!(report.cleared, 0, "{report:?}");
+        assert_eq!(report.leftovers.len(), 1, "{report:?}");
+        assert!(deleted.exists(), "stopped part of the way");
+
+        let finished = reconcile_unlocked(&cfg);
+        assert_eq!(finished.cleared, 1, "{finished:?}");
         assert!(!deleted.exists());
     }
 

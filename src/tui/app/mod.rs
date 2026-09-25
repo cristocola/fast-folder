@@ -2369,7 +2369,8 @@ impl App {
             CommandId::CopyTo => {
                 let mut prompt = TextPrompt::new(validators::COPY_TO_PROMPT, TextThen::CopyTo);
                 // The move progress modal is what a copy reports through too:
-                // it is the same staged copy underneath.
+                // it is the same staged copy underneath. It goes up when the
+                // copy starts, not while its destination is being typed.
                 self.move_progress = None;
                 prompt.input = crate::tui::widgets::input::LineEdit::default();
                 self.modals.push(Modal::TextPrompt(prompt));
@@ -2560,6 +2561,12 @@ impl App {
         let id = ActionId(self.next_action);
         self.busy = Some(what);
         self.busy_id = Some(id);
+        // Armed here, the one door every action passes, and only once it is
+        // really running: a refused action never leaves a dialog up for a job
+        // that is not there, for every later quit gesture to read as one.
+        if action.reports_progress() {
+            self.move_progress = Some(crate::core::assets::Progress::new(&[]));
+        }
         vec![Effect::Run(id, Box::new(action))]
     }
 

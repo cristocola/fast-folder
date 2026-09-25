@@ -552,10 +552,25 @@ A finished verb patches its row by the **path it had** (`ListChange::Patched`
 carries `was`) before the id, because `copy-to` can put one id in two bases.
 
 **A move is a job** on a worker with a shared `Progress` and a cancel flag, so
-Ctrl-C during a move cancels it instead of quitting. `MoveOutcome::staged` and
-`copied` tell both surfaces whether it was an instant rename or a verified copy of
-so many files, and `JobStatus` reaches `Done` on both paths, so `Runtime.moving`
-clears and a later `Effect::CancelMove` touches nothing.
+Ctrl-C during a move cancels it instead of quitting. So are a copy to a folder
+and a reconcile: `Action::reports_progress` is the one answer to "is this a long
+job", read by `App::run_action` (which arms `App.move_progress` only once the
+action really runs, so a refused one leaves no dialog behind) and by the runtime
+(which registers the handles). `MoveOutcome::staged` and `copied` tell both
+surfaces whether it was an instant rename or a verified copy of so many files,
+and `JobStatus` reaches `Done`, `Failed` or `Cancelled` on every path
+(`core::progress::settle`), so `Runtime.moving` clears and a later
+`Effect::CancelMove` touches nothing.
+
+**The dialog draws one row per step** (`view::modals::progress_lines`) from
+`Progress.steps` and `Progress.finished`: done steps ticked with what they
+counted, the current one with its count, bar and entry, the rest dim — or the
+current step alone when the window is too short, or the job plans none (a
+reconcile, which names its item instead). A copy's bar measures bytes and says
+them after it; every other step's bar measures its count. **A cancel after the
+publish is answered, not sent**: `Progress.committed` makes the dialog's last
+line say the job finishes by itself and `request_cancel` log
+`jobs::too_late` instead of emitting `Effect::CancelMove`.
 
 The `$EDITOR` note suspends into `Suspended::Note` and the CLI's own
 `cli::note::note_from_editor`. The metadata and notes views load through

@@ -426,9 +426,25 @@ move is an atomic rename and finishes instantly however large the folder is, so
 without that line an instant finish on a 200 GB project is indistinguishable
 from one that did nothing.
 
-A cross-filesystem move reports its progress as it goes — a bar, the phase
-(copying, verifying, finalizing), how many files are done, and how much has been
-copied.
+A cross-filesystem move names every step as it happens and counts it: the
+live line says what it is doing and how far it has got, and each step that
+finishes leaves a line of its own, so the terminal keeps the whole run:
+
+```
+  ✓ scanned 1473 entries
+  ✓ checked the original's base
+  ✓ copied 1301 files
+  ✓ verified 2945 entries
+  ✓ published PROJECT_INFO.md
+  ✓ set the original aside 2946 entries
+  ✓ checked the old copy 2946 entries
+  removing the old copy  312 of 1473 entries
+```
+
+Copying also shows the bytes. Removing the old copy is the step that takes
+longest on a cloud mount, where every entry is a request to the service; it is
+counted like every other. Where the output is not a terminal, only the finished
+steps are printed, one line each.
 **Before anything is copied**, a cross-drive move checks that it could finish:
 that it can write in the source base (a move removes the original afterwards,
 so a read-only base is refused), that the base shows links as links, that the
@@ -443,7 +459,10 @@ error: /mnt/share/2026-07-26_Shoot_ID0047 holds 2 entries that cannot be copied 
 
 **Ctrl-C cancels it safely before publication**: fastf removes only the private
 transaction owned by that operation and leaves the source untouched. Once
-publication begins, cancellation is too late. If the moved copy turns out to be
+`PROJECT_INFO.md` is being published, cancellation is too late: the moved copy
+is the project, and what is left — setting the original aside, removing it —
+carries on. Ctrl-C then says so rather than stopping part of the way; a second
+Ctrl-C ends fastf, and `fastf reconcile` finishes whatever it left. If the moved copy turns out to be
 missing anything, fastf copies it again from the original, which stays whole
 until the copy is complete. If the original cannot then be set aside — a
 program has a file in it open — the move says that the original is still there,
@@ -490,8 +509,9 @@ file, a private `.fastf-transactions/` staging tree under the destination,
 exact path/type/size/link-target verification, a check that the source did not
 change while it copied, and an atomic publish. Links travel as links, exactly as
 in a move, and the room and name checks run before anything is copied; a copy
-removes nothing, so it needs no write access to the original. Ctrl-C cancels
-and leaves nothing but the copy's own transaction, which it removes.
+removes nothing, so it needs no write access to the original. It reports its
+steps as a move does. Ctrl-C cancels before the copy's `PROJECT_INFO.md` is
+written and leaves nothing but the copy's own transaction, which it removes.
 
 `fastf copy` (no dash) is unrelated: it puts a project's path on the clipboard.
 In the guided app the verb is `C`, `Copy to…`, and it runs over every marked
@@ -550,6 +570,13 @@ or older left half-deleted is finished the same way when what is left is
 provably a duplicate. Missing bases, mismatched identities, malformed journals,
 or unknown states are reported without mutation. Running the command repeatedly
 is safe.
+
+It shows its progress as it goes: which item of how many (what the app's header
+counted as needing attention), and that item's step with its count — `1 of 1
+2026-07-26_Shoot_ID0047: removing the old copy  312 of 1473 entries`. Ctrl-C
+stops it between items, or part of the way through a removal; it says it
+stopped, what it finished is finished, and what it had not reached is as it was
+for the next run.
 
 It also finishes a **rename** that was interrupted. Renaming a folder to a
 different capitalisation of the same name has to go through a temporary name,

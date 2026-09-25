@@ -279,13 +279,6 @@ impl App {
         let Some(project) = self.job.as_mut().and_then(|job| job.begin_next().cloned()) else {
             return self.job_finish();
         };
-        // The progress modal is for a move that is actually running: arming it
-        // here — after an item began — means the final advance, which only
-        // finishes the job, cannot leave a stale modal behind for every later
-        // quit gesture to read as "a move is running".
-        if kind == JobKind::Move {
-            self.move_progress = Some(Progress::new(&[]));
-        }
         let action = {
             let job = self.job.as_ref().expect("the job is running");
             job.action_for(&project)
@@ -387,10 +380,19 @@ impl App {
     /// Stop after the current item: the in-flight move is told to cancel, and
     /// the job marks itself as cancelled so the rest stay marked. A bare
     /// single move (no job) just cancels at the runtime.
+    ///
+    /// A move past its publish cannot be undone, and the dialog already says
+    /// so; the answer here is that sentence in the log, not a cancel that
+    /// would pretend to stop it.
     pub(super) fn request_cancel(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
-        if self.move_progress.is_some() {
-            effects.push(Effect::CancelMove);
+        match &self.move_progress {
+            Some(progress) if progress.committed => {
+                let late = too_late(progress);
+                self.info(late);
+            }
+            Some(_) => effects.push(Effect::CancelMove),
+            None => {}
         }
         match &mut self.job {
             Some(job) => job.cancelled = true,
@@ -402,6 +404,19 @@ impl App {
             effects.extend(self.job_finish());
         }
         effects
+    }
+}
+
+/// What a cancel that comes after the point of no return is told — the
+/// dialog's last line and the log say the same.
+pub(crate) fn too_late(progress: &Progress) -> &'static str {
+    use crate::core::assets::JobPhase;
+    match progress.phase {
+        JobPhase::SettingAside | JobPhase::Checking | JobPhase::Removing | JobPhase::Clearing => {
+            "too late to cancel: the project is in its new place, and removing the old copy \
+             carries on"
+        }
+        _ => "too late to cancel: it is past the point of no return, and finishes by itself",
     }
 }
 

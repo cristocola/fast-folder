@@ -152,6 +152,7 @@ pub(crate) fn delete_project_inner(project: &Project) -> Result<()> {
             &retired,
             None,
             crate::core::move_cleanup::Purpose::Delete,
+            crate::core::progress::Ticker::none(),
         ),
     };
     if let crate::core::move_cleanup::Removal::Leftover {

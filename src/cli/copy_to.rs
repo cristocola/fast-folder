@@ -12,18 +12,11 @@
 
 use anyhow::Result;
 use colored::Colorize;
-use std::io::IsTerminal;
 use std::path::Path;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
-use crate::core::assets::Progress;
 use crate::core::config::Config;
 use crate::core::copy_engine::CopyOutcome;
 use crate::core::library;
-
-const TICK: Duration = Duration::from_millis(200);
 
 pub struct CopyToArgs {
     /// Project query — exact ID, ID prefix, or name substring.
@@ -100,42 +93,13 @@ fn report(project: &library::Project, outcome: &CopyOutcome) {
     }
 }
 
-/// The copy on a worker, the progress line on this thread — the same shape
-/// `move` uses, and for the same reason: a copy runs for minutes and a silent
+/// The copy on a worker, the progress on this thread — the same shape `move`
+/// uses, and for the same reason: a copy runs for minutes and a silent
 /// terminal is indistinguishable from a hung one. Ctrl-C feeds the engine's
 /// cancel flag, so an interrupted copy leaves nothing but its own transaction
 /// to remove.
 fn run_with_progress(project: &library::Project, destination: &Path) -> Result<CopyOutcome> {
-    let progress = Mutex::new(Progress::new(&[]));
-    let cancel = AtomicBool::new(false);
-    let live = std::io::stdout().is_terminal();
-
-    let done = std::thread::scope(|scope| {
-        let worker = scope.spawn(|| {
-            crate::core::operations::copy_project(project, destination, &progress, &cancel)
-        });
-        let mut drew = false;
-        while !worker.is_finished() {
-            if crate::util::interrupt::is_set() {
-                cancel.store(true, Ordering::Relaxed);
-            }
-            if live {
-                let snapshot = progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                if snapshot.total_files > 0 {
-                    crate::cli::move_project::draw(&snapshot);
-                    drew = true;
-                }
-            }
-            std::thread::sleep(TICK);
-        }
-        if drew {
-            println!();
-        }
-        worker.join()
-    });
-
-    match done {
-        Ok(result) => result,
-        Err(_) => anyhow::bail!("the copy thread panicked"),
-    }
+    crate::cli::progress::run_watched("copy", |progress, cancel| {
+        crate::core::operations::copy_project(project, destination, progress, cancel)
+    })
 }

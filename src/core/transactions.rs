@@ -29,6 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::core::assets::Progress;
+use crate::core::progress::Ticker;
 
 pub const TRANSACTIONS_DIR: &str = ".fastf-transactions";
 pub const JOURNAL_FILE: &str = "move.json";
@@ -304,7 +305,12 @@ impl MoveManifest {
     /// move — every one of them named, not only the first — and links and
     /// special files are never followed or silently omitted.
     pub fn scan(root: &Path) -> Result<Self> {
-        let entries = Walk::of(root, "move source")?.into_entries(root)?;
+        Self::scan_with(root, Ticker::none())
+    }
+
+    /// [`Self::scan`], counting every entry and stopping on a cancel.
+    pub fn scan_with(root: &Path, ticker: Ticker) -> Result<Self> {
+        let entries = Walk::of_with(root, "move source", ticker)?.into_entries(root)?;
         let manifest = Self {
             version: MANIFEST_VERSION,
             entries,
@@ -429,7 +435,12 @@ impl MoveManifest {
     /// Hands back the walk it compared, which is the destination as it is
     /// about to be published.
     pub fn verify_destination(&self, destination: &Path) -> Result<Walk> {
-        let walk = Walk::of(destination, "move destination")?;
+        self.verify_destination_with(destination, Ticker::none())
+    }
+
+    /// [`Self::verify_destination`], counting every entry it walks.
+    pub fn verify_destination_with(&self, destination: &Path, ticker: Ticker) -> Result<Walk> {
+        let walk = Walk::of_with(destination, "move destination", ticker)?;
         let diff = self.compare(&walk, Match::Content);
         if !diff.is_clean() {
             bail!(
@@ -443,7 +454,12 @@ impl MoveManifest {
     /// Re-walk the source and compare path, type, length, link target and
     /// modification time against the scan.
     pub fn verify_source_unchanged(&self, source: &Path) -> Result<()> {
-        let diff = self.compare(&Walk::of(source, "move source")?, Match::Exact);
+        self.verify_source_unchanged_with(source, Ticker::none())
+    }
+
+    /// [`Self::verify_source_unchanged`], counting every entry it walks.
+    pub fn verify_source_unchanged_with(&self, source: &Path, ticker: Ticker) -> Result<()> {
+        let diff = self.compare(&Walk::of_with(source, "move source", ticker)?, Match::Exact);
         if !diff.is_clean() {
             bail!(
                 "the source changed after it was scanned: {}",
@@ -456,9 +472,14 @@ impl MoveManifest {
     /// Used by recovery before deleting a source: compare exact path/type/size
     /// manifests on both sides and also require the source to still match the
     /// original pre-copy metadata snapshot.
-    pub fn verify_recovery_pair(&self, source: &Path, destination: &Path) -> Result<()> {
-        self.verify_source_unchanged(source)?;
-        self.verify_destination(destination).map(drop)
+    pub fn verify_recovery_pair(
+        &self,
+        source: &Path,
+        destination: &Path,
+        ticker: Ticker,
+    ) -> Result<()> {
+        self.verify_source_unchanged_with(source, ticker)?;
+        self.verify_destination_with(destination, ticker).map(drop)
     }
 
     /// The root `PROJECT_INFO.md`, which is written last: it is what makes the
@@ -872,12 +893,18 @@ impl Walk {
     /// Walk `root`, which must be a real directory; `label` names it when it
     /// is not.
     pub fn of(root: &Path, label: &str) -> Result<Self> {
+        Self::of_with(root, label, Ticker::none())
+    }
+
+    /// [`Self::of`], ticking once per entry examined; a ticker that has been
+    /// cancelled stops the walk with [`crate::core::progress::CANCELLED`].
+    pub fn of_with(root: &Path, label: &str, ticker: Ticker) -> Result<Self> {
         crate::util::paths::require_real_directory(root, label)?;
         let device = fs::symlink_metadata(root)
             .map(|metadata| device_of(&metadata))
             .with_context(|| format!("reading metadata for {}", root.display()))?;
         let mut walk = Self::default();
-        walk_at(root, root, 0, device, &mut walk)?;
+        walk_at(root, root, 0, device, &mut walk, ticker)?;
         walk.entries
             .sort_by(|left, right| left.path.cmp(&right.path));
         walk.problems
@@ -934,6 +961,7 @@ fn walk_at(
     depth: usize,
     device: Option<u64>,
     walk: &mut Walk,
+    ticker: Ticker,
 ) -> Result<()> {
     let here = relative_to(root, current)?;
     if depth >= crate::util::paths::MAX_WALK_DEPTH {
@@ -974,6 +1002,9 @@ fn walk_at(
         };
         let path = child.path();
         let relative = relative_to(root, &path)?;
+        if !ticker.tick(&relative) {
+            bail!("{}", crate::core::progress::CANCELLED);
+        }
         crate::util::paths::require_native_relative(&relative, "move manifest path")?;
         let mut problem = |problem| {
             walk.problems.push(WalkProblem {
@@ -1003,7 +1034,7 @@ fn walk_at(
                     continue;
                 }
                 walk.entries.push(entry);
-                walk_at(root, &path, depth + 1, device, walk)?;
+                walk_at(root, &path, depth + 1, device, walk, ticker)?;
             }
             Ok(entry) => walk.entries.push(entry),
         }
@@ -1438,6 +1469,7 @@ impl MoveTransaction {
                         &staging,
                         None,
                         crate::core::move_cleanup::Purpose::Delete,
+                        Ticker::none(),
                     )
                 {
                     bail!(
@@ -1912,6 +1944,7 @@ fn copy_contents(
                 entry.path.display()
             );
         }
+        crate::util::faults::check("move:each-file")?;
         if let Ok(mut state) = progress.lock() {
             state.current_file = entry.path.to_string_lossy().into_owned();
             state.touch();
@@ -1959,6 +1992,7 @@ fn copy_contents(
             .with_context(|| format!("syncing {}", destination_path.display()))?;
         if let Ok(mut state) = progress.lock() {
             state.done_files += 1;
+            state.step_done += 1;
             state.touch();
         }
     }

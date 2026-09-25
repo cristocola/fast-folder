@@ -135,12 +135,13 @@ never does, the spawn failed, and the surface says so with the log's path.
 
 The engine API keeps `&Mutex<Progress>` and `&AtomicBool`. What changes:
 
-- **`JobPhase`** names every step: `Waiting` (for the data lock), `Scanning`,
-  `Probing`, `Copying`, `Verifying`, `Publishing`, `SettingAside`, `Removing`,
-  `Clearing`, `Done`.
-- **`Progress`** gains a generic step count (`step_done`/`step_total`), `item`
-  (n of N) and its label, `operation` (the record's id, once known), and
-  `holds_lock`. It derives `Deserialize` too. `status` finally reaches `Failed`
+- **`JobPhase`** names every step: `Starting`, `Waiting` (for the data lock),
+  `Scanning`, `Probing`, `Copying`, `Verifying`, `Publishing`, `SettingAside`,
+  `Checking` (the old copy, before its removal), `Removing`, `Clearing`, `Done`.
+- **`Progress`** gains a generic step count (`step_done`/`step_total`), the
+  planned `steps` and the `finished` ones with their counts, `item` (n of N) and
+  its label, `operation` (the record's id, once known), `committed` (past the
+  point of no return), and in Phase 3 `holds_lock`. It derives `Deserialize` too. `status` finally reaches `Failed`
   and `Cancelled` on every path, one helper in each engine.
 - **A `core::progress::Ticker`** is handed to the walks and to `remove_tree`:
   entries counted, cancel polled, one debug log line per entry. `Ticker::none()`
@@ -233,25 +234,27 @@ time. Both go into `ALL_FAULT_POINTS`.
 
 No process split yet. Both surfaces show the new steps through today's threads.
 
-- [ ] `JobPhase` extended; `Progress` gains the step count, item, operation and
-  `holds_lock`, derives `Deserialize`, and reaches `Failed`/`Cancelled` on every
-  path (defect 4). `as_str` gives the words a person reads.
-- [ ] `core::progress::Ticker`, threaded through `Walk::of` (a `_with` entry
-  point; the depth stays threaded), `remove_tree`, `check_removable`,
-  `complete_destination`, the probe and the retire. `Ticker::none()` everywhere
-  else.
-- [ ] `move_engine` and `copy_engine` set every phase in order. `remove_tree`
+- [x] `JobPhase` extended; `Progress` gains the step count, the plan and the
+  finished steps, item, operation and `committed` (`holds_lock` moved to Phase
+  3, which uses it), derives `Deserialize`, and reaches `Failed`/`Cancelled` on
+  every path (defect 4). `as_str` and `past` give the words a person reads.
+- [x] `core::progress::Ticker`, threaded through `Walk::of` (a `_with` entry
+  point; the depth stays threaded), `remove_tree` and `check_removable` (the
+  checks before the retire and before the removal). `Ticker::none()` everywhere
+  else. The probe and `complete_destination`'s copies are short and stay
+  uncounted (Phase log).
+- [x] `move_engine` and `copy_engine` set every phase in order. `remove_tree`
   counts n of the manifest's N. The publish no longer polls cancel, and a cancel
   after publication gets its "too late" answer (defect 9).
-- [ ] Reconcile takes a `&Mutex<Progress>` and `&AtomicBool`: the item is the
+- [x] Reconcile takes a `&Mutex<Progress>` and `&AtomicBool`: the item is the
   record (n of N over every base), the step is the record's own phase, and
   cancel is honoured between records and inside a removal.
-- [ ] The failpoint `delay-<ms>` action and the two per-entry points.
-- [ ] Surfaces: `cli::move_project::draw` names the phase and its count. The
+- [x] The failpoint `delay-<ms>` action and the two per-entry points.
+- [x] Surfaces: `cli::move_project::draw` names the phase and its count. The
   app's move dialog lists the steps. Copy-to registers progress and cancel in
   the app (defect 5). Reconcile in the app uses the same dialog instead of the
   spinner (defect 3).
-- [ ] Tests: a staged move's progress passes through every phase in order (a
+- [x] Tests: a staged move's progress passes through every phase in order (a
   recording `Ticker` sink); `remove_tree` counts reach the manifest's total; a
   failed and a cancelled move end `Failed`/`Cancelled`; a cancel after
   publication is answered and removes nothing extra; reconcile counts records and
@@ -300,6 +303,7 @@ Acceptance: after any move, `fastf log` shows its phases with counts and
   removals after the lock; reconcile and `list_incomplete` skip live jobs'
   records (defects 7, 8, 14). `DataLock::acquire_waiting(cancel)`; the 30 s wait
   names the job (defect 12).
+- [ ] `Progress.holds_lock`, set while the worker holds the data lock.
 - [ ] Batch jobs in the worker: moves first, housekeeping after, the lock taken
   per item.
 - [ ] CLI: `move`, `copy-to`, `delete`, `reconcile` through the worker, attached;
@@ -388,3 +392,31 @@ there with its count; kill that app too, and the move still finishes.
 
 - 2026-09-25 — plan written from the maintainer's Drive move; branch
   `feat/background-jobs` cut from `main` at 9981ed6.
+- 2026-09-25 — Phase 1. `core::progress` (`Ticker`, `settle`), threaded
+  through `Walk::of_with`, `MoveManifest::scan_with`/`verify_*_with`,
+  `Cleanup.ticker` and `remove_tree`; `JobPhase` names every step and
+  `Progress` keeps the plan (`MOVE_STEPS`, `COPY_STEPS`), the finished steps with
+  their counts, item n of N and `committed`; `cleanup_pending` and `warning`
+  (never written) are gone. Reconcile counts `list_incomplete`'s items and stops
+  between them or mid-removal (`ReconcileReport.cancelled`,
+  `operations::reconcile_with`). `cli::progress::run_watched` is the one loop
+  for `move`, `copy-to` and `reconcile`: a live line, and a line of record per
+  finished step (the only output on a pipe). The app arms its dialog in
+  `run_action` from `Action::reports_progress`, so copy-to and reconcile have
+  progress and cancel now; the dialog draws a row per step, the current step
+  alone in a short window. Three departures from the design: (1)
+  `JobPhase::can_cancel` became `Progress::committed`, because a reconcile can
+  stop mid-removal while a move cannot, so "too late" is the job's fact, not
+  the step's; (2) a `Checking` step, since removing the old copy is preceded by
+  two walks re-checking it, which would otherwise count to 2N under
+  "removing"; (3) the publish step reads "publishing PROJECT_INFO.md", because
+  the copy step counts every file but that one and the outcome counts all of
+  them, and 1472 beside 1473 needed the explanation. Checks never stop for a
+  cancel (`cleanup.ticker.uncancellable()`), only removals do. Verified by
+  hand under a pty: a slowed staged move (`remove:each-entry:delay-25`) counts
+  1 to 63 while removing, and a reconcile after a move killed at
+  `move:after-retire` says `1 of 1 … removing the old copy 7 of 63 entries`.
+  Uncounted still: the probe, the publish, the clearing (whose record removal
+  can wait 20 s on `EIO`), and `complete_destination`'s copies. The late-cancel
+  test was run against a build whose removal honoured the cancel, and caught it.
+  Gates green: fmt, clippy debug/release/windows-gnu, test debug/release, doc.

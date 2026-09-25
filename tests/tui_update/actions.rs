@@ -56,20 +56,31 @@ fn add_and_remove_tags_run_their_actions() {
     ));
 }
 
+/// A move is a job of its own: the app starts it and follows it, the dialog
+/// up — "moving", blank — until its worker answers.
 #[test]
-fn move_picks_a_target_and_runs_a_move_action() {
+fn move_picks_a_target_and_starts_a_move_job() {
     let mut app = fixture(12, 80, 24);
     app.summary = Some(sample_summary_moveable(12));
     let selected = app.library.selected().unwrap().clone();
     press(&mut app, Key::ch('m'));
     assert!(matches!(app.modals.top(), Some(Modal::Pick(_))));
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
-    assert!(matches!(
-        action_of(&effects),
-        Action::Move { project, target } if **project == selected
-            && target == Path::new("/media/usb/archive")
-    ));
-    assert!(app.move_progress.is_some(), "the progress modal is up");
+    let (kind, items) = job_started(&effects).expect("a job starts");
+    assert_eq!(kind, fastf::core::jobs::JobKind::Move);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, selected.id);
+    assert_eq!(Path::new(&items[0].target), Path::new("/media/usb/archive"));
+    assert!(
+        app.busy.is_none(),
+        "the app is not busy: the job is not its work"
+    );
+    assert_eq!(app.shown_title(), "moving…");
+    assert!(app.shown_progress().is_some(), "the dialog is up");
+
+    let effects = update(&mut app, Msg::JobStarted(Ok("18d8-1-0".to_string())));
+    assert!(effects.contains(&Effect::WatchJobs));
+    assert_eq!(app.background.following.as_deref(), Some("18d8-1-0"));
 }
 
 #[test]
@@ -131,7 +142,6 @@ fn an_action_done_patch_forgets_the_stale_sizes() {
     );
     assert!(effects.contains(&Effect::ForgetSizes(vec![selected_path])));
     assert!(app.busy.is_none());
-    assert!(app.move_progress.is_none());
     assert!(
         !effects.iter().any(|e| matches!(e, Effect::Discover { .. })),
         "a tag patch must not rescan: {effects:?}"
@@ -145,15 +155,10 @@ fn an_action_done_removal_clamps_the_selection() {
     let mut app = fixture(3, 80, 24);
     press(&mut app, Key::ch('G'));
     let doomed = app.library.selected().unwrap().path.clone();
-    let name = app.library.selected().unwrap().name.clone();
 
-    // Delete: the word confirms, and the prompt names the folder.
-    press(&mut app, Key::ch('D'));
-    assert!(
-        matches!(app.modals.top(), Some(Modal::TextPrompt(prompt)) if prompt.title.contains(&name))
-    );
-    type_text(&mut app, "delete");
-    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    // Unregister: a yes, and the row goes.
+    press(&mut app, Key::ch('u'));
+    let effects = press(&mut app, Key::ch('y'));
     let id = match effects.as_slice() {
         [Effect::Run(id, _)] => *id,
         other => panic!("{other:?}"),
@@ -167,7 +172,7 @@ fn an_action_done_removal_clamps_the_selection() {
                 ListChange::Removed {
                     path: doomed.clone(),
                 },
-                "Deleted",
+                "Unregistered",
             ))),
         },
     );
@@ -207,7 +212,10 @@ fn delete_asks_for_the_word_and_a_mismatch_deletes_nothing() {
     type_text(&mut app, "e");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(
-        matches!(action_of(&effects), Action::Delete(_)),
+        matches!(
+            job_started(&effects),
+            Some((fastf::core::jobs::JobKind::Delete, _))
+        ),
         "the word, any case, deletes: {effects:?}"
     );
     assert!(app.modals.is_empty());
@@ -234,19 +242,165 @@ fn y_and_n_answer_a_confirm_without_enter() {
     ));
 }
 
+/// The job dialog: Ctrl-C asks the job to stop, Esc hides the dialog and
+/// the job goes on — and `q` quits the app, leaving the job to finish, since
+/// it is not the app's.
 #[test]
-fn quit_keys_cancel_a_running_move() {
+fn ctrl_c_cancels_a_job_esc_hides_it_and_q_leaves_it_running() {
     use fastf::core::assets::Progress;
+    use fastf::core::jobs::JobKind;
 
     let mut app = fixture(12, 80, 24);
-    app.move_progress = Some(Progress::new(&[]));
-    // Every quit gesture cancels the job instead of abandoning it mid-write.
-    assert_eq!(press(&mut app, Key::ctrl('c')), vec![Effect::CancelMove]);
-    assert_eq!(
-        press(&mut app, Key::plain(KeyCode::Esc)),
-        vec![Effect::CancelMove]
+    let id = fastf::tui::testing::follow_job(&mut app, JobKind::Move, Progress::new(&[]));
+    assert!(app.job_dialog_up());
+    assert_eq!(press(&mut app, Key::ctrl('c')), vec![Effect::CancelJob(id)]);
+    assert_eq!(press(&mut app, Key::plain(KeyCode::Esc)), vec![]);
+    assert!(!app.job_dialog_up(), "hidden");
+    assert!(
+        app.background.live().next().is_some(),
+        "and the job goes on"
     );
-    assert_eq!(press(&mut app, Key::ch('q')), vec![Effect::CancelMove]);
+    let effects = press(&mut app, Key::ch('q'));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Quit(_))),
+        "q quits: {effects:?}"
+    );
+}
+
+/// Past the publish a cancel cannot undo a move, and the app does not pretend
+/// it can: no cancel is sent, the move carries on, and the log says why.
+#[test]
+fn a_cancel_after_the_publish_is_answered_not_sent() {
+    use fastf::core::assets::{JobPhase, Progress};
+
+    let mut app = fixture(12, 80, 24);
+    let mut progress = Progress::new(&[]);
+    progress.phase = JobPhase::Removing;
+    progress.committed = true;
+    fastf::tui::testing::follow_job(&mut app, fastf::core::jobs::JobKind::Move, progress);
+
+    assert_eq!(press(&mut app, Key::ctrl('c')), vec![]);
+    assert!(app.job_dialog_up(), "the move is still running");
+    let said = app
+        .log
+        .back()
+        .map(|entry| entry.text.clone())
+        .unwrap_or_default();
+    assert!(said.contains("too late to cancel"), "{said}");
+}
+
+/// A copy out of the library and a reconcile are long jobs too: each puts up
+/// the progress dialog as it starts, and only then.
+#[test]
+fn a_copy_and_a_reconcile_are_jobs_with_the_dialog_up() {
+    use fastf::core::jobs::JobKind;
+
+    let mut app = fixture(12, 80, 24);
+    let effects = press(&mut app, Key::ch('!'));
+    assert!(matches!(
+        job_started(&effects),
+        Some((JobKind::Reconcile, []))
+    ));
+    assert!(
+        app.shown_progress().is_some(),
+        "reconcile shows its progress"
+    );
+
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch('C'));
+    assert!(
+        app.shown_progress().is_none(),
+        "not while the folder is being typed"
+    );
+    // An absolute path where the test runs: `/mnt/backup` is not one on
+    // Windows, and the prompt refuses it there.
+    type_text(
+        &mut app,
+        if cfg!(windows) {
+            r"C:\backup"
+        } else {
+            "/mnt/backup"
+        },
+    );
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(job_started(&effects), Some((JobKind::Copy, [_]))));
+    assert!(
+        app.shown_progress().is_some(),
+        "the copy shows its progress"
+    );
+}
+
+/// A job that ends is reported: its summary on the status line, its
+/// warning in a dialog, the list reloaded, and the job marked seen.
+#[test]
+fn a_job_that_ends_is_reported_once_and_marked_seen() {
+    use fastf::core::assets::{JobStatus, Progress};
+    use fastf::core::jobs::JobKind;
+
+    let mut app = fixture(12, 80, 24);
+    let id = fastf::tui::testing::follow_job(&mut app, JobKind::Move, Progress::new(&[]));
+    let mut ended = fastf::tui::testing::job_view(
+        &id,
+        JobKind::Move,
+        &[("ID0248", "2026-08-28_Lullaby_Remix_ID0248")],
+        Progress::new(&[]),
+        false,
+        JobStatus::Done,
+    );
+    let state = ended.state.as_mut().unwrap();
+    state.summary = "moved ID0248 to /media/usb/archive".to_string();
+    state.items[0].done = true;
+    state.items[0].warning = Some(
+        "the original at /mnt/projects/x is still there, whole: a program has a file in \
+         it open. `fastf reconcile` finishes the move."
+            .to_string(),
+    );
+    let effects = update(&mut app, Msg::Jobs(vec![ended.clone()]));
+    assert!(effects.contains(&Effect::MarkSeen(id.clone())));
+    assert!(effects.contains(&Effect::LoadSummary), "{effects:?}");
+    assert!(
+        app.status.text.contains("moved ID0248"),
+        "{}",
+        app.status.text
+    );
+    let Some(Modal::Message { title, lines, .. }) = app.modals.top() else {
+        panic!("the warning is a dialog: {:?}", app.modals.top());
+    };
+    assert_eq!(title, "needs a look");
+    assert!(
+        lines.join(" ").contains("Reconcile (`!`)"),
+        "the app's key: {lines:?}"
+    );
+    assert!(!app.job_dialog_up());
+
+    // Read again: reported already, so nothing new.
+    let effects = update(&mut app, Msg::Jobs(vec![ended]));
+    assert!(!effects.contains(&Effect::MarkSeen(id)));
+}
+
+/// While a job holds the library's lock every change would only wait for it:
+/// the verbs say so, and browsing goes on.
+#[test]
+fn a_job_holding_the_lock_greys_out_the_verbs_that_would_wait() {
+    use fastf::core::assets::Progress;
+    use fastf::core::jobs::JobKind;
+    use fastf::tui::command::{Availability, CommandId, find};
+
+    let mut app = fixture(12, 80, 24);
+    let mut progress = Progress::new(&[]);
+    progress.holds_lock = true;
+    fastf::tui::testing::follow_job(&mut app, JobKind::Move, progress);
+    let rename = (find(CommandId::Rename).available)(&app);
+    assert!(
+        matches!(rename, Availability::Disabled(why) if why.contains("holds the library")),
+        "{rename:?}"
+    );
+    assert!(matches!(
+        (find(CommandId::Search).available)(&app),
+        Availability::Enabled
+    ));
 }
 
 /// A move that could not remove its original says why in a paragraph, and a
@@ -312,6 +466,130 @@ fn a_paragraph_warning_or_a_many_line_error_opens_a_dialog() {
     assert!(
         !app.status.text.contains('\n'),
         "the status line keeps one line: {}",
+        app.status.text
+    );
+}
+
+/// What ended while no app was open is said once, on the first read of the
+/// jobs: a finished job's summary, and a killed one as needing Reconcile. A
+/// job someone has already seen is not said again.
+#[test]
+fn jobs_that_ended_while_the_app_was_closed_are_said_on_the_first_look() {
+    use fastf::core::assets::{JobStatus, Progress};
+    use fastf::core::jobs::JobKind;
+    use fastf::tui::testing::job_view;
+
+    let mut app = fixture(12, 80, 24);
+    let item = [("ID0248", "2026-08-28_Lullaby_Remix_ID0248")];
+    let mut done = job_view(
+        "18d8-2-0",
+        JobKind::Copy,
+        &item,
+        Progress::new(&[]),
+        false,
+        JobStatus::Done,
+    );
+    done.state.as_mut().unwrap().summary = "copied ID0248 to /mnt/backup".to_string();
+    let mut seen = done.clone();
+    seen.id = "18d8-1-0".to_string();
+    seen.seen = true;
+    let killed = job_view(
+        "18d8-3-0",
+        JobKind::Move,
+        &item,
+        Progress::new(&[]),
+        false,
+        JobStatus::Running,
+    );
+
+    let effects = update(&mut app, Msg::Jobs(vec![killed, done, seen]));
+    assert!(effects.contains(&Effect::MarkSeen("18d8-2-0".to_string())));
+    assert!(effects.contains(&Effect::MarkSeen("18d8-3-0".to_string())));
+    assert!(!effects.contains(&Effect::MarkSeen("18d8-1-0".to_string())));
+    let said: Vec<String> = app.log.iter().map(|entry| entry.text.clone()).collect();
+    assert!(
+        said.iter()
+            .any(|line| line.contains("while fastf was closed") && line.contains("copied ID0248")),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|line| line.contains("stopped when its process ended")
+                && line.contains("Reconcile")),
+        "{said:?}"
+    );
+}
+
+/// While a job is still starting its dialog is already up: Esc hides it
+/// rather than quitting, and Ctrl-C is kept for the moment the worker
+/// answers, when the job is asked to stop.
+#[test]
+fn esc_and_ctrl_c_answer_while_a_job_is_starting() {
+    let mut app = fixture(12, 80, 24);
+    app.summary = Some(sample_summary_moveable(12));
+    press(&mut app, Key::ch('m'));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(job_started(&effects).is_some());
+    assert!(app.job_dialog_up(), "the dialog is up at once");
+
+    assert_eq!(press(&mut app, Key::ctrl('c')), vec![]);
+    assert!(
+        !app.log.iter().any(|entry| entry.text.contains("Goodbye")),
+        "Ctrl-C did not quit"
+    );
+    let effects = update(&mut app, Msg::JobStarted(Ok("18d8-1-0".to_string())));
+    assert!(effects.contains(&Effect::CancelJob("18d8-1-0".to_string())));
+}
+
+/// A read of the jobs can land before the app hears its own job started:
+/// the job is there, with no worker and no state yet. It is not ended, so
+/// its end is still reported when it comes — and the dialog closes then.
+#[test]
+fn a_job_seen_while_starting_is_still_reported_when_it_ends() {
+    use fastf::core::assets::{JobStatus, Progress};
+    use fastf::core::jobs::JobKind;
+    use fastf::tui::testing::job_view;
+
+    let mut app = fixture(12, 80, 24);
+    let _ = update(&mut app, Msg::Jobs(Vec::new()));
+    app.summary = Some(sample_summary_moveable(12));
+    press(&mut app, Key::ch('m'));
+    let _ = press(&mut app, Key::plain(KeyCode::Enter));
+
+    let item = [("ID0248", "2026-08-28_Lullaby_Remix_ID0248")];
+    let mut starting = job_view(
+        "18d8-1-0",
+        JobKind::Move,
+        &item,
+        Progress::new(&[]),
+        false,
+        JobStatus::Running,
+    );
+    starting.state = None;
+    starting.young = true;
+    let effects = update(&mut app, Msg::Jobs(vec![starting]));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::MarkSeen(_)))
+    );
+
+    let _ = update(&mut app, Msg::JobStarted(Ok("18d8-1-0".to_string())));
+    let mut ended = job_view(
+        "18d8-1-0",
+        JobKind::Move,
+        &item,
+        Progress::new(&[]),
+        false,
+        JobStatus::Done,
+    );
+    ended.state.as_mut().unwrap().summary = "moved ID0248".to_string();
+    let effects = update(&mut app, Msg::Jobs(vec![ended]));
+    assert!(effects.contains(&Effect::MarkSeen("18d8-1-0".to_string())));
+    assert!(!app.job_dialog_up(), "the dialog closed with the job");
+    assert!(
+        app.status.text.contains("moved ID0248"),
+        "{}",
         app.status.text
     );
 }

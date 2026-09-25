@@ -1,5 +1,6 @@
 ---
 source: tests/tui_snapshots.rs
+assertion_line: 26
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -10,11 +11,11 @@ expression: frame
 "│  ID     PROJECT                                         SIZE ││ 2026-08-28_Lullaby_Remix_ID0248  │"
 "│  ID0237 2026-08-17_Live_Session_ID0237             scanning… ││ music-video   ·   projects       │"
 "│  ID0238 2026-08-18_Spring_Campaign_ID0238          scanning… ││ created 2026-08-28               │"
-"│  ID0239 2026-┌ messages ──────────────────────────────────────────────────────────┐              │"
-"│  ID0240 2026-│ 10:00:00  ⚠ warning: the archive base is not mounted               │───────────── │"
-"│  ID0241 2026-│ 10:00:00  sorted by oldest                                         │              │"
-"│  ID0242 2026-│                                                                    │              │"
-"│  ID0243 2026-│                                                                    │              │"
+"│  ID0239 2026-┌ activity ──────────────────────────────────────────────────────────┐              │"
+"│  ID0240 2026-│ ▸ messages     jobs     log   Tab turns the page · newest first    │───────────── │"
+"│  ID0241 2026-│                                                                    │              │"
+"│  ID0242 2026-│ 10:00:00  ⚠ warning: the archive base is not mounted               │              │"
+"│  ID0243 2026-│ 10:00:00  sorted by oldest                                         │              │"
 "│  ID0244 2026-│                                                                    │              │"
 "│  ID0245 2026-│                                                                    │              │"
 "│  ID0246 2026-│                                                                    │              │"

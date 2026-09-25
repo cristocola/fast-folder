@@ -18,6 +18,16 @@
 //!   cleaned up. This models hard process termination such as `taskkill /F` and
 //!   proves that *recovery* works rather than only testing unwind cleanup.
 //!
+//! A third mode makes a point slow instead of failing it: `delay-<ms>` sleeps
+//! there and carries on. Two points fire once per entry for exactly this —
+//! `move:each-file` for every file a move or a copy writes, and
+//! `remove:each-entry` for every entry a removal takes — so a test, or a person
+//! looking at a progress dialog, can watch a cloud mount's pace on a local disk:
+//!
+//! ```text
+//! FASTF_FAULT=move:force-staged,remove:each-entry:delay-400
+//! ```
+//!
 //! Several failpoints can be armed at once as a **comma list**, which trips
 //! every named point on the way:
 //!
@@ -84,6 +94,7 @@ fn specs(armed: &str) -> Vec<(&str, &str)> {
         .split(',')
         .map(|spec| match spec.rsplit_once(':') {
             Some((point, mode @ ("abort" | "error"))) => (point, mode),
+            Some((point, mode)) if mode.starts_with("delay-") => (point, mode),
             _ => (spec, "error"),
         })
         .collect()
@@ -93,6 +104,11 @@ fn specs(armed: &str) -> Vec<(&str, &str)> {
 fn trip(name: &str, armed: &str) -> Result<()> {
     for (point, mode) in specs(armed) {
         if point == name {
+            if let Some(millis) = mode.strip_prefix("delay-") {
+                let millis = millis.parse::<u64>().unwrap_or(0);
+                std::thread::sleep(std::time::Duration::from_millis(millis));
+                continue;
+            }
             if mode == "abort" {
                 // No unwinding, no destructors, no cleanup: a hard process stop.
                 crate::util::diag::fatal(format!("fault injection aborting at '{name}'"));
@@ -181,6 +197,10 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "move:mid-gc",
     // After the retired copy is removed, before the transaction is.
     "move:after-source-cleanup",
+    // Once per file a move or a copy writes, and once per entry a removal
+    // takes: armed with `delay-<ms>`, they make a job as slow as a cloud mount.
+    "move:each-file",
+    "remove:each-entry",
     // A copy is a move that keeps its source, so it trips at the same places
     // minus every one about removing the source — there is nothing to remove,
     // and after publication there is nothing left to go wrong.
@@ -258,6 +278,18 @@ mod tests {
         // is enough that it parses without swallowing the second entry.
         with_fault("create:mid-copy:error,move:after-staging", || {
             assert!(check("move:after-staging").is_err());
+        });
+    }
+
+    /// `delay-<ms>` makes a point slow, never failing: the entry after it in
+    /// the list still trips.
+    #[test]
+    fn a_delay_waits_and_carries_on() {
+        with_fault("remove:each-entry:delay-30,move:mid-copy", || {
+            let started = std::time::Instant::now();
+            assert!(check("remove:each-entry").is_ok());
+            assert!(started.elapsed() >= std::time::Duration::from_millis(30));
+            assert!(check("move:mid-copy").is_err());
         });
     }
 

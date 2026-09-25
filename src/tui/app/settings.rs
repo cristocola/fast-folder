@@ -388,6 +388,10 @@ pub fn raw_value(settings: &Settings, key: &str) -> String {
             .unwrap_or(crate::tui::motion::Motion::On)
             .name()
             .to_string(),
+        "log-level" => crate::util::log::Level::parse(&settings.log_level)
+            .unwrap_or(crate::util::log::Level::Info)
+            .name()
+            .to_string(),
         "default-template" => settings.default_template.clone(),
         "date-format" => settings.date_format.clone(),
         "register-naming-pattern" => settings.register_naming_pattern.clone(),
@@ -455,6 +459,7 @@ fn run(label: &'static str, job: Job, value: String, hint: &'static str) -> Row 
 const COLLISION: &[&str] = &["suffix", "error"];
 const THEMES: &[&str] = &crate::tui::theme::ThemeChoice::NAMES;
 const MOTION: &[&str] = &["on", "off"];
+const LOG_LEVELS: &[&str] = &crate::util::log::Level::NAMES;
 
 /// Every setting fastf has, grouped, with what it is set to now.
 pub fn rows(s: &Settings) -> Vec<Row> {
@@ -590,6 +595,12 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             "make every mounted base agree on that number — after copying projects in from elsewhere",
         ),
         heading("Maintenance"),
+        Row {
+            label: "Log level",
+            value: raw_value(s, "log-level"),
+            hint: "how much the log keeps — L shows it: debug adds every entry a move touches; a move's own log keeps everything",
+            kind: Kind::Choice("log-level", LOG_LEVELS),
+        },
         run(
             "Reindex",
             Job::Reindex,
@@ -735,7 +746,9 @@ impl App {
             }
             Job::SyncCounters => self.run_action(job.busy(), Action::SyncCounters),
             Job::Reindex => self.run_action(job.busy(), Action::Reindex),
-            Job::Reconcile => self.run_action(job.busy(), Action::Reconcile),
+            Job::Reconcile => {
+                self.start_background(crate::core::jobs::JobKind::Reconcile, Vec::new(), None)
+            }
             Job::DataLocations => self.load_view(
                 "data locations".to_string(),
                 PathBuf::new(),

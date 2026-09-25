@@ -14,6 +14,8 @@ pub struct ActionId(pub u64);
 pub enum Effect {
     /// Probe the bases, read the indexes, list the templates — the header.
     LoadSummary,
+    /// Read the messages and the log for the activity screen (`L`).
+    LoadActivity,
     /// `library::discover` on a worker. The generation tells a late answer
     /// from a current one.
     Discover {
@@ -76,8 +78,23 @@ pub enum Effect {
     /// Answered by `Msg::Previewed`, or by `Msg::PreviewFailed` naming the
     /// field that was wrong.
     Preview(Box<Request>),
-    /// Cancel the move job that is running.
-    CancelMove,
+    /// Start a job — a move, a copy, a delete, a reconcile — in a process of
+    /// its own.
+    StartJob {
+        kind: crate::core::jobs::JobKind,
+        items: Vec<crate::core::jobs::JobItem>,
+    },
+    /// Read `jobs/` now, rather than at the next watch.
+    WatchJobs,
+    /// Ask a job to stop.
+    CancelJob(String),
+    /// Say that a job's outcome has been shown.
+    MarkSeen(String),
+    /// Read a job's own log into the message dialog titled `title`.
+    LoadJobLog {
+        id: String,
+        title: String,
+    },
     /// Give the terminal back, run something that needs it, take it again.
     Suspend(Suspended),
     Quit(Exit),
@@ -152,8 +169,6 @@ pub enum Action {
     RaiseCounter(u64),
     /// Make every mounted base agree on the highest ID seen anywhere.
     SyncCounters,
-    /// Finish or roll back work a crash left half-done.
-    Reconcile,
     AddTag {
         project: Box<Project>,
         tag: String,
@@ -207,19 +222,7 @@ pub enum Action {
         project: Box<Project>,
         name: String,
     },
-    /// A single move, one item for the one-item job runner. The runtime owns
-    /// the progress and cancel handles.
-    Move {
-        project: Box<Project>,
-        target: PathBuf,
-    },
-    /// Copy a project to a folder outside every base, keeping its id.
-    CopyTo {
-        project: Box<Project>,
-        destination: PathBuf,
-    },
     Unregister(Box<Project>),
-    Delete(Box<Project>),
     AppendNote {
         project: Box<Project>,
         text: String,

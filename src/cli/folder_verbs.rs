@@ -120,7 +120,7 @@ pub fn unregister(query: &str, yes: bool) -> Result<()> {
 
 /// `fastf delete <query>`: the folder and everything inside it, after the
 /// word `delete` — the same confirmation the app asks for.
-pub fn delete(query: &str, yes: bool) -> Result<()> {
+pub fn delete(query: &str, yes: bool, detach: bool) -> Result<()> {
     let Some(project) = one(
         query,
         "delete",
@@ -149,10 +149,13 @@ pub fn delete(query: &str, yes: bool) -> Result<()> {
             return Ok(());
         }
     }
-    let path = display_path(&project.path);
-    operations::delete(&project)?;
-    println!("{} Deleted {} ({})", "✓".green(), project.id, path);
-    Ok(())
+    // A job of its own: removing a large folder on a cloud mount takes
+    // minutes, and the project is out of the library in one rename before it.
+    let item = crate::core::jobs::JobItem::of(&project, None)?;
+    match crate::cli::jobs::start(crate::core::jobs::JobKind::Delete, vec![item], detach)? {
+        crate::cli::jobs::Followed::Ended(state) => crate::cli::jobs::finish(&state),
+        _ => Ok(()),
+    }
 }
 
 /// A yes/no that needs a terminal, and says which flag answers it otherwise.

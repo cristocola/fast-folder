@@ -226,3 +226,78 @@ pub fn render_to_string(app: &App, width: u16, height: u16) -> String {
         .expect("a frame");
     format!("{}", terminal.backend())
 }
+
+/// A job as a read of `jobs/` would hand it: one of `kind` over `items` (id,
+/// folder name), at `progress`, alive or not, in `status`.
+pub fn job_view(
+    id: &str,
+    kind: crate::core::jobs::JobKind,
+    items: &[(&str, &str)],
+    progress: crate::core::assets::Progress,
+    alive: bool,
+    status: crate::core::assets::JobStatus,
+) -> crate::core::jobs::JobView {
+    use crate::core::jobs::{ItemReport, JobItem, JobRequest, JobState, JobView};
+    JobView {
+        id: id.to_string(),
+        request: Some(JobRequest {
+            version: 1,
+            kind,
+            items: items
+                .iter()
+                .map(|(id, name)| JobItem {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    path: format!("/mnt/projects/{name}"),
+                    base: "/mnt/projects".to_string(),
+                    target: "/media/usb/archive".to_string(),
+                })
+                .collect(),
+        }),
+        state: Some(JobState {
+            version: 1,
+            id: id.to_string(),
+            kind: Some(kind),
+            pid: 4242,
+            started: "2026-09-25 16:03".to_string(),
+            updated: "2026-09-25 16:03".to_string(),
+            status,
+            progress,
+            items: vec![ItemReport::default(); items.len()],
+            ..JobState::default()
+        }),
+        alive,
+        young: false,
+        seen: false,
+        cancel_asked: false,
+    }
+}
+
+/// Make the app follow a running move of the fixture's newest project, at
+/// `progress` — what it looks like the moment the dialog is up.
+pub fn follow_job(
+    app: &mut App,
+    kind: crate::core::jobs::JobKind,
+    progress: crate::core::assets::Progress,
+) -> String {
+    let id = "18d8983cdf094ce9-1092-0".to_string();
+    let items: &[(&str, &str)] = if kind == crate::core::jobs::JobKind::Reconcile {
+        &[]
+    } else {
+        &[("ID0248", "2026-08-28_Lullaby_Remix_ID0248")]
+    };
+    let job = job_view(
+        &id,
+        kind,
+        items,
+        progress,
+        true,
+        crate::core::assets::JobStatus::Running,
+    );
+    app.background.jobs = vec![job];
+    app.background.following = Some(id.clone());
+    app.background.started_here.insert(id.clone());
+    app.background.looked = true;
+    app.background.hidden = false;
+    id
+}

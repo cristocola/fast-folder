@@ -787,6 +787,28 @@ pub fn reconcile() -> Result<crate::core::provisioning::ReconcileReport> {
     Ok(crate::core::provisioning::reconcile_locked())
 }
 
+/// [`reconcile`], saying how far it has got and stopping between items, or
+/// inside a removal, when `cancel` is set. A cancelled pass still returns its
+/// report — what it finished is finished — with `cancelled` set.
+pub fn reconcile_with(
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<crate::core::provisioning::ReconcileReport> {
+    let result = Config::load().map(|_| {
+        crate::core::provisioning::reconcile_locked_with(crate::core::progress::Ticker::new(
+            progress, cancel,
+        ))
+    });
+    crate::core::progress::settle(progress, cancel, &result);
+    if let Ok(report) = &result
+        && report.cancelled
+    {
+        progress.lock().unwrap_or_else(|e| e.into_inner()).status =
+            crate::core::assets::JobStatus::Cancelled;
+    }
+    result
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------

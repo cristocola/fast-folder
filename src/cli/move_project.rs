@@ -8,19 +8,10 @@
 
 use anyhow::Result;
 use colored::Colorize;
-use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
-use crate::core::assets::Progress;
 use crate::core::config::Config;
 use crate::core::library;
-
-/// How often the progress line is redrawn. Fast enough to look live, slow
-/// enough that a network copy is not competing with the terminal for I/O.
-const TICK: Duration = Duration::from_millis(200);
 
 pub struct MoveArgs {
     /// Project query — exact ID, ID prefix, or name substring.
@@ -29,6 +20,8 @@ pub struct MoveArgs {
     pub base: Option<String>,
     /// Skip the confirmation prompt.
     pub yes: bool,
+    /// Start the move and return; `fastf jobs` follows it.
+    pub detach: bool,
 }
 
 pub fn run(args: MoveArgs) -> Result<()> {
@@ -128,128 +121,11 @@ pub fn run(args: MoveArgs) -> Result<()> {
         }
     }
 
-    let outcome = run_with_progress(&project, &target)?;
-    let moved = &outcome.project;
-
-    println!(
-        "{}  Moved {} {}",
-        "✓".green().bold(),
-        moved.id.green().bold(),
-        moved.name.bold()
-    );
-    println!(
-        "   {} {}",
-        "from".dimmed(),
-        crate::util::paths::display_path(&project.path).dimmed()
-    );
-    println!(
-        "   {} {}",
-        "to  ".dimmed(),
-        crate::util::paths::display_path(&moved.path)
-    );
-    // Which kind of move it was. Without it a rename and a two-hundred-gigabyte
-    // staged copy print the same three lines, and the instant one reads as
-    // though nothing happened.
-    println!(
-        "   {}",
-        match outcome.copied {
-            Some((files, bytes)) => format!(
-                "copied {}, verified",
-                crate::core::transactions::copied_summary(files, outcome.links, bytes)
-            ),
-            None => "renamed on the same filesystem, nothing copied".to_string(),
-        }
-        .dimmed()
-    );
-    for note in &outcome.link_notes {
-        eprintln!("{} {note}", "note:".cyan().bold());
+    // A job of its own: this terminal follows it, and closing it or killing
+    // this process leaves the move to finish (`cli::jobs`).
+    let item = crate::core::jobs::JobItem::of(&project, Some(&target))?;
+    match crate::cli::jobs::start(crate::core::jobs::JobKind::Move, vec![item], args.detach)? {
+        crate::cli::jobs::Followed::Ended(state) => crate::cli::jobs::finish(&state),
+        _ => Ok(()),
     }
-    if let Some(warning) = outcome.source.warning(&project.path) {
-        eprintln!("{} {warning}", "warning:".yellow().bold());
-    }
-    Ok(())
-}
-
-/// Run the move on a worker thread and report progress from this one.
-///
-/// A cross-filesystem move can copy for minutes; without this the CLI would sit
-/// completely silent for the whole of it, with no phase, no byte count and no
-/// way to cancel.
-///
-/// Ctrl-C feeds the engine's cancel flag rather than killing the process, so an
-/// interrupted move aborts *before* the source is removed — the invariant the
-/// staged path is built around. Same-filesystem moves take the atomic rename
-/// fast path and finish before there is anything to draw.
-fn run_with_progress(
-    project: &library::Project,
-    target: &std::path::Path,
-) -> Result<library::MoveOutcome> {
-    let progress = Mutex::new(Progress::new(&[]));
-    let cancel = AtomicBool::new(false);
-    let live = std::io::stdout().is_terminal();
-
-    let moved = std::thread::scope(|scope| {
-        let worker = scope
-            .spawn(|| crate::core::operations::move_project(project, target, &progress, &cancel));
-
-        let mut drew = false;
-        while !worker.is_finished() {
-            if crate::util::interrupt::is_set() {
-                cancel.store(true, Ordering::Relaxed);
-            }
-            if live {
-                let snapshot = progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                // Totals stay zero until the staged path has scanned the tree —
-                // and never fill in at all for a rename. Nothing to say yet.
-                if snapshot.total_files > 0 {
-                    draw(&snapshot);
-                    drew = true;
-                }
-            }
-            std::thread::sleep(TICK);
-        }
-        if drew {
-            // Leave the cursor on a fresh line for whatever prints next.
-            println!();
-        }
-        worker.join()
-    });
-
-    match moved {
-        Ok(result) => result,
-        Err(_) => anyhow::bail!("the move thread panicked"),
-    }
-}
-
-/// One carriage-returned line: phase, file count, bytes.
-///
-/// Single-line and ANSI-free for the same reason `recent::clamp_label` exists —
-/// the legacy Windows console miscounts wrapped rows and leaves ghosted
-/// characters behind when a redraw spans more than one.
-pub(crate) fn draw(p: &Progress) {
-    let line = format!(
-        "  {:<10} {}/{} files  {}",
-        p.phase,
-        p.done_files,
-        p.total_files,
-        human_bytes(p.copied_bytes, p.total_bytes)
-    );
-    let width = ratatui::crossterm::terminal::size()
-        .map(|(columns, _rows)| columns as usize)
-        .unwrap_or(0);
-    let clamped = if width > 1 {
-        crate::tui::view::fit(&line, width - 1, "…")
-    } else {
-        line
-    };
-    print!("\r{clamped}\x1b[K");
-    let _ = std::io::stdout().flush();
-}
-
-fn human_bytes(done: u64, total: u64) -> String {
-    const MB: f64 = 1024.0 * 1024.0;
-    if total == 0 {
-        return String::new();
-    }
-    format!("{:.0}/{:.0} MB", done as f64 / MB, total as f64 / MB)
 }

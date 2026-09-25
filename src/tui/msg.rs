@@ -48,8 +48,10 @@ pub enum Msg {
     },
     /// Metadata read on demand, for a query that needs template variables.
     MetaLoaded(Vec<(PathBuf, Option<Metadata>)>),
-    /// A running move reported its progress, once per tick.
-    MoveProgress(crate::core::assets::Progress),
+    /// A read of `jobs/`: every job, newest first.
+    Jobs(Vec<crate::core::jobs::JobView>),
+    /// A job's worker answered that it runs — or why it could not start.
+    JobStarted(Result<String, String>),
     /// One template was read in full for the open flow.
     TemplateLoaded {
         slug: String,
@@ -84,6 +86,12 @@ pub enum Msg {
     PreviewFailed {
         field: Option<String>,
         error: String,
+    },
+    /// The activity screen's files were read: every message kept, and the
+    /// log's last events, both oldest first.
+    ActivityLoaded {
+        messages: Vec<crate::util::messages::Message>,
+        log: Vec<String>,
     },
     /// A read-only view's content landed.
     ViewLoaded {

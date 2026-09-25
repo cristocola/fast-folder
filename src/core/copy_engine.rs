@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::core::assets::{self, JobPhase, Progress};
 use crate::core::config::Config;
 use crate::core::library::{Project, revalidate_project};
+use crate::core::progress::Ticker;
 use crate::core::transactions::{self, MoveManifest, MoveTransaction, Operation};
 
 #[derive(Debug, Clone)]
@@ -47,12 +48,39 @@ pub fn copy_project_configured(
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<CopyOutcome> {
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    let cfg = Config::load()?;
-    let project = revalidate_project(&cfg, project)?;
-    let destination = resolve_destination(&cfg, &project, destination)?;
-    copy_unlocked(&project, &destination, progress, cancel)
+    let result = (|| {
+        let ticker = Ticker::new(progress, cancel);
+        ticker.subject(format!(
+            "copy {} {} to {}",
+            project.id,
+            project.name,
+            crate::util::paths::display_path(destination)
+        ));
+        let _data_lock = crate::util::lockfile::DataLock::acquire_then(|| {
+            ticker.phase(JobPhase::Waiting, 0);
+        })?;
+        ticker.update(|state| state.holds_lock = true);
+        let copied = (|| {
+            let cfg = Config::load()?;
+            let project = revalidate_project(&cfg, project)?;
+            let destination = resolve_destination(&cfg, &project, destination)?;
+            copy_unlocked(&project, &destination, progress, cancel)
+        })();
+        ticker.update(|state| state.holds_lock = false);
+        copied
+    })();
+    crate::core::progress::settle(progress, cancel, &result);
+    result
 }
+
+/// The steps a copy passes through, in order.
+pub const COPY_STEPS: &[JobPhase] = &[
+    JobPhase::Scanning,
+    JobPhase::Copying,
+    JobPhase::Verifying,
+    JobPhase::Publishing,
+    JobPhase::Clearing,
+];
 
 /// What a destination has to be, and why.
 ///
@@ -146,6 +174,8 @@ fn copy_unlocked(
         .map(PathBuf::from)
         .context("the project path has no folder name")?;
 
+    let ticker = Ticker::new(progress, cancel);
+    ticker.plan(COPY_STEPS);
     crate::util::faults::check("copy:before-marker-write")?;
     let transaction = MoveTransaction::begin(
         &source_base,
@@ -159,7 +189,8 @@ fn copy_unlocked(
     let staged = (|| -> Result<((usize, u64), usize, Vec<String>)> {
         // The same scan as a cross-drive move: links recorded as links, never
         // followed, and anything it cannot copy refused, all of it named.
-        let manifest = MoveManifest::scan(&project.path)?;
+        ticker.phase(JobPhase::Scanning, 0);
+        let manifest = MoveManifest::scan_with(&project.path, ticker)?;
         transaction.write_manifest(&manifest)?;
         // A copy removes nothing, so it needs no write access to its source —
         // only the room to land.
@@ -169,18 +200,18 @@ fn copy_unlocked(
             manifest.total_links(),
             manifest.link_notes(&project.path),
         );
-        {
-            let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
-            state.phase = JobPhase::Copying;
+        // Everything but `PROJECT_INFO.md`, which the publish writes: the
+        // step counts what it copies, so its bar reaches its end.
+        let body = manifest.without_root_metadata();
+        ticker.phase(JobPhase::Copying, body.total_files());
+        ticker.update(|state| {
             state.total_bytes = manifest.total_bytes();
             state.total_files = manifest.total_files();
             state.done_files = 0;
             state.copied_bytes = 0;
-            state.touch();
-        }
+        });
         // Made at its final path, `PROJECT_INFO.md` last — see `transactions`.
         let staging = transaction.claim_staging()?;
-        let body = manifest.without_root_metadata();
         if let Err(error) =
             transactions::copy_to_staging(&body, &project.path, &staging, progress, cancel)
         {
@@ -191,22 +222,31 @@ fn copy_unlocked(
                 .with_context(|| format!("copying '{}' into {}", project.name, root.display()));
         }
         crate::util::faults::check("copy:after-staging")?;
-        set_phase(progress, JobPhase::Verifying);
-        body.verify_destination(&staging)?;
+        ticker.phase(
+            JobPhase::Verifying,
+            body.entries.len() + manifest.entries.len(),
+        );
         // The source has to be what it was when the manifest was taken, or the
         // copy is of two different moments.
-        manifest.verify_source_unchanged(&project.path)?;
+        let verified = body
+            .verify_destination_with(&staging, ticker)
+            .and_then(|_| manifest.verify_source_unchanged_with(&project.path, ticker));
+        if verified.is_err() && ticker.cancelled() {
+            anyhow::bail!("copy of '{}' cancelled", project.name);
+        }
+        verified?;
         crate::util::faults::check("copy:after-verify")?;
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("copy of '{}' cancelled", project.name);
         }
-        set_phase(progress, JobPhase::Finalizing);
+        ticker.phase(JobPhase::Publishing, 0);
+        ticker.update(|state| state.committed = true);
         transactions::copy_to_staging(
             &manifest.only_root_metadata(),
             &project.path,
             &staging,
             progress,
-            cancel,
+            &AtomicBool::new(false),
         )
         .with_context(|| format!("publishing the copy at {}", target.display()))?;
         Ok(totals)
@@ -217,6 +257,7 @@ fn copy_unlocked(
     // removed, and a copy removes no source. An unpublished copy goes with it
     // (`MoveTransaction::remove`); a published one is at `Copying` in the
     // record but holds its `PROJECT_INFO.md`, which `remove` sees.
+    ticker.phase(JobPhase::Clearing, 0);
     let removal = transaction.remove();
     let (copied, links, link_notes) = staged?;
     if let Err(error) = removal {
@@ -224,26 +265,10 @@ fn copy_unlocked(
             "could not clear the completed copy transaction: {error:#}"
         ));
     }
-    set_phase(progress, JobPhase::Done);
-    finish_progress(progress);
     Ok(CopyOutcome {
         path: target.to_path_buf(),
         copied,
         links,
         link_notes,
     })
-}
-
-fn set_phase(progress: &Mutex<Progress>, phase: JobPhase) {
-    if let Ok(mut state) = progress.lock() {
-        state.phase = phase;
-        state.touch();
-    }
-}
-
-fn finish_progress(progress: &Mutex<Progress>) {
-    if let Ok(mut state) = progress.lock() {
-        state.status = crate::core::assets::JobStatus::Done;
-        state.touch();
-    }
 }

@@ -31,6 +31,12 @@ The data folder holds:
   the detail pane was open, the row the cursor was on, whether the template
   guide has been offered, and whether the builder's panel is shown. Delete it
   to start fresh.
+- `messages.log` — every message fastf showed you, in the app and on the
+  command line, one per line; `fastf messages` and `L` in the app read it.
+- `logs/fastf.log` — the log: every step of every move, copy and reconcile
+  with its count, and every warning, one timestamped line each. It is rotated
+  as it grows (`fastf.log.1` to `.3`); `fastf log` and `L` read it, and
+  `log-level` decides how much it keeps.
 
 Each base directory carries two files of its own next to the projects:
 `.fastf-index.json`, a disposable cache discovery rebuilds whenever it
@@ -61,6 +67,11 @@ fastf config set theme doom-one                  # auto | doom-one | rich | ansi
 # dims on its way out; off makes every frame a hard cut. A palette with no
 # colour is always off. FASTF_MOTION=0 turns it off for one run.
 fastf config set motion off                      # on | off
+
+# How much the log keeps. info (the default) is every step of every move and
+# reconcile with its count, and every warning; debug adds a line for every
+# entry a move touches; off keeps nothing. Messages are kept whatever it says.
+fastf config set log-level debug                 # debug | info | warn | error | off
 
 # Extra folders to index beyond base-dir, comma separated
 fastf config set bases "/mnt/projects/clients,/srv/archive"

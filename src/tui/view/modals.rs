@@ -14,7 +14,7 @@ use crate::tui::app::palette::PaletteState;
 use crate::tui::app::wizard::{Flow, Preview, Step};
 use crate::tui::command::{self, Availability, CommandId, Context};
 use crate::tui::layout::{centered, centered_fixed};
-use crate::tui::view::{fit, highlighted, pad, split_line};
+use crate::tui::view::{fit, fit_spans, highlighted, pad, split_line};
 
 /// Draw the top modal, if any. Returns where its caret is.
 pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
@@ -42,6 +42,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         }
         Modal::Guide(state) => {
             render_guide(app, state, frame, area);
+            None
+        }
+        Modal::Activity(activity) => {
+            render_activity(app, activity, frame, area);
             None
         }
         Modal::Message {
@@ -85,58 +89,200 @@ fn bar<'a>(app: &App, width: usize, done: u64, total: u64) -> Line<'a> {
     ])
 }
 
-/// The move job's progress, drawn over the dashboard while one runs. It is not
-/// a modal on the stack — it shares the lifetime of `App::busy` and disappears
-/// when the move answers. A batch job draws its own modal (`render_job`),
-/// which shows the move detail for its moving items, so this stays out of the
-/// way while `App::job` is up.
+/// A long job's progress — a move, a copy out of the library, a reconcile —
+/// drawn over the dashboard while one runs. It is not a modal on the stack —
+/// it shares the lifetime of `App::busy` and disappears when the job answers.
+/// A batch job draws its own modal (`render_job`), which shows the current
+/// item's step, so this stays out of the way while `App::job` is up.
+///
+/// **One row per step**, when the job knows its steps: the finished ones
+/// ticked with what they counted, the current one with its count, its bar and
+/// the entry it is at, the rest dim. A move used to show one bar for its copy
+/// and then sit at "finalizing" with the bar full for as long as removing the
+/// old copy took — ten minutes on a cloud mount. A window too short for every
+/// row shows the current step alone.
 pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
     if app.job.is_some() {
         return;
     }
-    let Some(progress) = &app.move_progress else {
+    let Some(progress) = app.shown_progress() else {
         return;
     };
+    let progress = &progress;
     let theme = &app.theme;
-    let g = theme.glyphs;
-    let width = 54.min(area.width);
-    let track = (width as usize).saturating_sub(9);
-    let lines = vec![
-        Line::from(Span::styled(
-            format!(" {} ", progress.phase.as_str()),
-            theme.accent(),
-        )),
-        bar(app, track, progress.copied_bytes, progress.total_bytes),
-        Line::from(vec![
-            Span::styled(
-                format!(" {} of {} files", progress.done_files, progress.total_files),
-                theme.text(),
-            ),
-            Span::styled(
-                format!(
-                    "   {} of {}",
-                    crate::util::human_bytes::human_bytes(progress.copied_bytes),
-                    crate::util::human_bytes::human_bytes(progress.total_bytes)
-                ),
-                theme.dim(),
-            ),
-        ]),
-        Line::from(Span::styled(
-            format!(
-                " {}",
-                fit(&progress.current_file, width as usize - 3, g.ellipsis)
-            ),
-            theme.dim(),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(" Ctrl-C cancels", theme.dim())),
-    ];
+    let width = 62.min(area.width);
+    let inner_width = (width as usize).saturating_sub(2);
+    let room = area.height.saturating_sub(2) as usize;
+
+    let mut lines = progress_lines(app, progress, inner_width, true);
+    if lines.len() > room {
+        lines = progress_lines(app, progress, inner_width, false);
+    }
+    lines.push(Line::from(""));
+    // The way out, read from the registry: Esc hides the dialog and the job
+    // goes on; Ctrl-C cancels, until the job is past its point of no return.
+    let hide = command::key_of_in(CommandId::Back, &theme.glyphs);
+    let cancel = command::key_of_in(CommandId::Interrupt, &theme.glyphs);
+    lines.push(Line::from(Span::styled(
+        fit(
+            &if progress.committed {
+                format!(" {hide} hides · it finishes by itself, even if fastf closes")
+            } else {
+                format!(" {hide} hides · {cancel} cancels · it goes on if fastf closes")
+            },
+            inner_width,
+            theme.glyphs.ellipsis,
+        ),
+        theme.dim(),
+    )));
+    // Shed from the bottom of the body, never the cancel line.
+    while lines.len() > room.max(1) && lines.len() > 2 {
+        lines.remove(lines.len() - 3);
+    }
+
+    let title = app
+        .shown_title()
+        .trim_end_matches('…')
+        .trim_end_matches("...")
+        .trim();
     let area = centered_fixed(area, width, lines.len() as u16 + 2);
     super::clear(frame, area, &app.theme);
-    let block = frame_block(app, " moving ".to_string(), true);
+    let block = frame_block(app, format!(" {title} "), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// A job's progress as rows `width` wide: every planned step when `all`, else
+/// only the current one — each with the item it is about, when there are
+/// several.
+fn progress_lines<'a>(
+    app: &App,
+    progress: &crate::core::assets::Progress,
+    width: usize,
+    all: bool,
+) -> Vec<Line<'a>> {
+    use crate::core::assets::{JobPhase, count_text};
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    // The bar, two in, its percentage, and a column of margin: `bar` draws
+    // one cell before the track and five after it.
+    let track = width.saturating_sub(9);
+    let mut lines = Vec::new();
+
+    let item = progress.item_text();
+    if !item.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {item}  "), theme.dim()),
+            Span::styled(
+                fit(
+                    &progress.item_label,
+                    width.saturating_sub(item.width() + 3),
+                    g.ellipsis,
+                ),
+                theme.text(),
+            ),
+        ]));
+    }
+
+    let current = progress.phase;
+    let planned = all && progress.steps.contains(&current);
+    let finished = |phase: JobPhase| progress.finished.iter().find(|step| step.phase == phase);
+    let label_of = |phase: JobPhase| {
+        if finished(phase).is_some() && phase != current {
+            phase.past()
+        } else {
+            phase.as_str()
+        }
+    };
+    let steps: Vec<JobPhase> = if planned {
+        progress.steps.clone()
+    } else {
+        vec![current]
+    };
+    let column = steps
+        .iter()
+        .map(|phase| label_of(*phase).width())
+        .max()
+        .unwrap_or(0)
+        .min(width.saturating_sub(4));
+
+    for phase in steps {
+        let label = pad(&fit(label_of(phase), column, g.ellipsis), column);
+        if phase == current {
+            let count = progress.count_text();
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", g.cursor), theme.accent()),
+                Span::styled(label, theme.text()),
+                Span::styled(
+                    fit(
+                        &format!("  {count}"),
+                        width.saturating_sub(column + 3),
+                        g.ellipsis,
+                    ),
+                    theme.text(),
+                ),
+            ]));
+            if phase == JobPhase::Copying && progress.total_bytes > 0 {
+                // The bar measures bytes, since one large file is most of a
+                // copy's time, and says them after it; the row above counts
+                // files.
+                let bytes = format!(
+                    "  {} of {}",
+                    crate::util::human_bytes::human_bytes(progress.copied_bytes),
+                    crate::util::human_bytes::human_bytes(progress.total_bytes)
+                );
+                let mut line = indented(bar(
+                    app,
+                    track.saturating_sub(bytes.width()),
+                    progress.copied_bytes,
+                    progress.total_bytes,
+                ));
+                line.spans.push(Span::styled(bytes, theme.dim()));
+                lines.push(line);
+            } else if progress.has_total() {
+                lines.push(indented(bar(
+                    app,
+                    track,
+                    progress.step_done as u64,
+                    progress.step_total as u64,
+                )));
+            }
+            if !progress.current_file.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "   {}",
+                        fit(&progress.current_file, width.saturating_sub(4), g.ellipsis)
+                    ),
+                    theme.dim(),
+                )));
+            }
+        } else if let Some(step) = finished(phase) {
+            let count = count_text(phase, step.count, 0);
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", g.check), theme.good()),
+                Span::styled(label, theme.dim()),
+                Span::styled(
+                    fit(
+                        &format!("  {count}"),
+                        width.saturating_sub(column + 3),
+                        g.ellipsis,
+                    ),
+                    theme.dim(),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(format!("   {label}"), theme.dim())));
+        }
+    }
+    lines
+}
+
+/// A bar under a step's label, two columns in.
+fn indented(line: Line<'_>) -> Line<'_> {
+    let mut spans = vec![Span::raw("  ")];
+    spans.extend(line.spans);
+    Line::from(spans)
 }
 
 /// A batch job's progress, drawn over the dashboard while one runs. Like
@@ -173,20 +319,6 @@ pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
             theme.text(),
         )),
     ];
-    if let Some(progress) = &app.move_progress {
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {} ", progress.phase.as_str()), theme.accent()),
-            Span::styled(
-                format!(
-                    "{} of {}",
-                    crate::util::human_bytes::human_bytes(progress.copied_bytes),
-                    crate::util::human_bytes::human_bytes(progress.total_bytes)
-                ),
-                theme.dim(),
-            ),
-        ]));
-        lines.push(bar(app, track, progress.copied_bytes, progress.total_bytes));
-    }
     if !job.failed.is_empty() {
         lines.push(Line::from(Span::styled(
             format!(" {} failed so far", job.failed.len()),
@@ -1318,6 +1450,112 @@ fn render_message(
         .wrap(Wrap { trim: false })
         .scroll((scroll.min(max_scroll) as u16, 0));
     frame.render_widget(paragraph, target);
+}
+
+/// The activity screen (`L`): the message box, a row naming the pages with
+/// the one on show in the accent and the key that turns them, a blank row, and
+/// the page — the same wrapped paragraph a message is.
+fn render_activity(
+    app: &App,
+    activity: &crate::tui::app::modal::Activity,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    use crate::tui::app::modal::ActivityPage;
+    let theme = &app.theme;
+    let box_ = crate::tui::layout::message_box(area);
+    super::clear(frame, box_, &app.theme);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(" activity ", theme.accent()))
+        .border_style(theme.accent());
+    let inner = block.inner(box_);
+    frame.render_widget(block, box_);
+    let target = inset(inner);
+
+    // The page on show wears the cursor as well as the accent, so a theme
+    // with no colour still says which it is.
+    let mut tabs = Vec::new();
+    for page in ActivityPage::ALL {
+        if page == activity.page {
+            tabs.push(Span::styled(
+                format!("{} {}", theme.glyphs.cursor, page.title()),
+                theme.accent(),
+            ));
+        } else {
+            tabs.push(Span::styled(format!("  {}", page.title()), theme.dim()));
+        }
+        tabs.push(Span::raw("   "));
+    }
+    let key = command::key_of_in(CommandId::FocusNext, &theme.glyphs);
+    tabs.push(Span::styled(
+        format!("{key} turns the page · newest first"),
+        theme.dim(),
+    ));
+    let header = Rect {
+        height: 1.min(target.height),
+        ..target
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(fit_spans(
+            tabs,
+            target.width as usize,
+            theme.glyphs.ellipsis,
+        ))),
+        header,
+    );
+
+    let body = Rect {
+        y: target.y + 2.min(target.height),
+        height: target.height.saturating_sub(2),
+        ..target
+    };
+    let lines = activity.lines();
+    let on_jobs = activity.page == ActivityPage::Jobs && !activity.job_ids.is_empty();
+    let text: Vec<Line> = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if !on_jobs {
+                return Line::from(Span::styled(line.clone(), Style::default().fg(theme.text)));
+            }
+            // The job Enter opens: the cursor and the selection style, which
+            // mono draws reversed.
+            // One line a job, cut to fit: a list, not a paragraph.
+            let line = fit(
+                line,
+                (body.width as usize).saturating_sub(2),
+                theme.glyphs.ellipsis,
+            );
+            if index == activity.job_cursor {
+                Line::from(Span::styled(
+                    format!("{} {line}", theme.glyphs.cursor),
+                    theme.selection,
+                ))
+            } else {
+                Line::from(Span::styled(
+                    format!("  {line}"),
+                    Style::default().fg(theme.text),
+                ))
+            }
+        })
+        .collect();
+    let max_scroll = message_rows(lines, body.width as usize).saturating_sub(body.height as usize);
+    let scroll = activity.scroll[activity.page as usize].min(max_scroll);
+    frame.render_widget(
+        Paragraph::new(text)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll as u16, 0)),
+        body,
+    );
+}
+
+/// How many rows of a page the activity screen shows: the message box's,
+/// less its border and the row of page names with the blank one under it.
+pub(crate) fn activity_body_rows(area: Rect) -> usize {
+    crate::tui::layout::message_box(area)
+        .height
+        .saturating_sub(4) as usize
 }
 
 /// How many rows a message takes once it is wrapped, which is not how many

@@ -321,7 +321,29 @@ are the two questions asked of it. Folder devices are compared on unix only, and
 only folders: on overlayfs a file reports the device of its layer.
 
 Before publication, a cancel or failure removes only the owned transaction. After
-it, cancel is too late.
+it, cancel is too late — **and the engine means it**: the publish's one-file copy
+is handed a flag nobody sets, and every step after it runs on
+`Ticker::uncancellable()`, so a late Ctrl-C can never stop a removal part of the
+way. `Progress.committed` is set as the publish starts, and is what surfaces
+read to answer "too late" instead of pretending to stop.
+
+**Every step of a long job is named and counted** (`core::progress::Ticker`,
+handed to `Walk::of_with`, `MoveManifest::scan_with`/`verify_*_with`,
+`Cleanup.ticker` and `remove_tree`). A staged move passes through
+`move_engine::MOVE_STEPS` in order — scanning, probing, copying, verifying,
+publishing, setting the original aside, checking the old copy, removing it,
+clearing the record — each counting what it touches, and `Ticker::phase` keeps
+the finished ones in `Progress.finished` with their counts. 3.12 ran everything
+after the copy under one "finalizing" with a full bar, and removing 1473 entries
+through a Drive mount took ten minutes there. **A check never stops for a
+cancel** (`check_removable` walks on `cleanup.ticker.uncancellable()`), because a
+check stopped part of the way reads as one that failed; the removal after it
+stops when its ticker honours one, leaving a redundant leftover. The public entry
+points (`move_project_configured_with_outcome`, `copy_project_configured`,
+`operations::reconcile_with`) end the progress through
+`core::progress::settle`: `Done`, `Cancelled` when the flag stopped it, `Failed`
+with the reason. `Ticker::none()` is what every caller with nobody to tell
+passes, and changes nothing.
 
 **After publication the source is retired, not deleted** (`core::move_cleanup`):
 renamed in one step to `<source base>/.fastf-moved-<operation>` — same folder, so
@@ -403,6 +425,63 @@ indexer holding a freshly written tree; the short one discarded a verified stagi
 copy at publish. On Windows a refused folder rename means a program has something
 in it open (`describe_rename_error`).
 
+## Jobs, and the lock split
+
+**A long operation is a job: a process of its own, described by files in the
+data dir** (`core::jobs`). `fastf move`/`copy-to`/`delete`/`reconcile` — and,
+from Phase 4 of the plan, the app — write `jobs/<id>/request.json` and start
+this binary as `fastf --fastf-job <id>` (`core::jobs::WORKER_FLAG`, taken off
+argv in `main` before clap), detached: `setsid` on unix, `DETACHED_PROCESS |
+CREATE_NEW_PROCESS_GROUP` plus a breakaway attempt on Windows, reaped on a
+thread so a long-lived app leaves no zombie. **On Linux with a user bus it goes
+through `systemd-run --user --scope`** (`in_a_scope_of_its_own`), because a
+child inherits its starter's cgroup, and a launcher's service with systemd's
+default `ExitType=main` SIGTERMs the whole group when the app quits — measured:
+the move was cancelled. KDE's launcher asks for `ExitType=cgroup` and waits;
+nothing promises another will. `systemd-run` that exits before the worker
+writes its state falls back to the plain start. On Windows the worker is started with
+fastf's own standard handles made non-inheritable for the moment
+(`StdHandlesNotInherited`): Windows hands a child every inheritable handle, so a
+command whose output a script captured through a pipe kept that pipe open for
+the worker's whole life, and `$(fastf move … --detach)` waited for the move. The worker (`cli::job_worker`)
+holds `jobs/<id>/lock` for its whole life — **alive means the lock is held**,
+the OS's answer, so a reused pid cannot lie — keeps `state.json` current from a
+watcher thread, turns a `cancel` file into the engine's flag, waits patiently
+for the data lock (`lockfile::wait_patiently`), and logs every line to
+`jobs/<id>/log`. Surfaces follow the state file; none owns the job.
+
+**The move is done when the original is set aside.**
+`move_engine::move_project_in_parts` runs under the data lock up to
+`move_cleanup::set_aside` and hands back a `Housekeeping` (the old copy's
+removal, owned, so it outlives the lock); `finish_housekeeping` runs it after
+the lock is released. `delete_project_in_parts` does the same for a delete, and
+`reconcile_locked_with` defers its removals (`Deferred`, `finish_deferred`)
+until its lock is dropped. The combined entry points (`move_project_configured_
+with_outcome`, `delete_project_configured`, `reconcile_unlocked`) run both halves
+in-process, so library callers and tests keep their meaning.
+`SourceOutcome::SetAside` is what a move says before its housekeeping has run.
+
+**A live job's records are its own.** An operation id carries the pid of the
+process that minted it, and a worker writes its pid before it does anything,
+so reconcile and `list_incomplete` skip any record, retired folder, deleted
+folder or probe whose id names a live worker (`jobs::live_workers`,
+`jobs::owned_by`) — no window in which a record exists and its job cannot be
+told. A job also owns what it **claims** (`jobs::claim`, a file in
+`jobs/<id>/owns/`): a reconcile claims each removal it defers before it drops
+the data lock, since those records were made by other, dead processes.
+**Liveness is read before state** (`jobs::view`): a worker writes its last
+state and then lets go of its lock, so the other order reads a finished job as
+killed; and a job with no state whose request is under fifteen seconds old is
+`young` — starting, not stopped. `DataLock::is_held` probes without creating
+anything, so asking about a job being pruned cannot bring it back. **A hang-up
+is not a cancel**: `util::interrupt::hung_up` tells SIGHUP/SIGTERM (a closed
+console, on Windows) from Ctrl-C, and a command following a job stops
+following on the first and cancels only on the second. An old copy's removal
+re-checks the moved copy every 500 entries (`remove_tree_guarded`) and keeps
+the rest, on purpose, once it is gone. `Progress.holds_lock` says when a job holds the data lock, and
+`jobs::lock_holder` is what a lock wait says instead of "another fastf
+process" (`lockfile::describe_holder_with`, set by `main`).
+
 ## Copying projects out
 
 `copy_engine::copy_project_configured` is a move that keeps its source: the same
@@ -428,8 +507,13 @@ reported for inspection. Creates defer no copies, but the resume branch stays fo
 a journal an older binary left on a shared drive, resuming after identity, type
 and length checks.
 
-**Reconcile** holds `DataLock` for the whole pass and is idempotent. By
-transaction (S source, R retired copy, T staging, F destination):
+**Reconcile** holds `DataLock` for the whole pass and is idempotent. Its
+progress (`reconcile_unlocked_with`) counts items — what `list_incomplete`
+counts, the header's "needs attention", growing if it finds more — each named
+as it is taken, with that item's steps under it; a cancel is honoured between
+items and inside a removal, and sets `ReconcileReport.cancelled`, which is never
+an empty report. By transaction (S source, R retired copy, T staging, F
+destination):
 
 | phase | on disk | action |
 |---|---|---|
@@ -692,4 +776,15 @@ the header, and every caller must say which side of the commit it is on.
 `util::diag` is the one sink for `core` and `util`: `warn` for a best-effort
 failure that must not change the outcome, `note` for something the caller could
 not have known (a partial project rolled back), `fatal` for the two paths with no
-`Result` (an armed failpoint's `abort`, an unresolvable data directory).
+`Result` (an armed failpoint's `abort`, an unresolvable data directory). Each is
+also written to the log (`util::log`), whichever surface shows it.
+
+**The log is facts, messages are sentences.** `util::log` writes
+`<data dir>/logs/fastf.log`, one line per event (`stamp LEVEL job pid text`,
+continuation lines indented), with one `write` on an append-mode file so
+processes interleave whole lines, and rotates past 4 MiB under a try-lock.
+A job's steps reach it through the `Ticker`, which logs each step at info once
+`Ticker::subject` names the job, and each entry at debug. `util::messages` keeps
+what a person was shown (`messages.log`, JSON lines, a tolerant reader) and
+writes each to the log too. In a `cfg(test)` build the log writes only where
+`FASTF_INSTALL_DIR` is set, so `cargo test` never fills the developer's own.

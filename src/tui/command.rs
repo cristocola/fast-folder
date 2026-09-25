@@ -664,8 +664,28 @@ fn batch_target(app: &App) -> Availability {
 fn not_busy(app: &App) -> Availability {
     if app.busy.is_some() || app.job.is_some() {
         Availability::Disabled("working…")
+    } else if app.background.starting.is_some() {
+        Availability::Disabled("starting a job…")
+    } else if app.background.lock_holder().is_some() {
+        // A job holds the library while it copies; every change would only
+        // wait for it. Browsing and reading go on.
+        Availability::Disabled("a job holds the library until it has copied — L shows it")
     } else {
         Availability::Enabled
+    }
+}
+
+/// Reconcile, unless one is running already: a second would only find the
+/// first's work claimed and do nothing.
+fn no_reconcile_running(app: &App) -> Availability {
+    let running = app
+        .background
+        .live()
+        .any(|job| job.kind() == Some(crate::core::jobs::JobKind::Reconcile));
+    if running {
+        Availability::Disabled("a reconcile is running — L shows it")
+    } else {
+        not_busy(app)
     }
 }
 
@@ -1058,8 +1078,8 @@ pub static COMMANDS: &[Command] = &[
     ),
     cmd!(
         ShowLog,
-        "Show messages",
-        "every status line and warning this session, newest first, with the time it arrived",
+        "Messages and log",
+        "what fastf said and what it did, from every session, newest first — the log has every step of every move",
         G,
         [Key::ch('L')],
         Help,
@@ -1283,7 +1303,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         FocusNext,
         "Next pane",
-        "move focus between the list and its pane",
+        "move focus between the list and its pane — on the messages and log screen, turn the page",
         G,
         [Key::plain(KeyCode::Tab)],
         Navigate,
@@ -1995,7 +2015,7 @@ pub static COMMANDS: &[Command] = &[
         Library,
         palette = true,
         hint = false,
-        not_busy
+        no_reconcile_running
     ),
     // --- the templates tab ------------------------------------------------
     cmd!(

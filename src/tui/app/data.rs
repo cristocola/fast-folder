@@ -72,6 +72,8 @@ pub struct Settings {
     pub theme: String,
     /// `on` or `off` — empty reads as `on`.
     pub motion: String,
+    /// `debug`, `info`, `warn`, `error` or `off` — empty reads as `info`.
+    pub log_level: String,
     pub default_template: String,
 
     pub date_format: String,

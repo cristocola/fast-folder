@@ -201,6 +201,10 @@ enum Commands {
         /// Skip the confirmation prompt
         #[arg(long)]
         yes: bool,
+
+        /// Start the copy and return at once; `fastf jobs` follows it
+        #[arg(long)]
+        detach: bool,
     },
 
     /// Print a project's folder path on stdout, and nothing else
@@ -261,6 +265,10 @@ enum Commands {
         /// Skip the confirmation prompt (for scripts).
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Start the move and return at once; `fastf jobs` follows it
+        #[arg(long)]
+        detach: bool,
     },
 
     /// Rename a project's folder on disk
@@ -316,6 +324,10 @@ enum Commands {
         /// Skip the confirmation (for scripts).
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Start the delete and return at once; `fastf jobs` follows it
+        #[arg(long)]
+        detach: bool,
     },
 
     /// Rebuild the project-library cache by rescanning every base
@@ -340,7 +352,58 @@ enum Commands {
             lists each obsolete marker for manual inspection and leaves it plus\n\
             all related paths untouched. Reconciliation is explicit and idempotent."
     )]
-    Reconcile,
+    Reconcile {
+        /// Start the reconcile and return at once; `fastf jobs` follows it
+        #[arg(long)]
+        detach: bool,
+    },
+
+    /// Moves, copies, deletes and reconciles running now or lately
+    #[command(
+        about = "Moves, copies, deletes and reconciles running now or lately",
+        long_about = "A move, a copy, a delete and a reconcile each run in a process of their\n\
+            own, so closing the terminal or the app that started one never stops it\n\
+            part of the way, and any fastf can follow it. `fastf jobs` lists them,\n\
+            newest first; `watch` follows one (the newest running, by default) and\n\
+            `cancel` asks one to stop — which undoes a move only until it has\n\
+            published its copy. After that it finishes by itself."
+    )]
+    Jobs {
+        #[command(subcommand)]
+        action: Option<JobsAction>,
+    },
+
+    /// Show the log: every step of every move and reconcile, every warning
+    #[command(
+        about = "Show the log: every step of every move and reconcile, every warning",
+        long_about = "The log is everything fastf did, one line per event, with a timestamp,\n\
+            a level, the job it belongs to and the process that wrote it — every step\n\
+            of a move with its count, every warning. It lives in the data directory\n\
+            under logs/ and is rotated as it grows; `config set log-level` decides\n\
+            how much it keeps. `fastf messages` is the short version: the sentences\n\
+            fastf said to you."
+    )]
+    Log {
+        /// How many events to show, newest last
+        #[arg(short = 'n', long, default_value_t = 40)]
+        lines: usize,
+        /// Keep showing new events as they are written, until Ctrl-C
+        #[arg(short, long)]
+        follow: bool,
+    },
+
+    /// Show the messages fastf said, in the app and here, from every session
+    #[command(
+        about = "Show the messages fastf said, in the app and here, from every session",
+        long_about = "Every status line the app showed and every outcome the command line\n\
+            printed for a move, a copy, a delete or a reconcile, kept across sessions,\n\
+            newest last. `fastf log` has everything else."
+    )]
+    Messages {
+        /// How many to show, newest last
+        #[arg(short = 'n', long, default_value_t = 20)]
+        lines: usize,
+    },
 
     /// Onboard an existing folder by writing its PROJECT_INFO.md (no folder is created)
     #[command(
@@ -657,6 +720,7 @@ enum ConfigAction {
             terminal                    Terminal emulator to open when launched without one (default: $TERMINAL, else probe; \"none\" disables)\n  \
             theme                       The app's palette: auto, doom-one, rich, ansi or mono (default: auto — Doom One where the terminal draws 24-bit colour)\n  \
             motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
+            log-level                   How much the log keeps: debug, info, warn, error or off (default: info)\n  \
             default-template            Slug of template to use without prompting (e.g. music-video)\n  \
             date-format                 strftime format for the {date} token (default: %Y-%m-%d)\n  \
             preview-lines               Lines per file in dry-run preview (default: 8, 0 = none)\n  \
@@ -783,6 +847,20 @@ enum TodoAction {
 }
 
 #[derive(Subcommand)]
+enum JobsAction {
+    /// Follow a job until it ends — the newest running one, without an id
+    Watch {
+        /// The job's id, as `fastf jobs` lists it
+        id: Option<String>,
+    },
+    /// Ask a job to stop — the newest running one, without an id
+    Cancel {
+        /// The job's id, as `fastf jobs` lists it
+        id: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum IdAction {
     /// Show the current global ID counter value and what the next project ID will be
     Show,
@@ -854,6 +932,17 @@ fn main() {
     // create unwinds and rolls its partial folder back rather than being killed
     // part-way through copying a template's assets.
     fastf::util::interrupt::install();
+
+    // A wait for the data lock names the job that holds it, where one does.
+    fastf::util::lockfile::describe_holder_with(fastf::core::jobs::lock_holder);
+
+    // `fastf --fastf-job <id>` is a job's worker, started detached by another
+    // fastf. Taken off argv before clap, like `--relaunched`, so no shell
+    // completion ever offers it.
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if argv.len() == 3 && argv[1] == fastf::core::jobs::WORKER_FLAG {
+        std::process::exit(cli::job_worker::run(&argv[2].to_string_lossy()));
+    }
 
     let outcome = run();
 
@@ -992,6 +1081,18 @@ fn run() -> Result<()> {
         Some(Commands::Completions { .. }) | Some(Commands::Mangen { .. })
     ) {
         bootstrap::ensure_bootstrapped()?;
+        // The log keeps what `log_level` asks for; `util` may not read the
+        // configuration, so it is told. A configuration that does not parse
+        // is the command's own error to report, a moment from now.
+        if let Ok(config) = fastf::core::config::Config::load()
+            && let Some(level) = fastf::util::log::Level::parse(&config.log_level)
+        {
+            fastf::util::log::set_level(level);
+        }
+        fastf::util::log::debug(format!(
+            "fastf {}",
+            std::env::args().skip(1).collect::<Vec<_>>().join(" ")
+        ));
     }
 
     match cli.command {
@@ -1104,22 +1205,41 @@ fn run() -> Result<()> {
             query,
             destination,
             yes,
+            detach,
         }) => cli::copy_to::run(cli::copy_to::CopyToArgs {
             query,
             destination,
             yes,
+            detach,
         }),
         Some(Commands::Path { query }) => cli::path_cmd::run(&query),
         Some(Commands::Term { query }) => cli::term_cmd::run(&query),
-        Some(Commands::Move { query, base, yes }) => {
-            cli::move_project::run(cli::move_project::MoveArgs { query, base, yes })
-        }
+        Some(Commands::Move {
+            query,
+            base,
+            yes,
+            detach,
+        }) => cli::move_project::run(cli::move_project::MoveArgs {
+            query,
+            base,
+            yes,
+            detach,
+        }),
         Some(Commands::Rename { query, name, yes }) => cli::folder_verbs::rename(&query, name, yes),
         Some(Commands::Unregister { query, yes }) => cli::folder_verbs::unregister(&query, yes),
-        Some(Commands::Delete { query, yes }) => cli::folder_verbs::delete(&query, yes),
+        Some(Commands::Delete { query, yes, detach }) => {
+            cli::folder_verbs::delete(&query, yes, detach)
+        }
 
         Some(Commands::Reindex) => cli::reindex::run(),
-        Some(Commands::Reconcile) => cli::reconcile::run(),
+        Some(Commands::Reconcile { detach }) => cli::reconcile::run(detach),
+        Some(Commands::Jobs { action }) => match action {
+            None => cli::jobs::list(),
+            Some(JobsAction::Watch { id }) => cli::jobs::watch(id),
+            Some(JobsAction::Cancel { id }) => cli::jobs::cancel(id),
+        },
+        Some(Commands::Log { lines, follow }) => cli::log::log(lines, follow),
+        Some(Commands::Messages { lines }) => cli::log::messages(lines),
 
         Some(Commands::Register {
             path,

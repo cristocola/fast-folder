@@ -13,8 +13,20 @@
 use anyhow::Result;
 use colored::Colorize;
 
-pub fn run() -> Result<()> {
-    let report = crate::core::operations::reconcile()?;
+use crate::core::config::Config;
+
+pub fn run(detach: bool) -> Result<()> {
+    // A job of its own, like a move: its removals on a cloud mount can take
+    // minutes, and closing this terminal must not stop one part of the way.
+    Config::load()?;
+    let state =
+        match crate::cli::jobs::start(crate::core::jobs::JobKind::Reconcile, Vec::new(), detach)? {
+            crate::cli::jobs::Followed::Ended(state) => state,
+            _ => return Ok(()),
+        };
+    let Some(report) = state.reconcile.clone() else {
+        anyhow::bail!("{}", state.summary);
+    };
 
     if report.is_empty() {
         println!(
@@ -27,7 +39,14 @@ pub fn run() -> Result<()> {
     // Not a green tick over a report that may be nothing but "could not
     // inspect": the tick means something worked, and here it only means the
     // pass ran.
-    let clean = report.unrecoverable.is_empty() && report.leftovers.is_empty();
+    let clean = report.unrecoverable.is_empty() && report.leftovers.is_empty() && !report.cancelled;
+    if report.cancelled {
+        println!(
+            "{}  Reconcile stopped when asked. What it finished is below; what it had \
+             not reached is as it was — run `fastf reconcile` again to finish it.",
+            "⚠".yellow().bold()
+        );
+    }
     println!(
         "{}  Reconcile report complete.",
         if clean {

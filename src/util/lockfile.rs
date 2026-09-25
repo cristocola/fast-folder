@@ -33,6 +33,33 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Poll interval while waiting. Short enough to feel instant on release.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+/// Set by a job's worker: wait for the lock as long as it takes, stopping
+/// only for this flag. A worker was started to do one thing and has nobody to
+/// give up to; 30 seconds is a person's patience, not a job's.
+static PATIENT: std::sync::OnceLock<&'static std::sync::atomic::AtomicBool> =
+    std::sync::OnceLock::new();
+
+/// Who holds the lock, in words, when something can tell — a live job says
+/// what it is doing. Set by `main`, because `util` may not read `core`.
+static HOLDER: std::sync::OnceLock<fn() -> Option<String>> = std::sync::OnceLock::new();
+
+/// Make every later wait in this process patient, until `cancel` is set.
+pub fn wait_patiently(cancel: &'static std::sync::atomic::AtomicBool) {
+    let _ = PATIENT.set(cancel);
+}
+
+/// Name the holder in what a wait says.
+pub fn describe_holder_with(describe: fn() -> Option<String>) {
+    let _ = HOLDER.set(describe);
+}
+
+fn holder() -> String {
+    HOLDER
+        .get()
+        .and_then(|describe| describe())
+        .unwrap_or_else(|| "another fastf process".to_string())
+}
+
 /// An acquired lock. Releasing happens on drop (the file handle closes), and
 /// the OS releases it on process death, so there is no stale-lock recovery path
 /// to get wrong.
@@ -48,6 +75,17 @@ impl DataLock {
         Self::acquire_at(&lock_path(), DEFAULT_TIMEOUT)
     }
 
+    /// [`Self::acquire`], calling `waiting` first when another process holds
+    /// the lock — so a job's progress says it is waiting only when it is.
+    pub fn acquire_then(waiting: impl FnOnce()) -> Result<Self> {
+        let path = lock_path();
+        if let Some(lock) = Self::try_acquire_at(&path)? {
+            return Ok(lock);
+        }
+        waiting();
+        Self::acquire_at(&path, DEFAULT_TIMEOUT)
+    }
+
     /// Lock `path`, waiting up to `timeout`. Exposed for tests.
     pub fn acquire_at(path: &Path, timeout: Duration) -> Result<Self> {
         if let Some(parent) = path.parent()
@@ -60,15 +98,17 @@ impl DataLock {
         let deadline = Instant::now() + timeout;
         let started = Instant::now();
         let mut said = false;
+        let patient = PATIENT.get();
         loop {
             // A second of silence is long enough to wonder; say what is
             // being waited for, once, through the one sink every surface
             // shows — the app's status line, the command line's stderr.
             if !said && started.elapsed() >= Duration::from_secs(1) {
                 said = true;
-                crate::util::diag::note(
-                    "waiting for another fastf process to finish (it holds the data lock)",
-                );
+                crate::util::diag::note(format!(
+                    "waiting for {} to finish (it holds the data lock)",
+                    holder()
+                ));
             }
             match try_lock(path) {
                 Ok(Some(file)) => {
@@ -83,7 +123,11 @@ impl DataLock {
                     return Err(err).with_context(|| format!("locking {}", path.display()));
                 }
             }
-            if Instant::now() >= deadline {
+            if let Some(cancel) = patient {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    anyhow::bail!("cancelled while waiting for {}", holder());
+                }
+            } else if Instant::now() >= deadline {
                 // Never suggest deleting the file. On Unix the lock is `flock`
                 // on the *inode*: unlinking the path does not release it, and
                 // the next process creates a new inode and locks that instead —
@@ -92,16 +136,45 @@ impl DataLock {
                 // stale lock to clear either way; the OS drops it when the
                 // holder dies.
                 anyhow::bail!(
-                    "another fastf process is busy (waited {}s for {}). \
+                    "{} is busy (waited {}s for {}). \
                      It still holds the data lock — close it or wait, then retry. \
                      Deleting the lock file does not help: the lock belongs to \
                      the process, not the file.",
+                    holder(),
                     timeout.as_secs(),
                     path.display()
                 );
             }
             std::thread::sleep(POLL_INTERVAL);
         }
+    }
+
+    /// One attempt at `path`, never waiting: `None` when another process
+    /// holds it. What a lock that only guards housekeeping — rotating a log —
+    /// wants, since the holder is doing the same work; and, for a lock a
+    /// process holds for its whole life, the OS's own answer to "is it still
+    /// running".
+    pub fn try_acquire_at(path: &Path) -> Result<Option<Self>> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        Ok(try_lock(path)
+            .with_context(|| format!("locking {}", path.display()))?
+            .map(|file| Self {
+                _file: file,
+                path: path.to_path_buf(),
+            }))
+    }
+
+    /// Whether another process holds the lock at `path` right now. Only an
+    /// existing file is opened — never created, and no folder is made — so
+    /// asking about a job another process is pruning cannot bring its folder
+    /// back.
+    pub fn is_held(path: &Path) -> bool {
+        matches!(try_lock_existing(path), Ok(None))
     }
 
     /// Path of the held lock file.
@@ -115,12 +188,24 @@ pub(crate) fn lock_path() -> PathBuf {
     crate::util::paths::install_dir().join(LOCK_FILENAME)
 }
 
+/// [`try_lock`] on a file that must already exist: an `Err` for a missing one.
+fn try_lock_existing(path: &Path) -> Result<Option<File>> {
+    if !path.is_file() {
+        anyhow::bail!("{} does not exist", path.display());
+    }
+    try_lock_with(path, false)
+}
+
+fn try_lock(path: &Path) -> Result<Option<File>> {
+    try_lock_with(path, true)
+}
+
 /// One non-blocking attempt. `Ok(None)` means "held by another process".
 ///
 /// Windows: `share_mode(0)` denies all sharing, so a second `CreateFile` on the
 /// same path fails with `ERROR_SHARING_VIOLATION` while we hold it.
 #[cfg(windows)]
-fn try_lock(path: &Path) -> Result<Option<File>> {
+fn try_lock_with(path: &Path, create: bool) -> Result<Option<File>> {
     use std::os::windows::fs::OpenOptionsExt;
 
     /// The file is open in another process and shares nothing.
@@ -129,7 +214,7 @@ fn try_lock(path: &Path) -> Result<Option<File>> {
     const ERROR_ACCESS_DENIED: i32 = 5;
 
     match OpenOptions::new()
-        .create(true)
+        .create(create)
         .truncate(false)
         .write(true)
         .share_mode(0)
@@ -150,11 +235,11 @@ fn try_lock(path: &Path) -> Result<Option<File>> {
 
 /// One non-blocking `flock` attempt. `Ok(None)` means another process holds it.
 #[cfg(unix)]
-fn try_lock(path: &Path) -> Result<Option<File>> {
+fn try_lock_with(path: &Path, create: bool) -> Result<Option<File>> {
     use std::os::unix::io::AsRawFd;
 
     let file = OpenOptions::new()
-        .create(true)
+        .create(create)
         .truncate(false)
         .write(true)
         .open(path)?;

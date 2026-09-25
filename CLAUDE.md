@@ -45,6 +45,8 @@ cargo build --release --target x86_64-pc-windows-gnu
 # Fault injection — trip a named boundary deterministically:
 FASTF_FAULT=create:mid-copy cargo test            # returns an error there
 FASTF_FAULT=move:before-commit-rename:abort ...   # kills the process there
+FASTF_FAULT=move:force-staged,remove:each-entry:delay-400 fastf move ...
+                                                  # a local move at a cloud mount's pace
 
 # Work counting — how many times an expensive thing happened:
 FASTF_TRACE_FILE=/tmp/counts cargo test           # one line per traced operation
@@ -64,7 +66,9 @@ tell you.
 - `src/bootstrap.rs` — first-run setup. Ships two deliberately universal
   templates (`general`, `client-project`); `examples/templates/` is a gallery to
   copy from, not bundled.
-- `src/core/` — the library proper. `library/` (filesystem-as-truth discovery, a
+- `src/core/` — the library proper. `jobs.rs` (a long operation as a process of
+  its own: `jobs/<id>/` in the data dir, the detached worker, liveness by lock),
+  `progress.rs` (the `Ticker` every step counts through). `library/` (filesystem-as-truth discovery, a
   facade over `model` / `discovery` / `cache` / `guard` / `lifecycle` /
   `resolve`), `move_engine.rs` (the staged move the facade delegates to — it
   needs transactions, staged copies and progress, which nothing else in the
@@ -82,6 +86,10 @@ tell you.
   violations, and the read-only attribute a publish must set aside), `interrupt`
   (Ctrl-C rollback, SIGHUP, and the `set_restore` hook for the second signal),
   `faults` (failpoints), `trace` (work counting), `diag` (the one warning sink),
+  `log` (the log on disk: one line per event, appended by every process at
+  once, rotated; its level is *set* by `main`, since `util` may not read
+  `Config`), `messages` (the sentences a person was shown, kept across
+  sessions),
   `yaml` (the one place the YAML crate is named), `time` (one clock), `paths`
   (data-dir resolution, `display_path`, the boundary checks including
   `contained_destination` and `is_link_like`, base probing), `shell_open`
@@ -91,7 +99,10 @@ tell you.
   (the one env-mutation guard, test-only), `tree_size`, `size_scan`,
   `human_bytes`, `clipboard`, `tty` (`require_tty`, `has_display`, the remembered
   cooked mode a signal handler restores).
-- `src/cli/` — one module per subcommand (`folder_verbs.rs` is `rename`,
+- `src/cli/` — `job_worker.rs` is not a subcommand but the worker a job runs
+  (`fastf --fastf-job <id>`, taken off argv in `main`); `jobs.rs` starts and
+  follows jobs for `move`/`copy-to`/`delete`/`reconcile` and is `fastf jobs`;
+  `progress.rs` prints a job's steps. One module per subcommand (`folder_verbs.rs` is `rename`,
   `unregister` and `delete`), plus `render.rs`, the only module that prints a
   plan, a create or an apply; `target.rs` (resolve a query to one project, asking
   when it is ambiguous — shared by `open`/`copy`/`path`/`term` and the folder

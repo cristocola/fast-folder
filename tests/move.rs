@@ -88,6 +88,102 @@ fn a_move_reports_whether_it_renamed_or_copied() {
     });
 }
 
+/// Two bases, one project in the first, the configuration saved — what
+/// `operations::move_project` reloads under the lock.
+fn one_project_two_bases(install: &Path) -> (library::Project, std::path::PathBuf) {
+    write_template(install, "test", &minimal_template_yaml("test"));
+    let base_a = install.join("projects");
+    let base_b = install.join("projects_b");
+    fs::create_dir_all(&base_a).unwrap();
+    fs::create_dir_all(&base_b).unwrap();
+    let mut cfg = Config::default();
+    cfg.base_dir = base_a.display().to_string();
+    cfg.bases = vec![base_b.display().to_string()];
+    cfg.save().unwrap();
+    let tmpl = template::find_by_slug("test").unwrap();
+    let mut counters = Counters::load().unwrap();
+    let mut vars = HashMap::new();
+    vars.insert("name".to_string(), "ender".to_string());
+    let plan = project::plan(&tmpl, &vars, &cfg, &counters).unwrap();
+    project::create(&plan, &tmpl, &mut counters, &cfg, false).unwrap();
+    (library::discover(&cfg).remove(0), base_b)
+}
+
+/// **A job that stops says how.** A failed move used to keep `Running` for
+/// ever, so anything watching it — the app polls until it is not — watched a
+/// dead job.
+#[test]
+fn a_move_that_fails_ends_failed_and_says_why() {
+    sandboxed(|install| {
+        let (project, base_b) = one_project_two_bases(install);
+        let blocker = base_b.join(project.path.file_name().unwrap());
+        fs::create_dir_all(&blocker).unwrap();
+
+        let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let result = fastf::core::operations::move_project(&project, &base_b, &progress, &cancel);
+
+        assert!(result.is_err());
+        let state = progress.lock().unwrap();
+        assert_eq!(state.status, fastf::core::assets::JobStatus::Failed);
+        let why = state.error.clone().unwrap_or_default();
+        assert!(why.contains("already exists"), "{why}");
+        assert!(project.path.is_dir(), "a failed move leaves the original");
+    });
+}
+
+/// A cancel before the publish undoes the move and ends `Cancelled`; one
+/// after it is too late and changes nothing — the move finishes and the old
+/// copy is removed whole, never left part of the way because somebody
+/// pressed Ctrl-C once it no longer meant anything.
+#[cfg(debug_assertions)]
+#[test]
+fn a_cancel_undoes_a_move_before_its_publish_and_changes_nothing_after() {
+    use fastf::core::assets::{JobStatus, Progress};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    common::env::with_sandbox(&SERIAL, |sandbox, guard| {
+        let (project, base_b) = one_project_two_bases(&sandbox.install);
+        guard.set("FASTF_FAULT", Path::new("move:force-staged"));
+
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(true);
+        let early = fastf::core::operations::move_project(&project, &base_b, &progress, &cancel);
+        assert!(early.is_err());
+        assert_eq!(progress.lock().unwrap().status, JobStatus::Cancelled);
+        assert!(project.path.is_dir(), "the original is where it was");
+        assert!(!base_b.join(project.path.file_name().unwrap()).exists());
+
+        guard.set(
+            "FASTF_FAULT",
+            Path::new("move:force-staged,remove:each-entry:delay-5"),
+        );
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(false);
+        let late = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for _ in 0..5000 {
+                    if progress.lock().unwrap().committed {
+                        cancel.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            });
+            fastf::core::operations::move_project(&project, &base_b, &progress, &cancel)
+        })
+        .expect("a cancel after the publish does not stop the move");
+        assert!(cancel.load(Ordering::Relaxed), "the cancel was asked for");
+        assert_eq!(
+            late.source,
+            fastf::core::move_engine::SourceOutcome::Removed
+        );
+        assert_eq!(progress.lock().unwrap().status, JobStatus::Done);
+        assert!(!project.path.exists(), "the old copy is gone, whole");
+        assert!(late.project.path.is_dir());
+    });
+}
+
 #[test]
 fn move_project_between_bases_full_round_trip() {
     sandboxed(|install| {

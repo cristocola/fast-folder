@@ -217,7 +217,10 @@ fn the_maintenance_rows_run_rather_than_set() {
     press(&mut app, Key::plain(KeyCode::Down));
     assert_eq!(state(&app).row().unwrap().label, "Reconcile");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
-    assert!(matches!(action_of(&effects), Action::Reconcile));
+    assert!(matches!(
+        job_started(&effects),
+        Some((fastf::core::jobs::JobKind::Reconcile, _))
+    ));
 }
 
 #[test]
@@ -242,7 +245,10 @@ fn the_counter_is_raised_through_a_prompt_that_names_the_floor() {
 fn needs_attention_is_the_recover_command() {
     let mut app = fixture(6, 120, 40);
     let effects = press(&mut app, Key::ch('!'));
-    assert!(matches!(action_of(&effects), Action::Reconcile));
+    assert!(matches!(
+        job_started(&effects),
+        Some((fastf::core::jobs::JobKind::Reconcile, _))
+    ));
 }
 
 #[test]

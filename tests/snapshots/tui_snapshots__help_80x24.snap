@@ -1,5 +1,6 @@
 ---
 source: tests/tui_snapshots.rs
+assertion_line: 26
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                     highest ID0248 "
@@ -9,7 +10,8 @@ expression: frame
 "│ │                  give the terminal back to the shell, as Ctrl-Z does in  │ │"
 "│▸│                  any program — `fg` brings fastf back                    │ │"
 "│ │   Tab            Next pane                                               │ │"
-"│ │                  move focus between the list and its pane                │ │"
+"│ │                  move focus between the list and its pane — on the       │ │"
+"│ │                  messages and log screen, turn the page                  │ │"
 "│ │   Shift-Tab      Previous pane                                           │ │"
 "│ │                  move focus the other way                                │ │"
 "│ │   ↓ / j          Down                                                    │ │"
@@ -22,7 +24,6 @@ expression: frame
 "│ │                  a screenful up (stops at the top)                       │ │"
 "│ │   Ctrl-d         Half a page down                                        │ │"
 "│ │                  half a screenful down (stops at the end)                │ │"
-"│ │   Ctrl-u         Half a page up                                          │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
 "                                                                                "
 " ↑↓ scroll  Esc close  ? help  c commands                                       "

@@ -105,6 +105,25 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
             None => bases.push(Span::styled("probing bases…", theme.dim())),
         },
     }
+    // A running job is the first thing on the row: what it is and how far,
+    // with the spinner. It goes on whether or not its dialog is up.
+    if let Some(job) = app.background.live().next() {
+        let more = app.background.live().count().saturating_sub(1);
+        let mut chip = vec![
+            Span::styled(format!("{} ", g.spin(app.elapsed_ms)), theme.accent()),
+            Span::styled(crate::tui::app::background::chip_title(job), theme.text()),
+            Span::styled(
+                format!(" {} {}", g.sep, crate::tui::app::background::step_of(job)),
+                theme.dim(),
+            ),
+        ];
+        if more > 0 {
+            chip.push(Span::styled(format!(" {} {more} more", g.sep), theme.dim()));
+        }
+        chip.push(Span::raw("   "));
+        chip.extend(bases);
+        bases = chip;
+    }
     // Something needing attention wins the row over the bases; what this
     // session did is the first thing a narrow window gives up.
     lines.push(match app.summary.as_ref().map(|s| s.attention) {

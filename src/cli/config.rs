@@ -89,6 +89,13 @@ pub fn show() -> Result<()> {
     );
     println!(
         "  {:<26} {}",
+        "log_level:".green(),
+        crate::util::log::Level::parse(&config.log_level)
+            .unwrap_or(crate::util::log::Level::Info)
+            .name()
+    );
+    println!(
+        "  {:<26} {}",
         "default_template:".green(),
         if config.default_template.is_empty() {
             "(always prompt)".to_string()
@@ -284,6 +291,30 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                     }
                 )
             }
+            "log_level" => {
+                let Some(level) = crate::util::log::Level::parse(value) else {
+                    bail!(
+                        "expected one of {}; got '{}'",
+                        crate::util::log::Level::NAMES.join(", "),
+                        value.trim()
+                    );
+                };
+                config.log_level = level.name().to_string();
+                format!(
+                    "Set log_level = {}  ({})",
+                    level.name(),
+                    match level {
+                        crate::util::log::Level::Debug =>
+                            "every step, and every entry a move or a reconcile touches",
+                        crate::util::log::Level::Info =>
+                            "every step of every job, and every warning",
+                        crate::util::log::Level::Warn => "warnings and errors",
+                        crate::util::log::Level::Error => "errors only",
+                        crate::util::log::Level::Off =>
+                            "nothing; a job's own log still keeps its story",
+                    }
+                )
+            }
             // A setting in v3.6.0, retired when the app stopped asking the
             // terminal for the mouse at all. Accepted and ignored for the
             // reason `show_banner` and `show_frame` are.
@@ -443,7 +474,7 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                 )
             }
             other => bail!(
-                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, motion, default-template, date-format, \
+                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, motion, log-level, default-template, date-format, \
              preview-lines, prompt-open-after-create, confirm-create, \
              recent-limit, register-naming-pattern, on-name-collision, \
              post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",

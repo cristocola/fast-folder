@@ -20,7 +20,8 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
 - The todo keys on a real keyboard: F2 on a laptop (with and without Fn),
   `+` on a keyboard where it needs Shift, `<` and `>` on a German layout, and a
   list pasted from a browser, an editor and a chat window.
-- A real move between two mounted bases with the progress modal, and a cancel
+- A real move between two mounted bases with the job dialog: Esc to hide it,
+  the header's chip, the terminal window closed mid-move, and a cancel
   mid-batch-move on a real second volume; the `$EDITOR` note flow in a real
   terminal.
 - A marked batch over the real library — a tag, a note, a delete.

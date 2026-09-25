@@ -35,60 +35,165 @@ pub struct CopyJob {
     pub bytes: u64,
 }
 
-/// Live progress of a background copy job.
-#[derive(Debug, Clone, Serialize)]
+/// Live progress of a long job: a create's resumed copies, a move, a copy out
+/// of the library, a reconcile.
+///
+/// **Every step is named and counted as it happens.** A move used to report
+/// only its copy: the scan, both verification walks, the checks before the
+/// original is set aside and the removal of the old copy — ten minutes of API
+/// calls on a cloud mount — all ran under one "finalizing" with a full bar.
+/// Now each step is a [`JobPhase`], [`Self::step_done`] of [`Self::step_total`]
+/// moves for every entry it touches, and [`Self::finished`] keeps what each
+/// finished step counted. [`crate::core::progress::Ticker`] is how the engine
+/// writes it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Progress {
     pub total_bytes: u64,
     pub copied_bytes: u64,
     pub total_files: usize,
     pub done_files: usize,
+    /// The entry the current step is at, relative to what it walks.
     pub current_file: String,
     pub status: JobStatus,
-    /// Coarse stage for the UI, shared by create + move jobs.
     pub phase: JobPhase,
+    /// The steps this job passes through, in order, when that is known up
+    /// front (a move, a copy); empty for a reconcile, whose steps depend on
+    /// what it finds.
+    pub steps: Vec<JobPhase>,
+    /// The steps finished so far, each with what it counted.
+    pub finished: Vec<FinishedStep>,
+    /// How far the current step has got, in its own unit
+    /// ([`JobPhase::unit`]).
+    pub step_done: usize,
+    /// How far it will go; 0 when that is not known (a scan, a delete).
+    pub step_total: usize,
+    /// Which of [`Self::items`] is under way, from 1; 0 when the job is one
+    /// thing. A reconcile counts what the header counted as needing attention.
+    pub item: usize,
+    pub items: usize,
+    /// What the current item is about.
+    pub item_label: String,
+    /// What the job is, for its log lines: `move ID0047 Shoot to /mnt/b`.
+    pub subject: String,
+    /// The move record's operation id, once there is one.
+    pub operation: Option<String>,
+    /// The job is past its point of no return: a move has published, and what
+    /// is left is housekeeping a cancel cannot undo. A surface answers a
+    /// cancel from here with "too late" rather than pretending to stop. A
+    /// reconcile never sets it — it can stop between items, and inside a
+    /// removal.
+    pub committed: bool,
+    /// The job holds the data lock right now, so every other fastf's changes
+    /// wait for it: while a move copies, not while it removes an old copy.
+    pub holds_lock: bool,
+    /// Why a job that ended [`JobStatus::Failed`] failed.
     pub error: Option<String>,
-    /// A move reached its verified destination but could not remove its source.
-    /// Existing clients may ignore this additive field safely.
-    pub cleanup_pending: bool,
-    /// Non-fatal detail accompanying [`Self::cleanup_pending`].
-    pub warning: Option<String>,
     /// Unix-epoch milliseconds of the last observed movement: written on every
     /// `touch`, read by nothing yet — it is what a "no progress for N minutes" note would read.
     pub last_progress_at: u64,
 }
 
+/// A step a job has finished, and what it counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinishedStep {
+    pub phase: JobPhase,
+    pub count: usize,
+}
+
 /// Where a background job has got to.
 ///
 /// Was a `String` set by literal at fifteen call sites, which is exactly as many
-/// chances to write `"canceled"`. The serialized names are unchanged, so a
-/// journal written by an older fastf still reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// chances to write `"canceled"`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
+    #[default]
     Running,
     Done,
     Failed,
     Cancelled,
 }
 
-/// The coarse stage a job reports, shared by create and move.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// The step a job is at. A staged move passes through every one of these but
+/// `Waiting`, in this order; a copy skips the probe and everything about the
+/// original.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum JobPhase {
+    /// Nothing has happened yet.
+    #[default]
+    Starting,
+    /// Another fastf holds the data lock.
+    Waiting,
+    /// Walking the project to record what it holds.
+    Scanning,
+    /// Asking the original's base whether the original can leave it.
+    Probing,
     Copying,
+    /// Walking the copy and the original again, and comparing.
     Verifying,
-    Finalizing,
+    /// Writing `PROJECT_INFO.md` last, which makes the copy the project.
+    Publishing,
+    /// Checking the original is what was moved, then renaming it out of the
+    /// library in one step.
+    SettingAside,
+    /// Checking the set-aside copy is still what was moved.
+    Checking,
+    /// Removing the set-aside copy, entry by entry.
+    Removing,
+    /// Removing the move's record.
+    Clearing,
     Done,
 }
 
 impl JobPhase {
-    /// The wire and display name — the same string the JSON carries.
+    /// What the step is doing, as a person reads it.
     pub fn as_str(self) -> &'static str {
         match self {
+            JobPhase::Starting => "starting",
+            JobPhase::Waiting => "waiting for another fastf",
+            JobPhase::Scanning => "scanning",
+            JobPhase::Probing => "checking the original's base",
             JobPhase::Copying => "copying",
             JobPhase::Verifying => "verifying",
-            JobPhase::Finalizing => "finalizing",
+            JobPhase::Publishing => "publishing PROJECT_INFO.md",
+            JobPhase::SettingAside => "setting the original aside",
+            JobPhase::Checking => "checking the old copy",
+            JobPhase::Removing => "removing the old copy",
+            JobPhase::Clearing => "clearing the record",
             JobPhase::Done => "done",
+        }
+    }
+
+    /// What the step did, once it has.
+    pub fn past(self) -> &'static str {
+        match self {
+            JobPhase::Starting => "started",
+            JobPhase::Waiting => "waited for another fastf",
+            JobPhase::Scanning => "scanned",
+            JobPhase::Probing => "checked the original's base",
+            JobPhase::Copying => "copied",
+            JobPhase::Verifying => "verified",
+            JobPhase::Publishing => "published PROJECT_INFO.md",
+            JobPhase::SettingAside => "set the original aside",
+            JobPhase::Checking => "checked the old copy",
+            JobPhase::Removing => "removed the old copy",
+            JobPhase::Clearing => "cleared the record",
+            JobPhase::Done => "done",
+        }
+    }
+
+    /// What the step counts, if it counts anything.
+    pub fn unit(self) -> Option<&'static str> {
+        match self {
+            JobPhase::Copying => Some("files"),
+            JobPhase::Scanning
+            | JobPhase::Verifying
+            | JobPhase::SettingAside
+            | JobPhase::Checking
+            | JobPhase::Removing => Some("entries"),
+            _ => None,
         }
     }
 }
@@ -103,16 +208,14 @@ impl Progress {
     pub fn new(jobs: &[CopyJob]) -> Self {
         Self {
             total_bytes: jobs.iter().map(|j| j.bytes).sum(),
-            copied_bytes: 0,
             total_files: jobs.len(),
-            done_files: 0,
-            current_file: String::new(),
-            status: JobStatus::Running,
-            phase: JobPhase::Copying,
-            error: None,
-            cleanup_pending: false,
-            warning: None,
+            phase: if jobs.is_empty() {
+                JobPhase::Starting
+            } else {
+                JobPhase::Copying
+            },
             last_progress_at: now_millis(),
+            ..Self::default()
         }
     }
 
@@ -120,6 +223,58 @@ impl Progress {
     /// that represents real movement.
     pub fn touch(&mut self) {
         self.last_progress_at = now_millis();
+    }
+
+    /// The current step's count in words: `312 of 1473 entries`, `312
+    /// entries` when the total is not known, nothing for a step that counts
+    /// nothing.
+    pub fn count_text(&self) -> String {
+        count_text(self.phase, self.step_done, self.step_total)
+    }
+
+    /// Whether the current step has a total to draw a bar against.
+    pub fn has_total(&self) -> bool {
+        self.step_total > 0 && self.phase.unit().is_some()
+    }
+
+    /// The current step and its count: `copying 312 of 1473 files`.
+    pub fn step_text(&self) -> String {
+        let count = self.count_text();
+        if count.is_empty() {
+            self.phase.as_str().to_string()
+        } else {
+            format!("{} {count}", self.phase.as_str())
+        }
+    }
+
+    /// `item 2 of 5`, or nothing for a job that is one thing.
+    pub fn item_text(&self) -> String {
+        if self.items == 0 && self.item == 0 {
+            return String::new();
+        }
+        format!("{} of {}", self.item.max(1), self.items.max(self.item))
+    }
+}
+
+/// `count` in a step's unit, against `total` when it is known. The unit
+/// agrees with the number it counts: `1 entry`, `2 of 1473 entries`.
+pub fn count_text(phase: JobPhase, count: usize, total: usize) -> String {
+    let Some(unit) = phase.unit() else {
+        return String::new();
+    };
+    let unit = if total.max(count) == 1 || (total == 0 && count == 1) {
+        match unit {
+            "entries" => "entry",
+            "files" => "file",
+            other => other,
+        }
+    } else {
+        unit
+    };
+    if total > 0 {
+        format!("{count} of {total} {unit}")
+    } else {
+        format!("{count} {unit}")
     }
 }
 
@@ -969,12 +1124,11 @@ mod tests {
         }
     }
 
-    /// The enums replaced `String` fields set by literal, and their serialized
-    /// names are what a move journal written by an older fastf holds. If these
-    /// change, `reconcile` reads a phase it does not know from a file it is
-    /// meant to recover, and there is nothing in the JSON to say so.
+    /// The names a job's progress is written with. Nothing on disk holds them
+    /// yet; once a job runs in its own process they are what every other fastf
+    /// reads, so a rename is a format change, not a refactor.
     #[test]
-    fn job_status_and_phase_serialize_to_the_names_a_journal_holds() {
+    fn job_status_and_phase_serialize_to_stable_names() {
         use super::{JobPhase, JobStatus};
 
         for (value, name) in [
@@ -994,16 +1148,43 @@ mod tests {
         }
 
         for (value, name) in [
+            (JobPhase::Starting, "starting"),
+            (JobPhase::Scanning, "scanning"),
             (JobPhase::Copying, "copying"),
-            (JobPhase::Verifying, "verifying"),
-            (JobPhase::Finalizing, "finalizing"),
+            (JobPhase::SettingAside, "setting-aside"),
+            (JobPhase::Removing, "removing"),
             (JobPhase::Done, "done"),
         ] {
             assert_eq!(
                 serde_json::to_string(&value).unwrap(),
                 format!("\"{name}\"")
             );
-            assert_eq!(value.as_str(), name);
         }
+    }
+
+    /// A progress record written by one version reads in another: unknown
+    /// fields are ignored and missing ones take their defaults.
+    #[test]
+    fn a_progress_record_reads_whatever_it_can() {
+        let read: super::Progress =
+            serde_json::from_str(r#"{"phase":"removing","step_done":3,"from_the_future":1}"#)
+                .unwrap();
+        assert_eq!(read.phase, super::JobPhase::Removing);
+        assert_eq!(read.step_done, 3);
+        assert_eq!(read.count_text(), "3 entries");
+    }
+
+    #[test]
+    fn a_count_names_its_unit_and_its_total_when_known() {
+        use super::{JobPhase, count_text};
+        assert_eq!(
+            count_text(JobPhase::Removing, 312, 1473),
+            "312 of 1473 entries"
+        );
+        assert_eq!(count_text(JobPhase::Copying, 2, 0), "2 files");
+        assert_eq!(count_text(JobPhase::Publishing, 1, 1), "");
+        assert_eq!(count_text(JobPhase::Copying, 1, 0), "1 file");
+        assert_eq!(count_text(JobPhase::Removing, 1, 1), "1 of 1 entry");
+        assert_eq!(count_text(JobPhase::Removing, 1, 2), "1 of 2 entries");
     }
 }

@@ -143,8 +143,10 @@ give would say where it leads. The rclone cache modes (`off`, `writes`,
 
 A move between drive letters copies, verifies, publishes, and then takes the
 original out of the library in one rename before removing it
-([projects.md](projects.md#moving-projects-between-bases)). Three things are
-particular to Windows:
+([projects.md](projects.md#moving-projects-between-bases)). It runs as a job of
+its own, with no console window: closing Windows Terminal, or an ssh session
+ending, leaves it to finish, and `fastf jobs` in any other window shows it.
+Three things are particular to Windows:
 
 - **A file open in another program** — a timeline in an editor, a document in
   Word — stops Windows renaming the folder around it. The move then publishes

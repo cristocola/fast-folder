@@ -31,6 +31,9 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
 | `fastf reconcile` | Recover scoped v2 work and report obsolete pre-v2 markers |
+| `fastf jobs` / `watch` / `cancel` | Moves, copies, deletes and reconciles running now or lately |
+| `fastf messages` | What fastf said to you, in the app and here, from every session |
+| `fastf log` | Everything fastf did: every step of every move and reconcile, every warning |
 | `fastf config show` / `set` | View and edit [configuration](config.md) |
 | `fastf id show` / `sync` / `set` | Inspect, synchronize, and raise the [ID counter](config.md#the-id-counter) |
 | `fastf paths` | Show where fastf keeps its data and why |
@@ -426,9 +429,25 @@ move is an atomic rename and finishes instantly however large the folder is, so
 without that line an instant finish on a 200 GB project is indistinguishable
 from one that did nothing.
 
-A cross-filesystem move reports its progress as it goes — a bar, the phase
-(copying, verifying, finalizing), how many files are done, and how much has been
-copied.
+A cross-filesystem move names every step as it happens and counts it: the
+live line says what it is doing and how far it has got, and each step that
+finishes leaves a line of its own, so the terminal keeps the whole run:
+
+```
+  ✓ scanned 1473 entries
+  ✓ checked the original's base
+  ✓ copied 1301 files
+  ✓ verified 2945 entries
+  ✓ published PROJECT_INFO.md
+  ✓ set the original aside 2946 entries
+  ✓ checked the old copy 2946 entries
+  removing the old copy  312 of 1473 entries
+```
+
+Copying also shows the bytes. Removing the old copy is the step that takes
+longest on a cloud mount, where every entry is a request to the service; it is
+counted like every other. Where the output is not a terminal, only the finished
+steps are printed, one line each.
 **Before anything is copied**, a cross-drive move checks that it could finish:
 that it can write in the source base (a move removes the original afterwards,
 so a read-only base is refused), that the base shows links as links, that the
@@ -441,9 +460,16 @@ error: /mnt/share/2026-07-26_Shoot_ID0047 holds 2 entries that cannot be copied 
   media: a different filesystem inside the project (a mount, or a separate btrfs subvolume)
 ```
 
+**The move runs as a job of its own** — see [Jobs](#jobs): the terminal only
+follows it. Closing the terminal, or killing `fastf move`, leaves the move to
+finish. `--detach` starts it and returns at once.
+
 **Ctrl-C cancels it safely before publication**: fastf removes only the private
 transaction owned by that operation and leaves the source untouched. Once
-publication begins, cancellation is too late. If the moved copy turns out to be
+`PROJECT_INFO.md` is being published, cancellation is too late: the moved copy
+is the project, and what is left — setting the original aside, removing it —
+carries on. Ctrl-C then stops following and says how to follow it again; the
+move finishes without the terminal. If the moved copy turns out to be
 missing anything, fastf copies it again from the original, which stays whole
 until the copy is complete. If the original cannot then be set aside — a
 program has a file in it open — the move says that the original is still there,
@@ -490,8 +516,9 @@ file, a private `.fastf-transactions/` staging tree under the destination,
 exact path/type/size/link-target verification, a check that the source did not
 change while it copied, and an atomic publish. Links travel as links, exactly as
 in a move, and the room and name checks run before anything is copied; a copy
-removes nothing, so it needs no write access to the original. Ctrl-C cancels
-and leaves nothing but the copy's own transaction, which it removes.
+removes nothing, so it needs no write access to the original. It reports its
+steps as a move does. Ctrl-C cancels before the copy's `PROJECT_INFO.md` is
+written and leaves nothing but the copy's own transaction, which it removes.
 
 `fastf copy` (no dash) is unrelated: it puts a project's path on the clipboard.
 In the guided app the verb is `C`, `Copy to…`, and it runs over every marked
@@ -551,6 +578,13 @@ provably a duplicate. Missing bases, mismatched identities, malformed journals,
 or unknown states are reported without mutation. Running the command repeatedly
 is safe.
 
+It shows its progress as it goes: which item of how many (what the app's header
+counted as needing attention), and that item's step with its count — `1 of 1
+2026-07-26_Shoot_ID0047: removing the old copy  312 of 1473 entries`. Ctrl-C
+stops it between items, or part of the way through a removal; it says it
+stopped, what it finished is finished, and what it had not reached is as it was
+for the next run.
+
 It also finishes a **rename** that was interrupted. Renaming a folder to a
 different capitalisation of the same name has to go through a temporary name,
 because a case-insensitive filesystem answers "does `ALBUM` already exist?" with
@@ -566,6 +600,61 @@ migrates, resumes, rolls back, or deletes through them. It also never sweeps
 files merely because their names end in `.tmp` or `.part`. Inspect source and
 destination manually and remove an obsolete marker only after deciding which
 copy is authoritative.
+
+## Jobs
+
+```bash
+fastf jobs                  # every job, newest first: running, done, failed, stopped
+fastf jobs watch            # follow the newest running job until it ends
+fastf jobs watch <id>
+fastf jobs cancel           # ask the newest running job to stop
+fastf move ID0047 archive --yes --detach   # start it and return at once
+```
+
+A move, a copy to a folder, a delete and a reconcile each run in a process of
+their own — a *job* — which the command that started it follows, printing its
+steps as they finish. The job is not that command's: closing the terminal,
+killing the command or quitting the app that started it leaves it running, and
+any other fastf can follow it (`fastf jobs watch`, `L` in the app) or cancel
+it. `move`, `copy-to`, `delete` and `reconcile` all take `--detach`.
+
+A cancel undoes a move or a copy until it publishes its `PROJECT_INFO.md`;
+after that it is too late, and `fastf jobs cancel` says so. A reconcile stops
+between items. A job whose process was killed shows as `stopped`;
+`fastf reconcile` finishes what it left, whole.
+
+While a move copies it holds the library's lock, so a change made elsewhere
+meanwhile — a tag, a note — waits, and says which job it waits for. Removing
+the old copy afterwards does not hold it.
+
+## Messages and the log
+
+```bash
+fastf messages              # the last 20 things fastf said, newest last
+fastf messages -n 100
+fastf log                   # the last 40 events
+fastf log -n 500
+fastf log --follow          # and keep printing new ones until Ctrl-C
+```
+
+**Messages and the log are two things.** A message is a sentence fastf said to
+you, with what to do next when there is something to do: the app's status
+lines, and what `move`, `copy-to` and `reconcile` printed at the end. They are
+kept from every session in the data folder, so what the app said yesterday is
+still there, and `L` in the app shows the same list.
+
+The log is everything, one line per event:
+
+```
+2026-09-25T14:03:11.123Z INFO  - 48213 move ID0047 2026-07-26_Shoot_ID0047 to /mnt/projects: copied 1301 files
+```
+
+— the time (UTC), the level, the job, the process, and what happened. Every
+step of every move, copy and reconcile is there with its count, and so is every
+warning. With `config set log-level debug` it also holds a line for every entry
+a move touches, which is what to read when a removal on a network drive seems
+slow. `--follow` keeps printing new events, from any fastf process, until
+Ctrl-C. See [config.md](config.md) for where both files live.
 
 ## Todos
 

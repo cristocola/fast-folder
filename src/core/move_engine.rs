@@ -22,6 +22,7 @@ use crate::core::library::{
     revalidate_recorded_project, to_forward_slashes,
 };
 use crate::core::move_cleanup::{self, Cleanup, SourceFate};
+use crate::core::progress::Ticker;
 use crate::core::project_info;
 use crate::core::transactions::{self, MoveManifest, MovePhase, MoveTransaction, Operation};
 
@@ -30,6 +31,11 @@ use crate::core::transactions::{self, MoveManifest, MovePhase, MoveTransaction, 
 pub enum SourceOutcome {
     /// Gone: renamed on the same filesystem, or retired and removed.
     Removed,
+    /// Out of the library in one rename — the move is done — and its old
+    /// copy at `path` is being removed, as housekeeping after the data lock
+    /// is released. What a move says the moment it is done; the removal's
+    /// own outcome replaces it ([`finish_housekeeping`]).
+    SetAside { path: PathBuf },
     /// Out of the library — the project is the moved copy — but its retired
     /// copy at `path` could not be removed yet. When `redundant`, everything
     /// in it is in the moved copy too and `fastf reconcile` removes it;
@@ -48,12 +54,39 @@ pub enum SourceOutcome {
 }
 
 impl SourceOutcome {
+    /// What a cleanup's fate means for the original. A record that could not
+    /// be cleared is a warning of its own, not a fact about the original.
+    pub(crate) fn from_fate(fate: SourceFate) -> Self {
+        match fate {
+            SourceFate::Removed { record_kept } => {
+                if let Some(reason) = record_kept {
+                    crate::util::diag::warn(format!(
+                        "the move is complete, but its record could not be cleared \
+                         ({reason}); `fastf reconcile` clears it"
+                    ));
+                }
+                SourceOutcome::Removed
+            }
+            SourceFate::Leftover {
+                path,
+                reason,
+                redundant,
+            } => SourceOutcome::Leftover {
+                path,
+                reason,
+                redundant,
+            },
+            SourceFate::KeptWhole { reason } => SourceOutcome::KeptWhole { reason },
+            SourceFate::Unknown { reason } => SourceOutcome::Unknown { reason },
+        }
+    }
+
     /// What to tell the user about the original, when there is anything to
     /// tell. The command line and the app both say it this way.
     pub fn warning(&self, original: &Path) -> Option<String> {
         let shown = |path: &Path| crate::util::paths::display_path(path);
         match self {
-            Self::Removed => None,
+            Self::Removed | Self::SetAside { .. } => None,
             Self::Leftover {
                 path,
                 reason,
@@ -111,7 +144,10 @@ pub struct MoveOutcome {
 impl MoveOutcome {
     /// Whether the move left work for `fastf reconcile`.
     pub fn cleanup_pending(&self) -> bool {
-        self.source != SourceOutcome::Removed
+        !matches!(
+            self.source,
+            SourceOutcome::Removed | SourceOutcome::SetAside { .. }
+        )
     }
 }
 
@@ -132,41 +168,100 @@ impl MoveOutcome {
 pub fn move_project(project: &Project, new_base: &Path) -> Result<Project> {
     let progress = Mutex::new(Progress::new(&[]));
     let cancel = AtomicBool::new(false);
-    let outcome = {
+    let (outcome, housekeeping) = {
         let _data_lock = crate::util::lockfile::DataLock::acquire()?;
         let revalidated = revalidate_recorded_project(project)?;
-        move_project_unlocked(&revalidated, new_base, &progress, &cancel)?
+        move_project_unlocked_in_parts(&revalidated, new_base, &progress, &cancel)?
     };
+    let outcome = finish_housekeeping(outcome, housekeeping, Ticker::none());
     report_cleanup_pending(&outcome, &project.path);
     Ok(outcome.project)
 }
 
 /// Application move entry point. It reloads configuration under the coarse
 /// mutation lock, then revalidates both source and target against that fresh
-/// snapshot before touching either path.
+/// snapshot before touching either path. Removing the old copy runs after the
+/// lock is released ([`move_project_in_parts`], [`finish_housekeeping`]).
 pub fn move_project_configured_with_outcome(
     project: &Project,
     new_base: &Path,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<MoveOutcome> {
-    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
-    let cfg = Config::load()?;
-    let project = revalidate_project(&cfg, project)?;
-    let wanted = crate::util::paths::canonical(new_base)
-        .with_context(|| format!("resolving target base {}", new_base.display()))?;
-    let target = cfg
-        .effective_bases()
-        .into_iter()
-        .filter_map(|base| crate::util::paths::canonical(&base).ok())
-        .find(|base| *base == wanted)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "'{}' is not a currently configured base",
-                new_base.display()
+    let result = move_project_in_parts(project, new_base, progress, cancel).map(
+        |(outcome, housekeeping)| {
+            finish_housekeeping(
+                outcome,
+                housekeeping,
+                Ticker::new(progress, cancel).uncancellable(),
             )
-        })?;
-    move_project_unlocked(&project, &target, progress, cancel)
+        },
+    );
+    crate::core::progress::settle(progress, cancel, &result);
+    result
+}
+
+/// The move, under the data lock, up to the moment it is done — the moved
+/// copy published, the original set aside, the books kept — and what is left
+/// after it: removing the old copy, which needs no lock and may take ten
+/// minutes on a cloud mount. **The lock is released when this returns**, so
+/// every other fastf can get on while the old copy goes. A job keeps the
+/// housekeeping's operation among its own, so no reconcile touches it while
+/// the job is alive; a job killed part of the way leaves a hidden, redundant
+/// copy the next reconcile finishes.
+///
+/// The progress is not settled here: the caller does that, after the
+/// housekeeping, or when it hands it on.
+pub fn move_project_in_parts(
+    project: &Project,
+    new_base: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
+    let ticker = Ticker::new(progress, cancel);
+    ticker.subject(format!(
+        "move {} {} to {}",
+        project.id,
+        project.name,
+        crate::util::paths::display_path(new_base)
+    ));
+    let _data_lock = crate::util::lockfile::DataLock::acquire_then(|| {
+        ticker.phase(JobPhase::Waiting, 0);
+    })?;
+    ticker.update(|state| state.holds_lock = true);
+    let moved = (|| {
+        let cfg = Config::load()?;
+        let project = revalidate_project(&cfg, project)?;
+        let wanted = crate::util::paths::canonical(new_base)
+            .with_context(|| format!("resolving target base {}", new_base.display()))?;
+        let target = cfg
+            .effective_bases()
+            .into_iter()
+            .filter_map(|base| crate::util::paths::canonical(&base).ok())
+            .find(|base| *base == wanted)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "'{}' is not a currently configured base",
+                    new_base.display()
+                )
+            })?;
+        move_project_unlocked_in_parts(&project, &target, progress, cancel)
+    })();
+    ticker.update(|state| state.holds_lock = false);
+    moved
+}
+
+/// Remove the old copy a move set aside, if it left one, and say what became
+/// of the original.
+pub fn finish_housekeeping(
+    mut outcome: MoveOutcome,
+    housekeeping: Option<move_cleanup::Housekeeping>,
+    ticker: Ticker,
+) -> MoveOutcome {
+    if let Some(housekeeping) = housekeeping {
+        outcome.source = SourceOutcome::from_fate(housekeeping.run(ticker));
+    }
+    outcome
 }
 
 /// Exercise the private copy transaction even when the test's two bases share
@@ -205,12 +300,12 @@ pub fn move_project_staged_for_test(project: &Project, new_base: &Path) -> Resul
     staged_copy_verify_commit(&project, &target, &new_path, &progress, &cancel)
 }
 
-fn move_project_unlocked(
+fn move_project_unlocked_in_parts(
     project: &Project,
     new_base: &Path,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
-) -> Result<MoveOutcome> {
+) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
     crate::util::paths::require_real_directory(new_base, "target base")?;
     let new_base = crate::util::paths::canonical(new_base)
         .with_context(|| format!("resolving target base {}", new_base.display()))?;
@@ -250,23 +345,27 @@ fn move_project_unlocked(
     // never reach it. The arm is a decision, not a failure to propagate, which
     // is why the engine asks `is_armed` rather than letting `check` trip.
     let outcome = if crate::util::faults::is_armed("move:force-staged") {
-        staged_copy_verify_commit(project, &new_base, &new_path, progress, cancel)?
+        staged_copy_verify_commit_in_parts(project, &new_base, &new_path, progress, cancel)?
     } else {
         match fs::rename(&project.path, &new_path) {
             Ok(()) => {
                 let moved = finish_move_bookkeeping(project, &old_base, &new_base, &new_path);
-                finish_progress(progress);
-                MoveOutcome {
-                    project: moved,
-                    source: SourceOutcome::Removed,
-                    staged: false,
-                    copied: None,
-                    links: 0,
-                    link_notes: Vec::new(),
-                }
+                (
+                    MoveOutcome {
+                        project: moved,
+                        source: SourceOutcome::Removed,
+                        staged: false,
+                        copied: None,
+                        links: 0,
+                        link_notes: Vec::new(),
+                    },
+                    None,
+                )
             }
             Err(error) if is_cross_device_error(&error) => {
-                return staged_copy_verify_commit(project, &new_base, &new_path, progress, cancel);
+                return staged_copy_verify_commit_in_parts(
+                    project, &new_base, &new_path, progress, cancel,
+                );
             }
             Err(error) => {
                 return Err(error).with_context(|| {
@@ -303,7 +402,7 @@ pub(crate) fn is_cross_device_error(error: &std::io::Error) -> bool {
 /// outcome.
 fn report_cleanup_pending(outcome: &MoveOutcome, source: &Path) {
     match &outcome.source {
-        SourceOutcome::Removed => {}
+        SourceOutcome::Removed | SourceOutcome::SetAside { .. } => {}
         SourceOutcome::Leftover { path, reason, .. } => crate::util::diag::warn(format!(
             "moved to {}; the original's retired copy at {} is not removed yet ({reason})",
             outcome.project.path.display(),
@@ -319,11 +418,33 @@ fn report_cleanup_pending(outcome: &MoveOutcome, source: &Path) {
     }
 }
 
+/// The steps a staged move passes through, in order.
+pub const MOVE_STEPS: &[JobPhase] = &[
+    JobPhase::Scanning,
+    JobPhase::Probing,
+    JobPhase::Copying,
+    JobPhase::Verifying,
+    JobPhase::Publishing,
+    JobPhase::SettingAside,
+    JobPhase::Checking,
+    JobPhase::Removing,
+    JobPhase::Clearing,
+];
+
 /// The staged cross-filesystem move body. All pre-publication state lives in
 /// one exclusively-created operation directory; cancellation or an ordinary
 /// error before publication removes exactly that directory and leaves the
-/// source untouched. Once publication begins cancellation is deliberately too
-/// late.
+/// source untouched.
+///
+/// **Cancel is honoured up to the publish and not after it** — not even by
+/// the publish's own one-file copy, which used to poll the flag and could
+/// stop the moment that makes the copy the project. From there on the moved
+/// copy is the project; setting the original aside and removing it are
+/// housekeeping, run with a ticker that cannot cancel, and a surface answers a
+/// late cancel with "too late" ([`Progress::committed`]).
+/// The whole staged move in one call, for the tests and the test-only entry
+/// point that force the staged path.
+#[cfg(any(test, debug_assertions))]
 pub(crate) fn staged_copy_verify_commit(
     project: &Project,
     new_base: &Path,
@@ -331,8 +452,28 @@ pub(crate) fn staged_copy_verify_commit(
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<MoveOutcome> {
+    let (outcome, housekeeping) =
+        staged_copy_verify_commit_in_parts(project, new_base, new_path, progress, cancel)?;
+    Ok(finish_housekeeping(
+        outcome,
+        housekeeping,
+        Ticker::new(progress, cancel).uncancellable(),
+    ))
+}
+
+/// [`staged_copy_verify_commit`] up to the original being set aside; the
+/// old copy's removal is handed back.
+pub(crate) fn staged_copy_verify_commit_in_parts(
+    project: &Project,
+    new_base: &Path,
+    new_path: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
     use std::sync::atomic::Ordering;
 
+    let ticker = Ticker::new(progress, cancel);
+    ticker.plan(MOVE_STEPS);
     let old_base = crate::util::paths::canonical(&project.base)
         .with_context(|| format!("resolving source base {}", project.base.display()))?;
     let folder = project
@@ -349,10 +490,13 @@ pub(crate) fn staged_copy_verify_commit(
         &project.id,
         Operation::Move,
     )?;
+    ticker.update(|state| state.operation = Some(transaction.journal.operation_id.clone()));
     let mut published = false;
     let pre_publication = (|| -> Result<(MoveManifest, MoveManifest)> {
-        let manifest = MoveManifest::scan(&project.path)?;
+        ticker.phase(JobPhase::Scanning, 0);
+        let manifest = MoveManifest::scan_with(&project.path, ticker)?;
         transaction.write_manifest(&manifest)?;
+        ticker.phase(JobPhase::Probing, 0);
         // Before a byte is copied: can the original be taken out of its base
         // afterwards, and does the target have the room?
         crate::core::move_preflight::probe_source_base(
@@ -361,19 +505,22 @@ pub(crate) fn staged_copy_verify_commit(
             &transaction.journal.operation_id,
         )?;
         crate::core::move_preflight::check_space(new_base, manifest.total_bytes())?;
-        {
-            let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
-            state.phase = crate::core::assets::JobPhase::Copying;
+        if ticker.cancelled() {
+            anyhow::bail!("move of '{}' cancelled", project.name);
+        }
+        // Everything but `PROJECT_INFO.md`, which the publish writes: the
+        // step counts what it copies, so its bar reaches its end.
+        let body = manifest.without_root_metadata();
+        ticker.phase(JobPhase::Copying, body.total_files());
+        ticker.update(|state| {
             state.total_bytes = manifest.total_bytes();
             state.total_files = manifest.total_files();
             state.done_files = 0;
             state.copied_bytes = 0;
-            state.touch();
-        }
+        });
         // The copy is made at its final path, everything but the root
         // `PROJECT_INFO.md`: until that lands the folder is not a project.
         let staging = transaction.claim_staging()?;
-        let body = manifest.without_root_metadata();
         if let Err(error) =
             transactions::copy_to_staging(&body, &project.path, &staging, progress, cancel)
         {
@@ -385,28 +532,41 @@ pub(crate) fn staged_copy_verify_commit(
             });
         }
         crate::util::faults::check("move:after-staging")?;
-        set_phase(progress, JobPhase::Verifying);
-        let mut staged = body.verify_destination(&staging)?;
-        manifest.verify_source_unchanged(&project.path)?;
+        // Two walks: the copy, then the original again.
+        ticker.phase(
+            JobPhase::Verifying,
+            body.entries.len() + manifest.entries.len(),
+        );
+        let verified = body
+            .verify_destination_with(&staging, ticker)
+            .and_then(|staged| {
+                manifest
+                    .verify_source_unchanged_with(&project.path, ticker)
+                    .map(|()| staged)
+            });
+        if verified.is_err() && ticker.cancelled() {
+            anyhow::bail!("move of '{}' cancelled", project.name);
+        }
+        let mut staged = verified?;
         crate::util::faults::check("move:after-verify")?;
         crate::util::faults::check("move:post-verification")?;
 
-        if cancel.load(Ordering::Relaxed) {
-            anyhow::bail!("move of '{}' cancelled", project.name);
-        }
-        set_phase(progress, JobPhase::Finalizing);
         crate::util::faults::check("move:before-commit-rename")?;
+        // The last moment a cancel undoes the move.
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("move of '{}' cancelled", project.name);
         }
+        ticker.phase(JobPhase::Publishing, 0);
+        ticker.update(|state| state.committed = true);
         // The publish: one file, written once. No folder on the target is
         // renamed, which is what a cloud mount with uploads in flight needs.
+        // Its copy is handed a flag nobody sets: once it starts, it finishes.
         transactions::copy_to_staging(
             &manifest.only_root_metadata(),
             &project.path,
             &staging,
             progress,
-            cancel,
+            &AtomicBool::new(false),
         )
         .with_context(|| format!("publishing '{}' in {}", project.name, new_base.display()))?;
         published = true;
@@ -440,17 +600,19 @@ pub(crate) fn staged_copy_verify_commit(
                 let state = progress.lock().unwrap_or_else(|error| error.into_inner());
                 (state.total_files, state.total_bytes)
             };
-            finish_progress(progress);
-            return Ok(MoveOutcome {
-                project: moved,
-                source: SourceOutcome::KeptWhole {
-                    reason: format!("{error:#}"),
+            return Ok((
+                MoveOutcome {
+                    project: moved,
+                    source: SourceOutcome::KeptWhole {
+                        reason: format!("{error:#}"),
+                    },
+                    staged: true,
+                    copied: Some(copied),
+                    links: 0,
+                    link_notes: Vec::new(),
                 },
-                staged: true,
-                copied: Some(copied),
-                links: 0,
-                link_notes: Vec::new(),
-            });
+                None,
+            ));
         }
     };
 
@@ -459,6 +621,7 @@ pub(crate) fn staged_copy_verify_commit(
     // durable once its folder is.
     move_cleanup::sync_dir(new_base);
     let mut moved: Option<Project> = None;
+    let mut housekeeping = None;
     let fate = if let Err(error) = crate::util::faults::check("move:after-publication")
         .and_then(|()| crate::util::faults::check("move:after-commit-before-source-removal"))
     {
@@ -483,51 +646,49 @@ pub(crate) fn staged_copy_verify_commit(
             final_path: new_path,
             project_id: &project.id,
             residue_allowed: false,
+            ticker: ticker.uncancellable(),
         };
-        move_cleanup::retire_and_remove(transaction, &cleanup, || {
+        match move_cleanup::set_aside(transaction, &cleanup, || {
             moved = Some(finish_move_bookkeeping(
                 project, &old_base, new_base, new_path,
             ));
-        })
+        }) {
+            move_cleanup::SetAside::Settled(fate) => fate,
+            move_cleanup::SetAside::Retired(transaction) => {
+                let old = move_cleanup::Housekeeping::old_copy(transaction, &cleanup);
+                let path = old.path();
+                housekeeping = Some(old);
+                // Not a fate the cleanup reached: the move is done, and the
+                // old copy's removal is the caller's to run.
+                SourceFate::Leftover {
+                    path,
+                    reason: String::new(),
+                    redundant: true,
+                }
+            }
+        }
     };
 
-    let source = match fate {
-        SourceFate::Removed { record_kept } => {
-            if let Some(reason) = record_kept {
-                crate::util::diag::warn(format!(
-                    "the move is complete, but its record could not be cleared ({reason}); \
-                     `fastf reconcile` clears it"
-                ));
-            }
-            SourceOutcome::Removed
-        }
-        SourceFate::Leftover {
-            path,
-            reason,
-            redundant,
-        } => SourceOutcome::Leftover {
-            path,
-            reason,
-            redundant,
-        },
-        SourceFate::KeptWhole { reason } => SourceOutcome::KeptWhole { reason },
-        SourceFate::Unknown { reason } => SourceOutcome::Unknown { reason },
+    let source = match (&housekeeping, fate) {
+        (Some(_), SourceFate::Leftover { path, .. }) => SourceOutcome::SetAside { path },
+        (_, fate) => SourceOutcome::from_fate(fate),
     };
     let moved = moved.unwrap_or_else(|| moved_view(project, new_base, new_path));
-    set_phase(progress, JobPhase::Done);
     let copied = {
         let state = progress.lock().unwrap_or_else(|error| error.into_inner());
         (state.total_files, state.total_bytes)
     };
-    finish_progress(progress);
-    Ok(MoveOutcome {
-        project: moved,
-        source,
-        staged: true,
-        copied: Some(copied),
-        links: manifest.total_links(),
-        link_notes: manifest.link_notes(&project.path),
-    })
+    Ok((
+        MoveOutcome {
+            project: moved,
+            source,
+            staged: true,
+            copied: Some(copied),
+            links: manifest.total_links(),
+            link_notes: manifest.link_notes(&project.path),
+        },
+        housekeeping,
+    ))
 }
 
 fn finish_move_bookkeeping(
@@ -584,25 +745,4 @@ pub(crate) fn finish_recovered_move(
     let original = project_from_meta(metadata, source_base, &source_base.join(source_folder));
     finish_move_bookkeeping(&original, source_base, target_base, final_path);
     Ok(())
-}
-
-/// The job is over. **`JobStatus` was assigned `Running` at construction and
-/// never changed anywhere in the crate**, so the runtime's "is it done yet"
-/// was always false: `Runtime.moving` was never cleared, a finished move kept
-/// emitting progress, and a later cancel set the flag on a dead job's handle.
-fn finish_progress(progress: &Mutex<Progress>) {
-    if let Ok(mut p) = progress.lock() {
-        p.status = crate::core::assets::JobStatus::Done;
-        p.phase = JobPhase::Done;
-        p.touch();
-    }
-}
-
-fn set_phase(progress: &Mutex<Progress>, phase: JobPhase) {
-    if let Ok(mut p) = progress.lock() {
-        p.phase = phase;
-        // A phase change is real movement: without it, verifying a large tree
-        // looks identical to a dead worker to anything reading the timestamp.
-        p.touch();
-    }
 }

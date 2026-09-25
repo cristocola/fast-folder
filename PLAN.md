@@ -454,7 +454,6 @@ move states what is on disk.
   disk; it now reloads, listing both until reconcile (pty test
   `a_move_that_keeps_its_original_says_why_in_a_dialog`). Windows VM: 457 unit
   tests green. Gates green. Left: publication, on the word.
-
 - 2026-09-25 — Review round. A review subagent over the whole branch found ten
   things, all confirmed and fixed: `fastf delete` and reconcile's removals
   could delete through a link on a link-resolving mount (every removal now asks

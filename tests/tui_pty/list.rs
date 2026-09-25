@@ -621,6 +621,72 @@ fn a_batch_move_reports_each_item_and_patches_its_rows() {
     );
 }
 
+/// A single move whose original cannot be set aside — here a retire made to
+/// fail — says why in a dialog: the reason is a paragraph, and the status line
+/// would show its first few words. The moved copy is listed; the original is
+/// whole on disk.
+#[cfg(debug_assertions)]
+#[test]
+fn a_move_that_keeps_its_original_says_why_in_a_dialog() {
+    let sb = Sandbox::new();
+    let alt = sb.with_bases(&["alt"])[0].clone();
+    plant_dated_project(&sb, "Solo", "ID0001", "2026-01-01T00:00:00Z", 64);
+
+    let script = pty::Script::new()
+        .pause(800)
+        .key("m")
+        .pause(400)
+        .enter() // → the one other mounted base
+        .pause(4500) // the staged copy, then the retire's retries run out
+        .key(KEY_QUIT) // close the dialog
+        .pause(300)
+        .key(KEY_QUIT) // leave
+        .build();
+    let fault = std::path::Path::new("move:force-staged,move:source-cleanup");
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_FAULT", fault),
+        ],
+        &script,
+        DEADLINE,
+    );
+    let text = pty::plain(&out);
+    let screen = app_screen(&out);
+    if std::env::var_os("FASTF_SHOW_FRAME").is_some() {
+        // The frame with the dialog up, for a person to look at.
+        let mut dialog = out
+            .find("fastf reconcile")
+            .map_or(out.len(), |at| (at + 4000).min(out.len()));
+        while !out.is_char_boundary(dialog) {
+            dialog -= 1;
+        }
+        eprintln!("{}\n{screen}", app_screen(&out[..dialog]));
+    }
+
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.contains("needs a look") && text.contains("still there, whole"),
+        "the dialog says what became of the original:\n{text}"
+    );
+    assert!(
+        sb.base.join("Solo").is_dir() && alt.join("Solo").is_dir(),
+        "the original is whole and the copy published:\n{text}"
+    );
+    let rows: Vec<&str> = screen
+        .lines()
+        .filter(|line| line.contains("ID0001 Solo"))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        2,
+        "both are projects until reconcile finishes, and both are listed:\n{screen}"
+    );
+}
+
 /// A move that fails mid-job surfaces in the UI — a report naming the row —
 /// and the list stays consistent: the folder never left its source base and
 /// the row keeps its mark for a retry.

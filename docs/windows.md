@@ -139,6 +139,28 @@ drive is refused rather than followed, because only the name Windows cannot
 give would say where it leads. The rclone cache modes (`off`, `writes`,
 `full`) all work.
 
+## Moving a project to another drive
+
+A move between drive letters copies, verifies, publishes, and then takes the
+original out of the library in one rename before removing it
+([projects.md](projects.md#moving-projects-between-bases)). Three things are
+particular to Windows:
+
+- **A file open in another program** — a timeline in an editor, a document in
+  Word — stops Windows renaming the folder around it. The move then publishes
+  the copy, reports that the original is still there, whole, with nothing
+  removed, and says a program has a file in it open. Close the program and run
+  `fastf reconcile`: it finishes the move without copying again.
+- **Junctions** travel as junctions, pointing at the same folder, and need
+  nothing special. **Symbolic links** travel as symbolic links of the same kind
+  (to a file, or to a folder), but Windows lets an account make one only with
+  Developer Mode on (Settings › System › For developers) or from an elevated
+  prompt; without it, a move of a project holding one says so before copying
+  anything.
+- **OneDrive and other cloud placeholders** are read as ordinary files, which
+  downloads them; a mounted volume inside a project, or a link WSL made, is
+  named and refused before anything is copied.
+
 ## The mouse
 
 fastf never takes the mouse, so text selects as in any program. The wheel

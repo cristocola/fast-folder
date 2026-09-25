@@ -47,6 +47,26 @@ pub(crate) enum LinkProbe {
     Unexaminable,
 }
 
+/// What the probe saw, from what making the link reported and what `lstat`
+/// then found at its path.
+///
+/// **What is on disk wins over what the call said.** On an sshfs mount with
+/// `follow_symlinks`, `symlink()` makes the link on the server and then fails
+/// with `EIO`, because the mount reads the new entry back as the file it
+/// points to and the kernel expected a link. Taking that error for "cannot
+/// make links" let the incident's own mount through; something at the path
+/// that is not a link is the answer.
+pub(crate) fn observe(made: std::io::Result<()>, found: std::io::Result<bool>) -> LinkProbe {
+    match found {
+        Ok(true) => LinkProbe::SeenAsLink,
+        Ok(false) => LinkProbe::SeenAsSomethingElse,
+        Err(error) if made.is_err() && error.kind() == std::io::ErrorKind::NotFound => {
+            LinkProbe::NotCreated
+        }
+        Err(_) => LinkProbe::Unexaminable,
+    }
+}
+
 /// Whether what the probe saw means the filesystem resolves links itself —
 /// sshfs's `follow_symlinks` does, on the server — so a link in a project
 /// there looks like what it points to. A move would copy the target's content
@@ -96,14 +116,9 @@ fn run_probe(probe: &Path, renamed: &Path) -> std::result::Result<(), String> {
     fs::create_dir(probe).map_err(cannot_write)?;
     fs::write(probe.join(PROBE_FILE), b"fastf").map_err(cannot_write)?;
     let link = probe.join(PROBE_LINK);
-    let seen = match make_link(Path::new(PROBE_FILE), &link) {
-        Err(_) => LinkProbe::NotCreated,
-        Ok(()) => match fs::symlink_metadata(&link) {
-            Ok(metadata) if metadata.file_type().is_symlink() => LinkProbe::SeenAsLink,
-            Ok(_) => LinkProbe::SeenAsSomethingElse,
-            Err(_) => LinkProbe::Unexaminable,
-        },
-    };
+    let made = make_link(Path::new(PROBE_FILE), &link);
+    let found = fs::symlink_metadata(&link).map(|metadata| metadata.file_type().is_symlink());
+    let seen = observe(made, found);
     if resolves_links(seen) {
         return Err(format!(
             "the filesystem holding {} shows a link as what it points to — an sshfs mount \
@@ -196,6 +211,22 @@ mod tests {
     /// A link the filesystem shows as a file is the sshfs `follow_symlinks`
     /// case, and a link it cannot examine is no better; a filesystem that
     /// makes no links at all holds none to hide.
+    #[test]
+    fn what_is_at_the_path_decides_not_what_the_call_said() {
+        use std::io::{Error, ErrorKind};
+        let eio = || Err(Error::from(ErrorKind::Other));
+        let absent = || Err(Error::from(ErrorKind::NotFound));
+        // sshfs `follow_symlinks`: made on the server, EIO to the caller, and
+        // what is at the path is the file it points to.
+        assert_eq!(observe(eio(), Ok(false)), LinkProbe::SeenAsSomethingElse);
+        assert_eq!(observe(Ok(()), Ok(false)), LinkProbe::SeenAsSomethingElse);
+        assert_eq!(observe(Ok(()), Ok(true)), LinkProbe::SeenAsLink);
+        // A filesystem that makes no links: refused, and nothing there.
+        assert_eq!(observe(eio(), absent()), LinkProbe::NotCreated);
+        // Made, and then not there to examine.
+        assert_eq!(observe(Ok(()), absent()), LinkProbe::Unexaminable);
+    }
+
     #[test]
     fn only_a_link_shown_as_something_else_means_links_are_resolved() {
         assert!(!resolves_links(LinkProbe::NotCreated));

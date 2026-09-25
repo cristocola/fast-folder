@@ -692,6 +692,10 @@ pub enum Problem {
     /// A link fastf cannot make again, and why: on Windows, a reparse point
     /// of a kind other than a symbolic link or a junction.
     UnsupportedLink(String),
+    /// A link whose target the filesystem will not hand over. sshfs does this
+    /// by default (`contain_symlinks`) for every link that is absolute or
+    /// climbs with `..` — which is every link in `node_modules/.bin`.
+    LinkNotReadable(String),
     /// A socket, FIFO or device node.
     Special,
     /// A folder on a different filesystem from the walked root: a mount, or a
@@ -711,6 +715,7 @@ impl Problem {
             Self::Unexaminable { error, .. } => format!("listed but not examinable ({error})"),
             Self::Unreadable(error) => format!("a folder that cannot be listed ({error})"),
             Self::UnsupportedLink(what) => what.clone(),
+            Self::LinkNotReadable(error) => format!("a link that cannot be read ({error})"),
             Self::Special => "a socket, pipe or device".to_string(),
             Self::OtherFilesystem => "a different filesystem".to_string(),
             Self::NotUnicode => "a name that is not valid Unicode".to_string(),
@@ -736,6 +741,12 @@ impl std::fmt::Display for Problem {
             ),
             Self::Unreadable(error) => write!(f, "its contents cannot be listed ({error})"),
             Self::UnsupportedLink(what) => write!(f, "{what}"),
+            Self::LinkNotReadable(error) => write!(
+                f,
+                "a link the filesystem will not let fastf read ({error}); sshfs refuses \
+                 every link that is absolute or climbs with `..` unless it is mounted with \
+                 `-o no_contain_symlinks`"
+            ),
             Self::Special => {
                 f.write_str("a socket, pipe or device, which is not a file fastf can copy")
             }
@@ -919,9 +930,15 @@ fn entry_for(
         // did; a dangling link is as good as any, since nothing is read
         // through it.
         let kind = link_kind(path, metadata)?;
-        let target = fs::read_link(path).map_err(|error| Problem::Unexaminable {
-            not_found: error.kind() == std::io::ErrorKind::NotFound,
-            error: error.to_string(),
+        let target = fs::read_link(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                Problem::LinkNotReadable(error.to_string())
+            } else {
+                Problem::Unexaminable {
+                    not_found: error.kind() == std::io::ErrorKind::NotFound,
+                    error: error.to_string(),
+                }
+            }
         })?;
         if target.to_str().is_none() {
             return Err(Problem::NotUnicode);
@@ -1777,6 +1794,16 @@ mod tests {
             !notes.contains("elsewhere"),
             "an absolute link elsewhere still works: {notes}"
         );
+    }
+
+    /// sshfs's default `contain_symlinks` hands back `EPERM` for every link
+    /// that climbs with `..`; the refusal names the option that lifts it.
+    #[test]
+    fn a_link_the_mount_will_not_read_names_the_option() {
+        let problem = Problem::LinkNotReadable("Operation not permitted (os error 1)".into());
+        let said = problem.to_string();
+        assert!(said.contains("no_contain_symlinks"), "{said}");
+        assert!(said.contains("Operation not permitted"), "{said}");
     }
 
     #[cfg(unix)]

@@ -775,6 +775,7 @@ fn run_action(
     cancel: &AtomicBool,
 ) -> Result<ActionOutcome> {
     use crate::core::library::base_label;
+    use crate::core::move_engine::SourceOutcome;
     use crate::util::paths::display_path;
 
     match action {
@@ -996,16 +997,26 @@ fn run_action(
                 .reduce(|all, next| format!("{all}\n\n{next}"));
             let session = format!("moved {} → {}", moved.id, base_label(&moved.base));
             let stale = vec![project.path.clone(), moved.path.clone()];
-            Ok(ActionOutcome::new(
+            // **An original kept whole is still a project.** Until reconcile
+            // finishes, the library holds it and its moved copy, one id in two
+            // bases — so the list reads both again rather than patching the
+            // original's row into the moved one and hiding what is on disk.
+            let kept = matches!(
+                outcome.source,
+                SourceOutcome::KeptWhole { .. } | SourceOutcome::Unknown { .. }
+            );
+            let change = if kept {
+                ListChange::Reload
+            } else {
                 ListChange::Patched {
                     project: Box::new(moved),
                     was: project.path.clone(),
                     stale,
-                },
-                message,
-            )
-            .warning(warning)
-            .session(session))
+                }
+            };
+            Ok(ActionOutcome::new(change, message)
+                .warning(warning)
+                .session(session))
         }
         Action::CopyTo {
             project,

@@ -354,21 +354,21 @@ move states what is on disk.
 
 ## Phase 5 — docs, the record, and ship
 
-- [ ] `docs/projects.md` › Moving projects and › What fastf promises: links reproduced;
+- [x] `docs/projects.md` › Moving projects and › What fastf promises: links reproduced;
   hard links become separate files; the source leaves in one rename; the limits — a
   mount that resolves links on the server (sshfs `follow_symlinks` is refused by the
   probe; a Samba share following links for a client without unix extensions cannot be
   probed, since the client cannot create a link), ownership/ACLs/xattrs not carried.
-- [ ] `docs/cli.md` › Moving projects, › Symlinks and junctions (defect 18), reconcile;
+- [x] `docs/cli.md` › Moving projects, › Symlinks and junctions (defect 18), reconcile;
   `docs/windows.md` junctions; `README.md:44` if its wording drifts.
-- [ ] `src/core/CLAUDE.md` › Moving projects and › Recovery: the principles, the table,
+- [x] `src/core/CLAUDE.md` › Moving projects and › Recovery: the principles, the table,
   the limits.
-- [ ] A real cross-device run with the release binary (a `/dev/shm` base to a base on
+- [x] A real cross-device run with the release binary (a `/dev/shm` base to a base on
   another filesystem): dangling `node_modules/.bin` links and a chmod-555 folder arrive,
   the source leaves in one step, reconcile's output is true. If sshfs and a local sshd
   are available, `follow_symlinks` is refused by the probe.
-- [ ] The app's move report and reconcile status checked with the screenshot tool.
-- [ ] Windows VM pass (clippy, tests, the phase-4 Windows tests).
+- [x] The app's move report and reconcile status checked with the screenshot tool.
+- [x] Windows VM pass (clippy, tests, the phase-4 Windows tests).
 - [ ] PR; on "release": the `release` skill for 3.12.0, both AUR packages; retire this
   file.
 
@@ -430,3 +430,27 @@ move states what is on disk.
   keeping the original whole until reconcile. Two Windows-only test mistakes
   fixed on the way: `read_link` answers the plain `C:\` form, and a moved
   project's path is canonical. Gates green.
+- 2026-09-25 — Phase 5. Docs: `projects.md` (moving, recovery, promises, the
+  mount limits), `cli.md` (moving, links, copy-to, recovery), `windows.md`
+  (moving to another drive), `app.md` (the attention count), `README.md`.
+  **A real cross-device run** (release binary, a `/dev/shm` base to the
+  scratchpad): the incident's `node_modules/.bin` dangling links arrived
+  verbatim, a mode-555 folder did not stop the removal, nothing was left behind,
+  reconcile had nothing to do; a read-only source base and a socket plus a pipe
+  were refused before any copy. **A real sshfs mount** (local `sftp-server`
+  through `ssh_command`, no sshd login needed) found two things the unit tests
+  could not: (1) on `follow_symlinks`, `symlink()` makes the link on the server
+  and then fails `EIO`, so the probe took "cannot make links" and let the mount
+  through — it now judges by what `lstat` finds (`move_preflight::observe`); (2)
+  this sshfs (3.7.6) defaults to `contain_symlinks`, refusing `readlink` with
+  `EPERM` for every link that is absolute or climbs with `..` — every
+  `node_modules/.bin` link — so such a link is `Problem::LinkNotReadable`, whose
+  message names `-o no_contain_symlinks`. With that option and without
+  `follow_symlinks`, the project moved with its link intact. For contrast, the
+  installed 3.11.0 on the `follow_symlinks` mount turned every link into a copy
+  of its target. The app: a single move that keeps its original now opens the
+  dialog, and — found by looking at the frame — the list patched the original's
+  row into the moved one although the original is still a whole project on
+  disk; it now reloads, listing both until reconcile (pty test
+  `a_move_that_keeps_its_original_says_why_in_a_dialog`). Windows VM: 457 unit
+  tests green. Gates green. Left: publication, on the word.

@@ -418,10 +418,10 @@ fastf move my-crate /mnt/projects/archive
 fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 ```
 
-Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move stages every ordinary file—including legitimate `.tmp` and `.part` names—checks relative paths and byte lengths, commits atomically, and only then removes the source. Keep the project untouched while that copy is running.
+Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move stages every ordinary file—including legitimate `.tmp` and `.part` names—and every link, checks relative paths, byte lengths and link targets, commits atomically, and only then sets the original aside in one rename and removes it. Keep the project untouched while that copy is running. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
 
 **A move always says which kind it was**: `renamed on the same filesystem,
-nothing copied`, or `copied 412 files, 199.5 GB, verified`. A same-filesystem
+nothing copied`, or `copied 412 files and 3 links, 199.5 GB, verified`. A same-filesystem
 move is an atomic rename and finishes instantly however large the folder is, so
 without that line an instant finish on a 200 GB project is indistinguishable
 from one that did nothing.
@@ -429,23 +429,41 @@ from one that did nothing.
 A cross-filesystem move reports its progress as it goes — a bar, the phase
 (copying, verifying, finalizing), how many files are done, and how much has been
 copied.
+**Before anything is copied**, a cross-drive move checks that it could finish:
+that it can write in the source base (a move removes the original afterwards,
+so a read-only base is refused), that the base shows links as links, that the
+target has room, and that every name fits the target's filesystem. Every
+problem is named at once, and nothing has been copied:
+
+```
+error: /mnt/share/2026-07-26_Shoot_ID0047 holds 2 entries that cannot be copied to another drive:
+  cache/render.sock: a socket, pipe or device, which is not a file fastf can copy
+  media: a different filesystem inside the project (a mount, or a separate btrfs subvolume)
+```
+
 **Ctrl-C cancels it safely before publication**: fastf removes only the private
 transaction owned by that operation and leaves the source untouched. Once
-publication begins, cancellation is too late. If the destination is published
-but source removal fails, the command reports cleanup pending and retains the
-transaction for reconciliation. Same-filesystem moves finish instantly and
-print nothing extra.
+publication begins, cancellation is too late. If the original cannot then be
+set aside — a program has a file in it open — the move says that the original
+is still there, whole, that nothing in it was removed, and why; `fastf
+reconcile` finishes the move once that is resolved, without copying again.
+Same-filesystem moves finish instantly and print nothing extra.
 
-**Symlinks and junctions.** A move to another drive has to copy, and a link cannot be reproduced faithfully there — recreating one needs elevation or Developer Mode on Windows, and following it would silently restructure your project and could duplicate a whole shared asset library. So fastf refuses, names the links it found, and changes nothing:
+**Symlinks and junctions** travel as links, pointing exactly where they did, and
+are never followed: nothing behind one is copied, and removing the original
+never deletes through one. A link whose target is missing moves like any other.
+A link whose meaning may change at the new place is named:
 
 ```
-error: '2026-07-26_Shoot_ID0047' contains 1 link that a cross-drive move cannot reproduce:
-  linked
-Nothing has been changed. Move the folder with a tool that preserves links
-(or remove the links first), then run `fastf reindex`.
+note: vendor/shared points outside the project (../../shared); it is kept exactly, so from the new place it may point somewhere else
 ```
 
-Moves *within* the same drive are unaffected: they are a rename, nothing is copied, and links travel along untouched.
+On Windows a symbolic link can only be made with Developer Mode on (junctions
+need nothing); without it, a move of a project holding one says so before
+copying anything. A network mount that resolves links itself (sshfs
+`follow_symlinks`) hides them from fastf, so a move from one is refused and
+names the option; sshfs's default `contain_symlinks` will not let fastf read a
+link that climbs with `..`, and the move names `-o no_contain_symlinks`.
 
 ## Copying a project out of the library
 
@@ -466,11 +484,11 @@ base it would have landed in.
 
 Underneath it is the same machinery as a cross-drive move: a manifest of every
 file, a private `.fastf-transactions/` staging tree under the destination,
-exact path/type/size verification, a check that the source did not change while
-it copied, and an atomic publish. Links are refused for the same reason a
-cross-drive move refuses them — a symlink or a junction cannot be reproduced
-faithfully somewhere else. Ctrl-C cancels and leaves nothing but the copy's own
-transaction, which it removes.
+exact path/type/size/link-target verification, a check that the source did not
+change while it copied, and an atomic publish. Links travel as links, exactly as
+in a move, and the room and name checks run before anything is copied; a copy
+removes nothing, so it needs no write access to the original. Ctrl-C cancels
+and leaves nothing but the copy's own transaction, which it removes.
 
 `fastf copy` (no dash) is unrelated: it puts a project's path on the clipboard.
 In the guided app the verb is `C`, `Copy to…`, and it runs over every marked
@@ -512,9 +530,14 @@ fastf reconcile
 Scoped v2 create journals let `reconcile` finish missing deferred copies after
 validating the template, project identity, relative paths, entry types, and byte
 lengths. Scoped move transactions are either discarded before publication or,
-after a matching destination has been published, advanced through source
-cleanup. Missing bases, mismatched identities, malformed journals, or unknown
-states are reported without mutation. Running the command repeatedly is safe.
+after a matching destination has been published, finished: the original is set
+aside and removed only when everything in it is what the move recorded and is
+still in the moved copy. Anything else is reported — the project, its
+transaction, and what differs — and nothing is removed. A move that fastf 3.11
+or older left half-deleted is finished the same way when what is left is
+provably a duplicate. Missing bases, mismatched identities, malformed journals,
+or unknown states are reported without mutation. Running the command repeatedly
+is safe.
 
 It also finishes a **rename** that was interrupted. Renaming a folder to a
 different capitalisation of the same name has to go through a temporary name,

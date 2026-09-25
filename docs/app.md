@@ -27,8 +27,9 @@ Top to bottom:
   the one you are on underlined, then how many bases there are and the
   highest ID; then each base with how many projects its index holds or that
   it is not mounted, and on the right `⚠ n needs attention` when an
-  interrupted create or move is waiting for `fastf reconcile` (else the last
-  few things this session did).
+  interrupted create or move, or a hidden folder a moved or deleted project
+  left behind, is waiting for `fastf reconcile` (else the last few things this
+  session did).
 - **The search bar** — the query, and on the right the one place the list
   reports itself: how many rows matched out of how many there are, the sort
   order, the template and base filters, and how many rows are marked. The

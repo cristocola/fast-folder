@@ -264,7 +264,12 @@ every unix symlink is `Symlink`; on Windows the reparse tag decides
 (`util::win_reparse`) — `SYMLINK` is `Symlink` or `DirSymlink` by the link's own
 directory attribute (its target may not exist), `MOUNT_POINT` is `Junction`
 unless it names a volume (`OtherFilesystem`), anything else is
-`UnsupportedLink`. Cloud placeholders are not name surrogates, so `std` reads them
+`UnsupportedLink`. A link whose `read_link` is refused is `LinkNotReadable`, whose
+message names sshfs's `-o no_contain_symlinks`: sshfs's default refuses every link
+that is absolute or climbs with `..`, found against a real mount. The probe judges
+by what `lstat` finds at the link's path, not by what `symlink()` said — on a
+`follow_symlinks` mount the call makes the link on the server and then fails with
+`EIO`. Cloud placeholders are not name surrogates, so `std` reads them
 as files and they are copied as data. `std::fs::read_link` turns `\??\C:\x` into
 the plain `C:\x` wherever it can, for the original and the copy alike, which is
 what lets the two compare; `win_reparse::create_junction` takes either form.

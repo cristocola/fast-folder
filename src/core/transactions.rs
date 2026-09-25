@@ -1147,6 +1147,13 @@ pub fn transaction_from_journal(
 
 /// Copy from a manifest with one reusable bounded buffer. Files are written
 /// directly into private staging, so no sibling `.part` convention exists.
+///
+/// **Two passes: every name first, then every file's contents.** A name the
+/// target's filesystem will not hold — two that differ only in case on a drive
+/// that ignores it, a `:` on one that forbids it, a name too long — used to be
+/// found file by file during the copy, possibly hours in. Making every folder
+/// and every (empty) file first finds all of them in seconds, before a byte of
+/// content has moved, and names them together.
 pub fn copy_to_staging(
     manifest: &MoveManifest,
     source: &Path,
@@ -1157,79 +1164,164 @@ pub fn copy_to_staging(
     crate::util::paths::require_real_directory(source, "move source")?;
     crate::util::paths::require_real_directory(staging, "move staging")?;
     manifest.validate()?;
-    let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
+    create_names(manifest, staging, cancel)?;
+    copy_contents(manifest, source, staging, progress, cancel)
+}
 
+/// The first pass: every folder, every file (empty), and — last, so no later
+/// write can pass through one — every link.
+fn create_names(manifest: &MoveManifest, staging: &Path, cancel: &AtomicBool) -> Result<()> {
+    let ordered = manifest
+        .entries
+        .iter()
+        .filter(|entry| !entry.kind.is_link())
+        .chain(manifest.entries.iter().filter(|entry| entry.kind.is_link()));
+    let mut refused: Vec<(PathBuf, String)> = Vec::new();
+    for entry in ordered {
+        if cancel.load(Ordering::Relaxed) {
+            bail!("move cancelled");
+        }
+        // Beneath a folder that could not be made, nothing can be; its own
+        // refusal says why.
+        if refused.iter().any(|(path, _)| entry.path.starts_with(path)) {
+            continue;
+        }
+        let destination = staging.join(&entry.path);
+        let made = match entry.kind {
+            ManifestKind::Directory => fs::create_dir(&destination),
+            ManifestKind::File => OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&destination)
+                .map(drop),
+            ManifestKind::Symlink | ManifestKind::DirSymlink | ManifestKind::Junction => Err(
+                std::io::Error::other("links are not supported by cross-drive moves"),
+            ),
+        };
+        if let Err(error) = made {
+            refused.push((entry.path.clone(), name_refusal(&error)));
+        }
+    }
+    if refused.is_empty() {
+        return Ok(());
+    }
+    let count = refused.len();
+    let mut message = format!(
+        "{count} {} cannot be made where the project is going:",
+        if count == 1 { "name" } else { "names" }
+    );
+    for (path, why) in refused.iter().take(LISTED) {
+        message.push_str(&format!("\n  {}: {why}", path.display()));
+    }
+    if count > LISTED {
+        message.push_str(&format!("\n  and {} more", count - LISTED));
+    }
+    message.push_str("\nNo file's contents were copied.");
+    bail!("{message}")
+}
+
+/// Why the target's filesystem would not make a name, in words.
+///
+/// `AlreadyExists` in a staging folder fastf made empty a moment ago can only
+/// mean the filesystem took two of the project's names for one: it ignores
+/// case, or folds these letters together.
+pub(crate) fn name_refusal(error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        return "the filesystem there takes this name for another one in the same folder \
+                (it ignores case, or folds these letters together)"
+            .to_string();
+    }
+    #[cfg(unix)]
+    match error.raw_os_error() {
+        Some(libc::EINVAL) | Some(libc::EILSEQ) => {
+            return "the filesystem there does not allow this name".to_string();
+        }
+        Some(libc::ENAMETOOLONG) => {
+            return "the name is too long for the filesystem there".to_string();
+        }
+        _ => {}
+    }
+    #[cfg(windows)]
+    match error.raw_os_error() {
+        // ERROR_INVALID_NAME
+        Some(123) => return "the filesystem there does not allow this name".to_string(),
+        // ERROR_FILENAME_EXCED_RANGE
+        Some(206) => return "the name is too long for the filesystem there".to_string(),
+        _ => {}
+    }
+    error.to_string()
+}
+
+/// The second pass: each file's contents, into the empty file the first pass
+/// made — opened without following a link, though none can be there.
+fn copy_contents(
+    manifest: &MoveManifest,
+    source: &Path,
+    staging: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
     for entry in &manifest.entries {
         if cancel.load(Ordering::Relaxed) {
             bail!("move cancelled");
         }
+        if entry.kind != ManifestKind::File {
+            continue;
+        }
         let source_path = source.join(&entry.path);
         let destination_path = staging.join(&entry.path);
-        match entry.kind {
-            ManifestKind::Directory => {
-                fs::create_dir_all(&destination_path).with_context(|| {
-                    format!("creating staging directory {}", destination_path.display())
-                })?;
+        let current = entry_from_path(&source_path, &entry.path)?;
+        if &current != entry {
+            bail!(
+                "move source changed before copying {}",
+                entry.path.display()
+            );
+        }
+        if let Ok(mut state) = progress.lock() {
+            state.current_file = entry.path.to_string_lossy().into_owned();
+            state.touch();
+        }
+        let mut reader = fs::File::open(&source_path)
+            .with_context(|| format!("opening {}", source_path.display()))?;
+        let mut options = OpenOptions::new();
+        options.write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut writer = options
+            .open(&destination_path)
+            .with_context(|| format!("opening {}", destination_path.display()))?;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                bail!("move cancelled");
             }
-            ManifestKind::Symlink | ManifestKind::DirSymlink | ManifestKind::Junction => {
-                bail!(
-                    "cannot copy {}: links are not supported by cross-drive moves",
-                    entry.path.display()
-                );
+            crate::util::faults::check("move:mid-copy")?;
+            let count = reader
+                .read(&mut buffer)
+                .with_context(|| format!("reading {}", source_path.display()))?;
+            if count == 0 {
+                break;
             }
-            ManifestKind::File => {
-                if let Some(parent) = destination_path.parent() {
-                    fs::create_dir_all(parent)
-                        .with_context(|| format!("creating {}", parent.display()))?;
-                }
-                let current = entry_from_path(&source_path, &entry.path)?;
-                if &current != entry {
-                    bail!(
-                        "move source changed before copying {}",
-                        entry.path.display()
-                    );
-                }
-                if let Ok(mut state) = progress.lock() {
-                    state.current_file = entry.path.to_string_lossy().into_owned();
-                    state.touch();
-                }
-                let mut reader = fs::File::open(&source_path)
-                    .with_context(|| format!("opening {}", source_path.display()))?;
-                let mut writer = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&destination_path)
-                    .with_context(|| format!("creating {}", destination_path.display()))?;
-                loop {
-                    if cancel.load(Ordering::Relaxed) {
-                        bail!("move cancelled");
-                    }
-                    crate::util::faults::check("move:mid-copy")?;
-                    let count = reader
-                        .read(&mut buffer)
-                        .with_context(|| format!("reading {}", source_path.display()))?;
-                    if count == 0 {
-                        break;
-                    }
-                    writer
-                        .write_all(&buffer[..count])
-                        .with_context(|| format!("writing {}", destination_path.display()))?;
-                    if let Ok(mut state) = progress.lock() {
-                        state.copied_bytes = state.copied_bytes.saturating_add(count as u64);
-                        state.touch();
-                    }
-                }
-                writer
-                    .flush()
-                    .with_context(|| format!("flushing {}", destination_path.display()))?;
-                writer
-                    .sync_all()
-                    .with_context(|| format!("syncing {}", destination_path.display()))?;
-                if let Ok(mut state) = progress.lock() {
-                    state.done_files += 1;
-                    state.touch();
-                }
+            writer
+                .write_all(&buffer[..count])
+                .with_context(|| format!("writing {}", destination_path.display()))?;
+            if let Ok(mut state) = progress.lock() {
+                state.copied_bytes = state.copied_bytes.saturating_add(count as u64);
+                state.touch();
             }
+        }
+        writer
+            .flush()
+            .with_context(|| format!("flushing {}", destination_path.display()))?;
+        writer
+            .sync_all()
+            .with_context(|| format!("syncing {}", destination_path.display()))?;
+        if let Ok(mut state) = progress.lock() {
+            state.done_files += 1;
+            state.touch();
         }
     }
     Ok(())
@@ -1661,6 +1753,64 @@ mod tests {
         fs::write(source.join("sub/c.txt"), "edited, and longer").unwrap();
         let edited = manifest.compare(&Walk::of(&source, "tree").unwrap(), Match::Whole);
         assert!(!edited.is_residue(), "{edited:?}");
+    }
+
+    /// Every name the target will not hold is found before any content is
+    /// copied, and named together. A name already taken in a staging folder
+    /// fastf made empty is how a case-insensitive drive refuses `README` beside
+    /// `readme`; planting the clash is how a test on a case-sensitive one gets
+    /// there.
+    #[test]
+    fn the_names_pass_refuses_every_name_before_copying_a_byte() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let staging = temp.path().join("staging");
+        fs::create_dir_all(source.join("sub")).unwrap();
+        fs::write(source.join("a.txt"), "aaa").unwrap();
+        fs::write(source.join("c.txt"), "ccc").unwrap();
+        fs::write(source.join("sub/b.txt"), "bbb").unwrap();
+        fs::create_dir(&staging).unwrap();
+        let manifest = MoveManifest::scan(&source).unwrap();
+        fs::write(staging.join("a.txt"), "").unwrap();
+        fs::write(staging.join("sub"), "").unwrap();
+
+        let error = copy_to_staging(
+            &manifest,
+            &source,
+            &staging,
+            &Mutex::new(Progress::new(&[])),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("2 names"),
+            "the folder's own entries are not counted: {error}"
+        );
+        assert!(
+            error.contains("a.txt: the filesystem there takes this name"),
+            "{error}"
+        );
+        assert!(
+            error.contains("sub: the filesystem there takes this name"),
+            "{error}"
+        );
+        assert!(error.contains("No file's contents were copied"), "{error}");
+        assert_eq!(
+            fs::read(staging.join("c.txt")).unwrap(),
+            b"",
+            "made, and left empty: the contents pass never ran"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_name_is_said_in_words() {
+        let from = |code| name_refusal(&std::io::Error::from_raw_os_error(code));
+        assert!(from(libc::EINVAL).contains("does not allow this name"));
+        assert!(from(libc::EILSEQ).contains("does not allow this name"));
+        assert!(from(libc::ENAMETOOLONG).contains("too long"));
+        assert!(from(libc::EEXIST).contains("takes this name for another"));
     }
 
     /// 3.11's journals are read, marked as ones whose source it may have

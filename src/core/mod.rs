@@ -6,6 +6,7 @@ pub mod counter;
 pub mod library;
 pub(crate) mod move_cleanup;
 pub mod move_engine;
+pub(crate) mod move_preflight;
 pub mod naming;
 pub mod operations;
 pub mod plan;

@@ -302,6 +302,21 @@ copy restored from an older backup keeps the original. Without a published recor
 device, re-checks each entry against the manifest, carries on past a failure,
 gives a folder its owner's permission back, and counts what it left.
 
+**Before a byte is copied** (`core::move_preflight`, a courtesy — correctness
+never depends on it): the scan's problems refuse the move, all of them named; a
+move (never a copy) probes its source base with `.fastf-probe-<operation>` —
+create, write, link, lstat the link, rename, remove — because only the real
+operation answers "can fastf write here" on a network mount whose server decides,
+and a link that reads back as a file means the mount resolves links itself (sshfs
+`follow_symlinks`), which is refused; a sticky base holding another user's folder
+is refused; `util::disk_space` refuses a copy that cannot fit, and an answer it
+cannot give (`None`) never refuses. Then `copy_to_staging` makes **every name
+before any content** — folders with `create_dir` in manifest order, empty files
+with `create_new`, links last — so a name the target will not hold (a case clash:
+`AlreadyExists` in a staging folder fastf made empty; `EINVAL`/123; too long) is
+found in seconds, all of them together (`name_refusal`). Reconcile clears a probe
+a killed move left, and only the names a probe holds.
+
 **A folder rename uses `fs_retry::rename_dir`**, whose ≈ 2.5 s schedule outlasts an
 indexer holding a freshly written tree; the short one discarded a verified staging
 copy at publish. On Windows a refused folder rename means a program has something

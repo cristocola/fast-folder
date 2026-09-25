@@ -217,7 +217,9 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                     retired.push((path, operation.to_string()));
                     continue;
                 }
-                if name.starts_with(move_cleanup::DELETED_PREFIX) {
+                if name.starts_with(move_cleanup::DELETED_PREFIX)
+                    || name.starts_with(crate::core::move_preflight::PROBE_PREFIX)
+                {
                     out.push(Incomplete {
                         path: path.display().to_string(),
                         kind: IncompleteKind::Leftover,
@@ -486,6 +488,20 @@ fn reconcile_base(
             }
             if name.starts_with(move_cleanup::DELETED_PREFIX) {
                 reconcile_deleted(&path, report);
+                continue;
+            }
+            if name.starts_with(crate::core::move_preflight::PROBE_PREFIX) {
+                // A move's probe outlives it only when the move was killed
+                // mid-probe; this pass holds the lock, so no move is running.
+                if crate::core::move_preflight::clear_probe(&path) {
+                    report.cleared += 1;
+                } else {
+                    report.leftovers.push(format!(
+                        "{}: a move's probe folder holds something fastf did not put \
+                         there, so it was left; delete it yourself once you have looked.",
+                        crate::util::paths::display_path(&path)
+                    ));
+                }
                 continue;
             }
             if is_stranded_case_rename(&name, &path) {
@@ -1654,7 +1670,10 @@ mod tests {
             said.contains("kept whole") && said.contains("autosave.tmp"),
             "{said}"
         );
-        assert_eq!(fs::read(retired.join("autosave.tmp")).unwrap(), b"only here");
+        assert_eq!(
+            fs::read(retired.join("autosave.tmp")).unwrap(),
+            b"only here"
+        );
         assert!(retired.join("payload.part").is_file(), "kept whole");
         assert!(operation.is_dir());
     }
@@ -1750,6 +1769,27 @@ mod tests {
         );
         assert!(source.join("payload.part").is_file());
         assert!(operation.is_dir());
+    }
+
+    /// A move killed while probing its source base leaves the probe; the next
+    /// pass clears it, and it clears nothing that is not a probe's.
+    #[test]
+    fn a_probe_a_killed_move_left_is_cleared() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("base");
+        let probe = crate::core::move_preflight::probe_path(&base, "18d863aff116f53c-1-3");
+        fs::create_dir_all(&probe).unwrap();
+        fs::write(probe.join("f"), b"fastf").unwrap();
+        let cfg = config_for(&base);
+        assert!(
+            list_incomplete(&cfg)
+                .iter()
+                .any(|item| item.kind == IncompleteKind::Leftover)
+        );
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.cleared, 1, "{report:?}");
+        assert!(!probe.exists());
     }
 
     /// A deleted project's hidden folder is finished by the next pass.

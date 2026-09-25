@@ -158,6 +158,9 @@ fn copy_unlocked(
         // silently restructure the copy.
         let manifest = MoveManifest::scan(&project.path)?;
         transaction.write_manifest(&manifest)?;
+        // A copy removes nothing, so it needs no write access to its source —
+        // only the room to land.
+        crate::core::move_preflight::check_space(&root, manifest.total_bytes())?;
         let totals = (manifest.total_files(), manifest.total_bytes());
         {
             let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());

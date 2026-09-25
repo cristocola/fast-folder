@@ -1,0 +1,246 @@
+//! What a cross-drive move can learn before it copies anything.
+//!
+//! **A courtesy, not a guarantee.** Correctness rests on verification and on
+//! the atomic retire (`move_cleanup`): a move that cannot take its source out
+//! of the library after copying keeps the source whole and says so. What this
+//! saves is the copy — sixty gigabytes across a network — that could never have
+//! finished, and the half-state it leaves until someone runs reconcile.
+//!
+//! Each check asks the filesystem the real question in the real place rather
+//! than reading permission bits, which mean nothing on a network mount whose
+//! server decides: can fastf write and rename in the source base, and does the
+//! source base show a link as a link?
+
+use anyhow::{Result, bail};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// The source base's probe folder, named by the operation, until it is removed.
+/// Dot-prefixed, so discovery never lists it.
+pub const PROBE_PREFIX: &str = ".fastf-probe-";
+/// The names a probe folder holds. Reconcile removes exactly these and nothing
+/// else, so a folder that merely shares the prefix is never emptied.
+const PROBE_FILE: &str = "f";
+const PROBE_LINK: &str = "l";
+
+/// The probe folder for `operation` in `source_base`.
+pub fn probe_path(source_base: &Path, operation_id: &str) -> PathBuf {
+    source_base.join(format!("{PROBE_PREFIX}{operation_id}"))
+}
+
+/// What renaming the probe folder makes of it.
+fn renamed_probe(probe: &Path) -> PathBuf {
+    let mut name = probe.file_name().unwrap_or_default().to_os_string();
+    name.push("-renamed");
+    probe.with_file_name(name)
+}
+
+/// What the filesystem showed of a link the probe made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkProbe {
+    /// The filesystem would not make one: it may hold none, which is fine.
+    NotCreated,
+    SeenAsLink,
+    /// A link fastf just made, to a file beside it, reads as something else.
+    SeenAsSomethingElse,
+    /// A link fastf just made cannot even be examined.
+    Unexaminable,
+}
+
+/// Whether what the probe saw means the filesystem resolves links itself —
+/// sshfs's `follow_symlinks` does, on the server — so a link in a project
+/// there looks like what it points to. A move would copy the target's content
+/// in its place and then, removing the original, delete through it.
+pub(crate) fn resolves_links(seen: LinkProbe) -> bool {
+    matches!(
+        seen,
+        LinkProbe::SeenAsSomethingElse | LinkProbe::Unexaminable
+    )
+}
+
+/// Before a move copies anything: can it take the source out of
+/// `source_base` once it has? Creates, links, renames and removes a small
+/// folder there — the very operations the retire will need.
+pub(crate) fn probe_source_base(
+    source_base: &Path,
+    source: &Path,
+    operation_id: &str,
+) -> Result<()> {
+    let probe = probe_path(source_base, operation_id);
+    let renamed = renamed_probe(&probe);
+    let outcome = run_probe(&probe, &renamed).and_then(|()| {
+        // The probe is there, not yet removed: what a crash leaves for
+        // reconcile to clear.
+        crate::util::faults::check("move:after-probe").map_err(|error| format!("{error:#}"))
+    });
+    clear_probe(&probe);
+    clear_probe(&renamed);
+    if let Err(refusal) = outcome {
+        bail!("{refusal}");
+    }
+    if let Some(refusal) = sticky_refusal(source_base, source) {
+        bail!("{refusal}");
+    }
+    Ok(())
+}
+
+fn run_probe(probe: &Path, renamed: &Path) -> std::result::Result<(), String> {
+    let base = probe.parent().unwrap_or(probe);
+    let cannot_write = |error: std::io::Error| {
+        format!(
+            "a move removes the original after copying it, so it needs to write in {}, \
+             and it cannot: {error}. Nothing was copied.",
+            crate::util::paths::display_path(base)
+        )
+    };
+    fs::create_dir(probe).map_err(cannot_write)?;
+    fs::write(probe.join(PROBE_FILE), b"fastf").map_err(cannot_write)?;
+    let link = probe.join(PROBE_LINK);
+    let seen = match make_link(Path::new(PROBE_FILE), &link) {
+        Err(_) => LinkProbe::NotCreated,
+        Ok(()) => match fs::symlink_metadata(&link) {
+            Ok(metadata) if metadata.file_type().is_symlink() => LinkProbe::SeenAsLink,
+            Ok(_) => LinkProbe::SeenAsSomethingElse,
+            Err(_) => LinkProbe::Unexaminable,
+        },
+    };
+    if resolves_links(seen) {
+        return Err(format!(
+            "the filesystem holding {} shows a link as what it points to — an sshfs mount \
+             with `follow_symlinks` does this — so fastf cannot see the links in a project \
+             there, and removing the original would delete through them. Mount it without \
+             that option, then move again. Nothing was copied.",
+            crate::util::paths::display_path(base)
+        ));
+    }
+    fs::rename(probe, renamed).map_err(cannot_write)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn make_link(_target: &Path, _link: &Path) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// Remove a probe folder: the names a probe holds, then the folder. Anything
+/// else in it stays, and so does the folder — it is not only fastf's then.
+pub(crate) fn clear_probe(probe: &Path) -> bool {
+    if fs::symlink_metadata(probe).is_err() {
+        return true;
+    }
+    for name in [PROBE_LINK, PROBE_FILE] {
+        let _ = crate::util::fs_retry::remove_file(&probe.join(name));
+    }
+    crate::util::fs_retry::remove_dir(probe).is_ok()
+}
+
+/// In a folder with the sticky bit set (`/tmp`'s kind), only the owner of an
+/// entry — or of the folder — may rename it. A shared base holding another
+/// user's project folder lets fastf copy it and then never take it out.
+#[cfg(unix)]
+fn sticky_refusal(base: &Path, source: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let base_metadata = fs::metadata(base).ok()?;
+    if base_metadata.mode() & 0o1000 == 0 {
+        return None;
+    }
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    let source_owner = fs::symlink_metadata(source).ok()?.uid();
+    if me == 0 || base_metadata.uid() == me || source_owner == me {
+        return None;
+    }
+    Some(format!(
+        "{} is shared (its sticky bit is set) and the project folder belongs to another \
+         user, so fastf could copy it but never take it out of the library. Nothing was \
+         copied.",
+        crate::util::paths::display_path(base)
+    ))
+}
+
+#[cfg(not(unix))]
+fn sticky_refusal(_base: &Path, _source: &Path) -> Option<String> {
+    None
+}
+
+/// Refuse a copy that cannot fit, when the filesystem says how much room it
+/// has. An answer it cannot give never refuses (`util::disk_space`).
+pub(crate) fn check_space(target_base: &Path, needed: u64) -> Result<()> {
+    if let Some(free) = crate::util::disk_space::available(target_base)
+        && needed > free
+    {
+        bail!(
+            "{} has {} free, and the project needs {}. Nothing was copied.",
+            crate::util::paths::display_path(target_base),
+            crate::util::human_bytes::human_bytes(free),
+            crate::util::human_bytes::human_bytes(needed)
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A link the filesystem shows as a file is the sshfs `follow_symlinks`
+    /// case, and a link it cannot examine is no better; a filesystem that
+    /// makes no links at all holds none to hide.
+    #[test]
+    fn only_a_link_shown_as_something_else_means_links_are_resolved() {
+        assert!(!resolves_links(LinkProbe::NotCreated));
+        assert!(!resolves_links(LinkProbe::SeenAsLink));
+        assert!(resolves_links(LinkProbe::SeenAsSomethingElse));
+        assert!(resolves_links(LinkProbe::Unexaminable));
+    }
+
+    /// The probe leaves nothing behind, on an ordinary filesystem it passes,
+    /// and the names it clears are its own.
+    #[test]
+    fn a_probe_passes_on_an_ordinary_folder_and_leaves_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("project");
+        fs::create_dir(&source).unwrap();
+        probe_source_base(temp.path(), &source, "18d863aff116f53c-1-1").unwrap();
+        let left: Vec<_> = fs::read_dir(temp.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name())
+            .collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("project")]);
+    }
+
+    #[test]
+    fn clearing_a_probe_keeps_what_is_not_a_probes() {
+        let temp = tempfile::tempdir().unwrap();
+        let probe = probe_path(temp.path(), "18d863aff116f53c-1-2");
+        fs::create_dir(&probe).unwrap();
+        fs::write(probe.join(PROBE_FILE), b"fastf").unwrap();
+        fs::write(probe.join("somebody-elses.txt"), b"keep").unwrap();
+        assert!(!clear_probe(&probe));
+        assert_eq!(fs::read(probe.join("somebody-elses.txt")).unwrap(), b"keep");
+        assert!(!probe.join(PROBE_FILE).exists());
+    }
+
+    /// Room is only refused when the filesystem says how much it has.
+    #[test]
+    fn a_copy_that_cannot_fit_is_refused_by_the_numbers() {
+        let temp = tempfile::tempdir().unwrap();
+        check_space(temp.path(), 1).unwrap();
+        let error = check_space(temp.path(), u64::MAX).unwrap_err().to_string();
+        assert!(
+            error.contains("free") && error.contains("Nothing was copied"),
+            "{error}"
+        );
+    }
+}

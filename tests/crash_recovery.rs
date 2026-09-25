@@ -100,6 +100,7 @@ const CREATE_POINTS: &[&str] = &[
 #[cfg(debug_assertions)]
 const MOVE_ABORT_POINTS: &[&str] = &[
     "move:after-transaction-create",
+    "move:after-probe",
     "move:mid-copy",
     "move:post-verification",
     "move:after-publication",
@@ -376,11 +377,13 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
                 .unwrap()
                 .flatten()
                 .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                .filter(|name| name.starts_with(".fastf-moved-"))
+                .filter(|name| {
+                    name.starts_with(".fastf-moved-") || name.starts_with(".fastf-probe-")
+                })
                 .collect();
             assert!(
                 hidden.is_empty() || *point == "move:after-transaction-create",
-                "[{point}] a retired original survived reconcile: {hidden:?} {first:?}"
+                "[{point}] a retired original or a probe survived reconcile: {hidden:?} {first:?}"
             );
 
             let authoritative = if final_after { &final_path } else { &source };

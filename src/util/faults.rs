@@ -161,6 +161,8 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "create:before-counter-save",
     "move:before-marker-write",
     "move:after-transaction-create",
+    // The source base's probe exists and is not yet removed.
+    "move:after-probe",
     "move:force-staged",
     "move:mid-copy",
     "move:after-staging",

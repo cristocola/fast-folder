@@ -346,6 +346,14 @@ pub(crate) fn staged_copy_verify_commit(
     let pre_publication = (|| -> Result<(MoveManifest, MoveManifest)> {
         let manifest = MoveManifest::scan(&project.path)?;
         transaction.write_manifest(&manifest)?;
+        // Before a byte is copied: can the original be taken out of its base
+        // afterwards, and does the target have the room?
+        crate::core::move_preflight::probe_source_base(
+            &old_base,
+            &project.path,
+            &transaction.journal.operation_id,
+        )?;
+        crate::core::move_preflight::check_space(new_base, manifest.total_bytes())?;
         {
             let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
             state.phase = crate::core::assets::JobPhase::Copying;

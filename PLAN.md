@@ -320,15 +320,15 @@ move states what is on disk.
 
 ## Phase 3 — before a byte is copied
 
-- [ ] `src/core/move_preflight.rs`: walk problems (Phase 1), the source-base probe with
+- [x] `src/core/move_preflight.rs`: walk problems (Phase 1), the source-base probe with
   the link-follow check, sticky bit and ownership (unix), free space; `move:after-probe`.
   Probe P is removed on every path; a crash between leaves it for reconcile.
-- [ ] `src/util/disk_space.rs` (unix `statvfs`; Windows `GetDiskFreeSpaceExW`, a path
+- [x] `src/util/disk_space.rs` (unix `statvfs`; Windows `GetDiskFreeSpaceExW`, a path
   ending in `\`); unknown never refuses.
-- [ ] `copy_to_staging` split into the names pass and the content pass, errors collected
+- [x] `copy_to_staging` split into the names pass and the content pass, errors collected
   and mapped (defect 12). Progress shows the names pass as part of Copying.
-- [ ] `copy_engine` wired to 1, 3, 4.
-- [ ] Tests: a chmod-555 source base is refused before any staging, S intact, no
+- [x] `copy_engine` wired to 1, 3, 4.
+- [x] Tests: a chmod-555 source base is refused before any staging, S intact, no
   transaction (skip as root); the link-follow decision and the error mapping as pure
   functions; `f_blocks == 0` is unknown; the names pass refuses a name collision before
   any content is written (a pure test of the mapping plus a planted pre-existing staging
@@ -408,3 +408,12 @@ move states what is on disk.
   writes. The in-process move writes `published.json` from the verified staging
   walk; reconcile reads it. The probe (`move:after-probe`) is Phase 3's.
   Gates green: fmt, clippy debug/release/windows-gnu, test debug/release, doc.
+- 2026-09-25 — Phase 3. `core::move_preflight` (probe with the link-follow check,
+  sticky ownership, `check_space`), `util::disk_space` (`statvfs`,
+  `GetDiskFreeSpaceExW`), the names pass (`create_names`, `name_refusal`) and the
+  contents pass opened `O_NOFOLLOW`; reconcile and `list_incomplete` clear and
+  count a probe a killed move left. `move:after-probe` fires with the probe on
+  disk, so the crash suite proves reconcile clears it. The probe renames itself
+  once, to `<probe>-renamed`, which shares the prefix. The design's "reconcile's
+  Copying arm removes P" became "reconcile removes any probe" — a pass holds the
+  lock, so no move is mid-probe. Gates green.

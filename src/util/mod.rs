@@ -1,6 +1,7 @@
 pub mod atomic;
 pub mod clipboard;
 pub mod diag;
+pub(crate) mod disk_space;
 pub mod faults;
 pub mod fs_retry;
 pub mod human_bytes;

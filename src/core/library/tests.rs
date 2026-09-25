@@ -47,7 +47,11 @@ fn retired_folders(base: &Path) -> Vec<String> {
         .unwrap()
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.starts_with(".fastf-moved-") || name.starts_with(".fastf-deleted-"))
+        .filter(|name| {
+            name.starts_with(".fastf-moved-")
+                || name.starts_with(".fastf-deleted-")
+                || name.starts_with(".fastf-probe-")
+        })
         .collect()
 }
 
@@ -1184,6 +1188,50 @@ fn a_read_only_folder_inside_the_project_cannot_leave_a_husk() {
         fs::read_to_string(new_path.join("zzz_after.txt")).unwrap(),
         "after"
     );
+}
+
+/// A base fastf cannot write in — a read-only mount, a share with read access
+/// only — cannot give up the original after the copy. The move says so before
+/// it copies anything, and leaves nothing behind on either side.
+#[cfg(unix)]
+#[test]
+fn a_read_only_source_base_is_refused_before_anything_is_copied() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root writes into a read-only folder, so as root this proves nothing.
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/payload.bin"), vec![3_u8; 4096]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    fs::set_permissions(old_base, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let progress = Mutex::new(Progress::new(&[]));
+    let result = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_base.join("proj_a"),
+        &progress,
+        &AtomicBool::new(false),
+    );
+    fs::set_permissions(old_base, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("needs to write in"), "{error}");
+    assert!(error.contains("Nothing was copied"), "{error}");
+    assert_eq!(progress.lock().unwrap().copied_bytes, 0, "not a byte");
+    assert_eq!(v2_transaction_count(new_base), 0);
+    assert!(!new_base.join("proj_a").exists());
+    assert_eq!(
+        fs::read(old_base.join("proj_a/payload.bin")).unwrap(),
+        vec![3_u8; 4096]
+    );
+    assert!(retired_folders(old_base).is_empty());
 }
 
 /// A removal of the retired copy that stops part of the way leaves a hidden

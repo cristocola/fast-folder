@@ -417,6 +417,17 @@ pub(crate) fn set_aside(
             reason: format!("{error:#}"),
         });
     }
+    // One rename, which fastf cannot count into: on an S3-style mount it is
+    // a copy and a delete per object inside rclone, and took minutes on a
+    // real R2 bucket with the count already full. Say what it is waiting on.
+    cleanup.ticker.update(|state| {
+        state.current_file = "renaming it aside in one step — on a cloud mount this can \
+                              take a while"
+            .to_string();
+    });
+    crate::util::log::info(
+        "setting the original aside: one rename, which a cloud mount may take a while over",
+    );
     match retire(source, &retired) {
         Retire::Done => {}
         Retire::KeptWhole(reason) => return Settled(SourceFate::KeptWhole { reason }),
@@ -569,11 +580,12 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
             kept_on_purpose,
         } = {
             cleanup.ticker.phase(JobPhase::Removing, recorded);
-            remove_tree(
+            remove_tree_guarded(
                 &retired,
                 Some(cleanup.manifest),
                 Purpose::Move,
                 cleanup.ticker,
+                Some((cleanup.final_path, cleanup.project_id)),
             )
         } {
             return SourceFate::Leftover {
@@ -741,6 +753,25 @@ pub(crate) fn remove_tree(
     purpose: Purpose,
     ticker: Ticker,
 ) -> Removal {
+    remove_tree_guarded(root, recorded, purpose, ticker, None)
+}
+
+/// How many entries a guarded removal takes between two looks at the moved
+/// copy.
+const GUARD_EVERY: usize = 500;
+
+/// [`remove_tree`], looking every [`GUARD_EVERY`] entries at the project at
+/// `guard` (its path and id): **an old copy's removal runs without the data
+/// lock**, for minutes on a cloud mount, and if the moved copy stops being
+/// that project meanwhile, the old copy may be the only one left. The removal
+/// then stops and keeps the rest, on purpose.
+pub(crate) fn remove_tree_guarded(
+    root: &Path,
+    recorded: Option<&MoveManifest>,
+    purpose: Purpose,
+    ticker: Ticker,
+    guard: Option<(&Path, &str)>,
+) -> Removal {
     let count = |root: &Path| {
         Walk::of(root, "folder")
             .map(|walk| walk.entries.len() + walk.problems.len())
@@ -767,6 +798,8 @@ pub(crate) fn remove_tree(
         device,
         purpose,
         ticker,
+        guard,
+        removed: 0,
         removed_one: false,
         stopped: None,
         kept_on_purpose: false,
@@ -805,6 +838,10 @@ struct Removing<'a> {
     device: Option<u64>,
     purpose: Purpose,
     ticker: Ticker<'a>,
+    /// The moved copy — path and id — looked at every [`GUARD_EVERY`]
+    /// entries.
+    guard: Option<(&'a Path, &'a str)>,
+    removed: usize,
     removed_one: bool,
     /// Set when a failpoint stops the removal; everything after is left.
     stopped: Option<String>,
@@ -938,6 +975,18 @@ impl Removing<'_> {
                 self.note(path, &error.to_string());
                 return;
             }
+        }
+        self.removed += 1;
+        if let Some((moved, id)) = self.guard
+            && self.removed.is_multiple_of(GUARD_EVERY)
+            && let Err(error) = confirm_identity(moved, id, "moved")
+        {
+            self.kept_on_purpose = true;
+            self.stopped = Some(format!(
+                "the moved copy is not this project any more ({error:#}), so what is \
+                 left of the original was kept"
+            ));
+            return;
         }
         let relative = path.strip_prefix(self.root).unwrap_or(path);
         if !self.ticker.tick(relative) {
@@ -1085,6 +1134,38 @@ mod tests {
             "changed, and longer"
         );
         assert!(!root.join("a.txt").exists(), "what was as recorded went");
+    }
+
+    /// A long removal looks at the moved copy as it goes: once that is not
+    /// the project any more, the old copy may be the only one, and the rest
+    /// of it is kept — on purpose, so nobody is told it is redundant.
+    #[test]
+    fn a_removal_stops_when_the_moved_copy_is_gone() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".fastf-moved-1-3");
+        fs::create_dir_all(&root).unwrap();
+        for n in 0..(GUARD_EVERY + 100) {
+            fs::write(root.join(format!("f{n}")), "x").unwrap();
+        }
+        let gone = temp.path().join("moved");
+
+        let removal = remove_tree_guarded(
+            &root,
+            None,
+            Purpose::Delete,
+            Ticker::none(),
+            Some((&gone, "ID0001")),
+        );
+        let Removal::Leftover {
+            kept_on_purpose,
+            remaining,
+            ..
+        } = removal
+        else {
+            panic!("the removal must stop");
+        };
+        assert!(kept_on_purpose);
+        assert_eq!(remaining, 100, "it stopped at the look");
     }
 
     /// On an ordinary folder links show as links, and asking leaves nothing.

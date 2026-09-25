@@ -510,3 +510,77 @@ fn jobs_that_ended_while_the_app_was_closed_are_said_on_the_first_look() {
         "{said:?}"
     );
 }
+
+/// While a job is still starting its dialog is already up: Esc hides it
+/// rather than quitting, and Ctrl-C is kept for the moment the worker
+/// answers, when the job is asked to stop.
+#[test]
+fn esc_and_ctrl_c_answer_while_a_job_is_starting() {
+    let mut app = fixture(12, 80, 24);
+    app.summary = Some(sample_summary_moveable(12));
+    press(&mut app, Key::ch('m'));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(job_started(&effects).is_some());
+    assert!(app.job_dialog_up(), "the dialog is up at once");
+
+    assert_eq!(press(&mut app, Key::ctrl('c')), vec![]);
+    assert!(
+        !app.log.iter().any(|entry| entry.text.contains("Goodbye")),
+        "Ctrl-C did not quit"
+    );
+    let effects = update(&mut app, Msg::JobStarted(Ok("18d8-1-0".to_string())));
+    assert!(effects.contains(&Effect::CancelJob("18d8-1-0".to_string())));
+}
+
+/// A read of the jobs can land before the app hears its own job started:
+/// the job is there, with no worker and no state yet. It is not ended, so
+/// its end is still reported when it comes — and the dialog closes then.
+#[test]
+fn a_job_seen_while_starting_is_still_reported_when_it_ends() {
+    use fastf::core::assets::{JobStatus, Progress};
+    use fastf::core::jobs::JobKind;
+    use fastf::tui::testing::job_view;
+
+    let mut app = fixture(12, 80, 24);
+    let _ = update(&mut app, Msg::Jobs(Vec::new()));
+    app.summary = Some(sample_summary_moveable(12));
+    press(&mut app, Key::ch('m'));
+    let _ = press(&mut app, Key::plain(KeyCode::Enter));
+
+    let item = [("ID0248", "2026-08-28_Lullaby_Remix_ID0248")];
+    let mut starting = job_view(
+        "18d8-1-0",
+        JobKind::Move,
+        &item,
+        Progress::new(&[]),
+        false,
+        JobStatus::Running,
+    );
+    starting.state = None;
+    starting.young = true;
+    let effects = update(&mut app, Msg::Jobs(vec![starting]));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::MarkSeen(_)))
+    );
+
+    let _ = update(&mut app, Msg::JobStarted(Ok("18d8-1-0".to_string())));
+    let mut ended = job_view(
+        "18d8-1-0",
+        JobKind::Move,
+        &item,
+        Progress::new(&[]),
+        false,
+        JobStatus::Done,
+    );
+    ended.state.as_mut().unwrap().summary = "moved ID0248".to_string();
+    let effects = update(&mut app, Msg::Jobs(vec![ended]));
+    assert!(effects.contains(&Effect::MarkSeen("18d8-1-0".to_string())));
+    assert!(!app.job_dialog_up(), "the dialog closed with the job");
+    assert!(
+        app.status.text.contains("moved ID0248"),
+        "{}",
+        app.status.text
+    );
+}

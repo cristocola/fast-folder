@@ -433,7 +433,13 @@ from Phase 4 of the plan, the app — write `jobs/<id>/request.json` and start
 this binary as `fastf --fastf-job <id>` (`core::jobs::WORKER_FLAG`, taken off
 argv in `main` before clap), detached: `setsid` on unix, `DETACHED_PROCESS |
 CREATE_NEW_PROCESS_GROUP` plus a breakaway attempt on Windows, reaped on a
-thread so a long-lived app leaves no zombie. The worker (`cli::job_worker`)
+thread so a long-lived app leaves no zombie. **On Linux with a user bus it goes
+through `systemd-run --user --scope`** (`in_a_scope_of_its_own`), because a
+child inherits its starter's cgroup, and a launcher's service with systemd's
+default `ExitType=main` SIGTERMs the whole group when the app quits — measured:
+the move was cancelled. KDE's launcher asks for `ExitType=cgroup` and waits;
+nothing promises another will. `systemd-run` that exits before the worker
+writes its state falls back to the plain start. The worker (`cli::job_worker`)
 holds `jobs/<id>/lock` for its whole life — **alive means the lock is held**,
 the OS's answer, so a reused pid cannot lie — keeps `state.json` current from a
 watcher thread, turns a `cancel` file into the engine's flag, waits patiently
@@ -456,7 +462,19 @@ process that minted it, and a worker writes its pid before it does anything,
 so reconcile and `list_incomplete` skip any record, retired folder, deleted
 folder or probe whose id names a live worker (`jobs::live_workers`,
 `jobs::owned_by`) — no window in which a record exists and its job cannot be
-told. `Progress.holds_lock` says when a job holds the data lock, and
+told. A job also owns what it **claims** (`jobs::claim`, a file in
+`jobs/<id>/owns/`): a reconcile claims each removal it defers before it drops
+the data lock, since those records were made by other, dead processes.
+**Liveness is read before state** (`jobs::view`): a worker writes its last
+state and then lets go of its lock, so the other order reads a finished job as
+killed; and a job with no state whose request is under fifteen seconds old is
+`young` — starting, not stopped. `DataLock::is_held` probes without creating
+anything, so asking about a job being pruned cannot bring it back. **A hang-up
+is not a cancel**: `util::interrupt::hung_up` tells SIGHUP/SIGTERM (a closed
+console, on Windows) from Ctrl-C, and a command following a job stops
+following on the first and cancels only on the second. An old copy's removal
+re-checks the moved copy every 500 entries (`remove_tree_guarded`) and keeps
+the rest, on purpose, once it is gone. `Progress.holds_lock` says when a job holds the data lock, and
 `jobs::lock_holder` is what a lock wait says instead of "another fastf
 process" (`lockfile::describe_holder_with`, set by `main`).
 

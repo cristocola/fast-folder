@@ -267,6 +267,7 @@ pub fn job_view(
             ..JobState::default()
         }),
         alive,
+        young: false,
         seen: false,
         cancel_asked: false,
     }

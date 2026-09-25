@@ -298,7 +298,7 @@ fn list_move_transactions(
     root: &Path,
     out: &mut Vec<Incomplete>,
     operations: &mut HashSet<String>,
-    live: &HashSet<u32>,
+    live: &crate::core::jobs::Live,
 ) {
     if crate::util::paths::require_real_directory(root, "transaction root").is_err() {
         out.push(Incomplete {
@@ -448,7 +448,7 @@ pub fn reconcile_unlocked_with(cfg: &Config, ticker: Ticker) -> ReconcileReport 
 /// where it puts them.
 struct Pass<'a> {
     ticker: Ticker<'a>,
-    live: HashSet<u32>,
+    live: crate::core::jobs::Live,
     deferred: Option<Vec<Deferred>>,
 }
 
@@ -556,6 +556,11 @@ pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
         deferred: Some(Vec::new()),
     };
     let mut report = reconcile_pass(&config, &mut pass);
+    // Each removal deferred past the lock is this job's own from here: a
+    // second reconcile started while it runs leaves it alone.
+    for deferred in pass.deferred.iter().flatten() {
+        crate::core::jobs::claim(&deferred.housekeeping.operation());
+    }
     ticker.update(|state| state.holds_lock = false);
     drop(_data_lock);
     // The removals decided above, now that nothing else waits for them:

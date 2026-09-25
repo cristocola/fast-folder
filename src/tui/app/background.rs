@@ -37,6 +37,9 @@ pub struct Background {
     /// Whether a read of `jobs/` has landed yet: the first one reports what
     /// ended while no app was open.
     pub looked: bool,
+    /// Ctrl-C came while the job was still starting: it is asked to stop the
+    /// moment its worker answers.
+    pub cancel_when_started: bool,
 }
 
 impl Background {
@@ -153,9 +156,12 @@ impl App {
         match started {
             Ok(id) => {
                 self.background.started_here.insert(id.clone());
-                self.background.following = Some(id);
-                self.background.hidden = false;
-                vec![Effect::WatchJobs]
+                self.background.following = Some(id.clone());
+                let mut effects = vec![Effect::WatchJobs];
+                if std::mem::take(&mut self.background.cancel_when_started) {
+                    effects.push(Effect::CancelJob(id));
+                }
+                effects
             }
             Err(error) => {
                 self.error(format!("error: {error}"));
@@ -175,7 +181,16 @@ impl App {
             .background
             .jobs
             .iter()
-            .filter(|job| !job.alive)
+            // Ended: finished and said so, or killed. A job still starting —
+            // no worker yet, no state — is neither, and is looked at again.
+            .filter(|job| {
+                !job.alive
+                    && (job.interrupted()
+                        || job
+                            .state
+                            .as_ref()
+                            .is_some_and(|state| state.status != JobStatus::Running))
+            })
             .filter(|job| !self.background.reported.contains(&job.id))
             .cloned()
             .collect();
@@ -310,6 +325,11 @@ impl App {
     /// Ctrl-C on the dialog: ask the job to stop — or, past its point of no
     /// return, say that it is too late.
     pub(super) fn cancel_followed_job(&mut self) -> Vec<Effect> {
+        if self.background.starting.is_some() {
+            self.background.cancel_when_started = true;
+            self.info("cancelling…");
+            return Vec::new();
+        }
         let Some(job) = self.background.shown() else {
             return Vec::new();
         };
@@ -336,6 +356,7 @@ impl App {
     /// Whether the progress dialog is up.
     pub fn job_dialog_up(&self) -> bool {
         self.background.shown().is_some()
+            || (self.background.starting.is_some() && !self.background.hidden)
     }
 
     /// The progress the dialog draws: the followed job's, or a blank one

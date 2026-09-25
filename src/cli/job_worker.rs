@@ -42,8 +42,30 @@ pub fn run(id: &str) -> i32 {
         return 3;
     };
     let Some(request) = crate::core::jobs::read_request(id) else {
+        // Said in its state, so no reader takes it for a job killed mid-way.
+        let _ = crate::core::jobs::write_state(&JobState {
+            version: crate::core::jobs::STATE_VERSION,
+            id: id.to_string(),
+            pid: std::process::id(),
+            status: JobStatus::Failed,
+            summary: "the job's request could not be read; nothing was done".to_string(),
+            ..JobState::default()
+        });
         return 4;
     };
+    // Called off before it began — `start` gave up waiting for this worker.
+    if crate::core::jobs::cancel_requested(id) {
+        let _ = crate::core::jobs::write_state(&JobState {
+            version: crate::core::jobs::STATE_VERSION,
+            id: id.to_string(),
+            kind: Some(request.kind),
+            pid: std::process::id(),
+            status: JobStatus::Cancelled,
+            summary: "called off before it started; nothing was done".to_string(),
+            ..JobState::default()
+        });
+        return 0;
+    }
     // A terminal closing does not concern a job; a SIGTERM is a cancel.
     #[cfg(unix)]
     // SAFETY: setting a signal's disposition to ignore is always sound.
@@ -56,6 +78,7 @@ pub fn run(id: &str) -> i32 {
         crate::util::log::set_level(level);
     }
     crate::util::log::set_job(Some((id.to_string(), dir.join("log"))));
+    crate::core::jobs::set_current(id);
     crate::util::log::info(format!(
         "job {id}: {:?} of {} item(s)",
         request.kind,
@@ -93,8 +116,23 @@ pub fn run(id: &str) -> i32 {
         })
     };
 
+    // What the engine says through `diag` would go to a stderr nobody reads:
+    // it is gathered here and put on the item it was about.
+    let warned: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    {
+        let warned = warned.clone();
+        crate::util::diag::set_sink(Box::new(move |level, message| {
+            if level == crate::util::diag::Level::Warn {
+                warned
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(message.to_string());
+            }
+        }));
+    }
     let job = Job {
         id,
+        warned,
         said: Mutex::new(Vec::new()),
         state: &state,
         progress: &progress,
@@ -132,6 +170,8 @@ fn write(state: &Mutex<JobState>, progress: &Mutex<Progress>) {
 
 struct Job<'a> {
     id: &'a str,
+    /// Warnings the engine gave through `diag` since the last report.
+    warned: Arc<Mutex<Vec<String>>>,
     /// Every message the job has said, in order.
     said: Mutex<Vec<String>>,
     state: &'a Mutex<JobState>,
@@ -164,7 +204,23 @@ impl Job<'_> {
         };
     }
 
-    fn report(&self, index: usize, report: ItemReport) {
+    fn report(&self, index: usize, mut report: ItemReport) {
+        let warned: Vec<String> =
+            std::mem::take(&mut *self.warned.lock().unwrap_or_else(|e| e.into_inner()));
+        for warning in warned {
+            if report
+                .warning
+                .as_deref()
+                .is_some_and(|already| already.contains(&warning))
+            {
+                continue;
+            }
+            self.say(Level::Warn, &warning);
+            report.warning = Some(match report.warning.take() {
+                Some(already) => format!("{already}\n\n{warning}"),
+                None => warning,
+            });
+        }
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(slot) = state.items.get_mut(index) {
             *slot = report;

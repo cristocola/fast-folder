@@ -675,6 +675,20 @@ fn not_busy(app: &App) -> Availability {
     }
 }
 
+/// Reconcile, unless one is running already: a second would only find the
+/// first's work claimed and do nothing.
+fn no_reconcile_running(app: &App) -> Availability {
+    let running = app
+        .background
+        .live()
+        .any(|job| job.kind() == Some(crate::core::jobs::JobKind::Reconcile));
+    if running {
+        Availability::Disabled("a reconcile is running — L shows it")
+    } else {
+        not_busy(app)
+    }
+}
+
 /// Enter in the pane: only over a row it can act on, and not while a write
 /// is in flight.
 fn pane_row_and_not_busy(app: &App) -> Availability {
@@ -2001,7 +2015,7 @@ pub static COMMANDS: &[Command] = &[
         Library,
         palette = true,
         hint = false,
-        not_busy
+        no_reconcile_running
     ),
     // --- the templates tab ------------------------------------------------
     cmd!(

@@ -148,6 +148,9 @@ pub struct JobView {
     pub state: Option<JobState>,
     /// Its worker holds its lock.
     pub alive: bool,
+    /// Asked for moments ago and not yet answered: a worker that has not
+    /// taken its lock or written its state is starting, not stopped.
+    pub young: bool,
     pub seen: bool,
     pub cancel_asked: bool,
 }
@@ -156,6 +159,7 @@ impl JobView {
     /// The worker ended without saying how the job ended: killed.
     pub fn interrupted(&self) -> bool {
         !self.alive
+            && !self.young
             && self
                 .state
                 .as_ref()
@@ -252,9 +256,12 @@ pub fn start(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
             return Ok(id);
         }
         if started.elapsed() > Duration::from_secs(10) {
+            // A worker that turns up late must not do what the surface has
+            // already said did not happen: it finds this and stops first.
+            let _ = request_cancel(&id);
             bail!(
-                "the job's worker did not start; its log may say why: {}",
-                crate::util::paths::display_path(&dir(&id)?.join("log"))
+                "the job's worker did not start in time, so it was called off and nothing \
+                 was done; `fastf log` may say why"
             );
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -284,16 +291,32 @@ fn spawn_worker(id: &str) -> Result<()> {
     #[cfg(unix)]
     let child = {
         use std::os::unix::process::CommandExt;
-        let mut command = command();
-        // SAFETY: `setsid` is async-signal-safe and touches nothing of the
-        // parent's; it is the one call made between fork and exec.
-        unsafe {
-            command.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
+        let detached = |mut command: Command| {
+            // SAFETY: `setsid` is async-signal-safe and touches nothing of
+            // the parent's; it is the one call made between fork and exec.
+            unsafe {
+                command.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+            command.spawn()
+        };
+        match in_a_scope_of_its_own(&exe, id, &install) {
+            Some(scoped) => match detached(scoped) {
+                Ok(mut child) => {
+                    if started_in_its_scope(&mut child, id) {
+                        Ok(child)
+                    } else {
+                        // No user manager to ask, or it refused: the plain
+                        // start, which every system without systemd gets.
+                        detached(command())
+                    }
+                }
+                Err(_) => detached(command()),
+            },
+            None => detached(command()),
         }
-        command.spawn()
     };
     #[cfg(windows)]
     let child = {
@@ -324,6 +347,62 @@ fn spawn_worker(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The worker's command line inside a systemd scope of its own —
+/// `systemd-run --user --scope` — where there is a user manager to ask.
+///
+/// **A process inherits its starter's cgroup**, and a desktop's launcher may
+/// run the app as a service whose stop kills everything in it: systemd's
+/// default for a service whose main process exits (`ExitType=main`) sends
+/// SIGTERM to the whole group, so quitting an app started from the menu would
+/// stop the move it started. KDE's launcher asks for `ExitType=cgroup`, which
+/// waits for the group instead; nothing promises another will. In a scope of
+/// its own the worker belongs to nobody's unit.
+#[cfg(unix)]
+fn in_a_scope_of_its_own(exe: &Path, id: &str, install: &Path) -> Option<std::process::Command> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let bus = std::env::var_os("XDG_RUNTIME_DIR").map(|dir| PathBuf::from(dir).join("bus"))?;
+    if !bus.exists() {
+        return None;
+    }
+    let systemd_run = crate::util::paths::find_on_path("systemd-run")?;
+    let mut command = std::process::Command::new(systemd_run);
+    command
+        .args(["--user", "--scope", "--quiet", "--collect"])
+        .arg(format!("--unit=fastf-job-{id}"))
+        .arg("--")
+        .arg(exe)
+        .arg(WORKER_FLAG)
+        .arg(id)
+        .env("FASTF_INSTALL_DIR", install)
+        .env("FASTF_NO_RELAUNCH", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    Some(command)
+}
+
+/// Whether a worker started through `systemd-run` got going: it has written
+/// its state, or is still running. `systemd-run` that exits first — no user
+/// manager after all, a refused unit — started nothing.
+#[cfg(unix)]
+fn started_in_its_scope(child: &mut std::process::Child, id: &str) -> bool {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        if read_state(id).is_some_and(|state| state.pid != 0) {
+            return true;
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => return read_state(id).is_some(),
+            Ok(None) => {}
+            Err(_) => return false,
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
 pub fn read_request(id: &str) -> Option<JobRequest> {
     let text = std::fs::read_to_string(dir(id).ok()?.join("request.json")).ok()?;
     serde_json::from_str(&text).ok()
@@ -347,14 +426,12 @@ pub fn lock_path(id: &str) -> Result<PathBuf> {
 
 /// Whether the job's worker is running: whether its lock is held.
 pub fn is_alive(id: &str) -> bool {
-    let Ok(path) = lock_path(id) else {
-        return false;
-    };
-    if !path.exists() {
-        return false;
-    }
-    matches!(DataLock::try_acquire_at(&path), Ok(None))
+    lock_path(id).is_ok_and(|path| DataLock::is_held(&path))
 }
+
+/// How long a job may go unanswered after its request before a reader
+/// believes its worker never came — `start`'s own patience, and a little.
+const STARTING_FOR: Duration = Duration::from_secs(15);
 
 /// Ask a job to stop. Its worker looks a few times a second; what it does
 /// depends on where it is — see `Progress::committed`.
@@ -380,11 +457,24 @@ pub fn view(id: &str) -> Option<JobView> {
     if !dir.is_dir() {
         return None;
     }
+    // **Alive first, then the state.** A worker writes its last state and
+    // then lets go of its lock: read the other way round, one that ended
+    // between the two reads looks killed mid-way.
+    let alive = is_alive(id);
+    let state = read_state(id);
+    let young = !alive
+        && state.is_none()
+        && std::fs::metadata(dir.join("request.json"))
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_none_or(|age| age < STARTING_FOR);
     Some(JobView {
         id: id.to_string(),
         request: read_request(id),
-        state: read_state(id),
-        alive: is_alive(id),
+        state,
+        alive,
+        young,
         seen: dir.join("seen").exists(),
         cancel_asked: dir.join("cancel").exists(),
     })
@@ -414,23 +504,72 @@ pub fn list() -> Vec<JobView> {
 /// pid before it does anything — so there is no moment in which a job's record
 /// exists and its job cannot be told, which a list of operations written a
 /// few times a second would leave.
-pub fn live_workers() -> HashSet<u32> {
-    list()
-        .into_iter()
-        .filter(|job| job.alive)
-        .filter_map(|job| job.state)
-        .map(|state| state.pid)
-        .filter(|pid| *pid != 0)
-        .collect()
+///
+/// A job also owns what it claims ([`claim`]): a reconcile finishes records
+/// other processes made, and claims each removal it defers before it lets go
+/// of the data lock, so a second reconcile leaves them to it.
+pub fn live_workers() -> Live {
+    let mut live = Live::default();
+    for job in list().into_iter().filter(|job| job.alive) {
+        if let Some(state) = &job.state
+            && state.pid != 0
+        {
+            live.pids.insert(state.pid);
+        }
+        if let Ok(entries) = dir(&job.id).and_then(|dir| Ok(std::fs::read_dir(dir.join("owns"))?)) {
+            live.operations.extend(
+                entries
+                    .flatten()
+                    .filter_map(|entry| entry.file_name().to_str().map(str::to_string)),
+            );
+        }
+    }
+    live
 }
 
-/// Whether `operation` was made by one of `live` — a live job's own.
-pub fn owned_by(operation: &str, live: &HashSet<u32>) -> bool {
-    operation
-        .split('-')
-        .nth(1)
-        .and_then(|pid| u32::from_str_radix(pid, 16).ok())
-        .is_some_and(|pid| live.contains(&pid))
+/// The live jobs, as reconcile asks about them.
+#[derive(Debug, Clone, Default)]
+pub struct Live {
+    pids: HashSet<u32>,
+    operations: HashSet<String>,
+}
+
+/// Whether `operation` is a live job's own: made by its worker, or claimed.
+pub fn owned_by(operation: &str, live: &Live) -> bool {
+    live.operations.contains(operation)
+        || operation
+            .split('-')
+            .nth(1)
+            .and_then(|pid| u32::from_str_radix(pid, 16).ok())
+            .is_some_and(|pid| live.pids.contains(&pid))
+}
+
+/// The job this process is the worker of, if it is one.
+static CURRENT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Say that this process is job `id`'s worker.
+pub fn set_current(id: &str) {
+    if let Ok(mut current) = CURRENT.lock() {
+        *current = Some(id.to_string());
+    }
+}
+
+/// Make `operation` this process's job's own until the job ends — nothing, in
+/// a process that is not a job's worker. Written before it is needed, while
+/// the caller still holds the data lock, so no reconcile can see the
+/// operation unowned.
+pub fn claim(operation: &str) {
+    let Some(id) = CURRENT.lock().ok().and_then(|current| current.clone()) else {
+        return;
+    };
+    if !crate::core::transactions::is_operation_id(operation) {
+        return;
+    }
+    if let Ok(dir) = dir(&id) {
+        let owns = dir.join("owns");
+        let _ = std::fs::create_dir_all(&owns);
+        let _ = std::fs::write(owns.join(operation), b"");
+    }
 }
 
 /// A sentence naming the live job that holds the data lock, if one does:
@@ -455,7 +594,7 @@ pub fn lock_holder() -> Option<String> {
 pub fn prune() {
     let now = chrono::Utc::now();
     for (index, job) in list().into_iter().enumerate() {
-        if job.alive || (job.interrupted() && !job.seen) {
+        if job.alive || job.young || (job.interrupted() && !job.seen) {
             continue;
         }
         let old = job
@@ -479,9 +618,12 @@ mod tests {
 
     #[test]
     fn an_operation_is_owned_by_the_process_that_made_it() {
-        let live: HashSet<u32> = [0x7395d].into_iter().collect();
+        let mut live = Live::default();
+        live.pids.insert(0x7395d);
+        live.operations.insert("18d8983cdf094ce9-1-2".to_string());
         assert!(owned_by("18d8983cdf094ce9-7395d-1", &live));
         assert!(!owned_by("18d8983cdf094ce9-7395e-1", &live));
+        assert!(owned_by("18d8983cdf094ce9-1-2", &live), "claimed");
         assert!(!owned_by("not-an-id", &live));
     }
 
@@ -509,6 +651,7 @@ mod tests {
             }),
             state: None,
             alive: false,
+            young: false,
             seen: false,
             cancel_asked: false,
         };

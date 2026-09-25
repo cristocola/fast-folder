@@ -277,7 +277,8 @@ pub fn job_rows(jobs: &[crate::core::jobs::JobView]) -> (Vec<String>, Vec<String
         let (word, detail) = if job.interrupted() {
             (
                 "stopped",
-                "its process ended part of the way; Reconcile finishes it".to_string(),
+                "its process ended before it said how it went; Reconcile finishes anything it left"
+                    .to_string(),
             )
         } else {
             match state.map(|state| state.status) {

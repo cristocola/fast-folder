@@ -361,28 +361,39 @@ there with its count; kill that app too, and the move still finishes.
 
 ## Phase 5 — real mounts, Windows, docs, ship
 
-- [ ] The rclone lab (an S3 remote served locally, mounted with
+- [x] The rclone lab (an S3 remote served locally, mounted with
   `--vfs-cache-mode full --tpslimit 2`): a 1,473-file move from it, watched in
   the app and from a second terminal, with the app closed mid-removal. Record
   the times in the log.
-- [ ] The maintainer's real Drive mount, release build: the same move, verified
+- [x] The maintainer's real Drive mount, release build: the same move, verified
   against Drive with `rclone lsf`, never only through the mount.
-- [ ] The sshfs base, if mounted: a move out of it and a reconcile.
-- [ ] Closing the terminal window itself, a desktop emulator, with a move
+- [x] The sshfs base, if mounted: a move out of it and a reconcile.
+- [x] Closing the terminal window itself, a desktop emulator, with a move
   running: the worker survives its window's scope.
-- [ ] Windows VM over ssh: clippy, unit tests, a detached move that survives the
+- [x] Windows VM over ssh: clippy, unit tests, a detached move that survives the
   ssh session ending, and a cancel from a second session. Shut the VM down.
-- [ ] Docs: `cli.md` (moving, reconcile, the jobs, log and messages verbs),
+- [x] Docs: `cli.md` (moving, reconcile, the jobs, log and messages verbs),
   `app.md` (the job dialog, the chip, the activity screen), `projects.md`
   (process-crash recovery, what fastf promises), `config.md` (`log_level`, the
   data dir's new files), `windows.md`. The four CLAUDE.md files.
   `.github/release-notes/v3.13.0.md`.
-- [ ] A review subagent over the whole branch; every finding confirmed and
+- [x] A review subagent over the whole branch; every finding confirmed and
   fixed or parked with a reason.
 - [ ] PR; on "release": the `release` skill for 3.13.0, both AUR packages;
   retire this file.
 
 ## Parking lot
+
+- **Checking the old copy walks it a second time.** Right after the original is
+  set aside, `remove_retired` re-walks it before removing (2 min of 7½ on R2,
+  where every stat of a renamed object is a HEAD request), although
+  `remove_tree` re-checks each entry anyway. Dropping the whole-tree check
+  would change the promise that a retired copy is removed whole or kept whole;
+  worth a design look, not a release-day change.
+- **On S3-style mounts the set-aside rename is a copy and a delete per object**
+  inside rclone (2 min on R2 for 1,522 entries, 12½ in the rate-limited lab),
+  one call fastf cannot count into; the dialog now says what it waits on. A
+  cheaper way out of the library there would be a different design.
 
 - Housekeeping of one batch item running beside the next item's copy. On one
   rate-limited remote it buys nothing.
@@ -484,3 +495,34 @@ there with its count; kill that app too, and the move still finishes.
   sweep over three job states, and a pty test that quits the app mid-move,
   starts a second app that shows the same job, and waits for the move to
   finish without either. Gates green.
+- 2026-09-25 — Phase 5. **Real mounts**, release build, each verified with
+  `rclone lsf` on the remote itself: a 200-file project off the Google Drive
+  mount (8 s to set aside, then 2 min 24 s removing 211 entries at Drive's
+  ~1.5 deletes/s — the step that used to show nothing); a 1,473-file project
+  off the maintainer's Cloudflare R2 bucket, mounted with rclone like Drive's,
+  with the command line SIGKILLed mid-removal
+  (the job finished; nothing left in the bucket) and moved back up (all 1,473
+  arrived); a 150-file project with a link off the sshfs base (3 s, the link
+  kept). The rate-limited rclone lab showed an S3 remote costs a HEAD per stat
+  (rclone keeps mtime in object metadata), so its walks crawl at the rate
+  limit where Drive's listing carries the time; its cancel mid-copy rolled back
+  clean. **Windows VM** over ssh: 497 then 498 unit tests; a move survived its
+  ssh session ending, and a cancel from a second session stopped another.
+  **Review subagent**: seven findings, all confirmed and fixed — a hang-up of
+  the following terminal cancelled the move (`interrupt::hung_up`; only Ctrl-C
+  cancels now); a starting job read as stopped, so the app could lose its end
+  and leave its dialog up (liveness read before state, `young` jobs); two
+  reconciles raced over deferred removals (`jobs::claim`, Reconcile dimmed
+  while one runs); a timed-out start could still run (it is called off, and
+  the worker checks first); the liveness probe could recreate a pruned job
+  (`DataLock::is_held`); `diag` warnings inside a worker went nowhere (gathered
+  onto the item); Esc and Ctrl-C fell through while a job was starting. The
+  promised re-check of the moved copy during a removal is now real
+  (`remove_tree_guarded`, every 500 entries). **Found by looking at a real
+  desktop**: fastf started from the application launcher runs in a systemd
+  service, and under systemd's default `ExitType=main` quitting the app
+  SIGTERMed the worker in the same cgroup — the move was cancelled. KDE's
+  launcher uses `ExitType=cgroup` and waits, but nothing promises that, so a
+  worker now starts through `systemd-run --user --scope` where a user manager
+  answers (tested both exit types; falls back to the plain start). Every fix
+  has a test written to fail first. Gates green.

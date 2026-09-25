@@ -78,6 +78,12 @@ pub(crate) fn follow(id: &str) -> Result<Followed> {
                  `fastf log` has what it did, and `fastf reconcile` finishes what it left"
             );
         }
+        // The terminal went away — a closed window, a dropped ssh session, a
+        // `kill`: this process stops following and the job goes on, which is
+        // the whole point of it being a job. Only Ctrl-C asks it to stop.
+        if crate::util::interrupt::is_set() && crate::util::interrupt::hung_up() {
+            return Ok(Followed::LeftRunning);
+        }
         if crate::util::interrupt::is_set() {
             let committed = job
                 .state
@@ -182,7 +188,9 @@ fn describe(job: &JobView) -> (String, String) {
     if job.interrupted() {
         return (
             "stopped".yellow().to_string(),
-            "its process ended part of the way; `fastf reconcile` finishes it".to_string(),
+            "its process ended before it said how it went; `fastf reconcile` finishes \
+             anything it left"
+                .to_string(),
         );
     }
     match state.map(|state| state.status) {

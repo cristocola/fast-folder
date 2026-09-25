@@ -17,6 +17,11 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+/// The stop came from the terminal going away — a hang-up, a terminate, a
+/// console window closed — rather than from somebody pressing Ctrl-C. A command
+/// following a job lets the job go on for the first and cancels it only for
+/// the second.
+static HUNG_UP: AtomicBool = AtomicBool::new(false);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 /// What the second signal undoes before it exits: the guided app's alternate
 /// screen and raw mode, or an inline prompt's rows. A `fn()` stored as its
@@ -26,6 +31,12 @@ static RESTORE: AtomicUsize = AtomicUsize::new(0);
 /// True once the user has asked us to stop.
 pub fn is_set() -> bool {
     INTERRUPTED.load(Ordering::Relaxed)
+}
+
+/// True when the stop came from the terminal going away (SIGHUP, SIGTERM, a
+/// closed console window, a logoff), not from Ctrl-C.
+pub fn hung_up() -> bool {
+    HUNG_UP.load(Ordering::Relaxed)
 }
 
 /// Error returned by long-running work that noticed the interrupt.
@@ -200,10 +211,14 @@ fn install_platform() {
         const CTRL_LOGOFF_EVENT: u32 = 5;
         const CTRL_SHUTDOWN_EVENT: u32 = 6;
         match ctrl_type {
-            CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT
-            | CTRL_SHUTDOWN_EVENT => {
+            CTRL_C_EVENT | CTRL_BREAK_EVENT => {
                 flag();
                 1 // handled — do not run the default terminator
+            }
+            CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+                HUNG_UP.store(true, Ordering::Relaxed);
+                flag();
+                1
             }
             _ => 0,
         }
@@ -216,7 +231,10 @@ fn install_platform() {
 
 #[cfg(unix)]
 fn install_platform() {
-    extern "C" fn handler(_signum: i32) {
+    extern "C" fn handler(signum: i32) {
+        if signum != libc::SIGINT {
+            HUNG_UP.store(true, Ordering::Relaxed);
+        }
         flag();
     }
     // Go through a plain function pointer before the integer cast. Casting the

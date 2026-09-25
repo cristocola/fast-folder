@@ -169,6 +169,14 @@ impl DataLock {
             }))
     }
 
+    /// Whether another process holds the lock at `path` right now. Only an
+    /// existing file is opened — never created, and no folder is made — so
+    /// asking about a job another process is pruning cannot bring its folder
+    /// back.
+    pub fn is_held(path: &Path) -> bool {
+        matches!(try_lock_existing(path), Ok(None))
+    }
+
     /// Path of the held lock file.
     pub fn path(&self) -> &Path {
         &self.path
@@ -180,12 +188,24 @@ pub(crate) fn lock_path() -> PathBuf {
     crate::util::paths::install_dir().join(LOCK_FILENAME)
 }
 
+/// [`try_lock`] on a file that must already exist: an `Err` for a missing one.
+fn try_lock_existing(path: &Path) -> Result<Option<File>> {
+    if !path.is_file() {
+        anyhow::bail!("{} does not exist", path.display());
+    }
+    try_lock_with(path, false)
+}
+
+fn try_lock(path: &Path) -> Result<Option<File>> {
+    try_lock_with(path, true)
+}
+
 /// One non-blocking attempt. `Ok(None)` means "held by another process".
 ///
 /// Windows: `share_mode(0)` denies all sharing, so a second `CreateFile` on the
 /// same path fails with `ERROR_SHARING_VIOLATION` while we hold it.
 #[cfg(windows)]
-fn try_lock(path: &Path) -> Result<Option<File>> {
+fn try_lock_with(path: &Path, create: bool) -> Result<Option<File>> {
     use std::os::windows::fs::OpenOptionsExt;
 
     /// The file is open in another process and shares nothing.
@@ -194,7 +214,7 @@ fn try_lock(path: &Path) -> Result<Option<File>> {
     const ERROR_ACCESS_DENIED: i32 = 5;
 
     match OpenOptions::new()
-        .create(true)
+        .create(create)
         .truncate(false)
         .write(true)
         .share_mode(0)
@@ -215,11 +235,11 @@ fn try_lock(path: &Path) -> Result<Option<File>> {
 
 /// One non-blocking `flock` attempt. `Ok(None)` means another process holds it.
 #[cfg(unix)]
-fn try_lock(path: &Path) -> Result<Option<File>> {
+fn try_lock_with(path: &Path, create: bool) -> Result<Option<File>> {
     use std::os::unix::io::AsRawFd;
 
     let file = OpenOptions::new()
-        .create(true)
+        .create(create)
         .truncate(false)
         .write(true)
         .open(path)?;

@@ -366,3 +366,143 @@ fn a_worker_is_in_a_session_of_its_own() {
     assert_ne!(worker_session, our_session);
     assert!(cli.wait_with_output().unwrap().status.success());
 }
+
+/// **Closing the terminal is not a cancel.** A hang-up reaches the command
+/// following the move; it stops following, and the move goes on. Only Ctrl-C
+/// asks the job to stop.
+#[cfg(unix)]
+#[test]
+fn a_hang_up_leaves_the_move_running() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 30);
+    let cli = start(
+        &sb,
+        &["move", "ID0001", &other.display().to_string(), "--yes"],
+        "move:force-staged,move:each-file:delay-40",
+    );
+    wait_until("the copy", 20, || in_phase(&sb, "copying"));
+    // SAFETY: a signal to a process this test started.
+    unsafe {
+        libc::kill(cli.id() as i32, libc::SIGHUP);
+    }
+    let out = cli.wait_with_output().unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("cancelling"),
+        "a hang-up is not a cancel: {out:?}"
+    );
+    wait_until("the job to end", 30, || ended(&sb));
+    let (_, state) = newest(&sb).unwrap();
+    assert_eq!(status(&state), "done", "{state}");
+    assert!(!original.exists());
+}
+
+/// A job asked for a moment ago whose worker has not answered yet is
+/// starting, not stopped — a reader must not report it killed.
+#[test]
+fn a_job_whose_worker_has_not_answered_yet_is_not_stopped() {
+    let sb = Sandbox::new();
+    let dir = sb.install.join("jobs").join("18d8983cdf094ce9-1-0");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("request.json"),
+        r#"{"version":1,"kind":"reconcile","items":[]}"#,
+    )
+    .unwrap();
+    let listed = sb.ok(&["jobs"]);
+    assert!(listed.contains("running"), "{listed}");
+    assert!(!listed.contains("stopped"), "{listed}");
+}
+
+/// Two reconciles at once: the first claims the removals it defers past its
+/// lock, and the second leaves them to it — no half-finished record, no
+/// removal run twice over one tree.
+#[test]
+fn a_second_reconcile_leaves_the_first_ones_removals_alone() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    project(&sb, &sb.base, 30);
+    let killed = sb
+        .command()
+        .args(["move", "ID0001", &other.display().to_string(), "--yes"])
+        .env("FASTF_FAULT", "move:force-staged,move:after-retire:abort")
+        .output()
+        .unwrap();
+    assert!(!killed.status.success());
+    assert_eq!(
+        hidden_folders(&sb.base).len(),
+        1,
+        "the retired original is left"
+    );
+
+    let first = start(&sb, &["reconcile"], "remove:each-entry:delay-60");
+    wait_until("the first reconcile's removal", 20, || {
+        in_phase(&sb, "removing")
+    });
+    let second = sb.ok(&["reconcile"]);
+    assert!(second.contains("Nothing to reconcile"), "{second}");
+    let out = first.wait_with_output().unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{out:?}");
+    assert!(said.contains("1 move(s) finished"), "{said}");
+    assert!(hidden_folders(&sb.base).is_empty());
+}
+
+/// **A job is nobody's unit's.** Started from a desktop launcher, the app runs
+/// in a systemd service; with systemd's default exit type, its main process
+/// ending stops the unit and SIGTERMs everything in its cgroup. The worker is
+/// started in a scope of its own, so the move finishes anyway. Only where
+/// there is a systemd user manager to ask — never on CI's runners.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_move_outlives_the_systemd_unit_that_started_it() {
+    let bus = std::env::var_os("XDG_RUNTIME_DIR").map(|dir| PathBuf::from(dir).join("bus"));
+    let usable = bus.is_some_and(|bus| bus.exists())
+        && std::process::Command::new("systemd-run")
+            .args(["--user", "--quiet", "--wait", "--collect", "true"])
+            .status()
+            .is_ok_and(|status| status.success());
+    if !usable {
+        eprintln!("no systemd user manager here; nothing to show");
+        return;
+    }
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 20);
+    let unit = format!("fastf-test-{}", std::process::id());
+    let set = |name: &str, value: &Path| format!("--setenv={name}={}", value.display());
+    let started = std::process::Command::new("systemd-run")
+        .args([
+            "--user",
+            "--quiet",
+            "-p",
+            "ExitType=main",
+            "-p",
+            "KillMode=control-group",
+        ])
+        .arg(format!("--unit={unit}"))
+        .arg(set("FASTF_INSTALL_DIR", &sb.install))
+        .arg(set("HOME", sb.tmp.path()))
+        .arg("--setenv=FASTF_NO_RELAUNCH=1")
+        .arg("--setenv=FASTF_FAULT=move:force-staged,move:each-file:delay-100")
+        .arg(format!(
+            "--setenv=XDG_RUNTIME_DIR={}",
+            std::env::var("XDG_RUNTIME_DIR").unwrap()
+        ))
+        .arg(format!("--setenv=PATH={}", std::env::var("PATH").unwrap()))
+        .arg(common::FASTF)
+        .args([
+            "move",
+            "ID0001",
+            &other.display().to_string(),
+            "--yes",
+            "--detach",
+        ])
+        .status()
+        .unwrap();
+    assert!(started.success());
+    wait_until("the job to end", 30, || ended(&sb));
+    let (_, state) = newest(&sb).unwrap();
+    assert_eq!(status(&state), "done", "{state}");
+    assert!(!original.exists());
+}

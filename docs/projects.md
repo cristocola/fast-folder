@@ -354,7 +354,10 @@ commands, your editor, the file manager for Reveal, a clipboard tool
 (`wl-copy`, `xclip`, `xsel`, `clip`, `pbcopy`), and — unix only — a terminal
 emulator plus `notify-send`. It also starts itself: a move, a copy, a delete
 and a reconcile each run as a copy of fastf, detached from the terminal, with
-nothing on its command line but the job it is to read from the data folder. The emulator is started only when fastf has been
+nothing on its command line but the job it is to read from the data folder. On
+Linux with a systemd user session it is started through `systemd-run --user
+--scope`, so it belongs to no other program's unit: a desktop launcher that
+stops the app's unit when the app quits does not stop the move with it. The emulator is started only when fastf has been
 asked for something interactive and can prove nothing can read its output, and
 it is given fastf's own arguments as arguments, never through a shell.
 

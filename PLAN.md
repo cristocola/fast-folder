@@ -58,7 +58,7 @@ same shape (`library/lifecycle.rs:97`).
 | 12 | Name clashes (case-insensitive target), invalid names, too-long names are discovered file by file during the content copy | `copy_to_staging`, `transactions.rs:483` |
 | 13 | Out-of-space is discovered at the end of the copy | no check exists |
 | 14 | Publish uses `fs_retry::rename` (~310 ms of backoff), so a Windows indexer holding the fresh tree for a moment **discards a verified staging copy** | `move_engine.rs:297`, `copy_engine.rs:188` |
-| 15 | A copy's transaction is indistinguishable from a move's: if a copy dies between publish and transaction removal and its folder is later adopted as a base, reconcile would treat it as a published move and remove the source | `copy_engine.rs:146`, `provisioning.rs:762` |
+| 15 | A copy's transaction is indistinguishable from a move's — safe today only because a copy never advances its journal past `Copying`, which nothing enforces | `copy_engine.rs:146`, `provisioning.rs:762` |
 | 16 | The command line prints cleanup-pending twice (engine `diag::warn` + CLI `eprintln`) | `move_engine.rs:341-374`, `cli/move_project.rs:165` |
 | 17 | `verify_source_unchanged` compares whole manifests, `version` included, so any manifest-version bump would strand every older transaction | `transactions.rs:180` |
 | 18 | `docs/cli.md:439-446` shows a link-refusal message the code has never printed | docs |
@@ -280,29 +280,29 @@ the scan names every problem; no message says "changed while it was being copied
 
 ## Phase 2 — the fix: journal v3, retire, GC, reconcile
 
-- [ ] Journal v3 fields, `set_phase` stamps 3, derived `retired_path`/`probe_path`,
+- [x] Journal v3 fields, `set_phase` stamps 3, derived `retired_path`/`probe_path`,
   `published.json` written at publish (`move_engine.rs:297`) and read by reconcile.
-- [ ] `fs_retry::rename_dir` (longer backoff for 5/32, no read-only fallback) for the
+- [x] `fs_retry::rename_dir` (longer backoff for 5/32, no read-only fallback) for the
   publish rename (`move_engine.rs:297`, `copy_engine.rs:188`, defect 14) and the retire.
-- [ ] `src/core/move_cleanup.rs`: destination condition, `retire`, `remove_retired`,
+- [x] `src/core/move_cleanup.rs`: destination condition, `retire`, `remove_retired`,
   as designed. Unit tests for each, including a chmod-555 folder (removed) and a
   retired folder holding an unrecorded file (kept whole).
-- [ ] `move_engine.rs` post-publish order; `SourceOutcome`; `report_cleanup_pending`
+- [x] `move_engine.rs` post-publish order; `SourceOutcome`; `report_cleanup_pending`
   and the engine's duplicate `diag::warn`s go; failpoints added and re-meant.
-- [ ] `provisioning.rs` follows the table; `finish_cleanup_pending` split into retire
+- [x] `provisioning.rs` follows the table; `finish_cleanup_pending` split into retire
   and GC steps; `.fastf-*` skipping in `reconcile_base` and `list_incomplete`;
-  `IncompleteKind::MoveLeftover` (serialized `move-leftover`) for the header count;
+  `IncompleteKind::Leftover` (serialized `leftover`) for the header count;
   `ReconcileReport.leftovers`; every "left (source) untouched" in move paths rewritten
   to state the disk (defect 3).
-- [ ] `copy_engine` writes `operation: Copy`; reconcile never removes a copy's source.
-- [ ] `library/lifecycle.rs` delete retires to `.fastf-deleted-<op>` then removes it
+- [x] `copy_engine` writes `operation: Copy`; reconcile never removes a copy's source.
+- [x] `library/lifecycle.rs` delete retires to `.fastf-deleted-<op>` then removes it
   (`delete:after-retire`); reconcile finishes a leftover one (defect 2).
-- [ ] Rendering: `cli/move_project.rs:165` (one message per `SourceOutcome`),
+- [x] Rendering: `cli/move_project.rs:165` (one message per `SourceOutcome`),
   `cli/reconcile.rs` (leftovers; footer true), `tui/runtime.rs:964-1003` (move status),
   `tui/runtime.rs:1224-1263` (reconcile), `tui/app/jobs.rs` batch report warnings; a refusal of more than one line (the scan's problem list, a diff) opens a message
   dialog for a single move too — the status line shows one line (`App::set_status`), so
   today a single failed move would show only the header.
-- [ ] Tests — `src/core/library/tests.rs`: the incident class — a staged move of a
+- [x] Tests — `src/core/library/tests.rs`: the incident class — a staged move of a
   project with a chmod-555 folder leaves no folder, husk or `.fastf-*` in the source
   base and a complete F (skip as root); `move:mid-gc` reports a leftover and reconcile
   finishes it; `cleanup_failure_is_a_reported_success_and_retains_the_marker` moves to
@@ -389,3 +389,22 @@ move states what is on disk.
   subvolume needs btrfs. `docs/cli.md`'s link-refusal example is left for Phase 4,
   where links stop being refused. Gates green: fmt, clippy debug/release/windows-gnu,
   test debug/release, doc.
+- 2026-09-25 — Phase 2. `core::move_cleanup` (retire, the redundancy rule,
+  `remove_tree`), journal v3 (`Retired`, `operation`, `host`, `legacy_cleanup`),
+  `published.json`, `fs_retry::rename_dir`/`remove_dir`/`describe_rename_error`,
+  `SourceOutcome` + `SourceOutcome::warning`, the reconcile table, `fastf delete`
+  through `.fastf-deleted-<op>`, `ReconcileReport.{leftovers, cleared}`,
+  `IncompleteKind::Leftover`; the app opens a dialog for a paragraph warning or a
+  many-line error (`needs_a_dialog`). Found while testing, and fixed: (1) the
+  bookkeeping rewrites the moved copy's `PROJECT_INFO.md` before the retired copy
+  is removed, so without a published record (3.11) an exact content check kept
+  every retired copy forever — the fallback is now "not older than the original";
+  (2) rewriting a 3.11 journal as version 3 before a retire that then failed lost
+  the fact that its source may be half-deleted, and the next pass demanded it
+  whole — `legacy_cleanup` is set on reading a version-2 journal and carried.
+  Outside the phase but on its gates: `util::trace`'s counting test shared
+  `read_metadata`/`discover` with every parallel unit test that reads a project,
+  and the new reconcile tests made that race fire; it now counts names only it
+  writes. The in-process move writes `published.json` from the verified staging
+  walk; reconcile reads it. The probe (`move:after-probe`) is Phase 3's.
+  Gates green: fmt, clippy debug/release/windows-gnu, test debug/release, doc.

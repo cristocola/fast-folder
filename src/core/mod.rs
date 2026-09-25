@@ -4,6 +4,7 @@ pub mod config;
 pub mod copy_engine;
 pub mod counter;
 pub mod library;
+pub(crate) mod move_cleanup;
 pub mod move_engine;
 pub mod naming;
 pub mod operations;

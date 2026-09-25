@@ -1,10 +1,12 @@
-//! Scoped v2 move transactions.
+//! Scoped move transactions.
 //!
 //! A transaction lives below the target base at
 //! `.fastf-transactions/<operation-id>/`.  The journal deliberately contains
 //! no target-base or staging path: both are derived from that owned location.
 //! Source and target folder names are validated single path components before
-//! they are ever joined to a base.
+//! they are ever joined to a base. So is where a source goes when it leaves
+//! the library: `<source base>/.fastf-moved-<operation-id>`, named by nothing
+//! but the operation.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -22,8 +24,21 @@ pub const TRANSACTIONS_DIR: &str = ".fastf-transactions";
 pub const JOURNAL_FILE: &str = "move.json";
 pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 pub const STAGING_DIR: &str = "staging";
+/// The destination as it was published: the walk of the verified staging tree,
+/// times included, so a later cleanup can tell the user's edits from a copy
+/// restored out of an older backup.
+pub(crate) const PUBLISHED_FILE: &str = "published.json";
+/// A source that has left the library, beside it in its base, until it is
+/// removed. Dot-prefixed, so discovery never lists it.
+pub const RETIRED_PREFIX: &str = ".fastf-moved-";
 
-const MOVE_VERSION: u32 = 2;
+/// The journal this build writes. Version 3 added the `Retired` phase, the
+/// operation and the host; a version-2 journal — what 3.11 and older wrote —
+/// is still read, and is rewritten as version 3 by its first phase change,
+/// before anything is renamed. An older binary refuses version 3, which is
+/// what keeps it from finishing a transaction whose source it cannot see.
+const MOVE_VERSION: u32 = 3;
+const MOVE_VERSION_OLDEST: u32 = 2;
 /// The manifest this build writes. Version 2 added the link kinds; a version-1
 /// manifest — what 3.11 and older wrote — is version 2 without them, and is
 /// still read, or a transaction an older binary left could never be finished.
@@ -32,7 +47,7 @@ const MANIFEST_VERSION_OLDEST: u32 = 1;
 const OPERATION_RETRIES: usize = 64;
 const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 /// How many paths a refusal or a difference names before "and N more".
-const LISTED: usize = 10;
+pub(crate) const LISTED: usize = 10;
 
 static OPERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -40,7 +55,24 @@ static OPERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub enum MovePhase {
     Copying,
     ReadyToCommit,
+    /// Published; the source is still at its path until it is retired.
     CleanupPending,
+    /// The source has been renamed out of the library to its retired name;
+    /// what is left is removing that. Written *after* the rename, so a crash
+    /// between the two leaves `CleanupPending` with the retired folder present,
+    /// which recovery reads the same way.
+    Retired,
+}
+
+/// What the transaction is for. A copy keeps its source, so recovery must never
+/// take a copy's transaction as licence to remove one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Operation {
+    /// Version-2 journals carry no operation. Only moves ever advanced past
+    /// `Copying` then, so reading them as moves is what they were.
+    #[default]
+    Move,
+    Copy,
 }
 
 /// The complete move journal schema. Unknown fields are rejected so a future
@@ -55,6 +87,66 @@ pub struct MoveJournal {
     pub source_folder: PathBuf,
     pub target_folder: PathBuf,
     pub phase: MovePhase,
+    #[serde(default)]
+    pub operation: Operation,
+    /// The machine that began it. A base can be reached from more than one
+    /// machine, and the source path a journal names means something else on
+    /// the other one; recovery there only reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Begun by a build that removed a source where it stood (3.11 and
+    /// older), so its source may already be partly removed. Set when a
+    /// version-2 journal is read and **carried** when it is rewritten as
+    /// version 3 — otherwise a retire that failed after the rewrite would
+    /// leave a half-removed source that the next pass, seeing version 3,
+    /// demands whole.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_cleanup: bool,
+}
+
+impl MoveJournal {
+    /// Whether the source may be a residue of an in-place removal.
+    pub fn source_may_be_partial(&self) -> bool {
+        self.legacy_cleanup
+    }
+
+    /// Whether this machine began the operation. A version-2 journal names
+    /// no machine and is taken as this one's, which is how 3.11 treated it.
+    pub fn is_from_this_host(&self) -> bool {
+        match (&self.host, this_host()) {
+            (Some(recorded), Some(here)) => *recorded == here,
+            _ => true,
+        }
+    }
+}
+
+/// This machine's name, as the journal records it.
+pub(crate) fn this_host() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let mut buffer = [0_u8; 256];
+        // SAFETY: the buffer is valid for its whole length, and the length
+        // passed leaves room for the terminating NUL.
+        let status = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len() - 1) };
+        if status != 0 {
+            return None;
+        }
+        let end = buffer.iter().position(|&byte| byte == 0)?;
+        std::str::from_utf8(&buffer[..end])
+            .ok()
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    }
+    #[cfg(windows)]
+    {
+        std::env::var("COMPUTERNAME")
+            .ok()
+            .filter(|name| !name.is_empty())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +178,16 @@ pub struct ModifiedTime {
 }
 
 impl ModifiedTime {
+    /// Nanoseconds from the epoch, signed, for ordering.
+    pub fn nanos(&self) -> i128 {
+        let magnitude = i128::from(self.seconds) * 1_000_000_000 + i128::from(self.nanoseconds);
+        if self.before_epoch {
+            -magnitude
+        } else {
+            magnitude
+        }
+    }
+
     fn from_system_time(value: SystemTime) -> Self {
         match value.duration_since(UNIX_EPOCH) {
             Ok(duration) => Self {
@@ -232,15 +334,19 @@ impl MoveManifest {
     /// targets. Destination modification times are intentionally not compared:
     /// fastf promises content topology and byte lengths, not metadata
     /// preservation.
-    pub fn verify_destination(&self, destination: &Path) -> Result<()> {
-        let diff = self.compare(&Walk::of(destination, "move destination")?, Match::Content);
+    ///
+    /// Hands back the walk it compared, which is the destination as it is
+    /// about to be published.
+    pub fn verify_destination(&self, destination: &Path) -> Result<Walk> {
+        let walk = Walk::of(destination, "move destination")?;
+        let diff = self.compare(&walk, Match::Content);
         if !diff.is_clean() {
             bail!(
                 "move verification failed: the copy does not match the source: {}",
                 diff.summary(LISTED)
             );
         }
-        Ok(())
+        Ok(walk)
     }
 
     /// Re-walk the source and compare path, type, length, link target and
@@ -261,7 +367,15 @@ impl MoveManifest {
     /// original pre-copy metadata snapshot.
     pub fn verify_recovery_pair(&self, source: &Path, destination: &Path) -> Result<()> {
         self.verify_source_unchanged(source)?;
-        self.verify_destination(destination)
+        self.verify_destination(destination).map(drop)
+    }
+
+    /// The recorded entry at `path`.
+    pub fn entry(&self, path: &Path) -> Option<&ManifestEntry> {
+        self.entries
+            .binary_search_by(|entry| entry.path.as_path().cmp(path))
+            .ok()
+            .map(|index| &self.entries[index])
     }
 
     /// Compare what a walk found against what this manifest recorded.
@@ -612,13 +726,13 @@ impl Walk {
 /// compared: on overlayfs a file reports the device of the layer it came from,
 /// so comparing files would refuse every tree inside a container.
 #[cfg(unix)]
-fn device_of(metadata: &fs::Metadata) -> Option<u64> {
+pub(crate) fn device_of(metadata: &fs::Metadata) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
     Some(metadata.dev())
 }
 
 #[cfg(not(unix))]
-fn device_of(_metadata: &fs::Metadata) -> Option<u64> {
+pub(crate) fn device_of(_metadata: &fs::Metadata) -> Option<u64> {
     None
 }
 
@@ -692,47 +806,68 @@ fn walk_at(
                 continue;
             }
         };
-        let file_type = metadata.file_type();
-        if file_type.is_symlink() {
-            problem(Problem::Link);
-            continue;
-        }
-        let modified = match metadata.modified() {
-            Ok(modified) => ModifiedTime::from_system_time(modified),
-            Err(error) => {
-                problem(Problem::Unexaminable {
-                    not_found: false,
-                    error: error.to_string(),
-                });
-                continue;
+        match entry_for(&path, &relative, &metadata) {
+            Err(found) => problem(found),
+            Ok(entry) if entry.kind == ManifestKind::Directory => {
+                if device.is_some() && device_of(&metadata) != device {
+                    problem(Problem::OtherFilesystem);
+                    continue;
+                }
+                walk.entries.push(entry);
+                walk_at(root, &path, depth + 1, device, walk)?;
             }
-        };
-        if file_type.is_dir() {
-            if device.is_some() && device_of(&metadata) != device {
-                problem(Problem::OtherFilesystem);
-                continue;
-            }
-            walk.entries.push(ManifestEntry {
-                path: relative,
-                kind: ManifestKind::Directory,
-                bytes: 0,
-                source_modified: modified,
-                link_target: None,
-            });
-            walk_at(root, &path, depth + 1, device, walk)?;
-        } else if file_type.is_file() {
-            walk.entries.push(ManifestEntry {
-                path: relative,
-                kind: ManifestKind::File,
-                bytes: metadata.len(),
-                source_modified: modified,
-                link_target: None,
-            });
-        } else {
-            problem(Problem::Special);
+            Ok(entry) => walk.entries.push(entry),
         }
     }
     Ok(())
+}
+
+/// **The one classification of an entry**, from its `lstat`: what a manifest
+/// records for it, or why it cannot. The walk and the removal of a retired
+/// folder both ask here, so what one records the other recognises.
+fn entry_for(
+    _path: &Path,
+    relative: &Path,
+    metadata: &fs::Metadata,
+) -> std::result::Result<ManifestEntry, Problem> {
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(Problem::Link);
+    }
+    let modified = metadata
+        .modified()
+        .map(ModifiedTime::from_system_time)
+        .map_err(|error| Problem::Unexaminable {
+            not_found: false,
+            error: error.to_string(),
+        })?;
+    let (kind, bytes) = if file_type.is_dir() {
+        (ManifestKind::Directory, 0)
+    } else if file_type.is_file() {
+        (ManifestKind::File, metadata.len())
+    } else {
+        return Err(Problem::Special);
+    };
+    Ok(ManifestEntry {
+        path: relative.to_path_buf(),
+        kind,
+        bytes,
+        source_modified: modified,
+        link_target: None,
+    })
+}
+
+/// What is at `path` now, as a walk would record it; `None` for what a
+/// manifest cannot hold.
+pub(crate) fn examine(path: &Path, relative: &Path) -> std::io::Result<Option<ManifestEntry>> {
+    let metadata = fs::symlink_metadata(path)?;
+    Ok(entry_for(path, relative, &metadata).ok())
+}
+
+/// Whether `found` is still the entry `recorded` describes. Folder times do
+/// not count: removing a child moves them.
+pub(crate) fn agrees(recorded: &ManifestEntry, found: &ManifestEntry) -> bool {
+    difference(recorded, found, Match::Whole).is_none()
 }
 
 fn relative_to(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -756,6 +891,7 @@ impl MoveTransaction {
         target_base: &Path,
         target_folder: &Path,
         project_id: &str,
+        operation: Operation,
     ) -> Result<Self> {
         crate::util::paths::require_real_directory(source_base, "source base")?;
         crate::util::paths::require_real_directory(target_base, "target base")?;
@@ -778,6 +914,9 @@ impl MoveTransaction {
                             source_folder: source_folder.to_path_buf(),
                             target_folder: target_folder.to_path_buf(),
                             phase: MovePhase::Copying,
+                            operation,
+                            host: this_host(),
+                            legacy_cleanup: false,
                         };
                         crate::util::atomic::write_json(
                             &operation_dir.join(JOURNAL_FILE),
@@ -821,6 +960,39 @@ impl MoveTransaction {
         self.journal.source_base.join(&self.journal.source_folder)
     }
 
+    /// Where the source goes when it leaves the library.
+    pub fn retired_path(&self) -> PathBuf {
+        retired_path(&self.journal.source_base, &self.journal.operation_id)
+    }
+
+    /// Record the destination as it is about to be published.
+    pub fn write_published(&self, walk: &Walk) -> Result<MoveManifest> {
+        let published = MoveManifest {
+            version: MANIFEST_VERSION,
+            entries: walk.entries.clone(),
+        };
+        published.validate()?;
+        crate::util::atomic::write_json(&self.operation_dir.join(PUBLISHED_FILE), &published)
+            .context("writing the published record")?;
+        Ok(published)
+    }
+
+    /// The destination as it was published, or `None` for a transaction that
+    /// never recorded one (3.11 did not).
+    pub fn read_published(&self) -> Result<Option<MoveManifest>> {
+        let path = self.operation_dir.join(PUBLISHED_FILE);
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            _ => {}
+        }
+        crate::util::paths::require_real_file(&path, "published record")?;
+        let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        let published: MoveManifest =
+            serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
+        published.validate()?;
+        Ok(Some(published))
+    }
+
     pub fn write_manifest(&self, manifest: &MoveManifest) -> Result<()> {
         manifest.validate()?;
         crate::util::atomic::write_json(&self.operation_dir.join(MANIFEST_FILE), manifest)
@@ -831,9 +1003,14 @@ impl MoveTransaction {
         read_manifest(&self.operation_dir)
     }
 
+    /// Record `phase`. **Always as this build's version**: a version-2 journal
+    /// is rewritten as version 3 here, before its source is renamed, so an
+    /// older binary cannot then find no source, call the move finished and
+    /// leave the retired folder behind with nothing recording it.
     pub fn set_phase(&mut self, phase: MovePhase) -> Result<()> {
         let mut next = self.journal.clone();
         next.phase = phase;
+        next.version = MOVE_VERSION;
         crate::util::atomic::write_json(&self.operation_dir.join(JOURNAL_FILE), &next)
             .with_context(|| format!("writing {:?} move phase", phase))?;
         self.journal = next;
@@ -887,18 +1064,44 @@ pub fn transaction_root(target_base: &Path) -> PathBuf {
     target_base.join(TRANSACTIONS_DIR)
 }
 
+/// `<source base>/.fastf-moved-<operation>`: derived, never stored.
+pub fn retired_path(source_base: &Path, operation_id: &str) -> PathBuf {
+    source_base.join(format!("{RETIRED_PREFIX}{operation_id}"))
+}
+
+/// The operation a retired folder's name carries, if it is one fastf writes.
+pub fn retired_operation(name: &str) -> Option<&str> {
+    name.strip_prefix(RETIRED_PREFIX)
+        .filter(|operation| validate_operation_id(operation).is_ok())
+}
+
 pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
     let path = operation_dir.join(JOURNAL_FILE);
     crate::util::paths::require_real_file(&path, "move journal")?;
     let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let journal: MoveJournal =
         serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
-    if journal.version != MOVE_VERSION {
+    if !(MOVE_VERSION_OLDEST..=MOVE_VERSION).contains(&journal.version) {
         bail!(
             "unsupported move journal version {} at {}",
             journal.version,
             path.display()
         );
+    }
+    let mut journal = journal;
+    if journal.version < 3 {
+        if journal.phase == MovePhase::Retired
+            || journal.host.is_some()
+            || journal.legacy_cleanup
+            || journal.operation != Operation::Move
+        {
+            bail!(
+                "a version-{} move journal cannot record what only version 3 has: {}",
+                journal.version,
+                path.display()
+            );
+        }
+        journal.legacy_cleanup = true;
     }
     validate_operation_id(&journal.operation_id)?;
     validate_folder(&journal.source_folder, "source")?;
@@ -1080,7 +1283,7 @@ fn validate_operation_id(operation_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn next_operation_id() -> String {
+pub(crate) fn next_operation_id() -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
@@ -1247,6 +1450,7 @@ mod tests {
             &target_base,
             Path::new("project"),
             "ID0001",
+            Operation::Move,
         )
         .unwrap();
         assert_eq!(transaction.final_path(), target_base.join("project"));
@@ -1457,6 +1661,75 @@ mod tests {
         fs::write(source.join("sub/c.txt"), "edited, and longer").unwrap();
         let edited = manifest.compare(&Walk::of(&source, "tree").unwrap(), Match::Whole);
         assert!(!edited.is_residue(), "{edited:?}");
+    }
+
+    /// 3.11's journals are read, marked as ones whose source it may have
+    /// half-removed, and rewritten as version 3 by the next phase change; a
+    /// version-2 journal claiming what only version 3 records, and a journal
+    /// from a future version, are refused.
+    #[test]
+    fn journals_are_read_across_versions_and_rewritten_as_the_newest() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_base = temp.path().join("source-base");
+        let target_base = temp.path().join("target-base");
+        fs::create_dir(&source_base).unwrap();
+        fs::create_dir(&target_base).unwrap();
+        let transaction = MoveTransaction::begin(
+            &source_base,
+            Path::new("project"),
+            &target_base,
+            Path::new("project"),
+            "ID0001",
+            Operation::Move,
+        )
+        .unwrap();
+        let operation = transaction.operation_dir.clone();
+        let journal_path = operation.join(JOURNAL_FILE);
+        let written: serde_json::Value =
+            serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+        assert_eq!(written["version"], 3);
+        assert!(written.get("legacy_cleanup").is_none(), "{written}");
+
+        let write = |edit: &dyn Fn(&mut serde_json::Map<String, serde_json::Value>)| {
+            let mut journal = written.clone();
+            edit(journal.as_object_mut().unwrap());
+            fs::write(&journal_path, serde_json::to_vec(&journal).unwrap()).unwrap();
+        };
+        write(&|journal| {
+            journal.insert("version".into(), serde_json::json!(2));
+            journal.remove("operation");
+            journal.remove("host");
+        });
+        let legacy = read_journal(&operation).unwrap();
+        assert!(legacy.source_may_be_partial());
+        let mut rewritten = transaction_from_journal(&target_base, &operation, legacy);
+        rewritten.set_phase(MovePhase::CleanupPending).unwrap();
+        let reread = read_journal(&operation).unwrap();
+        assert_eq!(reread.version, 3);
+        assert!(
+            reread.source_may_be_partial(),
+            "carried through the rewrite"
+        );
+
+        for (bad, why) in [
+            (
+                serde_json::json!({"version": 2, "phase": "Retired"}),
+                "only version 3",
+            ),
+            (
+                serde_json::json!({"version": 4}),
+                "unsupported move journal version 4",
+            ),
+        ] {
+            write(&|journal| {
+                journal.remove("host");
+                for (key, value) in bad.as_object().unwrap() {
+                    journal.insert(key.clone(), value.clone());
+                }
+            });
+            let error = format!("{:#}", read_journal(&operation).unwrap_err());
+            assert!(error.contains(why), "expected '{why}', got: {error}");
+        }
     }
 
     #[test]

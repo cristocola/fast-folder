@@ -4,7 +4,7 @@
 use super::*;
 use crate::core::assets::Progress;
 use crate::core::config::Config;
-use crate::core::move_engine::{is_cross_device_error, staged_copy_verify_commit};
+use crate::core::move_engine::{SourceOutcome, is_cross_device_error, staged_copy_verify_commit};
 use crate::core::project_info;
 #[cfg(debug_assertions)]
 use crate::core::provisioning;
@@ -38,6 +38,17 @@ fn cfg_for(base: &Path, extra: &[&Path]) -> Config {
         bases: extra.iter().map(|p| p.display().to_string()).collect(),
         ..Default::default()
     }
+}
+
+/// fastf's hidden per-project folders in `base`: a retired original, a
+/// deleted project on its way out.
+fn retired_folders(base: &Path) -> Vec<String> {
+    fs::read_dir(base)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".fastf-moved-") || name.starts_with(".fastf-deleted-"))
+        .collect()
 }
 
 fn v2_transaction_count(base: &Path) -> usize {
@@ -532,12 +543,25 @@ fn cleanup_failure_is_a_reported_success_and_retains_the_marker() {
     })
     .expect("publication remains a successful move");
 
-    assert!(outcome.cleanup_pending);
+    assert!(
+        matches!(outcome.source, SourceOutcome::KeptWhole { .. }),
+        "{:?}",
+        outcome.source
+    );
     assert_eq!(
         fs::read(final_path.join("payload.bin")).unwrap(),
         [0_u8, 1, 2, 255]
     );
     assert!(project.path.is_dir(), "failed cleanup leaves source intact");
+    assert_eq!(
+        fs::read(project.path.join("payload.bin")).unwrap(),
+        [0_u8, 1, 2, 255],
+        "and whole"
+    );
+    assert!(
+        retired_folders(old.path()).is_empty(),
+        "a retire that failed leaves nothing retired"
+    );
     assert_eq!(
         v2_transaction_count(new.path()),
         1,
@@ -565,7 +589,7 @@ fn conventional_v1_staging_and_marker_are_payload_not_move_authority() {
     fs::write(&marker, b"foreign marker bytes").unwrap();
     let outcome =
         staged_copy_verify_commit(&project, new.path(), &final_path, &progress, &cancel).unwrap();
-    assert!(!outcome.cleanup_pending);
+    assert!(!outcome.cleanup_pending());
     assert_eq!(
         fs::read(staging.join("sentinel")).unwrap(),
         b"owned by someone else"
@@ -1004,7 +1028,19 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
         "move:after-verify",
         "move:before-commit-rename",
         "move:after-commit-before-source-removal",
+        "move:before-retire",
+        "move:source-cleanup",
+        "move:after-retire",
+        "move:mid-gc",
     ];
+    // Published, the original still whole at its path.
+    const KEPT: &[&str] = &[
+        "move:after-commit-before-source-removal",
+        "move:before-retire",
+        "move:source-cleanup",
+    ];
+    // Published, the original out of the library, its retired copy not gone.
+    const RETIRED: &[&str] = &["move:after-retire", "move:mid-gc"];
 
     for point in MOVE_POINTS {
         let tmp1 = tempfile::tempdir().unwrap();
@@ -1025,11 +1061,29 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
             staged_copy_verify_commit(&project, new_base, &new_path, &progress, &cancel)
         });
 
-        if *point == "move:after-commit-before-source-removal" {
+        if KEPT.contains(point) {
             assert!(
-                result.as_ref().is_ok_and(|outcome| outcome.cleanup_pending),
-                "[{point}] publication must be reported as cleanup pending"
+                result
+                    .as_ref()
+                    .is_ok_and(|outcome| matches!(outcome.source, SourceOutcome::KeptWhole { .. })),
+                "[{point}] publication with the original kept whole: {result:?}"
             );
+        } else if RETIRED.contains(point) {
+            assert!(
+                result.as_ref().is_ok_and(|outcome| matches!(
+                    outcome.source,
+                    SourceOutcome::Leftover {
+                        redundant: true,
+                        ..
+                    }
+                )),
+                "[{point}] the original out of the library, a leftover reported: {result:?}"
+            );
+            assert!(
+                !old_base.join("proj_a").exists(),
+                "[{point}] no husk: the original left in one rename"
+            );
+            assert_eq!(retired_folders(old_base).len(), 1, "[{point}]");
         } else {
             assert!(result.is_err(), "[{point}] should have failed");
         }
@@ -1044,7 +1098,7 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
             "[{point}] data exists in neither location — this is data loss"
         );
 
-        if *point == "move:after-commit-before-source-removal" {
+        if KEPT.contains(point) || RETIRED.contains(point) {
             assert!(dest_ok, "[{point}] commit landed, destination must hold it");
         } else {
             assert!(
@@ -1071,7 +1125,151 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
             0,
             "[{point}] reconcile left a transaction behind: {report:?}"
         );
+        assert!(
+            retired_folders(old_base).is_empty(),
+            "[{point}] reconcile left a retired original behind: {report:?}"
+        );
+        assert!(report.leftovers.is_empty(), "[{point}] {report:?}");
     }
+}
+
+/// **The incident, without sshfs.** Anything that stops a removal part of the
+/// way — here a read-only folder inside the project — used to leave a husk
+/// that still held `PROJECT_INFO.md`: listed as the project, most of it gone.
+/// The original now leaves the library in one rename, and its retired copy is
+/// removed after, read-only folder and all.
+#[cfg(unix)]
+#[test]
+fn a_read_only_folder_inside_the_project_cannot_leave_a_husk() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root writes into a read-only folder, so as root this proves nothing.
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let sealed = old_base.join("proj_a/aaa_modcache");
+    fs::create_dir_all(&sealed).unwrap();
+    fs::write(sealed.join("module.go"), "package x").unwrap();
+    fs::write(old_base.join("proj_a/zzz_after.txt"), "after").unwrap();
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+    let outcome = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_path,
+        &progress,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    assert!(!old_base.join("proj_a").exists(), "no husk at the old path");
+    assert!(
+        retired_folders(old_base).is_empty(),
+        "and nothing left hidden"
+    );
+    assert_eq!(
+        fs::read_to_string(new_path.join("aaa_modcache/module.go")).unwrap(),
+        "package x"
+    );
+    assert_eq!(
+        fs::read_to_string(new_path.join("zzz_after.txt")).unwrap(),
+        "after"
+    );
+}
+
+/// A removal of the retired copy that stops part of the way leaves a hidden
+/// leftover — not a project — and the next reconcile finishes it.
+#[cfg(debug_assertions)]
+#[test]
+fn a_removal_stopped_part_way_leaves_only_a_hidden_leftover() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    for name in ["a.bin", "b.bin", "c.bin"] {
+        fs::write(old_base.join("proj_a").join(name), name).unwrap();
+    }
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+
+    let outcome = crate::util::faults::with_thread_fault("move:mid-gc", || {
+        staged_copy_verify_commit(
+            &project,
+            new_base,
+            &new_path,
+            &progress,
+            &AtomicBool::new(false),
+        )
+    })
+    .unwrap();
+
+    let SourceOutcome::Leftover {
+        path,
+        redundant: true,
+        ..
+    } = &outcome.source
+    else {
+        panic!("expected a redundant leftover: {:?}", outcome.source);
+    };
+    assert!(path.is_dir(), "the retired copy is still there");
+    assert!(!old_base.join("proj_a").exists());
+    assert!(
+        discover(&cfg)
+            .iter()
+            .all(|found| !found.path.starts_with(old_base)),
+        "the leftover is never listed as a project"
+    );
+    assert!(
+        outcome.project.path.starts_with(new_base),
+        "the project is the moved copy"
+    );
+
+    let report = provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(report.completed, 1, "{report:?}");
+    assert!(!path.exists());
+    assert!(retired_folders(old_base).is_empty());
+    assert_eq!(v2_transaction_count(new_base), 0);
+    assert!(
+        provisioning::reconcile_unlocked(&cfg).is_empty(),
+        "and a second pass has nothing left to do"
+    );
+}
+
+/// `fastf delete` leaves the library in one rename too, and a removal that
+/// stops after it leaves a hidden folder reconcile clears — never a husk.
+#[cfg(debug_assertions)]
+#[test]
+fn a_delete_stopped_after_its_rename_is_cleared_by_reconcile() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(base.join("proj/payload.bin"), [1_u8, 2, 3]).unwrap();
+    let cfg = cfg_for(base, &[]);
+    let project = scan_base(base).remove(0);
+
+    crate::util::faults::with_thread_fault("delete:after-retire", || {
+        delete_project_inner(&project)
+    })
+    .unwrap();
+
+    assert!(!base.join("proj").exists(), "no husk at the old path");
+    assert_eq!(retired_folders(base).len(), 1);
+    assert!(scan_base(base).is_empty(), "nothing listed");
+
+    let report = provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(report.cleared, 1, "{report:?}");
+    assert!(retired_folders(base).is_empty());
 }
 
 #[test]

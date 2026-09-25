@@ -228,7 +228,8 @@ projects, and mints duplicates when it guesses low, so the lookup happens once, 
 ## Moving projects
 
 **Invariant: a source is never removed until a complete destination has been
-copied, verified and published.**
+copied, verified and published — and then it leaves the library in one rename,
+never by being deleted where it stands.**
 
 `library::move_project` is the compatibility shape (lock, revalidate);
 applications use `operations::move_project` →
@@ -243,9 +244,11 @@ rename error returns unchanged — never broaden that match. The rename probe sk
 backoff to every cross-drive move.
 
 Staged moves live at `.fastf-transactions/<timestamp-pid-counter>/` in the target
-base. `move.json` holds only version, operation id, project id, source base,
-validated folder components and `Copying | ReadyToCommit | CleanupPending`; paths
-derive from the transaction's own location. `MoveManifest::scan` is
+base. `move.json` (version 3; version 2 is read) holds version, operation id,
+project id, source base, validated folder components, the phase
+(`Copying | ReadyToCommit | CleanupPending | Retired`), `operation` (`Move |
+Copy`), the `host` that began it, and `legacy_cleanup`; paths derive from the
+transaction's own location, the retired name from the operation. `MoveManifest::scan` is
 **deny-by-default** — a link or special entry fails the whole move — and
 `verify_destination` compares the exact path/type/size manifest, because a
 verification narrower than the copy could remove a source that never fully
@@ -267,8 +270,42 @@ are the two questions asked of it. Folder devices are compared on unix only, and
 only folders: on overlayfs a file reports the device of its layer.
 
 Before publication, a cancel or failure removes only the owned transaction. After
-it, cancel is too late, and a failed source removal keeps `CleanupPending` and
-reports the destination published.
+it, cancel is too late.
+
+**After publication the source is retired, not deleted** (`core::move_cleanup`):
+renamed in one step to `<source base>/.fastf-moved-<operation>` — same folder, so
+the same filesystem, and dot-prefixed, so discovery skips it — then removed. A
+tree removal is not one operation; anything that stops `remove_dir_all` part of
+the way (a mode-555 folder, a file a program holds open, a network drop, an entry
+a mount lists but hides) used to leave a husk that still held `PROJECT_INFO.md`
+and was listed as the project. That is how 3.11 left 13 of 1473 files behind on
+an sshfs base and then called the source untouched. The order is fsync the target
+base (unix), `CleanupPending`, check, retire, `Retired` (written *after* the
+rename; a crash between reads the same, since the retired folder is there),
+bookkeeping, remove the retired copy, remove the transaction. Publishing first is
+deliberate: a Windows "file in use" at the retire then costs a reconcile, not a
+second copy. `MoveOutcome.source` says what became of it (`Removed`, `Leftover`,
+`KeptWhole`, `Unknown`), and `SourceOutcome::warning` is the one wording both
+surfaces print. `fastf delete` retires through `.fastf-deleted-<operation>` the
+same way.
+
+**One rule decides removal, in-process and in reconcile**
+(`move_cleanup::check_removable`): every entry is one the move recorded,
+unchanged (`is_clean` for a version-3 source, `is_residue` for a retired copy and
+for a source 3.11 may have half-deleted, which `legacy_cleanup` marks and carries
+through the version-3 rewrite), and the moved copy holds an entry of the same kind
+at every such path that is as published (`published.json`, the staging walk) or
+newer — so the user may edit the moved copy while a cleanup waits, and a moved
+copy restored from an older backup keeps the original. Without a published record
+(3.11) "newer" is measured against the original's own time. The removal itself is
+`move_cleanup::remove_tree`, not std's: it never follows a link or crosses a
+device, re-checks each entry against the manifest, carries on past a failure,
+gives a folder its owner's permission back, and counts what it left.
+
+**A folder rename uses `fs_retry::rename_dir`**, whose ≈ 2.5 s schedule outlasts an
+indexer holding a freshly written tree; the short one discarded a verified staging
+copy at publish. On Windows a refused folder rename means a program has something
+in it open (`describe_rename_error`).
 
 ## Copying projects out
 
@@ -295,11 +332,28 @@ reported for inspection. Creates defer no copies, but the resume branch stays fo
 a journal an older binary left on a shared drive, resuming after identity, type
 and length checks.
 
-**Reconcile** holds `DataLock` for the whole pass and is idempotent. `Copying` and
-unpublished `ReadyToCommit` discard only the owned transaction; published
-`ReadyToCommit` compares identity and manifests before cleanup; `CleanupPending`
-repeats those checks before removing the source. Missing bases, malformed
-journals, identity mismatches and unknown states are report-only.
+**Reconcile** holds `DataLock` for the whole pass and is idempotent. By
+transaction (S source, R retired copy, T staging, F destination):
+
+| phase | on disk | action |
+|---|---|---|
+| any | `host` is another machine's | report only |
+| any | `operation = Copy` | discard T if unpublished, clear the record; never touch S |
+| Copying, ReadyToCommit | R present | report |
+| Copying | S ours, no F | discard |
+| ReadyToCommit | T, no F | discard |
+| ReadyToCommit | F ours, no T | exact source + content, then as CleanupPending |
+| CleanupPending, Retired | F not ours | report; with R present, say R may be the only copy |
+| CleanupPending | R present | write `Retired`, bookkeeping, remove R |
+| CleanupPending | S present | check, retire, `Retired`, bookkeeping, remove R |
+| CleanupPending, Retired | no R, and no S or `Retired` | bookkeeping, clear the record |
+
+`reconcile_base` and `list_incomplete` never look inside `.fastf-moved-*` or
+`.fastf-deleted-*` for a create to resume. A retired folder no transaction owns is
+reported, never removed; a deleted project's folder is removed (the word confirmed
+it). Every message names the project, its record and phase, and what is on disk;
+"left untouched" about a pass is not a statement about the disk. `leftovers` holds
+the hidden folders not removed yet, `cleared` the deleted ones that were.
 
 **A case-only rename** stages through `.<target>.fastf-case`
 (`library::lifecycle::case_staging_name`/`case_staging_target`, one spelling for

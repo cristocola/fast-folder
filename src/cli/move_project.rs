@@ -162,13 +162,8 @@ pub fn run(args: MoveArgs) -> Result<()> {
         }
         .dimmed()
     );
-    if outcome.cleanup_pending {
-        eprintln!(
-            "{} destination is complete, but the original could not be removed. \
-             Cleanup is pending at {} and the transaction was retained.",
-            "warning:".yellow().bold(),
-            crate::util::paths::display_path(&project.path)
-        );
+    if let Some(warning) = outcome.source.warning(&project.path) {
+        eprintln!("{} {warning}", "warning:".yellow().bold());
     }
     Ok(())
 }

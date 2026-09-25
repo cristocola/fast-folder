@@ -27,7 +27,7 @@ pub fn run() -> Result<()> {
     // Not a green tick over a report that may be nothing but "could not
     // inspect": the tick means something worked, and here it only means the
     // pass ran.
-    let clean = report.unrecoverable.is_empty();
+    let clean = report.unrecoverable.is_empty() && report.leftovers.is_empty();
     println!(
         "{}  Reconcile report complete.",
         if clean {
@@ -45,9 +45,16 @@ pub fn run() -> Result<()> {
     }
     if report.completed > 0 {
         println!(
-            "   {} {} move(s) committed (source removed)",
+            "   {} {} move(s) finished (original removed)",
             "completed".dimmed(),
             report.completed
+        );
+    }
+    if report.cleared > 0 {
+        println!(
+            "   {} {} old folder(s) of deleted projects removed",
+            "cleared".dimmed(),
+            report.cleared
         );
     }
     if report.restored > 0 {
@@ -96,10 +103,26 @@ pub fn run() -> Result<()> {
                 .dimmed()
         );
     }
+    if !report.leftovers.is_empty() {
+        println!(
+            "   {} {} old folder(s) not removed yet:",
+            "leftover".yellow().bold(),
+            report.leftovers.len()
+        );
+        for item in &report.leftovers {
+            println!("     - {}", item.yellow());
+        }
+        println!(
+            "     {}",
+            "Hidden folders that projects which have left the library left behind. \
+             Each line says whether fastf can remove it."
+                .dimmed()
+        );
+    }
     if !report.unrecoverable.is_empty() {
         println!(
-            "   {} {} item(s) could not be inspected:",
-            "unrecoverable".yellow().bold(),
+            "   {} {} item(s) need a look:",
+            "attention".yellow().bold(),
             report.unrecoverable.len()
         );
         for item in &report.unrecoverable {
@@ -110,8 +133,8 @@ pub fn run() -> Result<()> {
         // bare list.
         println!(
             "     {}",
-            "Nothing was changed for these. Look at each path yourself: fastf could not \
-             read it, or reading it would have meant guessing."
+            "Each line says what is on disk and what fastf left alone. Where it names a \
+             step, that step finishes it; otherwise look at the paths yourself."
                 .dimmed()
         );
     }

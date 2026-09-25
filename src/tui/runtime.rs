@@ -982,12 +982,7 @@ fn run_action(
                     display_path(&moved.path)
                 ),
             };
-            let warning = outcome.cleanup_pending.then(|| {
-                format!(
-                    "destination is complete, but cleanup is pending at {}",
-                    display_path(&project.path)
-                )
-            });
+            let warning = outcome.source.warning(&project.path);
             let session = format!("moved {} → {}", moved.id, base_label(&moved.base));
             let stale = vec![project.path.clone(), moved.path.clone()];
             Ok(ActionOutcome::new(
@@ -1227,8 +1222,12 @@ fn run_action(
                 "Nothing to reconcile — every project is fully provisioned.".to_string()
             } else {
                 format!(
-                    "Reconciled: {} resumed, {} committed, {} rolled back, {} restored",
-                    report.resumed, report.completed, report.rolled_back, report.restored
+                    "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared",
+                    report.resumed,
+                    report.completed,
+                    report.rolled_back,
+                    report.restored,
+                    report.cleared
                 )
             };
             let outcome = ActionOutcome::new(ListChange::Reload, message).settings();
@@ -1241,11 +1240,18 @@ fn run_action(
                     report.incomplete.join(", ")
                 ));
             }
+            if !report.leftovers.is_empty() {
+                notes.push(format!(
+                    "{} old folder(s) not removed yet:\n{}",
+                    report.leftovers.len(),
+                    report.leftovers.join("\n")
+                ));
+            }
             if !report.unrecoverable.is_empty() {
                 notes.push(format!(
-                    "{} could not be recovered: {}",
+                    "{} need a look:\n{}",
                     report.unrecoverable.len(),
-                    report.unrecoverable.join(", ")
+                    report.unrecoverable.join("\n")
                 ));
             }
             if !report.obsolete.is_empty() {
@@ -1258,7 +1264,7 @@ fn run_action(
             Ok(if notes.is_empty() {
                 outcome
             } else {
-                outcome.warning(Some(notes.join("  ·  ")))
+                outcome.warning(Some(notes.join("\n\n")))
             })
         }
         Action::Unregister(project) => {

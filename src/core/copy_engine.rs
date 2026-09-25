@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::core::assets::{self, JobPhase, Progress};
 use crate::core::config::Config;
 use crate::core::library::{Project, revalidate_project};
-use crate::core::transactions::{self, MoveManifest, MoveTransaction};
+use crate::core::transactions::{self, MoveManifest, MoveTransaction, Operation};
 
 #[derive(Debug, Clone)]
 pub struct CopyOutcome {
@@ -143,7 +143,14 @@ fn copy_unlocked(
         .context("the project path has no folder name")?;
 
     crate::util::faults::check("copy:before-marker-write")?;
-    let transaction = MoveTransaction::begin(&source_base, &folder, &root, &folder, &project.id)?;
+    let transaction = MoveTransaction::begin(
+        &source_base,
+        &folder,
+        &root,
+        &folder,
+        &project.id,
+        Operation::Copy,
+    )?;
 
     let staged = (|| -> Result<(usize, u64)> {
         // Deny-by-default, exactly as a cross-drive move is: a link cannot be
@@ -188,7 +195,7 @@ fn copy_unlocked(
                 crate::util::paths::display_path(target)
             );
         }
-        crate::util::fs_retry::rename(&staging, target)
+        crate::util::fs_retry::rename_dir(&staging, target)
             .with_context(|| format!("publishing the copy at {}", target.display()))?;
         Ok(totals)
     })();

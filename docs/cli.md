@@ -418,7 +418,7 @@ fastf move my-crate /mnt/projects/archive
 fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 ```
 
-Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move stages every ordinary file—including legitimate `.tmp` and `.part` names—and every link, checks relative paths, byte lengths and link targets, commits atomically, and only then sets the original aside in one rename and removes it. Keep the project untouched while that copy is running. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
+Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move copies every ordinary file—including legitimate `.tmp` and `.part` names—and every link into the new folder, checks relative paths, byte lengths and link targets, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then sets the original aside in one rename and removes it. Keep the project untouched while that copy is running. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
 
 **A move always says which kind it was**: `renamed on the same filesystem,
 nothing copied`, or `copied 412 files and 3 links, 199.5 GB, verified`. A same-filesystem
@@ -443,10 +443,13 @@ error: /mnt/share/2026-07-26_Shoot_ID0047 holds 2 entries that cannot be copied 
 
 **Ctrl-C cancels it safely before publication**: fastf removes only the private
 transaction owned by that operation and leaves the source untouched. Once
-publication begins, cancellation is too late. If the original cannot then be
-set aside — a program has a file in it open — the move says that the original
-is still there, whole, that nothing in it was removed, and why; `fastf
-reconcile` finishes the move once that is resolved, without copying again.
+publication begins, cancellation is too late. If the moved copy turns out to be
+missing anything, fastf copies it again from the original, which stays whole
+until the copy is complete. If the original cannot then be set aside — a
+program has a file in it open — the move says that the original is still there,
+whole, that nothing in it was removed, and why; `fastf reconcile` finishes the
+move once that is resolved, without copying again. In the app, `fastf
+reconcile` is the `!` key, named Reconcile.
 Same-filesystem moves finish instantly and print nothing extra.
 
 **Symlinks and junctions** travel as links, pointing exactly where they did, and
@@ -538,10 +541,11 @@ fastf reconcile
 Scoped v2 create journals let `reconcile` finish missing deferred copies after
 validating the template, project identity, relative paths, entry types, and byte
 lengths. Scoped move transactions are either discarded before publication or,
-after a matching destination has been published, finished: the original is set
-aside and removed only when everything in it is what the move recorded and is
-still in the moved copy. Anything else is reported — the project, its
-transaction, and what differs — and nothing is removed. A move that fastf 3.11
+after a matching destination has been published, finished: anything the moved
+copy is missing is put back from the original, then the original is set aside
+and removed, once everything in it is what the move recorded and is in the
+moved copy. Anything else is reported — the project, its transaction, and what
+differs — and nothing is removed. A move that fastf 3.11
 or older left half-deleted is finished the same way when what is left is
 provably a duplicate. Missing bases, mismatched identities, malformed journals,
 or unknown states are reported without mutation. Running the command repeatedly

@@ -161,9 +161,9 @@ pub(crate) fn delete_project_inner(project: &Project) -> Result<()> {
     } = removal
     {
         let next = if kept_on_purpose {
-            "remove it yourself once you have looked"
+            "fastf keeps it until you have looked"
         } else {
-            "`fastf reconcile` tries again, or remove it yourself"
+            "`fastf reconcile` finishes it"
         };
         crate::util::diag::warn(format!(
             "deleted '{}', but its folder, hidden at {}, is not fully removed yet ({reason}); \

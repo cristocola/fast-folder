@@ -1988,8 +1988,8 @@ pub static COMMANDS: &[Command] = &[
     ),
     cmd!(
         Reconcile,
-        "Check and recover",
-        "finish or roll back work a crash left half-done — what the header's needs-attention warning means",
+        "Reconcile",
+        "check and recover: finish or roll back work a crash or a failed move left half-done — what the header's needs-attention warning means",
         TABS,
         [Key::ch('!')],
         Library,

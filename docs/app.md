@@ -186,7 +186,7 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
-| `!` | check and recover — what `⚠ n needs attention` means |
+| `!` | reconcile: check and recover from what a crash or a failed move left — what `⚠ n needs attention` means |
 | `L` | the session's messages, newest first with the time each arrived — a warning that flashed under a dialog is counted on the status line until you read them |
 | F5, Ctrl-R | reload: read every base again |
 | `R` | reindex: rescan every base from its folders and rebuild the caches |
@@ -320,10 +320,11 @@ because that is what the list is. The keys and what each one means are in
 
 The same screen holds the **ID counter** (what the highest ID is, what the next
 project gets, raising it, and making every mounted base agree on it) and
-**maintenance**: reindex every base, check and recover from work a crash left
-half-done, and where fastf keeps its config, counter and templates. `!` runs
-check-and-recover from anywhere, which is what the header's `⚠ n needs
-attention` is about.
+**maintenance**: reindex every base, reconcile (check and recover from what a
+crash or a failed move left half-done), and where fastf keeps its config,
+counter and templates. `!` reconciles from anywhere, which is what the header's
+`⚠ n needs attention` is about. It is the same thing as `fastf reconcile` on
+the command line.
 
 ## Actions, and marks
 

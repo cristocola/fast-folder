@@ -178,19 +178,21 @@ fn copy_unlocked(
             state.copied_bytes = 0;
             state.touch();
         }
+        // Made at its final path, `PROJECT_INFO.md` last — see `transactions`.
         let staging = transaction.claim_staging()?;
+        let body = manifest.without_root_metadata();
         if let Err(error) =
-            transactions::copy_to_staging(&manifest, &project.path, &staging, progress, cancel)
+            transactions::copy_to_staging(&body, &project.path, &staging, progress, cancel)
         {
             if cancel.load(Ordering::Relaxed) {
                 anyhow::bail!("copy of '{}' cancelled", project.name);
             }
             return Err(error)
-                .with_context(|| format!("copying '{}' into private staging", project.name));
+                .with_context(|| format!("copying '{}' into {}", project.name, root.display()));
         }
         crate::util::faults::check("copy:after-staging")?;
         set_phase(progress, JobPhase::Verifying);
-        manifest.verify_destination(&staging)?;
+        body.verify_destination(&staging)?;
         // The source has to be what it was when the manifest was taken, or the
         // copy is of two different moments.
         manifest.verify_source_unchanged(&project.path)?;
@@ -199,20 +201,22 @@ fn copy_unlocked(
             anyhow::bail!("copy of '{}' cancelled", project.name);
         }
         set_phase(progress, JobPhase::Finalizing);
-        if assets::entry_exists(target)? {
-            anyhow::bail!(
-                "the copy destination became occupied: {}",
-                crate::util::paths::display_path(target)
-            );
-        }
-        crate::core::move_engine::publish(&staging, target)
-            .with_context(|| format!("publishing the copy at {}", target.display()))?;
+        transactions::copy_to_staging(
+            &manifest.only_root_metadata(),
+            &project.path,
+            &staging,
+            progress,
+            cancel,
+        )
+        .with_context(|| format!("publishing the copy at {}", target.display()))?;
         Ok(totals)
     })();
 
     // **Whatever happened, the transaction goes.** There is no cleanup-pending
     // state here: a move keeps its transaction when the *source* could not be
-    // removed, and a copy removes no source.
+    // removed, and a copy removes no source. An unpublished copy goes with it
+    // (`MoveTransaction::remove`); a published one is at `Copying` in the
+    // record but holds its `PROJECT_INFO.md`, which `remove` sees.
     let removal = transaction.remove();
     let (copied, links, link_notes) = staged?;
     if let Err(error) = removal {

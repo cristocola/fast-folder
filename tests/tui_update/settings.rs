@@ -215,7 +215,7 @@ fn the_maintenance_rows_run_rather_than_set() {
     let _ = update(&mut app, item_done(id, ListChange::None));
 
     press(&mut app, Key::plain(KeyCode::Down));
-    assert_eq!(state(&app).row().unwrap().label, "Check and recover");
+    assert_eq!(state(&app).row().unwrap().label, "Reconcile");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(matches!(action_of(&effects), Action::Reconcile));
 }

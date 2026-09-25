@@ -1097,12 +1097,12 @@ mod settings {
         snap("onboarding", render_to_string(&app, 100, 30));
     }
 
-    /// What `Check and recover` reports when it found something.
+    /// What `Reconcile` reports when it found something.
     #[test]
     fn reconcile_report() {
         let mut app = fixture(12, 100, 30);
         open(&mut app);
-        go_to(&mut app, "Check and recover");
+        go_to(&mut app, "Reconcile");
         let effects = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
         let id = match &effects[..] {
             [fastf::tui::effect::Effect::Run(id, _)] => *id,

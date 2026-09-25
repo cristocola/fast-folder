@@ -921,7 +921,7 @@ a refusal is the command line's, word for word, and `app/settings.rs` knows
 nothing about what is legal. A yes/no or a two-way choice toggles in place;
 anything else edits **on its own line**, pre-filled, with the refusal under it and
 the text kept. The **library bases** are one `TextArea`, a folder per line, Ctrl-S
-to keep. The **ID counter** and the maintenance verbs (reindex, check and recover,
+to keep. The **ID counter** and the maintenance verbs (reindex, reconcile,
 data locations) are rows too; `!` is `CommandId::Reconcile` from anywhere, for the
 header's `⚠ n needs attention`. `ActionOutcome::settings()` re-reads the screen
 after a write, so a normalised value shows as stored.

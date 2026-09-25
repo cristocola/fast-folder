@@ -70,13 +70,14 @@ impl SourceOutcome {
                 redundant: false,
             } => Some(format!(
                 "the original is out of the library; its retired copy at {} was kept \
-                 whole, because {reason}. Look inside, delete it yourself once nothing in \
-                 it is needed, then run `fastf reconcile`.",
+                 whole, because {reason}. fastf keeps it until you have looked; once \
+                 nothing in it is needed, remove it and run `fastf reconcile`.",
                 shown(path)
             )),
             Self::KeptWhole { reason } => Some(format!(
                 "the original at {} is still there, whole, and fastf removed nothing: \
-                 {reason}. When that is resolved, `fastf reconcile` finishes the move.",
+                 {reason}. `fastf reconcile` finishes the move once that is resolved; \
+                 until then both copies are listed.",
                 shown(original)
             )),
             Self::Unknown { reason } => Some(format!(
@@ -369,21 +370,24 @@ pub(crate) fn staged_copy_verify_commit(
             state.copied_bytes = 0;
             state.touch();
         }
+        // The copy is made at its final path, everything but the root
+        // `PROJECT_INFO.md`: until that lands the folder is not a project.
         let staging = transaction.claim_staging()?;
+        let body = manifest.without_root_metadata();
         if let Err(error) =
-            transactions::copy_to_staging(&manifest, &project.path, &staging, progress, cancel)
+            transactions::copy_to_staging(&body, &project.path, &staging, progress, cancel)
         {
             if cancel.load(Ordering::Relaxed) {
                 anyhow::bail!("move of '{}' cancelled", project.name);
             }
-            return Err(error)
-                .with_context(|| format!("copying '{}' into private staging", project.name));
+            return Err(error).with_context(|| {
+                format!("copying '{}' into {}", project.name, new_base.display())
+            });
         }
         crate::util::faults::check("move:after-staging")?;
         set_phase(progress, JobPhase::Verifying);
-        let staged = manifest.verify_destination(&staging)?;
+        let mut staged = body.verify_destination(&staging)?;
         manifest.verify_source_unchanged(&project.path)?;
-        let published_record = transaction.write_published(&staged)?;
         crate::util::faults::check("move:after-verify")?;
         crate::util::faults::check("move:post-verification")?;
 
@@ -391,17 +395,30 @@ pub(crate) fn staged_copy_verify_commit(
             anyhow::bail!("move of '{}' cancelled", project.name);
         }
         set_phase(progress, JobPhase::Finalizing);
-        transaction.set_phase(MovePhase::ReadyToCommit)?;
         crate::util::faults::check("move:before-commit-rename")?;
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("move of '{}' cancelled", project.name);
         }
-        if assets::entry_exists(new_path)? {
-            anyhow::bail!("move target became occupied: {}", new_path.display());
-        }
-        publish(&staging, new_path)
-            .with_context(|| format!("finalizing move into {}", new_path.display()))?;
+        // The publish: one file, written once. No folder on the target is
+        // renamed, which is what a cloud mount with uploads in flight needs.
+        transactions::copy_to_staging(
+            &manifest.only_root_metadata(),
+            &project.path,
+            &staging,
+            progress,
+            cancel,
+        )
+        .with_context(|| format!("publishing '{}' in {}", project.name, new_base.display()))?;
         published = true;
+        let metadata_path = Path::new(project_info::RESERVED_FILENAME);
+        if let Ok(Some(entry)) = transactions::examine(&staging.join(metadata_path), metadata_path)
+        {
+            staged.entries.push(entry);
+            staged
+                .entries
+                .sort_by(|left, right| left.path.cmp(&right.path));
+        }
+        let published_record = transaction.write_published(&staged)?;
         Ok((manifest, published_record))
     })();
 
@@ -513,25 +530,6 @@ pub(crate) fn staged_copy_verify_commit(
     })
 }
 
-/// Rename the verified staging tree into place. **An error is checked, not
-/// believed**: over a network the server can complete the rename while the
-/// client times out, and a move that then reported failure and cleared its
-/// record would leave a complete second copy with the same id, recorded
-/// nowhere. Staging gone and the destination there is a publish.
-pub(crate) fn publish(staging: &Path, destination: &Path) -> std::io::Result<()> {
-    match crate::util::fs_retry::rename_dir(staging, destination) {
-        Ok(()) => Ok(()),
-        Err(_)
-            if fs::symlink_metadata(staging).is_err()
-                && crate::util::paths::require_real_directory(destination, "destination")
-                    .is_ok() =>
-        {
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
-}
-
 fn finish_move_bookkeeping(
     project: &Project,
     old_base: &Path,
@@ -606,25 +604,5 @@ fn set_phase(progress: &Mutex<Progress>, phase: JobPhase) {
         // A phase change is real movement: without it, verifying a large tree
         // looks identical to a dead worker to anything reading the timestamp.
         p.touch();
-    }
-}
-
-#[cfg(test)]
-mod publish_tests {
-    /// A rename that reports an error after it landed is a publish; one that
-    /// did not land is not.
-    #[test]
-    fn a_publish_is_judged_by_where_the_tree_is() {
-        let temp = tempfile::tempdir().unwrap();
-        let landed = temp.path().join("landed");
-        std::fs::create_dir(&landed).unwrap();
-        super::publish(&temp.path().join("staging-gone"), &landed).unwrap();
-        assert!(
-            super::publish(
-                &temp.path().join("staging-gone"),
-                &temp.path().join("nowhere")
-            )
-            .is_err()
-        );
     }
 }

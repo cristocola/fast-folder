@@ -20,6 +20,14 @@
 //! and the moved copy still holds an entry of the same kind at its path that
 //! is either what was published or newer. Nothing is removed that exists
 //! nowhere else.
+//!
+//! **And the original is the authority until it is retired.** A moved copy
+//! that turns out to be missing entries — a cloud mount that misplaced
+//! uploads while its folder was renamed, a file deleted there by hand — is
+//! completed from the original ([`complete_destination`]) rather than
+//! reported for someone to repair by hand: every missing entry the original
+//! still holds exactly as recorded is copied across again, and only then is
+//! the rule asked once more.
 
 use anyhow::{Result, bail};
 use std::collections::HashMap;
@@ -125,8 +133,140 @@ pub(crate) fn check_removable(
             diff.summary(LISTED)
         ));
     }
-    destination_covers(&walk.entries, cleanup)?;
+    match destination_covers(&walk.entries, cleanup) {
+        Ok(()) => {}
+        // Only missing: the original holds them, so put them there and ask
+        // again. Anything else that differs is somebody's decision, not ours.
+        Err(gaps) if gaps.only_missing() => {
+            complete_destination(&gaps.missing, cleanup)?;
+            destination_covers(&walk.entries, cleanup).map_err(|gaps| gaps.message())?;
+        }
+        Err(gaps) => return Err(gaps.message()),
+    }
     Ok(walk)
+}
+
+/// Where the moved copy falls short of the original.
+#[derive(Debug, Default)]
+struct Gaps {
+    /// Recorded entries the moved copy does not hold at all, in manifest
+    /// order — parents before children.
+    missing: Vec<PathBuf>,
+    /// Entries it holds as something else, or older than published.
+    other: Vec<String>,
+}
+
+impl Gaps {
+    fn only_missing(&self) -> bool {
+        !self.missing.is_empty() && self.other.is_empty()
+    }
+
+    fn message(&self) -> String {
+        let count = self.missing.len() + self.other.len();
+        let mut message = format!(
+            "the moved copy does not hold everything the original does ({count} {}):",
+            if count == 1 { "entry" } else { "entries" }
+        );
+        let lines = self.other.iter().cloned().chain(
+            self.missing
+                .iter()
+                .map(|path| format!("{}: not in the moved copy", path.display())),
+        );
+        for line in lines.take(LISTED) {
+            message.push_str("\n  ");
+            message.push_str(&line);
+        }
+        if count > LISTED {
+            message.push_str(&format!("\n  and {} more", count - LISTED));
+        }
+        message
+    }
+}
+
+/// Put every entry in `missing` into the moved copy, from the original,
+/// provided the original still holds it exactly as the move recorded it.
+///
+/// Files land through an atomic sibling and a rename, so a crash mid-copy
+/// never leaves a half-written file at the real path — which the next pass
+/// would take for the user's own newer file, and then remove the original.
+/// Every write is checked for containment first: the moved copy is a
+/// published project, and a link placed in it since must not be written
+/// through.
+fn complete_destination(missing: &[PathBuf], cleanup: &Cleanup) -> std::result::Result<(), String> {
+    let final_path = cleanup.final_path;
+    let mut failures = Vec::new();
+    for relative in missing {
+        let Some(recorded) = cleanup.manifest.entry(relative) else {
+            failures.push(format!("{}: not in the move's record", relative.display()));
+            continue;
+        };
+        let source_path = cleanup.source.join(relative);
+        let holds = matches!(
+            transactions::examine(&source_path, relative),
+            Ok(Some(found)) if transactions::agrees(recorded, &found)
+        );
+        if !holds {
+            failures.push(format!(
+                "{}: the original no longer holds it as the move recorded it",
+                relative.display()
+            ));
+            continue;
+        }
+        let destination = match crate::util::paths::contained_destination(final_path, relative) {
+            Ok(destination) => destination,
+            Err(error) => {
+                failures.push(format!("{}: {error:#}", relative.display()));
+                continue;
+            }
+        };
+        let made = match recorded.kind {
+            ManifestKind::Directory => match fs::create_dir(&destination) {
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                other => other.map_err(|error| error.to_string()),
+            },
+            ManifestKind::File => crate::util::atomic::copy(&source_path, &destination)
+                .map_err(|error| format!("{error:#}"))
+                .and_then(|()| match transactions::examine(&destination, relative) {
+                    Ok(Some(found))
+                        if found.kind == ManifestKind::File && found.bytes == recorded.bytes =>
+                    {
+                        Ok(())
+                    }
+                    _ => Err("did not read back as copied".to_string()),
+                }),
+            ManifestKind::Symlink | ManifestKind::DirSymlink | ManifestKind::Junction => {
+                match &recorded.link_target {
+                    Some(target) => transactions::make_link(recorded.kind, target, &destination)
+                        .map_err(|error| transactions::link_refusal(&error)),
+                    None => Err("the record of this link has no target".to_string()),
+                }
+            }
+        };
+        if let Err(why) = made {
+            failures.push(format!(
+                "{}: could not be put back ({why})",
+                relative.display()
+            ));
+        }
+    }
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let count = failures.len();
+    let mut message = format!(
+        "the moved copy is missing {count} {} the original holds, and fastf could not put \
+         {} back:",
+        if count == 1 { "entry" } else { "entries" },
+        if count == 1 { "it" } else { "them" }
+    );
+    for line in failures.iter().take(LISTED) {
+        message.push_str("\n  ");
+        message.push_str(line);
+    }
+    if count > LISTED {
+        message.push_str(&format!("\n  and {} more", count - LISTED));
+    }
+    Err(message)
 }
 
 /// The moved copy still holds, for every one of `entries`, an entry of the
@@ -143,24 +283,36 @@ pub(crate) fn check_removable(
 fn destination_covers(
     entries: &[ManifestEntry],
     cleanup: &Cleanup,
-) -> std::result::Result<(), String> {
-    confirm_identity(cleanup.final_path, cleanup.project_id, "moved")
-        .map_err(|error| format!("the moved copy is not this project any more: {error:#}"))?;
-    let moved = Walk::of(cleanup.final_path, "moved copy").map_err(|error| format!("{error:#}"))?;
+) -> std::result::Result<(), Gaps> {
+    let mut gaps = Gaps::default();
+    if let Err(error) = confirm_identity(cleanup.final_path, cleanup.project_id, "moved") {
+        gaps.other.push(format!(
+            "the moved copy is not this project any more: {error:#}"
+        ));
+        return Err(gaps);
+    }
+    let moved = match Walk::of(cleanup.final_path, "moved copy") {
+        Ok(moved) => moved,
+        Err(error) => {
+            gaps.other.push(format!("{error:#}"));
+            return Err(gaps);
+        }
+    };
     let at: HashMap<&Path, &ManifestEntry> = moved
         .entries
         .iter()
         .map(|entry| (entry.path.as_path(), entry))
         .collect();
-    let mut gaps = Vec::new();
     for entry in entries {
         let path = entry.path.display();
         let Some(now) = at.get(entry.path.as_path()) else {
-            gaps.push(format!("{path}: not in the moved copy"));
+            // In manifest order, so a missing folder comes before what it
+            // holds, and the repair makes it first.
+            gaps.missing.push(entry.path.clone());
             continue;
         };
         if now.kind != entry.kind {
-            gaps.push(format!(
+            gaps.other.push(format!(
                 "{path}: not the same kind of entry in the moved copy"
             ));
             continue;
@@ -171,36 +323,26 @@ fn destination_covers(
         match cleanup.published {
             Some(published) => match published.entry(&entry.path) {
                 Some(then) if now.source_modified.nanos() >= then.source_modified.nanos() => {}
-                Some(_) => gaps.push(format!(
+                Some(_) => gaps.other.push(format!(
                     "{path}: older in the moved copy than when it was moved \
                      (restored from a backup?)"
                 )),
-                None => gaps.push(format!("{path}: not in the copy that was published")),
+                None => gaps
+                    .other
+                    .push(format!("{path}: not in the copy that was published")),
             },
             None if now.source_modified.nanos() < entry.source_modified.nanos() => {
-                gaps.push(format!(
+                gaps.other.push(format!(
                     "{path}: older in the moved copy than here (restored from a backup?)"
                 ));
             }
             None => {}
         }
     }
-    if gaps.is_empty() {
+    if gaps.missing.is_empty() && gaps.other.is_empty() {
         return Ok(());
     }
-    let count = gaps.len();
-    let mut message = format!(
-        "the moved copy no longer holds everything this folder does ({count} {}):",
-        if count == 1 { "entry" } else { "entries" }
-    );
-    for gap in gaps.iter().take(LISTED) {
-        message.push_str("\n  ");
-        message.push_str(gap);
-    }
-    if count > LISTED {
-        message.push_str(&format!("\n  and {} more", count - LISTED));
-    }
-    Err(message)
+    Err(gaps)
 }
 
 /// Publish-then-retire, from `CleanupPending` with the source at its path:
@@ -301,6 +443,36 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
         if let Err(error) = crate::util::faults::check("move:after-source-cleanup") {
             return SourceFate::Removed {
                 record_kept: Some(format!("{error:#}")),
+            };
+        }
+    }
+    // A 3.12.0 record's old staging folder may hold files the mount put
+    // there late; they go into place before the record goes, and anything
+    // that cannot keeps the record (`MoveTransaction::sweep_strays`).
+    match transaction.sweep_strays(Some(cleanup.manifest)) {
+        Ok((_, left)) if left.is_empty() => {}
+        Ok((moved, left)) => {
+            return SourceFate::Removed {
+                record_kept: Some(format!(
+                    "{moved} file{} the mount had put in the move's old staging folder \
+                     late {} moved into place, and {} left there that fastf will not \
+                     remove: {}",
+                    if moved == 1 { "" } else { "s" },
+                    if moved == 1 { "was" } else { "were" },
+                    left.len(),
+                    left.iter()
+                        .take(LISTED)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )),
+            };
+        }
+        Err(error) => {
+            return SourceFate::Removed {
+                record_kept: Some(format!(
+                    "the move's old staging folder could not be looked through ({error:#})"
+                )),
             };
         }
     }

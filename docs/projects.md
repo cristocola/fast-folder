@@ -151,11 +151,13 @@ The app's `m` does the same, over every marked project when there are marks. The
 - On the same filesystem, a move is an instant atomic rename. fastf says so —
   `renamed on the same filesystem, nothing copied` — because an instant finish
   on a large folder otherwise reads as a move that did nothing.
-- Across filesystems (or to network storage), fastf creates an exclusive
-  `.fastf-transactions/<operation-id>/` directory beneath the target base,
-  copies into its private `staging/` tree, checks exact relative paths, entry
-  types, byte lengths and link targets, confirms that the source did not
-  change, and publishes with an atomic rename. **Only then does the original
+- Across filesystems (or to network storage), fastf writes a record of the
+  move under `.fastf-transactions/<operation-id>/` in the target base, copies
+  everything but `PROJECT_INFO.md` into the project's final folder there,
+  checks exact relative paths, entry types, byte lengths and link targets,
+  confirms that the source did not change, and then writes `PROJECT_INFO.md`.
+  That one file is the publish: until it lands the folder is not a project,
+  and no folder on the target is ever renamed. **Only then does the original
   leave the library, in one step**: it is renamed, beside itself, to a hidden
   `.fastf-moved-<operation-id>` folder, and that folder is then removed.
 - Every filename is project data. Names ending in `.tmp` or `.part` are copied and verified like any other name.
@@ -180,10 +182,20 @@ otherwise stop it at the end, and names every problem it finds at once:
 - that the source base shows a link as a link — see *mounts that resolve
   links* below;
 - that the target has room, when its filesystem says;
-- that the target can hold every name: every folder and empty file is made
-  before any content is copied, so two names that differ only in case on a
-  drive that ignores case, a character that drive forbids, a name too long, or
-  links on a drive that cannot hold them are found in seconds.
+- that the target can hold every name: every folder and link is made before
+  any content is copied, and a drive that ignores case is asked so, and the
+  project's names checked against each other, first. A file name the drive
+  will not take is found when that file is reached, still before anything is
+  published. Each file is written exactly once, which is what a cloud mount
+  needs: it uploads every write.
+
+**Why no folder on the target is renamed.** A cloud mount such as rclone with
+a cache uploads in the background, and renaming a folder while its uploads are
+still in flight can land some of them at the old path; the mount's own view
+shows nothing wrong. fastf 3.12.0 renamed its finished copy into place, and on
+a Google Drive mount three files of a moved project ended up under the folder
+it had just left. Writing the copy in its final place, with `PROJECT_INFO.md`
+last, means there is nothing to misplace.
 
 **Why the original is renamed before it is removed.** Removing a folder is not
 one step: anything that stops it part of the way — a read-only folder inside,
@@ -191,6 +203,13 @@ a file another program holds open, a dropped network connection — would leave
 part of the project where it was, still holding its `PROJECT_INFO.md`, so still
 listed as the project. A rename either happens or does not. So:
 
+- If the moved copy turns out to be missing anything — a cloud mount that
+  misplaced uploads while the folder was renamed into place, a file deleted
+  there since — fastf **puts it back from the original**, which is kept whole
+  until then, and checks again. In the move itself first, and on every
+  reconcile after. Only missing entries are put back; something that is there
+  but differs (older than what was moved, or another kind of entry) is your
+  decision, and both copies stay, both listed, until it is made.
 - If the original cannot be set aside — on Windows, a program has a file in it
   open — the move reports that **the original is still there, whole, and fastf
   removed nothing**, and why. The moved copy is complete and is the project.
@@ -267,16 +286,19 @@ flag without a usable v2 journal is reported for manual inspection.
 
 Cross-filesystem moves use a private transaction beneath the target base:
 
-- `Copying`: the source is authoritative; reconcile discards only that owned
-  transaction.
-- `ReadyToCommit` with staging still present: reconcile discards the transaction
-  and leaves the source for a fresh move.
-- `ReadyToCommit` after publication: reconcile requires matching source/final
-  project identities and manifests before entering cleanup.
+- `Copying`: the source is authoritative. A folder at the destination without
+  `PROJECT_INFO.md` is fastf's own unfinished copy, and goes with the record;
+  one that already holds the project's `PROJECT_INFO.md` was published the
+  instant before the crash, and the move is finished from there.
+- Records that fastf 3.12.0 wrote staged under the transaction and renamed the
+  copy into place. Reconcile finishes those the old way, and any file a cloud
+  mount uploaded into that old staging folder after the rename is moved into
+  place, never deleted.
 - `CleanupPending`: the original is still at its path. Reconcile checks the rule
   above — everything in it recorded and unchanged, and still in the moved copy
-  — then sets it aside and removes it. If it differs, reconcile says what
-  differs and removes nothing.
+  — then sets it aside and removes it. Anything the moved copy is missing is
+  put back from the original first. If something differs in another way,
+  reconcile says what and removes nothing.
 - `Retired`: the original has been set aside. Reconcile removes the hidden copy
   under the same rule. If the moved copy has since gone, the hidden copy may be
   the only one left, and reconcile says where it is and how to rename it back.

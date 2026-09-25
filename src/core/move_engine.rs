@@ -399,7 +399,7 @@ pub(crate) fn staged_copy_verify_commit(
         if assets::entry_exists(new_path)? {
             anyhow::bail!("move target became occupied: {}", new_path.display());
         }
-        crate::util::fs_retry::rename_dir(&staging, new_path)
+        publish(&staging, new_path)
             .with_context(|| format!("finalizing move into {}", new_path.display()))?;
         published = true;
         Ok((manifest, published_record))
@@ -513,6 +513,25 @@ pub(crate) fn staged_copy_verify_commit(
     })
 }
 
+/// Rename the verified staging tree into place. **An error is checked, not
+/// believed**: over a network the server can complete the rename while the
+/// client times out, and a move that then reported failure and cleared its
+/// record would leave a complete second copy with the same id, recorded
+/// nowhere. Staging gone and the destination there is a publish.
+pub(crate) fn publish(staging: &Path, destination: &Path) -> std::io::Result<()> {
+    match crate::util::fs_retry::rename_dir(staging, destination) {
+        Ok(()) => Ok(()),
+        Err(_)
+            if fs::symlink_metadata(staging).is_err()
+                && crate::util::paths::require_real_directory(destination, "destination")
+                    .is_ok() =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn finish_move_bookkeeping(
     project: &Project,
     old_base: &Path,
@@ -531,12 +550,19 @@ fn finish_move_bookkeeping(
         ));
     }
 
-    let old_dir = project
-        .path
-        .strip_prefix(old_base)
-        .map(to_forward_slashes)
-        .unwrap_or_else(|_| project.name.clone());
-    cache_remove(old_base, &old_dir);
+    // Whatever is at the original's path now — a project put back there, or
+    // another one entirely — is read again rather than forgotten: dropping its
+    // row would hide a real project until the next reindex.
+    if project_info::pinfo_path(&project.path).is_file() {
+        crate::core::library::refresh_cache(&project.path);
+    } else {
+        let old_dir = project
+            .path
+            .strip_prefix(old_base)
+            .map(to_forward_slashes)
+            .unwrap_or_else(|_| project.name.clone());
+        cache_remove(old_base, &old_dir);
+    }
     cache_upsert(new_base, &moved);
     moved
 }
@@ -580,5 +606,25 @@ fn set_phase(progress: &Mutex<Progress>, phase: JobPhase) {
         // A phase change is real movement: without it, verifying a large tree
         // looks identical to a dead worker to anything reading the timestamp.
         p.touch();
+    }
+}
+
+#[cfg(test)]
+mod publish_tests {
+    /// A rename that reports an error after it landed is a publish; one that
+    /// did not land is not.
+    #[test]
+    fn a_publish_is_judged_by_where_the_tree_is() {
+        let temp = tempfile::tempdir().unwrap();
+        let landed = temp.path().join("landed");
+        std::fs::create_dir(&landed).unwrap();
+        super::publish(&temp.path().join("staging-gone"), &landed).unwrap();
+        assert!(
+            super::publish(
+                &temp.path().join("staging-gone"),
+                &temp.path().join("nowhere")
+            )
+            .is_err()
+        );
     }
 }

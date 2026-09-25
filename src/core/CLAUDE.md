@@ -247,9 +247,14 @@ Staged moves live at `.fastf-transactions/<timestamp-pid-counter>/` in the targe
 base. `move.json` (version 3; version 2 is read) holds version, operation id,
 project id, source base, validated folder components, the phase
 (`Copying | ReadyToCommit | CleanupPending | Retired`), `operation` (`Move |
-Copy`), the `host` that began it, and `legacy_cleanup`; paths derive from the
-transaction's own location, the retired name from the operation. `MoveManifest::scan` is
-**deny-by-default** — a link or special entry fails the whole move — and
+Copy`), the `host` and `machine` (`util::machine`, compared first: a hostname
+changes with DHCP) that began it, and `legacy_cleanup`; paths derive from the
+transaction's own location, the retired name from the operation. fastf's hidden
+folders are recognised by prefix **and** an operation id (`retired_operation`,
+`deleted_operation`, `probe_operation`), never by prefix alone, and after the
+case-rename check: a project may be named `fastf-deleted-Scenes`.
+`MoveManifest::scan` is **deny-by-default** for what it cannot copy — a special
+entry, one it cannot examine, another filesystem — and
 `verify_destination` compares the exact path/type/size/link-target manifest,
 because a verification narrower than the copy could remove a source that never
 fully arrived. No hashes, no advanced metadata. Every walked name is payload —
@@ -337,6 +342,19 @@ with `create_new`, links last — so a name the target will not hold (a case cla
 `AlreadyExists` in a staging folder fastf made empty; `EINVAL`/123; too long) is
 found in seconds, all of them together (`name_refusal`). Reconcile clears a probe
 a killed move left, and only the names a probe holds.
+
+**Every removal asks first whether the mount hides links**
+(`move_preflight::links_hidden_in`, inside `remove_tree`, and in `fastf delete`
+before its rename): the walk decides "folder" from `lstat`, and on a
+`follow_symlinks` mount a linked folder says it is one. `fastf delete` also
+refuses a project with another filesystem mounted inside, since the walk would
+keep it and its hidden folder for good. `Removal::Leftover.kept_on_purpose` is
+what separates "kept because not provably safe" from "a removal failed" — only
+the second is called redundant. A publish rename that errors is checked, not
+believed (`move_engine::publish`). Bookkeeping re-reads whatever project is at
+the original's path instead of dropping its row. Windows needs a folder's
+read-only attribute cleared before `RemoveDirectoryW` (`clear_read_only_folder`,
+real folders only — on a link it would reach the target).
 
 **A folder rename uses `fs_retry::rename_dir`**, whose ≈ 2.5 s schedule outlasts an
 indexer holding a freshly written tree; the short one discarded a verified staging

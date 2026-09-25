@@ -94,6 +94,29 @@ pub(crate) fn delete_project_inner(project: &Project) -> Result<()> {
             path.display()
         );
     }
+    // Before anything is renamed, the two things that would stop the removal
+    // for good: a mount that hides links (the walk would step through one
+    // into whatever it points to), and another filesystem mounted inside the
+    // project (the walk keeps it, so the hidden folder would stay forever).
+    if let Some(why) = crate::core::move_preflight::links_hidden_in(&base) {
+        anyhow::bail!(
+            "cannot delete {} safely: {why}, then delete again. Nothing was removed.",
+            crate::util::paths::display_path(&path)
+        );
+    }
+    let walk = crate::core::transactions::Walk::of(&path, "project")?;
+    if let Some(mounted) = walk
+        .problems
+        .iter()
+        .find(|problem| problem.problem == crate::core::transactions::Problem::OtherFilesystem)
+    {
+        anyhow::bail!(
+            "cannot delete {}: {} is {}. Unmount it first. Nothing was removed.",
+            crate::util::paths::display_path(&path),
+            mounted.path.display(),
+            mounted.problem
+        );
+    }
     // **Out of the library in one rename, then removed** — the same reason as
     // a move's source (`core::move_cleanup`): a removal that stops part of the
     // way through the project folder itself leaves a husk that still holds
@@ -123,6 +146,7 @@ pub(crate) fn delete_project_inner(project: &Project) -> Result<()> {
         Err(error) => crate::core::move_cleanup::Removal::Leftover {
             remaining: 0,
             reason: format!("{error:#}"),
+            kept_on_purpose: false,
         },
         Ok(()) => crate::core::move_cleanup::remove_tree(
             &retired,
@@ -130,10 +154,20 @@ pub(crate) fn delete_project_inner(project: &Project) -> Result<()> {
             crate::core::move_cleanup::Purpose::Delete,
         ),
     };
-    if let crate::core::move_cleanup::Removal::Leftover { reason, .. } = removal {
+    if let crate::core::move_cleanup::Removal::Leftover {
+        reason,
+        kept_on_purpose,
+        ..
+    } = removal
+    {
+        let next = if kept_on_purpose {
+            "remove it yourself once you have looked"
+        } else {
+            "`fastf reconcile` tries again, or remove it yourself"
+        };
         crate::util::diag::warn(format!(
             "deleted '{}', but its folder, hidden at {}, is not fully removed yet ({reason}); \
-             `fastf reconcile` removes it",
+             {next}",
             project.name,
             crate::util::paths::display_path(&retired)
         ));

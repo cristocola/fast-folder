@@ -35,6 +35,13 @@ use crate::core::transactions::{
 /// Dot-prefixed, so discovery never lists it.
 pub const DELETED_PREFIX: &str = ".fastf-deleted-";
 
+/// The operation a deleted project's hidden folder is named by, if `name` is
+/// one `fastf delete` writes — the prefix and an operation id, nothing else.
+pub fn deleted_operation(name: &str) -> Option<&str> {
+    name.strip_prefix(DELETED_PREFIX)
+        .filter(|operation| transactions::is_operation_id(operation))
+}
+
 /// What became of a source after publication.
 #[derive(Debug)]
 pub(crate) enum SourceFate {
@@ -276,8 +283,11 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
                 redundant: false,
             };
         }
-        if let Removal::Leftover { remaining, reason } =
-            remove_tree(&retired, Some(cleanup.manifest), Purpose::Move)
+        if let Removal::Leftover {
+            remaining,
+            reason,
+            kept_on_purpose,
+        } = remove_tree(&retired, Some(cleanup.manifest), Purpose::Move)
         {
             return SourceFate::Leftover {
                 path: retired,
@@ -285,7 +295,7 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
                     "{remaining} {} left: {reason}",
                     if remaining == 1 { "entry" } else { "entries" }
                 ),
-                redundant: true,
+                redundant: !kept_on_purpose,
             };
         }
         if let Err(error) = crate::util::faults::check("move:after-source-cleanup") {
@@ -373,7 +383,15 @@ pub(crate) fn sync_dir(dir: &Path) {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Removal {
     Removed,
-    Leftover { remaining: usize, reason: String },
+    /// Something is left. `kept_on_purpose` says some of it was kept because
+    /// it was not provably safe to remove — changed since it was recorded, on
+    /// another filesystem, behind links the mount hides — rather than because
+    /// a removal failed; the next attempt will keep it again.
+    Leftover {
+        remaining: usize,
+        reason: String,
+        kept_on_purpose: bool,
+    },
 }
 
 /// What a tree is being removed for, which decides the failpoint it trips.
@@ -398,6 +416,23 @@ pub(crate) fn remove_tree(
     recorded: Option<&MoveManifest>,
     purpose: Purpose,
 ) -> Removal {
+    let count = |root: &Path| {
+        Walk::of(root, "folder")
+            .map(|walk| walk.entries.len() + walk.problems.len())
+            .unwrap_or(0)
+    };
+    // A mount that shows a link as what it points to would have this walk
+    // step into a linked folder as if it were the project's own.
+    if let Some(why) = root
+        .parent()
+        .and_then(crate::core::move_preflight::links_hidden_in)
+    {
+        return Removal::Leftover {
+            remaining: count(root),
+            reason: format!("{why}; fastf removed nothing"),
+            kept_on_purpose: true,
+        };
+    }
     let device = fs::symlink_metadata(root)
         .ok()
         .and_then(|metadata| transactions::device_of(&metadata));
@@ -408,6 +443,7 @@ pub(crate) fn remove_tree(
         purpose,
         removed_one: false,
         stopped: None,
+        kept_on_purpose: false,
         notes: Vec::new(),
     };
     removing.children(root, 0);
@@ -421,9 +457,7 @@ pub(crate) fn remove_tree(
     if !entry_exists(root) {
         return Removal::Removed;
     }
-    let remaining = Walk::of(root, "folder")
-        .map(|walk| walk.entries.len() + walk.problems.len())
-        .unwrap_or(0);
+    let remaining = count(root);
     let mut reason = removing.stopped.take().unwrap_or_default();
     if reason.is_empty() {
         reason = if removing.notes.is_empty() {
@@ -432,7 +466,11 @@ pub(crate) fn remove_tree(
             removing.notes.join("; ")
         };
     }
-    Removal::Leftover { remaining, reason }
+    Removal::Leftover {
+        remaining,
+        reason,
+        kept_on_purpose: removing.kept_on_purpose,
+    }
 }
 
 struct Removing<'a> {
@@ -443,6 +481,8 @@ struct Removing<'a> {
     removed_one: bool,
     /// Set when a failpoint stops the removal; everything after is left.
     stopped: Option<String>,
+    /// Something was kept because removing it was not provably safe.
+    kept_on_purpose: bool,
     /// The first few things that were left, and why.
     notes: Vec<String>,
 }
@@ -462,6 +502,7 @@ impl Removing<'_> {
     /// Remove what is inside `dir`, depth-first. `dir` itself is the caller's.
     fn children(&mut self, dir: &Path, depth: usize) {
         if depth >= crate::util::paths::MAX_WALK_DEPTH {
+            self.kept_on_purpose = true;
             self.note(dir, "too deep to walk");
             return;
         }
@@ -489,7 +530,12 @@ impl Removing<'_> {
             }
             let metadata = match fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                // Gone since it was listed — or listed and hidden by the
+                // mount, which the folder's own removal then reports.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.note(&path, "listed, but not there to examine");
+                    continue;
+                }
                 Err(error) => {
                     self.note(&path, &format!("cannot be examined ({error})"));
                     continue;
@@ -498,12 +544,14 @@ impl Removing<'_> {
             if let Some(manifest) = self.recorded
                 && !self.still_recorded(manifest, &path)
             {
+                self.kept_on_purpose = true;
                 self.note(&path, "not as the move recorded it, so it was kept");
                 continue;
             }
             let file_type = metadata.file_type();
             if file_type.is_dir() {
                 if self.device.is_some() && transactions::device_of(&metadata) != self.device {
+                    self.kept_on_purpose = true;
                     self.note(&path, "on another filesystem, so it was kept");
                     continue;
                 }
@@ -511,9 +559,11 @@ impl Removing<'_> {
                 if self.stopped.is_some() {
                     return;
                 }
-                self.remove(&path, true);
+                self.remove(&path, Removed::Folder);
+            } else if is_folder_link(&metadata) {
+                self.remove(&path, Removed::FolderLink);
             } else {
-                self.remove(&path, is_folder_link(&metadata));
+                self.remove(&path, Removed::Other);
             }
         }
     }
@@ -533,18 +583,18 @@ impl Removing<'_> {
 
     /// Remove one entry: a folder (already emptied) or a folder link with
     /// `remove_dir`, anything else with `remove_file`. Never through a link.
-    fn remove(&mut self, path: &Path, as_folder: bool) {
-        let attempt = || {
-            if as_folder {
-                crate::util::fs_retry::remove_dir(path)
-            } else {
-                crate::util::fs_retry::remove_file(path)
-            }
+    fn remove(&mut self, path: &Path, what: Removed) {
+        let attempt = || match what {
+            Removed::Folder | Removed::FolderLink => crate::util::fs_retry::remove_dir(path),
+            Removed::Other => crate::util::fs_retry::remove_file(path),
         };
         let result = match attempt() {
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 if let Some(parent) = path.parent() {
                     grant_owner(parent);
+                }
+                if what == Removed::Folder {
+                    clear_read_only_folder(path);
                 }
                 attempt()
             }
@@ -569,6 +619,35 @@ impl Removing<'_> {
             }
         }
     }
+}
+
+/// What one removal takes away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Removed {
+    /// A real folder, already emptied.
+    Folder,
+    /// A link Windows removes as a folder: a directory symlink or junction.
+    FolderLink,
+    Other,
+}
+
+/// Windows will not remove a folder carrying the read-only attribute —
+/// customised folders with a `desktop.ini` carry it, and so do trees copied
+/// off read-only media. Cleared only on a real folder: on a link it would
+/// reach the link's target. A file's attribute is `fs_retry`'s business.
+fn clear_read_only_folder(folder: &Path) {
+    #[cfg(windows)]
+    if let Ok(metadata) = fs::symlink_metadata(folder)
+        && metadata.file_type().is_dir()
+        && metadata.permissions().readonly()
+    {
+        let mut permissions = metadata.permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        let _ = fs::set_permissions(folder, permissions);
+    }
+    #[cfg(not(windows))]
+    let _ = folder;
 }
 
 /// A link that Windows removes as a folder: a directory symlink or junction.
@@ -608,4 +687,76 @@ fn grant_owner(dir: &Path) {
 
 fn entry_exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tree(root: &Path) {
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("a.txt"), "a").unwrap();
+        fs::write(root.join("sub/b.txt"), "b").unwrap();
+    }
+
+    /// Removal never steps through a link: the link goes, what it points at
+    /// stays.
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_tree_takes_a_link_and_not_its_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "keep").unwrap();
+        let root = temp.path().join(".fastf-deleted-1-1");
+        tree(&root);
+        std::os::unix::fs::symlink(&outside, root.join("sub/linked")).unwrap();
+
+        assert_eq!(remove_tree(&root, None, Purpose::Delete), Removal::Removed);
+        assert!(!root.exists());
+        assert_eq!(
+            fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "keep"
+        );
+    }
+
+    /// An entry changed since the move recorded it is kept, and the leftover
+    /// says it was kept on purpose — so nobody is told it is redundant.
+    #[test]
+    fn a_changed_entry_is_kept_on_purpose() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".fastf-moved-1-2");
+        tree(&root);
+        let manifest = MoveManifest::scan(&root).unwrap();
+        fs::write(root.join("sub/b.txt"), "changed, and longer").unwrap();
+
+        let Removal::Leftover {
+            kept_on_purpose,
+            reason,
+            ..
+        } = remove_tree(&root, Some(&manifest), Purpose::Move)
+        else {
+            panic!("a changed entry must be kept");
+        };
+        assert!(kept_on_purpose);
+        let changed = Path::new("sub").join("b.txt").display().to_string();
+        assert!(reason.contains(&changed), "{reason}");
+        assert_eq!(
+            fs::read_to_string(root.join("sub/b.txt")).unwrap(),
+            "changed, and longer"
+        );
+        assert!(!root.join("a.txt").exists(), "what was as recorded went");
+    }
+
+    /// On an ordinary folder links show as links, and asking leaves nothing.
+    #[cfg(unix)]
+    #[test]
+    fn an_ordinary_folder_hides_no_links_and_asking_leaves_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            crate::core::move_preflight::links_hidden_in(temp.path()),
+            None
+        );
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
 }

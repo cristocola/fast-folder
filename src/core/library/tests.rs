@@ -1679,3 +1679,40 @@ fn a_file_held_open_keeps_the_original_whole_until_reconcile() {
     assert!(!old_base.join("proj_a").exists());
     assert_eq!(v2_transaction_count(new_base), 0);
 }
+
+/// `fastf delete` removes the project and never what a link in it points at:
+/// its removal walks the tree itself now, so the guard std's `remove_dir_all`
+/// gave for free is this test's to keep.
+#[test]
+fn a_delete_never_removes_what_a_link_points_at() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base");
+    let library_folder = tmp.path().join("asset_library");
+    fs::create_dir_all(&library_folder).unwrap();
+    fs::write(library_folder.join("stock.mov"), "irreplaceable").unwrap();
+    write_project(&base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let link = base.join("proj").join("assets");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&library_folder, &link).unwrap();
+    #[cfg(windows)]
+    assert!(
+        std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&library_folder)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let project = scan_base(&base).remove(0);
+
+    delete_project_inner(&project).unwrap();
+
+    assert!(!base.join("proj").exists());
+    assert!(retired_folders(&base).is_empty());
+    assert_eq!(
+        fs::read_to_string(library_folder.join("stock.mov")).unwrap(),
+        "irreplaceable"
+    );
+}

@@ -89,11 +89,16 @@ pub struct MoveJournal {
     pub phase: MovePhase,
     #[serde(default)]
     pub operation: Operation,
-    /// The machine that began it. A base can be reached from more than one
-    /// machine, and the source path a journal names means something else on
-    /// the other one; recovery there only reports.
+    /// The machine that began it, by name, for a message. A base can be
+    /// reached from more than one machine, and the source path a journal
+    /// names means something else on the other one; recovery there only
+    /// reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// The same machine by its operating system's id (`util::machine`), which
+    /// is what is compared: a hostname changes with DHCP or a rename.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     /// Begun by a build that removed a source where it stood (3.11 and
     /// older), so its source may already be partly removed. Set when a
     /// version-2 journal is read and **carried** when it is rewritten as
@@ -110,9 +115,13 @@ impl MoveJournal {
         self.legacy_cleanup
     }
 
-    /// Whether this machine began the operation. A version-2 journal names
-    /// no machine and is taken as this one's, which is how 3.11 treated it.
+    /// Whether this machine began the operation: by machine id when both
+    /// sides have one, else by name. A version-2 journal names no machine and
+    /// is taken as this one's, which is how 3.11 treated it.
     pub fn is_from_this_host(&self) -> bool {
+        if let (Some(recorded), Some(here)) = (&self.machine, crate::util::machine::id()) {
+            return *recorded == here;
+        }
         match (&self.host, this_host()) {
             (Some(recorded), Some(here)) => *recorded == here,
             _ => true,
@@ -1074,6 +1083,7 @@ impl MoveTransaction {
                             phase: MovePhase::Copying,
                             operation,
                             host: this_host(),
+                            machine: crate::util::machine::id(),
                             legacy_cleanup: false,
                         };
                         crate::util::atomic::write_json(
@@ -1171,6 +1181,10 @@ impl MoveTransaction {
         next.version = MOVE_VERSION;
         crate::util::atomic::write_json(&self.operation_dir.join(JOURNAL_FILE), &next)
             .with_context(|| format!("writing {:?} move phase", phase))?;
+        // The phase is written by a rename into this folder, and the retire it
+        // comes before is a rename on another filesystem: only a synced folder
+        // keeps a power loss from keeping the retire and losing the phase.
+        crate::core::move_cleanup::sync_dir(&self.operation_dir);
         self.journal = next;
         Ok(())
     }
@@ -1230,7 +1244,15 @@ pub fn retired_path(source_base: &Path, operation_id: &str) -> PathBuf {
 /// The operation a retired folder's name carries, if it is one fastf writes.
 pub fn retired_operation(name: &str) -> Option<&str> {
     name.strip_prefix(RETIRED_PREFIX)
-        .filter(|operation| validate_operation_id(operation).is_ok())
+        .filter(|operation| is_operation_id(operation))
+}
+
+/// Whether `text` is shaped like an operation id: hex digits and dashes.
+/// fastf's hidden folders are recognised by this, never by their prefix
+/// alone — a project may be named `fastf-deleted-Scenes`, and a case-only
+/// rename of it passes through `.fastf-deleted-Scenes.fastf-case`.
+pub fn is_operation_id(text: &str) -> bool {
+    validate_operation_id(text).is_ok()
 }
 
 pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
@@ -1250,6 +1272,7 @@ pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
     if journal.version < 3 {
         if journal.phase == MovePhase::Retired
             || journal.host.is_some()
+            || journal.machine.is_some()
             || journal.legacy_cleanup
             || journal.operation != Operation::Move
         {
@@ -2188,6 +2211,7 @@ mod tests {
             journal.insert("version".into(), serde_json::json!(2));
             journal.remove("operation");
             journal.remove("host");
+            journal.remove("machine");
         });
         let legacy = read_journal(&operation).unwrap();
         assert!(legacy.source_may_be_partial());
@@ -2212,6 +2236,7 @@ mod tests {
         ] {
             write(&|journal| {
                 journal.remove("host");
+                journal.remove("machine");
                 for (key, value) in bad.as_object().unwrap() {
                     journal.insert(key.clone(), value.clone());
                 }

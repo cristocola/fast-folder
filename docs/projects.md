@@ -220,7 +220,9 @@ it. A network mount that follows links on the server — sshfs's
 take in the target's content in the link's place, and removing the original
 would delete through it. The source-base check makes a link and reads it back,
 so on such a mount the move is refused and names the option; mount it without
-that option. A Samba share that follows links for a client without unix
+that option. Every removal asks the same question first — `fastf delete`, and
+reconcile removing a set-aside original or a deleted project's hidden folder —
+and on such a mount removes nothing. A Samba share that follows links for a client without unix
 extensions behaves the same way but cannot be checked, because the client
 cannot make a link there to read back — mount it with unix extensions, or move
 on the server.

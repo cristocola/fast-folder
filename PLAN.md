@@ -454,3 +454,25 @@ move states what is on disk.
   disk; it now reloads, listing both until reconcile (pty test
   `a_move_that_keeps_its_original_says_why_in_a_dialog`). Windows VM: 457 unit
   tests green. Gates green. Left: publication, on the word.
+
+- 2026-09-25 — Review round. A review subagent over the whole branch found ten
+  things, all confirmed and fixed: `fastf delete` and reconcile's removals
+  could delete through a link on a link-resolving mount (every removal now asks
+  `links_hidden_in` first; delete refuses up front, and refuses a nested
+  filesystem); fastf's hidden folders were matched by prefix alone, so a
+  project named `fastf-deleted-…` caught mid case-rename would have been
+  removed (now prefix + operation id, after the case-rename check); Windows
+  never removed a read-only folder (`clear_read_only_folder`; the Windows delete
+  test now asserts nothing is left); `set_phase` did not sync its folder, and a
+  power loss could leave `ReadyToCommit` beside a retired original (synced, and
+  reconcile finishes that state); a hostname change stranded a move (journal
+  records `machine`, `util::machine`, compared first); reconcile advised
+  deleting "the original" when it was another project (left alone, move
+  finished), never cleared the record of an undone move (rolled back), and its
+  bookkeeping hid a project at the original's path (re-read instead); leftovers
+  were called redundant when something was kept on purpose
+  (`kept_on_purpose`); a publish that errored after landing left a silent
+  duplicate (`move_engine::publish`); an empty copy record was reported forever;
+  the probe ignored a base that allows rename but not delete. CI's Linux leg
+  also caught a pty assertion matching the raw stream (`some_frame_shows`).
+  Windows VM: 467 unit + 11 `windows_semantics` green. Gates green.

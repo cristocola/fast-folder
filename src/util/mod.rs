@@ -7,6 +7,7 @@ pub mod fs_retry;
 pub mod human_bytes;
 pub mod interrupt;
 pub mod lockfile;
+pub(crate) mod machine;
 #[cfg(unix)]
 pub mod notify;
 pub mod paths;

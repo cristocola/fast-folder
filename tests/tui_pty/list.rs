@@ -639,7 +639,7 @@ fn a_move_that_keeps_its_original_says_why_in_a_dialog() {
         .enter() // → the one other mounted base
         .pause(4500) // the staged copy, then the retire's retries run out
         .key(KEY_QUIT) // close the dialog
-        .pause(300)
+        .pause(800)
         .key(KEY_QUIT) // leave
         .build();
     let fault = std::path::Path::new("move:force-staged,move:source-cleanup");
@@ -669,8 +669,8 @@ fn a_move_that_keeps_its_original_says_why_in_a_dialog() {
 
     assert_eq!(code, 0, "{text}");
     assert!(
-        text.contains("needs a look") && text.contains("still there, whole"),
-        "the dialog says what became of the original:\n{text}"
+        some_frame_shows(&out, &["needs a look", "whole,", "'move:source-cleanup'."]),
+        "the dialog says what became of the original, and why:\n{text}"
     );
     assert!(
         sb.base.join("Solo").is_dir() && alt.join("Solo").is_dir(),

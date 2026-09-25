@@ -28,11 +28,22 @@ pub fn probe_path(source_base: &Path, operation_id: &str) -> PathBuf {
     source_base.join(format!("{PROBE_PREFIX}{operation_id}"))
 }
 
+/// What renaming the probe folder adds to its name.
+const RENAMED_SUFFIX: &str = "-renamed";
+
 /// What renaming the probe folder makes of it.
 fn renamed_probe(probe: &Path) -> PathBuf {
     let mut name = probe.file_name().unwrap_or_default().to_os_string();
-    name.push("-renamed");
+    name.push(RENAMED_SUFFIX);
     probe.with_file_name(name)
+}
+
+/// The operation a probe folder is named by, if `name` is one a move writes
+/// — the prefix, an operation id, and perhaps the renamed suffix.
+pub fn probe_operation(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix(PROBE_PREFIX)?;
+    let operation = rest.strip_suffix(RENAMED_SUFFIX).unwrap_or(rest);
+    crate::core::transactions::is_operation_id(operation).then_some(operation)
 }
 
 /// What the filesystem showed of a link the probe made.
@@ -93,10 +104,19 @@ pub(crate) fn probe_source_base(
         // reconcile to clear.
         crate::util::faults::check("move:after-probe").map_err(|error| format!("{error:#}"))
     });
-    clear_probe(&probe);
-    clear_probe(&renamed);
+    let _ = clear_probe(&probe);
+    let cleared = clear_probe(&renamed);
     if let Err(refusal) = outcome {
         bail!("{refusal}");
+    }
+    // A base that lets fastf make and rename but not remove would take the
+    // original out of the library and then keep it there for good.
+    if let Err(why) = cleared {
+        bail!(
+            "a move removes the original after copying it, and fastf can write and rename in \
+             {} but not remove there: its probe folder {why}. Nothing was copied.",
+            crate::util::paths::display_path(source_base)
+        );
     }
     if let Some(refusal) = sticky_refusal(source_base, source) {
         bail!("{refusal}");
@@ -114,22 +134,51 @@ fn run_probe(probe: &Path, renamed: &Path) -> std::result::Result<(), String> {
         )
     };
     fs::create_dir(probe).map_err(cannot_write)?;
-    fs::write(probe.join(PROBE_FILE), b"fastf").map_err(cannot_write)?;
-    let link = probe.join(PROBE_LINK);
-    let made = make_link(Path::new(PROBE_FILE), &link);
-    let found = fs::symlink_metadata(&link).map(|metadata| metadata.file_type().is_symlink());
-    let seen = observe(made, found);
+    let seen = read_back_a_link(probe).map_err(cannot_write)?;
     if resolves_links(seen) {
         return Err(format!(
-            "the filesystem holding {} shows a link as what it points to — an sshfs mount \
-             with `follow_symlinks` does this — so fastf cannot see the links in a project \
-             there, and removing the original would delete through them. Mount it without \
-             that option, then move again. Nothing was copied.",
-            crate::util::paths::display_path(base)
+            "{}, then move again. Nothing was copied.",
+            hidden_links_refusal(base)
         ));
     }
     fs::rename(probe, renamed).map_err(cannot_write)?;
     Ok(())
+}
+
+/// Make a file and a link to it in `probe`, which exists, and read the link
+/// back.
+fn read_back_a_link(probe: &Path) -> std::io::Result<LinkProbe> {
+    fs::write(probe.join(PROBE_FILE), b"fastf")?;
+    let link = probe.join(PROBE_LINK);
+    let made = make_link(Path::new(PROBE_FILE), &link);
+    let found = fs::symlink_metadata(&link).map(|metadata| metadata.file_type().is_symlink());
+    Ok(observe(made, found))
+}
+
+/// Why nothing may be removed in `base`; the caller says what to do next.
+fn hidden_links_refusal(base: &Path) -> String {
+    format!(
+        "the filesystem holding {} shows a link as what it points to — an sshfs mount with \
+         `follow_symlinks` does this — so fastf cannot tell a link from what it points to \
+         there, and removing anything could delete through one. Mount it without that option",
+        crate::util::paths::display_path(base)
+    )
+}
+
+/// Whether removing things in `base` could delete through a link fastf cannot
+/// see — asked before **every** removal, not only a move's: `fastf delete` and
+/// reconcile's removals walk a tree the same way. `None` when links show as
+/// links, and when the base cannot be asked (a read-only one will refuse the
+/// removal on its own).
+pub(crate) fn links_hidden_in(base: &Path) -> Option<String> {
+    let probe = probe_path(base, &crate::core::transactions::next_operation_id());
+    fs::create_dir(&probe).ok()?;
+    let seen = read_back_a_link(&probe);
+    let _ = clear_probe(&probe);
+    match seen {
+        Ok(seen) if resolves_links(seen) => Some(hidden_links_refusal(base)),
+        _ => None,
+    }
 }
 
 #[cfg(unix)]
@@ -149,14 +198,25 @@ fn make_link(_target: &Path, _link: &Path) -> std::io::Result<()> {
 
 /// Remove a probe folder: the names a probe holds, then the folder. Anything
 /// else in it stays, and so does the folder — it is not only fastf's then.
-pub(crate) fn clear_probe(probe: &Path) -> bool {
+/// The error says which of the two kept it.
+pub(crate) fn clear_probe(probe: &Path) -> std::result::Result<(), String> {
     if fs::symlink_metadata(probe).is_err() {
-        return true;
+        return Ok(());
     }
     for name in [PROBE_LINK, PROBE_FILE] {
-        let _ = crate::util::fs_retry::remove_file(&probe.join(name));
+        match crate::util::fs_retry::remove_file(&probe.join(name)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("could not be removed ({error})")),
+        }
     }
-    crate::util::fs_retry::remove_dir(probe).is_ok()
+    match crate::util::fs_retry::remove_dir(probe) {
+        Ok(()) => Ok(()),
+        Err(_) if fs::read_dir(probe).is_ok_and(|mut entries| entries.next().is_some()) => {
+            Err("holds something fastf did not put there".to_string())
+        }
+        Err(error) => Err(format!("could not be removed ({error})")),
+    }
 }
 
 /// In a folder with the sticky bit set (`/tmp`'s kind), only the owner of an
@@ -252,13 +312,31 @@ mod tests {
     }
 
     #[test]
+    fn only_names_a_probe_is_given_are_probes() {
+        assert_eq!(
+            probe_operation(".fastf-probe-18d863af-1-2"),
+            Some("18d863af-1-2")
+        );
+        assert_eq!(
+            probe_operation(".fastf-probe-18d863af-1-2-renamed"),
+            Some("18d863af-1-2")
+        );
+        assert_eq!(probe_operation(".fastf-probe-Scenes.fastf-case"), None);
+        assert_eq!(probe_operation(".fastf-probe-"), None);
+    }
+
+    #[test]
     fn clearing_a_probe_keeps_what_is_not_a_probes() {
         let temp = tempfile::tempdir().unwrap();
         let probe = probe_path(temp.path(), "18d863aff116f53c-1-2");
         fs::create_dir(&probe).unwrap();
         fs::write(probe.join(PROBE_FILE), b"fastf").unwrap();
         fs::write(probe.join("somebody-elses.txt"), b"keep").unwrap();
-        assert!(!clear_probe(&probe));
+        assert!(
+            clear_probe(&probe)
+                .unwrap_err()
+                .contains("did not put there")
+        );
         assert_eq!(fs::read(probe.join("somebody-elses.txt")).unwrap(), b"keep");
         assert!(!probe.join(PROBE_FILE).exists());
     }

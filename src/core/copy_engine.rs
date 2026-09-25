@@ -157,9 +157,8 @@ fn copy_unlocked(
     )?;
 
     let staged = (|| -> Result<((usize, u64), usize, Vec<String>)> {
-        // Deny-by-default, exactly as a cross-drive move is: a link cannot be
-        // reproduced faithfully somewhere else, and following one would
-        // silently restructure the copy.
+        // The same scan as a cross-drive move: links recorded as links, never
+        // followed, and anything it cannot copy refused, all of it named.
         let manifest = MoveManifest::scan(&project.path)?;
         transaction.write_manifest(&manifest)?;
         // A copy removes nothing, so it needs no write access to its source —
@@ -206,7 +205,7 @@ fn copy_unlocked(
                 crate::util::paths::display_path(target)
             );
         }
-        crate::util::fs_retry::rename_dir(&staging, target)
+        crate::core::move_engine::publish(&staging, target)
             .with_context(|| format!("publishing the copy at {}", target.display()))?;
         Ok(totals)
     })();

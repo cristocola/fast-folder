@@ -521,6 +521,14 @@ script; without it and without a terminal to ask on, every one of them refuses
 rather than guessing. Unregister leaves the folder untouched, so `fastf
 register` brings the project straight back; delete is permanent.
 
+Delete takes the project out of the library in one rename, to a hidden
+`.fastf-deleted-…` folder beside it, and then removes that — so a removal that
+stops part of the way (a file held open, a read-only folder) never leaves half
+a project listed; `fastf reconcile` finishes the hidden folder. It removes a
+link and never what the link points at. On a mount that shows links as what
+they point to (sshfs `follow_symlinks`), or with another filesystem mounted
+inside the project, it refuses before removing anything and says why.
+
 ### Interrupted-operation recovery
 
 ```bash

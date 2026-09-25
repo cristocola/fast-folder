@@ -161,6 +161,8 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "create:before-counter-save",
     "move:before-marker-write",
     "move:after-transaction-create",
+    // The source base's probe exists and is not yet removed.
+    "move:after-probe",
     "move:force-staged",
     "move:mid-copy",
     "move:after-staging",
@@ -170,7 +172,14 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "move:after-publication",
     "move:after-commit-before-source-removal",
     "move:before-source-cleanup",
+    "move:before-retire",
+    // The retire — the rename that takes the source out of the library — fails.
     "move:source-cleanup",
+    // Renamed out of the library; `Retired` not yet recorded.
+    "move:after-retire",
+    // The retired copy's removal stops after its first entry.
+    "move:mid-gc",
+    // After the retired copy is removed, before the transaction is.
     "move:after-source-cleanup",
     // A copy is a move that keeps its source, so it trips at the same places
     // minus every one about removing the source — there is nothing to remove,
@@ -179,6 +188,8 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "copy:after-staging",
     "copy:after-verify",
     "template:mid-save",
+    // A deleted project is renamed out of the library, not yet removed.
+    "delete:after-retire",
     // A decision, like `move:force-staged`: canonicalize every path the way a
     // drive Windows cannot name forces (`util::paths::canonical`).
     "paths:unnamed-volume",

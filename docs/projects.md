@@ -154,24 +154,84 @@ The app's `m` does the same, over every marked project when there are marks. The
 - Across filesystems (or to network storage), fastf creates an exclusive
   `.fastf-transactions/<operation-id>/` directory beneath the target base,
   copies into its private `staging/` tree, checks exact relative paths, entry
-  types, and byte lengths, confirms that the source metadata did not change,
-  publishes with an atomic rename, and only then removes the source.
+  types, byte lengths and link targets, confirms that the source did not
+  change, and publishes with an atomic rename. **Only then does the original
+  leave the library, in one step**: it is renamed, beside itself, to a hidden
+  `.fastf-moved-<operation-id>` folder, and that folder is then removed.
 - Every filename is project data. Names ending in `.tmp` or `.part` are copied and verified like any other name.
+- **Links travel as links.** A symbolic link — or, on Windows, a junction — is
+  made again at the destination pointing exactly where it pointed, by the text
+  of its target. It is never followed: nothing behind it is copied, and removing
+  the original never deletes through it. A link whose target does not exist
+  (what `node_modules/.bin` often holds) moves like any other. When a link's
+  meaning may change at the new place — a relative link that climbs out of the
+  project, an absolute one into the original folder — the move says which.
 - Keep the project untouched while it moves. Editing it from another program during the copy is outside the supported contract.
 
-The source is never removed until the destination is published from a verified
-staging tree. If publication succeeds but source cleanup fails, the command
-reports **cleanup pending**, leaves the source and transaction in place, and
-treats the destination as the completed move. `fastf reconcile` can retry that
-cleanup after rechecking both project identities and the saved manifest.
+**Before a byte is copied**, a cross-filesystem move checks what would
+otherwise stop it at the end, and names every problem it finds at once:
 
-Copy moves preserve regular-file contents and directory topology. They do not
-promise hashes, ACLs, extended attributes, sparse layout, hard-link
-relationships, symlink/junction reproduction, or storage-level durability.
-Links and special entries are refused when copying would be required. The
-checks are intended to prevent application mistakes and ordinary interrupted
-copies; hardware failure, power loss, bit rot, and storage corruption belong to
-the filesystem and backups.
+- entries it cannot copy — a socket, a pipe, a device, an entry the filesystem
+  lists but will not let it examine, a different filesystem mounted inside the
+  project;
+- that it can write and rename in the source base, by trying — a read-only
+  base, or a share you can only read, is refused, since a move has to remove
+  the original afterwards (`fastf copy-to` copies without removing);
+- that the source base shows a link as a link — see *mounts that resolve
+  links* below;
+- that the target has room, when its filesystem says;
+- that the target can hold every name: every folder and empty file is made
+  before any content is copied, so two names that differ only in case on a
+  drive that ignores case, a character that drive forbids, a name too long, or
+  links on a drive that cannot hold them are found in seconds.
+
+**Why the original is renamed before it is removed.** Removing a folder is not
+one step: anything that stops it part of the way — a read-only folder inside,
+a file another program holds open, a dropped network connection — would leave
+part of the project where it was, still holding its `PROJECT_INFO.md`, so still
+listed as the project. A rename either happens or does not. So:
+
+- If the original cannot be set aside — on Windows, a program has a file in it
+  open — the move reports that **the original is still there, whole, and fastf
+  removed nothing**, and why. The moved copy is complete and is the project.
+  Once the reason is gone, `fastf reconcile` finishes the move without copying
+  again.
+- If removing the set-aside copy stops part of the way, what is left is a
+  hidden folder beside the others, never listed as a project, and everything
+  in it is also in the moved copy. `fastf reconcile` removes it.
+
+Nothing is removed that exists nowhere else: before the original is set aside,
+and again before its hidden copy is removed, fastf checks that every entry in it
+is one the move recorded, unchanged, and that the moved copy still holds an
+entry of the same kind at every such path, as it was published or newer. You
+can go on working in the moved copy while a cleanup waits; a moved copy
+restored from a backup taken before the move keeps the original.
+
+Copy moves preserve regular-file contents, directory topology and links. They
+do not promise hashes, ACLs, ownership and permissions, extended attributes,
+sparse layout, hard-link relationships (hard-linked files arrive as separate
+files), or storage-level durability. The checks are intended to prevent
+application mistakes and ordinary interrupted copies; hardware failure, power
+loss, bit rot, and storage corruption belong to the filesystem and backups.
+
+**Mounts that resolve links.** fastf can only see what the filesystem shows
+it. A network mount that follows links on the server — sshfs's
+`follow_symlinks` option — shows a link as whatever it points to: a copy would
+take in the target's content in the link's place, and removing the original
+would delete through it. The source-base check makes a link and reads it back,
+so on such a mount the move is refused and names the option; mount it without
+that option. Every removal asks the same question first — `fastf delete`, and
+reconcile removing a set-aside original or a deleted project's hidden folder —
+and on such a mount removes nothing. A Samba share that follows links for a client without unix
+extensions behaves the same way but cannot be checked, because the client
+cannot make a link there to read back — mount it with unix extensions, or move
+on the server.
+
+sshfs has a second default in the way: `contain_symlinks` refuses to read any
+link that is absolute or climbs with `..` — which is every link in a
+`node_modules/.bin`. fastf cannot copy a link it cannot read, so the move names
+each one and suggests mounting with `-o no_contain_symlinks`. For moving
+projects over sshfs, mount with that option and without `follow_symlinks`.
 
 ## Copies, and two bases holding one ID
 
@@ -212,13 +272,31 @@ Cross-filesystem moves use a private transaction beneath the target base:
 - `ReadyToCommit` with staging still present: reconcile discards the transaction
   and leaves the source for a fresh move.
 - `ReadyToCommit` after publication: reconcile requires matching source/final
-  project identities and path/type/size manifests before entering cleanup.
-- `CleanupPending`: reconcile rechecks the published project and, while the
-  source still exists, the source/final manifests, then retries source removal.
+  project identities and manifests before entering cleanup.
+- `CleanupPending`: the original is still at its path. Reconcile checks the rule
+  above — everything in it recorded and unchanged, and still in the moved copy
+  — then sets it aside and removes it. If it differs, reconcile says what
+  differs and removes nothing.
+- `Retired`: the original has been set aside. Reconcile removes the hidden copy
+  under the same rule. If the moved copy has since gone, the hidden copy may be
+  the only one left, and reconcile says where it is and how to rename it back.
 
-Missing configured bases, identity mismatches, malformed journals, and unknown
-states are reported without mutation. Reconciliation is explicit and
-idempotent.
+A move left half-finished by fastf 3.11 or older may have deleted part of its
+original already, since those versions removed it in place. Reconcile finishes
+it when everything left is exactly what the move recorded, and otherwise lists
+what differs. A move another machine began is reported, never acted on: the
+source path it names means something else here.
+
+Hidden folders fastf leaves beside the projects are handled too: a set-aside
+original with no transaction left is reported and never removed, a deleted
+project's `.fastf-deleted-*` folder is removed (you confirmed the delete), and
+a move's `.fastf-probe-*` folder is removed.
+
+Every line reconcile prints names the project, its transaction and what is on
+disk. Missing configured bases, identity mismatches, malformed journals, and
+unknown states are reported without mutation. Reconciliation is explicit and
+idempotent; deleting a kept original or a hidden folder yourself is always a
+supported way out, and the next pass notices.
 
 Create and move markers written before journal v2 are **obsolete and
 report-only**. They contain arbitrary absolute paths, so `reconcile` never
@@ -229,7 +307,7 @@ locations before manually removing any obsolete artifact.
 ## What fastf promises
 
 fastf is a local, single-user tool for self-contained trees of ordinary
-directories and regular files. It has two surfaces, the command line and the
+directories, regular files and links. It has two surfaces, the command line and the
 guided app, and no network surface at all. Its commands may wait behind one
 coarse mutation lock per data folder; it does not coordinate simultaneous
 writers on two computers, so two machines writing one shared base at the same
@@ -254,12 +332,14 @@ template's `files/` — never follows a link, junction or reparse point that is
 already there. The path text cannot escape its root, and the filesystem
 beneath it is checked component by component immediately before each write.
 
-**What a move or copy does not promise.** Hashes, ACLs, extended attributes,
-sparse-file layout, hard-link relationships, symlink or junction reproduction,
-and storage-level durability are outside the contract; links and special
-entries are refused when copying would be required. Process-crash recovery is
-in scope; hardware failure, power loss, bit rot and storage corruption remain
-the job of the filesystem and your backups.
+**What a move or copy does not promise.** Hashes, ACLs, ownership and
+permissions, extended attributes, sparse-file layout, hard-link relationships
+and storage-level durability are outside the contract. Links are reproduced by
+their target text; sockets, pipes and device files are refused before anything
+is copied. A filesystem that hides links (a mount that resolves them on the
+server) is outside what fastf can see — the move checks for the one kind it can
+detect. Process-crash recovery is in scope; hardware failure, power loss, bit
+rot and storage corruption remain the job of the filesystem and your backups.
 
 **What stays compatible.** Command-line flags, `config.toml`, templates,
 `PROJECT_INFO.md` and the caches stay compatible within a major version.

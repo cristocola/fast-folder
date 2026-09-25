@@ -248,3 +248,70 @@ fn quit_keys_cancel_a_running_move() {
     );
     assert_eq!(press(&mut app, Key::ch('q')), vec![Effect::CancelMove]);
 }
+
+/// A move that could not remove its original says why in a paragraph, and a
+/// refused move lists every entry it cannot copy; the status line shows one
+/// line, so either arrives whole in a dialog instead of as its first words.
+#[test]
+fn a_paragraph_warning_or_a_many_line_error_opens_a_dialog() {
+    use fastf::tui::effect::ActionOutcome;
+
+    let mut app = fixture(12, 80, 24);
+    let start = |app: &mut fastf::tui::app::App| {
+        press(app, Key::ch('A'));
+        run_id(&press(app, Key::plain(KeyCode::Enter)))
+    };
+
+    let id = start(&mut app);
+    let warning = "the original at /mnt/projects/x is still there, whole, and fastf removed \
+                   nothing: a program has a file in it open. When that is resolved, \
+                   `fastf reconcile` finishes the move."
+        .to_string();
+    update(
+        &mut app,
+        Msg::ActionDone {
+            id,
+            outcome: Ok(Box::new(
+                ActionOutcome::new(ListChange::SummaryOnly, "Moved to /mnt/archive/x")
+                    .warning(Some(warning.clone())),
+            )),
+        },
+    );
+    let Some(Modal::Message { title, lines, .. }) = app.modals.top() else {
+        panic!(
+            "a paragraph of warning opens a dialog: {:?}",
+            app.modals.top()
+        );
+    };
+    assert_eq!(title, "needs a look");
+    assert_eq!(lines.join("\n"), warning);
+    assert!(
+        app.status.text.contains("see the report"),
+        "{}",
+        app.status.text
+    );
+    app.modals.pop();
+
+    let id = start(&mut app);
+    update(
+        &mut app,
+        Msg::ActionDone {
+            id,
+            outcome: Err(
+                "x holds 2 entries that cannot be copied to another drive:\n  \
+                          a.sock: a socket\n  b.pipe: a pipe"
+                    .to_string(),
+            ),
+        },
+    );
+    let Some(Modal::Message { title, lines, .. }) = app.modals.top() else {
+        panic!("a many-line error opens a dialog: {:?}", app.modals.top());
+    };
+    assert_eq!(title, "error");
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(
+        !app.status.text.contains('\n'),
+        "the status line keeps one line: {}",
+        app.status.text
+    );
+}

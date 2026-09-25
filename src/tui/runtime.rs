@@ -775,6 +775,7 @@ fn run_action(
     cancel: &AtomicBool,
 ) -> Result<ActionOutcome> {
     use crate::core::library::base_label;
+    use crate::core::move_engine::SourceOutcome;
     use crate::util::paths::display_path;
 
     match action {
@@ -972,34 +973,50 @@ fn run_action(
             // doubt an instant finish creates.
             let message = match outcome.copied {
                 Some((files, bytes)) => format!(
-                    "Moved to {} — copied {files} file{}, {}, verified",
+                    "Moved to {} — copied {}, verified",
                     display_path(&moved.path),
-                    if files == 1 { "" } else { "s" },
-                    crate::util::human_bytes::human_bytes(bytes)
+                    crate::core::transactions::copied_summary(files, outcome.links, bytes)
                 ),
                 None => format!(
                     "Moved to {} — renamed on the same filesystem, nothing copied",
                     display_path(&moved.path)
                 ),
             };
-            let warning = outcome.cleanup_pending.then(|| {
-                format!(
-                    "destination is complete, but cleanup is pending at {}",
-                    display_path(&project.path)
+            // The notes about links ride with the warning: both are things to
+            // read, and a long one opens the report dialog.
+            let warning = outcome
+                .source
+                .warning(&project.path)
+                .into_iter()
+                .chain(
+                    outcome
+                        .link_notes
+                        .iter()
+                        .map(|note| format!("note: {note}")),
                 )
-            });
+                .reduce(|all, next| format!("{all}\n\n{next}"));
             let session = format!("moved {} → {}", moved.id, base_label(&moved.base));
             let stale = vec![project.path.clone(), moved.path.clone()];
-            Ok(ActionOutcome::new(
+            // **An original kept whole is still a project.** Until reconcile
+            // finishes, the library holds it and its moved copy, one id in two
+            // bases — so the list reads both again rather than patching the
+            // original's row into the moved one and hiding what is on disk.
+            let kept = matches!(
+                outcome.source,
+                SourceOutcome::KeptWhole { .. } | SourceOutcome::Unknown { .. }
+            );
+            let change = if kept {
+                ListChange::Reload
+            } else {
                 ListChange::Patched {
                     project: Box::new(moved),
                     was: project.path.clone(),
                     stale,
-                },
-                message,
-            )
-            .warning(warning)
-            .session(session))
+                }
+            };
+            Ok(ActionOutcome::new(change, message)
+                .warning(warning)
+                .session(session))
         }
         Action::CopyTo {
             project,
@@ -1008,19 +1025,24 @@ fn run_action(
             let outcome =
                 crate::core::operations::copy_project(&project, &destination, progress, cancel)?;
             let (files, bytes) = outcome.copied;
+            let notes = outcome
+                .link_notes
+                .iter()
+                .map(|note| format!("note: {note}"))
+                .reduce(|all, next| format!("{all}\n\n{next}"));
             // **No `ListChange`.** The copy lands outside every base by rule, so
             // no row changed and nothing needs re-reading; a `Reload` here would
             // walk the whole library to learn that.
             Ok(ActionOutcome::new(
                 ListChange::None,
                 format!(
-                    "Copied {} to {} — {files} file{}, {}, verified",
+                    "Copied {} to {} — {}, verified",
                     project.id,
                     display_path(&outcome.path),
-                    if files == 1 { "" } else { "s" },
-                    crate::util::human_bytes::human_bytes(bytes)
+                    crate::core::transactions::copied_summary(files, outcome.links, bytes)
                 ),
             )
+            .warning(notes)
             .session(format!("copied {}", project.id)))
         }
         Action::Create(request) => {
@@ -1227,8 +1249,12 @@ fn run_action(
                 "Nothing to reconcile — every project is fully provisioned.".to_string()
             } else {
                 format!(
-                    "Reconciled: {} resumed, {} committed, {} rolled back, {} restored",
-                    report.resumed, report.completed, report.rolled_back, report.restored
+                    "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared",
+                    report.resumed,
+                    report.completed,
+                    report.rolled_back,
+                    report.restored,
+                    report.cleared
                 )
             };
             let outcome = ActionOutcome::new(ListChange::Reload, message).settings();
@@ -1241,11 +1267,18 @@ fn run_action(
                     report.incomplete.join(", ")
                 ));
             }
+            if !report.leftovers.is_empty() {
+                notes.push(format!(
+                    "{} old folder(s) not removed yet:\n{}",
+                    report.leftovers.len(),
+                    report.leftovers.join("\n")
+                ));
+            }
             if !report.unrecoverable.is_empty() {
                 notes.push(format!(
-                    "{} could not be recovered: {}",
+                    "{} need a look:\n{}",
                     report.unrecoverable.len(),
-                    report.unrecoverable.join(", ")
+                    report.unrecoverable.join("\n")
                 ));
             }
             if !report.obsolete.is_empty() {
@@ -1258,7 +1291,7 @@ fn run_action(
             Ok(if notes.is_empty() {
                 outcome
             } else {
-                outcome.warning(Some(notes.join("  ·  ")))
+                outcome.warning(Some(notes.join("\n\n")))
             })
         }
         Action::Unregister(project) => {

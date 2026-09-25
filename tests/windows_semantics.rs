@@ -251,9 +251,25 @@ fn delete_succeeds_despite_read_only_files() {
     perms.set_readonly(true);
     fs::set_permissions(&locked, perms).unwrap();
 
+    // A folder carrying the read-only attribute too: `desktop.ini` folders do.
+    let sealed = dir.join("sealed");
+    fs::create_dir(&sealed).unwrap();
+    fs::write(sealed.join("inside.txt"), "x").unwrap();
+    let mut folder = fs::metadata(&sealed).unwrap().permissions();
+    folder.set_readonly(true);
+    fs::set_permissions(&sealed, folder).unwrap();
+
     let project = library::scan_base(base).remove(0);
     library::delete_project_unlocked(&project).expect("read-only file must not block deletion");
     assert!(!dir.exists());
+    // Not only gone from its place: removed, with no hidden folder left.
+    let hidden: Vec<_> = fs::read_dir(base)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".fastf-deleted-"))
+        .collect();
+    assert!(hidden.is_empty(), "left behind: {hidden:?}");
 }
 
 /// A handle held briefly by another process (antivirus, the search indexer,
@@ -297,10 +313,9 @@ fn transient_sharing_violation_is_retried_not_fatal() {
 /// A same-filesystem move of a project containing a junction must succeed and
 /// keep the junction — `fs::rename` copies nothing, so there is nothing to lose.
 ///
-/// This is the counterpart to the refusal: the guard is deliberately scoped to
-/// the staged (copying) path, because refusing here would block the common case
-/// for no benefit. The staged refusal itself is covered in `library`'s unit
-/// tests, which can reach the private path without needing two real filesystems.
+/// The staged (copying) path carries a junction as a junction; that is covered
+/// in `library`'s unit tests, which can reach the private path without needing
+/// two real filesystems.
 #[cfg(windows)]
 #[test]
 fn same_filesystem_move_preserves_a_junction() {

@@ -1,11 +1,13 @@
 pub mod atomic;
 pub mod clipboard;
 pub mod diag;
+pub(crate) mod disk_space;
 pub mod faults;
 pub mod fs_retry;
 pub mod human_bytes;
 pub mod interrupt;
 pub mod lockfile;
+pub(crate) mod machine;
 #[cfg(unix)]
 pub mod notify;
 pub mod paths;
@@ -21,4 +23,6 @@ pub mod time;
 pub mod trace;
 pub(crate) mod tree_size;
 pub mod tty;
+#[cfg(windows)]
+pub(crate) mod win_reparse;
 pub mod yaml;

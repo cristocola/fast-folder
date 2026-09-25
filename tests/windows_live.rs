@@ -357,12 +357,12 @@ fn a_move_within_one_volume_renames_and_copies_nothing() {
     assert!(second.join("Quick_L0001").is_dir());
 }
 
-/// A link inside a project cannot be reproduced by a copy, so the staged path
-/// refuses the whole move rather than silently dropping it — the failure mode
-/// that once deleted a source whose junctions never reached the destination.
-/// The same-volume rename keeps it, because it copies nothing.
+/// A junction inside a project crosses to another volume as a junction, and
+/// the original's removal never goes through it — the failure mode that once
+/// deleted what a junction pointed at. A volume that cannot hold one (a share
+/// may not) is found before anything is copied, and the source stays whole.
 #[test]
-fn a_junction_is_refused_by_a_cross_volume_move_and_kept_by_a_rename() {
+fn a_junction_crosses_volumes_as_a_junction_or_is_refused_up_front() {
     let Some(live) = live("junction") else {
         return;
     };
@@ -385,16 +385,33 @@ fn a_junction_is_refused_by_a_cross_volume_move_and_kept_by_a_rename() {
         return;
     }
 
-    let error = live.fails(&["move", "L0001", &live.share.display().to_string(), "--yes"]);
-    assert!(
-        error.to_lowercase().contains("link") || error.to_lowercase().contains("junction"),
-        "the refusal must name what it could not copy:\n{error}"
+    let out = live.run(&["move", "L0001", &live.share.display().to_string(), "--yes"]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
-    assert!(
-        source.join("linked").exists(),
-        "the source is untouched by a refused move"
+    assert_eq!(
+        std::fs::read_to_string(target.join("shared.txt")).unwrap(),
+        "outside",
+        "nothing behind the junction was touched:\n{said}"
     );
-    assert_eq!(live.projects_in(&live.share), 0, "nothing was published");
+    if out.status.success() {
+        let moved = live.only_project(&live.share);
+        assert_eq!(
+            std::fs::read_link(moved.join("linked")).unwrap(),
+            std::fs::read_link(&target).unwrap_or_else(|_| target.clone()),
+            "the junction crossed as a junction:\n{said}"
+        );
+        assert!(!source.exists(), "the original left the library:\n{said}");
+    } else {
+        assert!(
+            said.to_lowercase().contains("link") || said.to_lowercase().contains("junction"),
+            "a refusal names what it could not make:\n{said}"
+        );
+        assert!(source.join("linked").exists(), "the source is whole");
+        assert_eq!(live.projects_in(&live.share), 0, "nothing was published");
+    }
 }
 
 // ---------------------------------------------------------------------------

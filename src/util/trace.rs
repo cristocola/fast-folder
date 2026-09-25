@@ -71,17 +71,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trace");
 
+        // Names only this test writes: while the variable is set, a unit test
+        // running beside it that reads a project traces `read_metadata` into
+        // this same file, and a shared name counts both.
         let mut guard = crate::util::test_env::EnvGuard::set(&[]);
         guard.also_set(super::TRACE_ENV, &path.display().to_string());
-        hit("discover");
-        hit("read_metadata");
-        hit("discover");
+        hit("trace-test:twice");
+        hit("trace-test:once");
+        hit("trace-test:twice");
         guard.also_remove(super::TRACE_ENV);
 
         let text = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(count_in(&text, "discover"), 2);
-        assert_eq!(count_in(&text, "read_metadata"), 1);
-        assert_eq!(count_in(&text, "scan_base"), 0);
+        assert_eq!(count_in(&text, "trace-test:twice"), 2);
+        assert_eq!(count_in(&text, "trace-test:once"), 1);
+        assert_eq!(count_in(&text, "trace-test:never"), 0);
     }
 
     /// Unset, or set to nothing, and the operation is free and silent.

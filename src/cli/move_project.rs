@@ -154,21 +154,18 @@ pub fn run(args: MoveArgs) -> Result<()> {
         "   {}",
         match outcome.copied {
             Some((files, bytes)) => format!(
-                "copied {files} file{}, {}, verified",
-                if files == 1 { "" } else { "s" },
-                crate::util::human_bytes::human_bytes(bytes)
+                "copied {}, verified",
+                crate::core::transactions::copied_summary(files, outcome.links, bytes)
             ),
             None => "renamed on the same filesystem, nothing copied".to_string(),
         }
         .dimmed()
     );
-    if outcome.cleanup_pending {
-        eprintln!(
-            "{} destination is complete, but the original could not be removed. \
-             Cleanup is pending at {} and the transaction was retained.",
-            "warning:".yellow().bold(),
-            crate::util::paths::display_path(&project.path)
-        );
+    for note in &outcome.link_notes {
+        eprintln!("{} {note}", "note:".cyan().bold());
+    }
+    if let Some(warning) = outcome.source.warning(&project.path) {
+        eprintln!("{} {warning}", "warning:".yellow().bold());
     }
     Ok(())
 }

@@ -5,7 +5,9 @@
 //! failpoints and a progress handle. `library::move_project*` delegates here.
 //!
 //! **The invariant, restated because it is the whole point: the source is never
-//! removed until the destination is fully copied and verified.**
+//! removed until the destination is fully copied and verified** — and then it
+//! leaves the library in one rename, never by being deleted where it stands
+//! (`move_cleanup`).
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -19,13 +21,78 @@ use crate::core::library::{
     Project, cache_remove, cache_upsert, project_from_meta, revalidate_project,
     revalidate_recorded_project, to_forward_slashes,
 };
+use crate::core::move_cleanup::{self, Cleanup, SourceFate};
 use crate::core::project_info;
-use crate::core::transactions::{self, MoveManifest, MovePhase, MoveTransaction};
+use crate::core::transactions::{self, MoveManifest, MovePhase, MoveTransaction, Operation};
+
+/// What became of the original once the destination was published.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceOutcome {
+    /// Gone: renamed on the same filesystem, or retired and removed.
+    Removed,
+    /// Out of the library — the project is the moved copy — but its retired
+    /// copy at `path` could not be removed yet. When `redundant`, everything
+    /// in it is in the moved copy too and `fastf reconcile` removes it;
+    /// otherwise it holds something the move did not record and is kept whole
+    /// for the user to look at.
+    Leftover {
+        path: PathBuf,
+        reason: String,
+        redundant: bool,
+    },
+    /// Still at its path, whole: nothing in it was removed. `fastf reconcile`
+    /// finishes the move once the reason is gone.
+    KeptWhole { reason: String },
+    /// Whether it left could not be told; `fastf reconcile` settles it.
+    Unknown { reason: String },
+}
+
+impl SourceOutcome {
+    /// What to tell the user about the original, when there is anything to
+    /// tell. The command line and the app both say it this way.
+    pub fn warning(&self, original: &Path) -> Option<String> {
+        let shown = |path: &Path| crate::util::paths::display_path(path);
+        match self {
+            Self::Removed => None,
+            Self::Leftover {
+                path,
+                reason,
+                redundant: true,
+            } => Some(format!(
+                "the original is out of the library, but its retired copy at {} is not \
+                 removed yet ({reason}). Everything in it is in the moved copy; \
+                 `fastf reconcile` removes it.",
+                shown(path)
+            )),
+            Self::Leftover {
+                path,
+                reason,
+                redundant: false,
+            } => Some(format!(
+                "the original is out of the library; its retired copy at {} was kept \
+                 whole, because {reason}. Look inside, delete it yourself once nothing in \
+                 it is needed, then run `fastf reconcile`.",
+                shown(path)
+            )),
+            Self::KeptWhole { reason } => Some(format!(
+                "the original at {} is still there, whole, and fastf removed nothing: \
+                 {reason}. When that is resolved, `fastf reconcile` finishes the move.",
+                shown(original)
+            )),
+            Self::Unknown { reason } => Some(format!(
+                "fastf could not tell whether the original at {} was set aside \
+                 ({reason}); nothing was removed. Run `fastf reconcile` to settle it.",
+                shown(original)
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MoveOutcome {
     pub project: Project,
-    pub cleanup_pending: bool,
+    /// What became of the original.
+    pub source: SourceOutcome,
     /// Whether the move copied. `false` is the same-filesystem rename, which
     /// is instant however large the folder is; `true` staged, verified and
     /// published. The caller has to say which, because a move that finishes
@@ -34,6 +101,17 @@ pub struct MoveOutcome {
     pub staged: bool,
     /// What was copied, when it staged: files and bytes.
     pub copied: Option<(usize, u64)>,
+    /// Links carried as links, when it staged.
+    pub links: usize,
+    /// Links whose meaning the new place may change (`MoveManifest::link_notes`).
+    pub link_notes: Vec<String>,
+}
+
+impl MoveOutcome {
+    /// Whether the move left work for `fastf reconcile`.
+    pub fn cleanup_pending(&self) -> bool {
+        self.source != SourceOutcome::Removed
+    }
 }
 
 /// Move a project folder into another base directory, keeping its folder name.
@@ -179,9 +257,11 @@ fn move_project_unlocked(
                 finish_progress(progress);
                 MoveOutcome {
                     project: moved,
-                    cleanup_pending: false,
+                    source: SourceOutcome::Removed,
                     staged: false,
                     copied: None,
+                    links: 0,
+                    link_notes: Vec::new(),
                 }
             }
             Err(error) if is_cross_device_error(&error) => {
@@ -217,14 +297,24 @@ pub(crate) fn is_cross_device_error(error: &std::io::Error) -> bool {
     }
 }
 
+/// The compatibility shape returns only the project, so this is the one place
+/// a move says what became of its source through `diag` rather than its
+/// outcome.
 fn report_cleanup_pending(outcome: &MoveOutcome, source: &Path) {
-    if outcome.cleanup_pending {
-        crate::util::diag::warn(format!(
-            "move published at {}, but source cleanup is pending at {}; \
-             the move transaction was retained",
+    match &outcome.source {
+        SourceOutcome::Removed => {}
+        SourceOutcome::Leftover { path, reason, .. } => crate::util::diag::warn(format!(
+            "moved to {}; the original's retired copy at {} is not removed yet ({reason})",
             outcome.project.path.display(),
-            source.display()
-        ));
+            path.display()
+        )),
+        SourceOutcome::KeptWhole { reason } | SourceOutcome::Unknown { reason } => {
+            crate::util::diag::warn(format!(
+                "moved to {}, but the original at {} is still there ({reason})",
+                outcome.project.path.display(),
+                source.display()
+            ))
+        }
     }
 }
 
@@ -250,12 +340,26 @@ pub(crate) fn staged_copy_verify_commit(
         .map(PathBuf::from)
         .context("move source has no folder name")?;
     crate::util::faults::check("move:before-marker-write")?;
-    let mut transaction =
-        MoveTransaction::begin(&old_base, &folder, new_base, &folder, &project.id)?;
+    let mut transaction = MoveTransaction::begin(
+        &old_base,
+        &folder,
+        new_base,
+        &folder,
+        &project.id,
+        Operation::Move,
+    )?;
     let mut published = false;
-    let pre_publication = (|| -> Result<MoveManifest> {
+    let pre_publication = (|| -> Result<(MoveManifest, MoveManifest)> {
         let manifest = MoveManifest::scan(&project.path)?;
         transaction.write_manifest(&manifest)?;
+        // Before a byte is copied: can the original be taken out of its base
+        // afterwards, and does the target have the room?
+        crate::core::move_preflight::probe_source_base(
+            &old_base,
+            &project.path,
+            &transaction.journal.operation_id,
+        )?;
+        crate::core::move_preflight::check_space(new_base, manifest.total_bytes())?;
         {
             let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
             state.phase = crate::core::assets::JobPhase::Copying;
@@ -277,8 +381,9 @@ pub(crate) fn staged_copy_verify_commit(
         }
         crate::util::faults::check("move:after-staging")?;
         set_phase(progress, JobPhase::Verifying);
-        manifest.verify_destination(&staging)?;
+        let staged = manifest.verify_destination(&staging)?;
         manifest.verify_source_unchanged(&project.path)?;
+        let published_record = transaction.write_published(&staged)?;
         crate::util::faults::check("move:after-verify")?;
         crate::util::faults::check("move:post-verification")?;
 
@@ -294,14 +399,14 @@ pub(crate) fn staged_copy_verify_commit(
         if assets::entry_exists(new_path)? {
             anyhow::bail!("move target became occupied: {}", new_path.display());
         }
-        crate::util::fs_retry::rename(&staging, new_path)
+        publish(&staging, new_path)
             .with_context(|| format!("finalizing move into {}", new_path.display()))?;
         published = true;
-        Ok(manifest)
+        Ok((manifest, published_record))
     })();
 
-    let manifest = match pre_publication {
-        Ok(manifest) => manifest,
+    let (manifest, published_record) = match pre_publication {
+        Ok(records) => records,
         Err(error) if !published => {
             return match transaction.remove() {
                 Ok(()) => Err(error),
@@ -312,11 +417,7 @@ pub(crate) fn staged_copy_verify_commit(
         }
         Err(error) => {
             // Publication is a point of no return. Preserve the transaction and
-            // return a truthful successful outcome with cleanup pending.
-            crate::util::diag::warn(format!(
-                "move published at {}, but cleanup is pending ({error:#})",
-                new_path.display()
-            ));
+            // return a truthful successful outcome: the source is untouched.
             let moved = moved_view(project, new_base, new_path);
             let copied = {
                 let state = progress.lock().unwrap_or_else(|error| error.into_inner());
@@ -325,70 +426,77 @@ pub(crate) fn staged_copy_verify_commit(
             finish_progress(progress);
             return Ok(MoveOutcome {
                 project: moved,
-                cleanup_pending: true,
+                source: SourceOutcome::KeptWhole {
+                    reason: format!("{error:#}"),
+                },
                 staged: true,
                 copied: Some(copied),
+                links: 0,
+                link_notes: Vec::new(),
             });
         }
     };
 
-    let mut cleanup_pending = false;
-    let mut retain_transaction = false;
-
-    if let Err(error) = crate::util::faults::check("move:after-publication")
+    // A power loss must not keep the retire below and lose the publish above:
+    // they are on different filesystems, and each one's rename is only
+    // durable once its folder is.
+    move_cleanup::sync_dir(new_base);
+    let mut moved: Option<Project> = None;
+    let fate = if let Err(error) = crate::util::faults::check("move:after-publication")
         .and_then(|()| crate::util::faults::check("move:after-commit-before-source-removal"))
     {
-        crate::util::diag::warn(format!(
-            "move published at {}, but cleanup is pending ({error:#})",
-            new_path.display()
-        ));
-        cleanup_pending = true;
-        retain_transaction = true;
+        SourceFate::KeptWhole {
+            reason: format!("{error:#}"),
+        }
     } else if let Err(error) = transaction.set_phase(MovePhase::CleanupPending) {
-        crate::util::diag::warn(format!(
-            "move published at {}, but the cleanup phase could not be recorded ({error:#})",
-            new_path.display()
-        ));
-        cleanup_pending = true;
-        retain_transaction = true;
+        SourceFate::KeptWhole {
+            reason: format!("the cleanup could not be recorded ({error:#})"),
+        }
     } else if let Err(error) = crate::util::faults::check("move:before-source-cleanup")
-        .and_then(|()| crate::util::faults::check("move:source-cleanup"))
+        .and_then(|()| revalidate_recorded_project(project).map(drop))
     {
-        crate::util::diag::warn(format!(
-            "move published at {}, but source cleanup is pending at {} ({error:#})",
-            new_path.display(),
-            project.path.display()
-        ));
-        cleanup_pending = true;
-        retain_transaction = true;
-    } else if let Err(error) = revalidate_recorded_project(project)
-        .and_then(|_| manifest.verify_recovery_pair(&project.path, new_path))
-        .and_then(|_| crate::util::fs_retry::remove_dir_all(&project.path).map_err(Into::into))
-    {
-        crate::util::diag::warn(format!(
-            "move published at {}, but source cleanup is pending at {} ({error:#})",
-            new_path.display(),
-            project.path.display()
-        ));
-        cleanup_pending = true;
-        retain_transaction = true;
-    } else if let Err(error) = crate::util::faults::check("move:after-source-cleanup") {
-        crate::util::diag::warn(format!(
-            "source cleanup completed, but transaction cleanup is pending ({error:#})"
-        ));
-        retain_transaction = true;
-    }
-
-    let moved = if cleanup_pending {
-        moved_view(project, new_base, new_path)
+        SourceFate::KeptWhole {
+            reason: format!("{error:#}"),
+        }
     } else {
-        finish_move_bookkeeping(project, &old_base, new_base, new_path)
+        let cleanup = Cleanup {
+            manifest: &manifest,
+            published: Some(&published_record),
+            source: &project.path,
+            final_path: new_path,
+            project_id: &project.id,
+            residue_allowed: false,
+        };
+        move_cleanup::retire_and_remove(transaction, &cleanup, || {
+            moved = Some(finish_move_bookkeeping(
+                project, &old_base, new_base, new_path,
+            ));
+        })
     };
-    if !retain_transaction && let Err(error) = transaction.remove() {
-        crate::util::diag::warn(format!(
-            "could not clear completed move transaction: {error:#}"
-        ));
-    }
+
+    let source = match fate {
+        SourceFate::Removed { record_kept } => {
+            if let Some(reason) = record_kept {
+                crate::util::diag::warn(format!(
+                    "the move is complete, but its record could not be cleared ({reason}); \
+                     `fastf reconcile` clears it"
+                ));
+            }
+            SourceOutcome::Removed
+        }
+        SourceFate::Leftover {
+            path,
+            reason,
+            redundant,
+        } => SourceOutcome::Leftover {
+            path,
+            reason,
+            redundant,
+        },
+        SourceFate::KeptWhole { reason } => SourceOutcome::KeptWhole { reason },
+        SourceFate::Unknown { reason } => SourceOutcome::Unknown { reason },
+    };
+    let moved = moved.unwrap_or_else(|| moved_view(project, new_base, new_path));
     set_phase(progress, JobPhase::Done);
     let copied = {
         let state = progress.lock().unwrap_or_else(|error| error.into_inner());
@@ -397,10 +505,31 @@ pub(crate) fn staged_copy_verify_commit(
     finish_progress(progress);
     Ok(MoveOutcome {
         project: moved,
-        cleanup_pending,
+        source,
         staged: true,
         copied: Some(copied),
+        links: manifest.total_links(),
+        link_notes: manifest.link_notes(&project.path),
     })
+}
+
+/// Rename the verified staging tree into place. **An error is checked, not
+/// believed**: over a network the server can complete the rename while the
+/// client times out, and a move that then reported failure and cleared its
+/// record would leave a complete second copy with the same id, recorded
+/// nowhere. Staging gone and the destination there is a publish.
+pub(crate) fn publish(staging: &Path, destination: &Path) -> std::io::Result<()> {
+    match crate::util::fs_retry::rename_dir(staging, destination) {
+        Ok(()) => Ok(()),
+        Err(_)
+            if fs::symlink_metadata(staging).is_err()
+                && crate::util::paths::require_real_directory(destination, "destination")
+                    .is_ok() =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn finish_move_bookkeeping(
@@ -421,12 +550,19 @@ fn finish_move_bookkeeping(
         ));
     }
 
-    let old_dir = project
-        .path
-        .strip_prefix(old_base)
-        .map(to_forward_slashes)
-        .unwrap_or_else(|_| project.name.clone());
-    cache_remove(old_base, &old_dir);
+    // Whatever is at the original's path now — a project put back there, or
+    // another one entirely — is read again rather than forgotten: dropping its
+    // row would hide a real project until the next reindex.
+    if project_info::pinfo_path(&project.path).is_file() {
+        crate::core::library::refresh_cache(&project.path);
+    } else {
+        let old_dir = project
+            .path
+            .strip_prefix(old_base)
+            .map(to_forward_slashes)
+            .unwrap_or_else(|_| project.name.clone());
+        cache_remove(old_base, &old_dir);
+    }
     cache_upsert(new_base, &moved);
     moved
 }
@@ -470,5 +606,25 @@ fn set_phase(progress: &Mutex<Progress>, phase: JobPhase) {
         // A phase change is real movement: without it, verifying a large tree
         // looks identical to a dead worker to anything reading the timestamp.
         p.touch();
+    }
+}
+
+#[cfg(test)]
+mod publish_tests {
+    /// A rename that reports an error after it landed is a publish; one that
+    /// did not land is not.
+    #[test]
+    fn a_publish_is_judged_by_where_the_tree_is() {
+        let temp = tempfile::tempdir().unwrap();
+        let landed = temp.path().join("landed");
+        std::fs::create_dir(&landed).unwrap();
+        super::publish(&temp.path().join("staging-gone"), &landed).unwrap();
+        assert!(
+            super::publish(
+                &temp.path().join("staging-gone"),
+                &temp.path().join("nowhere")
+            )
+            .is_err()
+        );
     }
 }

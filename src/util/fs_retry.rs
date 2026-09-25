@@ -23,6 +23,13 @@ use std::time::Duration;
 /// well past a typical antivirus scan window while staying imperceptible.
 const BACKOFF_MS: [u64; 5] = [10, 20, 40, 80, 160];
 
+/// The longer schedule for renaming a folder, ≈ 2.5 s. A folder whose every
+/// file was just read or written — a staging tree about to be published, a
+/// source about to leave the library — is exactly what an indexer or a virus
+/// scanner is still holding, and the short schedule gave up on it: at publish
+/// that threw away a verified copy.
+const DIR_BACKOFF_MS: [u64; 7] = [20, 50, 100, 200, 400, 700, 1000];
+
 /// Windows error codes worth retrying.
 #[cfg(windows)]
 mod codes {
@@ -55,13 +62,17 @@ fn is_transient(_err: &io::Error) -> bool {
 
 /// Run `op`, retrying transient contention with backoff. Returns the last error
 /// if every attempt fails, so the caller sees the real cause.
-fn retry<T>(mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+fn retry<T>(op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    retry_on(&BACKOFF_MS, op)
+}
+
+fn retry_on<T>(schedule: &[u64], mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     let mut last = match op() {
         Ok(value) => return Ok(value),
         Err(err) if is_transient(&err) => err,
         Err(err) => return Err(err),
     };
-    for delay in BACKOFF_MS {
+    for &delay in schedule {
         std::thread::sleep(Duration::from_millis(delay));
         match op() {
             Ok(value) => return Ok(value),
@@ -219,6 +230,34 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
         Ok(()) => Ok(()),
         Err(err) => retry_without_readonly(path, err, false),
     }
+}
+
+/// [`std::fs::rename`] of a **folder**, with the longer retry schedule and no
+/// read-only fallback: the attribute means nothing on a folder's name, and a
+/// folder that stays refused is held by a program — which is what the caller
+/// has to say, see [`describe_rename_error`].
+pub fn rename_dir(from: &Path, to: &Path) -> io::Result<()> {
+    retry_on(&DIR_BACKOFF_MS, || std::fs::rename(from, to))
+}
+
+/// [`std::fs::remove_dir`] of an empty folder, with transient-contention
+/// retries.
+pub fn remove_dir(path: &Path) -> io::Result<()> {
+    retry(|| std::fs::remove_dir(path))
+}
+
+/// What a failed folder rename means, in words. On Windows a folder cannot be
+/// renamed while any file in it is open without delete sharing, or while it is
+/// some program's working folder, and the error only says `Access is denied`.
+pub fn describe_rename_error(err: &io::Error) -> String {
+    #[cfg(windows)]
+    if is_transient(err) {
+        return format!(
+            "a program has a file in it open, or is working in it ({err}); \
+             close it and try again"
+        );
+    }
+    err.to_string()
 }
 
 /// [`std::fs::remove_dir_all`] with transient-contention retries, plus a

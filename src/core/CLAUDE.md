@@ -228,7 +228,8 @@ projects, and mints duplicates when it guesses low, so the lookup happens once, 
 ## Moving projects
 
 **Invariant: a source is never removed until a complete destination has been
-copied, verified and published.**
+copied, verified and published — and then it leaves the library in one rename,
+never by being deleted where it stands.**
 
 `library::move_project` is the compatibility shape (lock, revalidate);
 applications use `operations::move_project` →
@@ -243,19 +244,122 @@ rename error returns unchanged — never broaden that match. The rename probe sk
 backoff to every cross-drive move.
 
 Staged moves live at `.fastf-transactions/<timestamp-pid-counter>/` in the target
-base. `move.json` holds only version, operation id, project id, source base,
-validated folder components and `Copying | ReadyToCommit | CleanupPending`; paths
-derive from the transaction's own location. `MoveManifest::scan` is
-**deny-by-default** — a link or special entry fails the whole move — and
-`verify_destination` compares the exact path/type/size manifest, because a
-verification narrower than the copy could remove a source that never fully
-arrived. No hashes, no advanced metadata. Links are refused only on the staged
-path; a rename preserves them. Every walked name is payload — there is no
-transient-suffix filter.
+base. `move.json` (version 3; version 2 is read) holds version, operation id,
+project id, source base, validated folder components, the phase
+(`Copying | ReadyToCommit | CleanupPending | Retired`), `operation` (`Move |
+Copy`), the `host` and `machine` (`util::machine`, compared first: a hostname
+changes with DHCP) that began it, and `legacy_cleanup`; paths derive from the
+transaction's own location, the retired name from the operation. fastf's hidden
+folders are recognised by prefix **and** an operation id (`retired_operation`,
+`deleted_operation`, `probe_operation`), never by prefix alone, and after the
+case-rename check: a project may be named `fastf-deleted-Scenes`.
+`MoveManifest::scan` is **deny-by-default** for what it cannot copy — a special
+entry, one it cannot examine, another filesystem — and
+`verify_destination` compares the exact path/type/size/link-target manifest,
+because a verification narrower than the copy could remove a source that never
+fully arrived. No hashes, no advanced metadata. Every walked name is payload —
+there is no transient-suffix filter.
+
+**Links are content** (manifest version 2): recorded by their target text, never
+followed, dangling allowed — what `mv` does, and what the rename always did. The
+walk never descends into one, the names pass makes them last (so no later write
+can pass through one), verification compares `read_link` text, and
+`remove_tree` unlinks them. `transactions::entry_for` is the one classification:
+every unix symlink is `Symlink`; on Windows the reparse tag decides
+(`util::win_reparse`) — `SYMLINK` is `Symlink` or `DirSymlink` by the link's own
+directory attribute (its target may not exist), `MOUNT_POINT` is `Junction`
+unless it names a volume (`OtherFilesystem`), anything else is
+`UnsupportedLink`. A link whose `read_link` is refused is `LinkNotReadable`, whose
+message names sshfs's `-o no_contain_symlinks`: sshfs's default refuses every link
+that is absolute or climbs with `..`, found against a real mount. The probe judges
+by what `lstat` finds at the link's path, not by what `symlink()` said — on a
+`follow_symlinks` mount the call makes the link on the server and then fails with
+`EIO`. Cloud placeholders are not name surrogates, so `std` reads them
+as files and they are copied as data. `std::fs::read_link` turns `\??\C:\x` into
+the plain `C:\x` wherever it can, for the original and the copy alike, which is
+what lets the two compare; `win_reparse::create_junction` takes either form.
+`MoveManifest::link_notes` names the links whose meaning a new place may change
+(relative ones that climb out, absolute ones into the original), and both
+surfaces print them.
+
+**`transactions::Walk` never stops at an odd entry**: it records what a manifest
+can hold and, beside it, every `Problem` (listed but not examinable, unreadable
+folder, link, special, a folder on another filesystem, a non-Unicode name, too
+deep), so a refusal names all of them and a comparison can say "a link now, was a
+312-byte file". **`MoveManifest::compare(&walk, Match)` is the one comparison**
+and it compares **entries only** — never the manifest's `version`, or every
+version-1 manifest an older binary left would read as changed forever. `Match`
+is `Exact` (the source before publish), `Whole` (folder times ignored, since
+removing a child moves them) or `Content` (a copy); `ManifestDiff::is_clean` and
+`is_residue` (everything left is recorded and unchanged, entries may be missing)
+are the two questions asked of it. Folder devices are compared on unix only, and
+only folders: on overlayfs a file reports the device of its layer.
 
 Before publication, a cancel or failure removes only the owned transaction. After
-it, cancel is too late, and a failed source removal keeps `CleanupPending` and
-reports the destination published.
+it, cancel is too late.
+
+**After publication the source is retired, not deleted** (`core::move_cleanup`):
+renamed in one step to `<source base>/.fastf-moved-<operation>` — same folder, so
+the same filesystem, and dot-prefixed, so discovery skips it — then removed. A
+tree removal is not one operation; anything that stops `remove_dir_all` part of
+the way (a mode-555 folder, a file a program holds open, a network drop, an entry
+a mount lists but hides) used to leave a husk that still held `PROJECT_INFO.md`
+and was listed as the project. That is how 3.11 left 13 of 1473 files behind on
+an sshfs base and then called the source untouched. The order is fsync the target
+base (unix), `CleanupPending`, check, retire, `Retired` (written *after* the
+rename; a crash between reads the same, since the retired folder is there),
+bookkeeping, remove the retired copy, remove the transaction. Publishing first is
+deliberate: a Windows "file in use" at the retire then costs a reconcile, not a
+second copy. `MoveOutcome.source` says what became of it (`Removed`, `Leftover`,
+`KeptWhole`, `Unknown`), and `SourceOutcome::warning` is the one wording both
+surfaces print. `fastf delete` retires through `.fastf-deleted-<operation>` the
+same way.
+
+**One rule decides removal, in-process and in reconcile**
+(`move_cleanup::check_removable`): every entry is one the move recorded,
+unchanged (`is_clean` for a version-3 source, `is_residue` for a retired copy and
+for a source 3.11 may have half-deleted, which `legacy_cleanup` marks and carries
+through the version-3 rewrite), and the moved copy holds an entry of the same kind
+at every such path that is as published (`published.json`, the staging walk) or
+newer — so the user may edit the moved copy while a cleanup waits, and a moved
+copy restored from an older backup keeps the original. Without a published record
+(3.11) "newer" is measured against the original's own time. The removal itself is
+`move_cleanup::remove_tree`, not std's: it never follows a link or crosses a
+device, re-checks each entry against the manifest, carries on past a failure,
+gives a folder its owner's permission back, and counts what it left.
+
+**Before a byte is copied** (`core::move_preflight`, a courtesy — correctness
+never depends on it): the scan's problems refuse the move, all of them named; a
+move (never a copy) probes its source base with `.fastf-probe-<operation>` —
+create, write, link, lstat the link, rename, remove — because only the real
+operation answers "can fastf write here" on a network mount whose server decides,
+and a link that reads back as a file means the mount resolves links itself (sshfs
+`follow_symlinks`), which is refused; a sticky base holding another user's folder
+is refused; `util::disk_space` refuses a copy that cannot fit, and an answer it
+cannot give (`None`) never refuses. Then `copy_to_staging` makes **every name
+before any content** — folders with `create_dir` in manifest order, empty files
+with `create_new`, links last — so a name the target will not hold (a case clash:
+`AlreadyExists` in a staging folder fastf made empty; `EINVAL`/123; too long) is
+found in seconds, all of them together (`name_refusal`). Reconcile clears a probe
+a killed move left, and only the names a probe holds.
+
+**Every removal asks first whether the mount hides links**
+(`move_preflight::links_hidden_in`, inside `remove_tree`, and in `fastf delete`
+before its rename): the walk decides "folder" from `lstat`, and on a
+`follow_symlinks` mount a linked folder says it is one. `fastf delete` also
+refuses a project with another filesystem mounted inside, since the walk would
+keep it and its hidden folder for good. `Removal::Leftover.kept_on_purpose` is
+what separates "kept because not provably safe" from "a removal failed" — only
+the second is called redundant. A publish rename that errors is checked, not
+believed (`move_engine::publish`). Bookkeeping re-reads whatever project is at
+the original's path instead of dropping its row. Windows needs a folder's
+read-only attribute cleared before `RemoveDirectoryW` (`clear_read_only_folder`,
+real folders only — on a link it would reach the target).
+
+**A folder rename uses `fs_retry::rename_dir`**, whose ≈ 2.5 s schedule outlasts an
+indexer holding a freshly written tree; the short one discarded a verified staging
+copy at publish. On Windows a refused folder rename means a program has something
+in it open (`describe_rename_error`).
 
 ## Copying projects out
 
@@ -282,11 +386,28 @@ reported for inspection. Creates defer no copies, but the resume branch stays fo
 a journal an older binary left on a shared drive, resuming after identity, type
 and length checks.
 
-**Reconcile** holds `DataLock` for the whole pass and is idempotent. `Copying` and
-unpublished `ReadyToCommit` discard only the owned transaction; published
-`ReadyToCommit` compares identity and manifests before cleanup; `CleanupPending`
-repeats those checks before removing the source. Missing bases, malformed
-journals, identity mismatches and unknown states are report-only.
+**Reconcile** holds `DataLock` for the whole pass and is idempotent. By
+transaction (S source, R retired copy, T staging, F destination):
+
+| phase | on disk | action |
+|---|---|---|
+| any | `host` is another machine's | report only |
+| any | `operation = Copy` | discard T if unpublished, clear the record; never touch S |
+| Copying, ReadyToCommit | R present | report |
+| Copying | S ours, no F | discard |
+| ReadyToCommit | T, no F | discard |
+| ReadyToCommit | F ours, no T | exact source + content, then as CleanupPending |
+| CleanupPending, Retired | F not ours | report; with R present, say R may be the only copy |
+| CleanupPending | R present | write `Retired`, bookkeeping, remove R |
+| CleanupPending | S present | check, retire, `Retired`, bookkeeping, remove R |
+| CleanupPending, Retired | no R, and no S or `Retired` | bookkeeping, clear the record |
+
+`reconcile_base` and `list_incomplete` never look inside `.fastf-moved-*` or
+`.fastf-deleted-*` for a create to resume. A retired folder no transaction owns is
+reported, never removed; a deleted project's folder is removed (the word confirmed
+it). Every message names the project, its record and phase, and what is on disk;
+"left untouched" about a pass is not a statement about the disk. `leftovers` holds
+the hidden folders not removed yet, `cleared` the deleted ones that were.
 
 **A case-only rename** stages through `.<target>.fastf-case`
 (`library::lifecycle::case_staging_name`/`case_staging_target`, one spelling for

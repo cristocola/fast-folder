@@ -1274,6 +1274,14 @@ impl App {
                     self.session = crate::tui::frame::recent_actions();
                 }
                 match outcome.warning {
+                    Some(warning) if needs_a_dialog(&warning) => {
+                        self.warn(format!("{}  —  see the report", outcome.message));
+                        self.modals.push(Modal::message(
+                            "needs a look",
+                            warning,
+                            MessageLevel::Warn,
+                        ));
+                    }
                     Some(warning) => {
                         self.warn(format!("{}  —  warning: {warning}", outcome.message))
                     }
@@ -1384,6 +1392,12 @@ impl App {
                     Some(Modal::Builder(builder)) if builder.saving => {
                         builder.saving = false;
                         builder.error = Some(format!("Cannot save: {error}"));
+                    }
+                    _ if needs_a_dialog(&error) => {
+                        let first = error.lines().next().unwrap_or_default().to_string();
+                        self.error(format!("error: {first}"));
+                        self.modals
+                            .push(Modal::message("error", error, MessageLevel::Error));
                     }
                     _ => self.error(format!("error: {error}")),
                 }
@@ -2595,6 +2609,14 @@ impl App {
 }
 
 /// The state machine: the app and one message in, the effects out.
+/// Whether an action's warning or error is more than the status line can
+/// show: it has more than one line (a move's list of what it could not copy,
+/// a reconcile's report), or it is a paragraph. The status line shows one
+/// line, so either would arrive as its first few words.
+fn needs_a_dialog(text: &str) -> bool {
+    text.contains('\n') || text.chars().count() > 160
+}
+
 pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
     app.handle(msg)
 }

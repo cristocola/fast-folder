@@ -4,11 +4,11 @@
 use super::*;
 use crate::core::assets::Progress;
 use crate::core::config::Config;
-use crate::core::move_engine::{is_cross_device_error, staged_copy_verify_commit};
+use crate::core::move_engine::{SourceOutcome, is_cross_device_error, staged_copy_verify_commit};
 use crate::core::project_info;
 #[cfg(debug_assertions)]
 use crate::core::provisioning;
-use crate::core::transactions::{self, MoveManifest};
+use crate::core::transactions;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -38,6 +38,21 @@ fn cfg_for(base: &Path, extra: &[&Path]) -> Config {
         bases: extra.iter().map(|p| p.display().to_string()).collect(),
         ..Default::default()
     }
+}
+
+/// fastf's hidden per-project folders in `base`: a retired original, a
+/// deleted project on its way out.
+fn retired_folders(base: &Path) -> Vec<String> {
+    fs::read_dir(base)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            name.starts_with(".fastf-moved-")
+                || name.starts_with(".fastf-deleted-")
+                || name.starts_with(".fastf-probe-")
+        })
+        .collect()
 }
 
 fn v2_transaction_count(base: &Path) -> usize {
@@ -532,12 +547,25 @@ fn cleanup_failure_is_a_reported_success_and_retains_the_marker() {
     })
     .expect("publication remains a successful move");
 
-    assert!(outcome.cleanup_pending);
+    assert!(
+        matches!(outcome.source, SourceOutcome::KeptWhole { .. }),
+        "{:?}",
+        outcome.source
+    );
     assert_eq!(
         fs::read(final_path.join("payload.bin")).unwrap(),
         [0_u8, 1, 2, 255]
     );
     assert!(project.path.is_dir(), "failed cleanup leaves source intact");
+    assert_eq!(
+        fs::read(project.path.join("payload.bin")).unwrap(),
+        [0_u8, 1, 2, 255],
+        "and whole"
+    );
+    assert!(
+        retired_folders(old.path()).is_empty(),
+        "a retire that failed leaves nothing retired"
+    );
     assert_eq!(
         v2_transaction_count(new.path()),
         1,
@@ -565,7 +593,7 @@ fn conventional_v1_staging_and_marker_are_payload_not_move_authority() {
     fs::write(&marker, b"foreign marker bytes").unwrap();
     let outcome =
         staged_copy_verify_commit(&project, new.path(), &final_path, &progress, &cancel).unwrap();
-    assert!(!outcome.cleanup_pending);
+    assert!(!outcome.cleanup_pending());
     assert_eq!(
         fs::read(staging.join("sentinel")).unwrap(),
         b"owned by someone else"
@@ -895,14 +923,17 @@ fn empty_created_falls_back_to_the_folder_timestamp() {
     );
 }
 
-/// The staged (copying) move must refuse a project containing links.
+/// The staged (copying) move carries a link as a link — and, removing the
+/// original afterwards, never deletes through it.
 ///
-/// Reached through the private pre-flight because the public entry point
-/// only consults it after `fs::rename` fails, and a test cannot conjure a
-/// second filesystem. The same-filesystem path is covered separately in
-/// `tests/windows_semantics.rs`, where the junction is expected to survive.
+/// This is the data-loss regression the refusal used to guard: a link to an
+/// asset library inside a project, a staged move, and the original removed.
+/// Were the removal to follow the link, the library's own files would go with
+/// it. Reached through the private staged path because the public entry point
+/// only stages after `fs::rename` fails, and a test cannot conjure a second
+/// filesystem.
 #[test]
-fn staged_move_pre_flight_refuses_links() {
+fn a_staged_move_carries_a_link_and_never_deletes_through_it() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path();
     write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
@@ -940,23 +971,50 @@ fn staged_move_pre_flight_refuses_links() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&target, &link).expect("creating a symlink");
 
-    let project = scan_base(base).into_iter().next().unwrap();
-    let err = MoveManifest::scan(&project.path)
-        .expect_err("a copying move cannot reproduce a link and must refuse")
-        .to_string();
-    assert!(
-        err.contains("linked"),
-        "the error must name the offending link, got: {err}"
-    );
-    assert!(project.path.is_dir(), "manifest scanning must be read-only");
+    fs::write(target.join("payload.txt"), "irreplaceable").unwrap();
+    let recorded_target = fs::read_link(&link).unwrap();
 
-    // A project with no links is waved through.
-    write_project(base, "proj_b", "ID0002", "gen", "2026-01-02T00:00:00Z");
-    let plain = scan_base(base)
+    let other = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(base, &[other.path()]);
+    let project = discover(&cfg)
         .into_iter()
-        .find(|p| p.name == "proj_b")
+        .find(|found| found.name == "proj_a")
         .unwrap();
-    assert!(MoveManifest::scan(&plain.path).is_ok());
+    let new_path = other.path().join("proj_a");
+    let outcome = staged_copy_verify_commit(
+        &project,
+        other.path(),
+        &new_path,
+        &Mutex::new(Progress::new(&[])),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    assert_eq!(outcome.links, 1);
+    assert!(!base.join("proj_a").exists());
+    assert_eq!(
+        fs::read_to_string(target.join("payload.txt")).unwrap(),
+        "irreplaceable",
+        "removing the original never went through the link"
+    );
+    let moved_link = new_path.join("linked");
+    assert!(
+        fs::symlink_metadata(&moved_link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a link, not a copy of what is behind it"
+    );
+    assert_eq!(fs::read_link(&moved_link).unwrap(), recorded_target);
+    assert_eq!(
+        fs::read_to_string(moved_link.join("payload.txt")).unwrap(),
+        "irreplaceable",
+        "and it still leads there"
+    );
+    // Still nothing named for it: an absolute link to outside the project
+    // points where it always did.
+    assert!(outcome.link_notes.is_empty(), "{:?}", outcome.link_notes);
 }
 
 /// The stranded-rename message must name the path the folder is actually at.
@@ -1004,7 +1062,19 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
         "move:after-verify",
         "move:before-commit-rename",
         "move:after-commit-before-source-removal",
+        "move:before-retire",
+        "move:source-cleanup",
+        "move:after-retire",
+        "move:mid-gc",
     ];
+    // Published, the original still whole at its path.
+    const KEPT: &[&str] = &[
+        "move:after-commit-before-source-removal",
+        "move:before-retire",
+        "move:source-cleanup",
+    ];
+    // Published, the original out of the library, its retired copy not gone.
+    const RETIRED: &[&str] = &["move:after-retire", "move:mid-gc"];
 
     for point in MOVE_POINTS {
         let tmp1 = tempfile::tempdir().unwrap();
@@ -1025,11 +1095,29 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
             staged_copy_verify_commit(&project, new_base, &new_path, &progress, &cancel)
         });
 
-        if *point == "move:after-commit-before-source-removal" {
+        if KEPT.contains(point) {
             assert!(
-                result.as_ref().is_ok_and(|outcome| outcome.cleanup_pending),
-                "[{point}] publication must be reported as cleanup pending"
+                result
+                    .as_ref()
+                    .is_ok_and(|outcome| matches!(outcome.source, SourceOutcome::KeptWhole { .. })),
+                "[{point}] publication with the original kept whole: {result:?}"
             );
+        } else if RETIRED.contains(point) {
+            assert!(
+                result.as_ref().is_ok_and(|outcome| matches!(
+                    outcome.source,
+                    SourceOutcome::Leftover {
+                        redundant: true,
+                        ..
+                    }
+                )),
+                "[{point}] the original out of the library, a leftover reported: {result:?}"
+            );
+            assert!(
+                !old_base.join("proj_a").exists(),
+                "[{point}] no husk: the original left in one rename"
+            );
+            assert_eq!(retired_folders(old_base).len(), 1, "[{point}]");
         } else {
             assert!(result.is_err(), "[{point}] should have failed");
         }
@@ -1044,7 +1132,7 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
             "[{point}] data exists in neither location — this is data loss"
         );
 
-        if *point == "move:after-commit-before-source-removal" {
+        if KEPT.contains(point) || RETIRED.contains(point) {
             assert!(dest_ok, "[{point}] commit landed, destination must hold it");
         } else {
             assert!(
@@ -1071,7 +1159,199 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
             0,
             "[{point}] reconcile left a transaction behind: {report:?}"
         );
+        assert!(
+            retired_folders(old_base).is_empty(),
+            "[{point}] reconcile left a retired original behind: {report:?}"
+        );
+        assert!(report.leftovers.is_empty(), "[{point}] {report:?}");
     }
+}
+
+/// **The incident, without sshfs.** Anything that stops a removal part of the
+/// way — here a read-only folder inside the project — used to leave a husk
+/// that still held `PROJECT_INFO.md`: listed as the project, most of it gone.
+/// The original now leaves the library in one rename, and its retired copy is
+/// removed after, read-only folder and all.
+#[cfg(unix)]
+#[test]
+fn a_read_only_folder_inside_the_project_cannot_leave_a_husk() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root writes into a read-only folder, so as root this proves nothing.
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let sealed = old_base.join("proj_a/aaa_modcache");
+    fs::create_dir_all(&sealed).unwrap();
+    fs::write(sealed.join("module.go"), "package x").unwrap();
+    fs::write(old_base.join("proj_a/zzz_after.txt"), "after").unwrap();
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+    let outcome = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_path,
+        &progress,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    assert!(!old_base.join("proj_a").exists(), "no husk at the old path");
+    assert!(
+        retired_folders(old_base).is_empty(),
+        "and nothing left hidden"
+    );
+    assert_eq!(
+        fs::read_to_string(new_path.join("aaa_modcache/module.go")).unwrap(),
+        "package x"
+    );
+    assert_eq!(
+        fs::read_to_string(new_path.join("zzz_after.txt")).unwrap(),
+        "after"
+    );
+}
+
+/// A base fastf cannot write in — a read-only mount, a share with read access
+/// only — cannot give up the original after the copy. The move says so before
+/// it copies anything, and leaves nothing behind on either side.
+#[cfg(unix)]
+#[test]
+fn a_read_only_source_base_is_refused_before_anything_is_copied() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root writes into a read-only folder, so as root this proves nothing.
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/payload.bin"), vec![3_u8; 4096]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    fs::set_permissions(old_base, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let progress = Mutex::new(Progress::new(&[]));
+    let result = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_base.join("proj_a"),
+        &progress,
+        &AtomicBool::new(false),
+    );
+    fs::set_permissions(old_base, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("needs to write in"), "{error}");
+    assert!(error.contains("Nothing was copied"), "{error}");
+    assert_eq!(progress.lock().unwrap().copied_bytes, 0, "not a byte");
+    assert_eq!(v2_transaction_count(new_base), 0);
+    assert!(!new_base.join("proj_a").exists());
+    assert_eq!(
+        fs::read(old_base.join("proj_a/payload.bin")).unwrap(),
+        vec![3_u8; 4096]
+    );
+    assert!(retired_folders(old_base).is_empty());
+}
+
+/// A removal of the retired copy that stops part of the way leaves a hidden
+/// leftover — not a project — and the next reconcile finishes it.
+#[cfg(debug_assertions)]
+#[test]
+fn a_removal_stopped_part_way_leaves_only_a_hidden_leftover() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    for name in ["a.bin", "b.bin", "c.bin"] {
+        fs::write(old_base.join("proj_a").join(name), name).unwrap();
+    }
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+
+    let outcome = crate::util::faults::with_thread_fault("move:mid-gc", || {
+        staged_copy_verify_commit(
+            &project,
+            new_base,
+            &new_path,
+            &progress,
+            &AtomicBool::new(false),
+        )
+    })
+    .unwrap();
+
+    let SourceOutcome::Leftover {
+        path,
+        redundant: true,
+        ..
+    } = &outcome.source
+    else {
+        panic!("expected a redundant leftover: {:?}", outcome.source);
+    };
+    assert!(path.is_dir(), "the retired copy is still there");
+    assert!(!old_base.join("proj_a").exists());
+    assert!(
+        discover(&cfg)
+            .iter()
+            .all(|found| !found.path.starts_with(old_base)),
+        "the leftover is never listed as a project"
+    );
+    assert!(
+        outcome
+            .project
+            .path
+            .starts_with(crate::util::paths::canonical(new_base).unwrap()),
+        "the project is the moved copy: {}",
+        outcome.project.path.display()
+    );
+
+    let report = provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(report.completed, 1, "{report:?}");
+    assert!(!path.exists());
+    assert!(retired_folders(old_base).is_empty());
+    assert_eq!(v2_transaction_count(new_base), 0);
+    assert!(
+        provisioning::reconcile_unlocked(&cfg).is_empty(),
+        "and a second pass has nothing left to do"
+    );
+}
+
+/// `fastf delete` leaves the library in one rename too, and a removal that
+/// stops after it leaves a hidden folder reconcile clears — never a husk.
+#[cfg(debug_assertions)]
+#[test]
+fn a_delete_stopped_after_its_rename_is_cleared_by_reconcile() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(base.join("proj/payload.bin"), [1_u8, 2, 3]).unwrap();
+    let cfg = cfg_for(base, &[]);
+    let project = scan_base(base).remove(0);
+
+    crate::util::faults::with_thread_fault("delete:after-retire", || {
+        delete_project_inner(&project)
+    })
+    .unwrap();
+
+    assert!(!base.join("proj").exists(), "no husk at the old path");
+    assert_eq!(retired_folders(base).len(), 1);
+    assert!(scan_base(base).is_empty(), "nothing listed");
+
+    let report = provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(report.cleared, 1, "{report:?}");
+    assert!(retired_folders(base).is_empty());
 }
 
 #[test]
@@ -1303,5 +1583,136 @@ fn a_root_base_is_labelled_as_it_reads() {
     assert_eq!(
         base_label(Path::new("/mnt/projects/01_PROJECTS")),
         "01_PROJECTS"
+    );
+}
+
+/// A directory symbolic link crosses as a directory symbolic link — made with
+/// the link's own directory attribute, since its target may not exist to ask.
+/// Windows lets an account make one only with Developer Mode on; without it
+/// the move names that before copying anything.
+#[cfg(windows)]
+#[test]
+fn a_staged_move_carries_a_directory_symlink_or_names_developer_mode() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let link = old_base.join("proj_a").join("dangling_dir_link");
+    match std::os::windows::fs::symlink_dir(r"..\nowhere", &link) {
+        Ok(()) => {}
+        // No Developer Mode here: the move's own refusal is what the test
+        // below would meet too, and a symlink cannot be planted to prove it.
+        Err(error) if error.raw_os_error() == Some(1314) => return,
+        Err(error) => panic!("{error}"),
+    }
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let outcome = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_path,
+        &Mutex::new(Progress::new(&[])),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    let moved = new_path.join("dangling_dir_link");
+    use std::os::windows::fs::FileTypeExt;
+    assert!(
+        fs::symlink_metadata(&moved)
+            .unwrap()
+            .file_type()
+            .is_symlink_dir()
+    );
+    assert_eq!(fs::read_link(&moved).unwrap(), Path::new(r"..\nowhere"));
+}
+
+/// **A file a program holds open keeps the original whole.** Windows will not
+/// rename a folder while anything in it is open without delete sharing — an
+/// editor's project file, a video in a timeline. The move publishes, cannot
+/// retire the original, says so, and removes nothing from it; once the file is
+/// closed, reconcile finishes the move without copying again.
+#[cfg(windows)]
+#[test]
+fn a_file_held_open_keeps_the_original_whole_until_reconcile() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let held_path = old_base.join("proj_a").join("timeline.prproj");
+    fs::write(&held_path, vec![5_u8; 4096]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+
+    // Readable by others, never deletable: what an editor holding a file does.
+    const FILE_SHARE_READ: u32 = 0x1;
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&held_path)
+        .unwrap();
+    let outcome = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_path,
+        &Mutex::new(Progress::new(&[])),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let SourceOutcome::KeptWhole { reason } = &outcome.source else {
+        panic!("expected the original kept whole: {:?}", outcome.source);
+    };
+    assert!(reason.contains("open"), "{reason}");
+    assert_eq!(fs::read(&held_path).unwrap(), vec![5_u8; 4096], "whole");
+    assert_eq!(
+        fs::read(new_path.join("timeline.prproj")).unwrap(),
+        vec![5_u8; 4096]
+    );
+    assert!(retired_folders(old_base).is_empty());
+
+    drop(held);
+    let report = crate::core::provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(report.completed, 1, "{report:?}");
+    assert!(!old_base.join("proj_a").exists());
+    assert_eq!(v2_transaction_count(new_base), 0);
+}
+
+/// `fastf delete` removes the project and never what a link in it points at:
+/// its removal walks the tree itself now, so the guard std's `remove_dir_all`
+/// gave for free is this test's to keep.
+#[test]
+fn a_delete_never_removes_what_a_link_points_at() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base");
+    let library_folder = tmp.path().join("asset_library");
+    fs::create_dir_all(&library_folder).unwrap();
+    fs::write(library_folder.join("stock.mov"), "irreplaceable").unwrap();
+    write_project(&base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let link = base.join("proj").join("assets");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&library_folder, &link).unwrap();
+    #[cfg(windows)]
+    assert!(
+        std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&library_folder)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let project = scan_base(&base).remove(0);
+
+    delete_project_inner(&project).unwrap();
+
+    assert!(!base.join("proj").exists());
+    assert!(retired_folders(&base).is_empty());
+    assert_eq!(
+        fs::read_to_string(library_folder.join("stock.mov")).unwrap(),
+        "irreplaceable"
     );
 }

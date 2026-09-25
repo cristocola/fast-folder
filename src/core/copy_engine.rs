@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::core::assets::{self, JobPhase, Progress};
 use crate::core::config::Config;
 use crate::core::library::{Project, revalidate_project};
-use crate::core::transactions::{self, MoveManifest, MoveTransaction};
+use crate::core::transactions::{self, MoveManifest, MoveTransaction, Operation};
 
 #[derive(Debug, Clone)]
 pub struct CopyOutcome {
@@ -30,6 +30,10 @@ pub struct CopyOutcome {
     pub path: PathBuf,
     /// Files and bytes copied.
     pub copied: (usize, u64),
+    /// Links carried as links.
+    pub links: usize,
+    /// Links whose meaning the new place may change (`MoveManifest::link_notes`).
+    pub link_notes: Vec<String>,
 }
 
 /// Copy `project` into `destination`, keeping its folder name and its id.
@@ -143,15 +147,28 @@ fn copy_unlocked(
         .context("the project path has no folder name")?;
 
     crate::util::faults::check("copy:before-marker-write")?;
-    let transaction = MoveTransaction::begin(&source_base, &folder, &root, &folder, &project.id)?;
+    let transaction = MoveTransaction::begin(
+        &source_base,
+        &folder,
+        &root,
+        &folder,
+        &project.id,
+        Operation::Copy,
+    )?;
 
-    let staged = (|| -> Result<(usize, u64)> {
-        // Deny-by-default, exactly as a cross-drive move is: a link cannot be
-        // reproduced faithfully somewhere else, and following one would
-        // silently restructure the copy.
+    let staged = (|| -> Result<((usize, u64), usize, Vec<String>)> {
+        // The same scan as a cross-drive move: links recorded as links, never
+        // followed, and anything it cannot copy refused, all of it named.
         let manifest = MoveManifest::scan(&project.path)?;
         transaction.write_manifest(&manifest)?;
-        let totals = (manifest.total_files(), manifest.total_bytes());
+        // A copy removes nothing, so it needs no write access to its source —
+        // only the room to land.
+        crate::core::move_preflight::check_space(&root, manifest.total_bytes())?;
+        let totals = (
+            (manifest.total_files(), manifest.total_bytes()),
+            manifest.total_links(),
+            manifest.link_notes(&project.path),
+        );
         {
             let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
             state.phase = JobPhase::Copying;
@@ -188,7 +205,7 @@ fn copy_unlocked(
                 crate::util::paths::display_path(target)
             );
         }
-        crate::util::fs_retry::rename(&staging, target)
+        crate::core::move_engine::publish(&staging, target)
             .with_context(|| format!("publishing the copy at {}", target.display()))?;
         Ok(totals)
     })();
@@ -197,7 +214,7 @@ fn copy_unlocked(
     // state here: a move keeps its transaction when the *source* could not be
     // removed, and a copy removes no source.
     let removal = transaction.remove();
-    let copied = staged?;
+    let (copied, links, link_notes) = staged?;
     if let Err(error) = removal {
         crate::util::diag::warn(format!(
             "could not clear the completed copy transaction: {error:#}"
@@ -208,6 +225,8 @@ fn copy_unlocked(
     Ok(CopyOutcome {
         path: target.to_path_buf(),
         copied,
+        links,
+        link_notes,
     })
 }
 

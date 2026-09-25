@@ -100,10 +100,13 @@ const CREATE_POINTS: &[&str] = &[
 #[cfg(debug_assertions)]
 const MOVE_ABORT_POINTS: &[&str] = &[
     "move:after-transaction-create",
+    "move:after-probe",
     "move:mid-copy",
     "move:post-verification",
     "move:after-publication",
     "move:before-source-cleanup",
+    "move:after-retire",
+    "move:mid-gc",
     "move:after-source-cleanup",
 ];
 
@@ -351,6 +354,8 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
                 *point,
                 "move:after-publication"
                     | "move:before-source-cleanup"
+                    | "move:after-retire"
+                    | "move:mid-gc"
                     | "move:after-source-cleanup"
             ) {
                 assert!(
@@ -365,6 +370,21 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
                 );
                 assert_eq!(state_after.2, 0, "[{point}] transaction should clear");
             }
+
+            // Read from the folder, not through discovery: nothing fastf hides
+            // there — a retired original, part of one — may outlive the pass.
+            let hidden: Vec<String> = fs::read_dir(source.parent().unwrap())
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| {
+                    name.starts_with(".fastf-moved-") || name.starts_with(".fastf-probe-")
+                })
+                .collect();
+            assert!(
+                hidden.is_empty() || *point == "move:after-transaction-create",
+                "[{point}] a retired original or a probe survived reconcile: {hidden:?} {first:?}"
+            );
 
             let authoritative = if final_after { &final_path } else { &source };
             assert_eq!(

@@ -103,7 +103,8 @@ tell you.
   sessions),
   `yaml` (the one place the YAML crate is named), `time` (one clock), `paths`
   (data-dir resolution, `display_path`, the boundary checks including
-  `contained_destination` and `is_link_like`, base probing), `shell_open`
+  `contained_destination` and `is_link_like`, base probing under one deadline),
+  `shell_open`
   (Windows `ShellExecuteW`), `relaunch` + `notify` (unix-only: the headless-GUI
   terminal relaunch and `notify-send`), `term_open` (an emulator whose shell
   starts in a project's folder: `fastf term`, "Open terminal here"), `test_env`
@@ -222,6 +223,18 @@ non-UTF-8 rather than recording the `?`-substituted path `display()` produces.
 `effective_bases()` memoizes against the configuration it was computed from, so a
 mutated `Config` recomputes instead of answering the wrong question.
 
+**Nothing asks one base after another, or without a deadline.** On a mount that
+stopped answering every call blocks for the kernel's own timeout, canonicalize
+included. `util::paths::answer_within` asks every path at once, each on a thread
+of its own, and takes what answered by one deadline (`PROBE_TIMEOUT`); a path
+whose look was given up on answers `None` at once, with no new thread, until
+that look comes back. `effective_bases()` canonicalizes through it and keeps the
+configured path for a base that does not answer; `paths::probe_dirs` is it over
+`probe_blocking`; `Config::base_candidates()` is the list before anything is
+asked of it, for a caller that reads each base on a worker of its own.
+`paths::stall_if_marked` is the suites' dead mount (`paths:stall-base`, a folder
+holding `.fastf-test-stall`), asked where fastf first touches a base.
+
 **The key `config set` takes is the key `config.toml` holds is the key `config
 show` prints.** `Config` has no `deny_unknown_fields`, so a mismatched spelling is
 silently ignored; a field whose Rust name differs carries `serde(rename)` plus an
@@ -238,17 +251,28 @@ reservation and discovery both assume the fixed name.
 There is no project database. **A folder is a project iff it holds a
 `PROJECT_INFO.md`**, whose frontmatter `id` is authoritative; the folder name is
 cosmetic. `discover(cfg)` unions `cfg.effective_bases()`, newest first, at
-**depth 1** (`SCAN_DEPTH` in `library/model.rs`). `scan_base` skips dot-prefixed
+**depth 1** (`SCAN_DEPTH` in `library/model.rs`), each base probed first — all
+at once, under one deadline — so a base that does not answer is named once and
+skipped, never waited on. `scan_base` skips dot-prefixed
 directories, so `.fastf-transactions` staging never appears as a duplicate.
 
 Each base carries a **disposable** `.fastf-index.json` with base-relative `dir`
 entries, so it travels with the projects across `/mnt/…` and `D:\…`. It is never
-authority: `discover_base` rescans when the base mtime is newer and
-existence-checks entries otherwise, writes are best-effort and atomic, and a
-rejected cache costs one rescan. `write_cache` re-stamps the index after the
-rename that publishes it, or that rename's mtime bump would make the base look
-newer than its own index. **No manual prune, ever** — "missing" is transient;
-`fastf reindex` rescans for edits fastf cannot observe.
+authority. **It records the names the base held when its scan listed it**
+(`Cache.seen`), and `discover_base` trusts it only while one names-only listing
+of the base returns exactly those (`discovery::freshness`); that listing is
+also the existence check, and the time gate (base newer than its index) stays
+as a second signal. Comparing times alone hid a project added while a scan that
+missed it was being written, and never fired on rclone, whose folder times read
+2000-01-01. fastf's own writers keep `seen` current — `cache_upsert` adds its
+name, `cache_remove` drops it only once the folder is `Absent` (an unregistered
+project's folder stays) — so a name anybody else added still reads as stale; an
+index without `seen` (an older fastf's) is rescanned once, with no version bump.
+Writes are best-effort and atomic, and a rejected cache costs one rescan.
+`write_index` re-stamps the index after the rename that publishes it, or that
+rename's mtime bump would make the base look newer than its own index. **No
+manual prune, ever** — "missing" is transient; `fastf reindex` rescans for
+edits fastf cannot observe.
 
 `library::max_id(cfg)` **must stay read-only** — previews reach it through the
 counter self-heal — so it uses `read_base_readonly`, never `discover`. **It

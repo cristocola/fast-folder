@@ -928,6 +928,128 @@ fn cache_staleness_gate_compares_the_right_way_round() {
     assert!(cache_is_stale(base));
 }
 
+/// **Defect 21.** A scan that missed a project wrote its index after the
+/// project arrived, so the index was newer than its base and read as fresh:
+/// the project stayed hidden until a rescan. The index now remembers the
+/// names its scan saw, and a base holding another name is rescanned —
+/// whatever the times say.
+#[test]
+fn a_project_the_scan_missed_is_found_whatever_the_times_say() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "first", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let scanned = discovery::scan_listing(base);
+    // The project lands while that scan's index is being written.
+    write_project(base, "second", "ID0002", "gen", "2026-01-02T00:00:00Z");
+    write_index(base, &scanned.projects, scanned.names).unwrap();
+    let future = std::time::SystemTime::now() + Duration::from_secs(3600);
+    fs::File::options()
+        .write(true)
+        .open(cache_path(base))
+        .unwrap()
+        .set_modified(future)
+        .unwrap();
+    assert!(!cache_is_stale(base), "the time gate alone would trust it");
+
+    let found = discover(&cfg_for(base, &[]));
+    let ids: Vec<&str> = found.iter().map(|project| project.id.as_str()).collect();
+    assert_eq!(ids, ["ID0002", "ID0001"]);
+}
+
+/// On an rclone base a folder's time reads 2000-01-01 once the mount's
+/// directory cache expires, whatever was added: the time gate never fired
+/// there, and a project copied in from elsewhere stayed invisible.
+#[cfg(unix)]
+#[test]
+fn a_base_whose_folder_time_never_moves_still_shows_a_new_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "first", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let cfg = cfg_for(base, &[]);
+    assert_eq!(discover(&cfg).len(), 1);
+
+    write_project(base, "copied_in", "ID0007", "gen", "2026-01-02T00:00:00Z");
+    let y2k = std::time::UNIX_EPOCH + Duration::from_secs(946_684_800);
+    fs::File::open(base).unwrap().set_modified(y2k).unwrap();
+    assert!(!cache_is_stale(base));
+
+    let ids: Vec<String> = discover(&cfg)
+        .into_iter()
+        .map(|project| project.id)
+        .collect();
+    assert_eq!(ids, ["ID0007", "ID0001"]);
+}
+
+/// fastf's own changes keep the index current, so the next discovery reads
+/// it instead of the base; a change made beside them still does not.
+#[test]
+fn fastfs_own_writes_keep_the_index_current_and_nobody_elses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "first", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let cfg = cfg_for(base, &[]);
+    discover(&cfg);
+    let current = |base: &Path| {
+        let cache = load_cache(base).unwrap();
+        matches!(
+            discovery::freshness(base, cache.seen.as_ref()),
+            discovery::Freshness::Current(_)
+        )
+    };
+    assert!(current(base));
+
+    // A create: the folder, then its entry.
+    write_project(base, "second", "ID0002", "gen", "2026-01-02T00:00:00Z");
+    assert!(!current(base), "a folder the index has not heard of");
+    let second = scan_base(base)
+        .into_iter()
+        .find(|project| project.id == "ID0002")
+        .unwrap();
+    cache_upsert(base, &second);
+    assert!(current(base), "an upsert names its folder");
+
+    // Unregistered: the entry goes, the folder and its name stay.
+    fs::remove_file(base.join("first").join(project_info::RESERVED_FILENAME)).unwrap();
+    cache_remove(base, "first");
+    assert!(current(base), "the folder is still there");
+    // Moved away: the name goes with the folder.
+    fs::remove_dir_all(base.join("second")).unwrap();
+    cache_remove(base, "second");
+    assert!(current(base));
+
+    // Someone else's folder, made beside fastf's own write.
+    fs::create_dir(base.join("theirs")).unwrap();
+    write_project(base, "third", "ID0003", "gen", "2026-01-03T00:00:00Z");
+    let third = scan_base(base)
+        .into_iter()
+        .find(|project| project.id == "ID0003")
+        .unwrap();
+    cache_upsert(base, &third);
+    assert!(!current(base), "a name only a listing knows about");
+}
+
+/// An index an older fastf wrote has no names: it is rescanned once, and the
+/// rescan records them.
+#[test]
+fn an_index_without_names_is_rescanned_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "first", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    write_index(base, &scan_base(base), None).unwrap();
+    assert!(matches!(
+        discovery::freshness(base, None),
+        discovery::Freshness::Stale
+    ));
+    assert_eq!(discover(&cfg_for(base, &[])).len(), 1);
+    assert_eq!(
+        load_cache(base).unwrap().seen,
+        Some(vec!["first".to_string()])
+    );
+    let written = fs::read_to_string(cache_path(base)).unwrap();
+    let older: serde_json::Value = serde_json::from_str(&written).unwrap();
+    assert_eq!(older["version"], 1, "no version bump: older fastf reads it");
+}
+
 /// Metadata with an empty `created` falls back to the folder's own mtime, so
 /// projects still sort sensibly instead of collapsing to one timestamp.
 #[test]

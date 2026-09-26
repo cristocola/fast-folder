@@ -45,9 +45,13 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         ));
     }
     let mut with_bases = left.clone();
-    if let Some(summary) = &app.summary {
+    let known = app
+        .summary
+        .as_ref()
+        .and_then(crate::tui::app::data::Summary::bases_known);
+    if let Some(bases) = known {
         with_bases.push(Span::styled(
-            format!("{gap}{}", plural(summary.bases.len(), "base", "bases")),
+            format!("{gap}{}", plural(bases.len(), "base", "bases")),
             theme.text(),
         ));
     }
@@ -75,9 +79,9 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
     // Line 2: the bases, and on the right whatever needs attention — else
     // what this session did.
     let mut bases = vec![Span::raw(" ")];
-    match &app.summary {
-        Some(summary) => {
-            for (i, base) in summary.bases.iter().enumerate() {
+    match known {
+        Some(known) => {
+            for (i, base) in known.iter().enumerate() {
                 if i > 0 {
                     bases.push(Span::raw(gap));
                 }
@@ -85,7 +89,18 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
                     bases.push(Span::styled(format!("{} ", g.arrow), theme.dim()));
                 }
                 bases.push(Span::styled(base.label.clone(), theme.accent()));
-                bases.push(Span::styled(format!(" {}", base.note()), theme.dim()));
+                // A base the last discovery did not hear from is silent,
+                // whatever its probe said a moment before.
+                let note = if app.library.silent.contains(&base.path) {
+                    crate::util::paths::Probe::Unresponsive
+                        .note()
+                        .trim()
+                        .trim_matches(['(', ')'])
+                        .to_string()
+                } else {
+                    base.note()
+                };
+                bases.push(Span::styled(format!(" {note}"), theme.dim()));
             }
         }
         None => match &app.summary_error {
@@ -130,14 +145,15 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         let attention = &summary.attention;
         (
             attention.needs_you(),
-            attention.auto() + attention.waiting(),
+            attention.auto(),
+            attention.waiting_work(),
         )
     });
     let key = crate::tui::command::key_of(crate::tui::command::CommandId::Attention);
     lines.push(match attention {
         // Only what needs a person is a warning; what fastf is finishing by
         // itself is said quietly, so nobody is sent to act on it.
-        Some((needs_you, _)) if needs_you > 0 => split_line(
+        Some((needs_you, _, _)) if needs_you > 0 => split_line(
             bases,
             vec![Span::styled(
                 format!(
@@ -150,9 +166,17 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
             width,
             g.ellipsis,
         ),
-        Some((_, finishing)) if finishing > 0 => split_line(
+        Some((_, finishing, _)) if finishing > 0 => split_line(
             bases,
             vec![Span::styled(format!("finishing {finishing} "), theme.dim())],
+            width,
+            g.ellipsis,
+        ),
+        // Work that waits for a base to answer; a silent base itself is
+        // named among the bases, not counted again here.
+        Some((_, _, waiting)) if waiting > 0 => split_line(
+            bases,
+            vec![Span::styled(format!("{waiting} waiting "), theme.dim())],
             width,
             g.ellipsis,
         ),

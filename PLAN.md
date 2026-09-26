@@ -470,20 +470,35 @@ nothing needs attention without a human decision.
 
 ## Phase 6 — the first frame never waits on a base
 
-- [ ] Every base probed in parallel under one deadline; canonicalized under a
-  timeout, falling back to the raw path.
-- [ ] The summary split: templates and prefs (data dir), base probes, and
-  attention, each with a generation (defect 18).
-- [ ] Discovery per base: `Msg::DiscoveredBase { generation, base, rows |
+- [x] Every base probed in parallel under one deadline; canonicalized under a
+  timeout, falling back to the raw path. *As built:*
+  `util::paths::answer_within` asks every path at once and takes what
+  answered by one deadline; a path whose look was given up on answers at once,
+  with no new thread, until that look comes back. `effective_bases()`,
+  `probe_dirs`, `discover` and `reindex` go through it, so the command line no
+  longer hangs on a dead base either.
+- [x] The summary split: templates and prefs (data dir), base probes, and
+  attention, each with a generation (defect 18). *As built:* one worker sends
+  the three `SummaryPart`s in turn; each part keeps the number of the read it
+  came from.
+- [x] Discovery per base: `Msg::DiscoveredBase { generation, base, rows |
   unresponsive }`, cached rows first, verified after; `install_base` keeps
   marks, meta and the cursor by path; `busy_bases` stops F5 stacking workers
-  on a blocked base; a silent base is named in the header.
-- [ ] `SizeScanner::drop` waits at most 200 ms, then detaches.
-- [ ] The index remembers the base mtime its scan saw and is stale when the
+  on a blocked base; a silent base is named in the header. *As built:*
+  `DiscoveryPlanned` / `DiscoveredBase` (twice: index, then folders) /
+  `DiscoverySettled { silent }`; a base's late answer is taken from any
+  discovery unless a later one's rows are in; the claim on a base is
+  `runtime::Claim`; a silent base's rows are dropped until it answers.
+- [x] `SizeScanner::drop` waits at most 200 ms, then detaches.
+- [x] The index remembers the base mtime its scan saw and is stale when the
   base's differs, instead of comparing its own file's mtime (defect 21) — and,
   since an rclone folder's mtime says nothing, it also compares the folder
-  names it holds with a names-only listing of the base (one request).
-- [ ] Tests: `paths:stall-base` (a debug decision, stalls only bases holding
+  names it holds with a names-only listing of the base (one request). *As
+  built:* the names alone (`Cache.seen`), with the old time gate kept as a
+  second signal: the index's own write bumps the base's time, so a recorded
+  base time could never match. The listing replaced the per-entry `is_dir`
+  check, so a current index costs one request whatever the base holds.
+- [x] Tests: `paths:stall-base` (a debug decision, stalls only bases holding
   `.fastf-test-stall`); the pty suite sees the healthy base's rows within a
   second beside a stalled base, and quits in under one; per-base install,
   generations and F5 in the update suite.
@@ -620,6 +635,21 @@ word left nothing, and the chip went. The same flows run in the suites
 (`bang_lists_the_unfinished_work_and_settles_what_needs_you`,
 `a_summary_with_leftovers_starts_a_quiet_reconcile`, the four resolutions in
 `provisioning`'s tests).
+
+**Phase 6 (2026-09-26).** As planned, with the deviations marked *as built*
+above. Against the lab's real mounts:
+
+| scenario | 3.13.0 | Phase 6 |
+|---|---|---|
+| the app opened with the private sshfs base frozen (SIGSTOP) | the healthy base's rows not shown in 15 s | rows after 0.03 s; the frozen base named `unresponsive` at 1.5 s; `q` 0.05 s |
+| a project copied into the R2 base with rclone, outside fastf (the base's time reads 2000-01-01) | not listed until `fastf reindex` | listed, and the index rewritten with it |
+
+The pty suite holds the first row against the stall point
+(`a_stalled_base_holds_up_neither_the_rows_nor_the_quit`: rows 60 ms after the
+first frame); the screenshot tool shows it (`FASTF_SHOT_STALLED=1`). Looking at
+it found one wrong note: the dim chip counted a silent base as "finishing 1";
+it counts work now (`Attention::waiting_work`), and the base is named where
+the bases are.
 
 ## Parking lot
 

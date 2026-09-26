@@ -149,6 +149,9 @@ impl SizeScanner {
     }
 }
 
+/// How long quitting waits for the workers to put a walk down.
+const DROP_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
+
 impl Drop for SizeScanner {
     fn drop(&mut self) {
         // Order matters. The flag a running walk reads is set *before* the
@@ -157,8 +160,21 @@ impl Drop for SizeScanner {
         self.cancel.store(true, Ordering::Relaxed);
         self.lock().shutdown = true;
         self.wake.notify_all();
+        // **At most `DROP_WAIT`, then detached.** A walk reads the flag between
+        // entries, and a worker blocked inside one — a stat on a mount that
+        // stopped answering — reads nothing until the kernel gives up on it:
+        // joining it held the quit for as long. Its thread goes with the
+        // process.
+        let deadline = std::time::Instant::now() + DROP_WAIT;
+        while self.workers.iter().any(|worker| !worker.is_finished())
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         for worker in self.workers.drain(..) {
-            let _ = worker.join();
+            if worker.is_finished() {
+                let _ = worker.join();
+            }
         }
     }
 }
@@ -301,6 +317,31 @@ mod tests {
 
         scanner.request(std::slice::from_ref(&missing));
         assert_eq!(await_cell(&scanner, &missing), SizeCell::Known(None));
+    }
+
+    /// Quitting with a worker blocked on a mount that stopped answering waits
+    /// `DROP_WAIT`, not for the mount.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_worker_stuck_on_a_dead_mount_does_not_hold_the_drop() {
+        use crate::util::paths::STALL_MARKER;
+        let (mut env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        env.also_set("FASTF_FAULT", "paths:stall-base");
+        let tmp = tempfile::tempdir().unwrap();
+        let stuck = project(tmp.path(), "stuck", 16);
+        fs::write(stuck.join(STALL_MARKER), "").unwrap();
+        let scanner = SizeScanner::new();
+        scanner.request(std::slice::from_ref(&stuck));
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        let started = std::time::Instant::now();
+        drop(scanner);
+        let took = started.elapsed();
+        fs::remove_file(stuck.join(STALL_MARKER)).unwrap();
+        assert!(
+            took < std::time::Duration::from_secs(1),
+            "the drop waited for the mount: {took:?}"
+        );
     }
 
     /// Teardown must return even with work outstanding: this test hangs rather

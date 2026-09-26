@@ -133,6 +133,52 @@ pub struct Summary {
     /// lists it.
     pub attention: crate::core::attention::Attention,
     pub prefs: Prefs,
+    /// The bases are still being asked: the header says "probing bases…"
+    /// and nothing offers a base. Only a summary put together from its parts
+    /// starts this way (`SummaryPart`); one read whole never does.
+    pub probing: bool,
+}
+
+impl Summary {
+    /// The bases, once they have answered or run out of time.
+    pub fn bases_known(&self) -> Option<&[BaseInfo]> {
+        (!self.probing).then_some(self.bases.as_slice())
+    }
+}
+
+/// **The summary, a part at a time**, each as soon as it is read, so the
+/// templates never wait on a base and a base never waits on the attention
+/// list. Each carries the generation of the read it came from
+/// (`Msg::SummaryPart`), and an older part never replaces a newer one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SummaryPart {
+    /// The data directory's: the templates and the configuration the screens
+    /// ask about. No base is touched.
+    Local {
+        templates: Vec<TemplateCard>,
+        prefs: Prefs,
+    },
+    /// Every base asked at once under one deadline: what each is, and what
+    /// its index says.
+    Bases {
+        bases: Vec<BaseInfo>,
+        projects: usize,
+        max_id: Option<String>,
+        newest: Option<(String, String)>,
+    },
+    /// What is unfinished, over the bases that answered.
+    Attention(crate::core::attention::Attention),
+}
+
+impl SummaryPart {
+    /// Which slot of `App::summary_seen` a part's generation is kept in.
+    pub fn slot(&self) -> usize {
+        match self {
+            SummaryPart::Local { .. } => 0,
+            SummaryPart::Bases { .. } => 1,
+            SummaryPart::Attention(_) => 2,
+        }
+    }
 }
 
 /// One entry of a project folder's top level.

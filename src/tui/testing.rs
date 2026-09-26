@@ -131,6 +131,7 @@ pub fn sample_summary(projects: usize) -> Summary {
             confirm_create: true,
             register_naming_pattern: "{date}_{name}_{id}".to_string(),
         },
+        probing: false,
     }
 }
 

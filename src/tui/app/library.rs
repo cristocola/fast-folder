@@ -219,6 +219,24 @@ pub struct LibraryState {
     /// asks for a width it will not use and the column never appears.
     pub base_width: usize,
     pub many_bases: bool,
+    /// **Each base's rows, as the base last answered**, by the base as
+    /// configured: a discovery reads every base on a worker of its own
+    /// (`Msg::DiscoveredBase`), so a base that answers fast is on screen
+    /// while one on a stalled mount is still being asked. The snapshot is
+    /// their union. Empty while the rows came whole (`install`).
+    by_base: std::collections::BTreeMap<PathBuf, BaseRows>,
+    /// The bases the last discovery asked, as configured.
+    planned: Vec<PathBuf>,
+    /// Bases that did not answer the last discovery by its deadline; their
+    /// rows arrive when they do. The header names them.
+    pub silent: BTreeSet<PathBuf>,
+}
+
+/// One base's rows, and the discovery that read them.
+#[derive(Debug)]
+struct BaseRows {
+    generation: u64,
+    projects: Vec<Project>,
 }
 
 impl Default for LibraryState {
@@ -253,6 +271,9 @@ impl LibraryState {
             widths: (4, 8),
             base_width: 4,
             many_bases: false,
+            by_base: std::collections::BTreeMap::new(),
+            planned: Vec::new(),
+            silent: BTreeSet::new(),
         }
     }
 
@@ -266,8 +287,92 @@ impl LibraryState {
         self.generation = generation;
         self.loaded = true;
         self.error = None;
+        self.by_base.clear();
+        self.silent.clear();
         self.replace_snapshot(projects);
         true
+    }
+
+    /// A discovery names the bases it is asking. Rows of a base no longer
+    /// configured go; the rest stay until their base answers again, so a
+    /// reload never empties the list. `false` when this is not the discovery
+    /// in flight.
+    pub fn plan(&mut self, generation: u64, bases: Vec<PathBuf>) -> bool {
+        if self.inflight != Some(generation) {
+            return false;
+        }
+        let before = self.by_base.len();
+        self.by_base.retain(|base, _| bases.contains(base));
+        self.silent.retain(|base| bases.contains(base));
+        self.planned = bases;
+        if self.by_base.len() != before {
+            self.union_bases();
+        }
+        true
+    }
+
+    /// **One base's rows**: what its index holds, then what the base holds.
+    /// Taken from any discovery — a base that answers after its deadline is
+    /// still the truth about itself — unless the base is not one the last
+    /// plan asked, or rows from a later discovery are already in. Marks,
+    /// metadata and the cursor stay by path. `false` when not taken.
+    pub fn install_base(&mut self, generation: u64, base: PathBuf, projects: Vec<Project>) -> bool {
+        if !self.planned.contains(&base)
+            || self
+                .by_base
+                .get(&base)
+                .is_some_and(|rows| rows.generation > generation)
+        {
+            return false;
+        }
+        self.silent.remove(&base);
+        self.by_base.insert(
+            base,
+            BaseRows {
+                generation,
+                projects,
+            },
+        );
+        self.union_bases();
+        true
+    }
+
+    /// Every base answered, or the deadline passed: the discovery is over.
+    /// A base still silent loses its rows — a mount that stopped answering
+    /// holds every size and every read of them — and is named. `false` when
+    /// this is not the discovery in flight.
+    pub fn settle(&mut self, generation: u64, silent: Vec<PathBuf>) -> bool {
+        if self.inflight != Some(generation) {
+            return false;
+        }
+        self.inflight = None;
+        self.generation = generation;
+        self.loaded = true;
+        self.error = None;
+        let mut dropped = false;
+        for base in silent {
+            dropped |= self.by_base.remove(&base).is_some();
+            self.silent.insert(base);
+        }
+        if dropped {
+            self.union_bases();
+        }
+        true
+    }
+
+    /// The snapshot as the union of every base's rows, newest first; a
+    /// project two configured spellings of one base both listed, once.
+    fn union_bases(&mut self) {
+        let mut seen = BTreeSet::new();
+        let mut projects: Vec<Project> = self
+            .by_base
+            .values()
+            .flat_map(|rows| rows.projects.iter())
+            .filter(|project| seen.insert(project.path.clone()))
+            .cloned()
+            .collect();
+        projects.sort_by(crate::core::library::newest_first);
+        self.replace_snapshot(projects);
     }
 
     /// Install rows that were read before the app opened, with no discovery
@@ -319,10 +424,19 @@ impl LibraryState {
         let Some(index) = found else {
             return false;
         };
-        if self.snapshot[index].path != project.path {
+        // Its base's rows too, or the next base to answer would put the old
+        // row back.
+        let old_path = self.snapshot[index].path.clone();
+        if let Some(row) = self
+            .by_base
+            .values_mut()
+            .find_map(|rows| rows.projects.iter_mut().find(|p| p.path == old_path))
+        {
+            *row = project.clone();
+        }
+        if old_path != project.path {
             // The row moved or was renamed: the old path's bookkeeping is no
             // longer this project's.
-            let old_path = self.snapshot[index].path.clone();
             self.marks.remove(&old_path);
             if self.last_mark.as_deref() == Some(was) {
                 self.last_mark = Some(project.path.clone());
@@ -339,6 +453,9 @@ impl LibraryState {
     }
 
     pub fn remove(&mut self, path: &Path) {
+        for rows in self.by_base.values_mut() {
+            rows.projects.retain(|project| project.path != path);
+        }
         if let Some(index) = self.snapshot.iter().position(|p| p.path == path) {
             self.snapshot.remove(index);
             self.haystacks.remove(index);

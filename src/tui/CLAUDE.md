@@ -169,12 +169,13 @@ reports "the terminal stopped answering", never "stop() was called". The input
 thread starts **before** the screen is taken, so a spawn failure cannot strand
 `SCREEN_OWNED` and an error on an alternate screen.
 
-**Where work runs.** Discovery, the header's summary, on-demand metadata and every
-`operations::*` call run on `spawn_worker` threads with `WORKER_STACK` (walk depth
-is in `src/core/CLAUDE.md`). The detail pane has one latest-wins worker, the
-debounce for a held arrow. Reveal, terminal and clipboard spawns run on workers
-too — `reveal_folder` waits on `.status()` and `wl-copy` can hang. The size
-scanner's `request`/`forget` only take a mutex, so they run inline.
+**Where work runs.** Discovery (a worker per base), the header's summary,
+on-demand metadata and every `operations::*` call run on `spawn_worker` threads
+with `WORKER_STACK` (walk depth is in `src/core/CLAUDE.md`). The detail pane has
+one latest-wins worker, the debounce for a held arrow. Reveal, terminal and
+clipboard spawns run on workers too — `reveal_folder` waits on `.status()` and
+`wl-copy` can hang. The size scanner's `request`/`forget` only take a mutex, so
+they run inline.
 
 **Ctrl-C is a key**, not SIGINT, in raw mode: it closes a dialog, else quits with
 `Exit::Interrupted`, and `tui::run` then calls `interrupt::raise()` so `main`
@@ -427,8 +428,42 @@ theirs, so a slow read never lands as another template's contents.
 ## Discovery, patches and generations
 
 The first frame's counts come from `library::index_summary`, labelled `(from
-index)`, while `library::discover` runs on a worker; a pty test asserts one
-`discover` and zero `scan_base` over a fresh index.
+index)`, while discovery runs on workers; a pty test asserts one `discover` and
+zero `scan_base` over a fresh index.
+
+**No base waits on another** — the acceptance a pty test holds with one base
+stalled (`a_stalled_base_holds_up_neither_the_rows_nor_the_quit`): the other
+base's rows within a second of the first frame, the silent one named, `q`
+out at once. **Discovery is a base at a time** (`runtime::discover_by_base`):
+`Msg::DiscoveryPlanned` names the bases as configured
+(`Config::base_candidates`), a worker per base sends `Msg::DiscoveredBase`
+twice — its index's rows, then the folders' — and `Msg::DiscoverySettled`
+comes once each has answered or `PROBE_TIMEOUT` has passed, naming the ones not
+heard from at all. `LibraryState` keeps each base's rows (`by_base`, by the
+configured path) and the snapshot is their union, so marks, metadata and the
+cursor stay by path as bases land. **A base's rows are taken from any
+discovery** — a mount that comes back answers for the discovery that asked it
+— unless the last plan does not name the base or a later discovery's rows are
+in (`install_base`). `settle` drops a silent base's rows, since every size and
+read of them would block, and puts it in `LibraryState.silent`, which the
+header names `unresponsive`. **A base whose worker is still out gets no
+second one** (`runtime::Claim`), so F5 on a dead mount parks no more threads.
+A patch or a removal is made in `by_base` too, or the next base to answer
+would put the old row back. `Msg::Discovered` installs a whole library at once
+— the fixtures' and the tests' shape; `rows_arrived` and `discovery_over` are
+what both paths run.
+
+**The summary is three parts** (`SummaryPart`, `Msg::SummaryPart`), each sent
+as it is read by one worker (`runtime::read_summary`): `Local` — templates and
+prefs, the data dir only, so the templates tab never waits on a base; `Bases` —
+every base asked at once under one deadline (canonical form, probe, index), a
+silent one `Unresponsive`; `Attention`, over the bases that answered. Each part
+keeps the number of the read it came from (`App.summary_seen`) and an older one
+never replaces a newer. Until `Bases` lands, `Summary.probing` holds and
+`Summary::bases_known` is `None`: the header says `probing bases…`, and nothing
+offers a base. The header's dim chip counts `finishing` (auto) and then
+`waiting` (`Attention::waiting_work`, a silent base itself not counted — it is
+named among the bases).
 
 **A content mutation patches its row; only a structural change reloads.**
 `ListChange::Patched { project, stale }` replaces the row, drops the `stale` size
@@ -491,8 +526,11 @@ widths as rows arrive.
 **Nothing blocks on a size.** A cell shows `scanning…` first; `util::size_scan`
 has two workers, and `request` **replaces** the queue with what is on screen,
 selected row first. Snapshots last the session, and `forget` takes a mutation's
-`stale`. **Bases are probed, never `is_dir`-ed** (`paths::probe_dirs` on the
-summary worker), because `is_dir()` on a dead SMB mount blocks for the OS timeout.
+`stale`. Quitting waits at most `DROP_WAIT` (200 ms) for the workers and leaves
+one blocked inside a dead mount behind (`SizeScanner::drop`): joining it held
+the quit for as long as the mount did. **Bases are probed, never `is_dir`-ed**
+(every one at once under one deadline), because `is_dir()` on a dead SMB mount
+blocks for the OS timeout.
 
 ## Search, sorting, filtering
 

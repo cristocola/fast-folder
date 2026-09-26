@@ -50,6 +50,8 @@ What each suite guards — the intent, not the case list:
   data directory so the session the app saves on exit never lands in yours;
   `FASTF_SHOT_LONG=1` for folder names of ninety characters;
   `FASTF_SHOT_ARGS="copy shared"` for a subcommand's inline prompt,
+  `FASTF_SHOT_STALLED=1` for an archive base that stopped answering,
+  `FASTF_SHOT_LEFTOVERS=1` for what `!` lists,
   `FASTF_SHOT_SIZE=80x24`, `FASTF_SHOT_SVG=<path>` for the README's SVG — sandbox
   only — drawn in `FASTF_SHOT_THEME`, default `doom-one`). **Look at every
   screen this way before writing its snapshot.**
@@ -158,6 +160,11 @@ the fix missed.
   and the code under test retries them by class (`fs_retry::with_retry`). A
   test that needs a mount to stay gone past the wait arms
   `fs:short-mount-wait` (one second instead of two minutes).
+- **A base that stops answering is `paths:stall-base`** (a decision) plus a
+  `.fastf-test-stall` file in the base: every look into it blocks while the
+  file is there — two minutes at most — and returns once it is removed, so a
+  test can bring the base back. Remove it before the test ends; a look still
+  blocked goes with the process.
 - **A job paced with `delay-<ms>` also arms `pool:serial`.** Walks, copies and
   removals run on `util::pool`, so without it a per-entry delay is paid by
   four to sixteen workers at once and a test that kills or cancels "mid-copy"

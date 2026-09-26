@@ -397,6 +397,10 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     // A decision: a mount that does not answer is waited for a second, not
     // two minutes (`util::fs_retry::mount_wait`), so a move pauses in a test.
     "fs:short-mount-wait",
+    // A decision: a look into a folder holding `.fastf-test-stall` does not
+    // come back while the file is there (`util::paths::stall_if_marked`) —
+    // a base on a mount that stopped answering.
+    "paths:stall-base",
 ];
 
 #[cfg(all(test, debug_assertions))]

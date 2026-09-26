@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::core::naming;
 
 use super::discovery::project_from_meta;
-use super::discovery::{read_project_meta, scan_base};
+use super::discovery::{read_project_meta, scan_listing};
 use super::model::{CACHE_FILENAME, Project};
 
 // ---------------------------------------------------------------------------
@@ -43,6 +43,20 @@ pub(crate) struct Cache {
     pub(crate) version: u32,
     #[serde(default)]
     pub(crate) entries: Vec<CacheEntry>,
+    /// **Every name the base held when this index was built** — folders and
+    /// files, dot-names left out — sorted, as the listing the scan walked
+    /// returned them. The index is current while a names-only listing of the
+    /// base returns exactly these ([`super::discovery::freshness`]): one
+    /// request, and the one question an rclone base can answer, whose folder
+    /// times read 2000-01-01 once its directory cache expires. Comparing the
+    /// index file's own time with the base's could not see a project added
+    /// while a scan that missed it was being written, and never fired on
+    /// rclone at all. fastf's own writers keep it current (`cache_upsert`,
+    /// `cache_remove`). `None` in an index an older fastf wrote, or one
+    /// written without a listing: stale once, and the rescan records them.
+    /// No version bump: an older fastf ignores the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) seen: Option<Vec<String>>,
 }
 
 pub(crate) const CACHE_VERSION: u32 = 1;
@@ -150,6 +164,7 @@ pub struct IndexSummary {
 
 /// `None` when the base has no readable cache of a version this build knows.
 pub fn index_summary(base: &Path) -> Option<IndexSummary> {
+    crate::util::paths::stall_if_marked(base);
     let cache = load_cache(base)?;
     let max_id = cache
         .entries
@@ -168,19 +183,26 @@ pub fn index_summary(base: &Path) -> Option<IndexSummary> {
     })
 }
 
-/// Write the cache for `base` atomically. Best-effort: a failure is returned but
-/// callers ignore it — the cache is disposable and the folders remain the truth.
+/// Write the cache for `base` atomically, with the names the listing it was
+/// built from saw (`seen`, see [`Cache::seen`]). Best-effort: a failure is
+/// returned but callers ignore it — the cache is disposable and the folders
+/// remain the truth.
 ///
 /// Uses the shared [`crate::util::atomic`] writer, whose temp name carries the
 /// process id: two fastf processes refreshing the same base cache no longer
 /// collide on a single fixed `.tmp` path.
-pub(crate) fn write_cache(base: &Path, projects: &[Project]) -> Result<()> {
+pub(crate) fn write_index(
+    base: &Path,
+    projects: &[Project],
+    seen: Option<Vec<String>>,
+) -> Result<()> {
     let cache = Cache {
         version: CACHE_VERSION,
         entries: projects
             .iter()
             .map(|p| CacheEntry::from_project(p, base))
             .collect(),
+        seen,
     };
     crate::util::atomic::write_json(&cache_path(base), &cache)?;
     // The atomic write stamps the file when its bytes are written and the base
@@ -191,6 +213,13 @@ pub(crate) fn write_cache(base: &Path, projects: &[Project]) -> Result<()> {
     // the file after the rename puts it at or after the directory, always.
     super::touch_cache(base);
     Ok(())
+}
+
+/// [`write_index`] with the names the base holds as it is written — what a
+/// test that plants an index means: current, whatever it says.
+#[cfg(test)]
+pub(crate) fn write_cache(base: &Path, projects: &[Project]) -> Result<()> {
+    write_index(base, projects, super::discovery::base_names(base).ok())
 }
 
 // ---------------------------------------------------------------------------
@@ -211,13 +240,19 @@ fn entry_dir(project: &Project, base: &Path) -> String {
 /// If the cache is missing/unreadable, seed it from a full scan first so the new
 /// entry lands in a complete cache.
 pub fn cache_upsert(base: &Path, project: &Project) {
-    let mut projects: Vec<Project> = match load_cache(base) {
-        Some(cache) => cache
-            .entries
-            .into_iter()
-            .filter_map(|e| e.into_project(base))
-            .collect(),
-        None => scan_base(base),
+    let (mut projects, seen): (Vec<Project>, _) = match load_cache(base) {
+        Some(cache) => (
+            cache
+                .entries
+                .into_iter()
+                .filter_map(|e| e.into_project(base))
+                .collect(),
+            cache.seen,
+        ),
+        None => {
+            let scanned = scan_listing(base);
+            (scanned.projects, scanned.names)
+        }
     };
     // The base-relative directory is the identity. Computing it directly beats
     // building a throwaway `CacheEntry` — with every other field cloned — once
@@ -225,7 +260,16 @@ pub fn cache_upsert(base: &Path, project: &Project) {
     let new_dir = entry_dir(project, base);
     projects.retain(|p| entry_dir(p, base) != new_dir);
     projects.push(project.clone());
-    let _ = write_cache(base, &projects);
+    // The folder is there — fastf made it, or read it just now — so the index
+    // knows its name. Only fastf's own change is added: a folder someone else
+    // put in the base meanwhile still makes the next listing differ.
+    let seen = seen.map(|mut names| {
+        if let Err(at) = names.binary_search(&new_dir) {
+            names.insert(at, new_dir);
+        }
+        names
+    });
+    let _ = write_index(base, &projects, seen);
 }
 
 /// Re-read a project's `PROJECT_INFO.md` and refresh its entry in the base
@@ -256,7 +300,21 @@ pub(crate) fn cache_remove(base: &Path, dir: &str) {
         .filter(|e| e.dir != target)
         .filter_map(|e| e.into_project(base))
         .collect();
-    let _ = write_cache(base, &projects);
+    // The name goes only with the folder: an unregistered project's folder
+    // stays, and an old copy emptied in place keeps its name until it is
+    // gone. A folder that does not answer keeps it too; if it has gone, the
+    // next listing says so.
+    let gone = matches!(
+        crate::util::paths::presence(&base.join(&target)),
+        crate::util::paths::Presence::Absent
+    );
+    let seen = cache.seen.map(|mut names| {
+        if gone {
+            names.retain(|name| *name != target);
+        }
+        names
+    });
+    let _ = write_index(base, &projects, seen);
 }
 
 #[cfg(test)]

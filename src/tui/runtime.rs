@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, BufWriter, Stderr, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -117,7 +117,15 @@ struct Runtime {
     /// When `jobs/` was last read, and whether a read is on its way.
     last_jobs: Option<Instant>,
     reading_jobs: Arc<AtomicBool>,
+    /// Summary reads started, so each part says which read it came from.
+    summaries: u64,
+    /// The bases a discovery's worker is still reading, as configured: a
+    /// reload starts no second worker on a base the first still waits on.
+    discovering: Discovering,
 }
+
+/// The bases with a discovery worker out.
+type Discovering = Arc<Mutex<std::collections::HashSet<PathBuf>>>;
 
 impl Runtime {
     fn init(tx: Sender<Msg>, rx: Receiver<Msg>) -> Result<Self> {
@@ -157,6 +165,8 @@ impl Runtime {
             last_activity: None,
             last_jobs: None,
             reading_jobs: Arc::new(AtomicBool::new(false)),
+            summaries: 0,
+            discovering: Arc::default(),
         })
     }
 
@@ -418,31 +428,15 @@ impl Runtime {
                     self.load_activity();
                 }
                 Effect::LoadSummary => {
-                    let tx = self.tx.clone();
-                    spawn_worker("fastf-summary", move || match loaders::summary() {
-                        Ok(summary) => {
-                            let _ = tx.send(Msg::Summary(Box::new(summary)));
-                        }
-                        Err(err) => {
-                            let _ = tx.send(Msg::SummaryFailed(format!("{err:#}")));
-                        }
-                    });
+                    self.summaries += 1;
+                    let (tx, generation) = (self.tx.clone(), self.summaries);
+                    spawn_worker("fastf-summary", move || read_summary(generation, &tx));
                 }
                 Effect::Discover { generation } => {
                     let tx = self.tx.clone();
-                    spawn_worker("fastf-discover", move || match loaders::discover() {
-                        Ok(projects) => {
-                            let _ = tx.send(Msg::Discovered {
-                                generation,
-                                projects,
-                            });
-                        }
-                        Err(err) => {
-                            let _ = tx.send(Msg::DiscoverFailed {
-                                generation,
-                                error: format!("{err:#}"),
-                            });
-                        }
+                    let discovering = Arc::clone(&self.discovering);
+                    spawn_worker("fastf-discover", move || {
+                        discover_by_base(generation, &tx, &discovering);
                     });
                 }
                 Effect::LoadDetail(path) => self.detail.request(path),
@@ -836,6 +830,132 @@ fn install_panic_hook() {
 }
 
 /// A worker whose panic becomes a warning rather than the end of the session.
+/// **The summary, a part at a time** (`SummaryPart`): the data directory's
+/// at once, then every base asked under one deadline, then what is
+/// unfinished over the bases that answered — so the templates never wait on
+/// a base.
+fn read_summary(generation: u64, tx: &Sender<Msg>) {
+    let cfg = match crate::core::config::Config::load() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            let _ = tx.send(Msg::SummaryFailed(format!("{err:#}")));
+            return;
+        }
+    };
+    let send = |part| {
+        let _ = tx.send(Msg::SummaryPart {
+            generation,
+            part: Box::new(part),
+        });
+    };
+    send(loaders::summary_local(&cfg));
+    let (bases, probed) = loaders::summary_bases(&cfg);
+    send(bases);
+    send(loaders::summary_attention(&cfg, probed));
+}
+
+/// **A discovery, a base at a time.** Each configured base is read on a
+/// worker of its own and answers when it answers — its index's rows first,
+/// then the base's — so a base on a mount that stopped answering holds up
+/// nothing but itself. The discovery settles once every base has answered
+/// or `PROBE_TIMEOUT` has passed, naming the bases not heard from at all;
+/// their rows land whenever they come. A base whose worker from an earlier
+/// discovery is still out gets no second one: that worker is the one that
+/// will say when the mount is back.
+fn discover_by_base(generation: u64, tx: &Sender<Msg>, discovering: &Discovering) {
+    let cfg = match crate::core::config::Config::load() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            let _ = tx.send(Msg::DiscoverFailed {
+                generation,
+                error: format!("{err:#}"),
+            });
+            return;
+        }
+    };
+    crate::util::trace::hit("discover");
+    let bases = cfg.base_candidates();
+    let _ = tx.send(Msg::DiscoveryPlanned {
+        generation,
+        bases: bases.clone(),
+    });
+
+    // Each worker says when it has answered anything, and when it is done.
+    let (heard_tx, heard) = std::sync::mpsc::channel::<(PathBuf, bool)>();
+    let mut asked = 0;
+    for base in &bases {
+        let Some(claim) = Claim::take(discovering, base) else {
+            continue;
+        };
+        asked += 1;
+        let (tx, heard_tx, base) = (tx.clone(), heard_tx.clone(), base.clone());
+        spawn_worker("fastf-discover-base", move || {
+            let _claim = claim;
+            let projects = loaders::discover_base(&base, |cached| {
+                let _ = tx.send(Msg::DiscoveredBase {
+                    generation,
+                    base: base.clone(),
+                    projects: cached,
+                });
+                let _ = heard_tx.send((base.clone(), false));
+            });
+            let _ = tx.send(Msg::DiscoveredBase {
+                generation,
+                base: base.clone(),
+                projects,
+            });
+            let _ = heard_tx.send((base.clone(), true));
+        });
+    }
+    drop(heard_tx);
+
+    let deadline = Instant::now() + crate::util::paths::PROBE_TIMEOUT;
+    let (mut answered, mut done) = (std::collections::HashSet::new(), 0);
+    while done < asked {
+        match heard.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok((base, finished)) => {
+                answered.insert(base);
+                done += usize::from(finished);
+            }
+            Err(_) => break,
+        }
+    }
+    let silent = bases
+        .into_iter()
+        .filter(|base| !answered.contains(base))
+        .collect();
+    let _ = tx.send(Msg::DiscoverySettled { generation, silent });
+}
+
+/// A base claimed for one discovery worker, let go when the worker ends —
+/// however it ends — or, if it never started, when its closure is dropped.
+struct Claim {
+    discovering: Discovering,
+    base: PathBuf,
+}
+
+impl Claim {
+    fn take(discovering: &Discovering, base: &Path) -> Option<Self> {
+        discovering
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(base.to_path_buf())
+            .then(|| Self {
+                discovering: Arc::clone(discovering),
+                base: base.to_path_buf(),
+            })
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        self.discovering
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&self.base);
+    }
+}
+
 fn spawn_worker(name: &'static str, work: impl FnOnce() + Send + 'static) {
     let spawned = std::thread::Builder::new()
         .name(name.to_string())

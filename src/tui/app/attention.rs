@@ -75,7 +75,8 @@ impl App {
             .filter(|item| item.state == State::NeedsYou)
             .map(row)
             .collect();
-        let finishing = attention.auto() + attention.waiting();
+        // A silent base alone is nothing a reconcile can finish.
+        let finishing = attention.auto() + attention.waiting_work();
         if finishing > 0 {
             items.push(PickItem {
                 label: "Finish now what fastf can".to_string(),
@@ -84,7 +85,7 @@ impl App {
                      finish, {} waiting for a base to answer. What needs you stays on this \
                      list until you choose.",
                     attention.auto(),
-                    attention.waiting()
+                    attention.waiting_work()
                 ),
                 value: ATTENTION_FINISH.to_string(),
             });

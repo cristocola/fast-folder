@@ -45,6 +45,10 @@
 //! looked) and a deleted project's folder (which that reconcile finishes).
 //! Give the app a moment first: `wait:2500 !`.
 //!
+//! `FASTF_SHOT_STALLED=1` makes the showcase's archive base a mount that
+//! stopped answering (`paths:stall-base`, debug builds): its projects stay
+//! away and the header names it.
+//!
 //! `FASTF_SHOT_REAL=1` runs against **your own** library instead — read-only
 //! keys only, please. It reads your configuration from a private copy of the
 //! data directory, because the app remembers the cursor's row, the sort and
@@ -143,6 +147,16 @@ fn screenshot() {
             plant_leftovers(&sb);
         }
     }
+    let stalled =
+        (!real && std::env::var("FASTF_SHOT_STALLED").is_ok_and(|v| v == "1")).then(|| {
+            sb.tmp
+                .path()
+                .join("archive")
+                .join(fastf::util::paths::STALL_MARKER)
+        });
+    if let Some(marker) = &stalled {
+        fs::write(marker, "").unwrap();
+    }
     // A real run keeps the real `HOME`, so a `~` in the configuration still
     // names your folders; only the data directory is the copy.
     let env: Vec<(&str, &std::path::Path)> = if real {
@@ -182,8 +196,14 @@ fn screenshot() {
         env.push(("COLORTERM", std::path::Path::new("truecolor")));
         env.push(("FASTF_THEME", std::path::Path::new(theme.kind.name())));
     }
+    if stalled.is_some() {
+        env.push(("FASTF_FAULT", std::path::Path::new("paths:stall-base")));
+    }
     let (chunks, code) =
         pty::run_chunked_sized(cols, rows, common::FASTF, &argv, &env, &script, DEADLINE);
+    if let Some(marker) = &stalled {
+        let _ = fs::remove_file(marker);
+    }
     let screen = screen_at_sized(&chunks, taken, cols, rows);
     if let Some(path) = svg_path {
         let parser = parser_at_sized(&chunks, taken, cols, rows);

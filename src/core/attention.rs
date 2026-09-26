@@ -135,11 +135,23 @@ impl Attention {
         self.count(State::Auto)
     }
 
-    /// What fastf finishes once a base answers.
+    /// What waits for a base to answer, the silent bases included.
     pub fn waiting(&self) -> usize {
         self.count(State::Waiting)
     }
+
+    /// What fastf finishes once a base answers — the work, without the
+    /// silent bases themselves, which the header names already.
+    pub fn waiting_work(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.state == State::Waiting && item.what != A_BASE)
+            .count()
+    }
 }
+
+/// What a base that does not answer is called on the list.
+pub const A_BASE: &str = "a base";
 
 /// What a reconcile could not settle, kept until one can: the old copy (or
 /// folder, or record) it is about, what kind of decision it waits for, and
@@ -244,7 +256,7 @@ pub fn attention_probed(
         match probe {
             crate::util::paths::Probe::Unresponsive => items.push(Item {
                 state: State::Waiting,
-                what: "a base".to_string(),
+                what: A_BASE.to_string(),
                 path: base.clone(),
                 project: None,
                 reason: format!(

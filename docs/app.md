@@ -25,17 +25,24 @@ Top to bottom:
 
 - **The header** — two lines. The two tabs, `library` and `templates`, with
   the one you are on underlined, then how many bases there are and the
-  highest ID; then each base with how many projects its index holds or that
-  it is not mounted — led, while a job runs, by what it is and its step
+  highest ID; then each base with how many projects its index holds, or that
+  it is not mounted, or `unresponsive` when it has not answered within a
+  second and a half — led, while a job runs, by what it is and its step
   (`moving ID0047 · copying 312 of 1473 files`) — and on the right
   `⚠ n need you  !` when something a move or a delete left needs a decision
-  only you can make, or a dim `finishing n` when fastf is finishing leftovers
-  by itself (else the last few things this session did). `!` lists them.
+  only you can make, a dim `finishing n` when fastf is finishing leftovers
+  by itself, or `n waiting` when what it would finish is on a base that does
+  not answer (else the last few things this session did). `!` lists them.
+  Until every base has answered it says `probing bases…`; the templates tab
+  never waits for them.
 - **The search bar** — the query, and on the right the one place the list
   reports itself: how many rows matched out of how many there are, the sort
   order, the template and base filters, and how many rows are marked. The
   first frame's counts come from each base's index and are labelled
-  `(from index)` until discovery answers.
+  `(from index)` until discovery answers. Each base's projects are listed as
+  soon as that base answers — first as its index has them, then as the
+  folders do — so a base on a mount that stopped answering holds up nothing
+  but itself; its projects appear when it answers again.
 - **The project table** — ID, folder name, then the size, the date, the base,
   the template and the tags, as many as fit; see [Columns](#columns). The
   folder name is never cut. When the table is empty it says so inside the box.

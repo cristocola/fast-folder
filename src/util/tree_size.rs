@@ -26,6 +26,7 @@ use crate::util::paths::is_link_like;
 /// not "unavailable". Cancellation is checked once per directory entry, which is
 /// what bounds teardown when the tree lives on a slow network share.
 pub(crate) fn directory_size_until(root: &Path, cancel: &AtomicBool) -> Option<u64> {
+    crate::util::paths::stall_if_marked(root);
     directory_size_inner(root, cancel).ok()
 }
 

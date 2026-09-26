@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::core::library::Project;
 use crate::core::project_info::Metadata;
-use crate::tui::app::data::{ProjectDetail, Summary, TemplateInfo};
+use crate::tui::app::data::{ProjectDetail, Summary, SummaryPart, TemplateInfo};
 use crate::tui::app::wizard::Preview;
 use crate::tui::command::Key;
 use crate::tui::effect::{ActionId, ActionOutcome, SpawnKind};
@@ -32,11 +32,35 @@ pub enum Msg {
     Tick,
     /// Folder sizes that landed since the last tick.
     Sizes(Vec<(PathBuf, Option<u64>)>),
+    /// The whole summary at once — a fixture's, or a test's.
     Summary(Box<Summary>),
+    /// One part of the summary, as soon as it is read (`SummaryPart`).
+    SummaryPart {
+        generation: u64,
+        part: Box<SummaryPart>,
+    },
     SummaryFailed(String),
+    /// The whole library at once — a fixture's, or a test's; the runtime
+    /// answers a discovery base by base.
     Discovered {
         generation: u64,
         projects: Vec<Project>,
+    },
+    /// The bases a discovery asks, as configured, each on a worker of its own.
+    DiscoveryPlanned {
+        generation: u64,
+        bases: Vec<PathBuf>,
+    },
+    /// One base's rows: what its index holds, then what the base holds.
+    DiscoveredBase {
+        generation: u64,
+        base: PathBuf,
+        projects: Vec<Project>,
+    },
+    /// Every base has answered, or the deadline passed: `silent` had not.
+    DiscoverySettled {
+        generation: u64,
+        silent: Vec<PathBuf>,
     },
     DiscoverFailed {
         generation: u64,

@@ -39,8 +39,8 @@ The data folder holds:
   `log-level` decides how much it keeps.
 
 Each base directory carries two files of its own next to the projects:
-`.fastf-index.json`, a disposable cache discovery rebuilds whenever it
-disagrees with the folders, and `.fastf-counter.toml`, the counter.
+`.fastf-index.json`, a disposable cache discovery rebuilds whenever the
+base holds a name it does not know, and `.fastf-counter.toml`, the counter.
 
 ## Settings
 

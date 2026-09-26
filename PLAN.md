@@ -508,17 +508,28 @@ second and `q` returns at once.
 
 ## Phase 7 — Windows, docs, release
 
-- [ ] Windows: holders through the Restart Manager (hand-declared
+- [x] Windows: holders through the Restart Manager (hand-declared
   `rstrtmgr` FFI, files in batches of 1000); a `CreateFileW(S, DELETE)` probe
   predicts a refused retire; the WinFsp rclone drive recognised; folder times
   with `FILE_FLAG_BACKUP_SEMANTICS`; `assert-standalone.ps1` allows
   `rstrtmgr.dll`. The VM scenarios: a handle without share-delete, a console
   sitting in the folder, parallel removal on NTFS, a cross-volume move, the
-  rclone drive.
-- [ ] Docs: `projects.md` (retire strategies, the merge and conflicts, the
+  rclone drive. *As built:* the VM showed Windows refuses to rename a folder
+  while **anything** under it is open — a file even with delete sharing, a
+  console in a subfolder — so every holder refuses the move on Windows, and
+  the `DELETE` probe runs on every folder (a local disk) rather than the
+  project folder alone. A refused rename names its holder everywhere. The
+  standalone check forbids only redistributable runtimes, so `rstrtmgr.dll`
+  needed no change. **The rclone drive was not recognised**: WinFsp volumes
+  are unknown to the mount manager, and `S:` read as a local disk — fixed by
+  asking the drive's own root. With one NTFS volume in the VM, the
+  cross-volume move went onto the WinFsp drive, and NTFS's own staged copy
+  was forced with `move:force-staged`.
+- [x] Docs: `projects.md` (retire strategies, the merge and conflicts, the
   fidelity promise, recovery), `app.md` (the attention page, first paint),
-  `cli.md` and `config.md` (`reconcile --list`, `trace`).
-- [ ] The four CLAUDE.md files: the principles, arming inheritance,
+  `cli.md` and `config.md` (`reconcile --list`, `trace`). *As built:* most
+  landed with the phases that changed them; Phase 7 added Windows.
+- [x] The four CLAUDE.md files: the principles, arming inheritance,
   `check_io`, the recovery table.
 - [ ] Release 3.14.0 through the `release` skill, on an explicit "release".
 
@@ -650,6 +661,24 @@ first frame); the screenshot tool shows it (`FASTF_SHOT_STALLED=1`). Looking at
 it found one wrong note: the dim chip counted a silent base as "finishing 1";
 it counts work now (`Attention::waiting_work`), and the base is named where
 the bases are.
+
+**Phase 7 (2026-09-26).** In the `win11` VM, the release exe against 3.13.0's,
+bases on `C:` and on an rclone WinFsp drive `S:` served from the host:
+
+| scenario | result |
+|---|---|
+| a PowerShell holding a file (share read), a move on one volume | refused at once: `powershell (pid …) has src\main.txt open; close it, or quit powershell, then try again`; after it quit, renamed |
+| the same, onto `S:` | refused after the scan, before a byte was copied |
+| a console working in `src`, onto `S:` | refused before copying: `a program is working in src`; after it quit, moved |
+| out of `S:` | set aside in place, `PROJECT_INFO.md` first (3.13 would rename every object); the record waits out the settle |
+| a file's time across `C:` → `S:` → `C:` | kept |
+| folder and file times, read-only, a staged move on NTFS | kept, the read-only file removed from the old copy |
+| delete 20 000 files on NTFS | 2.9 s (3.13.0: 7.1 s), nothing left |
+
+The VM also showed what the plan assumed wrong: the rclone drive read as a
+local disk (fixed, above), and a refused rename's "access is denied" was
+explained as a permission problem when a program held the folder (the holder
+sentence is the error now).
 
 ## Parking lot
 

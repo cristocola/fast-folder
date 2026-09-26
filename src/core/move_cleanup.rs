@@ -788,7 +788,15 @@ pub(crate) fn retire(source: &Path, retired: &Path) -> Retire {
         Err(error) => match (presence(source), presence(retired)) {
             (Presence::Absent, Presence::Present(_)) => Retire::Done,
             (Presence::Present(_), Presence::Absent) => {
-                Retire::KeptWhole(crate::util::fs_retry::describe_rename_error(&error))
+                // Windows keeps a folder with anything in it open, and says
+                // only "access is denied": say who, when it can be told.
+                let held = cfg!(windows)
+                    .then(|| crate::core::holders::in_tree(source).refusal())
+                    .flatten();
+                Retire::KeptWhole(match held {
+                    Some(held) => held,
+                    None => crate::util::fs_retry::describe_rename_error(&error),
+                })
             }
             // A rename that is not one step — an S3 bucket through rclone
             // copies and deletes object by object — can stop with part of the

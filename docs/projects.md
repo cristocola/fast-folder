@@ -194,8 +194,13 @@ The app's `m` does the same, over every marked project when there are marks. The
 **Only what fastf cannot fix stops a move**, and it says what and what to do:
 no permission where it has to write or remove, **a program writing a file in
 the project** (Linux names it — `python3 (pid 4242) has session.txt open for
-writing` — since after the move its writes would land in the old copy), a full
-drive, a read-only one, a name the drive will not take. Everything else is
+writing` — since after the move its writes would land in the old copy), **on
+Windows, a program holding anything in the project at all** — Windows will
+not move a folder while anything in it is open, a file whatever its sharing or
+a folder a console works in, so the original could never be set aside:
+`powershell (pid 7152) has src\main.txt open`, or `a program is working in
+src` for a console — a full drive, a read-only one, a name the drive will not
+take. Everything else is
 waited out: an input/output error or a lock a moment long is asked again with
 a growing pause, a mount that drops is waited for until the same mount is back
 — an unmounted mount point is an empty folder, and nothing under it is taken
@@ -243,7 +248,8 @@ rest removed:
 
 - On a local disk, sshfs, SMB or NFS it is **renamed** beside itself to a
   hidden `.fastf-moved-<operation-id>` folder.
-- On a **cloud mount** (rclone, or a mount fastf does not know) a folder rename
+- On a **cloud mount** (rclone — on Windows too, where its WinFsp drive calls
+  itself `FUSE-rclone` — or a mount fastf does not know) a folder rename
   is a copy and a delete for every file in it — twelve minutes for one web
   project on an S3 bucket — and moves uploads still in flight to the old path.
   There the original is **emptied where it stands**: a small note
@@ -273,10 +279,11 @@ and a moved copy restored from a backup taken before the move keeps the
 original's version of what it holds older. `PROJECT_INFO.md` is never written
 into the moved copy: its own is the project's.
 
-If the original cannot leave at all — on Windows, a program has a file in it
-open — the move reports that **the original is still there, whole, and fastf
-removed nothing**, and why. The moved copy is complete and is the project.
-Once the reason is gone, `fastf reconcile` finishes the move without copying
+If the original cannot leave at all — on Windows, a program opened something
+in it while the move was copying — the move reports that **the original is
+still there, whole, and fastf removed nothing**, and which program holds it.
+The moved copy is complete and is the project. Once the program lets go,
+`fastf reconcile` (or the app, by itself) finishes the move without copying
 again. If removing the old copy stops part of the way, what is left is hidden,
 never listed as a project, and everything in it is also in the moved copy;
 `fastf reconcile` finishes it.

@@ -349,6 +349,19 @@ pub(crate) fn case_staging_target(name: &str) -> Option<&str> {
     (!target.is_empty()).then_some(target)
 }
 
+/// A refused rename, or who holds the folder where that can be told:
+/// Windows refuses a folder with anything in it open and says only "access
+/// is denied", which is no permission problem to explain.
+fn held_or(error: std::io::Error, folder: &Path) -> anyhow::Error {
+    let held = cfg!(windows)
+        .then(|| crate::core::holders::in_tree(folder).refusal())
+        .flatten();
+    match held {
+        Some(held) => anyhow::anyhow!("{held}"),
+        None => anyhow::Error::new(error),
+    }
+}
+
 /// What to say when a case-only rename could neither commit nor be undone.
 ///
 /// The folder is parked under a dot-prefixed staging name at this point, and
@@ -400,7 +413,8 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
             attempt += 1;
             staging = base.join(case_staging_name(&sanitized, attempt));
         }
-        crate::util::fs_retry::rename(&project.path, &staging)?;
+        crate::util::fs_retry::rename(&project.path, &staging)
+            .map_err(|error| held_or(error, &project.path))?;
         if let Err(err) = crate::util::fs_retry::rename(&staging, &new_path) {
             let context = format!("renaming '{}' to '{}'", project.name, sanitized);
             // Put it back rather than leaving the project under a dot-prefixed
@@ -420,7 +434,8 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
         if assets::entry_exists(&new_path)? {
             anyhow::bail!("rename target already exists: {}", new_path.display());
         }
-        crate::util::fs_retry::rename(&project.path, &new_path)?;
+        crate::util::fs_retry::rename(&project.path, &new_path)
+            .map_err(|error| held_or(error, &project.path))?;
     }
 
     let mut renamed = project.clone();

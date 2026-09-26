@@ -376,6 +376,14 @@ fn move_project_unlocked_in_parts(
                 );
             }
             Err(error) => {
+                // Windows refuses a folder with anything in it open, and
+                // says only "access is denied": say who. The sentence is
+                // the error, so nothing explains it as a permission.
+                if cfg!(windows)
+                    && let Some(held) = crate::core::holders::in_tree(&project.path).refusal()
+                {
+                    anyhow::bail!("{held}");
+                }
                 return Err(error).with_context(|| {
                     format!(
                         "renaming project {} to {}",
@@ -587,7 +595,9 @@ fn staged_in_parts(
     let old_base = crate::util::paths::canonical(&project.base)
         .with_context(|| format!("resolving source base {}", project.base.display()))?;
     ticker.update(|state| state.operation = Some(transaction.journal.operation_id.clone()));
-    let holders = crate::core::holders::in_tree(&project.path);
+    // Who works in the folder: asked after the scan, which Windows needs —
+    // it asks about each file and folder the scan found.
+    let mut holders = crate::core::holders::Holders::default();
     // Set once the copy is there to keep: a mount that stops answering from
     // then on pauses the move instead of throwing the copy away.
     let mut claimed = false;
@@ -603,8 +613,11 @@ fn staged_in_parts(
         let manifest = MoveManifest::scan_with(&project.path, ticker)?;
         ticker.phase(JobPhase::Probing, 0);
         // Before a byte is copied: is a program writing in it — after the
-        // move its writes would land in the old copy, which then goes?
-        if let Some(refusal) = holders.refusal(&project.path) {
+        // move its writes would land in the old copy, which then goes — or,
+        // on Windows, holding anything in it, which keeps the old copy from
+        // ever being set aside?
+        holders = crate::core::holders::in_manifest(&project.path, &manifest);
+        if let Some(refusal) = holders.refusal() {
             anyhow::bail!("{refusal}");
         }
         // Can the original be taken out of its base afterwards, and does the

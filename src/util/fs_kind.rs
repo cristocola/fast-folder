@@ -215,18 +215,81 @@ mod imp {
 
     const DRIVE_REMOTE: u32 = 4;
 
+    /// The kind of filesystem `path` is on, from the name its volume gives
+    /// itself. **Asked of the volume the mount manager names, else of the
+    /// drive's own root**: a drive it does not know — every WinFsp mount,
+    /// which is how rclone mounts on Windows — gets the path itself back from
+    /// `GetVolumePathNameW` (with 1005), and a path that is no root has no
+    /// volume information, which read as a local disk. Measured in the VM:
+    /// `S:\` answers `FUSE-rclone`.
     pub(super) fn of(path: &Path) -> FsKind {
-        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-        wide.push(0);
+        [volume_root(path), drive_root(path)]
+            .into_iter()
+            .flatten()
+            .find_map(|root| {
+                let name = file_system_name(&root)?;
+                // SAFETY: a NUL-terminated root.
+                let remote = unsafe { GetDriveTypeW(root.as_ptr()) } == DRIVE_REMOTE;
+                Some(classify(&name, remote))
+            })
+            .unwrap_or(FsKind::Unknown)
+    }
+
+    /// WinFsp's FUSE layer names itself (`FUSE-rclone`, `FUSE-sshfs`).
+    pub(super) fn classify(name: &str, remote: bool) -> FsKind {
+        let name = name.to_ascii_lowercase();
+        if name.contains("rclone") {
+            FsKind::Rclone
+        } else if name.contains("sshfs") {
+            FsKind::Sshfs
+        } else if name.starts_with("fuse") {
+            FsKind::OtherFuse
+        } else if remote {
+            FsKind::Smb
+        } else {
+            FsKind::Local
+        }
+    }
+
+    /// The mount manager's answer, NUL-terminated.
+    fn volume_root(path: &Path) -> Option<Vec<u16>> {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
         let mut root = vec![0u16; 1024];
         // SAFETY: NUL-terminated input and an output buffer of the length the
-        // calls are told; a failure answers `Unknown`.
-        unsafe {
-            if GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) == 0 {
-                return FsKind::Unknown;
+        // call is told.
+        let got =
+            unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) };
+        (got != 0).then_some(root)
+    }
+
+    /// `S:\` for anything on drive S, `\\server\share\` for anything on a
+    /// share, NUL-terminated; the verbatim forms alike.
+    fn drive_root(path: &Path) -> Option<Vec<u16>> {
+        use std::path::{Component, Prefix};
+        let Component::Prefix(prefix) = path.components().next()? else {
+            return None;
+        };
+        let root = match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                format!("{}:\\", letter as char)
             }
-            let mut file_system = vec![0u16; 64];
-            let named = GetVolumeInformationW(
+            Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => format!(
+                "\\\\{}\\{}\\",
+                server.to_string_lossy(),
+                share.to_string_lossy()
+            ),
+            _ => return None,
+        };
+        Some(root.encode_utf16().chain([0]).collect())
+    }
+
+    /// The name the volume at `root` gives its file system.
+    fn file_system_name(root: &[u16]) -> Option<String> {
+        let mut file_system = vec![0u16; 64];
+        // SAFETY: a NUL-terminated root and an output buffer of the length
+        // the call is told.
+        let named = unsafe {
+            GetVolumeInformationW(
                 root.as_ptr(),
                 std::ptr::null_mut(),
                 0,
@@ -235,24 +298,10 @@ mod imp {
                 std::ptr::null_mut(),
                 file_system.as_mut_ptr(),
                 file_system.len() as u32,
-            ) != 0;
-            let name = if named {
-                let end = file_system.iter().position(|c| *c == 0).unwrap_or(0);
-                String::from_utf16_lossy(&file_system[..end]).to_ascii_lowercase()
-            } else {
-                String::new()
-            };
-            // WinFsp's FUSE layer names itself; rclone says so in the name.
-            if name.contains("rclone") {
-                FsKind::Rclone
-            } else if name.starts_with("fuse") {
-                FsKind::OtherFuse
-            } else if GetDriveTypeW(root.as_ptr()) == DRIVE_REMOTE {
-                FsKind::Smb
-            } else {
-                FsKind::Local
-            }
-        }
+            )
+        } != 0;
+        let end = file_system.iter().position(|c| *c == 0).unwrap_or(0);
+        named.then(|| String::from_utf16_lossy(&file_system[..end]))
     }
 }
 
@@ -316,6 +365,36 @@ mod tests {
             mount_points_inside(mountinfo, Path::new("/home/user/proj")),
             vec![PathBuf::from("/home/user/proj/data")],
             "a mount at the folder itself, or beside it, is not inside it"
+        );
+    }
+
+    /// What a volume calls its file system, as the kinds fastf knows.
+    #[cfg(windows)]
+    #[test]
+    fn volume_names_map_to_kinds() {
+        assert_eq!(imp::classify("FUSE-rclone", false), FsKind::Rclone);
+        assert_eq!(imp::classify("FUSE-rclone", true), FsKind::Rclone);
+        assert_eq!(imp::classify("SSHFS", true), FsKind::Sshfs);
+        assert_eq!(imp::classify("FUSE-gocryptfs", false), FsKind::OtherFuse);
+        assert_eq!(imp::classify("NTFS", true), FsKind::Smb);
+        assert_eq!(imp::classify("NTFS", false), FsKind::Local);
+    }
+
+    /// A look at a real drive, for the VM: `FASTF_FSKIND_PROBE=S:\p7`.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "a probe of a real drive, run by hand in the VM's desktop session"]
+    fn what_a_drive_is() {
+        let Ok(path) = std::env::var("FASTF_FSKIND_PROBE") else {
+            return;
+        };
+        let path = PathBuf::from(path);
+        let canonical = crate::util::paths::canonical(&path).unwrap();
+        println!("plain {} -> {:?}", path.display(), imp::of(&path));
+        println!(
+            "canonical {} -> {:?}",
+            canonical.display(),
+            imp::of(&canonical)
         );
     }
 }

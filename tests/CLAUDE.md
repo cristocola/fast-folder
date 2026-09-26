@@ -72,6 +72,11 @@ What each suite guards — the intent, not the case list:
   to a runtime test.
 - `windows_semantics.rs` — reserved names, trailing dots, control chars, unicode,
   >MAX_PATH, case-only rename, read-only files, a real sharing violation, junctions.
+  What only a real Windows shows lives in the lib's `cfg(windows)` unit tests,
+  run in the VM: the Restart Manager naming a PowerShell that holds a file,
+  a console working in a subfolder, how a volume names its file system
+  (`util::fs_kind`'s ignored `what_a_drive_is` probes a real drive, such as a
+  WinFsp `S:`, from the desktop session).
 - `windows_live.rs` (windows; **opt-in**) — what no temporary directory can show:
   the move engine's **staged copy**, reached only by a real
   `ERROR_NOT_SAME_DEVICE`, and the **counter over a shared drive**. With either

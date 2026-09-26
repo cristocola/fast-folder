@@ -78,7 +78,8 @@ tell you.
   `Judge`), `merge.rs` (an old copy leaving entry by entry: the one `decide`
   table, what may be written into the moved copy, the recordless proof),
   `records.rs` (the data dir's index of every move record, and the settle),
-  `holders.rs` (which programs have something in a folder open),
+  `holders.rs` (which programs have something in a folder open: `/proc` on
+  Linux, the Restart Manager on Windows),
   `attention.rs` (what is unfinished, by who finishes it, and the choices that
   settle what needs you),
   `operations.rs` (the shared mutation boundary), `project.rs` (plan / create /
@@ -217,6 +218,13 @@ lock (`DataLock` is not reentrant, and `config::set` holds it).
 other WinFsp mounts, RAM disks — so each mutation's base check refused there.
 The helper walks such a path itself and refuses a link it cannot follow;
 `FASTF_FAULT=paths:unnamed-volume` sends every call down that walk on any OS.
+
+**`util::fs_kind` asks a Windows volume by its drive root when the mount
+manager does not know it.** A WinFsp drive — how rclone mounts on Windows —
+gets the path itself back from `GetVolumePathNameW` (1005, the gap `canonical`
+walks around), and a path that is no root has no volume information: rclone's
+`S:` read as a local disk and was renamed aside object by object. Its root
+answers `FUSE-rclone`.
 
 **A path that will be stored goes through `util::paths::storable`**, which refuses
 non-UTF-8 rather than recording the `?`-substituted path `display()` produces.

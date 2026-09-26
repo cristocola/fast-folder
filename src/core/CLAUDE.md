@@ -485,12 +485,25 @@ time, which only a finished copy has — and copying the rest
 (`transactions::adopt_staging`). Only a cancel rolls a copy back.
 
 **A program writing in the project stops the move before anything is copied**
-(`core::holders`, Linux: `/proc/*/fd` with `fdinfo` flags and `cwd`, this
-user's processes, fastf's own left out): its later writes would land in the
-old copy. A program only working in the folder is a note in the result
-(`MoveOutcome.notes`). A job's worker works in its own folder, and
-`jobs::start` steps out of any project the job is about, since a working
-folder holds a folder on Windows. **A stall is said, never a freeze**: a job's
+(`core::holders`, asked after the scan — `in_manifest` — and before the
+probe; Linux: `/proc/*/fd` with `fdinfo` flags and `cwd`, this user's
+processes, fastf's own left out): its later writes would land in the old
+copy. A program only working in the folder is a note in the result
+(`MoveOutcome.notes`). **On Windows a program holding anything stops it**
+(`Holders.blocking`, `busy_folders`), because Windows will not rename a folder
+while anything under it is open — a file whatever its sharing, a folder a
+console works in; only a handle on the folder itself that allows delete (a
+watcher) does not stop it. Measured in the VM, and why the retire could never
+happen otherwise. The Restart Manager (`rstrtmgr`, declared by hand, a
+thousand files a session, halved until each held file is named) says who
+holds files; opening each folder for `DELETE` answers a sharing violation
+while a console works there, which the Restart Manager cannot see — every
+folder on a local disk, only the project folder across a network, where each
+open is a round trip. A refused rename names the holder instead of "access is
+denied" (the move's rename, the retire's `KeptWhole`, `fastf rename`), and the
+sentence is the error, so no class explanation calls it a permission problem.
+A job's worker works in its own folder, and `jobs::start` steps out of any
+project the job is about, since a working folder holds a folder on Windows. **A stall is said, never a freeze**: a job's
 worker sets `Progress.stalled_ms` when nothing has moved for
 `STALL_AFTER_MS`, `Ticker::working_in` names the mount, and both surfaces print
 "no answer from … for N s".

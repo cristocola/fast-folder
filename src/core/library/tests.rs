@@ -2274,7 +2274,7 @@ fn a_writer_refuses_the_move_and_a_program_in_the_folder_is_a_note() {
         .unwrap();
     wait_for(&|| {
         !crate::core::holders::in_tree(&project.path)
-            .writing
+            .blocking
             .is_empty()
     });
     let refused = staged_copy_verify_commit(

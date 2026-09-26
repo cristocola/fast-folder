@@ -141,17 +141,23 @@ impl Attention {
     }
 
     /// What fastf finishes once a base answers — the work, without the
-    /// silent bases themselves, which the header names already.
+    /// silent bases themselves, which the header names already, or an old
+    /// copy waiting out the settle, which only a clock finishes.
     pub fn waiting_work(&self) -> usize {
         self.items
             .iter()
-            .filter(|item| item.state == State::Waiting && item.what != A_BASE)
+            .filter(|item| {
+                item.state == State::Waiting && item.what != A_BASE && item.what != A_SETTLE
+            })
             .count()
     }
 }
 
 /// What a base that does not answer is called on the list.
 pub const A_BASE: &str = "a base";
+
+/// What an old copy waiting out the settle is called on the list.
+pub const A_SETTLE: &str = "a settling old copy";
 
 /// What a reconcile could not settle, kept until one can: the old copy (or
 /// folder, or record) it is about, what kind of decision it waits for, and
@@ -272,7 +278,9 @@ pub fn attention_probed(
     }
     let verdicts = read_verdicts();
     let verdict_for = |path: &Path| verdicts.iter().find(|verdict| verdict.path == path);
-    for incomplete in provisioning::list_incomplete_in(cfg, &answering) {
+    let incomplete = provisioning::list_incomplete_in(cfg, &answering);
+    items.extend(settling(&incomplete, &answering));
+    for incomplete in incomplete {
         let path = PathBuf::from(&incomplete.path);
         items.push(match incomplete.kind {
             IncompleteKind::Move => move_item(&incomplete, path, &verdict_for),
@@ -350,6 +358,65 @@ pub fn attention_probed(
         });
     }
     Attention { items }
+}
+
+/// **Old copies waiting out the settle** (`core::records`): on a mount that
+/// can put a removed folder back, a move's or a delete's record stays for
+/// [`records::SETTLE_SECS`] after the old copy is gone, and a pass after that
+/// clears it and removes whatever came back. Quiet until then — nothing to
+/// do, and the header does not count it — and then fastf's own: without an
+/// item nothing started that pass, and a file an upload put back stayed.
+fn settling(incomplete: &[provisioning::Incomplete], answering: &[PathBuf]) -> Vec<Item> {
+    // A record the list names already is its own item: its old copy is back.
+    let listed: std::collections::HashSet<String> = incomplete
+        .iter()
+        .flat_map(|item| [item.record.as_deref(), Some(item.path.as_str())])
+        .flatten()
+        .filter_map(|path| Path::new(path).file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter_map(|name| {
+            transactions::pointer_operation(&name)
+                .or_else(|| crate::core::move_cleanup::deleted_record_operation(&name))
+                .map(str::to_string)
+                .or_else(|| transactions::is_operation_id(&name).then_some(name))
+        })
+        .collect();
+    let now = crate::util::time::now_unix();
+    crate::core::records::all()
+        .into_iter()
+        .filter(|entry| !listed.contains(&entry.operation))
+        .filter(|entry| answering.contains(&entry.source_base))
+        .filter_map(|entry| {
+            let due = entry.gone_at? + crate::core::records::SETTLE_SECS;
+            let old_copy = entry.source_base.join(&entry.source_folder);
+            let project = Some(entry.project_id.clone());
+            Some(if now >= due {
+                Item {
+                    project,
+                    ..auto(
+                        A_SETTLE,
+                        old_copy,
+                        "an old copy on a cloud mount, gone long enough; fastf clears its \
+                         record, and removes anything the mount put back",
+                    )
+                }
+            } else {
+                Item {
+                    state: State::Waiting,
+                    what: A_SETTLE.to_string(),
+                    path: old_copy,
+                    project,
+                    reason: format!(
+                        "an old copy on a cloud mount, which can put removed files back from \
+                         uploads still on their way; fastf looks again in {} min and clears \
+                         its record",
+                        (due - now + 59) / 60
+                    ),
+                    actions: Vec::new(),
+                }
+            })
+        })
+        .collect()
 }
 
 fn auto(what: &str, path: PathBuf, reason: &str) -> Item {

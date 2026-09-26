@@ -184,7 +184,12 @@ pub fn with_retry_for<T>(
 ) -> io::Result<T> {
     let mut tries = 0;
     let deadline = std::time::Instant::now() + mount_wait;
-    let mount = crate::util::fs_kind::mount_identity(path);
+    // The mount to wait for, read at the first "not connected" rather than
+    // before every call: a FUSE mount whose daemon went away is still in the
+    // mount table then, so it names the same mount — and reading the table
+    // on every walk's look and every unlink cost more than a local unlink
+    // (a 20 000-file delete on a local disk, 0.4 s → 1.1 s).
+    let mut mount: Option<Option<String>> = None;
     loop {
         let error = match op() {
             Ok(value) => return Ok(value),
@@ -204,6 +209,7 @@ pub fn with_retry_for<T>(
                     "{}: {error}; waiting for its mount",
                     crate::util::paths::display_path(path)
                 ));
+                let mount = mount.get_or_insert_with(|| crate::util::fs_kind::mount_identity(path));
                 wait_for_mount(path, mount.as_deref(), deadline);
             }
             _ => return Err(error),

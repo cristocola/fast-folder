@@ -271,6 +271,14 @@ pub(crate) fn set_aside(
     match outcome {
         Retire::Done => {}
         Retire::KeptWhole(reason) => return Settled(SourceFate::KeptWhole { reason }),
+        Retire::Diverged(reason) => {
+            bookkeeping();
+            return Settled(SourceFate::Leftover {
+                path: source.to_path_buf(),
+                reason,
+                redundant: false,
+            });
+        }
         Retire::Unknown(reason) => return Settled(SourceFate::Unknown { reason }),
     }
     if let Err(error) = crate::util::faults::check("move:after-retire") {
@@ -307,25 +315,44 @@ pub(crate) fn retire_in_place(transaction: &MoveTransaction, cleanup: &Cleanup) 
     let pinfo = crate::core::project_info::pinfo_path(cleanup.source);
     let relative = Path::new(crate::core::project_info::RESERVED_FILENAME);
     let recorded = cleanup.manifest.entry(relative);
-    let unchanged = match (transactions::examine(&pinfo, relative), recorded) {
-        (Ok(Some(found)), Some(recorded)) if transactions::agrees(recorded, &found) => true,
+    match (transactions::examine(&pinfo, relative), recorded) {
+        (Ok(Some(found)), Some(recorded)) if transactions::agrees(recorded, &found) => {}
+        // Older than what the move copied: a version from before it, which
+        // a cloud mount put back from an upload still on its way — nothing
+        // in it the moved copy lacks. The lab's edit-then-move on R2 got the
+        // pre-edit file back after the move had removed the edited one.
+        (Ok(Some(found)), Some(recorded))
+            if found.source_modified.nanos() < recorded.source_modified.nanos() => {}
         // Only its time moved, or the moved copy's was rewritten since: the
-        // text decides, without the two lines a move changes.
-        (Ok(Some(_)), Some(_)) => match (
-            fs::read_to_string(&pinfo),
-            fs::read_to_string(crate::core::project_info::pinfo_path(cleanup.final_path)),
-        ) {
-            (Ok(here), Ok(there)) => merge::same_but_for_place(&here, &there),
-            _ => false,
-        },
-        _ => false,
-    };
-    if !unchanged {
-        return Retire::KeptWhole(
-            "its PROJECT_INFO.md changed after the move copied it, so it is still the \
-             original's"
-                .to_string(),
-        );
+        // text decides, without the two lines a move changes. Different text
+        // is an edit made after the copy — a version only a person can
+        // weigh against the moved one.
+        (Ok(Some(_)), Some(_)) => {
+            let same = match (
+                fs::read_to_string(&pinfo),
+                fs::read_to_string(crate::core::project_info::pinfo_path(cleanup.final_path)),
+            ) {
+                (Ok(here), Ok(there)) => merge::same_but_for_place(&here, &there),
+                _ => false,
+            };
+            if !same {
+                return Retire::Diverged(
+                    "its PROJECT_INFO.md was changed after the move copied it; keep the moved \
+                     copy's, or take the old one's"
+                        .to_string(),
+                );
+            }
+        }
+        // Gone already: a pass before this one took it.
+        (Ok(None), _) => return Retire::Done,
+        (Err(error), _) => {
+            return Retire::KeptWhole(format!("its PROJECT_INFO.md does not answer ({error})"));
+        }
+        (Ok(Some(_)), None) => {
+            return Retire::KeptWhole(
+                "the move's record does not say what its PROJECT_INFO.md was".to_string(),
+            );
+        }
     }
     match crate::util::fs_retry::remove_file(&pinfo) {
         Ok(()) => Retire::Done,
@@ -755,6 +782,10 @@ fn remove_split_residue(transaction: &MoveTransaction, cleanup: &Cleanup) -> Opt
 pub(crate) enum Retire {
     Done,
     KeptWhole(String),
+    /// In place: the original's `PROJECT_INFO.md` was edited after the copy.
+    /// It leaves the library — the moved copy is the project — and the
+    /// choice between the two versions is a person's.
+    Diverged(String),
     Unknown(String),
 }
 

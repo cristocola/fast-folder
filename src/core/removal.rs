@@ -153,6 +153,7 @@ pub(crate) fn remove_tree_judged(
     ticker: Ticker,
     guard: Option<(&Path, &str)>,
 ) -> Removal {
+    crate::util::trace::hit("remove_tree");
     let count = |root: &Path| {
         Walk::of(root, "folder")
             .map(|walk| walk.entries.len() + walk.problems.len())
@@ -177,9 +178,11 @@ pub(crate) fn remove_tree_judged(
     let removing = Removing {
         root,
         judge,
-        device: fs::symlink_metadata(root)
-            .ok()
-            .and_then(|metadata| transactions::device_of(&metadata)),
+        device: transactions::RootDevice::recorded(
+            root,
+            transactions::current_device(root),
+            transactions::current_device,
+        ),
         purpose,
         ticker,
         guard,
@@ -306,7 +309,7 @@ const TAKE_BATCH: usize = 32;
 struct Removing<'a> {
     root: &'a Path,
     judge: &'a dyn Judge,
-    device: Option<u64>,
+    device: transactions::RootDevice<'a>,
     purpose: Purpose,
     ticker: Ticker<'a>,
     /// The moved copy — path and id — looked at every [`GUARD_EVERY`]
@@ -459,10 +462,7 @@ impl Removing<'_> {
                     }
                 };
             let file_type = metadata.file_type();
-            if file_type.is_dir()
-                && self.device.is_some()
-                && transactions::device_of(&metadata) != self.device
-            {
+            if file_type.is_dir() && self.device.elsewhere(&metadata) {
                 self.leave(&path, "on another filesystem, so it was kept", true);
                 continue;
             }

@@ -300,11 +300,14 @@ unknown; the lab's drop and resurrect scenarios leave no recordless folder.
   one right after the other, and asked of a `Judge` (`Recorded`,
   `Everything`; the merge plugs in here in Phase 3); a folder something was
   left in is never asked to go.
-- [ ] Fewer walks: in-process, the pre-retire whole-tree checks of S and F go
+- [x] Fewer walks: in-process, the pre-retire whole-tree checks of S and F go
   (the merge proves each removal), and so does the walk that only counts
   leftovers. Target: S walked twice, F twice, R once (defect 15). *As built:*
   the counting walk now runs only when something is left; the pre-retire
-  checks go with Phase 3's merge, which is what replaces them.
+  checks went with Phase 3's merge, which is what replaces them. Held by
+  `jobs::a_staged_move_walks_each_tree_as_few_times_as_it_can`, which counts
+  the worker's own walks (`walk <what>`, `remove_tree` in the trace): S twice,
+  F twice, R once.
 - [x] Tests: the parallel walk equals a sequential reference, problems and a
   70-deep tree included (property test); an arming trips inside pool threads;
   `+x`, file and folder times survive a move; Windows read-only files and
@@ -679,6 +682,25 @@ The VM also showed what the plan assumed wrong: the rclone drive read as a
 local disk (fixed, above), and a refused rename's "access is denied" was
 explained as a permission problem when a program held the folder (the holder
 sentence is the error now).
+
+**The final lab run (2026-09-26, every scenario, the Phase 7 tree).** Every
+move finished with its content, modes and times whole; the three planted
+refusals refused (a writer, links onto rclone, and the dev server's log that
+keeps growing in the moved copy, as designed); first paint beside a frozen
+sshfs 0.01 s, quit 0.05 s; into R2 and straight back out left nothing twelve
+minutes later. Four defects, all fixed after it, with tests:
+
+| found | what | fix |
+|---|---|---|
+| sshfs killed mid-removal, back 15 s later | the remount is a new device for everything under it, so the removal kept 1352 entries "on another filesystem" and said "until you decide"; a reconcile finished it | `transactions::RootDevice`: a folder on another device is asked of the root again; on the laptop's sshfs the job then finished by itself |
+| a note saved on R2 a moment before moving the project off it | the upload landed after the in-place retire removed the file: the old copy's `PROJECT_INFO.md` came back (the pre-edit version), listed beside the moved project; and nothing started the settle's pass that would remove it | discovery skips a folder an in-place pointer names while it holds that project's id; the settle is a quiet waiting item that becomes fastf's own when its time is up; an older put-back `PROJECT_INFO.md` goes, one edited after the copy is a conflict for a person; bookkeeping drops the old copy's row. On the real bucket, the reconcile removed the put-back file |
+| a 20 000-file move and delete, timed against Phase 2's binary | every walk's look, unlink and file copy read the mount table first (Phase 4): on a local disk a staged move of 20 000 files took 2.8 s instead of 0.6 s, a delete 1.0 s instead of 0.4 s | the table is read at the first "not connected" only; a test counts the reads (273 for a 40-file move before, 9 after) |
+| Phase 2's "fewer walks" | unproven | the same test counts each tree's walks: the original twice, the moved copy twice, the old copy once |
+
+The 20 000-file sshfs scenarios ran slow in that run (a scan of 415 s), and
+the same scan took 2.3 s on a quiet host minutes later: the laptop's link had
+degraded to 200 ms a request, and the laptop then left the network, which
+also took the lab's second sshfs down.
 
 ## Parking lot
 

@@ -1041,9 +1041,11 @@ impl Walk {
     /// once, and the result is sorted at the end, so it is exactly what one
     /// thread walking depth-first would find.
     pub fn of_with(root: &Path, label: &str, ticker: Ticker) -> Result<Self> {
+        // Counted by what it walks: a move's walks of each tree are few by
+        // design (`a_staged_move_walks_each_tree_as_few_times_as_it_can`).
+        crate::util::trace::hit(&format!("walk {label}"));
         crate::util::paths::require_real_directory(root, label)?;
-        let device = fs::symlink_metadata(root)
-            .map(|metadata| device_of(&metadata))
+        let device = RootDevice::of(root)
             .with_context(|| format!("reading metadata for {}", root.display()))?;
         let found = Mutex::new(Self::default());
         let walker = Walker {
@@ -1110,6 +1112,75 @@ pub(crate) fn device_of(_metadata: &fs::Metadata) -> Option<u64> {
     None
 }
 
+/// **The filesystem a tree's root is on, as a walk and a removal ask it.**
+/// A folder on another device is another filesystem mounted inside the tree,
+/// and is not walked into — unless the root moved with it: a FUSE mount that
+/// dropped and came back (sshfs, rclone) is a new device for every entry
+/// under it, the root's own included. So a folder that disagrees is asked of
+/// the root again, and if the root agrees with it now, that is the same
+/// filesystem remounted, not another. Found by the lab: an sshfs killed
+/// mid-removal came back as a new device, and the removal kept 1352 entries
+/// "on another filesystem".
+pub(crate) struct RootDevice<'r> {
+    root: &'r Path,
+    device: Mutex<Option<u64>>,
+    now: fn(&Path) -> Option<u64>,
+}
+
+impl<'r> RootDevice<'r> {
+    /// The root's device as it is now.
+    pub(crate) fn of(root: &'r Path) -> std::io::Result<Self> {
+        let device = device_of(&fs::symlink_metadata(root)?);
+        Ok(Self::recorded(root, device, current_device))
+    }
+
+    /// With the device already read, and how to read it again.
+    pub(crate) fn recorded(
+        root: &'r Path,
+        device: Option<u64>,
+        now: fn(&Path) -> Option<u64>,
+    ) -> Self {
+        Self {
+            root,
+            device: Mutex::new(device),
+            now,
+        }
+    }
+
+    /// Whether a folder with `metadata` is on another filesystem than the
+    /// root is on now.
+    pub(crate) fn elsewhere(&self, metadata: &fs::Metadata) -> bool {
+        self.elsewhere_than(device_of(metadata))
+    }
+
+    fn elsewhere_than(&self, folder: Option<u64>) -> bool {
+        let mut known = self
+            .device
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let (Some(root), Some(folder)) = (*known, folder) else {
+            return false;
+        };
+        if root == folder {
+            return false;
+        }
+        match (self.now)(self.root) {
+            Some(now) if now == folder => {
+                *known = Some(now);
+                false
+            }
+            _ => true,
+        }
+    }
+}
+
+/// A path's device as it is now; `None` when it cannot be read.
+pub(crate) fn current_device(path: &Path) -> Option<u64> {
+    fs::symlink_metadata(path)
+        .ok()
+        .and_then(|metadata| device_of(&metadata))
+}
+
 /// One piece of a walk's work.
 enum Step {
     /// A folder to list, at its depth (the root's is 0).
@@ -1128,7 +1199,7 @@ const EXAMINE_BATCH: usize = 32;
 struct Walker<'w> {
     root: &'w Path,
     /// The root's device: a folder on another is not walked into.
-    device: Option<u64>,
+    device: RootDevice<'w>,
     ticker: Ticker<'w>,
     found: &'w Mutex<Walk>,
 }
@@ -1217,7 +1288,7 @@ impl Walker<'_> {
             match entry_for(&path, &relative, &metadata) {
                 Err(found) => problem(found),
                 Ok(entry) if entry.kind == ManifestKind::Directory => {
-                    if self.device.is_some() && device_of(&metadata) != self.device {
+                    if self.device.elsewhere(&metadata) {
                         problem(Problem::OtherFilesystem);
                         continue;
                     }
@@ -2903,10 +2974,9 @@ fn copy_file_again(
     const PAUSES_MS: [u64; 6] = [200, 400, 800, 1600, 3200, 5000];
     let destination = staging.join(&entry.path);
     let deadline = std::time::Instant::now() + crate::util::fs_retry::mount_wait();
-    let mounts = (
-        crate::util::fs_kind::mount_identity(source),
-        crate::util::fs_kind::mount_identity(staging),
-    );
+    // Read at the first "not connected", as `fs_retry::with_retry` does: not
+    // once for every file copied.
+    let mut mounts = None;
     let mut pauses = 0;
     loop {
         let error = match copy_file(entry, source, staging, progress, cancel) {
@@ -2922,8 +2992,14 @@ fn copy_file_again(
                 pauses += 1;
             }
             Some(ErrorClass::NotConnected) if std::time::Instant::now() < deadline => {
-                crate::util::fs_retry::wait_for_mount(source, mounts.0.as_deref(), deadline);
-                crate::util::fs_retry::wait_for_mount(staging, mounts.1.as_deref(), deadline);
+                let (at_source, at_staging) = mounts.get_or_insert_with(|| {
+                    (
+                        crate::util::fs_kind::mount_identity(source),
+                        crate::util::fs_kind::mount_identity(staging),
+                    )
+                });
+                crate::util::fs_retry::wait_for_mount(source, at_source.as_deref(), deadline);
+                crate::util::fs_retry::wait_for_mount(staging, at_staging.as_deref(), deadline);
             }
             _ => return Err(error),
         }
@@ -3123,6 +3199,29 @@ pub(crate) fn next_operation_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A folder on another device is another filesystem — unless the root
+    /// moved with it, which is a mount that came back.
+    #[test]
+    fn a_remounted_root_is_the_same_filesystem_a_nested_mount_is_not() {
+        let root = Path::new("/mnt/projects/project");
+        let remounted = RootDevice::recorded(root, Some(1), |_| Some(2));
+        assert!(!remounted.elsewhere_than(Some(1)));
+        assert!(
+            !remounted.elsewhere_than(Some(2)),
+            "the root is on 2 now as well: the same filesystem, remounted"
+        );
+        assert!(!remounted.elsewhere_than(Some(2)));
+        let nested = RootDevice::recorded(root, Some(1), |_| Some(1));
+        assert!(
+            nested.elsewhere_than(Some(3)),
+            "a filesystem mounted inside"
+        );
+        let gone = RootDevice::recorded(root, Some(1), |_| None);
+        assert!(gone.elsewhere_than(Some(3)), "a root that does not answer");
+        let unknown = RootDevice::recorded(root, None, |_| None);
+        assert!(!unknown.elsewhere_than(Some(3)), "no device to compare");
+    }
 
     #[test]
     fn manifest_preserves_exact_topology_and_source_metadata() {

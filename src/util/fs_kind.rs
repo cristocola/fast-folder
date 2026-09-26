@@ -73,6 +73,9 @@ pub fn of_now(path: &Path) -> FsKind {
 /// everything under it reads as gone; comparing this with what it was tells
 /// "gone" from "not mounted". `None` where the system cannot say.
 pub fn mount_identity(path: &Path) -> Option<String> {
+    // Counted: a move reads the mount table a few times, never once per
+    // entry (`a_staged_move_walks_each_tree_as_few_times_as_it_can`).
+    crate::util::trace::hit("mount table");
     imp::mount_identity(path)
 }
 

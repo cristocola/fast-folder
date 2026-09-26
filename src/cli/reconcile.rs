@@ -28,7 +28,7 @@ pub fn list() -> Result<()> {
     let groups = [
         (State::NeedsYou, "needs you".yellow().bold()),
         (State::Auto, "fastf finishes".bold()),
-        (State::Waiting, "waiting for a base".bold()),
+        (State::Waiting, "waiting".bold()),
     ];
     for (state, title) in groups {
         let items: Vec<_> = attention

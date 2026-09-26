@@ -4217,6 +4217,50 @@ mod tests {
         assert!(final_path.is_dir(), "and the moved copy");
     }
 
+    /// An old copy waiting out the settle is a quiet waiting item — not
+    /// counted in the header — until its time is up; then it is fastf's to
+    /// finish, so the app's own reconcile clears the record.
+    #[test]
+    fn a_settling_old_copy_waits_quietly_then_is_fastfs_to_finish() {
+        use crate::core::attention::{A_SETTLE, State, attention};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let source_base = crate::util::paths::canonical(&source_base).unwrap();
+        let operation = "18d8f68b4e22da23-378707-0".to_string();
+        let mut entry = crate::core::records::Entry {
+            operation: operation.clone(),
+            kind: "move".to_string(),
+            project_id: "ID0007".to_string(),
+            record: target_base.join(".fastf-transactions").join(&operation),
+            source_base: source_base.clone(),
+            source_folder: PathBuf::from("2026-01-01_Cloud_ID0007"),
+            gone_at: Some(crate::util::time::now_unix() - 60),
+            ..crate::core::records::Entry::default()
+        };
+        crate::core::records::add(&entry);
+        let now = attention(&cfg);
+        let item = now
+            .items
+            .iter()
+            .find(|item| item.what == A_SETTLE)
+            .unwrap_or_else(|| panic!("{now:?}"));
+        assert_eq!(item.state, State::Waiting);
+        assert!(item.reason.contains("looks again in"), "{}", item.reason);
+        assert_eq!(now.waiting_work(), 0, "nothing for the header to count");
+
+        entry.gone_at = Some(crate::util::time::now_unix() - crate::core::records::SETTLE_SECS - 1);
+        crate::core::records::add(&entry);
+        let later = attention(&cfg);
+        let item = later
+            .items
+            .iter()
+            .find(|item| item.what == A_SETTLE)
+            .unwrap_or_else(|| panic!("{later:?}"));
+        assert_eq!(item.state, State::Auto, "its time is up: fastf's to finish");
+        assert_eq!(later.auto(), 1);
+    }
+
     /// An interrupted move fastf can finish is not a person's business.
     #[test]
     fn an_interrupted_move_is_finished_by_fastf() {

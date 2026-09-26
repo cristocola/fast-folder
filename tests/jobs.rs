@@ -635,3 +635,45 @@ fn a_job_waiting_on_its_filesystem_says_how_long_and_where() {
     assert_eq!(status(&state), "done");
     assert!(state["progress"]["stalled_ms"].as_u64().unwrap_or(0) == 0);
 }
+
+/// **A staged move looks at each tree as few times as it can** (defect 15):
+/// the original twice — the scan, and the look that settles the copy — the
+/// moved copy twice — verified, then the merge's one walk of it — and the
+/// old copy once, removed by the merge as it is walked. 3.13 walked each of
+/// them three times or more, at two `lstat`s an entry, which on a cloud
+/// mount is minutes. Read from the worker's own trace.
+#[test]
+fn a_staged_move_walks_each_tree_as_few_times_as_it_can() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 40);
+    let trace = sb.tmp.path().join("walks");
+    let out = sb
+        .command()
+        .args(["move", "ID0001", &other.display().to_string(), "--yes"])
+        .env("FASTF_FAULT", "move:force-staged")
+        .env("FASTF_TRACE_FILE", &trace)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(!original.exists());
+    let lines = fs::read_to_string(&trace).unwrap_or_default();
+    let count = |name: &str| lines.lines().filter(|line| *line == name).count();
+    assert_eq!(count("walk move source"), 2, "the original: {lines}");
+    assert_eq!(count("walk move destination"), 1, "the moved copy: {lines}");
+    assert_eq!(count("walk moved copy"), 1, "the merge's look: {lines}");
+    assert_eq!(count("remove_tree"), 1, "the old copy: {lines}");
+    assert_eq!(
+        count("walk folder"),
+        0,
+        "nothing was left to count: {lines}"
+    );
+    // Asked once for the move, not once for every file it looks at, copies
+    // or removes: on a local disk that read cost more than the unlink it
+    // guarded, and a 20 000-file move took 4.5 times as long.
+    let reads = count("mount table");
+    assert!(
+        reads < 20,
+        "the mount table was read {reads} times for a move of 40 files: {lines}"
+    );
+}

@@ -180,7 +180,8 @@ pub(crate) fn delete_project_inner(
     ));
     match crate::core::move_cleanup::retire(&path, &retired) {
         crate::core::move_cleanup::Retire::Done => {}
-        crate::core::move_cleanup::Retire::KeptWhole(reason) => {
+        crate::core::move_cleanup::Retire::KeptWhole(reason)
+        | crate::core::move_cleanup::Retire::Diverged(reason) => {
             anyhow::bail!(
                 "could not delete {}: {reason}. Nothing was removed.",
                 crate::util::paths::display_path(&path)

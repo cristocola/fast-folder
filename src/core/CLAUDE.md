@@ -368,8 +368,13 @@ in one of two ways chosen when the record is made (`RetireStrategy::for_base`):
   an S3 bucket at ten requests a second) and moves uploads still in flight to
   the old path: the pointer `.fastf-moved-<operation>.json` beside the original
   (`RetirePointer`: which record, which folder), then the original's
-  `PROJECT_INFO.md` — only when it is still what was copied, by time or by text
-  (`merge::same_but_for_place`) — which takes it out of the library. The folder
+  `PROJECT_INFO.md` — when it is still what was copied, by time or by text
+  (`merge::same_but_for_place`), or older than what was copied (a version a
+  cloud mount put back from an upload still queued: the lab's edit-then-move
+  on R2 got the pre-edit file back after the move removed the edited one) —
+  which takes it out of the library. One edited after the copy is a choice
+  between two versions (`Retire::Diverged`): the old copy still leaves the
+  library, and the record stays with a conflict for a person. The folder
   keeps its name until the merge has emptied it; `transactions::clear_target`
   says so to a move that lands on it. The pointer goes last, after the record.
 
@@ -454,13 +459,17 @@ every pool one worker, which a test that paces a job with `delay-<ms>` needs.
 Per-entry failpoints — `walk:readdir`, `walk:lstat`, `remove:each-entry`,
 `move:each-file` — fire on the workers.
 
-**The removal under the merge** is `core::removal`, not std's: it never follows a link or crosses a device, asks a
-`Judge` of each entry — `Recorded` re-checks it against the manifest,
-`Everything` takes all — on the worker that then removes it, right after the
-`lstat` the judge saw, carries on past a failure, gives a folder its owner's
-permission back, never asks a folder that still holds something to go, and
-counts what is left only when something is (a walk; the common case needs
-none).
+**The removal under the merge** is `core::removal`, not std's: it never
+follows a link or crosses a device (`transactions::RootDevice`, as the walk:
+a folder on another device is asked of the root again, because a FUSE mount
+that dropped and came back is a new device for everything under it, the root
+included — the lab's sshfs drop kept 1352 entries "on another filesystem"
+before this), asks a `Judge` of each entry — `Recorded` re-checks it against
+the manifest, `Everything` takes all — on the worker that then removes it,
+right after the `lstat` the judge saw, carries on past a failure, gives a
+folder its owner's permission back, never asks a folder that still holds
+something to go, and counts what is left only when something is (a walk; the
+common case needs none).
 
 **Only what fastf cannot fix stops anything; the rest is asked again by
 class** (`util::fs_retry::classify`, `with_retry`): Transient (EIO, ESTALE,
@@ -574,8 +583,10 @@ refuses a project with another filesystem mounted inside, since the walk would
 keep it and its hidden folder for good. `Removal::Leftover.kept_on_purpose` is
 what separates "kept because not provably safe" from "a removal failed" — only
 the second is called redundant. A publish rename that errors is checked, not
-believed (`move_engine::publish`). Bookkeeping re-reads whatever project is at
-the original's path instead of dropping its row. Windows needs a folder's
+believed (`move_engine::publish`). Bookkeeping re-reads another project at
+the original's path instead of dropping its row; the same project there is its
+old copy — emptied in place, or put back by a cloud mount — and its row goes,
+or the id is listed twice. Windows needs a folder's
 read-only attribute cleared before `RemoveDirectoryW` (`clear_read_only_folder`,
 real folders only — on a link it would reach the target).
 
@@ -717,10 +728,18 @@ them, a move's in a base since dropped from `bases` — and the index keeps
 `gone_at`, **the settle**: on an rclone or unknown FUSE mount, a removal that
 ends with the old copy gone keeps the record (`SourceFate::Settling`, reported
 as removed) until a pass `records::SETTLE_SECS` later still finds it gone,
-because rclone put removed folders back from uploads still queued. A settling
-record is not attention. In unit tests the index is read only by the thread
-holding `test_env::EnvGuard` (`test_env::holds_guard`), since the environment
-is the process's.
+because rclone put removed folders back from uploads still queued. **A
+settling record is a quiet item** (`attention::A_SETTLE`: `Waiting` until its
+settle is up, not counted by the header's chip, then `Auto`, so the app's own
+reconcile runs the pass that clears it — without an item nothing started that
+pass, and a file an upload put back stayed). **And discovery never lists a
+put-back old copy as the project** (`discovery::emptied_by`): a folder an
+in-place pointer or delete record names is skipped while its
+`PROJECT_INFO.md` carries that record's project id — the lab's edit-then-move
+on R2 found the edit's upload landing after the move had removed the file.
+In unit tests the index is read only by the thread holding
+`test_env::EnvGuard` (`test_env::holds_guard`), since the environment is the
+process's.
 
 `reconcile_base` and `list_incomplete` never look inside `.fastf-moved-*` or
 `.fastf-deleted-*` for a create to resume. A retired folder no transaction owns is

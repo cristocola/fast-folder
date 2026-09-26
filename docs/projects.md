@@ -416,10 +416,13 @@ base you have since removed from `bases`, or beside a `copy-to` destination, is
 still found and finished.
 
 On an rclone mount a removed folder can come back: an upload still queued in
-rclone's cache lands after the removal. There, the record of a move — or of a
-delete — stays for ten minutes after its old copy is removed, unseen; a
-reconcile in that time removes whatever came back, and one after it clears the
-record.
+rclone's cache lands after the removal — a note saved a moment before the move
+is the usual one. There, the record of a move — or of a delete — stays for ten
+minutes after its old copy is removed; a reconcile in that time removes
+whatever came back, and one after it clears the record. The app runs that one
+itself once the ten minutes are up (`!` lists the old copy as waiting until
+then; the header counts nothing for it), and an old copy the mount put back
+is never listed as the project a second time meanwhile.
 
 A rename that stopped part of the way — an S3 bucket through rclone renames
 object by object — leaves part of the original at its path and part at its

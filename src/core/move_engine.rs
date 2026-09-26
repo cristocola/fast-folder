@@ -911,10 +911,16 @@ fn finish_move_bookkeeping(
         ));
     }
 
-    // Whatever is at the original's path now — a project put back there, or
-    // another one entirely — is read again rather than forgotten: dropping its
-    // row would hide a real project until the next reindex.
-    if project_info::pinfo_path(&project.path).is_file() {
+    // Another project at the original's path now is read again rather than
+    // forgotten: dropping its row would hide a real project until the next
+    // reindex. This project there is its old copy — being emptied in place,
+    // or its `PROJECT_INFO.md` put back by a cloud mount — and the moved
+    // copy is the project: its row goes, or the id is listed twice.
+    let another_there = project_info::read_metadata(&project.path)
+        .ok()
+        .flatten()
+        .is_some_and(|there| there.id != project.id);
+    if another_there {
         crate::core::library::refresh_cache(&project.path);
     } else {
         let old_dir = project

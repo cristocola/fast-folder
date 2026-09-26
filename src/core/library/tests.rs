@@ -1050,6 +1050,43 @@ fn an_index_without_names_is_rescanned_once() {
     assert_eq!(older["version"], 1, "no version bump: older fastf reads it");
 }
 
+/// A cloud mount can put an old copy's `PROJECT_INFO.md` back after a move
+/// removed it — an edit still uploading when the move ran. While the move's
+/// pointer names the folder, the same project there is that old copy, not a
+/// second listing of the project; another project there is someone's.
+#[test]
+fn an_old_copy_a_cloud_mount_put_back_is_not_listed_twice() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    write_project(base, "other", "ID0002", "gen", "2026-01-02T00:00:00Z");
+    let pointer = |folder: &str, id: &str| {
+        serde_json::json!({
+            "version": 1,
+            "operation": "18d8e2f16082c791-e6a94-0",
+            "project_id": id,
+            "folder": folder,
+            "target_base": "/mnt/elsewhere",
+            "target_folder": folder,
+        })
+        .to_string()
+    };
+    let pointer_path = base.join(".fastf-moved-18d8e2f16082c791-e6a94-0.json");
+    fs::write(&pointer_path, pointer("proj", "ID0001")).unwrap();
+    let ids: Vec<String> = scan_base(base).into_iter().map(|p| p.id).collect();
+    assert_eq!(
+        ids,
+        ["ID0002"],
+        "the old copy is hidden, the neighbour is not"
+    );
+
+    // A pointer naming a folder that holds another project hides nothing.
+    fs::write(&pointer_path, pointer("other", "ID0001")).unwrap();
+    let mut ids: Vec<String> = scan_base(base).into_iter().map(|p| p.id).collect();
+    ids.sort();
+    assert_eq!(ids, ["ID0001", "ID0002"]);
+}
+
 /// Metadata with an empty `created` falls back to the folder's own mtime, so
 /// projects still sort sensibly instead of collapsing to one timestamp.
 #[test]
@@ -1938,6 +1975,95 @@ fn on_a_cloud_mount_the_original_is_emptied_in_place() {
         let report = provisioning::reconcile_unlocked(&cfg);
         assert!(!record.exists(), "{report:?}");
         assert!(!old_base.join(&hidden[0]).exists(), "and the pointer, last");
+    });
+}
+
+/// **A cloud mount can put the original's `PROJECT_INFO.md` back** after the
+/// move removed it — an upload still queued; the lab's edit-then-move on R2
+/// got the pre-edit file back. An older version holds nothing the moved copy
+/// lacks and goes; one edited after the copy is a choice between two
+/// versions, and needs a person. Neither is ever listed as the project twice.
+#[cfg(debug_assertions)]
+#[test]
+fn a_project_info_put_back_goes_when_older_and_is_asked_about_when_newer() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/b.bin"), [1_u8, 2, 3]).unwrap();
+    let before = fs::read_to_string(old_base.join("proj_a/PROJECT_INFO.md")).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let old_copy = old_base.join("proj_a");
+    let put_back = |text: &str, modified: std::time::SystemTime| {
+        fs::create_dir_all(&old_copy).unwrap();
+        fs::write(old_copy.join("PROJECT_INFO.md"), text).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(old_copy.join("PROJECT_INFO.md"))
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    };
+    let listed = |cfg: &Config| {
+        discover(cfg)
+            .iter()
+            .filter(|found| found.id == "ID0001")
+            .count()
+    };
+
+    crate::util::faults::with_thread_fault("fs:as-rclone", || {
+        let progress = Mutex::new(Progress::new(&[]));
+        staged_copy_verify_commit(
+            &project,
+            new_base,
+            &new_path,
+            &progress,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(!old_copy.exists());
+
+        // The version from before the move comes back, older than the copy.
+        let long_ago = std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        put_back(&before, long_ago);
+        assert_eq!(listed(&cfg), 1, "the old copy is not listed as the project");
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(!old_copy.exists(), "the stale version goes: {report:?}");
+        assert!(report.verdicts.is_empty(), "nobody is asked: {report:?}");
+
+        // An edit made after the copy comes back instead: a newer version.
+        let edited = format!("{before}\n- 2026-01-02T00:00:00Z — written after the copy\n");
+        put_back(
+            &edited,
+            std::time::SystemTime::now() + Duration::from_secs(60),
+        );
+        assert_eq!(listed(&cfg), 1, "still listed once");
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(
+            old_copy.join("PROJECT_INFO.md").is_file(),
+            "kept: {report:?}"
+        );
+        let attention = crate::core::attention::attention(&cfg);
+        let item = attention
+            .items
+            .iter()
+            .find(|item| item.path == old_copy || item.path.ends_with("proj_a"))
+            .unwrap_or_else(|| panic!("{attention:?}"));
+        assert_eq!(item.state, crate::core::attention::State::NeedsYou);
+        assert_eq!(listed(&cfg), 1, "and still listed once");
+
+        // Keeping the moved copy's version finishes it.
+        crate::core::attention::resolve(
+            &cfg,
+            &item.path,
+            crate::core::attention::Action::KeepMoved,
+        )
+        .unwrap();
+        assert!(!old_copy.exists());
+        assert_eq!(listed(&cfg), 1);
     });
 }
 

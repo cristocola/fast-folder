@@ -243,6 +243,7 @@ pub(crate) fn scan_listing(base: &Path) -> Scanned {
     };
 
     let mut names = Some(Vec::new());
+    let mut emptying = std::collections::HashMap::new();
     for entry in read_dir {
         let Ok(entry) = entry else {
             names = None;
@@ -253,6 +254,9 @@ pub(crate) fn scan_listing(base: &Path) -> Scanned {
         // surface as a phantom duplicate project.
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') {
+            if let Some((folder, project_id)) = emptied_by(&entry.path(), &name) {
+                emptying.insert(folder, project_id);
+            }
             continue;
         }
         if let Some(names) = names.as_mut() {
@@ -269,7 +273,36 @@ pub(crate) fn scan_listing(base: &Path) -> Scanned {
     if let Some(names) = names.as_mut() {
         names.sort();
     }
+    // **An old copy being emptied where it stands is not a project**, even
+    // when a cloud mount puts its `PROJECT_INFO.md` back: an edit saved a
+    // moment before a move from R2 was still uploading when the move removed
+    // the file, and landed after — the lab found the old copy listed beside
+    // the moved project, one id twice. Its pointer or delete record names
+    // the folder until the settle has looked again; the same id there is
+    // that old copy, another is someone's project.
+    projects.retain(|project| {
+        project
+            .path
+            .file_name()
+            .and_then(|folder| emptying.get(&folder.to_string_lossy().into_owned()))
+            .is_none_or(|project_id| *project_id != project.id)
+    });
     Scanned { projects, names }
+}
+
+/// The folder a move's or a delete's in-place record names, and the project
+/// it was, when `name` is one of those records.
+fn emptied_by(path: &Path, name: &str) -> Option<(String, String)> {
+    let (folder, project_id) = if crate::core::transactions::pointer_operation(name).is_some() {
+        let pointer = crate::core::transactions::read_pointer(path).ok()?;
+        (pointer.folder, pointer.project_id)
+    } else if crate::core::move_cleanup::deleted_record_operation(name).is_some() {
+        let record = crate::core::move_cleanup::read_delete_record(path).ok()?;
+        (record.folder, record.project_id)
+    } else {
+        return None;
+    };
+    Some((folder.to_string_lossy().into_owned(), project_id))
 }
 
 /// Build a [`Project`] from a folder iff it contains a readable

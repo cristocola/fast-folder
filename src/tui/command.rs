@@ -398,6 +398,7 @@ pub enum CommandId {
     Templates,
     Settings,
     Reconcile,
+    Attention,
     // The action menu
     ActionsRun,
     // The templates tab
@@ -428,7 +429,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 106] = [
+    pub const ALL: [CommandId; 107] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -515,6 +516,7 @@ impl CommandId {
         CommandId::Templates,
         CommandId::Settings,
         CommandId::Reconcile,
+        CommandId::Attention,
         CommandId::StripFilter,
         CommandId::ActionsRun,
         CommandId::StudioNew,
@@ -2007,11 +2009,22 @@ pub static COMMANDS: &[Command] = &[
         not_busy
     ),
     cmd!(
-        Reconcile,
-        "Reconcile",
-        "check and recover: finish or roll back work a crash or a failed move left half-done — what the header's needs-attention warning means",
+        Attention,
+        "Unfinished work",
+        "what fastf left unfinished — what it is finishing by itself, what waits for a base, and what needs you, each with what settles it",
         TABS,
         [Key::ch('!')],
+        Library,
+        palette = true,
+        hint = false,
+        always
+    ),
+    cmd!(
+        Reconcile,
+        "Reconcile now",
+        "finish now what fastf can: interrupted moves and copies, old copies, deleted projects' folders — rather than wait for the app to start it",
+        TABS,
+        [],
         Library,
         palette = true,
         hint = false,

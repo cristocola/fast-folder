@@ -177,11 +177,21 @@ pub struct Incomplete {
     pub path: String,
     pub kind: IncompleteKind,
     pub pending: usize,
+    /// A move's record folder, where the item is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<String>,
 }
 
 /// Cheap read-only discovery used by CLI/UI state. Invalid v2 journals are
 /// surfaced by their owned path and are never followed.
 pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
+    list_incomplete_in(cfg, &cfg.effective_bases())
+}
+
+/// [`list_incomplete`] over `bases` alone: the ones that answered a probe
+/// (`core::attention`), so a base that does not answer never freezes it.
+pub fn list_incomplete_in(cfg: &Config, bases: &[PathBuf]) -> Vec<Incomplete> {
+    let _ = cfg;
     // A job running now is not something that needs attention: its records
     // are its own until it ends.
     let live = crate::core::jobs::live_workers();
@@ -190,8 +200,8 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
     let mut operations = HashSet::new();
     let mut retired = Vec::new();
     let mut pointers = Vec::new();
-    for configured in cfg.effective_bases() {
-        let Ok(base) = crate::util::paths::canonical(&configured) else {
+    for configured in bases {
+        let Ok(base) = crate::util::paths::canonical(configured) else {
             continue;
         };
         if crate::util::paths::require_real_directory(&base, "configured base").is_err() {
@@ -214,6 +224,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: path.display().to_string(),
                         kind: IncompleteKind::MoveV2Invalid,
                         pending: 0,
+                        record: None,
                     });
                 }
                 continue;
@@ -224,6 +235,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: path.display().to_string(),
                         kind: IncompleteKind::RenameStaging,
                         pending: 0,
+                        record: None,
                     });
                     continue;
                 }
@@ -241,6 +253,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: path.display().to_string(),
                         kind: IncompleteKind::Leftover,
                         pending: 0,
+                        record: None,
                     });
                     continue;
                 }
@@ -249,6 +262,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: legacy_create_marker_path(&path).display().to_string(),
                         kind: IncompleteKind::ObsoleteCreateV1,
                         pending: 0,
+                        record: None,
                     });
                 }
                 if entry_exists_quiet(&create_journal_path(&path)) {
@@ -257,11 +271,13 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                             path: path.display().to_string(),
                             kind: IncompleteKind::Create,
                             pending: journal.jobs.len(),
+                            record: None,
                         }),
                         Err(_) => out.push(Incomplete {
                             path: create_journal_path(&path).display().to_string(),
                             kind: IncompleteKind::CreateV2Invalid,
                             pending: 0,
+                            record: None,
                         }),
                     }
                 } else if crate::core::project_info::is_provisioning(&path) {
@@ -269,6 +285,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: path.display().to_string(),
                         kind: IncompleteKind::Create,
                         pending: 0,
+                        record: None,
                     });
                 }
             } else if let Some(operation) = move_cleanup::deleted_record_operation(&name) {
@@ -281,6 +298,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: path.display().to_string(),
                         kind: IncompleteKind::Leftover,
                         pending: 0,
+                        record: None,
                     });
                 }
             } else if let Some(operation) = transactions::pointer_operation(&name) {
@@ -290,6 +308,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                     path: path.display().to_string(),
                     kind: IncompleteKind::ObsoleteMoveV1,
                     pending: 0,
+                    record: None,
                 });
             }
         }
@@ -301,6 +320,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                 path: path.display().to_string(),
                 kind: IncompleteKind::Leftover,
                 pending: 0,
+                record: None,
             });
         }
     }
@@ -312,6 +332,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                 path: path.display().to_string(),
                 kind: IncompleteKind::Leftover,
                 pending: 0,
+                record: None,
             });
         }
     }
@@ -330,6 +351,7 @@ fn list_move_transactions(
             path: root.display().to_string(),
             kind: IncompleteKind::MoveV2Invalid,
             pending: 0,
+            record: None,
         });
         return;
     }
@@ -356,11 +378,13 @@ fn list_move_transactions(
                     path: base.join(journal.target_folder).display().to_string(),
                     kind: IncompleteKind::Move,
                     pending: 0,
+                    record: Some(operation_dir.display().to_string()),
                 }),
                 Err(_) => out.push(Incomplete {
                     path: operation_dir.display().to_string(),
                     kind: IncompleteKind::MoveV2Invalid,
                     pending: 0,
+                    record: None,
                 }),
             }
         } else {
@@ -368,6 +392,7 @@ fn list_move_transactions(
                 path: operation_dir.display().to_string(),
                 kind: IncompleteKind::MoveV2Invalid,
                 pending: 0,
+                record: None,
             });
         }
     }
@@ -396,6 +421,26 @@ pub struct ReconcileReport {
     /// The pass stopped for a cancel before it had looked at everything;
     /// what it did not reach is as it was, and the next pass takes it up.
     pub cancelled: bool,
+    /// What the pass could not settle and a person has to decide, by the
+    /// folder it is about: kept as `attention.json` (`core::attention`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verdicts: Vec<crate::core::attention::Verdict>,
+}
+
+impl ReconcileReport {
+    /// Keep a verdict: `path` needs a person, for `reason`.
+    pub(crate) fn needs(
+        &mut self,
+        path: &Path,
+        kind: crate::core::attention::VerdictKind,
+        reason: &str,
+    ) {
+        self.verdicts.push(crate::core::attention::Verdict {
+            path: path.to_path_buf(),
+            kind,
+            reason: reason.to_string(),
+        });
+    }
 }
 
 impl ReconcileReport {
@@ -477,7 +522,17 @@ pub fn reconcile_unlocked_with(cfg: &Config, ticker: Ticker) -> ReconcileReport 
         live: crate::core::jobs::live_workers(),
         deferred: None,
     };
-    reconcile_pass(cfg, &mut pass)
+    let report = reconcile_pass(cfg, &mut pass);
+    keep_verdicts(&report);
+    report
+}
+
+/// A complete pass's verdicts are what needs a person now; a cancelled one
+/// did not look at everything, and changes nothing.
+fn keep_verdicts(report: &ReconcileReport) {
+    if !report.cancelled {
+        crate::core::attention::write_verdicts(&report.verdicts);
+    }
 }
 
 /// What one pass carries: its progress, the live jobs whose records it leaves
@@ -683,10 +738,24 @@ fn reconcile_recordless(
             .find(|project| project.id == *id)
     });
     let Some(project) = found else {
+        let note = orphan_note(cfg, path, operation);
+        report.needs(
+            path,
+            crate::core::attention::VerdictKind::UnknownProject,
+            &match &owner {
+                Some(id) => format!(
+                    "An old copy of {id} whose move left no record. fastf finds {id} in no base \
+                     now, so this may be its only copy: put it back as the project, or discard \
+                     it."
+                ),
+                None => "An old copy whose move left no record, and that does not say which \
+                         project it was: look inside, then put it back or discard it."
+                    .to_string(),
+            },
+        );
         report.leftovers.push(format!(
             "{shown}: a moved project's old copy, with no record of the move left, and \
-             fastf cannot find the project it held, so it keeps all of it.{}",
-            orphan_note(cfg, path, operation)
+             fastf cannot find the project it held, so it keeps all of it.{note}"
         ));
         return;
     };
@@ -741,11 +810,21 @@ fn holds_only_folders(path: &Path) -> bool {
 
 fn report_recordless(path: &Path, fate: SourceFate, subject: &str, report: &mut ReconcileReport) {
     match fate {
-        SourceFate::Leftover { reason, .. } => report.leftovers.push(format!(
-            "{}: an old copy of {subject}, whose move left no record; what the project holds \
-             the same was removed, and what differs stays: {reason}",
-            crate::util::paths::display_path(path)
-        )),
+        SourceFate::Leftover { reason, .. } => {
+            report.needs(
+                path,
+                crate::core::attention::VerdictKind::Differs,
+                &format!(
+                    "an old copy of {subject} with no record of its move; what the project \
+                     holds the same went, and what is left differs: {reason}"
+                ),
+            );
+            report.leftovers.push(format!(
+                "{}: an old copy of {subject}, whose move left no record; what the project \
+                 holds the same was removed, and what differs stays: {reason}",
+                crate::util::paths::display_path(path)
+            ))
+        }
         _ => report.cleared += 1,
     }
 }
@@ -824,6 +903,7 @@ pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
         }
         finish_deferred(deferred, ticker, &mut report);
     }
+    keep_verdicts(&report);
     report
 }
 
@@ -1386,6 +1466,23 @@ fn reconcile_transactions(
 
 /// One transaction directory: its journal read, or — when it holds nothing a
 /// move ever gets past its first write to — removed.
+/// Reconcile one move record, now, in this process — what a person's
+/// decision about it ends with (`core::attention::resolve`).
+pub(crate) fn reconcile_one_record(
+    cfg: &Config,
+    target_base: &Path,
+    operation_dir: &Path,
+) -> ReconcileReport {
+    let mut report = ReconcileReport::default();
+    let mut pass = Pass {
+        ticker: Ticker::none(),
+        live: crate::core::jobs::live_workers(),
+        deferred: None,
+    };
+    reconcile_record(cfg, target_base, operation_dir, &mut report, &mut pass);
+    report
+}
+
 fn reconcile_record(
     cfg: &Config,
     target_base: &Path,
@@ -1740,6 +1837,17 @@ fn reconcile_transaction(
                      nothing left to finish: delete the move's record once you have looked."
                         .to_string()
                 };
+                if retired_exists {
+                    report.needs(
+                        &retired,
+                        crate::core::attention::VerdictKind::OnlyCopy,
+                        &format!(
+                            "the moved copy at {} is not this project any more, so this old \
+                             copy may be the only one",
+                            shown(&final_path)
+                        ),
+                    );
+                }
                 report.unrecoverable.push(format!(
                     "{subject}: the moved copy at {} is not this project any more \
                      ({error:#}){whole}. fastf changed nothing.{record}",
@@ -2241,13 +2349,20 @@ fn record_fate(
             path,
             reason,
             redundant: false,
-        } => report.leftovers.push(format!(
-            "{subject}: moved to {}; what is left of the original at {} differs from the \
-             moved copy, so fastf keeps it, with the move's record, until you decide: \
-             {reason}",
-            shown(final_path),
-            shown(&path)
-        )),
+        } => {
+            report.needs(
+                &path,
+                crate::core::attention::VerdictKind::Conflict,
+                &format!("what is left of the original differs from the moved copy: {reason}"),
+            );
+            report.leftovers.push(format!(
+                "{subject}: moved to {}; what is left of the original at {} differs from the \
+                 moved copy, so fastf keeps it, with the move's record, until you decide: \
+                 {reason}",
+                shown(final_path),
+                shown(&path)
+            ))
+        }
         SourceFate::KeptWhole { reason } => report.unrecoverable.push(format!(
             "{subject}: moved to {}, but the original at {} is still there and fastf \
              removed nothing: {reason}. `fastf reconcile` tries again once that is \
@@ -3976,5 +4091,144 @@ mod tests {
             source_base.join("gone/payload.part").is_file(),
             "the project stays"
         );
+    }
+
+    /// **A conflict needs you until a version is chosen**, and then nothing
+    /// does: keeping the moved copy's version removes the old copy; taking
+    /// the old copy's puts it into the moved one first. Either way the move
+    /// finishes, and attention is empty.
+    #[test]
+    fn a_conflict_needs_you_until_a_version_is_chosen() {
+        use crate::core::attention::{Action, State, attention, resolve};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        for keep in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let (source_base, target_base, cfg) = bases(temp.path());
+            let (source, final_path, mut transaction) =
+                published_awaiting_cleanup(&source_base, &target_base);
+            let retired = transaction.retired_path();
+            fs::rename(&source, &retired).unwrap();
+            transaction.set_phase(MovePhase::Retired).unwrap();
+            fs::write(retired.join("payload.part"), b"the old side").unwrap();
+            fs::write(final_path.join("payload.part"), b"the moved side").unwrap();
+
+            let report = reconcile_unlocked(&cfg);
+            assert_eq!(report.completed, 0, "{report:?}");
+            let now = attention(&cfg);
+            let item = now
+                .items
+                .iter()
+                .find(|item| item.state == State::NeedsYou)
+                .unwrap_or_else(|| panic!("{now:?}"));
+            assert_eq!(item.path, retired);
+            assert_eq!(item.actions, vec![Action::KeepMoved, Action::TakeOld]);
+            assert_eq!(now.needs_you(), 1);
+
+            let action = if keep {
+                Action::KeepMoved
+            } else {
+                Action::TakeOld
+            };
+            resolve(&cfg, &retired, action).unwrap();
+            assert!(!retired.exists());
+            assert_eq!(
+                fs::read(final_path.join("payload.part")).unwrap(),
+                if keep {
+                    b"the moved side".to_vec()
+                } else {
+                    b"the old side".to_vec()
+                }
+            );
+            assert!(!transaction.operation_dir.exists(), "the move is finished");
+            let after = attention(&cfg);
+            assert!(after.items.is_empty(), "{after:?}");
+        }
+    }
+
+    /// An old copy with no record whose project fastf cannot find needs you:
+    /// put it back as the project, or discard it.
+    #[test]
+    fn an_old_copy_nobody_can_place_is_put_back() {
+        use crate::core::attention::{Action, State, attention, resolve};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, _target_base, cfg) = bases(temp.path());
+        let elsewhere = temp.path().join("elsewhere");
+        let moved = write_project(&elsewhere, "project", "ID0042");
+        // The list holds the bases' spelling of a path: on Windows, verbatim.
+        let old = crate::util::paths::canonical(&recordless_copy_of(&moved, &source_base)).unwrap();
+        fs::remove_dir_all(&elsewhere).unwrap();
+
+        reconcile_unlocked(&cfg);
+        let now = attention(&cfg);
+        let item = now
+            .items
+            .iter()
+            .find(|item| item.path == old)
+            .unwrap_or_else(|| panic!("{now:?}"));
+        assert_eq!(item.state, State::NeedsYou);
+        assert_eq!(item.actions, vec![Action::PutBack, Action::Discard]);
+
+        resolve(&cfg, &old, Action::PutBack).unwrap();
+        assert!(!old.exists());
+        assert!(source_base.join("project/payload.part").is_file());
+        assert!(
+            crate::core::library::discover(&cfg)
+                .iter()
+                .any(|project| project.id == "ID0042"),
+            "it is the project again"
+        );
+        assert!(attention(&cfg).items.is_empty());
+    }
+
+    /// A move begun on another machine needs you, and discarding it removes
+    /// its record and nothing else.
+    #[test]
+    fn a_move_from_another_machine_is_discarded_record_only() {
+        use crate::core::attention::{Action, State, attention, resolve};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, final_path, transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        let operation = crate::util::paths::canonical(&transaction.operation_dir).unwrap();
+        edit_journal(&operation, |journal| {
+            journal.insert("host".into(), serde_json::json!("elsewhere"));
+            journal.insert("machine".into(), serde_json::json!("0000another0machine"));
+        });
+        let now = attention(&cfg);
+        let item = now
+            .items
+            .iter()
+            .find(|item| item.path == operation)
+            .unwrap_or_else(|| panic!("{now:?}"));
+        assert_eq!(item.state, State::NeedsYou);
+        assert!(item.reason.contains("elsewhere"), "{}", item.reason);
+        assert!(
+            resolve(&cfg, &operation, Action::PutBack).is_err(),
+            "not offered"
+        );
+        resolve(&cfg, &operation, Action::Discard).unwrap();
+        assert!(!operation.exists());
+        assert!(
+            source.join("payload.part").is_file(),
+            "the original is untouched"
+        );
+        assert!(final_path.is_dir(), "and the moved copy");
+    }
+
+    /// An interrupted move fastf can finish is not a person's business.
+    #[test]
+    fn an_interrupted_move_is_finished_by_fastf() {
+        use crate::core::attention::{State, attention};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        published_awaiting_cleanup(&source_base, &target_base);
+        let now = attention(&cfg);
+        assert_eq!(now.items.len(), 1, "{now:?}");
+        assert_eq!(now.items[0].state, State::Auto);
+        assert_eq!(now.auto(), 1);
+        assert_eq!(now.needs_you(), 0);
     }
 }

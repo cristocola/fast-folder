@@ -1870,3 +1870,30 @@ fn templates_tab_60x20() {
     );
     snap("templates_tab_44x14", frame);
 }
+
+/// `!`: what is unfinished, what needs you first, and the selected item's
+/// reason in full below the list — wide at 80×24, and still readable at
+/// 40×12.
+#[test]
+fn attention_page_80x24_and_40x12() {
+    for (width, height) in [(80, 24), (40, 12)] {
+        let mut app = fixture(12, width, height);
+        let _ = update(&mut app, Msg::Key(Key::ch('!')));
+        let frame = render_to_string(&app, width, height);
+        assert!(frame.contains("Unfinished"), "{frame}");
+        assert!(frame.contains("needs you"), "{frame}");
+        snap(&format!("attention_page_{width}x{height}"), frame);
+    }
+}
+
+/// Enter on an item that needs you: what settles it.
+#[test]
+fn attention_actions_80x24() {
+    let mut app = fixture(12, 80, 24);
+    let _ = update(&mut app, Msg::Key(Key::ch('!')));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+    let frame = render_to_string(&app, 80, 24);
+    assert!(frame.contains("Put it back as the project"), "{frame}");
+    assert!(frame.contains("Discard it"), "{frame}");
+    snap("attention_actions_80x24", frame);
+}

@@ -128,8 +128,10 @@ pub struct Summary {
     pub max_id: Option<String>,
     pub newest: Option<(String, String)>,
     pub templates: Vec<TemplateCard>,
-    /// Interrupted creates and moves that `fastf reconcile` would deal with.
-    pub attention: usize,
+    /// What fastf left unfinished, by who finishes it (`core::attention`):
+    /// the header counts what needs you and what fastf is finishing, and `!`
+    /// lists it.
+    pub attention: crate::core::attention::Attention,
     pub prefs: Prefs,
 }
 

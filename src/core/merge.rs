@@ -557,7 +557,7 @@ impl Judge for Identical<'_> {
 /// Copy the old copy's file at `from` to `to`, new, keeping its mode and
 /// times; an error when the file changed while it was read — it is then left
 /// for the next pass, whole.
-fn copy_whole(from: &Path, to: &Path, expected: &ManifestEntry) -> Result<(), String> {
+pub(crate) fn copy_whole(from: &Path, to: &Path, expected: &ManifestEntry) -> Result<(), String> {
     let mut reader = fs::File::open(from).map_err(|error| error.to_string())?;
     let before = reader.metadata().map_err(|error| error.to_string())?;
     let mut options = fs::OpenOptions::new();

@@ -100,6 +100,10 @@ pub struct JobRequest {
     pub kind: JobKind,
     #[serde(default)]
     pub items: Vec<JobItem>,
+    /// Started by the app itself to finish leftovers, not by a person: its
+    /// end is reported quietly (`tui::app::attention`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto: bool,
 }
 
 /// What became of one item, in the words both surfaces print.
@@ -220,6 +224,18 @@ pub fn dir(id: &str) -> Result<PathBuf> {
 
 /// Write a new job's request. Its worker is not started yet.
 pub fn create(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
+    create_as(kind, items, false)
+}
+
+/// Start the app's own reconcile ([`JobRequest::auto`]).
+pub fn start_auto() -> Result<String> {
+    prune();
+    let id = create_as(JobKind::Reconcile, Vec::new(), true)?;
+    spawn_worker(&id)?;
+    Ok(id)
+}
+
+fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool) -> Result<String> {
     let root = root_or_error()?;
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
     for _ in 0..64 {
@@ -231,6 +247,7 @@ pub fn create(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
                     version: STATE_VERSION,
                     kind,
                     items,
+                    auto,
                 };
                 let text = serde_json::to_string_pretty(&request)?;
                 std::fs::write(dir.join("request.json"), text)
@@ -782,6 +799,7 @@ mod tests {
                 version: 1,
                 kind,
                 items,
+                auto: false,
             }),
             state: None,
             alive: false,

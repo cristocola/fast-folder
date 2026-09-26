@@ -241,14 +241,95 @@ fn the_counter_is_raised_through_a_prompt_that_names_the_floor() {
     assert!(matches!(action_of(&effects), Action::RaiseCounter(2489)));
 }
 
+/// **`!` lists what is unfinished**, what needs you first, each with its
+/// reason; Enter on an item that needs you offers what settles it, and
+/// discarding asks for the word before anything is sent.
 #[test]
-fn needs_attention_is_the_recover_command() {
+fn bang_lists_the_unfinished_work_and_settles_what_needs_you() {
+    use fastf::core::attention::Action as Resolution;
+    use fastf::tui::app::modal::Then;
     let mut app = fixture(6, 120, 40);
-    let effects = press(&mut app, Key::ch('!'));
+    assert!(press(&mut app, Key::ch('!')).is_empty());
+    let Some(Modal::Pick(page)) = app.modals.top() else {
+        panic!("expected the page, got {:?}", app.modals.top());
+    };
+    assert!(matches!(page.then, Then::Attention));
+    assert_eq!(page.title, "Unfinished — 1 needs you");
+    assert!(
+        page.items[0].label.starts_with("needs you"),
+        "{:?}",
+        page.items
+    );
+    assert_eq!(
+        page.items.len(),
+        1,
+        "nothing for fastf to finish: no row for it"
+    );
+
+    press(&mut app, Key::plain(KeyCode::Enter));
+    let Some(Modal::Pick(actions)) = app.modals.top() else {
+        panic!("expected its actions, got {:?}", app.modals.top());
+    };
+    assert!(matches!(actions.then, Then::AttentionAction(_)));
+    let words: Vec<&str> = actions
+        .items
+        .iter()
+        .map(|item| item.value.as_str())
+        .collect();
+    assert_eq!(words, ["put-back", "discard"]);
+
+    press(&mut app, Key::plain(KeyCode::Down));
+    let asked = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(asked.is_empty(), "the word first: {asked:?}");
+    type_text(&mut app, "discrad");
+    assert!(
+        press(&mut app, Key::plain(KeyCode::Enter)).is_empty(),
+        "a typo sends nothing"
+    );
+    for _ in 0.."discrad".len() {
+        press(&mut app, Key::plain(KeyCode::Backspace));
+    }
+    type_text(&mut app, "discard");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(matches!(
-        job_started(&effects),
-        Some((fastf::core::jobs::JobKind::Reconcile, _))
+        action_of(&effects),
+        Action::ResolveAttention {
+            action: Resolution::Discard,
+            ..
+        }
     ));
+}
+
+/// **The app finishes its own leftovers**, quietly: a summary that shows
+/// something fastf can finish, with nothing running, starts a reconcile of
+/// the app's own — once, not again within the minute, and never beside a
+/// running job — and no dialog comes up for it.
+#[test]
+fn a_summary_with_leftovers_starts_a_quiet_reconcile() {
+    use fastf::core::attention::{Attention, Item, State};
+    let mut app = fixture(6, 120, 40);
+    let mut summary = sample_summary(6);
+    summary.attention = Attention {
+        items: vec![Item {
+            state: State::Auto,
+            what: "a move".to_string(),
+            path: PathBuf::from("/srv/projects/.fastf-transactions/1-1-0"),
+            project: None,
+            reason: "an interrupted move; fastf finishes it".to_string(),
+            actions: Vec::new(),
+        }],
+    };
+    let effects = update(&mut app, Msg::Summary(Box::new(summary.clone())));
+    assert!(effects.contains(&Effect::StartAutoReconcile), "{effects:?}");
+    assert!(app.shown_progress().is_none(), "no dialog for it");
+    let again = update(&mut app, Msg::Summary(Box::new(summary.clone())));
+    assert!(
+        !again.contains(&Effect::StartAutoReconcile),
+        "not twice in a minute"
+    );
+    app.elapsed_ms += 61_000;
+    let later = update(&mut app, Msg::Summary(Box::new(summary)));
+    assert!(later.contains(&Effect::StartAutoReconcile), "{later:?}");
 }
 
 #[test]

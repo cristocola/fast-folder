@@ -52,6 +52,8 @@ pub enum Msg {
     Jobs(Vec<crate::core::jobs::JobView>),
     /// A job's worker answered that it runs — or why it could not start.
     JobStarted(Result<String, String>),
+    /// The app's own reconcile started (`Effect::StartAutoReconcile`), or not.
+    AutoReconcileStarted(Result<String, String>),
     /// One template was read in full for the open flow.
     TemplateLoaded {
         slug: String,

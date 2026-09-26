@@ -955,9 +955,26 @@ nothing about what is legal. A yes/no or a two-way choice toggles in place;
 anything else edits **on its own line**, pre-filled, with the refusal under it and
 the text kept. The **library bases** are one `TextArea`, a folder per line, Ctrl-S
 to keep. The **ID counter** and the maintenance verbs (reindex, reconcile,
-data locations) are rows too; `!` is `CommandId::Reconcile` from anywhere, for the
-header's `⚠ n needs attention`. `ActionOutcome::settings()` re-reads the screen
-after a write, so a normalised value shows as stored.
+data locations) are rows too; the palette's "Reconcile now" is
+`CommandId::Reconcile`. `ActionOutcome::settings()` re-reads the screen after a
+write, so a normalised value shows as stored.
+
+**`!` is what is unfinished** (`app::attention`, `CommandId::Attention`): the
+summary carries `core::attention::Attention`, the header counts `need you`
+(a warning, with the key) and `finishing` (dim — nobody has to act), and `!`
+opens a **wide picker** (`PickState::wide`: most of the window, labels only,
+the selected row's detail wrapped under a rule, the box sized to the longest
+reason — `layout::wide_pick_box`) listing what needs you first, then a "Finish
+now" row when fastf has anything to finish, then the rest. Enter on an item
+that needs you opens its actions (`Then::AttentionAction`); Discard asks for
+the word (`TextThen::DiscardAttention`); each runs
+`Action::ResolveAttention` → `operations::resolve_attention` on a worker. **The
+app finishes leftovers by itself**: a summary with `auto` items, nothing live,
+and none started in the last minute (`AUTO_EVERY_MS`) pushes
+`Effect::StartAutoReconcile` — a job whose request says `auto`, never followed
+by the dialog, whose end is a status line only when it finished something or
+found something that needs you (`report_auto_reconcile`); a tick reloads the
+summary every five minutes while an item waits for a base.
 
 **`/` narrows the settings** (`Editing::Filter`, the value editors' own machinery,
 so `Modal::context()` needs no new answer): a case-insensitive substring over the

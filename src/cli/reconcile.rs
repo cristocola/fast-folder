@@ -15,6 +15,110 @@ use colored::Colorize;
 
 use crate::core::config::Config;
 
+/// `fastf reconcile --list`: what is unfinished, by who finishes it, and
+/// for what needs you, the commands that settle it. Changes nothing.
+pub fn list() -> Result<()> {
+    use crate::core::attention::State;
+    let cfg = Config::load()?;
+    let attention = crate::core::attention::attention(&cfg);
+    if attention.items.is_empty() {
+        println!("{}  Nothing unfinished.", "✓".green().bold());
+        return Ok(());
+    }
+    let groups = [
+        (State::NeedsYou, "needs you".yellow().bold()),
+        (State::Auto, "fastf finishes".bold()),
+        (State::Waiting, "waiting for a base".bold()),
+    ];
+    for (state, title) in groups {
+        let items: Vec<_> = attention
+            .items
+            .iter()
+            .filter(|item| item.state == state)
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        println!("{title} ({})", items.len());
+        for item in items {
+            let shown = crate::util::paths::display_path(&item.path);
+            match &item.project {
+                Some(project) => println!("  {} — {} {}", item.what, project, shown.dimmed()),
+                None => println!("  {} — {}", item.what, shown.dimmed()),
+            }
+            println!("    {}", item.reason);
+            for action in &item.actions {
+                println!(
+                    "    {}  {}",
+                    format!(
+                        "fastf reconcile --resolve {} {}",
+                        shell_quoted(&shown),
+                        action.word()
+                    )
+                    .cyan(),
+                    action.label().dimmed()
+                );
+            }
+        }
+    }
+    if attention.auto() > 0 {
+        println!(
+            "{}",
+            "`fastf reconcile` finishes what fastf can; the app starts one by itself.".dimmed()
+        );
+    }
+    Ok(())
+}
+
+/// `fastf reconcile --resolve <path> <action>`: settle one item that needs
+/// you, as you chose. Discarding asks for the word first.
+pub fn resolve(path: &str, action: &str, yes: bool) -> Result<()> {
+    use crate::core::attention::Action;
+    let Some(action) = Action::from_word(action) else {
+        anyhow::bail!(
+            "'{action}' is not an action; one of: keep-moved, take-old, put-back, discard, finish"
+        );
+    };
+    let path = std::path::PathBuf::from(path);
+    if action == Action::Discard && !yes {
+        crate::util::tty::require_tty("confirm", "pass --yes to discard without confirming")?;
+        let typed = crate::tui::prompt::text(
+            &format!(
+                "Discard {}? It goes for good. Type discard to confirm",
+                crate::util::paths::display_path(&path)
+            ),
+            crate::tui::prompt::TextOpts {
+                initial: None,
+                default: None,
+                allow_empty: true,
+                validator: None,
+            },
+        )?;
+        if !typed
+            .as_deref()
+            .is_some_and(|word| word.trim().eq_ignore_ascii_case("discard"))
+        {
+            println!("{}", "not discarded: the word did not match".dimmed());
+            return Ok(());
+        }
+    }
+    let said = crate::core::operations::resolve_attention(&path, action)?;
+    println!("{}  {said}", "✓".green().bold());
+    Ok(())
+}
+
+/// A path as a shell reads it back, when it needs quoting.
+fn shell_quoted(text: &str) -> String {
+    if text
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-~:".contains(c))
+    {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
 pub fn run(detach: bool) -> Result<()> {
     // A job of its own, like a move: its removals on a cloud mount can take
     // minutes, and closing this terminal must not stop one part of the way.

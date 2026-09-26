@@ -787,6 +787,17 @@ pub fn reconcile() -> Result<crate::core::provisioning::ReconcileReport> {
     Ok(crate::core::provisioning::reconcile_locked())
 }
 
+/// Settle an item that needs a person (`core::attention`), as they chose,
+/// under the data lock and against freshly loaded configuration.
+pub fn resolve_attention(
+    path: &std::path::Path,
+    action: crate::core::attention::Action,
+) -> Result<String> {
+    let _data_lock = crate::util::lockfile::DataLock::acquire()?;
+    let config = Config::load()?;
+    crate::core::attention::resolve(&config, path, action)
+}
+
 /// [`reconcile`], saying how far it has got and stopping between items, or
 /// inside a removal, when `cancel` is set. A cancelled pass still returns its
 /// report — what it finished is finished — with `cancelled` set.

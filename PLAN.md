@@ -437,21 +437,31 @@ move, each naming the path and the program; drops and stalls end moved.
 
 ## Phase 5 — fastf finishes its own leftovers; attention means you
 
-- [ ] `provisioning::attention(cfg)`: typed items (kind, project, path, base,
+- [x] `provisioning::attention(cfg)`: typed items (kind, project, path, base,
   record, phase, reason, state `Auto | Waiting | NeedsYou`, actions), each base
   read under a timeout — a silent one is a waiting item, not skipped;
   `list_incomplete` becomes a wrapper; verdicts persist in `attention.json`.
-- [ ] Reconcile gains `Scope { All, Auto }`; the per-category advice moves from
+  *As built:* `core::attention` (its own module), over `list_incomplete_in`
+  and the bases that answered a probe; verdicts are kept by the folder they
+  are about (`ReconcileReport.verdicts`, written by every complete pass).
+- [x] Reconcile gains `Scope { All, Auto }`; the per-category advice moves from
   `cli/reconcile.rs` into core as data; locked operations: finish, resume,
   remove what the copy holds, discard (typed word), take the old or keep the
-  new version of a conflict.
-- [ ] The app: an automatic reconcile (`JobRequest.auto`) on the first
+  new version of a conflict. *As built:* no scope: a reconcile only ever does
+  what needs no decision, so the app's own runs the same pass; the decisions
+  are `attention::Action` (keep-moved, take-old, put-back, discard, finish),
+  carried out by `operations::resolve_attention`. The old CLI advice stays for
+  the report; each item's reason and actions are the data.
+- [x] The app: an automatic reconcile (`JobRequest.auto`) on the first
   attention answer with auto items and no live job, after any job ends, and
   every five minutes while items wait — reporting only new needs-you items;
   the header's `⚠ 2 need you  !` and a dim "finishing 3"; `!` opens an
   attention page with the items, their actions and the last reconcile report.
-- [ ] `fastf reconcile --list`.
-- [ ] Tests: the classification table; the app's automatic start, debounce, no
+  *As built:* the page is a wide picker (the reason wrapped under the list);
+  the last report is the status line and `L`'s jobs page, as before.
+- [x] `fastf reconcile --list`. *As built:* and `--resolve <path> <action>`
+  (`--yes` for discard), so a person without the app can settle an item too.
+- [x] Tests: the classification table; the app's automatic start, debounce, no
   start beside a live job, chip counts, actions to effects; snapshots of the
   page and the chip at 40×12 and 80×24; `reconcile --list` output.
 
@@ -600,6 +610,16 @@ above. The lab, same scenarios as Phase 3:
 The first sshfs drop run found one more thing: a folder whose listing broke
 part of the way was not asked again; listings are now whole or retried
 (`fs_retry::list_dir`).
+
+**Phase 5 (2026-09-26).** As planned, with the deviations marked *as built*
+above. Looked at through the screenshot tool with an old copy of an unknown
+project and a deleted project's folder planted: within two seconds of opening,
+the app's own reconcile removed the deleted folder, found the old copy needs a
+decision, and the header said `⚠ 1 needs you  !`; `!`, Enter, Discard and the
+word left nothing, and the chip went. The same flows run in the suites
+(`bang_lists_the_unfinished_work_and_settles_what_needs_you`,
+`a_summary_with_leftovers_starts_a_quiet_reconcile`, the four resolutions in
+`provisioning`'s tests).
 
 ## Parking lot
 

@@ -30,7 +30,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf show <query>` | Everything fastf knows about one project |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
-| `fastf reconcile` | Recover scoped v2 work and report obsolete pre-v2 markers |
+| `fastf reconcile` / `--list` / `--resolve` | Finish what moves, copies, deletes and creates left; list what is unfinished; settle what needs you |
 | `fastf jobs` / `watch` / `cancel` | Moves, copies, deletes and reconciles running now or lately |
 | `fastf messages` | What fastf said to you, in the app and here, from every session |
 | `fastf log` | Everything fastf did: every step of every move and reconcile, every warning |
@@ -474,8 +474,8 @@ missing anything, fastf copies it again from the original, which stays whole
 until the copy is complete. If the original cannot then be set aside — a
 program has a file in it open — the move says that the original is still there,
 whole, that nothing in it was removed, and why; `fastf reconcile` finishes the
-move once that is resolved, without copying again. In the app, `fastf
-reconcile` is the `!` key, named Reconcile.
+move once that is resolved, without copying again. The app runs that
+reconcile by itself; its `!` key lists what is unfinished.
 Same-filesystem moves finish instantly and print nothing extra.
 
 **Symlinks and junctions** travel as links, pointing exactly where they did, and
@@ -562,8 +562,19 @@ inside the project, it refuses before removing anything and says why.
 ### Interrupted-operation recovery
 
 ```bash
-fastf reconcile
+fastf reconcile                      # finish what fastf can
+fastf reconcile --list               # what is unfinished, and who finishes it; changes nothing
+fastf reconcile --resolve <path> keep-moved   # settle one item that needs you
 ```
+
+`--list` sorts what is unfinished by who finishes it: **fastf** (a reconcile
+does — the app starts one by itself), **waiting** (for a base that is not
+mounted or does not answer), or **needs you**, each with its reason and the
+exact commands that settle it. Only a few things need you: an old copy holding
+something that differs from the moved copy (`keep-moved` or `take-old`), an
+old copy whose project fastf cannot find (`put-back` or `discard`), a move
+another machine began, a record fastf cannot read. `discard` asks for the word
+unless `--yes`.
 
 Scoped v2 create journals let `reconcile` finish missing deferred copies after
 validating the template, project identity, relative paths, entry types, and byte

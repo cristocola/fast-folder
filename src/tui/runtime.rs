@@ -575,6 +575,14 @@ impl Runtime {
                         let _ = tx.send(Msg::JobStarted(started));
                     });
                 }
+                Effect::StartAutoReconcile => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-auto-reconcile", move || {
+                        let started = crate::core::jobs::start_auto()
+                            .map_err(|error| for_the_app(&format!("{error:#}")));
+                        let _ = tx.send(Msg::AutoReconcileStarted(started));
+                    });
+                }
                 Effect::WatchJobs => self.read_jobs(),
                 Effect::CancelJob(id) => {
                     if let Err(error) = crate::core::jobs::request_cancel(&id) {
@@ -844,9 +852,9 @@ fn spawn_worker(name: &'static str, work: impl FnOnce() + Send + 'static) {
 
 /// One mutation through `core::operations`, on a worker. `progress` and
 /// `cancel` are the move job's handles — ignored by every other verb.
-/// The engine's messages name the command line's verb; in the app the same
-/// verb is the `!` key, and a person reading a dialog here should be told the
-/// key, not sent to a terminal.
+/// The engine's messages name the command line's verb; in the app a reconcile
+/// is what `!` lists and can run, and a person reading a dialog here should be
+/// told the key, not sent to a terminal.
 fn for_the_app(text: &str) -> String {
     crate::tui::app::background::for_the_app(text)
 }
@@ -1245,6 +1253,10 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
                 format!("Unregistered {}", project.name),
             )
             .session(format!("unregistered {}", project.id)))
+        }
+        Action::ResolveAttention { path, action } => {
+            let said = crate::core::operations::resolve_attention(&path, action)?;
+            Ok(ActionOutcome::new(ListChange::Reload, for_the_app(&said)))
         }
         Action::AppendNote { project, text } => {
             crate::core::operations::append_note(&project, &text)?;
@@ -1658,7 +1670,7 @@ mod wording_tests {
     fn the_app_names_its_own_key_for_reconcile() {
         assert_eq!(
             super::for_the_app("fastf removed nothing; `fastf reconcile` finishes the move."),
-            "fastf removed nothing; Reconcile (`!`) finishes the move."
+            "fastf removed nothing; a reconcile (`!`) finishes the move."
         );
     }
 }

@@ -261,6 +261,44 @@ pub fn pick_box(area: Rect, items: usize) -> Rect {
     centered_fixed(area, 50, height)
 }
 
+/// How many rows of reason a wide picker shows below its list, at most.
+pub const PICK_DETAIL_ROWS: u16 = 6;
+
+/// A wide picker's box (`PickState::wide`) and how many rows of reason it
+/// shows: most of the window wide; tall enough for its rows and for the
+/// longest reason (`detail_lines` of them, wrapped to the box), within the
+/// window — a short window gives the reason fewer rows before the list loses
+/// its own.
+pub fn wide_pick_box(area: Rect, items: usize, detail_lines: u16) -> (Rect, u16) {
+    let width = area.width.saturating_sub(4).min(100);
+    let most = area.height.saturating_sub(2).max(6);
+    // Border (two), query, its gap, rule: five rows that are not list or
+    // reason.
+    let room = most.saturating_sub(5);
+    let list = (items as u16).clamp(1, room.max(1));
+    let detail = detail_lines
+        .clamp(1, PICK_DETAIL_ROWS)
+        .min(room.saturating_sub(list.min(3)).max(1));
+    let height = (5 + list + detail).min(most);
+    (centered_fixed(area, width, height), detail)
+}
+
+/// The width a wide picker's reason is wrapped to.
+pub fn wide_pick_text_width(area: Rect) -> usize {
+    area.width.saturating_sub(4).min(100).saturating_sub(4) as usize
+}
+
+/// The rows a picker's list has, narrow or wide: the box less its border, the
+/// query line and its gap, and a wide one's rule and reason.
+pub fn pick_list_rows(area: Rect, items: usize, wide: bool, detail_lines: u16) -> usize {
+    if wide {
+        let (dialog, detail) = wide_pick_box(area, items, detail_lines);
+        list_rows(dialog, 3 + detail)
+    } else {
+        list_rows(pick_box(area, items), 2)
+    }
+}
+
 /// Where the help overlay is drawn: most of a narrow window, 84 % of a wide
 /// one. The app clamps its scroll with the same box the view draws it in.
 pub fn help_box(area: Rect) -> Rect {

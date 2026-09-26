@@ -720,6 +720,23 @@ ordinary. Every message names the project, its record and phase, and what is on 
 "left untouched" about a pass is not a statement about the disk. `leftovers` holds
 the hidden folders not removed yet, `cleared` the deleted ones that were.
 
+**What is unfinished, by who finishes it** (`core::attention`): every item
+`list_incomplete` finds (over the bases that answered a probe — a silent one
+is a waiting item of its own) is `Auto` (a reconcile finishes it), `Waiting`
+(its source base is not on its mount, or does not answer) or `NeedsYou`, with
+a reason and the `Action`s that settle it. What only a person can decide is
+what a reconcile could not settle, kept as **verdicts** by the folder they are
+about (`ReconcileReport.verdicts` → the data dir's `attention.json`, written
+by every complete pass): a merge's conflicts (`KeepMoved`, `TakeOld`), an old
+copy that may be the only one or whose project is gone (`PutBack`,
+`Discard`), plus moves another machine began and unreadable records.
+`attention::resolve` carries a choice out under the data lock
+(`operations::resolve_attention`), re-reading what is on disk first: `TakeOld`
+writes each file new at its place (never renamed, as the merge), `PutBack`
+renames an old copy to its recorded name only when that name is free, and
+`Discard` removes only the item — a record's folder, never its original or
+moved copy.
+
 **A case-only rename** stages through `.<target>.fastf-case`
 (`library::lifecycle::case_staging_name`/`case_staging_target`, one spelling for
 writer and recovery). Error paths roll back, and a failed rollback says where it

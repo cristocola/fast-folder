@@ -79,6 +79,8 @@ tell you.
   table, what may be written into the moved copy, the recordless proof),
   `records.rs` (the data dir's index of every move record, and the settle),
   `holders.rs` (which programs have something in a folder open),
+  `attention.rs` (what is unfinished, by who finishes it, and the choices that
+  settle what needs you),
   `operations.rs` (the shared mutation boundary), `project.rs` (plan / create /
   apply, and the preview *reports*), `plan.rs` (`ProjectPlan`),
   `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus

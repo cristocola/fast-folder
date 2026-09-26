@@ -111,7 +111,21 @@ pub fn sample_summary(projects: usize) -> Summary {
                 on_disk: true,
             },
         ],
-        attention: 1,
+        attention: crate::core::attention::Attention {
+            items: vec![crate::core::attention::Item {
+                state: crate::core::attention::State::NeedsYou,
+                what: "an old copy".to_string(),
+                path: std::path::PathBuf::from("/srv/projects/.fastf-moved-1-1-0"),
+                project: None,
+                reason: "an old copy with no record of its move, whose project fastf cannot \
+                         find: it may be the only copy."
+                    .to_string(),
+                actions: vec![
+                    crate::core::attention::Action::PutBack,
+                    crate::core::attention::Action::Discard,
+                ],
+            }],
+        },
         prefs: crate::tui::app::data::Prefs {
             default_template: String::new(),
             confirm_create: true,
@@ -253,6 +267,7 @@ pub fn job_view(
                     target: "/media/usb/archive".to_string(),
                 })
                 .collect(),
+            auto: false,
         }),
         state: Some(JobState {
             version: 1,

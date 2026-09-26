@@ -1,9 +1,10 @@
 ---
 source: tests/tui_snapshots.rs
+assertion_line: 25
 expression: frame
 ---
 " fast-┌ settings ────────────────────────────────────────────────────────┐D0248 "
-" → pro│   Date format                 %Y-%m-%d   (today: 2026-09-03)     │ntion "
+" → pro│   Date format                 %Y-%m-%d   (today: 2026-09-03)     │ou  ! "
 " ⌕ / t│   Editor                      nvim                               │ewest "
 "┌ proj│   Terminal                    (probe the known ones)             │─────┐"
 "│  ID │   Register pattern            {date}_{name}_{id}                 │D    │"

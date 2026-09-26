@@ -434,7 +434,12 @@ fn render_palette(app: &App, palette: &PaletteState, frame: &mut Frame, area: Re
 fn render_pick(app: &App, pick: &PickState, frame: &mut Frame, area: Rect) -> Position {
     let theme = &app.theme;
     let g = theme.glyphs;
-    let area = crate::tui::layout::pick_box(area, pick.ranked.len());
+    let lines = pick.detail_lines(crate::tui::layout::wide_pick_text_width(area));
+    let (area, shown_detail) = if pick.wide {
+        crate::tui::layout::wide_pick_box(area, pick.ranked.len(), lines)
+    } else {
+        (crate::tui::layout::pick_box(area, pick.ranked.len()), 0)
+    };
 
     super::clear(frame, area, &app.theme);
     let block = frame_block(app, format!(" {} ", pick.title), true);
@@ -452,12 +457,36 @@ fn render_pick(app: &App, pick: &PickState, frame: &mut Frame, area: Rect) -> Po
         )
         .unwrap_or(Position::new(inner.x, inner.y));
 
+    // A wide picker keeps its last rows for the selected row's reason, under
+    // a rule.
+    let detail_rows = if pick.wide { shown_detail + 1 } else { 0 };
     let list_area = Rect::new(
         inner.x,
         inner.y + 2,
         inner.width,
-        inner.height.saturating_sub(2),
+        inner.height.saturating_sub(2 + detail_rows),
     );
+    if pick.wide {
+        let rule_y = list_area.y + list_area.height;
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                g.rule.repeat(inner.width as usize),
+                theme.dim(),
+            )),
+            Rect::new(inner.x, rule_y, inner.width, 1),
+        );
+        let detail = pick.selected_detail().unwrap_or_default();
+        frame.render_widget(
+            Paragraph::new(Span::styled(detail.to_string(), theme.text()))
+                .wrap(Wrap { trim: true }),
+            Rect::new(
+                inner.x + 1,
+                rule_y + 1,
+                inner.width.saturating_sub(2),
+                shown_detail,
+            ),
+        );
+    }
     let items: Vec<ListItem> = pick
         .ranked
         .iter()
@@ -466,7 +495,7 @@ fn render_pick(app: &App, pick: &PickState, frame: &mut Frame, area: Rect) -> Po
             let hits: Vec<usize> = hits.iter().map(|&h| h as usize).collect();
             let mut spans = vec![Span::raw(" ")];
             spans.extend(highlighted(&item.label, &hits, theme.text(), theme.hit()));
-            if !item.detail.is_empty() {
+            if !item.detail.is_empty() && !pick.wide {
                 spans.push(Span::styled(
                     format!("  {} {}", g.sep, item.detail),
                     theme.dim(),
@@ -594,6 +623,7 @@ fn render_text_prompt(app: &App, prompt: &TextPrompt, frame: &mut Frame, area: R
         TextThen::Delete(_) => "delete",
         TextThen::RaiseCounter => "ID counter",
         TextThen::CopyTo => "copy to",
+        TextThen::DiscardAttention(_) => "discard",
     };
     // The box grows with its question: a confirmation over six marked
     // folders names all six.

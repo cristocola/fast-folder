@@ -14,6 +14,8 @@ pub struct ActionId(pub u64);
 pub enum Effect {
     /// Probe the bases, read the indexes, list the templates — the header.
     LoadSummary,
+    /// Start the app's own reconcile, quietly (`core::jobs::start_auto`).
+    StartAutoReconcile,
     /// Read the messages and the log for the activity screen (`L`).
     LoadActivity,
     /// `library::discover` on a worker. The generation tells a late answer
@@ -223,6 +225,12 @@ pub enum Action {
         name: String,
     },
     Unregister(Box<Project>),
+    /// Settle an unfinished item as the person chose
+    /// (`operations::resolve_attention`).
+    ResolveAttention {
+        path: PathBuf,
+        action: crate::core::attention::Action,
+    },
     AppendNote {
         project: Box<Project>,
         text: String,

@@ -40,7 +40,7 @@ pub fn summary() -> Result<Summary> {
     let probed = paths::probe_dirs(&bases, paths::PROBE_TIMEOUT);
 
     let mut summary = Summary::default();
-    for (base, probe) in probed {
+    for (base, probe) in probed.clone() {
         let index = probe
             .usable()
             .then(|| library::index_summary(&base))
@@ -74,7 +74,7 @@ pub fn summary() -> Result<Summary> {
             Vec::new()
         }
     };
-    summary.attention = provisioning::list_incomplete(&cfg).len();
+    summary.attention = crate::core::attention::attention_probed(&cfg, probed);
     summary.prefs = Prefs {
         default_template: cfg.default_template.clone(),
         confirm_create: cfg.confirm_create,

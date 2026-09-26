@@ -297,8 +297,12 @@ fn a_cancel_after_the_publish_is_answered_not_sent() {
 fn a_copy_and_a_reconcile_are_jobs_with_the_dialog_up() {
     use fastf::core::jobs::JobKind;
 
+    // "Reconcile now", from the palette: `!` lists what is unfinished and
+    // offers it only when fastf has something to finish.
     let mut app = fixture(12, 80, 24);
-    let effects = press(&mut app, Key::ch('!'));
+    press(&mut app, Key::ctrl('p'));
+    type_text(&mut app, "reconcile now");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(matches!(
         job_started(&effects),
         Some((JobKind::Reconcile, []))
@@ -370,7 +374,7 @@ fn a_job_that_ends_is_reported_once_and_marked_seen() {
     };
     assert_eq!(title, "needs a look");
     assert!(
-        lines.join(" ").contains("Reconcile (`!`)"),
+        lines.join(" ").contains("a reconcile (`!`)"),
         "the app's key: {lines:?}"
     );
     assert!(!app.job_dialog_up());

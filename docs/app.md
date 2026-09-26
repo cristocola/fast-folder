@@ -8,7 +8,7 @@ configuration, one set of templates and one counter.
 
 ```
  fast-folder   library │ templates   3 bases                          highest ID0248
- → projects 9   archive 3   usb not mounted                       ⚠ 1 needs attention
+ → projects 9   archive 3   usb not mounted                          ⚠ 1 needs you  !
 
  ⌕ tag:draft lulla                                              4/12 · relevance
 ┌ projects ────────────────────────────────────┐┌ ID0248 ─────────────────────┐
@@ -28,10 +28,9 @@ Top to bottom:
   highest ID; then each base with how many projects its index holds or that
   it is not mounted — led, while a job runs, by what it is and its step
   (`moving ID0047 · copying 312 of 1473 files`) — and on the right
-  `⚠ n needs attention` when an
-  interrupted create or move, or a hidden folder a moved or deleted project
-  left behind, is waiting for `fastf reconcile` (else the last few things this
-  session did).
+  `⚠ n need you  !` when something a move or a delete left needs a decision
+  only you can make, or a dim `finishing n` when fastf is finishing leftovers
+  by itself (else the last few things this session did). `!` lists them.
 - **The search bar** — the query, and on the right the one place the list
   reports itself: how many rows matched out of how many there are, the sort
   order, the template and base filters, and how many rows are marked. The
@@ -188,7 +187,7 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `n`, `e`, `E` | the new-project wizard; register an existing folder; apply a template to a folder |
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
-| `!` | reconcile: check and recover from what a crash or a failed move left — what `⚠ n needs attention` means |
+| `!` | what is unfinished: what needs you first, each with its reason — Enter on one offers what settles it (discarding asks for the word) — then what fastf is finishing by itself, and a row that finishes it now |
 | `L` | messages, jobs and the log: every message fastf showed you, from every session; every move, copy, delete and reconcile, running or done — Enter opens a job's own log; and every step of every one. Tab turns the page, all newest first, and all keep up while open. A warning that flashed under a dialog is counted on the status line until you read them |
 | F5, Ctrl-R | reload: read every base again |
 | `R` | reindex: rescan every base from its folders and rebuild the caches |
@@ -322,11 +321,18 @@ because that is what the list is. The keys and what each one means are in
 
 The same screen holds the **ID counter** (what the highest ID is, what the next
 project gets, raising it, and making every mounted base agree on it) and
-**maintenance**: reindex every base, reconcile (check and recover from what a
-crash or a failed move left half-done), and where fastf keeps its config,
-counter and templates. `!` reconciles from anywhere, which is what the header's
-`⚠ n needs attention` is about. It is the same thing as `fastf reconcile` on
-the command line.
+**maintenance**: reindex every base, reconcile (finish now what a crash, a drop
+or a failed move left half-done), and where fastf keeps its config, counter
+and templates. The same reconcile as `fastf reconcile` on the command line —
+though you rarely need it: **the app finishes leftovers by itself.** When the
+header's summary shows something fastf can finish and nothing else is running,
+it starts a reconcile of its own, quietly — no dialog, and a word on the
+status line only when it finished something or found something that needs
+you — again after every job, and every five minutes while something waits for
+a base that does not answer. What is left is only what needs you, and `!`
+lists it with what settles each: keep the moved copy's version of what
+differs, take the old copy's, put an old copy back as the project, or discard
+it (typing the word).
 
 ## Actions, and marks
 
@@ -339,7 +345,7 @@ space to mark each; delete names the folder and asks you to type the word
 `delete` — a typo keeps your text and says why it was refused; `y` or `n`
 answers a yes/no without Enter.
 
-**A move, a copy to a folder (`C`), a delete and a reconcile (`!`) each run as
+**A move, a copy to a folder (`C`), a delete and a reconcile each run as
 a job of their own**, which the app follows but does not own. The dialog shows
 one row per step: the steps done ticked with what they counted, the current
 one with its count, its bar and the entry it is at, the rest dimmed; over

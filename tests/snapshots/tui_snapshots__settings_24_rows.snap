@@ -1,10 +1,10 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 26
+assertion_line: 25
 expression: frame
 ---
 " fast-fo┌ settings ────────────────────────────────────────────────────────────────────────┐ ID0248 "
-" → proje│   Name collision              suffix                                             │tention "
+" → proje│   Name collision              suffix                                             │ you  ! "
 " ⌕ / to │ Appearance                                                                       │ newest "
 "┌ projec│   Theme                       auto (follows the terminal)                        │───────┐"
 "│  ID   │   Motion                      on                                                 │D0248  │"

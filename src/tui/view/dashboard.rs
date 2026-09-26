@@ -126,17 +126,33 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
     }
     // Something needing attention wins the row over the bases; what this
     // session did is the first thing a narrow window gives up.
-    lines.push(match app.summary.as_ref().map(|s| s.attention) {
-        Some(n) if n > 0 => split_line(
+    let attention = app.summary.as_ref().map(|summary| {
+        let attention = &summary.attention;
+        (
+            attention.needs_you(),
+            attention.auto() + attention.waiting(),
+        )
+    });
+    let key = crate::tui::command::key_of(crate::tui::command::CommandId::Attention);
+    lines.push(match attention {
+        // Only what needs a person is a warning; what fastf is finishing by
+        // itself is said quietly, so nobody is sent to act on it.
+        Some((needs_you, _)) if needs_you > 0 => split_line(
             bases,
             vec![Span::styled(
                 format!(
-                    "{} {n} need{} attention ",
+                    "{} {needs_you} need{} you  {key} ",
                     g.warn,
-                    if n == 1 { "s" } else { "" }
+                    if needs_you == 1 { "s" } else { "" }
                 ),
                 theme.warn(),
             )],
+            width,
+            g.ellipsis,
+        ),
+        Some((_, finishing)) if finishing > 0 => split_line(
+            bases,
+            vec![Span::styled(format!("finishing {finishing} "), theme.dim())],
             width,
             g.ellipsis,
         ),

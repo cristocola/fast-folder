@@ -11,6 +11,7 @@
 //! `impl App` for the keys and answers that belong to it.
 
 pub mod actions;
+pub mod attention;
 pub mod background;
 pub mod data;
 pub mod jobs;
@@ -206,6 +207,9 @@ pub struct App {
     pub library: LibraryState,
     pub search: SearchState,
     pub summary: Option<Summary>,
+    /// When the last summary landed (`elapsed_ms`): the clock the look
+    /// again while something waits for a base runs on.
+    pub summary_at: Option<u64>,
     pub summary_error: Option<String>,
     pub details: HashMap<PathBuf, ProjectDetail>,
     pub detail_open: bool,
@@ -348,6 +352,7 @@ impl App {
             library: LibraryState::new(),
             search: SearchState::default(),
             summary: None,
+            summary_at: None,
             summary_error: None,
             details: HashMap::new(),
             detail_open: true,
@@ -1078,7 +1083,7 @@ impl App {
                 if !motion::focus_easing(self.focus_moved_at, self.elapsed_ms) {
                     self.focus_moved_at = None;
                 }
-                Vec::new()
+                self.look_again_while_waiting()
             }
             Msg::Sizes(cells) => {
                 for (path, size) in cells {
@@ -1109,7 +1114,9 @@ impl App {
                 self.summary_error = None;
                 // A template written or deleted is a change to the templates
                 // tab's list, whether or not that tab is the one on screen.
-                self.refresh_templates()
+                let mut effects = self.refresh_templates();
+                effects.extend(self.maybe_finish_leftovers());
+                effects
             }
             Msg::SummaryFailed(error) => {
                 self.summary_error = Some(error.clone());
@@ -1216,6 +1223,7 @@ impl App {
             }
             Msg::Jobs(jobs) => self.on_jobs(jobs),
             Msg::JobStarted(started) => self.on_job_started(started),
+            Msg::AutoReconcileStarted(started) => self.on_auto_reconcile_started(started),
             Msg::TemplateLoaded { slug, result } => self.on_template_loaded(&slug, result),
             Msg::TemplateSourceLoaded { slug, result } => {
                 let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
@@ -2523,6 +2531,7 @@ impl App {
             CommandId::Templates => self.toggle_templates(),
             CommandId::Settings => self.open_settings(),
             CommandId::Reconcile => self.run_job(settings::Job::Reconcile),
+            CommandId::Attention => self.open_attention(),
             // `f` on the templates tab: filter the library by this template
             // **and go back to it**. The old strip set the filter and left you
             // looking at the strip, which is the one place the answer is not.

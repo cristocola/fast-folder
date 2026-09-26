@@ -71,6 +71,10 @@ pub(crate) enum SourceFate {
     KeptWhole { reason: String },
     /// Whether it left could not be told.
     Unknown { reason: String },
+    /// Retired and removed, on a mount that can put a removed folder back
+    /// (`core::records::can_resurrect`): the record stays until a later pass
+    /// finds the old copy still gone, and removes whatever came back.
+    Settling,
 }
 
 /// The facts a cleanup works from.
@@ -86,6 +90,12 @@ pub(crate) struct Cleanup<'a> {
     /// recorded. A version-3 source is never partly removed, so it must be
     /// whole.
     pub residue_allowed: bool,
+    /// The rename that set the original aside stopped part of the way (an S3
+    /// bucket through rclone renames object by object), so part of the
+    /// original is still at `source` beside its retired copy. That part is the
+    /// move's own residue: removed after the retired copy, under the same
+    /// rule, and the record stays until both are gone.
+    pub split: bool,
     /// Where each step says how far it has got. Its checks never stop for a
     /// cancel; the removal does when this ticker honours one, and a move hands
     /// the steps after its publish one that does not — they are housekeeping.
@@ -148,7 +158,7 @@ pub(crate) fn check_removable(
         // Only missing: the original holds them, so put them there and ask
         // again. Anything else that differs is somebody's decision, not ours.
         Err(gaps) if gaps.only_missing() => {
-            complete_destination(&gaps.missing, cleanup)?;
+            complete_destination(&gaps.missing, tree, cleanup)?;
             destination_covers(&walk.entries, cleanup).map_err(|gaps| gaps.message())?;
         }
         Err(gaps) => return Err(gaps.message()),
@@ -202,7 +212,11 @@ impl Gaps {
 /// Every write is checked for containment first: the moved copy is a
 /// published project, and a link placed in it since must not be written
 /// through.
-fn complete_destination(missing: &[PathBuf], cleanup: &Cleanup) -> std::result::Result<(), String> {
+fn complete_destination(
+    missing: &[PathBuf],
+    from: &Path,
+    cleanup: &Cleanup,
+) -> std::result::Result<(), String> {
     let final_path = cleanup.final_path;
     let mut failures = Vec::new();
     for relative in missing {
@@ -210,7 +224,11 @@ fn complete_destination(missing: &[PathBuf], cleanup: &Cleanup) -> std::result::
             failures.push(format!("{}: not in the move's record", relative.display()));
             continue;
         };
-        let source_path = cleanup.source.join(relative);
+        // From the tree being checked: the original before its retire, its
+        // retired copy after — which is where the original's entries are by
+        // then. 3.13 read the original's old path either way, which a retired
+        // copy has left, so a repair after the retire could never succeed.
+        let source_path = from.join(relative);
         let holds = matches!(
             transactions::examine(&source_path, relative),
             Ok(Some(found)) if transactions::agrees(recorded, &found)
@@ -341,9 +359,15 @@ fn destination_covers(
                     "{path}: older in the moved copy than when it was moved \
                      (restored from a backup?)"
                 )),
-                None => gaps
-                    .other
-                    .push(format!("{path}: not in the copy that was published")),
+                // A record whose publish could not read its own
+                // `PROJECT_INFO.md` back (a mount that failed the lstat) left
+                // it out; measured against the original's time instead, the
+                // way a record without `published.json` is — rather than
+                // failing this check on every pass for ever.
+                None if now.source_modified.nanos() >= entry.source_modified.nanos() => {}
+                None => gaps.other.push(format!(
+                    "{path}: older in the moved copy than here (restored from a backup?)"
+                )),
             },
             None if now.source_modified.nanos() < entry.source_modified.nanos() => {
                 gaps.other.push(format!(
@@ -474,6 +498,7 @@ pub struct OldCopy {
     final_path: PathBuf,
     project_id: String,
     residue_allowed: bool,
+    split: bool,
 }
 
 impl Housekeeping {
@@ -487,6 +512,7 @@ impl Housekeeping {
             final_path: cleanup.final_path.to_path_buf(),
             project_id: cleanup.project_id.to_string(),
             residue_allowed: cleanup.residue_allowed,
+            split: cleanup.split,
         }))
     }
 
@@ -533,6 +559,7 @@ impl Housekeeping {
                     final_path: &old.final_path,
                     project_id: &old.project_id,
                     residue_allowed: old.residue_allowed,
+                    split: old.split,
                     ticker,
                 };
                 remove_retired(old.transaction, &cleanup)
@@ -564,7 +591,20 @@ impl Housekeeping {
 /// user to look at — never removed part of the way on purpose.
 pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) -> SourceFate {
     let retired = transaction.retired_path();
-    if entry_exists(&retired) {
+    let present = match crate::util::paths::presence(&retired) {
+        crate::util::paths::Presence::Present(_) => true,
+        crate::util::paths::Presence::Absent => false,
+        // A mount that does not answer says nothing about the old copy: the
+        // record stays, and the next pass finishes once it answers.
+        crate::util::paths::Presence::Unknown(error) => {
+            return SourceFate::Leftover {
+                path: retired,
+                reason: format!("it does not answer ({error})"),
+                redundant: true,
+            };
+        }
+    };
+    if present {
         let recorded = cleanup.manifest.entries.len();
         cleanup.ticker.phase(JobPhase::Checking, recorded * 2);
         if let Err(reason) = check_removable(&retired, true, cleanup) {
@@ -602,6 +642,14 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
                 record_kept: Some(format!("{error:#}")),
             };
         }
+    }
+    if cleanup.split
+        && let Some(fate) = remove_split_residue(cleanup)
+    {
+        return fate;
+    }
+    if settling(&transaction.journal.operation_id, cleanup.source) {
+        return SourceFate::Settling;
     }
     cleanup.ticker.phase(JobPhase::Clearing, 0);
     // A 3.12.0 record's old staging folder may hold files the mount put
@@ -642,6 +690,106 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
     }
 }
 
+/// Whether the record of `operation`, whose old copy is gone from beside
+/// `source`, waits out the settle: on a mount that uploads in the background
+/// a removed folder can come back minutes later (rclone did, on R2, after a
+/// move reported its old copy removed), and only a record can remove it then.
+/// A record the data dir's index does not know is cleared at once, as before.
+pub(crate) fn settling(operation: &str, source: &Path) -> bool {
+    let Some(source_base) = source.parent() else {
+        return false;
+    };
+    if !crate::core::records::can_resurrect(source_base) {
+        return false;
+    }
+    let now = crate::util::time::now_unix();
+    crate::core::records::gone_since(operation, now)
+        .is_some_and(|since| now - since < crate::core::records::SETTLE_SECS)
+}
+
+/// What a split rename left at the original's path, removed under the rule
+/// for a residue: every entry one the move recorded, unchanged, and in the
+/// moved copy. `None` when it is gone; otherwise why it is not, and the record
+/// stays.
+fn remove_split_residue(cleanup: &Cleanup) -> Option<SourceFate> {
+    let source = cleanup.source.to_path_buf();
+    match crate::util::paths::presence(&source) {
+        crate::util::paths::Presence::Absent => return None,
+        crate::util::paths::Presence::Unknown(error) => {
+            return Some(SourceFate::Leftover {
+                path: source,
+                reason: format!("it does not answer ({error})"),
+                redundant: true,
+            });
+        }
+        crate::util::paths::Presence::Present(_) => {}
+    }
+    // A residue holds only what the move recorded, unchanged. Anything else
+    // there means the folder is not (only) the original's: without our
+    // `PROJECT_INFO.md` it is one a program made again at that path after the
+    // retire, and is left alone; with it, it is ours with something new in
+    // it, and both it and the record stay for a person.
+    let walk = match Walk::of(&source, "original") {
+        Ok(walk) => walk,
+        Err(error) => {
+            return Some(SourceFate::Leftover {
+                path: source,
+                reason: format!("{error:#}"),
+                redundant: true,
+            });
+        }
+    };
+    let diff = cleanup.manifest.compare(&walk, Match::Whole);
+    if !diff.is_residue() {
+        let ours = crate::core::project_info::read_metadata(&source)
+            .ok()
+            .flatten()
+            .is_some_and(|metadata| metadata.id == cleanup.project_id);
+        if !ours {
+            return None;
+        }
+        return Some(SourceFate::Leftover {
+            path: source,
+            reason: format!(
+                "part of the original is still there, and it is not only what was moved: {}",
+                diff.summary(LISTED)
+            ),
+            redundant: false,
+        });
+    }
+    if let Err(reason) = check_removable(&source, true, cleanup) {
+        return Some(SourceFate::Leftover {
+            path: source,
+            reason,
+            redundant: false,
+        });
+    }
+    cleanup
+        .ticker
+        .phase(JobPhase::Removing, cleanup.manifest.entries.len());
+    match remove_tree_guarded(
+        &source,
+        Some(cleanup.manifest),
+        Purpose::Move,
+        cleanup.ticker,
+        Some((cleanup.final_path, cleanup.project_id)),
+    ) {
+        Removal::Removed => None,
+        Removal::Leftover {
+            remaining,
+            reason,
+            kept_on_purpose,
+        } => Some(SourceFate::Leftover {
+            path: source,
+            reason: format!(
+                "{remaining} {} left: {reason}",
+                if remaining == 1 { "entry" } else { "entries" }
+            ),
+            redundant: !kept_on_purpose,
+        }),
+    }
+}
+
 /// How a retire went.
 #[derive(Debug)]
 pub(crate) enum Retire {
@@ -656,24 +804,53 @@ pub(crate) enum Retire {
 /// network the server can complete it while the client times out, so both
 /// paths are looked at again before anything is said.
 pub(crate) fn retire(source: &Path, retired: &Path) -> Retire {
+    use crate::util::paths::{Presence, presence};
     step_out_of(source);
-    if entry_exists(retired) {
-        return Retire::Unknown(format!(
-            "{} is already there",
-            crate::util::paths::display_path(retired)
-        ));
+    match presence(retired) {
+        Presence::Absent => {}
+        Presence::Present(_) => {
+            return Retire::Unknown(format!(
+                "{} is already there",
+                crate::util::paths::display_path(retired)
+            ));
+        }
+        // Nothing has been renamed yet, so the original is whole where it
+        // was; a name that does not answer is no name to rename onto.
+        Presence::Unknown(error) => {
+            return Retire::KeptWhole(format!(
+                "{} does not answer ({error})",
+                crate::util::paths::display_path(retired)
+            ));
+        }
     }
     match crate::util::fs_retry::rename_dir(source, retired) {
         Ok(()) => Retire::Done,
-        Err(error) => match (entry_exists(source), entry_exists(retired)) {
-            (false, true) => Retire::Done,
-            (true, false) => {
+        Err(error) => match (presence(source), presence(retired)) {
+            (Presence::Absent, Presence::Present(_)) => Retire::Done,
+            (Presence::Present(_), Presence::Absent) => {
                 Retire::KeptWhole(crate::util::fs_retry::describe_rename_error(&error))
             }
-            _ => Retire::Unknown(format!(
-                "renaming it aside reported '{error}', and afterwards neither it nor {} \
-                 could be found where expected",
+            // A rename that is not one step — an S3 bucket through rclone
+            // copies and deletes object by object — can stop with part of the
+            // tree on each side.
+            (Presence::Present(_), Presence::Present(_)) => Retire::Unknown(format!(
+                "renaming it aside reported '{error}' part of the way: some of it is still \
+                 here and some is at {}",
                 crate::util::paths::display_path(retired)
+            )),
+            (Presence::Absent, Presence::Absent) => Retire::Unknown(format!(
+                "renaming it aside reported '{error}', and afterwards neither it nor {} \
+                 could be found",
+                crate::util::paths::display_path(retired)
+            )),
+            (source, retired_is) => Retire::Unknown(format!(
+                "renaming it aside reported '{error}', and the folders do not answer \
+                 ({}{})",
+                source.unknown().map(|e| e.to_string()).unwrap_or_default(),
+                retired_is
+                    .unknown()
+                    .map(|e| format!("; {e}"))
+                    .unwrap_or_default()
             )),
         },
     }
@@ -813,8 +990,14 @@ pub(crate) fn remove_tree_guarded(
             Err(error) => removing.note(root, &error.to_string()),
         }
     }
-    if !entry_exists(root) {
-        return Removal::Removed;
+    match crate::util::paths::presence(root) {
+        crate::util::paths::Presence::Absent => return Removal::Removed,
+        // Not "removed": the mount did not say so. What is left, if anything,
+        // is for the next pass once it answers.
+        crate::util::paths::Presence::Unknown(error) => {
+            removing.note(root, &format!("it does not answer ({error})"));
+        }
+        crate::util::paths::Presence::Present(_) => {}
     }
     let remaining = count(root);
     let mut reason = removing.stopped.take().unwrap_or_default();
@@ -887,7 +1070,22 @@ impl Removing<'_> {
                 return;
             }
         };
-        let children: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+        // A listing that stops part of the way cannot say what it did not
+        // list: the folder is noted, and its own removal, which then fails,
+        // keeps what is left for the next pass.
+        let mut children: Vec<PathBuf> = Vec::new();
+        for entry in entries {
+            match entry {
+                Ok(entry) => children.push(entry.path()),
+                Err(error) => {
+                    self.note(
+                        dir,
+                        &format!("its listing stopped part of the way ({error})"),
+                    );
+                    break;
+                }
+            }
+        }
         for path in children {
             if self.stopped.is_some() {
                 return;
@@ -1070,10 +1268,6 @@ fn grant_owner(dir: &Path) {
     let _ = dir;
 }
 
-fn entry_exists(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1166,6 +1360,24 @@ mod tests {
         };
         assert!(kept_on_purpose);
         assert_eq!(remaining, 100, "it stopped at the look");
+    }
+
+    /// A removal is `Removed` only when the folder is provably gone: a mount
+    /// that answers the last look with an error has not said so. 3.13 took
+    /// the error for "gone" and cleared the record.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_removal_is_not_done_until_the_folder_is_provably_gone() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".fastf-deleted-1-4");
+        tree(&root);
+        let removal = crate::util::faults::with_thread_fault("presence:lstat:eio", || {
+            remove_tree(&root, None, Purpose::Delete, Ticker::none())
+        });
+        let Removal::Leftover { reason, .. } = removal else {
+            panic!("an unanswered look is not a removal");
+        };
+        assert!(reason.contains("does not answer"), "{reason}");
     }
 
     /// On an ordinary folder links show as links, and asking leaves nothing.

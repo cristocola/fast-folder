@@ -78,6 +78,8 @@ impl SourceOutcome {
             },
             SourceFate::KeptWhole { reason } => SourceOutcome::KeptWhole { reason },
             SourceFate::Unknown { reason } => SourceOutcome::Unknown { reason },
+            // Removed; the record only waits out the settle.
+            SourceFate::Settling => SourceOutcome::Removed,
         }
     }
 
@@ -492,6 +494,11 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
     )?;
     ticker.update(|state| state.operation = Some(transaction.journal.operation_id.clone()));
     let mut published = false;
+    // Set the moment the publish starts writing. A publish whose write then
+    // reports an error may still have landed — a `sync_all` that fails after
+    // the bytes did — and a `PROJECT_INFO.md` at the destination makes that
+    // folder the project, whatever the error said.
+    let mut publishing = false;
     let pre_publication = (|| -> Result<(MoveManifest, MoveManifest)> {
         ticker.phase(JobPhase::Scanning, 0);
         let manifest = MoveManifest::scan_with(&project.path, ticker)?;
@@ -558,6 +565,7 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
         }
         ticker.phase(JobPhase::Publishing, 0);
         ticker.update(|state| state.committed = true);
+        publishing = true;
         // The publish: one file, written once. No folder on the target is
         // renamed, which is what a cloud mount with uploads in flight needs.
         // Its copy is handed a flag nobody sets: once it starts, it finishes.
@@ -569,19 +577,41 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
             &AtomicBool::new(false),
         )
         .with_context(|| format!("publishing '{}' in {}", project.name, new_base.display()))?;
+        crate::util::faults::check("move:after-publish-write")?;
         published = true;
         let metadata_path = Path::new(project_info::RESERVED_FILENAME);
-        if let Ok(Some(entry)) = transactions::examine(&staging.join(metadata_path), metadata_path)
-        {
-            staged.entries.push(entry);
-            staged
-                .entries
-                .sort_by(|left, right| left.path.cmp(&right.path));
+        // The file was written a moment ago; a mount that fails one lstat may
+        // answer the next. Without the entry, the checks before the old
+        // copy's removal measure it against the original's time instead.
+        for attempt in 0..3 {
+            if let Ok(Some(entry)) =
+                transactions::examine(&staging.join(metadata_path), metadata_path)
+            {
+                staged.entries.push(entry);
+                staged
+                    .entries
+                    .sort_by(|left, right| left.path.cmp(&right.path));
+                break;
+            }
+            if attempt < 2 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
         }
         let published_record = transaction.write_published(&staged)?;
         Ok((manifest, published_record))
     })();
 
+    // A publish that reported an error but left its file behind is a publish:
+    // rolling it back would remove a folder that is already the project, and
+    // clearing the record would leave both copies listed with nothing tying
+    // them together. The record stays, and the move ends as published.
+    if !published
+        && publishing
+        && !crate::util::paths::presence(&new_path.join(project_info::RESERVED_FILENAME))
+            .is_absent()
+    {
+        published = true;
+    }
     let (manifest, published_record) = match pre_publication {
         Ok(records) => records,
         Err(error) if !published => {
@@ -646,6 +676,7 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
             final_path: new_path,
             project_id: &project.id,
             residue_allowed: false,
+            split: false,
             ticker: ticker.uncancellable(),
         };
         match move_cleanup::set_aside(transaction, &cleanup, || {

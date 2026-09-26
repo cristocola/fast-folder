@@ -323,9 +323,30 @@ what differs. A move another machine began is reported, never acted on: the
 source path it names means something else here.
 
 Hidden folders fastf leaves beside the projects are handled too: a set-aside
-original with no transaction left is reported and never removed, a deleted
-project's `.fastf-deleted-*` folder is removed (you confirmed the delete), and
-a move's `.fastf-probe-*` folder is removed.
+original with no transaction left is reported and never removed — with which
+project it holds and where that project is now — a deleted project's
+`.fastf-deleted-*` folder is removed (you confirmed the delete), and a move's
+`.fastf-probe-*` folder is removed.
+
+**A record is never lost while anything it owns is left.** fastf counts
+something as gone only when the filesystem says "nothing there"; a mount that
+answers with an error — dropped, restarting, not answering — says nothing, and
+the record waits for it. Reconcile then reports the move as **waiting for a
+base to answer**, changes nothing, and finishes it once the base is back; an
+unplugged drive is waiting too, never something you have to look at. fastf
+also keeps a small index of every record in its data folder, so a record in a
+base you have since removed from `bases`, or beside a `copy-to` destination, is
+still found and finished.
+
+On an rclone mount a removed folder can come back: an upload still queued in
+rclone's cache lands after the removal. There, the record of a move stays for
+ten minutes after its old copy is removed, unseen; a reconcile in that time
+removes whatever came back, and one after it clears the record.
+
+A rename that stopped part of the way — an S3 bucket through rclone renames
+object by object — leaves part of the original at its path and part at its
+hidden name. Both are the move's own: reconcile removes the hidden part, then
+what is left at the original's path, and clears the record only after both.
 
 Every line reconcile prints names the project, its transaction and what is on
 disk. Missing configured bases, identity mismatches, malformed journals, and

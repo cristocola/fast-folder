@@ -296,6 +296,10 @@ pub fn job_rows(jobs: &[crate::core::jobs::JobView]) -> (Vec<String>, Vec<String
                     "cancelled",
                     state.map(|s| s.summary.clone()).unwrap_or_default(),
                 ),
+                Some(JobStatus::Unknown) => (
+                    "ended",
+                    state.map(|s| s.summary.clone()).unwrap_or_default(),
+                ),
             }
         };
         let started = state

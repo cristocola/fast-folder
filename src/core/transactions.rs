@@ -40,6 +40,9 @@ pub const JOURNAL_FILE: &str = "move.json";
 /// had long since retired its original. A file that is only ever created
 /// cannot be misplaced, and the phase is the highest marker present.
 const PHASE_PREFIX: &str = "phase.";
+
+/// See [`MoveTransaction::mark_split`].
+const SPLIT_MARKER: &str = "split";
 pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 pub const STAGING_DIR: &str = "staging";
 /// The destination as it was published: the walk of the verified staging tree,
@@ -824,7 +827,7 @@ impl Problem {
 
 impl MovePhase {
     /// The order phases are reached in.
-    fn rank(self) -> u8 {
+    pub(crate) fn rank(self) -> u8 {
         match self {
             Self::Copying => 0,
             Self::ReadyToCommit => 1,
@@ -1168,6 +1171,15 @@ fn relative_to(root: &Path, path: &Path) -> Result<PathBuf> {
         .with_context(|| format!("deriving relative path for {}", path.display()))
 }
 
+/// Whether a move's copy has become the project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Publication {
+    Published,
+    NotPublished,
+    /// The filesystem did not answer the question.
+    Unknown(String),
+}
+
 /// A claimed transaction directory owned by the current move.
 #[derive(Debug)]
 pub struct MoveTransaction {
@@ -1196,6 +1208,23 @@ impl MoveTransaction {
             let operation_dir = transaction_root.join(&operation_id);
             match fs::create_dir(&operation_dir) {
                 Ok(()) => {
+                    // Where the record is, for a reconcile that walks only the
+                    // configured bases (`core::records`).
+                    crate::core::records::add(&crate::core::records::Entry {
+                        operation: operation_id.clone(),
+                        kind: match operation {
+                            Operation::Move => "move",
+                            Operation::Copy => "copy",
+                        }
+                        .to_string(),
+                        project_id: project_id.to_string(),
+                        record: operation_dir.clone(),
+                        source_base: source_base.to_path_buf(),
+                        source_folder: source_folder.to_path_buf(),
+                        target_base: target_base.to_path_buf(),
+                        target_folder: target_folder.to_path_buf(),
+                        ..Default::default()
+                    });
                     let result = (|| -> Result<Self> {
                         crate::util::faults::check("move:after-transaction-create")?;
                         let journal = MoveJournal {
@@ -1222,6 +1251,10 @@ impl MoveTransaction {
                     })();
                     if result.is_err() {
                         let _ = crate::util::fs_retry::remove_dir_all(&operation_dir);
+                        if let Some(name) = operation_dir.file_name().and_then(|name| name.to_str())
+                        {
+                            crate::core::records::remove(name);
+                        }
                     }
                     return result;
                 }
@@ -1341,6 +1374,30 @@ impl MoveTransaction {
         Ok(())
     }
 
+    /// Record that the rename setting the original aside stopped part of the
+    /// way: a later pass that finds the retired copy gone still knows that
+    /// what is at the original's path is this move's residue. A file created
+    /// once; a 3.13 binary reads only `phase.*` markers and ignores it.
+    pub fn mark_split(&self) -> Result<()> {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(self.operation_dir.join(SPLIT_MARKER))
+        {
+            Ok(file) => {
+                let _ = file.sync_all();
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(error).context("recording that the retire stopped part of the way"),
+        }
+    }
+
+    /// See [`Self::mark_split`].
+    pub fn is_split(&self) -> bool {
+        self.operation_dir.join(SPLIT_MARKER).is_file()
+    }
+
     pub fn claim_staging(&self) -> Result<PathBuf> {
         let staging = self.staging_path();
         fs::create_dir(&staging)
@@ -1351,10 +1408,32 @@ impl MoveTransaction {
     /// Whether the copy at the final path has been published: it holds a
     /// `PROJECT_INFO.md` that reads as this move's project.
     pub fn final_is_published(&self) -> bool {
-        crate::core::project_info::read_metadata(&self.final_path())
-            .ok()
-            .flatten()
-            .is_some_and(|metadata| metadata.id == self.journal.project_id)
+        matches!(self.publication(), Publication::Published)
+    }
+
+    /// [`Self::final_is_published`], with the third answer a mount can give:
+    /// it did not say. Removing an unpublished copy asks this, because a
+    /// published one read through a mount that failed the read is the project,
+    /// and must not be taken for fastf's own unfinished copy.
+    pub fn publication(&self) -> Publication {
+        let pinfo = crate::core::project_info::pinfo_path(&self.final_path());
+        match crate::util::paths::presence(&pinfo) {
+            crate::util::paths::Presence::Absent => return Publication::NotPublished,
+            crate::util::paths::Presence::Unknown(error) => {
+                return Publication::Unknown(error.to_string());
+            }
+            crate::util::paths::Presence::Present(_) => {}
+        }
+        match crate::core::project_info::read_metadata(&self.final_path()) {
+            Ok(Some(metadata)) if metadata.id == self.journal.project_id => Publication::Published,
+            Ok(_) => Publication::NotPublished,
+            // A read that failed says nothing; a file that reads but does not
+            // parse is a publish that never finished writing.
+            Err(error) if error.chain().any(|cause| cause.is::<std::io::Error>()) => {
+                Publication::Unknown(format!("{error:#}"))
+            }
+            Err(_) => Publication::NotPublished,
+        }
     }
 
     /// Move into place any file a cloud mount uploaded to a 3.12.0 record's
@@ -1374,8 +1453,15 @@ impl MoveTransaction {
         let Some(staging) = self.old_staging_path() else {
             return Ok((0, Vec::new()));
         };
-        if fs::symlink_metadata(&staging).is_err() {
-            return Ok((0, Vec::new()));
+        match crate::util::paths::presence(&staging) {
+            crate::util::paths::Presence::Absent => return Ok((0, Vec::new())),
+            crate::util::paths::Presence::Unknown(error) => {
+                bail!(
+                    "the old staging folder {} does not answer ({error})",
+                    staging.display()
+                )
+            }
+            crate::util::paths::Presence::Present(_) => {}
         }
         let final_path = self.final_path();
         let walk = Walk::of(&staging, "old staging")?;
@@ -1462,7 +1548,26 @@ impl MoveTransaction {
     pub fn remove(self) -> Result<()> {
         if self.journal.in_place && self.journal.phase == MovePhase::Copying {
             let staging = self.final_path();
-            if fs::symlink_metadata(&staging).is_ok() && !self.final_is_published() {
+            let there = match crate::util::paths::presence(&staging) {
+                crate::util::paths::Presence::Absent => false,
+                crate::util::paths::Presence::Present(_) => true,
+                crate::util::paths::Presence::Unknown(error) => {
+                    bail!(
+                        "the copy at {} does not answer ({error})",
+                        staging.display()
+                    )
+                }
+            };
+            let unpublished = there
+                && match self.publication() {
+                    Publication::NotPublished => true,
+                    Publication::Published => false,
+                    Publication::Unknown(error) => bail!(
+                        "cannot tell whether the copy at {} is published ({error})",
+                        staging.display()
+                    ),
+                };
+            if unpublished {
                 crate::util::paths::require_real_directory(&staging, "unpublished copy")?;
                 if let crate::core::move_cleanup::Removal::Leftover { reason, .. } =
                     crate::core::move_cleanup::remove_tree(
@@ -1516,7 +1621,10 @@ impl MoveTransaction {
         let mut waited = 0;
         loop {
             match crate::util::fs_retry::remove_dir_all(&self.operation_dir) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    crate::core::records::remove(&self.journal.operation_id);
+                    return Ok(());
+                }
                 Err(error) if is_io_error(&error) && waited < RECORD_REMOVAL_WAIT_MS => {
                     std::thread::sleep(std::time::Duration::from_millis(1000));
                     waited += 1000;
@@ -1658,6 +1766,35 @@ pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
         }
     }
     Ok(journal)
+}
+
+/// A transaction directory that holds nothing a move writes after its
+/// journal: no manifest, no marker, nothing but at most a `move.json` that did
+/// not finish. A move makes its copy only after its manifest, so one killed
+/// this early left nothing anywhere else either.
+pub fn is_bare_record(operation_dir: &Path) -> bool {
+    // fastf names its records; anything else is somebody's, and a journal
+    // that reads as JSON but not as a valid record is reported, never removed.
+    if !operation_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_operation_id)
+    {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(operation_dir) else {
+        return false;
+    };
+    for entry in entries {
+        match entry {
+            Ok(entry) if entry.file_name() == JOURNAL_FILE => {}
+            _ => return false,
+        }
+    }
+    match fs::read(operation_dir.join(JOURNAL_FILE)) {
+        Ok(raw) => serde_json::from_slice::<serde_json::Value>(&raw).is_err(),
+        Err(error) => crate::util::paths::is_absence(&error),
+    }
 }
 
 pub fn read_manifest(operation_dir: &Path) -> Result<MoveManifest> {

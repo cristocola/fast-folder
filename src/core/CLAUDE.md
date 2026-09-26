@@ -386,6 +386,23 @@ copy restored from an older backup keeps the original. Without a published recor
 device, re-checks each entry against the manifest, carries on past a failure,
 gives a folder its owner's permission back, and counts what it left.
 
+**Only "nothing there" is absence** (`util::paths::presence`: `Present`,
+`Absent` on ENOENT/ENOTDIR only, `Unknown` for any other error). 3.13 asked
+`symlink_metadata(p).is_ok()`, so an EIO or ENOTCONN from a mount that dropped
+read as "gone": the removal reported `Removed`, the record was cleared, and the
+old copy was left with nothing to finish it. Every decision that removes
+something or clears a record asks `presence` and treats `Unknown` as a reason
+to wait — reconcile files it under `waiting`, a removal is a `Leftover`, a
+retire refuses to rename past it, `MoveTransaction::remove` refuses to discard
+a copy whose publication it cannot read (`Publication::Unknown`).
+`provisioning::entry_exists_quiet` survives only for *finding* work.
+
+**A publish that reported an error but left its file is a publish**
+(`move_engine`, `publishing`): a `sync_all` that fails after the bytes landed
+used to roll the move back and clear its record, leaving both copies listed.
+A record without `PROJECT_INFO.md` in `published.json` (a failed read-back)
+measures that entry against the original's time instead of failing forever.
+
 **Before a byte is copied** (`core::move_preflight`, a courtesy — correctness
 never depends on it): the scan's problems refuse the move, all of them named; a
 move (never a copy) probes its source base with `.fastf-probe-<operation>` —
@@ -466,7 +483,13 @@ process that minted it, and a worker writes its pid before it does anything,
 so reconcile and `list_incomplete` skip any record, retired folder, deleted
 folder or probe whose id names a live worker (`jobs::live_workers`,
 `jobs::owned_by`) — no window in which a record exists and its job cannot be
-told. A job also owns what it **claims** (`jobs::claim`, a file in
+told. **Whichever data dir started it**: `owned_by` also asks the operating
+system (`util::process::is_live_fastf_since`) whether the id's pid is a fastf
+still running that started before the id was minted — a second data dir on
+the same machine (portable beside installed, a test lab) otherwise took a live
+move's record for an abandoned one and discarded its copy mid-write. The
+process's own pid is excluded: an in-process reconcile after an in-process
+move is how the library is tested. A job also owns what it **claims** (`jobs::claim`, a file in
 `jobs/<id>/owns/`): a reconcile claims each removal it defers before it drops
 the data lock, since those records were made by other, dead processes.
 **Liveness is read before state** (`jobs::view`): a worker writes its last
@@ -517,6 +540,7 @@ destination):
 
 | phase | on disk | action |
 |---|---|---|
+| any | a path it names does not answer (`presence` is `Unknown`), or its source base is configured but not mounted | `waiting`; nothing changed |
 | any | `host` is another machine's | report only |
 | any | `operation = Copy` | discard T if unpublished, clear the record; never touch S |
 | Copying, ReadyToCommit | R present | report |
@@ -529,12 +553,32 @@ destination):
 | CleanupPending, Retired | F not ours | report; with R present, say R may be the only copy |
 | CleanupPending | R present | write `Retired`, bookkeeping, remove R |
 | CleanupPending | S present | check, retire, `Retired`, bookkeeping, remove R |
+| CleanupPending | R and S (ours or identity-less), first seen here | split rename: mark `split`, `Retired`, bookkeeping, remove R, then S under the residue rule; S holding something new with our identity keeps both and the record |
+| Retired, `split` marked | no R, S present | remove S under the residue rule |
+| CleanupPending, Retired | no R, and no S or `Retired`, on a mount that can resurrect (`records::can_resurrect`) inside the settle | keep the record, quietly |
 | CleanupPending, Retired | no R, and no S or `Retired` | bookkeeping, sweep the old staging's strays into place (`finish_record`), clear the record |
+| — | a transaction folder named by an operation id holding nothing but a torn `move.json` | remove it (a move writes its manifest, and only then copies) |
+
+**The data dir indexes every record** (`core::records`,
+`<data dir>/records/<op>.json`, written at `MoveTransaction::begin`, removed
+with the record; advisory, never authority). Reconcile visits indexed records
+the configured bases do not hold — a `copy-to`'s beside a destination outside
+them, a move's in a base since dropped from `bases` — and the index keeps
+`gone_at`, **the settle**: on an rclone or unknown FUSE mount, a removal that
+ends with the old copy gone keeps the record (`SourceFate::Settling`, reported
+as removed) until a pass `records::SETTLE_SECS` later still finds it gone,
+because rclone put removed folders back from uploads still queued. A settling
+record is not attention. In unit tests the index is read only by the thread
+holding `test_env::EnvGuard` (`test_env::holds_guard`), since the environment
+is the process's.
 
 `reconcile_base` and `list_incomplete` never look inside `.fastf-moved-*` or
 `.fastf-deleted-*` for a create to resume. A retired folder no transaction owns is
-reported, never removed; a deleted project's folder is removed (the word confirmed
-it). Every message names the project, its record and phase, and what is on disk;
+reported, never removed — saying which project it holds and where that project
+is now (`orphan_note`: its own `PROJECT_INFO.md`, or the job that moved it); a
+deleted project's folder is removed (the word confirmed it). A configured base
+that is not mounted is `waiting`, not "needs a look": an unplugged drive is
+ordinary. Every message names the project, its record and phase, and what is on disk;
 "left untouched" about a pass is not a statement about the disk. `leftovers` holds
 the hidden folders not removed yet, `cleared` the deleted ones that were.
 
@@ -779,12 +823,26 @@ not have known (a partial project rolled back), `fatal` for the two paths with n
 `Result` (an armed failpoint's `abort`, an unresolvable data directory). Each is
 also written to the log (`util::log`), whichever surface shows it.
 
+**Failpoints that fail like a filesystem**: a boundary that makes a
+filesystem call asks `faults::check_io(name)`, whose io modes (`eio`,
+`enotconn`, `enotempty`, `estale`, `eacces`, `ebusy`, `enoent`, each with an
+optional `-<n>`: fail n times, then pass) return that `io::Error`, so the code
+takes the path a real mount would send it down. The crash-recovery registry
+scan knows both `check` and `check_io`. `fs:as-rclone` is a decision point:
+`util::fs_kind` answers `Rclone` for every folder, so the settle runs on a
+local disk.
+
 **The log is facts, messages are sentences.** `util::log` writes
 `<data dir>/logs/fastf.log`, one line per event (`stamp LEVEL job pid text`,
 continuation lines indented), with one `write` on an append-mode file so
 processes interleave whole lines, and rotates past 4 MiB under a try-lock.
 A job's steps reach it through the `Ticker`, which logs each step at info once
-`Ticker::subject` names the job, and each entry at debug. `util::messages` keeps
+`Ticker::subject` names the job, and each entry at **trace** — built under the
+progress lock, written after it — which only `log-level trace` turns on: at
+debug, 3.13's per-entry lines made one move of twelve projects an 85 MB log. A
+job's own log takes debug and above through one handle kept open, and rotates
+to `log.1` past 16 MiB; `jobs::prune` also keeps all jobs under 64 MiB, oldest
+first. `util::messages` keeps
 what a person was shown (`messages.log`, JSON lines, a tolerant reader) and
 writes each to the log too. In a `cfg(test)` build the log writes only where
 `FASTF_INSTALL_DIR` is set, so `cargo test` never fills the developer's own.

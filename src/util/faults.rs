@@ -28,6 +28,16 @@
 //! FASTF_FAULT=move:force-staged,remove:each-entry:delay-400
 //! ```
 //!
+//! A fourth kind of mode fails a point **the way a filesystem does**, for the
+//! boundaries that ask [`check_io`]: `eio`, `enotconn`, `enotempty`, `estale`,
+//! `eacces`, `ebusy` or `enoent` returns that `io::Error`, and a `-<n>` suffix
+//! fails only the first `n` times the point is reached, then lets it pass — a
+//! mount that drops and comes back:
+//!
+//! ```text
+//! FASTF_FAULT=remove:unlink:enotconn-3
+//! ```
+//!
 //! Several failpoints can be armed at once as a **comma list**, which trips
 //! every named point on the way:
 //!
@@ -72,17 +82,141 @@ thread_local! {
 /// `faults::check("move:before-commit-rename")?;`
 #[cfg(debug_assertions)]
 pub fn check(name: &str) -> Result<()> {
-    // Thread-local first: an in-process test's arming must not be visible to
-    // tests running in parallel.
-    let armed = THREAD_FAULT.with(|f| f.borrow().clone());
-    let armed = match armed {
-        Some(value) => value,
-        None => match std::env::var(FAULT_ENV) {
-            Ok(value) => value,
-            Err(_) => return Ok(()),
-        },
+    check_io(name).map_err(|error| {
+        if error.raw_os_error().is_some() {
+            anyhow::Error::new(error).context(format!("injected fault at '{name}'"))
+        } else {
+            anyhow::anyhow!("{error}")
+        }
+    })
+}
+
+/// Trip point `name` as a filesystem call would fail: an `io::Error`, with the
+/// errno an io mode names (see the module docs), so the code under test takes
+/// the same path it takes on a real mount.
+#[cfg(debug_assertions)]
+pub fn check_io(name: &str) -> std::io::Result<()> {
+    let Some((armed, scope)) = armed() else {
+        return Ok(());
     };
-    trip(name, &armed)
+    for (point, mode) in specs(&armed) {
+        if point != name {
+            continue;
+        }
+        if let Some(millis) = mode.strip_prefix("delay-") {
+            let millis = millis.parse::<u64>().unwrap_or(0);
+            std::thread::sleep(std::time::Duration::from_millis(millis));
+            continue;
+        }
+        if mode == "abort" {
+            // No unwinding, no destructors, no cleanup: a hard process stop.
+            crate::util::diag::fatal(format!("fault injection aborting at '{name}'"));
+            std::process::abort();
+        }
+        if let Some((errno, times)) = io_mode(mode) {
+            if let Some(times) = times
+                && bump(scope, &armed, name) > times
+            {
+                continue;
+            }
+            return Err(io_error(errno));
+        }
+        return Err(std::io::Error::other(format!("injected fault at '{name}'")));
+    }
+    Ok(())
+}
+
+/// Where the armed value came from: a thread's own arming, or the process's
+/// environment. Each keeps its own `-<n>` counts, so a test in one thread never
+/// spends another's.
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy)]
+enum Scope {
+    Thread,
+    Process,
+}
+
+#[cfg(debug_assertions)]
+fn armed() -> Option<(String, Scope)> {
+    if let Some(value) = THREAD_FAULT.with(|f| f.borrow().clone()) {
+        return Some((value, Scope::Thread));
+    }
+    std::env::var(FAULT_ENV)
+        .ok()
+        .map(|value| (value, Scope::Process))
+}
+
+/// An io mode's errno name and how many times it fails, if `mode` is one.
+#[cfg(debug_assertions)]
+fn io_mode(mode: &str) -> Option<(&str, Option<u32>)> {
+    let (errno, times) = match mode.split_once('-') {
+        Some((errno, n)) => (errno, Some(n.parse::<u32>().ok()?)),
+        None => (mode, None),
+    };
+    matches!(
+        errno,
+        "eio" | "enotconn" | "enotempty" | "estale" | "eacces" | "ebusy" | "enoent"
+    )
+    .then_some((errno, times))
+}
+
+/// The error an io mode stands for, as this platform's filesystem reports it.
+#[cfg(debug_assertions)]
+fn io_error(errno: &str) -> std::io::Error {
+    #[cfg(unix)]
+    let code = match errno {
+        "eio" => libc::EIO,
+        "enotconn" => libc::ENOTCONN,
+        "enotempty" => libc::ENOTEMPTY,
+        "estale" => libc::ESTALE,
+        "eacces" => libc::EACCES,
+        "ebusy" => libc::EBUSY,
+        _ => libc::ENOENT,
+    };
+    // The nearest Windows answers: ERROR_IO_DEVICE, ERROR_NETNAME_DELETED,
+    // ERROR_DIR_NOT_EMPTY, ERROR_UNEXP_NET_ERR, ERROR_ACCESS_DENIED,
+    // ERROR_SHARING_VIOLATION, ERROR_FILE_NOT_FOUND.
+    #[cfg(not(unix))]
+    let code = match errno {
+        "eio" => 1117,
+        "enotconn" => 64,
+        "enotempty" => 145,
+        "estale" => 59,
+        "eacces" => 5,
+        "ebusy" => 32,
+        _ => 2,
+    };
+    std::io::Error::from_raw_os_error(code)
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static THREAD_COUNTS: std::cell::RefCell<std::collections::HashMap<String, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(debug_assertions)]
+static PROCESS_COUNTS: std::sync::Mutex<Option<std::collections::HashMap<String, u32>>> =
+    std::sync::Mutex::new(None);
+
+/// Count one more trip of `name` under this arming; answers the new count.
+#[cfg(debug_assertions)]
+fn bump(scope: Scope, armed: &str, name: &str) -> u32 {
+    let key = format!("{armed}\u{0}{name}");
+    let step = |counts: &mut std::collections::HashMap<String, u32>| {
+        let count = counts.entry(key.clone()).or_insert(0);
+        *count += 1;
+        *count
+    };
+    match scope {
+        Scope::Thread => THREAD_COUNTS.with(|counts| step(&mut counts.borrow_mut())),
+        Scope::Process => {
+            let mut counts = PROCESS_COUNTS
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            step(counts.get_or_insert_with(std::collections::HashMap::new))
+        }
+    }
 }
 
 /// The armed value split into `(point, mode)` pairs — a comma list, each entry
@@ -95,29 +229,10 @@ fn specs(armed: &str) -> Vec<(&str, &str)> {
         .map(|spec| match spec.rsplit_once(':') {
             Some((point, mode @ ("abort" | "error"))) => (point, mode),
             Some((point, mode)) if mode.starts_with("delay-") => (point, mode),
+            Some((point, mode)) if io_mode(mode).is_some() => (point, mode),
             _ => (spec, "error"),
         })
         .collect()
-}
-
-#[cfg(debug_assertions)]
-fn trip(name: &str, armed: &str) -> Result<()> {
-    for (point, mode) in specs(armed) {
-        if point == name {
-            if let Some(millis) = mode.strip_prefix("delay-") {
-                let millis = millis.parse::<u64>().unwrap_or(0);
-                std::thread::sleep(std::time::Duration::from_millis(millis));
-                continue;
-            }
-            if mode == "abort" {
-                // No unwinding, no destructors, no cleanup: a hard process stop.
-                crate::util::diag::fatal(format!("fault injection aborting at '{name}'"));
-                std::process::abort();
-            }
-            anyhow::bail!("injected fault at '{name}'");
-        }
-    }
-    Ok(())
 }
 
 /// Whether the armed failpoints include `name`.
@@ -128,15 +243,7 @@ fn trip(name: &str, armed: &str) -> Result<()> {
 /// injected `Err` there is the signal, not a failure to propagate.
 #[cfg(debug_assertions)]
 pub fn is_armed(name: &str) -> bool {
-    let armed = THREAD_FAULT.with(|f| f.borrow().clone());
-    let armed = match armed {
-        Some(value) => value,
-        None => match std::env::var(FAULT_ENV) {
-            Ok(value) => value,
-            Err(_) => return false,
-        },
-    };
-    specs(&armed).iter().any(|(point, _)| *point == name)
+    armed().is_some_and(|(armed, _)| specs(&armed).iter().any(|(point, _)| *point == name))
 }
 
 /// Arm a failpoint for the current thread only, for the duration of `body`.
@@ -146,6 +253,7 @@ pub fn is_armed(name: &str) -> bool {
 #[cfg(all(test, debug_assertions))]
 pub fn with_thread_fault<R>(spec: &str, body: impl FnOnce() -> R) -> R {
     THREAD_FAULT.with(|f| *f.borrow_mut() = Some(spec.to_string()));
+    THREAD_COUNTS.with(|counts| counts.borrow_mut().clear());
     let out = body();
     THREAD_FAULT.with(|f| *f.borrow_mut() = None);
     out
@@ -155,6 +263,13 @@ pub fn with_thread_fault<R>(spec: &str, body: impl FnOnce() -> R) -> R {
 #[cfg(not(debug_assertions))]
 #[inline(always)]
 pub fn check(_name: &str) -> Result<()> {
+    Ok(())
+}
+
+/// Release builds have no failpoints at all.
+#[cfg(not(debug_assertions))]
+#[inline(always)]
+pub fn check_io(_name: &str) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -185,6 +300,9 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "move:after-verify",
     "move:post-verification",
     "move:before-commit-rename",
+    // The publish's `PROJECT_INFO.md` is written; the step reports an error
+    // anyway (a `sync_all` that failed after the bytes landed).
+    "move:after-publish-write",
     "move:after-publication",
     "move:after-commit-before-source-removal",
     "move:before-source-cleanup",
@@ -210,6 +328,12 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     "template:mid-save",
     // A deleted project is renamed out of the library, not yet removed.
     "delete:after-retire",
+    // A decision: every folder reads as an rclone mount (`util::fs_kind`), so
+    // the settle and the rclone strategies run on a local disk.
+    "fs:as-rclone",
+    // Every `util::paths::presence` look, failed the way a mount fails
+    // (`presence:lstat:eio`): a path that does not answer.
+    "presence:lstat",
     // A decision, like `move:force-staged`: canonicalize every path the way a
     // drive Windows cannot name forces (`util::paths::canonical`).
     "paths:unnamed-volume",
@@ -307,5 +431,56 @@ mod tests {
             assert!(check("move:mid-copy").is_ok());
         });
         assert!(!is_armed("move:force-staged"), "unarmed point is not armed");
+    }
+
+    /// An io mode fails the point the way the filesystem would: with that
+    /// errno, so a classifier sees what a real mount would hand it.
+    #[test]
+    fn an_io_mode_fails_with_that_errno() {
+        with_fault("remove:unlink:enotconn,walk:readdir:eio", || {
+            let error = check_io("remove:unlink").unwrap_err();
+            #[cfg(unix)]
+            assert_eq!(error.raw_os_error(), Some(libc::ENOTCONN));
+            #[cfg(not(unix))]
+            assert_eq!(error.raw_os_error(), Some(64));
+            #[cfg(unix)]
+            assert_eq!(
+                check_io("walk:readdir").unwrap_err().raw_os_error(),
+                Some(libc::EIO)
+            );
+            assert!(check_io("copy:write").is_ok(), "an unlisted point passes");
+            // The anyhow form names the point and keeps the errno underneath.
+            let error = check("remove:unlink").unwrap_err();
+            assert!(error.to_string().contains("remove:unlink"));
+            assert!(error.downcast_ref::<std::io::Error>().is_some());
+        });
+    }
+
+    /// `-<n>` fails the first n trips, then passes: a mount that drops and
+    /// comes back. Each arming counts afresh.
+    #[test]
+    fn an_io_mode_with_a_count_fails_that_many_times() {
+        with_fault("remove:unlink:eio-2", || {
+            assert!(check_io("remove:unlink").is_err());
+            assert!(check_io("remove:unlink").is_err());
+            assert!(check_io("remove:unlink").is_ok());
+            assert!(check_io("remove:unlink").is_ok());
+        });
+        with_fault("remove:unlink:eio-2", || {
+            assert!(
+                check_io("remove:unlink").is_err(),
+                "a new arming counts from zero"
+            );
+        });
+    }
+
+    /// A count that is not a number is not an io mode: the whole entry is then
+    /// a point name, which nothing trips — rather than a mode silently read as
+    /// "fail for ever".
+    #[test]
+    fn a_malformed_count_is_not_an_io_mode() {
+        with_fault("remove:unlink:eio-x", || {
+            assert!(check_io("remove:unlink").is_ok());
+        });
     }
 }

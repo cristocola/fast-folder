@@ -19,6 +19,132 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
+/// What a failed filesystem call means for whoever made it: whether to try
+/// again, wait for the mount, or stop and say why. **Only [`Denied`], [`Locked`],
+/// [`Full`], [`ReadOnly`] and [`NameRefused`] are reasons for a move to stop**;
+/// the rest are waited out.
+///
+/// [`Denied`]: ErrorClass::Denied
+/// [`Locked`]: ErrorClass::Locked
+/// [`Full`]: ErrorClass::Full
+/// [`ReadOnly`]: ErrorClass::ReadOnly
+/// [`NameRefused`]: ErrorClass::NameRefused
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// Nothing is there: ENOENT, ENOTDIR.
+    Gone,
+    /// Not allowed: EACCES, EPERM, `ERROR_ACCESS_DENIED`.
+    Denied,
+    /// A program holds it: EBUSY, ETXTBSY, a Windows sharing or lock violation.
+    Locked,
+    /// Worth asking again soon: EIO, EAGAIN, EINTR, ETIMEDOUT, ESTALE, a reset
+    /// connection.
+    Transient,
+    /// The mount is not there to ask: ENOTCONN and the network errors — an
+    /// rclone that restarted, an sshfs whose connection dropped.
+    NotConnected,
+    /// No room: ENOSPC, EDQUOT.
+    Full,
+    /// A read-only filesystem.
+    ReadOnly,
+    /// A name the filesystem will not take: EILSEQ, ENAMETOOLONG, a Windows
+    /// invalid name.
+    NameRefused,
+    /// A folder that still holds something: ENOTEMPTY — on a cloud mount, often
+    /// a listing that has not caught up yet.
+    NotEmpty,
+    Other,
+}
+
+/// See [`ErrorClass`].
+pub fn classify(error: &io::Error) -> ErrorClass {
+    if crate::util::paths::is_absence(error) {
+        return ErrorClass::Gone;
+    }
+    if let Some(code) = error.raw_os_error()
+        && let Some(class) = classify_code(code)
+    {
+        return class;
+    }
+    match error.kind() {
+        io::ErrorKind::PermissionDenied => ErrorClass::Denied,
+        io::ErrorKind::ResourceBusy | io::ErrorKind::ExecutableFileBusy => ErrorClass::Locked,
+        io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => ErrorClass::Full,
+        io::ErrorKind::ReadOnlyFilesystem => ErrorClass::ReadOnly,
+        io::ErrorKind::DirectoryNotEmpty => ErrorClass::NotEmpty,
+        io::ErrorKind::InvalidFilename => ErrorClass::NameRefused,
+        io::ErrorKind::NotConnected
+        | io::ErrorKind::ConnectionAborted
+        | io::ErrorKind::HostUnreachable
+        | io::ErrorKind::NetworkUnreachable
+        | io::ErrorKind::NetworkDown => ErrorClass::NotConnected,
+        io::ErrorKind::TimedOut
+        | io::ErrorKind::Interrupted
+        | io::ErrorKind::WouldBlock
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::StaleNetworkFileHandle => ErrorClass::Transient,
+        _ => ErrorClass::Other,
+    }
+}
+
+#[cfg(unix)]
+fn classify_code(code: i32) -> Option<ErrorClass> {
+    Some(match code {
+        libc::EACCES | libc::EPERM => ErrorClass::Denied,
+        libc::EBUSY | libc::ETXTBSY => ErrorClass::Locked,
+        libc::EIO
+        | libc::EAGAIN
+        | libc::EINTR
+        | libc::ETIMEDOUT
+        | libc::ESTALE
+        | libc::ECONNRESET => ErrorClass::Transient,
+        libc::ENOTCONN
+        | libc::ESHUTDOWN
+        | libc::ECONNABORTED
+        | libc::EHOSTDOWN
+        | libc::EHOSTUNREACH
+        | libc::ENETDOWN
+        | libc::ENETUNREACH
+        | libc::ENODEV
+        | libc::ENXIO => ErrorClass::NotConnected,
+        libc::ENOSPC | libc::EDQUOT => ErrorClass::Full,
+        libc::EROFS => ErrorClass::ReadOnly,
+        libc::EILSEQ | libc::ENAMETOOLONG => ErrorClass::NameRefused,
+        libc::ENOTEMPTY => ErrorClass::NotEmpty,
+        _ => return None,
+    })
+}
+
+#[cfg(windows)]
+fn classify_code(code: i32) -> Option<ErrorClass> {
+    Some(match code {
+        // ERROR_ACCESS_DENIED: a permission, or a file somebody holds while it
+        // is deleted — the retries in this module tell the two apart.
+        5 => ErrorClass::Denied,
+        // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION, ERROR_USER_MAPPED_FILE.
+        32 | 33 | 1224 => ErrorClass::Locked,
+        // ERROR_NOT_READY, ERROR_IO_DEVICE, ERROR_SEM_TIMEOUT, ERROR_UNEXP_NET_ERR.
+        21 | 1117 | 121 | 59 => ErrorClass::Transient,
+        // ERROR_BAD_NETPATH, ERROR_NETNAME_DELETED, ERROR_BAD_NET_NAME,
+        // ERROR_NETWORK_UNREACHABLE, ERROR_REM_NOT_LIST, ERROR_DEV_NOT_EXIST.
+        53 | 64 | 67 | 1231 | 51 | 55 => ErrorClass::NotConnected,
+        // ERROR_HANDLE_DISK_FULL, ERROR_DISK_FULL, ERROR_DISK_QUOTA_EXCEEDED.
+        39 | 112 | 1295 => ErrorClass::Full,
+        // ERROR_WRITE_PROTECT.
+        19 => ErrorClass::ReadOnly,
+        // ERROR_INVALID_NAME, ERROR_FILENAME_EXCED_RANGE.
+        123 | 206 => ErrorClass::NameRefused,
+        // ERROR_DIR_NOT_EMPTY.
+        145 => ErrorClass::NotEmpty,
+        _ => return None,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn classify_code(_code: i32) -> Option<ErrorClass> {
+    None
+}
+
 /// Backoff schedule between attempts. Total worst-case wait ≈ 310 ms, which is
 /// well past a typical antivirus scan window while staying imperceptible.
 const BACKOFF_MS: [u64; 5] = [10, 20, 40, 80, 160];
@@ -272,6 +398,28 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The classes a move acts on, from the errors a mount really gives.
+    #[cfg(unix)]
+    #[test]
+    fn errors_are_classed_by_what_to_do_next() {
+        let class = |code| classify(&io::Error::from_raw_os_error(code));
+        assert_eq!(class(libc::ENOENT), ErrorClass::Gone);
+        assert_eq!(class(libc::ENOTDIR), ErrorClass::Gone);
+        assert_eq!(class(libc::EACCES), ErrorClass::Denied);
+        assert_eq!(class(libc::EBUSY), ErrorClass::Locked);
+        assert_eq!(class(libc::EIO), ErrorClass::Transient);
+        assert_eq!(class(libc::ESTALE), ErrorClass::Transient);
+        assert_eq!(class(libc::ENOTCONN), ErrorClass::NotConnected);
+        assert_eq!(class(libc::ENOSPC), ErrorClass::Full);
+        assert_eq!(class(libc::EROFS), ErrorClass::ReadOnly);
+        assert_eq!(class(libc::ENAMETOOLONG), ErrorClass::NameRefused);
+        assert_eq!(class(libc::ENOTEMPTY), ErrorClass::NotEmpty);
+        assert_eq!(
+            classify(&io::Error::other("something else")),
+            ErrorClass::Other
+        );
+    }
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]

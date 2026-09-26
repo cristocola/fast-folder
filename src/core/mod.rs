@@ -17,6 +17,7 @@ pub mod project;
 pub mod project_info;
 pub mod provisioning;
 pub mod query;
+pub mod records;
 pub mod template;
 pub mod template_import;
 pub mod transactions;

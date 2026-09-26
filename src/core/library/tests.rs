@@ -1091,14 +1091,18 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
         "move:after-staging",
         "move:after-verify",
         "move:before-commit-rename",
+        "move:after-publish-write",
         "move:after-commit-before-source-removal",
         "move:before-retire",
         "move:source-cleanup",
         "move:after-retire",
         "move:mid-gc",
     ];
-    // Published, the original still whole at its path.
+    // Published, the original still whole at its path. A publish whose write
+    // reported an error after its file landed is a publish too: rolling it
+    // back would remove the project, clearing its record would leave both.
     const KEPT: &[&str] = &[
+        "move:after-publish-write",
         "move:after-commit-before-source-removal",
         "move:before-retire",
         "move:source-cleanup",

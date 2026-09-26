@@ -66,7 +66,7 @@ impl<'a> Ticker<'a> {
     }
 
     /// Say what the job is, for its log: every step it starts and finishes is
-    /// a line there, every entry it touches one more at debug.
+    /// a line there, every entry it touches one more at trace.
     pub fn subject(self, subject: String) {
         crate::util::log::info(format!("{subject}: started"));
         self.update(|state| state.subject = subject);
@@ -131,14 +131,18 @@ impl<'a> Ticker<'a> {
     /// One more entry done, at `current`. Answers `false` when the job has
     /// been cancelled and this ticker honours it, so the caller stops.
     pub fn tick(self, current: &Path) -> bool {
+        // Built under the lock, written after it: a write per entry while
+        // holding the progress would make every worker of a parallel walk wait
+        // on the disk the log is on.
+        let mut line = None;
         self.update(|state| {
             state.step_done += 1;
             state.current_file.clear();
             state.current_file.push_str(&current.to_string_lossy());
             if !state.subject.is_empty()
-                && crate::util::log::enabled(crate::util::log::Level::Debug)
+                && crate::util::log::enabled(crate::util::log::Level::Trace)
             {
-                crate::util::log::debug(format!(
+                line = Some(format!(
                     "{}: {} {}",
                     state.subject,
                     state.phase.as_str(),
@@ -146,6 +150,9 @@ impl<'a> Ticker<'a> {
                 ));
             }
         });
+        if let Some(line) = line {
+            crate::util::log::trace(line);
+        }
         !self.cancelled()
     }
 

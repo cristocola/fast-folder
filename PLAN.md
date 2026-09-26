@@ -67,6 +67,8 @@ PV = `provisioning.rs`, MP = `move_preflight.rs`, CE = `copy_engine.rs`
 | 17 | Moves lose every file's mtime and permission bits (`+x` included) | TX:1923-1999 |
 | 18 | The app's header summary and every row wait on every base, in series, with no timeout (canonicalize before the probe; `list_incomplete` ignores the probe; discovery sends one message at the end); quit joins size workers stuck on a dead mount | `tui/loaders.rs:36-84`, `library/discovery.rs:21-32`, `util/size_scan.rs:152` |
 | 19 | "Needs attention" is a count: no list, no key named, report-only items lit for ever, the reconcile report gone when its dialog closes | `tui/loaders.rs:77,123`, `tui/view/dashboard.rs:127-142`, `tui/app/background.rs:219-317` |
+| 20 | A reconcile run from **another data dir** on the same machine treats a live move's record as abandoned and discards its copy mid-write: liveness is only this data dir's `jobs/` (found by the Phase 0 lab: two moves failed, "657 of the 1639 recorded entries missing") | `core/jobs.rs::live_workers`/`owned_by`, PV:187-188 |
+| 21 | A base's index built from a scan older than a new project can be written after it, pass the mtime gate, and hide that project until the next rescan ("no project matches"), because the gate compares the index file's own mtime with the base's | `library/discovery.rs:93-104`, `library/cache.rs:177-194` |
 
 ## Decisions
 
@@ -185,9 +187,9 @@ only when it is verified, and record what happened in the Phase log.
 
 Outside the repository, except this file.
 
-- [ ] The maintainer's problem project (a vite site with node_modules) moved
+- [x] The maintainer's problem project (a vite site with node_modules) moved
   out of the working tree into the lab's fixtures.
-- [ ] The mount lab: an isolated data dir; the three real test bases plus
+- [x] The mount lab: an isolated data dir; the three real test bases plus
   private fault mounts the lab owns (a second sshfs, a local `rclone serve
   s3` behind an `rclone mount`), so stopping one never freezes the
   maintainer's own services; fixtures (links of every kind, 20k small files,
@@ -196,56 +198,71 @@ Outside the repository, except this file.
   stall, drop, resurrect, the debug failpoints); a runner that starts jobs in
   parallel, polls their state, times every step and checks the invariants;
   a teardown that always restores.
-- [ ] The baseline: every scenario against 3.13.0, recorded.
+- [x] The baseline: every scenario against 3.13.0, recorded.
 
 Acceptance: the baseline reproduces defects 1–4, 13, 14 and 15 on the real
 mounts, with timings.
 
 ## Phase 1 — records are never lost; logs stay sane
 
-- [ ] `util::paths::presence(p) -> Presence { Present(Metadata), Absent,
+- [x] `util::paths::presence(p) -> Presence { Present(Metadata), Absent,
   Unknown(io::Error) }` (absent only on ENOENT/ENOTDIR) replaces `entry_exists`
   and `entry_exists_quiet` and the same pattern in `sweep_strays`,
   `MoveTransaction::remove` and `clear_probe`. Unknown never clears a record
   and never counts as removed; reconcile calls it waiting. `retire()` refuses
   to rename past an unknown. A removal is `Removed` only when its root is
   absent afterwards; a listing error marks its folder incomplete (defects 1, 9).
-- [ ] The publish: attempted is set before `PROJECT_INFO.md` is written; on an
+- [x] The publish: attempted is set before `PROJECT_INFO.md` is written; on an
   error, a file that is not absent keeps the record as published. The entry
   in `published.json` comes from the open handle's fstat; a record without it
   falls back to the manifest's time, which unsticks existing records
-  (defects 5, 7).
-- [ ] `complete_destination` reads from the tree being checked. A split
+  (defects 5, 7). *As built:* the entry is read back with up to three tries
+  rather than from the write's own handle; the fallback covers the rest.
+- [x] `complete_destination` reads from the tree being checked. A split
   rename (R and S both there) is finished on both halves, S as residue, the
   record kept until both are absent (defects 6, 8).
-- [ ] `core::records`: `<data dir>/records/<op>.json`, written at
+- [x] `core::records`: `<data dir>/records/<op>.json`, written at
   `MoveTransaction::begin`, cleared with the record. Reconcile visits indexed
   records outside the bases (a copy-to's) and finds a record whose base is no
   longer configured. An orphan `.fastf-moved-<op>` is looked up in: the
   configured bases, the index, the pointer, the job history
   (`ItemReport.operation` added), R's own `PROJECT_INFO.md`. A record on a base
-  that is not answering is waiting (defects 4, 10).
-- [ ] Settle, on rclone and unknown FUSE only: a removal that ends absent sets
+  that is not answering is waiting (defects 4, 10). *As built:* configured
+  bases, then the index; for a folder with no record anywhere, R's own
+  `PROJECT_INFO.md` or a one-item job names the project and where it is now.
+  The pointer comes with Phase 3's in-place retire; `ItemReport.operation` is
+  in the Parking lot.
+- [x] Settle, on rclone and unknown FUSE only: a removal that ends absent sets
   `gone_at` and keeps the record; a pass ten minutes later that still finds
   nothing clears it; whatever reappeared is removed as residue (defect 2).
-- [ ] A transaction folder with no readable `move.json` and nothing at its
-  destination is removed (defect 12). `util::atomic`'s temp files get one
-  recognisable name (`.<file>.fastf-<pid>-<n>.tmp`); housekeeping sweeps dead
-  ones where fastf writes them.
-- [ ] `util::fs_kind` (Local, Nfs, Smb, Sshfs, Rclone, OtherFuse, Unknown; statfs
-  plus `/proc/self/mountinfo`, `GetDriveTypeW`/`GetVolumeInformationW`), under
-  the probe timeout, memoised. `fs_retry::classify` (Gone, Denied, Locked,
+- [x] A transaction folder with no readable `move.json` and nothing at its
+  destination is removed (defect 12) — *as built:* one named by an operation
+  id that holds nothing but a torn `move.json`; a complete but invalid one
+  stays report-only. The temp-file sweep was dropped (Parking lot).
+- [x] **A record belongs to its live worker, whatever data dir started it**
+  (defect 20): an operation id names its worker's pid; that pid is alive, a
+  fastf process, and started before the operation was minted (`/proc/<pid>/stat`
+  start time; `OpenProcess` + `GetProcessTimes` on Windows) → the record is
+  the worker's, and reconcile and the attention scan leave it alone. The data
+  dir's `jobs/` stays the first answer.
+- [x] `util::fs_kind` (Local, Nfs, Smb, Sshfs, Rclone, OtherFuse, Unknown; statfs
+  plus `/proc/self/mountinfo`, `GetDriveTypeW`/`GetVolumeInformationW`),
+  memoised — *as built:* on Linux it reads only `/proc/self/mountinfo`, never
+  the mount, so it needs no timeout. `fs_retry::classify` (Gone, Denied, Locked,
   Transient, NotConnected, Full, ReadOnly, NameRefused, Other).
   `links_hidden_in` memoised per base and skipped on Local and NFS.
-- [ ] Logs: a `trace` level for per-entry lines, formatted in the progress lock
+- [x] Logs: a `trace` level for per-entry lines, formatted in the progress lock
   and written after it; the job log keeps one handle and rotates at 16 MiB;
   `jobs::prune` caps the total at 64 MiB; `JobPhase`/`JobStatus` get
   `#[serde(other)] Unknown` (defect 16).
-- [ ] Failpoints: `faults::check_io(name)` with modes
+- [x] Failpoints: `faults::check_io(name)` with modes
   `eio|enotconn|enotempty|estale|eacces|ebusy[-N]` (fail N times, then pass);
   points `move:after-publish-write`, `presence:lstat`, `walk:readdir`; the
-  crash-recovery registry scan learns `check_io`.
-- [ ] Tests: an old copy under an unreadable base keeps its record;
+  crash-recovery registry scan learns `check_io`. *As built:* `walk:readdir`
+  moves to Phase 2 with the walk it would sit in; `fs:as-rclone` (a decision:
+  every folder reads as rclone) was added for the settle's tests.
+- [x] Tests: a reconcile from a second data dir during a move leaves the move
+  alone (a real second process, as the lab found it); an old copy under an unreadable base keeps its record;
   `presence:lstat:eio` on R keeps it; a split rename is finished on both
   halves; a `published.json` without `PROJECT_INFO.md` finishes; a moved copy
   missing entries after the retire is completed from R; an orphan R is found
@@ -396,6 +413,8 @@ nothing needs attention without a human decision.
   marks, meta and the cursor by path; `busy_bases` stops F5 stacking workers
   on a blocked base; a silent base is named in the header.
 - [ ] `SizeScanner::drop` waits at most 200 ms, then detaches.
+- [ ] The index remembers the base mtime its scan saw and is stale when the
+  base's differs, instead of comparing its own file's mtime (defect 21).
 - [ ] Tests: `paths:stall-base` (a debug decision, stalls only bases holding
   `.fastf-test-stall`); the pty suite sees the healthy base's rows within a
   second beside a stalled base, and quits in under one; per-base install,
@@ -424,8 +443,33 @@ second and `q` returns at once.
 
 ## Phase log
 
-(one entry per phase: what landed, what differed from the plan, and why)
+**Phase 0 (2026-09-26).** The problem project moved out of the working tree
+into the private lab's fixtures; the lab lives beside the repository with its
+own README. The first parallel run shared the bases between lanes and found
+two defects the plan did not have: **20**, a second data dir's reconcile
+discarding a live move's copy mid-write ("657 of the 1639 recorded entries
+missing"), and **21**, the index race ("no project matches" right after a
+project appeared). Lanes then got their own folder in every base. The 3.13.0
+baseline reproduced defect 1 (rclone killed mid-removal: the move said
+"moved", cleared its record, and left the old copy), 14 (a dev server and a
+held file: "move source changed before copying"), 16 (job logs), 18 (one
+frozen base: no rows in fifteen seconds) and 20 again, and measured the slow
+paths — see the Phase 0 numbers in the lab's `baseline-3.13.0` summary.
+
+**Phase 1 (2026-09-26).** As planned, with the deviations marked *as built*
+above. Presence is three-way everywhere a removal or a record is decided;
+`MoveTransaction::publication` answers the third way too, since an EIO reading
+the moved copy's `PROJECT_INFO.md` read as "not published" and let `remove`
+discard a published copy. An unmounted configured base is `waiting`, not
+"needs a look". `crash_recovery`'s `move:after-transaction-create` case
+pinned defect 12's old answer (retained, reported) and now asserts removal.
 
 ## Parking lot
 
-(findings outside the current phase)
+- **Temp-file sweep (dropped from Phase 1).** `util::atomic` is documented to
+  never sweep by name; a stray temp needs a kill mid-write, and the
+  maintainer's leftovers were old copies, not temps.
+- `ItemReport.operation`, so a many-item job's history names each item's
+  operation (the orphan note uses one-item jobs today).
+- A test for an old copy under a base the user cannot read (root-owned):
+  `presence:lstat:eio` covers the logic, not the permission.

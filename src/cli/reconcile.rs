@@ -138,6 +138,22 @@ pub fn run(detach: bool) -> Result<()> {
                 .dimmed()
         );
     }
+    if !report.waiting.is_empty() {
+        println!(
+            "   {} {} item(s) waiting for a base to answer:",
+            "waiting".cyan().bold(),
+            report.waiting.len()
+        );
+        for item in &report.waiting {
+            println!("     - {}", item.cyan());
+        }
+        println!(
+            "     {}",
+            "fastf changed nothing about these and finishes them once the base answers \
+             again: mount it, or wait for the connection to come back."
+                .dimmed()
+        );
+    }
     if !report.unrecoverable.is_empty() {
         println!(
             "   {} {} item(s) need a look:",

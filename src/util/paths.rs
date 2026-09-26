@@ -223,6 +223,60 @@ pub fn require_real_directory(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// What is at a path, asked without following a link.
+///
+/// **Only a filesystem that says "nothing there" is absence.** Any other
+/// failure — a mount that dropped (`ENOTCONN`), one that failed (`EIO`), a
+/// folder that may not be read — says nothing about the path, and code that
+/// removes something, or forgets a record of it, must not read it as gone:
+/// 3.13 did, through `symlink_metadata(p).is_ok()`, and cleared a move's record
+/// while its old copy was still on an rclone mount that had restarted, leaving
+/// a folder no reconcile would touch again.
+#[derive(Debug)]
+pub enum Presence {
+    Present(std::fs::Metadata),
+    Absent,
+    /// The filesystem did not answer the question.
+    Unknown(std::io::Error),
+}
+
+impl Presence {
+    pub fn is_present(&self) -> bool {
+        matches!(self, Presence::Present(_))
+    }
+
+    pub fn is_absent(&self) -> bool {
+        matches!(self, Presence::Absent)
+    }
+
+    /// Why the filesystem did not answer, when it did not.
+    pub fn unknown(&self) -> Option<&std::io::Error> {
+        match self {
+            Presence::Unknown(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// See [`Presence`].
+pub fn presence(path: &Path) -> Presence {
+    let looked = crate::util::faults::check_io("presence:lstat")
+        .and_then(|()| std::fs::symlink_metadata(path));
+    match looked {
+        Ok(metadata) => Presence::Present(metadata),
+        Err(error) if is_absence(&error) => Presence::Absent,
+        Err(error) => Presence::Unknown(error),
+    }
+}
+
+/// ENOENT, or ENOTDIR (a folder on the way is a file): nothing is there.
+pub fn is_absence(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
+}
+
 /// **The one way to canonicalize a path.** `Path::canonicalize`, except where
 /// Windows cannot give the volume a DOS name.
 ///

@@ -342,13 +342,16 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
                     source_after && !final_after,
                     "[{point}] source is authoritative"
                 );
+                // Killed before its journal was written, the record holds
+                // nothing a move gets past its first write to: it is removed,
+                // not reported as invalid on every pass for ever (3.13 did).
                 assert_eq!(
-                    state_after.2, 1,
-                    "[{point}] malformed transaction is retained"
+                    state_after.2, 0,
+                    "[{point}] the empty record is removed: {first:?}"
                 );
                 assert!(
-                    !first.unrecoverable.is_empty(),
-                    "[{point}] must be reported"
+                    first.unrecoverable.is_empty(),
+                    "[{point}] and nobody is asked to look: {first:?}"
                 );
             } else if matches!(
                 *point,
@@ -691,6 +694,7 @@ fn every_failpoint_in_the_source_is_declared_and_vice_versa() {
             // `move:force-staged` — asked about as a decision with `is_armed`.
             for (_, rest) in text
                 .match_indices("faults::check(\"")
+                .chain(text.match_indices("faults::check_io(\""))
                 .chain(text.match_indices("faults::is_armed(\""))
                 .map(|(i, m)| (i, &text[i + m.len()..]))
             {

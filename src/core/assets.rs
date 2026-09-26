@@ -113,6 +113,10 @@ pub enum JobStatus {
     Done,
     Failed,
     Cancelled,
+    /// A state a later fastf wrote, sharing this data dir. Read as ended:
+    /// nothing here can follow it further.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The step a job is at. A staged move passes through every one of these but
@@ -145,6 +149,9 @@ pub enum JobPhase {
     /// Removing the move's record.
     Clearing,
     Done,
+    /// A step a later fastf wrote, sharing this data dir.
+    #[serde(other)]
+    Unknown,
 }
 
 impl JobPhase {
@@ -163,6 +170,7 @@ impl JobPhase {
             JobPhase::Removing => "removing the old copy",
             JobPhase::Clearing => "clearing the record",
             JobPhase::Done => "done",
+            JobPhase::Unknown => "working",
         }
     }
 
@@ -181,6 +189,7 @@ impl JobPhase {
             JobPhase::Removing => "removed the old copy",
             JobPhase::Clearing => "cleared the record",
             JobPhase::Done => "done",
+            JobPhase::Unknown => "worked",
         }
     }
 

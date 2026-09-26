@@ -34,6 +34,19 @@ use tempfile::TempDir;
 /// The one lock over process environment mutation in this binary.
 pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+thread_local! {
+    /// Whether this thread holds an [`EnvGuard`]. The environment is the
+    /// process's, so a data directory a guard points at is visible to every
+    /// test running beside it; state that must stay one test's own (the
+    /// records index) is read only by the thread that set it.
+    static HOLDS_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether this thread holds the [`EnvGuard`] now in force.
+pub fn holds_guard() -> bool {
+    HOLDS_GUARD.with(|holds| holds.get())
+}
+
 /// Holds [`ENV_LOCK`] and restores every variable it changed when dropped —
 /// including on unwind, which is the point.
 pub struct EnvGuard {
@@ -55,6 +68,7 @@ impl EnvGuard {
             // binary under which the environment is mutated.
             unsafe { std::env::set_var(name, value) };
         }
+        HOLDS_GUARD.with(|holds| holds.set(true));
         Self {
             _lock: lock,
             previous,
@@ -103,6 +117,7 @@ impl EnvGuard {
 
 impl Drop for EnvGuard {
     fn drop(&mut self) {
+        HOLDS_GUARD.with(|holds| holds.set(false));
         for (name, value) in self.previous.drain() {
             // SAFETY: the lock is held until this guard finishes dropping.
             unsafe {

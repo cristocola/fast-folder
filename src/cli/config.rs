@@ -304,8 +304,9 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                     "Set log_level = {}  ({})",
                     level.name(),
                     match level {
-                        crate::util::log::Level::Debug =>
+                        crate::util::log::Level::Trace =>
                             "every step, and every entry a move or a reconcile touches",
+                        crate::util::log::Level::Debug => "every step, with what each decided",
                         crate::util::log::Level::Info =>
                             "every step of every job, and every warning",
                         crate::util::log::Level::Warn => "warnings and errors",

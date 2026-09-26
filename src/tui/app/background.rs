@@ -295,7 +295,7 @@ impl App {
         let body = for_the_app(&body.join("\n\n"));
         match state.status {
             JobStatus::Done if body.is_empty() => self.good(summary),
-            JobStatus::Done | JobStatus::Cancelled => {
+            JobStatus::Done | JobStatus::Cancelled | JobStatus::Unknown => {
                 if body.is_empty() {
                     self.warn(summary);
                 } else {
@@ -419,6 +419,13 @@ pub(crate) fn reconcile_notes(report: &crate::core::provisioning::ReconcileRepor
             "{} need a look:\n{}",
             report.unrecoverable.len(),
             report.unrecoverable.join("\n")
+        ));
+    }
+    if !report.waiting.is_empty() {
+        notes.push(format!(
+            "{} waiting for a base to answer — fastf finishes them once it does:\n{}",
+            report.waiting.len(),
+            report.waiting.join("\n")
         ));
     }
     if !report.obsolete.is_empty() {

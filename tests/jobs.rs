@@ -123,6 +123,82 @@ fn a_killed_command_line_leaves_its_move_to_finish() {
     assert!(hidden_folders(&sb.base).is_empty(), "no old copy is left");
 }
 
+/// **A second data dir's reconcile leaves a live move alone.** Two fastf data
+/// dirs on one machine — portable mode beside the installed one, a test lab —
+/// share their bases, and 3.13's reconcile asked only its own data dir which
+/// jobs were alive: it took a live move's record for an abandoned one and
+/// discarded the copy while it was being written ("657 of the 1639 recorded
+/// entries missing", found by the mount lab).
+#[cfg(unix)]
+#[test]
+fn a_reconcile_from_another_data_dir_leaves_a_live_move_alone() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 30);
+    let second = Sandbox::new();
+    second.ok(&["config", "set", "base-dir", &sb.base.display().to_string()]);
+    second.ok(&["config", "set", "bases", &other.display().to_string()]);
+    let cli = start(
+        &sb,
+        &["move", "ID0001", &other.display().to_string(), "--yes"],
+        "move:force-staged,move:each-file:delay-60",
+    );
+    wait_until("the copy", 20, || in_phase(&sb, "copying"));
+
+    let report = second.ok(&["reconcile"]);
+    assert!(!report.contains("rolled back"), "{report}");
+    let out = cli.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "the move finishes: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!original.exists(), "the original is gone");
+    assert_eq!(
+        fs::read_dir(other.join("2026-01-01_Shoot_ID0001/takes"))
+            .unwrap()
+            .count(),
+        30,
+        "every file arrived"
+    );
+}
+
+/// **A delete killed part of the way is finished by reconcile.** The project
+/// left the library in one rename, so what is left is a hidden folder nothing
+/// lists; the next reconcile removes it — the word was typed once, for the
+/// whole delete. A design guard: 3.13 did this too, but this suite, which says
+/// it covers deletes, had no case for one.
+#[cfg(unix)]
+#[test]
+fn a_delete_killed_mid_removal_is_finished_by_reconcile() {
+    let sb = Sandbox::new();
+    let original = project(&sb, &sb.base, 40);
+    let mut cli = start(
+        &sb,
+        &["delete", "ID0001", "--yes"],
+        "remove:each-entry:delay-50",
+    );
+    wait_until("the removal", 20, || {
+        hidden_folders(&sb.base).len() == 1 && !original.exists()
+    });
+    std::thread::sleep(Duration::from_millis(400));
+    let (_, state) = newest(&sb).unwrap();
+    // SAFETY: a signal to a process this test started, through its child.
+    unsafe {
+        libc::kill(state["pid"].as_u64().unwrap() as i32, libc::SIGKILL);
+    }
+    let _ = cli.wait();
+    assert_eq!(
+        hidden_folders(&sb.base).len(),
+        1,
+        "part of it is left, hidden"
+    );
+    assert!(!original.exists(), "and nothing is listed");
+
+    let report = sb.ok(&["reconcile"]);
+    assert!(hidden_folders(&sb.base).is_empty(), "{report}");
+}
+
 /// A worker killed mid-copy is a job that stopped without saying how: its
 /// state still says running and its lock is free. Reconcile rolls the move
 /// back — the original was never touched.

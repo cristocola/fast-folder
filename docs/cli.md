@@ -651,9 +651,9 @@ The log is everything, one line per event:
 
 — the time (UTC), the level, the job, the process, and what happened. Every
 step of every move, copy and reconcile is there with its count, and so is every
-warning. With `config set log-level debug` it also holds a line for every entry
-a move touches, which is what to read when a removal on a network drive seems
-slow. `--follow` keeps printing new events, from any fastf process, until
+warning. With `config set log-level trace` it also holds a line for every
+entry a move touches, which is what to read when a removal on a network drive
+seems slow. `--follow` keeps printing new events, from any fastf process, until
 Ctrl-C. See [config.md](config.md) for where both files live.
 
 ## Todos

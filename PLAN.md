@@ -68,7 +68,7 @@ PV = `provisioning.rs`, MP = `move_preflight.rs`, CE = `copy_engine.rs`
 | 18 | The app's header summary and every row wait on every base, in series, with no timeout (canonicalize before the probe; `list_incomplete` ignores the probe; discovery sends one message at the end); quit joins size workers stuck on a dead mount | `tui/loaders.rs:36-84`, `library/discovery.rs:21-32`, `util/size_scan.rs:152` |
 | 19 | "Needs attention" is a count: no list, no key named, report-only items lit for ever, the reconcile report gone when its dialog closes | `tui/loaders.rs:77,123`, `tui/view/dashboard.rs:127-142`, `tui/app/background.rs:219-317` |
 | 20 | A reconcile run from **another data dir** on the same machine treats a live move's record as abandoned and discards its copy mid-write: liveness is only this data dir's `jobs/` (found by the Phase 0 lab: two moves failed, "657 of the 1639 recorded entries missing") | `core/jobs.rs::live_workers`/`owned_by`, PV:187-188 |
-| 21 | A base's index built from a scan older than a new project can be written after it, pass the mtime gate, and hide that project until the next rescan ("no project matches"), because the gate compares the index file's own mtime with the base's | `library/discovery.rs:93-104`, `library/cache.rs:177-194` |
+| 21 | A base's index built from a scan older than a new project can be written after it, pass the mtime gate, and hide that project until the next rescan ("no project matches"), because the gate compares the index file's own mtime with the base's. **On an rclone S3 base the gate can never fire**: a folder's mtime reads 2000-01-01 once rclone's directory cache expires, so a project copied in from elsewhere stays invisible until `fastf reindex` (found by the lab on R2) | `library/discovery.rs:93-104`, `library/cache.rs:177-194` |
 
 ## Decisions
 
@@ -345,7 +345,12 @@ an old copy on R2 is removed at least ten times faster.
   points under either strategy.
 
 Acceptance: the lab's dev-server scenario moves without failing and leaves
-nothing behind; the resurrect scenario leaves nothing after ten minutes.
+nothing behind; the resurrect scenario leaves nothing after ten minutes;
+`editmove-r2` (edited on R2, moved away seconds later) finishes with nobody
+asked — an entry whose size agrees and only its time moved is compared by
+content before it is called changed, since a cloud mount's rename or upload
+can move a time; and an empty folder a mount left at the move's own target
+name (rclone re-creates directory markers) does not block the move.
 
 ## Phase 4 — only what fastf cannot fix stops a move
 
@@ -414,7 +419,9 @@ nothing needs attention without a human decision.
   on a blocked base; a silent base is named in the header.
 - [ ] `SizeScanner::drop` waits at most 200 ms, then detaches.
 - [ ] The index remembers the base mtime its scan saw and is stale when the
-  base's differs, instead of comparing its own file's mtime (defect 21).
+  base's differs, instead of comparing its own file's mtime (defect 21) — and,
+  since an rclone folder's mtime says nothing, it also compares the folder
+  names it holds with a names-only listing of the base (one request).
 - [ ] Tests: `paths:stall-base` (a debug decision, stalls only bases holding
   `.fastf-test-stall`); the pty suite sees the healthy base's rows within a
   second beside a stalled base, and quits in under one; per-base install,
@@ -454,7 +461,18 @@ baseline reproduced defect 1 (rclone killed mid-removal: the move said
 "moved", cleared its record, and left the old copy), 14 (a dev server and a
 held file: "move source changed before copying"), 16 (job logs), 18 (one
 frozen base: no rows in fifteen seconds) and 20 again, and measured the slow
-paths — see the Phase 0 numbers in the lab's `baseline-3.13.0` summary.
+paths. The numbers every later phase is compared with (gjiro is the
+maintainer's vite project, 1640 entries):
+
+| 3.13.0 | time | what happened |
+|---|---|---|
+| move out of R2 | 314 s | set aside 28 s, check 88 s, removal 194 s (≈120 ms an entry) |
+| delete on R2 | 349 s | and 181 entries left ("Directory not empty", rclone's listing lag) |
+| S3 at 10 req/s | 737 s | the one-rename set-aside alone (a copy and a delete per object) |
+| sshfs, 20k files | 93 s | delete |
+| into R2 and straight back | — | a recordless `.fastf-moved-*` back on the bucket 12 minutes later |
+| rclone killed mid-removal | — | "kept whole, because reading … Transport endpoint is not connected" |
+| every move | — | all 1472 file mtimes and `+x` lost; ~2.7 MB of job log |
 
 **Phase 1 (2026-09-26).** As planned, with the deviations marked *as built*
 above. Presence is three-way everywhere a removal or a record is decided;
@@ -463,6 +481,15 @@ the moved copy's `PROJECT_INFO.md` read as "not published" and let `remove`
 discard a published copy. An unmounted configured base is `waiting`, not
 "needs a look". `crash_recovery`'s `move:after-transaction-create` case
 pinned defect 12's old answer (retained, reported) and now asserts removal.
+In the lab, against 3.13.0: rclone killed mid-removal (on the maintainer's R2
+unit, and on the private S3) keeps the record, reconcile says it is waiting
+while the mount is down and finishes the removal once it is back; a second
+data dir's reconcile leaves a live move alone; job logs are 4–6 KB instead of
+2.4–2.7 MB. What it cannot do yet: a project edited on R2 and moved away
+seconds later ends "kept whole: PROJECT_INFO.md modified since it was scanned"
+(rclone's object-by-object rename moves the file's time) — the record is kept,
+but a person is still asked. That is Phase 3's merge and in-place retire; the
+lab's `editmove-r2` is its acceptance test.
 
 ## Parking lot
 

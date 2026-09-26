@@ -3232,7 +3232,7 @@ mod tests {
                 }
                 cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             });
-            crate::util::faults::with_thread_fault("remove:each-entry:delay-10", || {
+            crate::util::faults::with_thread_fault("pool:serial,remove:each-entry:delay-10", || {
                 reconcile_unlocked_with(&cfg, Ticker::new(&progress, &cancel))
             })
         });

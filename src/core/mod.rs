@@ -18,6 +18,7 @@ pub mod project_info;
 pub mod provisioning;
 pub mod query;
 pub mod records;
+pub(crate) mod removal;
 pub mod template;
 pub mod template_import;
 pub mod transactions;

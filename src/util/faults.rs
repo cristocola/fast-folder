@@ -72,8 +72,56 @@ thread_local! {
     /// scoped exactly to the test that armed it, needs no lock, and cannot leak
     /// into a sibling. The env var remains for subprocess tests, which are a
     /// different process and so cannot be affected by anyone else's thread.
-    static THREAD_FAULT: std::cell::RefCell<Option<String>> =
+    ///
+    /// **A thread the armed one starts is armed the same way**
+    /// ([`current`], [`with_arming`]): the engine's walks, copies and removals
+    /// run on `util::pool`'s workers, and a failpoint armed by a test must
+    /// still trip there — with one count of `-<n>` trips shared by them all.
+    static THREAD_FAULT: std::cell::RefCell<Option<ThreadArming>> =
         const { std::cell::RefCell::new(None) };
+}
+
+/// One thread arming: the armed value, and the `-<n>` counts every thread
+/// armed from it shares.
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone)]
+struct ThreadArming {
+    value: String,
+    counts: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+}
+
+/// What a thread has armed, to arm a thread it starts the same way
+/// ([`with_arming`]). Nothing in release builds, which have no failpoints.
+#[derive(Debug, Clone, Default)]
+pub struct Arming {
+    #[cfg(debug_assertions)]
+    thread: Option<ThreadArming>,
+}
+
+/// This thread's own arming — not the environment's, which every thread sees
+/// already.
+pub fn current() -> Arming {
+    Arming {
+        #[cfg(debug_assertions)]
+        thread: THREAD_FAULT.with(|f| f.borrow().clone()),
+    }
+}
+
+/// Run `body` armed as `arming` says, then as before: how a worker thread
+/// takes on the arming of the thread that started it.
+pub fn with_arming<R>(arming: &Arming, body: impl FnOnce() -> R) -> R {
+    #[cfg(debug_assertions)]
+    {
+        let before = THREAD_FAULT.with(|f| f.replace(arming.thread.clone()));
+        let out = body();
+        THREAD_FAULT.with(|f| *f.borrow_mut() = before);
+        out
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = arming;
+        body()
+    }
 }
 
 /// Trip point `name` if it is one of the currently armed failpoints.
@@ -115,7 +163,7 @@ pub fn check_io(name: &str) -> std::io::Result<()> {
         }
         if let Some((errno, times)) = io_mode(mode) {
             if let Some(times) = times
-                && bump(scope, &armed, name) > times
+                && bump(&scope, &armed, name) > times
             {
                 continue;
             }
@@ -130,16 +178,16 @@ pub fn check_io(name: &str) -> std::io::Result<()> {
 /// environment. Each keeps its own `-<n>` counts, so a test in one thread never
 /// spends another's.
 #[cfg(debug_assertions)]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Scope {
-    Thread,
+    Thread(std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>),
     Process,
 }
 
 #[cfg(debug_assertions)]
 fn armed() -> Option<(String, Scope)> {
-    if let Some(value) = THREAD_FAULT.with(|f| f.borrow().clone()) {
-        return Some((value, Scope::Thread));
+    if let Some(arming) = THREAD_FAULT.with(|f| f.borrow().clone()) {
+        return Some((arming.value, Scope::Thread(arming.counts)));
     }
     std::env::var(FAULT_ENV)
         .ok()
@@ -190,18 +238,12 @@ fn io_error(errno: &str) -> std::io::Error {
 }
 
 #[cfg(debug_assertions)]
-thread_local! {
-    static THREAD_COUNTS: std::cell::RefCell<std::collections::HashMap<String, u32>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-#[cfg(debug_assertions)]
 static PROCESS_COUNTS: std::sync::Mutex<Option<std::collections::HashMap<String, u32>>> =
     std::sync::Mutex::new(None);
 
 /// Count one more trip of `name` under this arming; answers the new count.
 #[cfg(debug_assertions)]
-fn bump(scope: Scope, armed: &str, name: &str) -> u32 {
+fn bump(scope: &Scope, armed: &str, name: &str) -> u32 {
     let key = format!("{armed}\u{0}{name}");
     let step = |counts: &mut std::collections::HashMap<String, u32>| {
         let count = counts.entry(key.clone()).or_insert(0);
@@ -209,7 +251,9 @@ fn bump(scope: Scope, armed: &str, name: &str) -> u32 {
         *count
     };
     match scope {
-        Scope::Thread => THREAD_COUNTS.with(|counts| step(&mut counts.borrow_mut())),
+        Scope::Thread(counts) => {
+            step(&mut counts.lock().unwrap_or_else(|error| error.into_inner()))
+        }
         Scope::Process => {
             let mut counts = PROCESS_COUNTS
                 .lock()
@@ -252,11 +296,13 @@ pub fn is_armed(name: &str) -> bool {
 /// another test running in parallel, so no lock is needed.
 #[cfg(all(test, debug_assertions))]
 pub fn with_thread_fault<R>(spec: &str, body: impl FnOnce() -> R) -> R {
-    THREAD_FAULT.with(|f| *f.borrow_mut() = Some(spec.to_string()));
-    THREAD_COUNTS.with(|counts| counts.borrow_mut().clear());
-    let out = body();
-    THREAD_FAULT.with(|f| *f.borrow_mut() = None);
-    out
+    let arming = Arming {
+        thread: Some(ThreadArming {
+            value: spec.to_string(),
+            counts: Default::default(),
+        }),
+    };
+    with_arming(&arming, body)
 }
 
 /// Release builds have no failpoints at all.
@@ -337,6 +383,13 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     // A decision, like `move:force-staged`: canonicalize every path the way a
     // drive Windows cannot name forces (`util::paths::canonical`).
     "paths:unnamed-volume",
+    // A decision: every pool runs one worker (`util::pool::width_for`), so a
+    // job paced with `delay-<ms>` takes one entry at a time.
+    "pool:serial",
+    // A walk's listing of one folder, and its look at one entry, failed the
+    // way a mount fails (`walk:readdir:eio`).
+    "walk:readdir",
+    "walk:lstat",
 ];
 
 #[cfg(all(test, debug_assertions))]

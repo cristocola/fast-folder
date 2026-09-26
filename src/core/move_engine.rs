@@ -650,6 +650,7 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
     // they are on different filesystems, and each one's rename is only
     // durable once its folder is.
     move_cleanup::sync_dir(new_base);
+    transactions::keep_folder_attributes(&manifest, &project.path, new_path);
     let mut moved: Option<Project> = None;
     let mut housekeeping = None;
     let fate = if let Err(error) = crate::util::faults::check("move:after-publication")

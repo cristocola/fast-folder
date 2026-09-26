@@ -150,4 +150,9 @@ the fix missed.
   open `fastf` for the 30-second timeout and leaving a lock file behind.
 - Lock order: `ENV_LOCK`, then `interrupt::TEST_LOCK`, which lives beside the
   process-global flag because a per-module mutex silently races. `faults` needs no
-  lock — its arming is thread-local.
+  lock — its arming is thread-local, and **a pool's workers inherit it**
+  (`faults::current`/`with_arming`), counts of `-<n>` shared across them.
+- **A job paced with `delay-<ms>` also arms `pool:serial`.** Walks, copies and
+  removals run on `util::pool`, so without it a per-entry delay is paid by
+  four to sixteen workers at once and a test that kills or cancels "mid-copy"
+  races the pool. `pool:serial` gives every pool one worker.

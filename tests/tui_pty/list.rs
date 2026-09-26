@@ -1063,7 +1063,7 @@ fn quitting_mid_move_leaves_the_move_to_finish_and_a_second_app_sees_it() {
     let alt = sb.with_bases(&["alt"])[0].clone();
     plant_dated_project(&sb, "Slow", "ID0001", "2026-01-01T00:00:00Z", 64);
     // One file, three seconds to copy: long enough to quit in the middle.
-    let fault = std::path::Path::new("move:force-staged,move:each-file:delay-3000");
+    let fault = std::path::Path::new("pool:serial,move:force-staged,move:each-file:delay-3000");
     let env = [
         ("FASTF_INSTALL_DIR", sb.install.as_path()),
         ("HOME", sb.tmp.path()),

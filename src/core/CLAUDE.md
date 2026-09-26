@@ -120,7 +120,9 @@ verbatim form is what makes paths past MAX_PATH work.
 overflow is not an unwind, which is also why those workers set `stack_size`.
 **Thread the depth**: each walk is a `_at` function taking `depth` behind a
 zero-initialising entry point, and recursing through the entry point resets the
-count and makes the guard unreachable. A template's `structure:` is bounded once,
+count and makes the guard unreachable. The pooled walks (`transactions::Walk`,
+`core::removal`) carry the depth in each queue item instead, and the root is
+the only item made at 0. A template's `structure:` is bounded once,
 in `template::validate_structure`, which every load and save passes through.
 
 ## `PROJECT_INFO.md`
@@ -373,6 +375,21 @@ kind) is somebody's decision, and both copies are kept and listed. Found on a
 real rclone Drive mount: it misplaced three uploads while the staging folder was
 renamed into place. No message ever advises deleting anything.
 
+**The engine runs on the pool** (`util::pool`): `Walk::of_with`, the copy, the
+folder attributes and every tree removal ask the filesystem about several
+entries at once, as many as `pool::width_for` says the filesystem is worth
+(local 4, NFS/SMB/sshfs 8, rclone and other FUSE 16, from `util::fs_kind`), and
+sort what they found at the end, so a walk's output is exactly the sequential
+one (`the_parallel_walk_finds_what_one_thread_finds`). The first error stops a
+pool; nothing new starts after it. **A worker runs under the fault arming of
+the thread that started the pool** (`faults::current`, `with_arming`), with
+one count of `-<n>` trips for all of them, so a failpoint a test arms trips in
+the workers. **A pool never starts a pool**: work running on a worker that
+reaches another walk runs it inline. `pool:serial` (a decision point) gives
+every pool one worker, which a test that paces a job with `delay-<ms>` needs.
+Per-entry failpoints — `walk:readdir`, `walk:lstat`, `remove:each-entry`,
+`move:each-file` — fire on the workers.
+
 **One rule decides removal, in-process and in reconcile**
 (`move_cleanup::check_removable`): every entry is one the move recorded,
 unchanged (`is_clean` for a version-3 source, `is_residue` for a retired copy and
@@ -382,9 +399,13 @@ at every such path that is as published (`published.json`, the staging walk) or
 newer — so the user may edit the moved copy while a cleanup waits, and a moved
 copy restored from an older backup keeps the original. Without a published record
 (3.11) "newer" is measured against the original's own time. The removal itself is
-`move_cleanup::remove_tree`, not std's: it never follows a link or crosses a
-device, re-checks each entry against the manifest, carries on past a failure,
-gives a folder its owner's permission back, and counts what it left.
+`core::removal`, not std's: it never follows a link or crosses a device, asks a
+`Judge` of each entry — `Recorded` re-checks it against the manifest,
+`Everything` takes all — on the worker that then removes it, right after the
+`lstat` the judge saw, carries on past a failure, gives a folder its owner's
+permission back, never asks a folder that still holds something to go, and
+counts what is left only when something is (a walk; the common case needs
+none).
 
 **Only "nothing there" is absence** (`util::paths::presence`: `Present`,
 `Absent` on ENOENT/ENOTDIR only, `Unknown` for any other error). 3.13 asked
@@ -413,7 +434,13 @@ and a link that reads back as a file means the mount resolves links itself (sshf
 is refused; `util::disk_space` refuses a copy that cannot fit, and an answer it
 cannot give (`None`) never refuses. Then `copy_to_staging` makes **every folder and
 link before any content, and writes each file once** — folders with `create_dir`
-in manifest order, links last, then each file `create_new` with its contents. It
+a level at a time, links last, then each file `create_new` with its contents,
+all on the pool. **A file keeps its permission bits and times**, set on its own
+handle before its `fsync` (`transactions::keep_attributes`), so what is
+verified and published is what was copied; folders get theirs after the
+publish, deepest first (`keep_folder_attributes`), since a folder's time moves
+with every name written into it and a mode-555 folder would refuse its own
+files; the project folder keeps the target's defaults. It
 asks the target once whether it ignores case (`target_ignores_case`, a probe
 pair in staging) and, if so, reads the record for names that differ only in case
 (`case_clashes`) before copying. 3.12.0 made every file empty first and filled

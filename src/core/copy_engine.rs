@@ -249,6 +249,7 @@ fn copy_unlocked(
             &AtomicBool::new(false),
         )
         .with_context(|| format!("publishing the copy at {}", target.display()))?;
+        transactions::keep_folder_attributes(&manifest, &project.path, &staging);
         Ok(totals)
     })();
 

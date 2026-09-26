@@ -277,28 +277,43 @@ unknown; the lab's drop and resurrect scenarios leave no recordless folder.
 
 ## Phase 2 — the engine runs in parallel
 
-- [ ] `util::pool`: a queue on `std::thread::scope` with a stop flag and a
+- [x] `util::pool`: a queue on `std::thread::scope` with a stop flag and a
   first-error slot; each worker runs under the spawner's fault arming
   (`faults::current()`/`with_arming`, no-ops in release); concurrency from
   `fs_kind`; a `pool:serial` decision point keeps pacing tests meaningful.
-- [ ] `Walk::of_with` on the pool over a `(dir, depth)` queue, with the same
+  *As built:* `-<n>` counts are shared by every thread armed from one arming;
+  a pool started on a worker runs inline; a system out of threads still gets
+  the work done.
+- [x] `Walk::of_with` on the pool over a `(dir, depth)` queue, with the same
   `Problem` rules; entries and problems sorted at the end, so its output is
-  unchanged.
-- [ ] Copy on the pool: folders and links first as now, then files in
+  unchanged. *As built:* a listing hands its entries on in batches of 32, so a
+  flat folder of twenty thousand files spreads over every worker; failpoints
+  `walk:readdir` and `walk:lstat`.
+- [x] Copy on the pool: folders and links first as now, then files in
   parallel, each `create_new|O_NOFOLLOW`, its mode and mtime set from the
   handle, then its fsync. Folder modes and times deepest-first after the
   publish, best effort (defect 17). Removal (deletes, unpublished copies) in
-  parallel: files, then folders by descending depth.
+  parallel: files, then folders by descending depth. *As built:* folders are
+  made a level at a time; the project folder itself keeps the target's
+  defaults (the bookkeeping rewrites its `PROJECT_INFO.md` next). The removal
+  is `core::removal`: each entry is examined and removed by the same worker,
+  one right after the other, and asked of a `Judge` (`Recorded`,
+  `Everything`; the merge plugs in here in Phase 3); a folder something was
+  left in is never asked to go.
 - [ ] Fewer walks: in-process, the pre-retire whole-tree checks of S and F go
   (the merge proves each removal), and so does the walk that only counts
-  leftovers. Target: S walked twice, F twice, R once (defect 15).
-- [ ] Tests: the parallel walk equals a sequential reference, problems and a
+  leftovers. Target: S walked twice, F twice, R once (defect 15). *As built:*
+  the counting walk now runs only when something is left; the pre-retire
+  checks go with Phase 3's merge, which is what replaces them.
+- [x] Tests: the parallel walk equals a sequential reference, problems and a
   70-deep tree included (property test); an arming trips inside pool threads;
   `+x`, file and folder times survive a move; Windows read-only files and
   junctions under parallel removal.
 
 Acceptance: the lab's before/after table and concurrency sweep are recorded;
-an old copy on R2 is removed at least ten times faster.
+an old copy on R2 is removed at least ten times faster. *Met in part:* the
+table is below; the R2 check and removal together are 9.5 times faster
+(Phase 3's merge removes the separate check). The sweep waits for the merge.
 
 ## Phase 3 — the retire is a merge; changes during a move are kept
 
@@ -490,6 +505,24 @@ seconds later ends "kept whole: PROJECT_INFO.md modified since it was scanned"
 (rclone's object-by-object rename moves the file's time) — the record is kept,
 but a person is still asked. That is Phase 3's merge and in-place retire; the
 lab's `editmove-r2` is its acceptance test.
+
+**Phase 2 (2026-09-26).** As planned, with the deviations marked *as built*
+above. The lab against 3.13.0, same bases and fixtures (gjiro = 1640
+entries; the sshfs base is the laptop over the LAN):
+
+| scenario | 3.13.0 | Phase 2 | notes |
+|---|---|---|---|
+| move out of R2: check the old copy | 88 s | 7.8 s | |
+| move out of R2: remove the old copy | 194 s | 21.8 s | 16 workers |
+| move out of R2: whole job | 314 s | 62 s | the set-aside rename (31 s) is unchanged: Phase 3 |
+| move out of sshfs | 42 s | 12 s | |
+| move into sshfs | 54 s | 48 s | one `fsync` per file on the laptop's disk, and sftp-server answers one request at a time |
+| delete on sshfs (gjiro) | 13.5 s | 4.4 s | |
+| delete on sshfs (20k files) | 93 s | 50 s | |
+| fidelity (content, modes, mtimes differing) | 0, 4, 1472 | 0, 0, 0 | every scenario |
+
+The per-file `fsync` stays: it is what makes the moved copy durable before
+the original goes, and on sshfs it is the server's disk that pays it.
 
 ## Parking lot
 

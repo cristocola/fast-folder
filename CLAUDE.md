@@ -73,6 +73,10 @@ tell you.
   `resolve`), `move_engine.rs` (the staged move the facade delegates to — it
   needs transactions, staged copies and progress, which nothing else in the
   library does), `copy_engine.rs` (a move that keeps its source),
+  `move_cleanup.rs` (how an original leaves: set aside, then removed),
+  `removal.rs` (removing a tree on the pool, entry by entry, each asked of a
+  `Judge`), `records.rs` (the data dir's index of every move record, and the
+  settle),
   `operations.rs` (the shared mutation boundary), `project.rs` (plan / create /
   apply, and the preview *reports*), `plan.rs` (`ProjectPlan`),
   `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus
@@ -86,6 +90,9 @@ tell you.
   violations, and the read-only attribute a publish must set aside), `interrupt`
   (Ctrl-C rollback, SIGHUP, and the `set_restore` hook for the second signal),
   `faults` (failpoints), `trace` (work counting), `diag` (the one warning sink),
+  `pool` (a few threads asking a filesystem several things at once; its width
+  comes from `fs_kind`, what kind of filesystem a path is on), `process` (is
+  the pid an operation id names a live fastf),
   `log` (the log on disk: one line per event, appended by every process at
   once, rotated; its level is *set* by `main`, since `util` may not read
   `Config`), `messages` (the sentences a person was shown, kept across

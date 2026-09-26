@@ -30,6 +30,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::core::assets::Progress;
 use crate::core::progress::Ticker;
+use crate::util::pool::Queue;
 
 pub const TRANSACTIONS_DIR: &str = ".fastf-transactions";
 pub const JOURNAL_FILE: &str = "move.json";
@@ -901,13 +902,34 @@ impl Walk {
 
     /// [`Self::of`], ticking once per entry examined; a ticker that has been
     /// cancelled stops the walk with [`crate::core::progress::CANCELLED`].
+    ///
+    /// **On the pool** (`util::pool`), as wide as the filesystem is worth:
+    /// folders are listed and their entries examined by several workers at
+    /// once, and the result is sorted at the end, so it is exactly what one
+    /// thread walking depth-first would find.
     pub fn of_with(root: &Path, label: &str, ticker: Ticker) -> Result<Self> {
         crate::util::paths::require_real_directory(root, label)?;
         let device = fs::symlink_metadata(root)
             .map(|metadata| device_of(&metadata))
             .with_context(|| format!("reading metadata for {}", root.display()))?;
-        let mut walk = Self::default();
-        walk_at(root, root, 0, device, &mut walk, ticker)?;
+        let found = Mutex::new(Self::default());
+        let walker = Walker {
+            root,
+            device,
+            ticker,
+            found: &found,
+        };
+        crate::util::pool::expand(
+            crate::util::pool::width_for(root),
+            vec![Step::List(root.to_path_buf(), 0)],
+            |step, queue| match step {
+                Step::List(dir, depth) => walker.list(&dir, depth, queue),
+                Step::Examine(paths, depth) => walker.examine(paths, depth, queue),
+            },
+        )?;
+        let mut walk = found
+            .into_inner()
+            .unwrap_or_else(|error| error.into_inner());
         walk.entries
             .sort_by(|left, right| left.path.cmp(&right.path));
         walk.problems
@@ -955,16 +977,154 @@ pub(crate) fn device_of(_metadata: &fs::Metadata) -> Option<u64> {
     None
 }
 
-/// The recursive step. **Only [`Walk::of`] starts it at depth 0**; recursing
-/// through an entry point would reset the count and make the limit
-/// unreachable.
+/// One piece of a walk's work.
+enum Step {
+    /// A folder to list, at its depth (the root's is 0).
+    List(PathBuf, usize),
+    /// Entries one listing found, examined together; the depth is their
+    /// folder's.
+    Examine(Vec<PathBuf>, usize),
+}
+
+/// How many entries of one folder one worker examines at a time: enough that
+/// the queue is never what a walk waits on, few enough that a flat folder of
+/// twenty thousand files still spreads over every worker.
+const EXAMINE_BATCH: usize = 32;
+
+/// What every worker of one walk shares.
+struct Walker<'w> {
+    root: &'w Path,
+    /// The root's device: a folder on another is not walked into.
+    device: Option<u64>,
+    ticker: Ticker<'w>,
+    found: &'w Mutex<Walk>,
+}
+
+impl Walker<'_> {
+    fn keep(&self, local: Walk) {
+        if local.entries.is_empty() && local.problems.is_empty() {
+            return;
+        }
+        let mut found = self.found.lock().unwrap_or_else(|error| error.into_inner());
+        found.entries.extend(local.entries);
+        found.problems.extend(local.problems);
+    }
+
+    fn problem(&self, path: PathBuf, problem: Problem) {
+        self.keep(Walk {
+            entries: Vec::new(),
+            problems: vec![WalkProblem { path, problem }],
+        });
+    }
+
+    /// List `dir` and queue what it holds for examining. **Only the root is
+    /// at depth 0**; a listing that fails there fails the walk, anywhere else
+    /// it is that folder's problem.
+    fn list(&self, dir: &Path, depth: usize, queue: &Queue<'_, Step>) -> Result<()> {
+        let here = relative_to(self.root, dir)?;
+        if depth >= crate::util::paths::MAX_WALK_DEPTH {
+            self.problem(here, Problem::TooDeep);
+            return Ok(());
+        }
+        let listing =
+            crate::util::faults::check_io("walk:readdir").and_then(|()| fs::read_dir(dir));
+        let children = match listing {
+            Ok(children) => children,
+            Err(error) if depth == 0 => {
+                return Err(error).with_context(|| format!("reading {}", dir.display()));
+            }
+            Err(error) => {
+                self.problem(here, Problem::Unreadable(error.to_string()));
+                return Ok(());
+            }
+        };
+        let mut batch = Vec::new();
+        for child in children {
+            // A listing that fails part of the way cannot say what it did not
+            // list, so the whole folder is a problem — after what it did list.
+            let child = match child {
+                Ok(child) => child,
+                Err(error) if depth == 0 => {
+                    return Err(error).with_context(|| format!("reading {}", dir.display()));
+                }
+                Err(error) => {
+                    if !batch.is_empty() {
+                        queue.push(Step::Examine(batch, depth));
+                    }
+                    self.problem(here, Problem::Unreadable(error.to_string()));
+                    return Ok(());
+                }
+            };
+            batch.push(child.path());
+            if batch.len() == EXAMINE_BATCH {
+                queue.push(Step::Examine(std::mem::take(&mut batch), depth));
+            }
+        }
+        if !batch.is_empty() {
+            queue.push(Step::Examine(batch, depth));
+        }
+        Ok(())
+    }
+
+    /// Examine entries of one folder at `depth`: record each, and queue each
+    /// folder among them for listing.
+    fn examine(&self, paths: Vec<PathBuf>, depth: usize, queue: &Queue<'_, Step>) -> Result<()> {
+        let mut local = Walk::default();
+        for path in paths {
+            let relative = relative_to(self.root, &path)?;
+            if !self.ticker.tick(&relative) {
+                bail!("{}", crate::core::progress::CANCELLED);
+            }
+            crate::util::paths::require_native_relative(&relative, "move manifest path")?;
+            let mut problem = |problem| {
+                local.problems.push(WalkProblem {
+                    path: relative.clone(),
+                    problem,
+                })
+            };
+            if relative.to_str().is_none() {
+                problem(Problem::NotUnicode);
+                continue;
+            }
+            let looked = crate::util::faults::check_io("walk:lstat")
+                .and_then(|()| fs::symlink_metadata(&path));
+            let metadata = match looked {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    problem(Problem::Unexaminable {
+                        not_found: error.kind() == std::io::ErrorKind::NotFound,
+                        error: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            match entry_for(&path, &relative, &metadata) {
+                Err(found) => problem(found),
+                Ok(entry) if entry.kind == ManifestKind::Directory => {
+                    if self.device.is_some() && device_of(&metadata) != self.device {
+                        problem(Problem::OtherFilesystem);
+                        continue;
+                    }
+                    local.entries.push(entry);
+                    queue.push(Step::List(path, depth + 1));
+                }
+                Ok(entry) => local.entries.push(entry),
+            }
+        }
+        self.keep(local);
+        Ok(())
+    }
+}
+
+/// The walk as one thread does it, depth-first: the reference the pool's walk
+/// is held to (`the_parallel_walk_finds_what_one_thread_finds`).
+#[cfg(all(test, unix))]
 fn walk_at(
     root: &Path,
     current: &Path,
     depth: usize,
     device: Option<u64>,
     walk: &mut Walk,
-    ticker: Ticker,
 ) -> Result<()> {
     let here = relative_to(root, current)?;
     if depth >= crate::util::paths::MAX_WALK_DEPTH {
@@ -988,8 +1148,6 @@ fn walk_at(
         }
     };
     for child in children {
-        // A listing that fails part of the way cannot say what it did not
-        // list, so the whole folder is a problem.
         let child = match child {
             Ok(child) => child,
             Err(error) if depth == 0 => {
@@ -1005,9 +1163,6 @@ fn walk_at(
         };
         let path = child.path();
         let relative = relative_to(root, &path)?;
-        if !ticker.tick(&relative) {
-            bail!("{}", crate::core::progress::CANCELLED);
-        }
         crate::util::paths::require_native_relative(&relative, "move manifest path")?;
         let mut problem = |problem| {
             walk.problems.push(WalkProblem {
@@ -1037,7 +1192,7 @@ fn walk_at(
                     continue;
                 }
                 walk.entries.push(entry);
-                walk_at(root, &path, depth + 1, device, walk, ticker)?;
+                walk_at(root, &path, depth + 1, device, walk)?;
             }
             Ok(entry) => walk.entries.push(entry),
         }
@@ -1157,6 +1312,16 @@ fn link_kind(path: &Path, metadata: &fs::Metadata) -> std::result::Result<Manife
 pub(crate) fn examine(path: &Path, relative: &Path) -> std::io::Result<Option<ManifestEntry>> {
     let metadata = fs::symlink_metadata(path)?;
     Ok(entry_for(path, relative, &metadata).ok())
+}
+
+/// What a look at `path` already taken (`metadata`) records it as; `None`
+/// for what a manifest cannot hold.
+pub(crate) fn entry_of(
+    path: &Path,
+    relative: &Path,
+    metadata: &fs::Metadata,
+) -> Option<ManifestEntry> {
+    entry_for(path, relative, metadata).ok()
 }
 
 /// Whether `found` is still the entry `recorded` describes. Folder times do
@@ -1569,11 +1734,11 @@ impl MoveTransaction {
                 };
             if unpublished {
                 crate::util::paths::require_real_directory(&staging, "unpublished copy")?;
-                if let crate::core::move_cleanup::Removal::Leftover { reason, .. } =
-                    crate::core::move_cleanup::remove_tree(
+                if let crate::core::removal::Removal::Leftover { reason, .. } =
+                    crate::core::removal::remove_tree(
                         &staging,
                         None,
-                        crate::core::move_cleanup::Purpose::Delete,
+                        crate::core::removal::Purpose::Delete,
                         Ticker::none(),
                     )
                 {
@@ -1910,22 +2075,25 @@ pub fn case_clashes(manifest: &MoveManifest) -> Vec<(PathBuf, PathBuf)> {
 }
 
 /// The first pass: every folder, and — last, so no later write can pass
-/// through one — every link.
+/// through one — every link. Folders are made a level at a time, each level on
+/// the pool, so a parent is always there before its children; links, which
+/// hold nothing, all at once.
 fn create_names(manifest: &MoveManifest, staging: &Path, cancel: &AtomicBool) -> Result<()> {
-    let ordered = manifest
-        .entries
-        .iter()
-        .filter(|entry| entry.kind == ManifestKind::Directory)
-        .chain(manifest.entries.iter().filter(|entry| entry.kind.is_link()));
-    let mut refused: Vec<(PathBuf, String)> = Vec::new();
-    for entry in ordered {
+    let width = crate::util::pool::width_for(staging);
+    let refused: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+    let make = |entry: &ManifestEntry| -> Result<()> {
         if cancel.load(Ordering::Relaxed) {
             bail!("move cancelled");
         }
         // Beneath a folder that could not be made, nothing can be; its own
         // refusal says why.
-        if refused.iter().any(|(path, _)| entry.path.starts_with(path)) {
-            continue;
+        if refused
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .any(|(path, _)| entry.path.starts_with(path))
+        {
+            return Ok(());
         }
         let destination = staging.join(&entry.path);
         let made = match entry.kind {
@@ -1946,12 +2114,41 @@ fn create_names(manifest: &MoveManifest, staging: &Path, cancel: &AtomicBool) ->
             } else {
                 name_refusal(&error)
             };
-            refused.push((entry.path.clone(), why));
+            refused
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push((entry.path.clone(), why));
         }
+        Ok(())
+    };
+    let mut levels: Vec<Vec<&ManifestEntry>> = Vec::new();
+    for entry in manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == ManifestKind::Directory)
+    {
+        let depth = entry.path.components().count();
+        if levels.len() < depth {
+            levels.resize_with(depth, Vec::new);
+        }
+        levels[depth - 1].push(entry);
     }
+    for level in levels {
+        crate::util::pool::run(width, level, make)?;
+    }
+    let links: Vec<&ManifestEntry> = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.kind.is_link())
+        .collect();
+    crate::util::pool::run(width, links, make)?;
+    let mut refused = refused
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner());
     if refused.is_empty() {
         return Ok(());
     }
+    refused.sort();
     let count = refused.len();
     let mut message = format!(
         "{count} {} cannot be made where the project is going:",
@@ -2056,7 +2253,8 @@ pub(crate) fn link_refusal(error: &std::io::Error) -> String {
 /// The second pass: each file, written once, into a folder the first pass
 /// made — created new, and opened without following a link, though none can
 /// be there yet. A name the target will not take is found here, still before
-/// anything is published.
+/// anything is published. Files are copied on the pool, as many at once as the
+/// slower of the two filesystems is worth.
 fn copy_contents(
     manifest: &MoveManifest,
     source: &Path,
@@ -2064,77 +2262,236 @@ fn copy_contents(
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
-    for entry in &manifest.entries {
+    let files: Vec<&ManifestEntry> = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == ManifestKind::File)
+        .collect();
+    let width = crate::util::pool::width_for_pair(source, staging);
+    crate::util::pool::run(width, files, |entry| {
         if cancel.load(Ordering::Relaxed) {
             bail!("move cancelled");
         }
-        if entry.kind != ManifestKind::File {
-            continue;
+        copy_file(entry, source, staging, progress, cancel)
+    })
+}
+
+/// Copy one recorded file into place, **keeping its permission bits and its
+/// times**, as `mv` does: both are set on the new file's own handle before it
+/// is synced, so what is published is what was verified. 3.13 kept neither,
+/// and every moved script lost its `+x`.
+fn copy_file(
+    entry: &ManifestEntry,
+    source: &Path,
+    staging: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let source_path = source.join(&entry.path);
+    let destination_path = staging.join(&entry.path);
+    let current = entry_from_path(&source_path, &entry.path)?;
+    if &current != entry {
+        bail!(
+            "move source changed before copying {}",
+            entry.path.display()
+        );
+    }
+    crate::util::faults::check("move:each-file")?;
+    if let Ok(mut state) = progress.lock() {
+        state.current_file = entry.path.to_string_lossy().into_owned();
+        state.touch();
+    }
+    let mut reader = fs::File::open(&source_path)
+        .with_context(|| format!("opening {}", source_path.display()))?;
+    // What was opened, from its own handle: the mode and times to keep.
+    let original = reader
+        .metadata()
+        .with_context(|| format!("reading metadata for {}", source_path.display()))?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut writer = options.open(&destination_path).map_err(|error| {
+        anyhow::anyhow!(
+            "{} cannot be made where the project is going: {}",
+            entry.path.display(),
+            name_refusal(&error)
+        )
+    })?;
+    // Small files are most files: a buffer the size of the file, up to the
+    // usual megabyte.
+    let size = usize::try_from(entry.bytes)
+        .unwrap_or(COPY_BUFFER_BYTES)
+        .clamp(1, COPY_BUFFER_BYTES);
+    let mut buffer = vec![0_u8; size.saturating_add(1).min(COPY_BUFFER_BYTES)];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            bail!("move cancelled");
         }
-        let source_path = source.join(&entry.path);
-        let destination_path = staging.join(&entry.path);
-        let current = entry_from_path(&source_path, &entry.path)?;
-        if &current != entry {
-            bail!(
-                "move source changed before copying {}",
-                entry.path.display()
-            );
-        }
-        crate::util::faults::check("move:each-file")?;
-        if let Ok(mut state) = progress.lock() {
-            state.current_file = entry.path.to_string_lossy().into_owned();
-            state.touch();
-        }
-        let mut reader = fs::File::open(&source_path)
-            .with_context(|| format!("opening {}", source_path.display()))?;
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW);
-        }
-        let mut writer = options.open(&destination_path).map_err(|error| {
-            anyhow::anyhow!(
-                "{} cannot be made where the project is going: {}",
-                entry.path.display(),
-                name_refusal(&error)
-            )
-        })?;
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                bail!("move cancelled");
-            }
-            crate::util::faults::check("move:mid-copy")?;
-            let count = reader
-                .read(&mut buffer)
-                .with_context(|| format!("reading {}", source_path.display()))?;
-            if count == 0 {
-                break;
-            }
-            writer
-                .write_all(&buffer[..count])
-                .with_context(|| format!("writing {}", destination_path.display()))?;
-            if let Ok(mut state) = progress.lock() {
-                state.copied_bytes = state.copied_bytes.saturating_add(count as u64);
-                state.touch();
-            }
+        crate::util::faults::check("move:mid-copy")?;
+        let count = reader
+            .read(&mut buffer)
+            .with_context(|| format!("reading {}", source_path.display()))?;
+        if count == 0 {
+            break;
         }
         writer
-            .flush()
-            .with_context(|| format!("flushing {}", destination_path.display()))?;
-        writer
-            .sync_all()
-            .with_context(|| format!("syncing {}", destination_path.display()))?;
+            .write_all(&buffer[..count])
+            .with_context(|| format!("writing {}", destination_path.display()))?;
         if let Ok(mut state) = progress.lock() {
-            state.done_files += 1;
-            state.step_done += 1;
+            state.copied_bytes = state.copied_bytes.saturating_add(count as u64);
             state.touch();
         }
     }
+    writer
+        .flush()
+        .with_context(|| format!("flushing {}", destination_path.display()))?;
+    keep_attributes(&writer, &original);
+    writer
+        .sync_all()
+        .with_context(|| format!("syncing {}", destination_path.display()))?;
+    if let Ok(mut state) = progress.lock() {
+        state.done_files += 1;
+        state.step_done += 1;
+        state.touch();
+    }
     Ok(())
 }
+
+/// Give a copied file the permission bits and times of `original`, on its
+/// own handle. Best effort: a filesystem that keeps neither (a FAT drive, an
+/// object store without metadata) still holds the right bytes, and the move
+/// never fails over this.
+fn keep_attributes(file: &fs::File, original: &fs::Metadata) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = original.permissions().mode() & 0o777;
+        let _ = file.set_permissions(fs::Permissions::from_mode(mode));
+    }
+    // The read-only attribute is Windows' permission bit.
+    #[cfg(windows)]
+    if original.permissions().readonly() {
+        let mut permissions = original.permissions();
+        permissions.set_readonly(true);
+        let _ = file.set_permissions(permissions);
+    }
+    let mut times = fs::FileTimes::new();
+    if let Ok(modified) = original.modified() {
+        times = times.set_modified(modified);
+    }
+    if let Ok(accessed) = original.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    let _ = file.set_times(times);
+}
+
+/// Give every folder of a published copy the permission bits and times of its
+/// original, deepest first: **after** the publish, because a folder's time
+/// moves with every name written into it, and a folder without write
+/// permission (Go's module cache is mode 555) would have refused its own
+/// files. The project folder itself is left as it is: the move's bookkeeping
+/// writes its `PROJECT_INFO.md` next. Best effort, like
+/// [`keep_attributes`]: the move is done whatever this manages.
+pub(crate) fn keep_folder_attributes(manifest: &MoveManifest, source: &Path, destination: &Path) {
+    let mut levels: Vec<Vec<&ManifestEntry>> = Vec::new();
+    for entry in manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == ManifestKind::Directory)
+    {
+        let depth = entry.path.components().count();
+        if levels.len() < depth {
+            levels.resize_with(depth, Vec::new);
+        }
+        levels[depth - 1].push(entry);
+    }
+    let width = crate::util::pool::width_for_pair(source, destination);
+    for level in levels.into_iter().rev() {
+        let _ = crate::util::pool::run(width, level, |entry| {
+            if let Ok(original) = fs::symlink_metadata(source.join(&entry.path))
+                && original.file_type().is_dir()
+            {
+                set_folder_attributes(&destination.join(&entry.path), &original);
+            }
+            Ok::<(), ()>(())
+        });
+    }
+}
+
+#[cfg(unix)]
+fn set_folder_attributes(folder: &Path, original: &fs::Metadata) {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let Ok(metadata) = fs::symlink_metadata(folder) else {
+        return;
+    };
+    // Only a folder fastf made: never through a link something put there.
+    if !metadata.file_type().is_dir() {
+        return;
+    }
+    let Ok(name) = std::ffi::CString::new(folder.as_os_str().as_bytes()) else {
+        return;
+    };
+    let times = [
+        libc::timespec {
+            tv_sec: original.atime() as libc::time_t,
+            tv_nsec: original.atime_nsec() as _,
+        },
+        libc::timespec {
+            tv_sec: original.mtime() as libc::time_t,
+            tv_nsec: original.mtime_nsec() as _,
+        },
+    ];
+    // SAFETY: a NUL-terminated path this function owns, and two timespecs.
+    unsafe {
+        libc::utimensat(
+            libc::AT_FDCWD,
+            name.as_ptr(),
+            times.as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        );
+    }
+    let mode = original.permissions().mode() & 0o7777;
+    let _ = fs::set_permissions(folder, fs::Permissions::from_mode(mode));
+}
+
+#[cfg(windows)]
+fn set_folder_attributes(folder: &Path, original: &fs::Metadata) {
+    use std::os::windows::fs::OpenOptionsExt;
+    // A folder opens only for backup semantics; the handle asks for nothing
+    // but its attributes, and never follows a link.
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let Ok(handle) = OpenOptions::new()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(folder)
+    else {
+        return;
+    };
+    let Ok(metadata) = handle.metadata() else {
+        return;
+    };
+    if !metadata.file_type().is_dir() {
+        return;
+    }
+    let mut times = fs::FileTimes::new();
+    if let Ok(modified) = original.modified() {
+        times = times.set_modified(modified);
+    }
+    if let Ok(accessed) = original.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    let _ = handle.set_times(times);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn set_folder_attributes(_folder: &Path, _original: &fs::Metadata) {}
 
 fn entry_from_path(path: &Path, relative: &Path) -> Result<ManifestEntry> {
     let metadata = fs::symlink_metadata(path)
@@ -2960,5 +3317,81 @@ mod tests {
             let error = bad.validate().unwrap_err().to_string();
             assert!(error.contains(why), "expected '{why}', got: {error}");
         }
+    }
+
+    /// **The pool's walk finds exactly what one thread walking depth-first
+    /// finds** — every entry and every problem, in the same order — over
+    /// random trees of folders, files and links, beside a folder that cannot
+    /// be listed, a pipe, and a chain deeper than any walk goes.
+    #[cfg(unix)]
+    #[test]
+    fn the_parallel_walk_finds_what_one_thread_finds() {
+        use proptest::prelude::*;
+        let config = ProptestConfig {
+            cases: 24,
+            ..ProptestConfig::default()
+        };
+        proptest!(config, |(
+            shape in prop::collection::vec((0u8..4, 0usize..8, "[a-c]{1,3}"), 1..120),
+            deep in any::<bool>(),
+        )| {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("tree");
+            fs::create_dir(&root).unwrap();
+            let mut folders = vec![root.clone()];
+            for (n, (kind, parent, name)) in shape.iter().enumerate() {
+                let path = folders[parent % folders.len()].join(format!("{name}{n}"));
+                match kind {
+                    0 => {
+                        fs::create_dir(&path).unwrap();
+                        folders.push(path);
+                    }
+                    1 => std::os::unix::fs::symlink(format!("../{name}"), &path).unwrap(),
+                    _ => fs::write(&path, name.repeat(n)).unwrap(),
+                }
+            }
+            let fifo = std::ffi::CString::new(
+                root.join("pipe").as_os_str().as_encoded_bytes().to_vec(),
+            )
+            .unwrap();
+            // SAFETY: a valid NUL-terminated path and a plain mode.
+            assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+            let closed = folders.get(1).cloned();
+            if let Some(closed) = &closed
+                && !running_as_root()
+            {
+                set_mode(closed, 0o000);
+            }
+            if deep {
+                let mut chain = root.join("deep");
+                for _ in 0..70 {
+                    chain = chain.join("d");
+                }
+                fs::create_dir_all(&chain).unwrap();
+            }
+
+            let parallel = Walk::of(&root, "tree");
+            let mut reference = Walk::default();
+            let device = device_of(&fs::symlink_metadata(&root).unwrap());
+            let sequential = walk_at(&root, &root, 0, device, &mut reference).map(|()| {
+                reference
+                    .entries
+                    .sort_by(|left, right| left.path.cmp(&right.path));
+                reference
+                    .problems
+                    .sort_by(|left, right| left.path.cmp(&right.path));
+                reference
+            });
+            if let Some(closed) = &closed {
+                set_mode(closed, 0o755);
+            }
+            let (parallel, sequential) = (parallel.unwrap(), sequential.unwrap());
+            prop_assert!(parallel.problems.iter().any(|p| p.problem == Problem::Special));
+            prop_assert_eq!(
+                deep,
+                parallel.problems.iter().any(|p| p.problem == Problem::TooDeep)
+            );
+            prop_assert_eq!(parallel, sequential);
+        });
     }
 }

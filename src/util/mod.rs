@@ -14,6 +14,7 @@ pub mod messages;
 #[cfg(unix)]
 pub mod notify;
 pub mod paths;
+pub mod pool;
 pub(crate) mod process;
 #[cfg(unix)]
 pub mod relaunch;

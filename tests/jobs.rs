@@ -103,7 +103,7 @@ fn a_killed_command_line_leaves_its_move_to_finish() {
     let mut cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40,remove:each-entry:delay-10",
+        "pool:serial,move:force-staged,move:each-file:delay-40,remove:each-entry:delay-10",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     cli.kill().unwrap();
@@ -141,7 +141,7 @@ fn a_reconcile_from_another_data_dir_leaves_a_live_move_alone() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-60",
+        "pool:serial,move:force-staged,move:each-file:delay-60",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
 
@@ -176,7 +176,7 @@ fn a_delete_killed_mid_removal_is_finished_by_reconcile() {
     let mut cli = start(
         &sb,
         &["delete", "ID0001", "--yes"],
-        "remove:each-entry:delay-50",
+        "pool:serial,remove:each-entry:delay-50",
     );
     wait_until("the removal", 20, || {
         hidden_folders(&sb.base).len() == 1 && !original.exists()
@@ -211,7 +211,7 @@ fn a_killed_worker_is_read_as_interrupted_and_reconcile_rolls_it_back() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40",
+        "pool:serial,move:force-staged,move:each-file:delay-40",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     let (_, state) = newest(&sb).unwrap();
@@ -248,7 +248,7 @@ fn a_worker_killed_mid_removal_leaves_the_rest_to_reconcile() {
     let mut cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,remove:each-entry:delay-60",
+        "pool:serial,move:force-staged,remove:each-entry:delay-60",
     );
     wait_until("the removal", 20, || in_phase(&sb, "removing"));
     let (_, state) = newest(&sb).unwrap();
@@ -286,7 +286,7 @@ fn another_process_cancels_before_the_publish_and_is_told_too_late_after() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40",
+        "pool:serial,move:force-staged,move:each-file:delay-40",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     let asked = sb.ok(&["jobs", "cancel"]);
@@ -301,7 +301,7 @@ fn another_process_cancels_before_the_publish_and_is_told_too_late_after() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,remove:each-entry:delay-60",
+        "pool:serial,move:force-staged,remove:each-entry:delay-60",
     );
     wait_until("the removal", 20, || in_phase(&sb, "removing"));
     let late = sb.ok(&["jobs", "cancel"]);
@@ -323,7 +323,7 @@ fn a_live_jobs_records_are_its_own_and_the_lock_is_free_while_it_removes() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,remove:each-entry:delay-60",
+        "pool:serial,move:force-staged,remove:each-entry:delay-60",
     );
     wait_until("the removal", 20, || in_phase(&sb, "removing"));
 
@@ -352,7 +352,7 @@ fn a_change_made_during_a_copy_waits_and_names_the_job() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-60",
+        "pool:serial,move:force-staged,move:each-file:delay-60",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     let out = sb.run(&["tag", "add", "ID0002", "client"]);
@@ -379,7 +379,7 @@ fn two_moves_at_once_take_turns() {
     let first = start(
         &sb,
         &["move", "ID0001", &target, "--yes"],
-        "move:force-staged,move:each-file:delay-400",
+        "pool:serial,move:force-staged,move:each-file:delay-400",
     );
     wait_until("the first copy", 20, || in_phase(&sb, "copying"));
     let out = sb
@@ -412,7 +412,10 @@ fn a_detached_move_is_followed_by_watch() {
             "--yes",
             "--detach",
         ])
-        .env("FASTF_FAULT", "move:force-staged,move:each-file:delay-30")
+        .env(
+            "FASTF_FAULT",
+            "pool:serial,move:force-staged,move:each-file:delay-30",
+        )
         .output()
         .unwrap();
     let said = String::from_utf8_lossy(&out.stdout);
@@ -442,7 +445,7 @@ fn a_worker_is_in_a_session_of_its_own() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40",
+        "pool:serial,move:force-staged,move:each-file:delay-40",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     let (_, state) = newest(&sb).unwrap();
@@ -466,7 +469,7 @@ fn a_hang_up_leaves_the_move_running() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40",
+        "pool:serial,move:force-staged,move:each-file:delay-40",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     // SAFETY: a signal to a process this test started.
@@ -522,7 +525,11 @@ fn a_second_reconcile_leaves_the_first_ones_removals_alone() {
         "the retired original is left"
     );
 
-    let first = start(&sb, &["reconcile"], "remove:each-entry:delay-60");
+    let first = start(
+        &sb,
+        &["reconcile"],
+        "pool:serial,remove:each-entry:delay-60",
+    );
     wait_until("the first reconcile's removal", 20, || {
         in_phase(&sb, "removing")
     });
@@ -571,7 +578,7 @@ fn a_move_outlives_the_systemd_unit_that_started_it() {
         .arg(set("FASTF_INSTALL_DIR", &sb.install))
         .arg(set("HOME", sb.tmp.path()))
         .arg("--setenv=FASTF_NO_RELAUNCH=1")
-        .arg("--setenv=FASTF_FAULT=move:force-staged,move:each-file:delay-100")
+        .arg("--setenv=FASTF_FAULT=pool:serial,move:force-staged,move:each-file:delay-100")
         .arg(format!(
             "--setenv=XDG_RUNTIME_DIR={}",
             std::env::var("XDG_RUNTIME_DIR").unwrap()

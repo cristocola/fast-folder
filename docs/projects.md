@@ -161,6 +161,10 @@ The app's `m` does the same, over every marked project when there are marks. The
   leave the library, in one step**: it is renamed, beside itself, to a hidden
   `.fastf-moved-<operation-id>` folder, and that folder is then removed.
 - Every filename is project data. Names ending in `.tmp` or `.part` are copied and verified like any other name.
+- **Several entries at once.** A walk, a copy and a removal each ask the
+  filesystem about several entries at the same time — a few on a local disk,
+  more on a network share or sshfs, most on a cloud mount, where every one is
+  a request that waits on the network.
 - **Links travel as links.** A symbolic link — or, on Windows, a junction — is
   made again at the destination pointing exactly where it pointed, by the text
   of its target. It is never followed: nothing behind it is copied, and removing
@@ -226,10 +230,15 @@ entry of the same kind at every such path, as it was published or newer. You
 can go on working in the moved copy while a cleanup waits; a moved copy
 restored from a backup taken before the move keeps the original.
 
-Copy moves preserve regular-file contents, directory topology and links. They
-do not promise hashes, ACLs, ownership and permissions, extended attributes,
-sparse layout, hard-link relationships (hard-linked files arrive as separate
-files), or storage-level durability. The checks are intended to prevent
+Copy moves keep what `mv` keeps: regular-file contents, directory topology,
+links, and every file's and folder's permission bits (on Windows, the
+read-only attribute) and modification and access times. A read-only folder
+inside the project is made read-only again after its files have arrived. The
+project folder itself keeps the target's default permissions, and its time is
+the move's, since the move rewrites its `PROJECT_INFO.md`. They do not promise
+hashes, ACLs, ownership, extended attributes, sparse layout, hard-link
+relationships (hard-linked files arrive as separate files), or storage-level
+durability. The checks are intended to prevent
 application mistakes and ordinary interrupted copies; hardware failure, power
 loss, bit rot, and storage corruption belong to the filesystem and backups.
 
@@ -393,9 +402,10 @@ template's `files/` — never follows a link, junction or reparse point that is
 already there. The path text cannot escape its root, and the filesystem
 beneath it is checked component by component immediately before each write.
 
-**What a move or copy does not promise.** Hashes, ACLs, ownership and
-permissions, extended attributes, sparse-file layout, hard-link relationships
-and storage-level durability are outside the contract. Links are reproduced by
+**What a move or copy does not promise.** Hashes, ACLs, ownership,
+extended attributes, sparse-file layout, hard-link relationships and
+storage-level durability are outside the contract; permission bits and times
+are kept, as `mv` keeps them. Links are reproduced by
 their target text; sockets, pipes and device files are refused before anything
 is copied. A filesystem that hides links (a mount that resolves them on the
 server) is outside what fastf can see — the move checks for the one kind it can

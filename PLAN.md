@@ -317,7 +317,7 @@ table is below; the R2 check and removal together are 9.5 times faster
 
 ## Phase 3 — the retire is a merge; changes during a move are kept
 
-- [ ] `core::merge`: a pure `decide(manifest, published, F, R, policy)` →
+- [x] `core::merge`: a pure `decide(manifest, published, F, R, policy)` →
   `Remove | CompleteThenRemove | ReplaceThenRemove | CopyNewThenRemove |
   Keep(reason)`, and `merge_remove` on the pool (F folders made before their
   children, `rmdir` by descending depth, the moved copy's identity checked
@@ -329,28 +329,51 @@ table is below; the R2 check and removal together are 9.5 times faster
   manifest and is covered by F, and never writes into F. What is left is the
   conflicts; the record stays, and the verdict goes to `attention.json`. This
   replaces "kept whole" (defect 3): core CLAUDE.md and `docs/projects.md` are
-  rewritten.
-- [ ] Absorbing source changes before publishing: the source check compares
+  rewritten. *As built:* plus `CompareContent`, for a size that agrees and a
+  time that moved. **Writes into F never go through `atomic::copy`**, whose
+  temp-and-rename a cloud mount misplaces: each is `create_new` at its final
+  path, announced first by a create-only `write.<n>` marker in the record, so
+  a torn write is redone by the next pass. The merge plugs into
+  `core::removal` as a `Judge`; the verdicts go to the report's leftovers now
+  and to `attention.json` with Phase 5.
+- [x] Absorbing source changes before publishing: the source check compares
   with `Match::Whole`; a file changed before its copy is copied as it is;
   `delta_round` re-copies what changed or is new and removes what vanished,
   up to three rounds; `manifest.json` is written once the source settles; a
   source that never settles fails the move naming the files (defect 14).
-- [ ] Retire strategy from `fs_kind(source base)`: rename on local, sshfs, SMB
+  *As built:* `transactions::settle_copy`; each file is recorded as copied
+  (its time from its own handle, its size the bytes that arrived). **A source
+  that never settles does not fail the move** — a dev server appends to its
+  log every tenth of a second, and it is neither a permission nor a lock:
+  after the third round the copy is published as that round left it,
+  consistent with its record, and the merge carries the rest.
+- [x] Retire strategy from `fs_kind(source base)`: rename on local, sshfs, SMB
   and NFS; on every rclone mount in place — pointer, S's `PROJECT_INFO.md`
   unlinked (only if it matches the manifest, else kept whole),
   `phase.Retired`, bookkeeping (discovery trusts cached rows by `is_dir`, so
   the source index must drop the row), `merge_remove(S, Full)`, the pointer
   last. `move.json` carries `retire: "in-place"`. The old folder name stays
-  taken until housekeeping finishes, and a collision says so.
-- [ ] Delete: the same switch; in place it writes `.fastf-deleted-<op>.json`
+  taken until housekeeping finishes, and a collision says so. *As built:*
+  unknown FUSE mounts go in place too; "matches" is by time or, failing that,
+  by text without `path`/`folder`.
+- [x] Delete: the same switch; in place it writes `.fastf-deleted-<op>.json`
   with the manifest, unlinks `PROJECT_INFO.md`, and removes only what the
   manifest lists. The walk under the data lock becomes a mountinfo lookup on
-  Linux (defect 11).
-- [ ] Recordless old copies left by 3.13 or earlier: removed automatically when
+  Linux (defect 11). *As built:* a local disk is still walked for btrfs
+  subvolumes, which mount nothing; a delete record waits out the settle too.
+- [x] Recordless old copies left by 3.13 or earlier: removed automatically when
   the index or the job history proves the move (what is identical in the
   moved copy by kind, size and content; `PROJECT_INFO.md` compared without
-  `path`/`folder`), otherwise an explicit action.
-- [ ] Tests: the `decide` table for both policies; after a merge every removed
+  `path`/`folder`), otherwise an explicit action. *As built:* the proof is the
+  content itself — every entry the project with that ID holds the same, byte
+  for byte, goes, whoever moved it; one holding nothing but folders goes; a
+  project fastf cannot find keeps it all. The explicit action is Phase 5's.
+- [x] Fewer walks (from Phase 2): nothing walks the original or the moved
+  copy before the retire; the merge walks the moved copy once and the old
+  copy once. S twice (scan, settle), F twice (verify, merge), R once.
+- [x] An empty folder at the move's own target name gives way
+  (`transactions::clear_target`).
+- [x] Tests: the `decide` table for both policies; after a merge every removed
   entry is in F, same kind, not older than published; `Residue` never writes
   into F; a temp file created and removed mid-move does not fail it; an append
   during the copy ends up whole in F; `.astro/dev.log` written into R after
@@ -522,7 +545,29 @@ entries; the sshfs base is the laptop over the LAN):
 | fidelity (content, modes, mtimes differing) | 0, 4, 1472 | 0, 0, 0 | every scenario |
 
 The per-file `fsync` stays: it is what makes the moved copy durable before
-the original goes, and on sshfs it is the server's disk that pays it.
+the original goes, and on sshfs it is the server's disk that pays it. A
+delete on R2 took 35 s and left nothing (3.13: 349 s and 181 entries left).
+
+**Phase 3 (2026-09-26).** As planned, with the deviations marked *as built*
+above; the two that change behaviour are that a source that never holds
+still no longer fails the move, and that writes into the moved copy are
+create-only with a marker instead of `atomic::copy`. The lab against 3.13.0
+and Phase 2:
+
+| scenario | 3.13.0 | Phase 2 | Phase 3 |
+|---|---|---|---|
+| move out of R2 (gjiro): set the original aside | 28 s | 31 s | 0.1 s (in place) |
+| move out of R2: whole job | 314 s | 62 s | 24 s |
+| move into R2 | 17 s | 17 s | 7 s |
+| delete on R2 | 349 s, 181 left | 35 s | 28 s |
+| a dev server writing during the move | fails: "source changed before copying" | fails | moves; its log and temp folders arrive; nothing left |
+| a file held open and appended | fails | fails | moves (Phase 4 refuses it up front: its later writes would land in the old copy) |
+| edited on R2, moved away seconds later | "kept whole" | "kept whole" | moves, nobody asked |
+
+An old copy's record and pointer on rclone wait out the ten-minute settle, as
+designed. The Phase 0 recordless copies on R2 were settled by reconcile: the
+empty directory marker removed, the two whose project no longer exists kept
+and named.
 
 ## Parking lot
 

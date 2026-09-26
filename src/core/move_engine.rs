@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use crate::core::assets::{self, JobPhase, Progress};
+use crate::core::assets::{JobPhase, Progress};
 use crate::core::config::Config;
 use crate::core::library::{
     Project, cache_remove, cache_upsert, project_from_meta, revalidate_project,
@@ -36,11 +36,11 @@ pub enum SourceOutcome {
     /// is released. What a move says the moment it is done; the removal's
     /// own outcome replaces it ([`finish_housekeeping`]).
     SetAside { path: PathBuf },
-    /// Out of the library — the project is the moved copy — but its retired
-    /// copy at `path` could not be removed yet. When `redundant`, everything
-    /// in it is in the moved copy too and `fastf reconcile` removes it;
-    /// otherwise it holds something the move did not record and is kept whole
-    /// for the user to look at.
+    /// Out of the library — the project is the moved copy — but its old copy
+    /// at `path` could not be removed yet. When `redundant`, everything in it
+    /// is in the moved copy too and `fastf reconcile` removes it; otherwise
+    /// what is left differs from the moved copy, and stays with the move's
+    /// record until the user decides.
     Leftover {
         path: PathBuf,
         reason: String,
@@ -94,7 +94,7 @@ impl SourceOutcome {
                 reason,
                 redundant: true,
             } => Some(format!(
-                "the original is out of the library, but its retired copy at {} is not \
+                "the original is out of the library, but its old copy at {} is not \
                  removed yet ({reason}). Everything in it is in the moved copy; \
                  `fastf reconcile` removes it.",
                 shown(path)
@@ -104,9 +104,9 @@ impl SourceOutcome {
                 reason,
                 redundant: false,
             } => Some(format!(
-                "the original is out of the library; its retired copy at {} was kept \
-                 whole, because {reason}. fastf keeps it until you have looked; once \
-                 nothing in it is needed, remove it and run `fastf reconcile`.",
+                "the original is out of the library; what is left of it at {} differs \
+                 from the moved copy, so fastf keeps it, with the move's record, until \
+                 you decide: {reason}",
                 shown(path)
             )),
             Self::KeptWhole { reason } => Some(format!(
@@ -294,9 +294,7 @@ pub fn move_project_staged_for_test(project: &Project, new_base: &Path) -> Resul
         .map(PathBuf::from)
         .context("move source has no folder name")?;
     let new_path = target.join(&folder);
-    if assets::entry_exists(&new_path)? {
-        anyhow::bail!("move target already exists: {}", new_path.display());
-    }
+    transactions::clear_target(&new_path)?;
     let progress = Mutex::new(Progress::new(&[]));
     let cancel = AtomicBool::new(false);
     staged_copy_verify_commit(&project, &target, &new_path, &progress, &cancel)
@@ -329,9 +327,7 @@ fn move_project_unlocked_in_parts(
     })?;
     let folder = PathBuf::from(folder_os);
     let new_path = new_base.join(&folder);
-    if assets::entry_exists(&new_path)? {
-        anyhow::bail!("move target already exists: {}", new_path.display());
-    }
+    transactions::clear_target(&new_path)?;
 
     // Fast path: same-filesystem rename is atomic and instant — no staging,
     // no verification needed (there is no window in which data is half-there).
@@ -502,7 +498,6 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
     let pre_publication = (|| -> Result<(MoveManifest, MoveManifest)> {
         ticker.phase(JobPhase::Scanning, 0);
         let manifest = MoveManifest::scan_with(&project.path, ticker)?;
-        transaction.write_manifest(&manifest)?;
         ticker.phase(JobPhase::Probing, 0);
         // Before a byte is copied: can the original be taken out of its base
         // afterwards, and does the target have the room?
@@ -517,7 +512,7 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
         }
         // Everything but `PROJECT_INFO.md`, which the publish writes: the
         // step counts what it copies, so its bar reaches its end.
-        let body = manifest.without_root_metadata();
+        let mut body = manifest.without_root_metadata();
         ticker.phase(JobPhase::Copying, body.total_files());
         ticker.update(|state| {
             state.total_bytes = manifest.total_bytes();
@@ -528,33 +523,39 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
         // The copy is made at its final path, everything but the root
         // `PROJECT_INFO.md`: until that lands the folder is not a project.
         let staging = transaction.claim_staging()?;
-        if let Err(error) =
-            transactions::copy_to_staging(&body, &project.path, &staging, progress, cancel)
-        {
-            if cancel.load(Ordering::Relaxed) {
+        match transactions::copy_to_staging(&body, &project.path, &staging, progress, cancel) {
+            Ok(copied) => body = body.with_copied(copied),
+            Err(_) if cancel.load(Ordering::Relaxed) => {
                 anyhow::bail!("move of '{}' cancelled", project.name);
             }
-            return Err(error).with_context(|| {
-                format!("copying '{}' into {}", project.name, new_base.display())
-            });
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("copying '{}' into {}", project.name, new_base.display())
+                });
+            }
         }
         crate::util::faults::check("move:after-staging")?;
-        // Two walks: the copy, then the original again.
+        // The original again, as often as it takes to hold still — what
+        // changed while it was copied is copied too — then the copy.
         ticker.phase(
             JobPhase::Verifying,
             body.entries.len() + manifest.entries.len(),
         );
-        let verified = body
-            .verify_destination_with(&staging, ticker)
-            .and_then(|staged| {
-                manifest
-                    .verify_source_unchanged_with(&project.path, ticker)
-                    .map(|()| staged)
-            });
+        let verified =
+            transactions::settle_copy(&mut body, &project.path, &staging, progress, cancel, ticker)
+                .and_then(|root| {
+                    // What the copy holds, and the `PROJECT_INFO.md` the publish
+                    // writes: the record, written once the original holds still.
+                    let manifest = body.clone().with_entry(root);
+                    manifest.validate()?;
+                    transaction.write_manifest(&manifest)?;
+                    body.verify_destination_with(&staging, ticker)
+                        .map(|staged| (manifest, staged))
+                });
         if verified.is_err() && ticker.cancelled() {
             anyhow::bail!("move of '{}' cancelled", project.name);
         }
-        let mut staged = verified?;
+        let (manifest, mut staged) = verified?;
         crate::util::faults::check("move:after-verify")?;
         crate::util::faults::check("move:post-verification")?;
 
@@ -678,6 +679,7 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
             project_id: &project.id,
             residue_allowed: false,
             split: false,
+            reappeared: false,
             ticker: ticker.uncancellable(),
         };
         match move_cleanup::set_aside(transaction, &cleanup, || {
@@ -687,7 +689,7 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
         }) {
             move_cleanup::SetAside::Settled(fate) => fate,
             move_cleanup::SetAside::Retired(transaction) => {
-                let old = move_cleanup::Housekeeping::old_copy(transaction, &cleanup);
+                let old = move_cleanup::Housekeeping::old_copy(*transaction, &cleanup);
                 let path = old.path();
                 housekeeping = Some(old);
                 // Not a fate the cleanup reached: the move is done, and the

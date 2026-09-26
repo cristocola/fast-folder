@@ -150,6 +150,127 @@ pub struct MoveJournal {
     /// renamed into place, and recovery treats that staging the old way.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub in_place: bool,
+    /// How the original leaves the library once the copy is published
+    /// ([`RetireStrategy`]). A 3.13 binary refuses a record that says
+    /// `in-place` (`deny_unknown_fields`), which is the point: it would finish
+    /// it the rename way.
+    #[serde(default, skip_serializing_if = "RetireStrategy::is_rename")]
+    pub retire: RetireStrategy,
+}
+
+/// How an original leaves the library after its copy is published.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RetireStrategy {
+    /// Renamed aside in one step, to `.fastf-moved-<operation>`, then
+    /// removed: one rename either happens or does not.
+    #[default]
+    Rename,
+    /// Emptied where it stands, `PROJECT_INFO.md` first, a pointer beside it
+    /// (`.fastf-moved-<operation>.json`) naming the record. On a cloud mount
+    /// renaming a folder is a copy and a delete for every object in it —
+    /// twelve minutes for one web project on an S3 bucket — and moves uploads
+    /// still in flight to the old path; this is a third of the requests and
+    /// renames nothing.
+    InPlace,
+}
+
+impl RetireStrategy {
+    fn is_rename(&self) -> bool {
+        *self == Self::Rename
+    }
+
+    /// The strategy for an original in `source_base`: in place on a mount
+    /// whose folder renames are not one step (rclone, and a FUSE mount fastf
+    /// does not know), a rename everywhere else.
+    pub fn for_base(source_base: &Path) -> Self {
+        match crate::util::fs_kind::of(source_base) {
+            crate::util::fs_kind::FsKind::Rclone | crate::util::fs_kind::FsKind::OtherFuse => {
+                Self::InPlace
+            }
+            _ => Self::Rename,
+        }
+    }
+}
+
+/// What an in-place retire leaves beside the original's folder while it is
+/// emptied: which move it is, and where its record lives, so an old copy
+/// whose `PROJECT_INFO.md` is already gone is never a stranger's folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetirePointer {
+    pub version: u32,
+    pub operation: String,
+    pub project_id: String,
+    pub folder: PathBuf,
+    pub target_base: PathBuf,
+    pub target_folder: PathBuf,
+}
+
+/// Where an in-place retire's pointer lives.
+pub fn pointer_path(source_base: &Path, operation_id: &str) -> PathBuf {
+    source_base.join(format!("{RETIRED_PREFIX}{operation_id}.json"))
+}
+
+/// The operation an in-place retire's pointer is named by, if `name` is one.
+pub fn pointer_operation(name: &str) -> Option<&str> {
+    name.strip_prefix(RETIRED_PREFIX)
+        .and_then(|rest| rest.strip_suffix(".json"))
+        .filter(|operation| is_operation_id(operation))
+}
+
+/// Make way for a move or copy landing at `path`: nothing there, or an
+/// empty folder — which a cloud mount leaves behind for a while after a
+/// folder is removed (rclone re-creates directory markers), and which holds
+/// nothing to lose — is removed. Anything else refuses, and says what it is
+/// when it is an earlier move's old copy still being emptied in place.
+pub fn clear_target(path: &Path) -> Result<()> {
+    use crate::util::paths::{Presence, presence};
+    match presence(path) {
+        Presence::Absent => return Ok(()),
+        Presence::Unknown(error) => {
+            bail!("move target {} does not answer ({error})", path.display());
+        }
+        Presence::Present(metadata) if metadata.file_type().is_dir() => {
+            let empty = fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none());
+            if empty && fs::remove_dir(path).is_ok() {
+                return Ok(());
+            }
+        }
+        Presence::Present(_) => {}
+    }
+    if let (Some(base), Some(folder)) = (path.parent(), path.file_name())
+        && let Ok(entries) = fs::read_dir(base)
+    {
+        let emptying = entries.flatten().any(|entry| {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                return false;
+            };
+            (pointer_operation(name).is_some()
+                && read_pointer(&entry.path()).is_ok_and(|pointer| pointer.folder == folder))
+                || (crate::core::move_cleanup::deleted_record_operation(name).is_some()
+                    && crate::core::move_cleanup::read_delete_record(&entry.path())
+                        .is_ok_and(|record| record.folder == folder))
+        });
+        if emptying {
+            bail!(
+                "move target already exists: {} is a folder fastf is still removing (an \
+                 earlier move's old copy, or a deleted project); try again once it is gone",
+                path.display()
+            );
+        }
+    }
+    bail!("move target already exists: {}", path.display())
+}
+
+/// Read an in-place retire's pointer.
+pub fn read_pointer(path: &Path) -> Result<RetirePointer> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let pointer: RetirePointer =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    validate_operation_id(&pointer.operation)?;
+    validate_folder(&pointer.folder, "pointer")?;
+    Ok(pointer)
 }
 
 impl MoveJournal {
@@ -237,6 +358,16 @@ impl ModifiedTime {
             -magnitude
         } else {
             magnitude
+        }
+    }
+
+    /// A time `nanos` after the epoch, for tests that build entries by hand.
+    #[cfg(test)]
+    pub(crate) fn from_nanos_for_test(nanos: i64) -> Self {
+        Self {
+            before_epoch: nanos < 0,
+            seconds: nanos.unsigned_abs() / 1_000_000_000,
+            nanoseconds: (nanos.unsigned_abs() % 1_000_000_000) as u32,
         }
     }
 
@@ -1405,6 +1536,10 @@ impl MoveTransaction {
                             machine: crate::util::machine::id(),
                             legacy_cleanup: false,
                             in_place: true,
+                            retire: match operation {
+                                Operation::Move => RetireStrategy::for_base(source_base),
+                                Operation::Copy => RetireStrategy::Rename,
+                            },
                         };
                         write_record_file(&operation_dir.join(JOURNAL_FILE), &journal)
                             .context("writing Copying move journal")?;
@@ -1464,6 +1599,59 @@ impl MoveTransaction {
     /// Where the source goes when it leaves the library.
     pub fn retired_path(&self) -> PathBuf {
         retired_path(&self.journal.source_base, &self.journal.operation_id)
+    }
+
+    /// The old copy once the original is out of the library: its retired
+    /// folder, or — retired in place — the original's own path.
+    pub fn old_copy_path(&self) -> PathBuf {
+        match self.journal.retire {
+            RetireStrategy::Rename => self.retired_path(),
+            RetireStrategy::InPlace => self.source_path(),
+        }
+    }
+
+    /// An in-place retire's pointer, beside the original.
+    pub fn pointer_path(&self) -> PathBuf {
+        pointer_path(&self.journal.source_base, &self.journal.operation_id)
+    }
+
+    /// Write the pointer an in-place retire leaves while it empties the
+    /// original. Written once, never renamed; one already there is this
+    /// move's own from a pass that stopped.
+    pub fn write_pointer(&self) -> Result<()> {
+        let path = self.pointer_path();
+        let pointer = RetirePointer {
+            version: 1,
+            operation: self.journal.operation_id.clone(),
+            project_id: self.journal.project_id.clone(),
+            folder: self.journal.source_folder.clone(),
+            target_base: self.target_base.clone(),
+            target_folder: self.journal.target_folder.clone(),
+        };
+        match write_record_file(&path, &pointer) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if read_pointer(&path)
+                    .is_ok_and(|found| found.operation == self.journal.operation_id) =>
+            {
+                let _ = error;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// When the copy was published: its published list's time. `None` for a
+    /// record without one, or one that does not answer.
+    pub fn published_at(&self) -> Option<SystemTime> {
+        fs::symlink_metadata(self.operation_dir.join(PUBLISHED_FILE))
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    }
+
+    /// The record's own folder.
+    pub fn operation_dir(&self) -> &Path {
+        &self.operation_dir
     }
 
     /// Record the destination as it is about to be published.
@@ -1819,7 +2007,7 @@ fn same_bytes(one: &Path, other: &Path) -> bool {
 /// a rename is what a background upload can misplace. A crash mid-write
 /// leaves a file that does not parse, which recovery reports and never acts
 /// on.
-fn write_record_file<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn write_record_file<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     let raw = serde_json::to_string_pretty(value)
         .with_context(|| format!("serializing {}", path.display()))?;
     let mut file = OpenOptions::new()
@@ -2003,7 +2191,7 @@ pub fn copy_to_staging(
     staging: &Path,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
-) -> Result<()> {
+) -> Result<Vec<ManifestEntry>> {
     crate::util::paths::require_real_directory(source, "move source")?;
     crate::util::paths::require_real_directory(staging, "move staging")?;
     manifest.validate()?;
@@ -2032,6 +2220,186 @@ pub fn copy_to_staging(
     }
     create_names(manifest, staging, cancel)?;
     copy_contents(manifest, source, staging, progress, cancel)
+}
+
+/// How many times [`settle_copy`] catches the copy up with the original
+/// before it publishes what the copy holds.
+pub const SETTLE_ROUNDS: usize = 3;
+
+/// Bring the copy at `staging` level with the original at `source` as it is
+/// now, and `body` — the record of what the copy holds, everything but the
+/// root `PROJECT_INFO.md` — with it: re-copy what changed since it was
+/// copied, copy what is new, remove what is gone, and look again, until a
+/// look finds nothing the copy does not hold, or [`SETTLE_ROUNDS`] rounds have
+/// caught up. Answers the root `PROJECT_INFO.md` as the last look found it.
+///
+/// **A change made to a project while it moves is kept.** 3.13 compared the
+/// original with its scan once, after the whole copy, and a dev server's log
+/// line or a temp folder it made and removed failed the move and threw the
+/// copy away. **An original that never holds still does not stop the move
+/// either** — a dev server appends to its log every tenth of a second: after
+/// the last round the copy is published as it is, consistent with its record,
+/// and what changes in the original from then on is carried into the moved
+/// copy by the merge after the retire (`core::merge`, `Policy::Full`).
+pub fn settle_copy(
+    body: &mut MoveManifest,
+    source: &Path,
+    staging: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+    ticker: Ticker,
+) -> Result<Option<ManifestEntry>> {
+    let root_info = Path::new(crate::core::project_info::RESERVED_FILENAME);
+    for round in 0..=SETTLE_ROUNDS {
+        #[cfg(test)]
+        BEFORE_EACH_LOOK.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().as_mut() {
+                hook();
+            }
+        });
+        let mut now = Walk::of_with(source, "move source", ticker)?;
+        let root_entry = now
+            .entries
+            .iter()
+            .position(|entry| entry.path == root_info)
+            .map(|at| now.entries.remove(at));
+        let diff = body.compare(&now, Match::Whole);
+        if !now.problems.is_empty() {
+            // Something appeared that no copy can hold: the scan's refusal.
+            now.clone().into_entries(source)?;
+        }
+        if diff.is_clean() {
+            return Ok(root_entry);
+        }
+        if round == SETTLE_ROUNDS {
+            crate::util::log::info(format!(
+                "the original was still changing after {SETTLE_ROUNDS} rounds; the copy is \
+                 published as it is, and the merge after the retire carries the rest: {}",
+                diff.summary(LISTED).replace('\n', ";")
+            ));
+            return Ok(root_entry);
+        }
+        crate::util::log::info(format!(
+            "the original changed while it was copied; copying the difference: {}",
+            diff.summary(LISTED).replace('\n', ";")
+        ));
+        catch_up(body, &now, &diff, source, staging, progress, cancel)?;
+    }
+    unreachable!("the last round returns or refuses")
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Run before each of [`settle_copy`]'s looks: a test's way to be the
+    /// program that keeps writing the project, deterministically.
+    static BEFORE_EACH_LOOK: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// One round of [`settle_copy`]: make the copy hold what `now` found.
+fn catch_up(
+    body: &mut MoveManifest,
+    now: &Walk,
+    diff: &ManifestDiff,
+    source: &Path,
+    staging: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let found: HashMap<&Path, &ManifestEntry> = now
+        .entries
+        .iter()
+        .map(|entry| (entry.path.as_path(), entry))
+        .collect();
+    // What goes first: everything gone, and everything that changed, since
+    // a changed entry is made again from what is there now.
+    let mut gone: Vec<&Path> = diff
+        .missing
+        .iter()
+        .map(PathBuf::as_path)
+        .chain(diff.changed.iter().map(|(path, _)| path.as_path()))
+        .collect();
+    gone.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    for path in gone {
+        let staged = staging.join(path);
+        let removed = match fs::symlink_metadata(&staged) {
+            Ok(metadata) if metadata.file_type().is_dir() => {
+                match crate::core::removal::remove_tree(
+                    &staged,
+                    None,
+                    crate::core::removal::Purpose::Delete,
+                    Ticker::none(),
+                ) {
+                    crate::core::removal::Removal::Removed => Ok(()),
+                    crate::core::removal::Removal::Leftover { reason, .. } => {
+                        Err(anyhow::anyhow!("{reason}"))
+                    }
+                }
+            }
+            Ok(_) => crate::util::fs_retry::remove_file(&staged).map_err(anyhow::Error::from),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        };
+        removed.with_context(|| format!("replacing {} in the copy", path.display()))?;
+    }
+    // Then everything new or changed, as a manifest of its own: folders and
+    // links first, then the files, exactly as the first copy did.
+    let fresh = MoveManifest {
+        version: MANIFEST_VERSION,
+        entries: diff
+            .added
+            .iter()
+            .chain(diff.changed.iter().map(|(path, _)| path))
+            .filter_map(|path| found.get(path.as_path()).map(|entry| (*entry).clone()))
+            .collect(),
+    };
+    create_names(&fresh, staging, cancel)?;
+    let copied = copy_contents(&fresh, source, staging, progress, cancel)?;
+    // The record is now what was found, with each file as it was copied.
+    let copied: HashMap<PathBuf, ManifestEntry> = copied
+        .into_iter()
+        .map(|entry| (entry.path.clone(), entry))
+        .collect();
+    body.entries = now
+        .entries
+        .iter()
+        .map(|entry| {
+            copied
+                .get(&entry.path)
+                .cloned()
+                .unwrap_or_else(|| entry.clone())
+        })
+        .collect();
+    Ok(())
+}
+
+impl MoveManifest {
+    /// The same record, with each of `copied` — a file as it was when it was
+    /// copied — in place of what the scan saw at its path.
+    pub fn with_copied(mut self, copied: Vec<ManifestEntry>) -> Self {
+        let copied: HashMap<PathBuf, ManifestEntry> = copied
+            .into_iter()
+            .map(|entry| (entry.path.clone(), entry))
+            .collect();
+        for entry in &mut self.entries {
+            if let Some(as_copied) = copied.get(&entry.path) {
+                *entry = as_copied.clone();
+            }
+        }
+        self
+    }
+
+    /// This record with `entry` — the root `PROJECT_INFO.md` a settled copy's
+    /// last look found — in its place, sorted as a walk sorts.
+    pub fn with_entry(mut self, entry: Option<ManifestEntry>) -> Self {
+        if let Some(entry) = entry {
+            self.entries.retain(|existing| existing.path != entry.path);
+            self.entries.push(entry);
+            self.entries
+                .sort_by(|left, right| left.path.cmp(&right.path));
+        }
+        self
+    }
 }
 
 /// Whether the filesystem holding `staging` — a folder fastf made empty a
@@ -2261,52 +2629,94 @@ fn copy_contents(
     staging: &Path,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
-) -> Result<()> {
+) -> Result<Vec<ManifestEntry>> {
     let files: Vec<&ManifestEntry> = manifest
         .entries
         .iter()
         .filter(|entry| entry.kind == ManifestKind::File)
         .collect();
     let width = crate::util::pool::width_for_pair(source, staging);
+    let copied = Mutex::new(Vec::with_capacity(files.len()));
     crate::util::pool::run(width, files, |entry| {
         if cancel.load(Ordering::Relaxed) {
             bail!("move cancelled");
         }
-        copy_file(entry, source, staging, progress, cancel)
-    })
+        if let Some(as_copied) = copy_file(entry, source, staging, progress, cancel)? {
+            copied
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(as_copied);
+        }
+        Ok(())
+    })?;
+    Ok(copied
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner()))
 }
 
 /// Copy one recorded file into place, **keeping its permission bits and its
 /// times**, as `mv` does: both are set on the new file's own handle before it
 /// is synced, so what is published is what was verified. 3.13 kept neither,
 /// and every moved script lost its `+x`.
+///
+/// **The file is copied as it is now**, and the answer is what was copied —
+/// its size and time from the handle it was read through — so a file changed
+/// since the scan costs one copy, not a failed move ([`settle_copy`] looks
+/// again). `None` when it is no longer a file there: gone, or something else
+/// now, which the next look finds too.
 fn copy_file(
     entry: &ManifestEntry,
     source: &Path,
     staging: &Path,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
-) -> Result<()> {
+) -> Result<Option<ManifestEntry>> {
     let source_path = source.join(&entry.path);
     let destination_path = staging.join(&entry.path);
-    let current = entry_from_path(&source_path, &entry.path)?;
-    if &current != entry {
-        bail!(
-            "move source changed before copying {}",
-            entry.path.display()
-        );
-    }
     crate::util::faults::check("move:each-file")?;
     if let Ok(mut state) = progress.lock() {
         state.current_file = entry.path.to_string_lossy().into_owned();
         state.touch();
     }
-    let mut reader = fs::File::open(&source_path)
-        .with_context(|| format!("opening {}", source_path.display()))?;
-    // What was opened, from its own handle: the mode and times to keep.
+    let mut reading = OpenOptions::new();
+    reading.read(true);
+    // Never through a link that took the file's place since the scan.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        reading.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        reading.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut reader = match reading.open(&source_path) {
+        Ok(reader) => reader,
+        Err(error) if is_not_a_file_now(&error) => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("opening {}", source_path.display()));
+        }
+    };
+    // What was opened, from its own handle: the mode and times to keep, and
+    // what the copy is of.
     let original = reader
         .metadata()
         .with_context(|| format!("reading metadata for {}", source_path.display()))?;
+    if !original.file_type().is_file() {
+        return Ok(None);
+    }
+    let as_copied =
+        ManifestEntry {
+            path: entry.path.clone(),
+            kind: ManifestKind::File,
+            bytes: original.len(),
+            source_modified: ModifiedTime::from_system_time(original.modified().with_context(
+                || format!("reading modification time for {}", source_path.display()),
+            )?),
+            link_target: None,
+        };
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -2323,10 +2733,11 @@ fn copy_file(
     })?;
     // Small files are most files: a buffer the size of the file, up to the
     // usual megabyte.
-    let size = usize::try_from(entry.bytes)
+    let size = usize::try_from(as_copied.bytes)
         .unwrap_or(COPY_BUFFER_BYTES)
         .clamp(1, COPY_BUFFER_BYTES);
     let mut buffer = vec![0_u8; size.saturating_add(1).min(COPY_BUFFER_BYTES)];
+    let mut copied: u64 = 0;
     loop {
         if cancel.load(Ordering::Relaxed) {
             bail!("move cancelled");
@@ -2341,6 +2752,7 @@ fn copy_file(
         writer
             .write_all(&buffer[..count])
             .with_context(|| format!("writing {}", destination_path.display()))?;
+        copied = copied.saturating_add(count as u64);
         if let Ok(mut state) = progress.lock() {
             state.copied_bytes = state.copied_bytes.saturating_add(count as u64);
             state.touch();
@@ -2350,6 +2762,14 @@ fn copy_file(
         .flush()
         .with_context(|| format!("flushing {}", destination_path.display()))?;
     keep_attributes(&writer, &original);
+    // A file written while it was read holds more (or fewer) bytes than its
+    // handle said at the start: the record is what the copy holds, and its
+    // time the older one, so the next look sees the difference and copies it
+    // again.
+    let as_copied = ManifestEntry {
+        bytes: copied,
+        ..as_copied
+    };
     writer
         .sync_all()
         .with_context(|| format!("syncing {}", destination_path.display()))?;
@@ -2358,14 +2778,27 @@ fn copy_file(
         state.step_done += 1;
         state.touch();
     }
-    Ok(())
+    Ok(Some(as_copied))
+}
+
+/// An open of a source file that says it is not a file there any more:
+/// gone, a folder now, or a link now (`O_NOFOLLOW`'s `ELOOP`).
+fn is_not_a_file_now(error: &std::io::Error) -> bool {
+    if crate::util::paths::is_absence(error) {
+        return true;
+    }
+    #[cfg(unix)]
+    if matches!(error.raw_os_error(), Some(libc::ELOOP) | Some(libc::EISDIR)) {
+        return true;
+    }
+    false
 }
 
 /// Give a copied file the permission bits and times of `original`, on its
 /// own handle. Best effort: a filesystem that keeps neither (a FAT drive, an
 /// object store without metadata) still holds the right bytes, and the move
 /// never fails over this.
-fn keep_attributes(file: &fs::File, original: &fs::Metadata) {
+pub(crate) fn keep_attributes(file: &fs::File, original: &fs::Metadata) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -2492,29 +2925,6 @@ fn set_folder_attributes(folder: &Path, original: &fs::Metadata) {
 
 #[cfg(not(any(unix, windows)))]
 fn set_folder_attributes(_folder: &Path, _original: &fs::Metadata) {}
-
-fn entry_from_path(path: &Path, relative: &Path) -> Result<ManifestEntry> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("reading metadata for {}", path.display()))?;
-    let file_type = metadata.file_type();
-    if file_type.is_symlink() || !file_type.is_file() {
-        bail!(
-            "move source entry is no longer a regular file: {}",
-            path.display()
-        );
-    }
-    Ok(ManifestEntry {
-        path: relative.to_path_buf(),
-        kind: ManifestKind::File,
-        bytes: metadata.len(),
-        source_modified: ModifiedTime::from_system_time(
-            metadata
-                .modified()
-                .with_context(|| format!("reading modification time for {}", path.display()))?,
-        ),
-        link_target: None,
-    })
-}
 
 fn validate_folder(path: &Path, label: &str) -> Result<()> {
     let mut components = path.components();
@@ -3393,5 +3803,111 @@ mod tests {
             );
             prop_assert_eq!(parallel, sequential);
         });
+    }
+
+    /// **A change made while a project moves is kept.** A file appended to, a
+    /// file removed, a folder made — each found by the next look and brought
+    /// across, where 3.13 failed the move after the whole copy and threw the
+    /// copy away. A file changed before its copy is copied as it is then.
+    #[test]
+    fn what_changes_during_the_copy_is_copied_too() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("project");
+        fs::create_dir_all(source.join("logs")).unwrap();
+        fs::write(source.join("PROJECT_INFO.md"), "---\nid: ID0001\n---\n").unwrap();
+        fs::write(source.join("logs/dev.log"), "line 1\n").unwrap();
+        fs::write(source.join("gone.txt"), "x").unwrap();
+        fs::write(source.join("early.txt"), "as scanned").unwrap();
+        let manifest = MoveManifest::scan(&source).unwrap();
+        let mut body = manifest.without_root_metadata();
+        let staging = temp.path().join("copy");
+        fs::create_dir(&staging).unwrap();
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(false);
+        // Changed before its copy: copied as it is.
+        fs::write(source.join("early.txt"), "changed before the copy").unwrap();
+        let copied = copy_to_staging(&body, &source, &staging, &progress, &cancel).unwrap();
+        body = body.with_copied(copied);
+        // Changed after it.
+        fs::write(source.join("logs/dev.log"), "line 1\nline 2\n").unwrap();
+        fs::remove_file(source.join("gone.txt")).unwrap();
+        fs::create_dir(source.join("cache")).unwrap();
+        fs::write(source.join("cache/new.bin"), [7_u8; 9]).unwrap();
+
+        let root = settle_copy(
+            &mut body,
+            &source,
+            &staging,
+            &progress,
+            &cancel,
+            Ticker::none(),
+        )
+        .unwrap();
+        assert!(root.is_some(), "the root PROJECT_INFO.md as last seen");
+        assert_eq!(
+            fs::read_to_string(staging.join("early.txt")).unwrap(),
+            "changed before the copy"
+        );
+        assert_eq!(
+            fs::read_to_string(staging.join("logs/dev.log")).unwrap(),
+            "line 1\nline 2\n"
+        );
+        assert!(!staging.join("gone.txt").exists());
+        assert_eq!(fs::read(staging.join("cache/new.bin")).unwrap(), [7_u8; 9]);
+        body.verify_destination(&staging).unwrap();
+        assert!(
+            !body
+                .entries
+                .iter()
+                .any(|entry| entry.path == Path::new("gone.txt")),
+            "the record is what the copy holds"
+        );
+    }
+
+    /// A project something keeps writing the whole time — a dev server's
+    /// log — is not a reason to stop: after the last round the copy is
+    /// published as the last round left it, consistent with its record, and
+    /// the merge after the retire carries the rest.
+    #[test]
+    fn a_project_that_never_holds_still_is_published_as_last_caught_up() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("project");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("busy.log"), "0\n").unwrap();
+        let manifest = MoveManifest::scan(&source).unwrap();
+        let mut body = manifest.without_root_metadata();
+        let staging = temp.path().join("copy");
+        fs::create_dir(&staging).unwrap();
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(false);
+        let copied = copy_to_staging(&body, &source, &staging, &progress, &cancel).unwrap();
+        body = body.with_copied(copied);
+        let busy = source.join("busy.log");
+        let mut n = 0;
+        BEFORE_EACH_LOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                n += 1;
+                let mut log = fs::OpenOptions::new().append(true).open(&busy).unwrap();
+                writeln!(log, "{n}").unwrap();
+            }));
+        });
+        let settled = settle_copy(
+            &mut body,
+            &source,
+            &staging,
+            &progress,
+            &cancel,
+            Ticker::none(),
+        );
+        BEFORE_EACH_LOOK.with(|hook| *hook.borrow_mut() = None);
+        settled.unwrap();
+        body.verify_destination(&staging)
+            .expect("the copy is what its record says");
+        let copied = fs::read_to_string(staging.join("busy.log")).unwrap();
+        assert!(copied.contains(&format!("{SETTLE_ROUNDS}\n")), "{copied}");
+        assert!(
+            fs::read_to_string(source.join("busy.log")).unwrap().len() > copied.len(),
+            "the last line is for the merge"
+        );
     }
 }

@@ -75,8 +75,9 @@ tell you.
   library does), `copy_engine.rs` (a move that keeps its source),
   `move_cleanup.rs` (how an original leaves: set aside, then removed),
   `removal.rs` (removing a tree on the pool, entry by entry, each asked of a
-  `Judge`), `records.rs` (the data dir's index of every move record, and the
-  settle),
+  `Judge`), `merge.rs` (an old copy leaving entry by entry: the one `decide`
+  table, what may be written into the moved copy, the recordless proof),
+  `records.rs` (the data dir's index of every move record, and the settle),
   `operations.rs` (the shared mutation boundary), `project.rs` (plan / create /
   apply, and the preview *reports*), `plan.rs` (`ProjectPlan`),
   `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus

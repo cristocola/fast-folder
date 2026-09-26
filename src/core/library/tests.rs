@@ -1407,8 +1407,10 @@ fn move_project_rejects_same_base_and_collision() {
     let err = move_project(&project, tmp1.path()).unwrap_err().to_string();
     assert!(err.contains("already in base"), "err: {err}");
 
-    // Target name collision → bail, source untouched.
+    // Target name collision → bail, source untouched. (An empty folder
+    // there gives way: it holds nothing to lose.)
     fs::create_dir_all(tmp2.path().join("proj_a")).unwrap();
+    fs::write(tmp2.path().join("proj_a/theirs.txt"), "not ours").unwrap();
     let err = move_project(&project, tmp2.path()).unwrap_err().to_string();
     assert!(err.contains("already exists"), "err: {err}");
     assert!(project.path.is_dir(), "source must be untouched on bail");
@@ -1753,4 +1755,260 @@ fn a_delete_never_removes_what_a_link_points_at() {
         fs::read_to_string(library_folder.join("stock.mov")).unwrap(),
         "irreplaceable"
     );
+}
+
+/// **On a cloud mount the original is emptied where it stands**, its
+/// `PROJECT_INFO.md` first: nothing is renamed, no `.fastf-moved-*` folder is
+/// made, and a pointer beside the original names the record while it waits
+/// out the settle. Once a later pass finds it still gone, the record and the
+/// pointer go, the pointer last.
+#[cfg(debug_assertions)]
+#[test]
+fn on_a_cloud_mount_the_original_is_emptied_in_place() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::create_dir_all(old_base.join("proj_a/src/deep")).unwrap();
+    fs::write(old_base.join("proj_a/src/deep/a.rs"), "fn main() {}").unwrap();
+    fs::write(old_base.join("proj_a/b.bin"), [1_u8, 2, 3]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+
+    crate::util::faults::with_thread_fault("fs:as-rclone", || {
+        let outcome = staged_copy_verify_commit(
+            &project,
+            new_base,
+            &new_path,
+            &progress,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(outcome.source, SourceOutcome::Removed);
+        assert!(!old_base.join("proj_a").exists(), "emptied where it stood");
+        let hidden: Vec<String> = fs::read_dir(old_base)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(transactions::RETIRED_PREFIX))
+            .collect();
+        assert_eq!(hidden.len(), 1, "only the pointer: {hidden:?}");
+        let operation = transactions::pointer_operation(&hidden[0])
+            .expect("a pointer, not a renamed folder")
+            .to_string();
+        let record = new_base
+            .join(transactions::TRANSACTIONS_DIR)
+            .join(&operation);
+        let journal = transactions::read_journal(&record).unwrap();
+        assert_eq!(journal.retire, transactions::RetireStrategy::InPlace);
+        assert_eq!(
+            fs::read_to_string(new_path.join("src/deep/a.rs")).unwrap(),
+            "fn main() {}"
+        );
+
+        // Ten minutes on, still gone: the record goes, then the pointer.
+        let mut entry = crate::core::records::get(&operation).unwrap();
+        entry.gone_at = Some(crate::util::time::now_unix() - crate::core::records::SETTLE_SECS);
+        crate::core::records::add(&entry);
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(!record.exists(), "{report:?}");
+        assert!(!old_base.join(&hidden[0]).exists(), "and the pointer, last");
+    });
+}
+
+/// A file changed in the original between the move's last look and the
+/// retire — a dev server's log line — is carried into the moved copy by the
+/// merge, and the old copy still goes whole.
+#[cfg(debug_assertions)]
+#[test]
+fn a_log_written_into_the_old_copy_after_the_retire_reaches_the_moved_copy() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::create_dir_all(old_base.join("proj_a/.astro")).unwrap();
+    fs::write(old_base.join("proj_a/.astro/dev.log"), "started\n").unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+
+    let (outcome, housekeeping) = crate::core::move_engine::staged_copy_verify_commit_in_parts(
+        &project, new_base, &new_path, &progress, &cancel,
+    )
+    .unwrap();
+    let housekeeping = housekeeping.expect("the old copy is left to remove");
+    // The dev server's open handle followed the rename into the old copy.
+    let old_copy = housekeeping.path();
+    fs::write(old_copy.join(".astro/dev.log"), "started\nreloaded\n").unwrap();
+    let outcome = crate::core::move_engine::finish_housekeeping(
+        outcome,
+        Some(housekeeping),
+        crate::core::progress::Ticker::none(),
+    );
+
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    assert!(!old_copy.exists());
+    assert_eq!(
+        fs::read_to_string(new_path.join(".astro/dev.log")).unwrap(),
+        "started\nreloaded\n",
+        "fast-forwarded into the moved copy"
+    );
+}
+
+/// Changed in both copies since the move: only that entry stays behind,
+/// with the record, and the moved copy's version is left as it is.
+#[cfg(debug_assertions)]
+#[test]
+fn a_file_changed_in_both_copies_keeps_only_that_entry_and_the_record() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/notes.txt"), "v1").unwrap();
+    fs::write(old_base.join("proj_a/other.txt"), "untouched").unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+
+    let (outcome, housekeeping) = crate::core::move_engine::staged_copy_verify_commit_in_parts(
+        &project, new_base, &new_path, &progress, &cancel,
+    )
+    .unwrap();
+    let housekeeping = housekeeping.unwrap();
+    let old_copy = housekeeping.path();
+    fs::write(old_copy.join("notes.txt"), "v2 in the old copy").unwrap();
+    fs::write(new_path.join("notes.txt"), "v2 in the moved copy").unwrap();
+    let outcome = crate::core::move_engine::finish_housekeeping(
+        outcome,
+        Some(housekeeping),
+        crate::core::progress::Ticker::none(),
+    );
+
+    let SourceOutcome::Leftover {
+        redundant: false,
+        reason,
+        ..
+    } = &outcome.source
+    else {
+        panic!("a conflict is kept: {:?}", outcome.source);
+    };
+    assert!(reason.contains("notes.txt"), "{reason}");
+    assert_eq!(
+        fs::read_to_string(old_copy.join("notes.txt")).unwrap(),
+        "v2 in the old copy"
+    );
+    assert_eq!(
+        fs::read_to_string(new_path.join("notes.txt")).unwrap(),
+        "v2 in the moved copy"
+    );
+    assert!(!old_copy.join("other.txt").exists(), "the rest went");
+    assert_eq!(
+        fs::read_dir(new_base.join(transactions::TRANSACTIONS_DIR))
+            .unwrap()
+            .count(),
+        1,
+        "the record stays"
+    );
+}
+
+/// **On a cloud mount a delete empties the folder where it stands**: its
+/// record first — every entry the project holds — then its
+/// `PROJECT_INFO.md`, so it leaves the library at once; then only what the
+/// record lists. Something written there by path after the delete began is
+/// kept, with the record, and named. Nothing is renamed.
+#[cfg(debug_assertions)]
+#[test]
+fn on_a_cloud_mount_a_delete_empties_the_folder_in_place() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::create_dir_all(base.join("proj/src")).unwrap();
+    fs::write(base.join("proj/src/a.rs"), "fn a() {}").unwrap();
+    let cfg = cfg_for(base, &[]);
+    let project = scan_base(base).remove(0);
+
+    crate::util::faults::with_thread_fault("fs:as-rclone", || {
+        let housekeeping = delete_project_inner(&project).unwrap();
+        assert!(
+            !base.join("proj/PROJECT_INFO.md").exists(),
+            "out of the library first"
+        );
+        assert!(scan_base(base).is_empty(), "nothing listed");
+        assert!(
+            retired_folders(base)
+                .iter()
+                .all(|name| !base.join(name).is_dir()),
+            "nothing renamed"
+        );
+        // A program writes into it by path meanwhile.
+        fs::write(base.join("proj/src/late.log"), "written after").unwrap();
+        let fate = housekeeping.run(crate::core::progress::Ticker::none());
+        let crate::core::move_cleanup::SourceFate::Leftover { reason, .. } = fate else {
+            panic!("what came after is kept: {fate:?}");
+        };
+        assert!(reason.contains("late.log"), "{reason}");
+        assert!(!base.join("proj/src/a.rs").exists(), "what it held went");
+        assert_eq!(
+            fs::read_to_string(base.join("proj/src/late.log")).unwrap(),
+            "written after"
+        );
+        let records: Vec<String> = fs::read_dir(base)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| crate::core::move_cleanup::deleted_record_operation(name).is_some())
+            .collect();
+        assert_eq!(records.len(), 1, "the record stays with it");
+
+        // Once it is gone, reconcile clears the record (past the settle).
+        fs::remove_file(base.join("proj/src/late.log")).unwrap();
+        let operation = crate::core::move_cleanup::deleted_record_operation(&records[0])
+            .unwrap()
+            .to_string();
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(!base.join("proj").exists(), "{report:?}");
+        let mut entry = crate::core::records::get(&operation).unwrap();
+        entry.gone_at = Some(crate::util::time::now_unix() - crate::core::records::SETTLE_SECS);
+        crate::core::records::add(&entry);
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(!base.join(&records[0]).exists(), "{report:?}");
+    });
+}
+
+/// An in-place delete killed before its housekeeping ran — its record
+/// written, its `PROJECT_INFO.md` gone, nothing else removed — is finished by
+/// the next reconcile, and so is one killed before even the
+/// `PROJECT_INFO.md` went.
+#[cfg(debug_assertions)]
+#[test]
+fn an_in_place_delete_killed_part_of_the_way_is_finished_by_reconcile() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    for before_the_identity_went in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        fs::write(base.join("proj/payload.bin"), [1_u8, 2, 3]).unwrap();
+        let cfg = cfg_for(base, &[]);
+        let project = scan_base(base).remove(0);
+        let identity = fs::read(base.join("proj/PROJECT_INFO.md")).unwrap();
+
+        crate::util::faults::with_thread_fault("fs:as-rclone", || {
+            let housekeeping = delete_project_inner(&project).unwrap();
+            drop(housekeeping);
+            if before_the_identity_went {
+                fs::write(base.join("proj/PROJECT_INFO.md"), &identity).unwrap();
+            }
+            let report = provisioning::reconcile_unlocked(&cfg);
+            assert!(!base.join("proj").exists(), "{report:?}");
+        });
+        assert!(scan_base(base).is_empty());
+    }
 }

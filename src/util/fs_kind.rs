@@ -93,6 +93,23 @@ pub fn mount_of<'a>(mountinfo: &'a str, path: &Path) -> Option<(PathBuf, &'a str
     best
 }
 
+/// The mount points strictly inside `path`, where the system can say without
+/// a walk (Linux: `/proc/self/mountinfo`); `None` where it cannot, and the
+/// caller has to walk the tree to find out.
+pub fn mounts_inside(path: &Path) -> Option<Vec<PathBuf>> {
+    imp::mounts_inside(path)
+}
+
+/// The mount points in `mountinfo`'s text that are strictly inside `path`.
+pub fn mount_points_inside(mountinfo: &str, path: &Path) -> Vec<PathBuf> {
+    mountinfo
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(4))
+        .map(|point| PathBuf::from(unescape(point)))
+        .filter(|point| point != path && point.starts_with(path))
+        .collect()
+}
+
 /// `mountinfo` writes a space, a tab, a newline and a backslash in a mount
 /// point as three octal digits (`\040`).
 fn unescape(field: &str) -> String {
@@ -119,7 +136,12 @@ fn unescape(field: &str) -> String {
 #[cfg(target_os = "linux")]
 mod imp {
     use super::FsKind;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    pub(super) fn mounts_inside(path: &Path) -> Option<Vec<PathBuf>> {
+        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+        Some(super::mount_points_inside(&mountinfo, path))
+    }
 
     pub(super) fn of(path: &Path) -> FsKind {
         let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") else {
@@ -136,7 +158,13 @@ mod imp {
 mod imp {
     use super::FsKind;
     use std::os::windows::ffi::OsStrExt;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    /// A mount inside a folder on Windows is a reparse point in it, which only
+    /// a walk finds.
+    pub(super) fn mounts_inside(_path: &Path) -> Option<Vec<PathBuf>> {
+        None
+    }
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -200,10 +228,14 @@ mod imp {
 #[cfg(not(any(target_os = "linux", windows)))]
 mod imp {
     use super::FsKind;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     pub(super) fn of(_path: &Path) -> FsKind {
         FsKind::Unknown
+    }
+
+    pub(super) fn mounts_inside(_path: &Path) -> Option<Vec<PathBuf>> {
+        None
     }
 }
 
@@ -237,5 +269,18 @@ mod tests {
         assert_eq!(from_type_name("fuse.gocryptfs"), FsKind::OtherFuse);
         assert_eq!(from_type_name("nfs4"), FsKind::Nfs);
         assert_eq!(from_type_name("ext4"), FsKind::Local);
+    }
+
+    #[test]
+    fn mounts_inside_a_folder_are_read_from_mountinfo() {
+        let mountinfo = "22 1 0:21 / / rw - btrfs /dev/x rw\n\
+             40 22 0:40 / /home/user/proj/data rw - fuse.sshfs host: rw\n\
+             41 22 0:41 / /home/user/project rw - fuse.rclone r2: rw\n\
+             42 22 0:42 / /home/user/proj rw - tmpfs tmpfs rw\n";
+        assert_eq!(
+            mount_points_inside(mountinfo, Path::new("/home/user/proj")),
+            vec![PathBuf::from("/home/user/proj/data")],
+            "a mount at the folder itself, or beside it, is not inside it"
+        );
     }
 }

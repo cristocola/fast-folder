@@ -168,6 +168,7 @@ fn a_move_that_fails_ends_failed_and_says_why() {
         let (project, base_b) = one_project_two_bases(install);
         let blocker = base_b.join(project.path.file_name().unwrap());
         fs::create_dir_all(&blocker).unwrap();
+        fs::write(blocker.join("somebody's.txt"), "not ours").unwrap();
 
         let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
         let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -179,6 +180,27 @@ fn a_move_that_fails_ends_failed_and_says_why() {
         let why = state.error.clone().unwrap_or_default();
         assert!(why.contains("already exists"), "{why}");
         assert!(project.path.is_dir(), "a failed move leaves the original");
+    });
+}
+
+/// **An empty folder at the target name gives way.** A cloud mount leaves
+/// one behind for a while after a folder is removed — rclone re-creates
+/// directory markers — and moving a project back where it came from then
+/// failed with "move target already exists" over a folder holding nothing.
+#[test]
+fn an_empty_folder_at_the_target_name_gives_way() {
+    sandboxed(|install| {
+        let (project, base_b) = one_project_two_bases(install);
+        let marker = base_b.join(project.path.file_name().unwrap());
+        fs::create_dir_all(&marker).unwrap();
+
+        let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let outcome =
+            fastf::core::operations::move_project(&project, &base_b, &progress, &cancel).unwrap();
+        assert_eq!(outcome.project.path.file_name(), marker.file_name());
+        assert!(marker.join("PROJECT_INFO.md").is_file());
+        assert!(!project.path.exists());
     });
 }
 

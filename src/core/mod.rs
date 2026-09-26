@@ -5,6 +5,7 @@ pub mod copy_engine;
 pub mod counter;
 pub mod jobs;
 pub mod library;
+pub(crate) mod merge;
 pub(crate) mod move_cleanup;
 pub mod move_engine;
 pub(crate) mod move_preflight;

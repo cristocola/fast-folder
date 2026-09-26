@@ -1,45 +1,43 @@
 //! How a source leaves the library, and how what it leaves behind is removed.
 //!
-//! **A source is never deleted where it stands.** Deleting a tree is not one
-//! operation: it walks, and anything that stops the walk part of the way — a
-//! folder it may not write, a file a program holds open, a network drop, an
-//! entry the filesystem lists but will not let it examine — leaves a tree that
-//! still holds its `PROJECT_INFO.md`, so the library lists a husk as the
-//! project. That is how 3.11 left 13 of 1473 files of a moved project behind
-//! on an sshfs mount and then called the source untouched.
+//! **A source is never deleted where it stands while it is still the
+//! project.** Deleting a tree is not one operation: it walks, and anything
+//! that stops the walk part of the way — a folder it may not write, a file a
+//! program holds open, a network drop, an entry the filesystem lists but will
+//! not let it examine — leaves a tree that still holds its `PROJECT_INFO.md`,
+//! so the library lists a husk as the project. That is how 3.11 left 13 of
+//! 1473 files of a moved project behind on an sshfs mount and then called the
+//! source untouched.
 //!
-//! So a source is **retired**: renamed, in one step, to
-//! `<source base>/.fastf-moved-<operation>` — same folder, same filesystem,
-//! and dot-prefixed, so discovery never lists it. If the rename fails, the
-//! source is whole where it was. Only then is the retired folder removed, and
-//! if *that* stops part of the way, what is left is a hidden copy of what the
-//! destination already holds, which the next `fastf reconcile` finishes.
+//! So a source is **retired** first, in one step that either happens or does
+//! not, and only then emptied:
 //!
-//! **One rule decides what may be removed**, here and in recovery
-//! ([`check_removable`]): every entry is one the move recorded, unchanged,
-//! and the moved copy still holds an entry of the same kind at its path that
-//! is either what was published or newer. Nothing is removed that exists
-//! nowhere else.
+//! - **renamed** to `<source base>/.fastf-moved-<operation>` — same folder,
+//!   same filesystem, dot-prefixed so discovery never lists it — on a local
+//!   disk, sshfs, SMB and NFS;
+//! - **or, in place, its `PROJECT_INFO.md` removed first** (`RetireStrategy::
+//!   InPlace`), a pointer `.fastf-moved-<operation>.json` beside it naming the
+//!   record — on rclone and FUSE mounts fastf does not know, where a folder
+//!   rename is a copy and a delete for every object and moves uploads still in
+//!   flight to the old path.
 //!
-//! **And the original is the authority until it is retired.** A moved copy
-//! that turns out to be missing entries — a cloud mount that misplaced
-//! uploads while its folder was renamed, a file deleted there by hand — is
-//! completed from the original ([`complete_destination`]) rather than
-//! reported for someone to repair by hand: every missing entry the original
-//! still holds exactly as recorded is copied across again, and only then is
-//! the rule asked once more.
+//! Either way the old copy then leaves through the merge (`core::merge`):
+//! entry by entry, each removed only once the moved copy provably holds it,
+//! what the moved copy lacks completed from it, what changed in it since the
+//! scan carried across while the moved copy has not changed too. What is left
+//! is exactly what needs a person. If that stops part of the way, what is left
+//! is hidden and redundant, and the next `fastf reconcile` finishes it.
 
 use anyhow::{Result, bail};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::core::assets::JobPhase;
+use crate::core::merge::{self, Merge, Policy};
 use crate::core::progress::Ticker;
-use crate::core::removal::{Purpose, Removal, remove_tree, remove_tree_guarded};
+use crate::core::removal::{Purpose, Removal, remove_tree};
 use crate::core::transactions::{
-    self, LISTED, ManifestEntry, ManifestKind, Match, MoveManifest, MovePhase, MoveTransaction,
-    Walk,
+    self, LISTED, Match, MoveManifest, MovePhase, MoveTransaction, RetireStrategy, Walk,
 };
 
 /// A deleted project, beside the others in its base, until it is removed.
@@ -53,16 +51,81 @@ pub fn deleted_operation(name: &str) -> Option<&str> {
         .filter(|operation| transactions::is_operation_id(operation))
 }
 
+/// What an in-place delete writes beside the project before it takes the
+/// project's `PROJECT_INFO.md`: which folder, whose, and every entry it held
+/// then — the only entries the delete removes, so nothing written there by
+/// path afterwards goes with it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeleteRecord {
+    pub version: u32,
+    pub operation: String,
+    pub project_id: String,
+    pub folder: PathBuf,
+    pub entries: Vec<transactions::ManifestEntry>,
+}
+
+/// Where an in-place delete's record lives: beside the project's folder.
+pub fn deleted_record_path(base: &Path, operation: &str) -> PathBuf {
+    base.join(format!("{DELETED_PREFIX}{operation}.json"))
+}
+
+/// The operation an in-place delete's record is named by, if `name` is one.
+pub fn deleted_record_operation(name: &str) -> Option<&str> {
+    name.strip_prefix(DELETED_PREFIX)
+        .and_then(|rest| rest.strip_suffix(".json"))
+        .filter(|operation| transactions::is_operation_id(operation))
+}
+
+/// Read an in-place delete's record.
+pub fn read_delete_record(path: &Path) -> Result<DeleteRecord> {
+    let text = fs::read_to_string(path)?;
+    let record: DeleteRecord = serde_json::from_str(&text)?;
+    if !transactions::is_operation_id(&record.operation) {
+        bail!("an in-place delete record with an invalid operation");
+    }
+    let mut components = record.folder.components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    ) {
+        bail!("an in-place delete record whose folder is not one plain name");
+    }
+    Ok(record)
+}
+
+/// Takes only what an in-place delete listed, by path and kind: the
+/// project as it was when the delete began.
+struct Listed(std::collections::HashMap<PathBuf, transactions::ManifestKind>);
+
+impl crate::core::removal::Judge for Listed {
+    fn judge(
+        &self,
+        path: &Path,
+        relative: &Path,
+        metadata: &fs::Metadata,
+    ) -> crate::core::removal::Verdict {
+        let now = transactions::entry_of(path, relative, metadata).map(|entry| entry.kind);
+        if now.is_some() && self.0.get(relative) == now.as_ref() {
+            crate::core::removal::Verdict::Take
+        } else {
+            crate::core::removal::Verdict::Keep {
+                why: "not part of the project when it was deleted, so it was kept".to_string(),
+                on_purpose: true,
+            }
+        }
+    }
+}
+
 /// What became of a source after publication.
 #[derive(Debug)]
 pub(crate) enum SourceFate {
     /// Retired and removed. `record_kept` says why the transaction could not
     /// be cleared too, when it could not; the next reconcile clears it.
     Removed { record_kept: Option<String> },
-    /// Out of the library; its retired copy at `path` is not removed yet.
+    /// Out of the library; its old copy at `path` is not removed yet.
     /// `redundant` says everything in it is also in the moved copy — removing
-    /// it stopped part of the way — rather than that it was kept whole because
-    /// it holds something the move did not record.
+    /// it stopped part of the way — rather than that part of it was kept
+    /// because it holds something the moved copy does not.
     Leftover {
         path: PathBuf,
         reason: String,
@@ -87,16 +150,17 @@ pub(crate) struct Cleanup<'a> {
     pub final_path: &'a Path,
     pub project_id: &'a str,
     /// A 3.11 transaction's source may already be partly removed: 3.11
-    /// deleted in place. Its residue may be retired if everything left is as
-    /// recorded. A version-3 source is never partly removed, so it must be
-    /// whole.
+    /// deleted in place. Its old copy is merged as a residue.
     pub residue_allowed: bool,
     /// The rename that set the original aside stopped part of the way (an S3
     /// bucket through rclone renames object by object), so part of the
     /// original is still at `source` beside its retired copy. That part is the
-    /// move's own residue: removed after the retired copy, under the same
-    /// rule, and the record stays until both are gone.
+    /// move's own residue: merged after the retired copy, and the record stays
+    /// until both are gone.
     pub split: bool,
+    /// The old copy was found gone once and is back (a cloud mount put it
+    /// back): whatever came back is merged as a residue.
+    pub reappeared: bool,
     /// Where each step says how far it has got. Its checks never stop for a
     /// cancel; the removal does when this ticker honours one, and a move hands
     /// the steps after its publish one that does not — they are housekeeping.
@@ -119,288 +183,30 @@ pub(crate) fn confirm_identity(path: &Path, expected: &str, label: &str) -> Resu
     Ok(())
 }
 
-/// Whether `tree` may be removed: why not, or the walk that says it may.
-///
-/// `residue_allowed` accepts entries missing from `tree` (a 3.11 half-delete,
-/// a retired folder removed part of the way); otherwise it must be whole.
-pub(crate) fn check_removable(
-    tree: &Path,
-    residue_allowed: bool,
-    cleanup: &Cleanup,
-) -> std::result::Result<Walk, String> {
-    // A check only reads, and one stopped part of the way would be reported
-    // as a tree that failed it: checks never stop for a cancel. The removal
-    // after them does, when its ticker honours one.
-    let walk = Walk::of_with(tree, "folder", cleanup.ticker.uncancellable())
-        .map_err(|error| format!("{error:#}"))?;
-    let diff = cleanup.manifest.compare(&walk, Match::Whole);
-    let fits = if residue_allowed {
-        diff.is_residue()
-    } else {
-        diff.is_clean()
-    };
-    if !fits {
-        let held = if diff.missing.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "it holds {} of the {} entries the move recorded, and ",
-                diff.present(),
-                diff.recorded
-            )
-        };
-        return Err(format!(
-            "{held}it is not what was moved: {}",
-            diff.summary(LISTED)
-        ));
-    }
-    match destination_covers(&walk.entries, cleanup) {
-        Ok(()) => {}
-        // Only missing: the original holds them, so put them there and ask
-        // again. Anything else that differs is somebody's decision, not ours.
-        Err(gaps) if gaps.only_missing() => {
-            complete_destination(&gaps.missing, tree, cleanup)?;
-            destination_covers(&walk.entries, cleanup).map_err(|gaps| gaps.message())?;
-        }
-        Err(gaps) => return Err(gaps.message()),
-    }
-    Ok(walk)
-}
-
-/// Where the moved copy falls short of the original.
-#[derive(Debug, Default)]
-struct Gaps {
-    /// Recorded entries the moved copy does not hold at all, in manifest
-    /// order — parents before children.
-    missing: Vec<PathBuf>,
-    /// Entries it holds as something else, or older than published.
-    other: Vec<String>,
-}
-
-impl Gaps {
-    fn only_missing(&self) -> bool {
-        !self.missing.is_empty() && self.other.is_empty()
-    }
-
-    fn message(&self) -> String {
-        let count = self.missing.len() + self.other.len();
-        let mut message = format!(
-            "the moved copy does not hold everything the original does ({count} {}):",
-            if count == 1 { "entry" } else { "entries" }
-        );
-        let lines = self.other.iter().cloned().chain(
-            self.missing
-                .iter()
-                .map(|path| format!("{}: not in the moved copy", path.display())),
-        );
-        for line in lines.take(LISTED) {
-            message.push_str("\n  ");
-            message.push_str(&line);
-        }
-        if count > LISTED {
-            message.push_str(&format!("\n  and {} more", count - LISTED));
-        }
-        message
-    }
-}
-
-/// Put every entry in `missing` into the moved copy, from the original,
-/// provided the original still holds it exactly as the move recorded it.
-///
-/// Files land through an atomic sibling and a rename, so a crash mid-copy
-/// never leaves a half-written file at the real path — which the next pass
-/// would take for the user's own newer file, and then remove the original.
-/// Every write is checked for containment first: the moved copy is a
-/// published project, and a link placed in it since must not be written
-/// through.
-fn complete_destination(
-    missing: &[PathBuf],
-    from: &Path,
-    cleanup: &Cleanup,
-) -> std::result::Result<(), String> {
-    let final_path = cleanup.final_path;
-    let mut failures = Vec::new();
-    for relative in missing {
-        let Some(recorded) = cleanup.manifest.entry(relative) else {
-            failures.push(format!("{}: not in the move's record", relative.display()));
-            continue;
-        };
-        // From the tree being checked: the original before its retire, its
-        // retired copy after — which is where the original's entries are by
-        // then. 3.13 read the original's old path either way, which a retired
-        // copy has left, so a repair after the retire could never succeed.
-        let source_path = from.join(relative);
-        let holds = matches!(
-            transactions::examine(&source_path, relative),
-            Ok(Some(found)) if transactions::agrees(recorded, &found)
-        );
-        if !holds {
-            failures.push(format!(
-                "{}: the original no longer holds it as the move recorded it",
-                relative.display()
-            ));
-            continue;
-        }
-        let destination = match crate::util::paths::contained_destination(final_path, relative) {
-            Ok(destination) => destination,
-            Err(error) => {
-                failures.push(format!("{}: {error:#}", relative.display()));
-                continue;
-            }
-        };
-        let made = match recorded.kind {
-            ManifestKind::Directory => match fs::create_dir(&destination) {
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-                other => other.map_err(|error| error.to_string()),
-            },
-            ManifestKind::File => crate::util::atomic::copy(&source_path, &destination)
-                .map_err(|error| format!("{error:#}"))
-                .and_then(|()| match transactions::examine(&destination, relative) {
-                    Ok(Some(found))
-                        if found.kind == ManifestKind::File && found.bytes == recorded.bytes =>
-                    {
-                        Ok(())
-                    }
-                    _ => Err("did not read back as copied".to_string()),
-                }),
-            ManifestKind::Symlink | ManifestKind::DirSymlink | ManifestKind::Junction => {
-                match &recorded.link_target {
-                    Some(target) => transactions::make_link(recorded.kind, target, &destination)
-                        .map_err(|error| transactions::link_refusal(&error)),
-                    None => Err("the record of this link has no target".to_string()),
-                }
-            }
-        };
-        if let Err(why) = made {
-            failures.push(format!(
-                "{}: could not be put back ({why})",
-                relative.display()
-            ));
-        }
-    }
-    if failures.is_empty() {
-        return Ok(());
-    }
-    let count = failures.len();
-    let mut message = format!(
-        "the moved copy is missing {count} {} the original holds, and fastf could not put \
-         {} back:",
-        if count == 1 { "entry" } else { "entries" },
-        if count == 1 { "it" } else { "them" }
-    );
-    for line in failures.iter().take(LISTED) {
-        message.push_str("\n  ");
-        message.push_str(line);
-    }
-    if count > LISTED {
-        message.push_str(&format!("\n  and {} more", count - LISTED));
-    }
-    Err(message)
-}
-
-/// The moved copy still holds, for every one of `entries`, an entry of the
-/// same kind, which is what was published or newer — so removing `entries`
-/// takes nothing that exists nowhere else.
-///
-/// "Or newer" is what lets the user work on the moved copy while a cleanup
-/// waits — and lets the move's own bookkeeping rewrite `PROJECT_INFO.md`;
-/// "not older" is what refuses a moved copy restored out of a backup taken
-/// before the move. A transaction without a published record (3.11) measures
-/// against the original's own time instead: a copy is always written after
-/// what it copied. That compares two filesystems' clocks, so it errs, when it
-/// errs, towards keeping.
-fn destination_covers(
-    entries: &[ManifestEntry],
-    cleanup: &Cleanup,
-) -> std::result::Result<(), Gaps> {
-    let mut gaps = Gaps::default();
-    if let Err(error) = confirm_identity(cleanup.final_path, cleanup.project_id, "moved") {
-        gaps.other.push(format!(
-            "the moved copy is not this project any more: {error:#}"
-        ));
-        return Err(gaps);
-    }
-    let moved = match Walk::of_with(
-        cleanup.final_path,
-        "moved copy",
-        cleanup.ticker.uncancellable(),
-    ) {
-        Ok(moved) => moved,
-        Err(error) => {
-            gaps.other.push(format!("{error:#}"));
-            return Err(gaps);
-        }
-    };
-    let at: HashMap<&Path, &ManifestEntry> = moved
-        .entries
-        .iter()
-        .map(|entry| (entry.path.as_path(), entry))
-        .collect();
-    for entry in entries {
-        let path = entry.path.display();
-        let Some(now) = at.get(entry.path.as_path()) else {
-            // In manifest order, so a missing folder comes before what it
-            // holds, and the repair makes it first.
-            gaps.missing.push(entry.path.clone());
-            continue;
-        };
-        if now.kind != entry.kind {
-            gaps.other.push(format!(
-                "{path}: not the same kind of entry in the moved copy"
-            ));
-            continue;
-        }
-        if entry.kind == ManifestKind::Directory {
-            continue;
-        }
-        match cleanup.published {
-            Some(published) => match published.entry(&entry.path) {
-                Some(then) if now.source_modified.nanos() >= then.source_modified.nanos() => {}
-                Some(_) => gaps.other.push(format!(
-                    "{path}: older in the moved copy than when it was moved \
-                     (restored from a backup?)"
-                )),
-                // A record whose publish could not read its own
-                // `PROJECT_INFO.md` back (a mount that failed the lstat) left
-                // it out; measured against the original's time instead, the
-                // way a record without `published.json` is — rather than
-                // failing this check on every pass for ever.
-                None if now.source_modified.nanos() >= entry.source_modified.nanos() => {}
-                None => gaps.other.push(format!(
-                    "{path}: older in the moved copy than here (restored from a backup?)"
-                )),
-            },
-            None if now.source_modified.nanos() < entry.source_modified.nanos() => {
-                gaps.other.push(format!(
-                    "{path}: older in the moved copy than here (restored from a backup?)"
-                ));
-            }
-            None => {}
-        }
-    }
-    if gaps.missing.is_empty() && gaps.other.is_empty() {
-        return Ok(());
-    }
-    Err(gaps)
-}
-
 /// How setting the original aside ended.
 pub(crate) enum SetAside {
     /// Nothing more to do here: the fate is decided.
     Settled(SourceFate),
     /// The original is out of the library and `Retired` is recorded; its old
     /// copy is what is left, for [`remove_retired`] — as housekeeping, once
-    /// the data lock is released.
-    Retired(MoveTransaction),
+    /// the data lock is released. Boxed: a record is many times the size of a
+    /// fate.
+    Retired(Box<MoveTransaction>),
 }
 
 /// Publish-then-retire, from `CleanupPending` with the source at its path:
-/// check, retire, record `Retired`, keep the books — `bookkeeping` runs once
-/// the source has left the library, since from that moment the project is the
-/// moved copy. **The move is done here**; removing the old copy is
-/// housekeeping ([`Housekeeping`]), which needs no data lock — the copy is
-/// hidden and redundant by construction, and a record whose job is alive is
-/// left alone by every reconcile.
+/// both copies are still this project, the original leaves the library
+/// ([`retire`] or [`retire_in_place`]), `Retired` is recorded and the books
+/// kept — `bookkeeping` runs once the source has left the library, since from
+/// that moment the project is the moved copy. **The move is done here**;
+/// merging the old copy away is housekeeping ([`Housekeeping`]), which needs
+/// no data lock — the copy is hidden, and a record whose job is alive is left
+/// alone by every reconcile.
+///
+/// Nothing is walked here: the merge that follows proves every removal entry
+/// by entry, and absorbs what changed in the original meanwhile. 3.13 walked
+/// the original and the moved copy first and kept the original whole on a
+/// single difference — a dev server's log line — for ever.
 pub(crate) fn set_aside(
     mut transaction: MoveTransaction,
     cleanup: &Cleanup,
@@ -408,10 +214,7 @@ pub(crate) fn set_aside(
 ) -> SetAside {
     use SetAside::Settled;
     let source = cleanup.source;
-    // Two walks: the original, then the moved copy it is compared against.
-    cleanup
-        .ticker
-        .phase(JobPhase::SettingAside, cleanup.manifest.entries.len() * 2);
+    cleanup.ticker.phase(JobPhase::SettingAside, 0);
     let has_identity = crate::core::project_info::pinfo_path(source).is_file();
     if (has_identity || !cleanup.residue_allowed)
         && let Err(error) = confirm_identity(source, cleanup.project_id, "original")
@@ -420,8 +223,10 @@ pub(crate) fn set_aside(
             reason: format!("{error:#}"),
         });
     }
-    if let Err(reason) = check_removable(source, cleanup.residue_allowed, cleanup) {
-        return Settled(SourceFate::KeptWhole { reason });
+    if let Err(error) = confirm_identity(cleanup.final_path, cleanup.project_id, "moved") {
+        return Settled(SourceFate::KeptWhole {
+            reason: format!("{error:#}"),
+        });
     }
     // Rewrites a 3.11 journal as version 3 *before* the rename — see
     // `MoveTransaction::set_phase`.
@@ -435,25 +240,34 @@ pub(crate) fn set_aside(
             reason: format!("{error:#}"),
         });
     }
-    let retired = transaction.retired_path();
     // A retire that fails, for a test to reach.
     if let Err(error) = crate::util::faults::check("move:source-cleanup") {
         return Settled(SourceFate::KeptWhole {
             reason: format!("{error:#}"),
         });
     }
-    // One rename, which fastf cannot count into: on an S3-style mount it is
-    // a copy and a delete per object inside rclone, and took minutes on a
-    // real R2 bucket with the count already full. Say what it is waiting on.
-    cleanup.ticker.update(|state| {
-        state.current_file = "renaming it aside in one step — on a cloud mount this can \
-                              take a while"
-            .to_string();
-    });
-    crate::util::log::info(
-        "setting the original aside: one rename, which a cloud mount may take a while over",
-    );
-    match retire(source, &retired) {
+    let retired = transaction.old_copy_path();
+    let outcome = match transaction.journal.retire {
+        RetireStrategy::Rename => {
+            // One rename, which fastf cannot count into: on an S3-style mount
+            // it is a copy and a delete per object inside rclone, and took
+            // minutes on a real R2 bucket. Say what it is waiting on.
+            cleanup.ticker.update(|state| {
+                state.current_file = "renaming it aside in one step — on a network mount this \
+                                      can take a while"
+                    .to_string();
+            });
+            crate::util::log::info("setting the original aside: one rename");
+            retire(source, &retired)
+        }
+        RetireStrategy::InPlace => {
+            crate::util::log::info(
+                "setting the original aside in place: its PROJECT_INFO.md first",
+            );
+            retire_in_place(&transaction, cleanup)
+        }
+    };
+    match outcome {
         Retire::Done => {}
         Retire::KeptWhole(reason) => return Settled(SourceFate::KeptWhole { reason }),
         Retire::Unknown(reason) => return Settled(SourceFate::Unknown { reason }),
@@ -475,7 +289,56 @@ pub(crate) fn set_aside(
         });
     }
     bookkeeping();
-    SetAside::Retired(transaction)
+    SetAside::Retired(Box::new(transaction))
+}
+
+/// The in-place retire: the pointer beside the original, then its
+/// `PROJECT_INFO.md` — only when it is still what the move copied, since the
+/// moved copy's is the project's from here on. Once that file is gone the
+/// folder is not a project; what is left in it is the merge's.
+pub(crate) fn retire_in_place(transaction: &MoveTransaction, cleanup: &Cleanup) -> Retire {
+    use crate::util::paths::{Presence, presence};
+    if let Err(error) = transaction.write_pointer() {
+        return Retire::KeptWhole(format!(
+            "the note that it is being removed could not be written beside it ({error:#})"
+        ));
+    }
+    let pinfo = crate::core::project_info::pinfo_path(cleanup.source);
+    let relative = Path::new(crate::core::project_info::RESERVED_FILENAME);
+    let recorded = cleanup.manifest.entry(relative);
+    let unchanged = match (transactions::examine(&pinfo, relative), recorded) {
+        (Ok(Some(found)), Some(recorded)) if transactions::agrees(recorded, &found) => true,
+        // Only its time moved, or the moved copy's was rewritten since: the
+        // text decides, without the two lines a move changes.
+        (Ok(Some(_)), Some(_)) => match (
+            fs::read_to_string(&pinfo),
+            fs::read_to_string(crate::core::project_info::pinfo_path(cleanup.final_path)),
+        ) {
+            (Ok(here), Ok(there)) => merge::same_but_for_place(&here, &there),
+            _ => false,
+        },
+        _ => false,
+    };
+    if !unchanged {
+        return Retire::KeptWhole(
+            "its PROJECT_INFO.md changed after the move copied it, so it is still the \
+             original's"
+                .to_string(),
+        );
+    }
+    match crate::util::fs_retry::remove_file(&pinfo) {
+        Ok(()) => Retire::Done,
+        Err(error) => match presence(&pinfo) {
+            Presence::Absent => Retire::Done,
+            Presence::Present(_) => Retire::KeptWhole(format!(
+                "its PROJECT_INFO.md could not be removed ({error})"
+            )),
+            Presence::Unknown(looked) => Retire::Unknown(format!(
+                "removing its PROJECT_INFO.md reported '{error}', and it does not answer \
+                 ({looked})"
+            )),
+        },
+    }
 }
 
 /// Work left after a move or a delete that needs no data lock: removing an
@@ -483,11 +346,37 @@ pub(crate) fn set_aside(
 /// the borrowed [`Cleanup`] it was made from.
 #[derive(Debug)]
 pub enum Housekeeping {
-    /// A move's retired original, and the facts its removal is checked
-    /// against again.
+    /// A move's retired original, and the facts its merge is checked against
+    /// again.
     OldCopy(Box<OldCopy>),
     /// A deleted project's hidden folder.
     Deleted(PathBuf),
+    /// An old copy whose move left no record, removed where the project
+    /// holds the same thing (`merge::remove_identical`).
+    Recordless(Box<Recordless>),
+    /// A deleted project emptied where it stands, on a cloud mount: only
+    /// what its record lists goes.
+    DeletedInPlace(Box<DeletedInPlace>),
+}
+
+/// A deleted project being emptied in place: its folder, its record, and
+/// what the record lists.
+#[derive(Debug)]
+pub struct DeletedInPlace {
+    pub(crate) folder: PathBuf,
+    pub(crate) record_path: PathBuf,
+    pub(crate) record: DeleteRecord,
+}
+
+/// An old copy with no record: where it is, where the project it held is
+/// now, and the pointer that named it, if it was being emptied in place.
+#[derive(Debug)]
+pub struct Recordless {
+    pub(crate) path: PathBuf,
+    pub(crate) operation: String,
+    pub(crate) moved: PathBuf,
+    pub(crate) project_id: String,
+    pub(crate) pointer: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -500,6 +389,7 @@ pub struct OldCopy {
     project_id: String,
     residue_allowed: bool,
     split: bool,
+    reappeared: bool,
 }
 
 impl Housekeeping {
@@ -514,6 +404,7 @@ impl Housekeeping {
             project_id: cleanup.project_id.to_string(),
             residue_allowed: cleanup.residue_allowed,
             split: cleanup.split,
+            reappeared: cleanup.reappeared,
         }))
     }
 
@@ -528,14 +419,18 @@ impl Housekeeping {
                 .and_then(deleted_operation)
                 .unwrap_or_default()
                 .to_string(),
+            Self::Recordless(old) => old.operation.clone(),
+            Self::DeletedInPlace(deleted) => deleted.record.operation.clone(),
         }
     }
 
     /// The folder being removed.
     pub fn path(&self) -> PathBuf {
         match self {
-            Self::OldCopy(old) => old.transaction.retired_path(),
+            Self::OldCopy(old) => old.transaction.old_copy_path(),
             Self::Deleted(path) => path.clone(),
+            Self::Recordless(old) => old.path.clone(),
+            Self::DeletedInPlace(deleted) => deleted.folder.clone(),
         }
     }
 
@@ -544,11 +439,13 @@ impl Housekeeping {
         match self {
             Self::OldCopy(old) => Some(&old.final_path),
             Self::Deleted(_) => None,
+            Self::Recordless(old) => Some(&old.moved),
+            Self::DeletedInPlace(_) => None,
         }
     }
 
-    /// Do it. The removal re-checks everything it removes; see
-    /// [`remove_retired`] and [`remove_tree`].
+    /// Do it. The merge re-checks everything it removes; see
+    /// [`remove_retired`] and `core::removal`.
     pub(crate) fn run(self, ticker: Ticker) -> SourceFate {
         match self {
             Self::OldCopy(old) => {
@@ -561,9 +458,81 @@ impl Housekeeping {
                     project_id: &old.project_id,
                     residue_allowed: old.residue_allowed,
                     split: old.split,
+                    reappeared: old.reappeared,
                     ticker,
                 };
                 remove_retired(old.transaction, &cleanup)
+            }
+            Self::Recordless(old) => {
+                ticker.phase(JobPhase::Removing, 0);
+                match merge::remove_identical(&old.path, &old.moved, &old.project_id, ticker) {
+                    Removal::Removed => {
+                        if let Some(pointer) = &old.pointer {
+                            let _ = crate::util::fs_retry::remove_file(pointer);
+                        }
+                        SourceFate::Removed { record_kept: None }
+                    }
+                    Removal::Leftover {
+                        remaining,
+                        reason,
+                        kept_on_purpose,
+                    } => SourceFate::Leftover {
+                        path: old.path,
+                        reason: format!(
+                            "{remaining} {} left: {reason}",
+                            if remaining == 1 { "entry" } else { "entries" }
+                        ),
+                        redundant: !kept_on_purpose,
+                    },
+                }
+            }
+            Self::DeletedInPlace(deleted) => {
+                let deleted = *deleted;
+                ticker.phase(JobPhase::Removing, deleted.record.entries.len());
+                let listed = Listed(
+                    deleted
+                        .record
+                        .entries
+                        .iter()
+                        .map(|entry| (entry.path.clone(), entry.kind))
+                        .collect(),
+                );
+                match crate::core::removal::remove_tree_judged(
+                    &deleted.folder,
+                    &listed,
+                    Purpose::Delete,
+                    ticker,
+                    None,
+                ) {
+                    Removal::Removed => {
+                        // A cloud mount can put a removed folder back: the
+                        // record waits out the settle, and removes it then.
+                        if settling(&deleted.record.operation, &deleted.folder) {
+                            return SourceFate::Settling;
+                        }
+                        match crate::util::fs_retry::remove_file(&deleted.record_path) {
+                            Ok(()) => {
+                                crate::core::records::remove(&deleted.record.operation);
+                                SourceFate::Removed { record_kept: None }
+                            }
+                            Err(error) => SourceFate::Removed {
+                                record_kept: Some(error.to_string()),
+                            },
+                        }
+                    }
+                    Removal::Leftover {
+                        remaining,
+                        reason,
+                        kept_on_purpose,
+                    } => SourceFate::Leftover {
+                        path: deleted.folder,
+                        reason: format!(
+                            "{remaining} {} left: {reason}",
+                            if remaining == 1 { "entry" } else { "entries" }
+                        ),
+                        redundant: !kept_on_purpose,
+                    },
+                }
             }
             Self::Deleted(path) => {
                 ticker.phase(JobPhase::Removing, 0);
@@ -587,65 +556,60 @@ impl Housekeeping {
     }
 }
 
-/// From `Retired`: remove the retired copy if it is still provably redundant,
-/// then the transaction. A retired copy that is not is kept whole, for the
-/// user to look at — never removed part of the way on purpose.
+/// From `Retired`: merge the old copy into the moved one and remove it
+/// (`core::merge`), then the part a split rename left, then — once nothing of
+/// the original is left, and a cloud mount has had its time to put anything
+/// back — the record, and an in-place retire's pointer last.
 pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) -> SourceFate {
-    let retired = transaction.retired_path();
-    let present = match crate::util::paths::presence(&retired) {
-        crate::util::paths::Presence::Present(_) => true,
-        crate::util::paths::Presence::Absent => false,
+    let old = transaction.old_copy_path();
+    match crate::util::paths::presence(&old) {
+        crate::util::paths::Presence::Absent => {}
         // A mount that does not answer says nothing about the old copy: the
         // record stays, and the next pass finishes once it answers.
         crate::util::paths::Presence::Unknown(error) => {
             return SourceFate::Leftover {
-                path: retired,
+                path: old,
                 reason: format!("it does not answer ({error})"),
                 redundant: true,
             };
         }
-    };
-    if present {
-        let recorded = cleanup.manifest.entries.len();
-        cleanup.ticker.phase(JobPhase::Checking, recorded * 2);
-        if let Err(reason) = check_removable(&retired, true, cleanup) {
-            return SourceFate::Leftover {
-                path: retired,
+        crate::util::paths::Presence::Present(_) => {
+            let residue =
+                cleanup.residue_allowed || cleanup.reappeared || cleanup.published.is_none();
+            let merged = merge::merge_remove(&Merge {
+                old: &old,
+                moved: cleanup.final_path,
+                project_id: cleanup.project_id,
+                manifest: cleanup.manifest,
+                published: cleanup.published,
+                policy: Policy::for_old_copy(transaction.published_at(), residue),
+                record: Some(transaction.operation_dir()),
+                ticker: cleanup.ticker,
+            });
+            if let Removal::Leftover {
+                remaining,
                 reason,
-                redundant: false,
-            };
-        }
-        if let Removal::Leftover {
-            remaining,
-            reason,
-            kept_on_purpose,
-        } = {
-            cleanup.ticker.phase(JobPhase::Removing, recorded);
-            remove_tree_guarded(
-                &retired,
-                Some(cleanup.manifest),
-                Purpose::Move,
-                cleanup.ticker,
-                Some((cleanup.final_path, cleanup.project_id)),
-            )
-        } {
-            return SourceFate::Leftover {
-                path: retired,
-                reason: format!(
-                    "{remaining} {} left: {reason}",
-                    if remaining == 1 { "entry" } else { "entries" }
-                ),
-                redundant: !kept_on_purpose,
-            };
-        }
-        if let Err(error) = crate::util::faults::check("move:after-source-cleanup") {
-            return SourceFate::Removed {
-                record_kept: Some(format!("{error:#}")),
-            };
+                kept_on_purpose,
+            } = merged
+            {
+                return SourceFate::Leftover {
+                    path: old,
+                    reason: format!(
+                        "{remaining} {} left: {reason}",
+                        if remaining == 1 { "entry" } else { "entries" }
+                    ),
+                    redundant: !kept_on_purpose,
+                };
+            }
+            if let Err(error) = crate::util::faults::check("move:after-source-cleanup") {
+                return SourceFate::Removed {
+                    record_kept: Some(format!("{error:#}")),
+                };
+            }
         }
     }
     if cleanup.split
-        && let Some(fate) = remove_split_residue(cleanup)
+        && let Some(fate) = remove_split_residue(&transaction, cleanup)
     {
         return fate;
     }
@@ -683,8 +647,17 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
             };
         }
     }
+    let pointer =
+        (transaction.journal.retire == RetireStrategy::InPlace).then(|| transaction.pointer_path());
     match transaction.remove() {
-        Ok(()) => SourceFate::Removed { record_kept: None },
+        Ok(()) => {
+            // Last: the pointer is what names this record to a pass that
+            // finds the old copy's folder without it.
+            if let Some(pointer) = pointer {
+                let _ = crate::util::fs_retry::remove_file(&pointer);
+            }
+            SourceFate::Removed { record_kept: None }
+        }
         Err(error) => SourceFate::Removed {
             record_kept: Some(format!("{error:#}")),
         },
@@ -708,11 +681,12 @@ pub(crate) fn settling(operation: &str, source: &Path) -> bool {
         .is_some_and(|since| now - since < crate::core::records::SETTLE_SECS)
 }
 
-/// What a split rename left at the original's path, removed under the rule
-/// for a residue: every entry one the move recorded, unchanged, and in the
-/// moved copy. `None` when it is gone; otherwise why it is not, and the record
+/// What a split rename left at the original's path, merged as a residue:
+/// only what the move recorded, unchanged, and the moved copy holds, and
+/// nothing written into the moved copy. `None` when it is gone — or when it
+/// is not the original's at all; otherwise why it is not, and the record
 /// stays.
-fn remove_split_residue(cleanup: &Cleanup) -> Option<SourceFate> {
+fn remove_split_residue(transaction: &MoveTransaction, cleanup: &Cleanup) -> Option<SourceFate> {
     let source = cleanup.source.to_path_buf();
     match crate::util::paths::presence(&source) {
         crate::util::paths::Presence::Absent => return None,
@@ -728,8 +702,7 @@ fn remove_split_residue(cleanup: &Cleanup) -> Option<SourceFate> {
     // A residue holds only what the move recorded, unchanged. Anything else
     // there means the folder is not (only) the original's: without our
     // `PROJECT_INFO.md` it is one a program made again at that path after the
-    // retire, and is left alone; with it, it is ours with something new in
-    // it, and both it and the record stay for a person.
+    // retire, and is left alone; with it, the merge keeps what is new.
     let walk = match Walk::of(&source, "original") {
         Ok(walk) => walk,
         Err(error) => {
@@ -741,40 +714,23 @@ fn remove_split_residue(cleanup: &Cleanup) -> Option<SourceFate> {
         }
     };
     let diff = cleanup.manifest.compare(&walk, Match::Whole);
-    if !diff.is_residue() {
-        let ours = crate::core::project_info::read_metadata(&source)
-            .ok()
-            .flatten()
-            .is_some_and(|metadata| metadata.id == cleanup.project_id);
-        if !ours {
-            return None;
-        }
-        return Some(SourceFate::Leftover {
-            path: source,
-            reason: format!(
-                "part of the original is still there, and it is not only what was moved: {}",
-                diff.summary(LISTED)
-            ),
-            redundant: false,
-        });
+    let ours = crate::core::project_info::read_metadata(&source)
+        .ok()
+        .flatten()
+        .is_some_and(|metadata| metadata.id == cleanup.project_id);
+    if !diff.is_residue() && !ours {
+        return None;
     }
-    if let Err(reason) = check_removable(&source, true, cleanup) {
-        return Some(SourceFate::Leftover {
-            path: source,
-            reason,
-            redundant: false,
-        });
-    }
-    cleanup
-        .ticker
-        .phase(JobPhase::Removing, cleanup.manifest.entries.len());
-    match remove_tree_guarded(
-        &source,
-        Some(cleanup.manifest),
-        Purpose::Move,
-        cleanup.ticker,
-        Some((cleanup.final_path, cleanup.project_id)),
-    ) {
+    match merge::merge_remove(&Merge {
+        old: &source,
+        moved: cleanup.final_path,
+        project_id: cleanup.project_id,
+        manifest: cleanup.manifest,
+        published: cleanup.published,
+        policy: Policy::Residue,
+        record: Some(transaction.operation_dir()),
+        ticker: cleanup.ticker,
+    }) {
         Removal::Removed => None,
         Removal::Leftover {
             remaining,
@@ -783,7 +739,7 @@ fn remove_split_residue(cleanup: &Cleanup) -> Option<SourceFate> {
         } => Some(SourceFate::Leftover {
             path: source,
             reason: format!(
-                "{remaining} {} left: {reason}",
+                "part of the original is still there: {remaining} {} left: {reason}",
                 if remaining == 1 { "entry" } else { "entries" }
             ),
             redundant: !kept_on_purpose,

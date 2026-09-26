@@ -191,7 +191,6 @@ fn copy_unlocked(
         // followed, and anything it cannot copy refused, all of it named.
         ticker.phase(JobPhase::Scanning, 0);
         let manifest = MoveManifest::scan_with(&project.path, ticker)?;
-        transaction.write_manifest(&manifest)?;
         // A copy removes nothing, so it needs no write access to its source —
         // only the room to land.
         crate::core::move_preflight::check_space(&root, manifest.total_bytes())?;
@@ -202,7 +201,7 @@ fn copy_unlocked(
         );
         // Everything but `PROJECT_INFO.md`, which the publish writes: the
         // step counts what it copies, so its bar reaches its end.
-        let body = manifest.without_root_metadata();
+        let mut body = manifest.without_root_metadata();
         ticker.phase(JobPhase::Copying, body.total_files());
         ticker.update(|state| {
             state.total_bytes = manifest.total_bytes();
@@ -212,29 +211,37 @@ fn copy_unlocked(
         });
         // Made at its final path, `PROJECT_INFO.md` last — see `transactions`.
         let staging = transaction.claim_staging()?;
-        if let Err(error) =
-            transactions::copy_to_staging(&body, &project.path, &staging, progress, cancel)
-        {
-            if cancel.load(Ordering::Relaxed) {
+        match transactions::copy_to_staging(&body, &project.path, &staging, progress, cancel) {
+            Ok(copied) => body = body.with_copied(copied),
+            Err(_) if cancel.load(Ordering::Relaxed) => {
                 anyhow::bail!("copy of '{}' cancelled", project.name);
             }
-            return Err(error)
-                .with_context(|| format!("copying '{}' into {}", project.name, root.display()));
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("copying '{}' into {}", project.name, root.display())
+                });
+            }
         }
         crate::util::faults::check("copy:after-staging")?;
         ticker.phase(
             JobPhase::Verifying,
             body.entries.len() + manifest.entries.len(),
         );
-        // The source has to be what it was when the manifest was taken, or the
-        // copy is of two different moments.
-        let verified = body
-            .verify_destination_with(&staging, ticker)
-            .and_then(|_| manifest.verify_source_unchanged_with(&project.path, ticker));
+        // The copy is of one moment: what changed in the source while it was
+        // copied is copied too, until it holds still.
+        let verified =
+            transactions::settle_copy(&mut body, &project.path, &staging, progress, cancel, ticker)
+                .and_then(|root| {
+                    let manifest = body.clone().with_entry(root);
+                    manifest.validate()?;
+                    transaction.write_manifest(&manifest)?;
+                    body.verify_destination_with(&staging, ticker)
+                        .map(|_| manifest)
+                });
         if verified.is_err() && ticker.cancelled() {
             anyhow::bail!("copy of '{}' cancelled", project.name);
         }
-        verified?;
+        let manifest = verified?;
         crate::util::faults::check("copy:after-verify")?;
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("copy of '{}' cancelled", project.name);

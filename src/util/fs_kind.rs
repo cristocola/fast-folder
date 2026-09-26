@@ -57,6 +57,25 @@ pub fn of(path: &Path) -> FsKind {
     kind
 }
 
+/// [`of`], asked again rather than remembered: whether a mount is still
+/// there. An unmounted FUSE mount point is an ordinary empty folder, so the
+/// kind is how "the old copy is gone" is told from "its mount is not there".
+pub fn of_now(path: &Path) -> FsKind {
+    if crate::util::faults::is_armed("fs:as-rclone") {
+        return FsKind::Rclone;
+    }
+    imp::of(path)
+}
+
+/// Which mount `path` is on now — its mount point and type, as one line the
+/// records index keeps — where the system can say (Linux). An unmounted
+/// mount point is an ordinary empty folder on the mount above it, and
+/// everything under it reads as gone; comparing this with what it was tells
+/// "gone" from "not mounted". `None` where the system cannot say.
+pub fn mount_identity(path: &Path) -> Option<String> {
+    imp::mount_identity(path)
+}
+
 /// The kind a mount's type name stands for (`fuse.rclone`, `nfs4`, …).
 pub fn from_type_name(name: &str) -> FsKind {
     match name {
@@ -143,6 +162,12 @@ mod imp {
         Some(super::mount_points_inside(&mountinfo, path))
     }
 
+    pub(super) fn mount_identity(path: &Path) -> Option<String> {
+        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+        let (point, kind) = super::mount_of(&mountinfo, path)?;
+        Some(format!("{kind} {}", point.display()))
+    }
+
     pub(super) fn of(path: &Path) -> FsKind {
         let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") else {
             return FsKind::Unknown;
@@ -163,6 +188,12 @@ mod imp {
     /// A mount inside a folder on Windows is a reparse point in it, which only
     /// a walk finds.
     pub(super) fn mounts_inside(_path: &Path) -> Option<Vec<PathBuf>> {
+        None
+    }
+
+    /// A drive that is not there fails every call on Windows; nothing reads
+    /// as gone.
+    pub(super) fn mount_identity(_path: &Path) -> Option<String> {
         None
     }
 
@@ -235,6 +266,10 @@ mod imp {
     }
 
     pub(super) fn mounts_inside(_path: &Path) -> Option<Vec<PathBuf>> {
+        None
+    }
+
+    pub(super) fn mount_identity(_path: &Path) -> Option<String> {
         None
     }
 }

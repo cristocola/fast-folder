@@ -390,6 +390,13 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     // way a mount fails (`walk:readdir:eio`).
     "walk:readdir",
     "walk:lstat",
+    // A removal's unlink or rmdir, and a copy's write, failed the way a mount
+    // fails (`remove:unlink:enotconn-3`, `copy:write:eio-1`).
+    "remove:unlink",
+    "copy:write",
+    // A decision: a mount that does not answer is waited for a second, not
+    // two minutes (`util::fs_retry::mount_wait`), so a move pauses in a test.
+    "fs:short-mount-wait",
 ];
 
 #[cfg(all(test, debug_assertions))]

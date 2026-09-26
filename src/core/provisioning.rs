@@ -1483,6 +1483,14 @@ fn reconcile_transaction(
             return;
         }
     };
+    // A mount point whose mount is gone is an empty folder, and everything
+    // under it would read as gone: wait for the mount instead.
+    if let Some(why) = crate::core::records::source_unmounted(&journal.operation_id) {
+        report.waiting.push(format!(
+            "{subject}: {why}; fastf changed nothing, and finishes the move once it is back"
+        ));
+        return;
+    }
     let source = source_base.join(&journal.source_folder);
     let final_path = target_base.join(&journal.target_folder);
     let staging = operation_dir.join(transactions::STAGING_DIR);
@@ -1569,6 +1577,17 @@ fn reconcile_transaction(
                  which fastf does not write; fastf changed nothing",
                 shown(&retired)
             ));
+        }
+        MovePhase::Copying if transaction.is_paused() => {
+            reconcile_paused(
+                &source_base,
+                target_base,
+                &final_path,
+                transaction,
+                &subject,
+                report,
+                pass,
+            );
         }
         MovePhase::Copying => {
             if let Err(error) =
@@ -1961,6 +1980,79 @@ fn finish_record(
         }
         Err(error) => report.unrecoverable.push(format!(
             "{subject}: the move is complete, but its record could not be cleared ({error:#})"
+        )),
+    }
+}
+
+/// A move that paused before its publish, waiting for a mount (`move_engine::
+/// Paused`): every path it names answers again, so it goes on from the copy
+/// it made — the rest of it copied, then published and set aside like any
+/// move.
+fn reconcile_paused(
+    source_base: &Path,
+    target_base: &Path,
+    final_path: &Path,
+    transaction: transactions::MoveTransaction,
+    subject: &str,
+    report: &mut ReconcileReport,
+    pass: &mut Pass,
+) {
+    let source = transaction.source_path();
+    let project = match crate::core::project_info::read_metadata(&source) {
+        Ok(Some(metadata)) if metadata.id == transaction.journal.project_id => {
+            library::project_from_meta(metadata, source_base, &source)
+        }
+        _ => {
+            report.unrecoverable.push(format!(
+                "{subject}: a paused move's original is not where it was; fastf changed nothing"
+            ));
+            return;
+        }
+    };
+    let local_progress = std::sync::Mutex::new(crate::core::assets::Progress::new(&[]));
+    let local_cancel = std::sync::atomic::AtomicBool::new(false);
+    let progress = pass.ticker.progress().unwrap_or(&local_progress);
+    let cancel = pass.ticker.cancel_flag().unwrap_or(&local_cancel);
+    let resumed = crate::core::move_engine::resume_in_parts(
+        &project,
+        target_base,
+        final_path,
+        transaction,
+        progress,
+        cancel,
+    );
+    match resumed {
+        Ok((outcome, housekeeping)) => {
+            report.resumed += 1;
+            match housekeeping {
+                Some(housekeeping) => match pass.deferred.as_mut() {
+                    Some(deferred) => deferred.push(Deferred {
+                        housekeeping,
+                        subject: subject.to_string(),
+                        source: source.clone(),
+                        final_path: final_path.to_path_buf(),
+                    }),
+                    None => {
+                        let fate = housekeeping.run(pass.ticker.uncancellable());
+                        record_fate(fate, subject, &source, final_path, report);
+                    }
+                },
+                None => {
+                    if let Some(warning) = outcome.source.warning(&source) {
+                        report.leftovers.push(format!("{subject}: {warning}"));
+                    }
+                }
+            }
+        }
+        Err(error)
+            if error
+                .downcast_ref::<crate::core::move_engine::Paused>()
+                .is_some() =>
+        {
+            report.waiting.push(format!("{subject}: {error}"));
+        }
+        Err(error) => report.unrecoverable.push(format!(
+            "{subject}: a paused move could not go on ({error:#})"
         )),
     }
 }

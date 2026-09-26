@@ -223,6 +223,10 @@ fn describe(job: &JobView) -> (String, String) {
             "cancelled".yellow().to_string(),
             state.map(|state| state.summary.clone()).unwrap_or_default(),
         ),
+        Some(JobStatus::Paused) => (
+            "paused".yellow().to_string(),
+            state.map(|state| state.summary.clone()).unwrap_or_default(),
+        ),
     }
 }
 

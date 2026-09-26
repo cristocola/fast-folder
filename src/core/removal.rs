@@ -170,6 +170,10 @@ pub(crate) fn remove_tree_judged(
             kept_on_purpose: true,
         };
     }
+    // An unmounted mount point is an empty folder: everything under it
+    // would read as removed. What it was on at the start is what it must
+    // still be on at the end for a removal to count.
+    let mount = crate::util::fs_kind::mount_identity(root);
     let removing = Removing {
         root,
         judge,
@@ -187,6 +191,7 @@ pub(crate) fn remove_tree_judged(
         notes: Mutex::new(Vec::new()),
         folders: Mutex::new(Vec::new()),
         holding: Mutex::new(HashSet::new()),
+        first_failure: Mutex::new(None),
     };
     let width = crate::util::pool::width_for(root);
     let _ = crate::util::pool::expand(
@@ -238,8 +243,16 @@ pub(crate) fn remove_tree_judged(
             Err(error) => removing.note(root, &error.to_string()),
         }
     }
+    let unmounted = mount.is_some() && crate::util::fs_kind::mount_identity(root) != mount;
+    if unmounted {
+        removing.note(
+            root,
+            "the filesystem it is on is not mounted any more, so what is left there cannot be told",
+        );
+    }
     match crate::util::paths::presence(root) {
-        crate::util::paths::Presence::Absent => return Removal::Removed,
+        crate::util::paths::Presence::Absent if !unmounted => return Removal::Removed,
+        crate::util::paths::Presence::Absent => {}
         // Not "removed": the mount did not say so. What is left, if anything,
         // is for the next pass once it answers.
         crate::util::paths::Presence::Unknown(error) => {
@@ -258,10 +271,16 @@ pub(crate) fn remove_tree_judged(
         .unwrap_or_else(|error| error.into_inner());
     notes.sort();
     notes.truncate(LISTED);
-    let reason = match stopped {
-        Some(reason) => reason,
-        None if notes.is_empty() => "the folder could not be removed".to_string(),
-        None => notes.join("; "),
+    let first = removing
+        .first_failure
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner())
+        .and_then(crate::util::fs_retry::sentence);
+    let reason = match (stopped, first) {
+        (Some(reason), _) => reason,
+        (None, _) if notes.is_empty() => "the folder could not be removed".to_string(),
+        (None, Some(sentence)) => format!("{sentence} ({})", notes.join("; ")),
+        (None, None) => notes.join("; "),
     };
     Removal::Leftover {
         remaining,
@@ -309,6 +328,9 @@ struct Removing<'a> {
     /// Folders something was left in, and every folder above them: none of
     /// them can go, so none is asked to.
     holding: Mutex<HashSet<PathBuf>>,
+    /// What kind of error the first entry that could not be removed met:
+    /// what the leftover's reason opens with, in one sentence.
+    first_failure: Mutex<Option<crate::util::fs_retry::ErrorClass>>,
 }
 
 impl Removing<'_> {
@@ -322,6 +344,17 @@ impl Removing<'_> {
                 .filter(|relative| !relative.as_os_str().is_empty())
                 .unwrap_or(path);
             notes.push(format!("{}: {why}", shown.display()));
+        }
+    }
+
+    /// Keep the class of the first error that left something.
+    fn failed(&self, error: &std::io::Error) {
+        let mut first = self
+            .first_failure
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if first.is_none() {
+            *first = Some(crate::util::fs_retry::classify(error));
         }
     }
 
@@ -379,42 +412,28 @@ impl Removing<'_> {
             self.hold(dir);
             return;
         }
-        let listing = match fs::read_dir(dir) {
+        let list = || crate::util::fs_retry::list_dir(dir, || Ok(()));
+        let listing = match list() {
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 grant_owner(dir);
-                fs::read_dir(dir)
+                list()
             }
             other => other,
         };
+        // A listing that fails, whole, even asked again, cannot say what it
+        // did not list: the folder is noted and kept, and the next pass
+        // finishes it.
         let entries = match listing {
             Ok(entries) => entries,
             Err(error) => {
-                self.note(dir, &error.to_string());
+                self.failed(&error);
+                self.note(dir, &format!("its listing failed ({error})"));
                 self.hold(dir);
                 return;
             }
         };
-        // A listing that stops part of the way cannot say what it did not
-        // list: the folder is noted and kept, and the next pass finishes it.
-        let mut batch = Vec::new();
-        for entry in entries {
-            match entry {
-                Ok(entry) => batch.push(entry.path()),
-                Err(error) => {
-                    self.note(
-                        dir,
-                        &format!("its listing stopped part of the way ({error})"),
-                    );
-                    self.hold(dir);
-                    break;
-                }
-            }
-            if batch.len() == TAKE_BATCH {
-                queue.push(Step::Take(std::mem::take(&mut batch), depth));
-            }
-        }
-        if !batch.is_empty() {
-            queue.push(Step::Take(batch, depth));
+        for batch in entries.chunks(TAKE_BATCH) {
+            queue.push(Step::Take(batch.to_vec(), depth));
         }
     }
 
@@ -425,19 +444,20 @@ impl Removing<'_> {
             if self.stop.load(Ordering::Relaxed) {
                 return;
             }
-            let metadata = match fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                // Gone since it was listed — or listed and hidden by the
-                // mount, which the folder's own removal then reports.
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    self.note(&path, "listed, but not there to examine");
-                    continue;
-                }
-                Err(error) => {
-                    self.leave(&path, &format!("cannot be examined ({error})"), false);
-                    continue;
-                }
-            };
+            let metadata =
+                match crate::util::fs_retry::with_retry(&path, || fs::symlink_metadata(&path)) {
+                    Ok(metadata) => metadata,
+                    // Gone since it was listed — or listed and hidden by the
+                    // mount, which the folder's own removal then reports.
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        self.note(&path, "listed, but not there to examine");
+                        continue;
+                    }
+                    Err(error) => {
+                        self.leave(&path, &format!("cannot be examined ({error})"), false);
+                        continue;
+                    }
+                };
             let file_type = metadata.file_type();
             if file_type.is_dir()
                 && self.device.is_some()
@@ -473,11 +493,20 @@ impl Removing<'_> {
             self.stop_with(format!("{error:#}"));
             return;
         }
-        let attempt = || match what {
-            Removed::Folder | Removed::FolderLink => crate::util::fs_retry::remove_dir(path),
-            Removed::Other => crate::util::fs_retry::remove_file(path),
+        // Asked again by what an error means (`fs_retry::with_retry`): a
+        // mount that restarts mid-removal is waited for, not given up on.
+        let attempt = || {
+            crate::util::fs_retry::with_retry(path, || {
+                crate::util::faults::check_io("remove:unlink")?;
+                match what {
+                    Removed::Folder | Removed::FolderLink => {
+                        crate::util::fs_retry::remove_dir(path)
+                    }
+                    Removed::Other => crate::util::fs_retry::remove_file(path),
+                }
+            })
         };
-        let result = match attempt() {
+        let mut result = match attempt() {
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 if let Some(parent) = path.parent() {
                     grant_owner(parent);
@@ -489,10 +518,17 @@ impl Removing<'_> {
             }
             other => other,
         };
+        if what == Removed::Folder
+            && let Err(error) = &result
+            && crate::util::fs_retry::classify(error) == crate::util::fs_retry::ErrorClass::NotEmpty
+        {
+            result = self.empty_again(path);
+        }
         match result {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
+                self.failed(&error);
                 self.leave(path, &error.to_string(), false);
                 if what == Removed::Folder {
                     self.hold(path);
@@ -526,6 +562,58 @@ impl Removing<'_> {
                 self.stop_with(format!("{error:#}"));
             }
         }
+    }
+}
+
+impl Removing<'_> {
+    /// A folder that says it is not empty once everything in it was taken:
+    /// a cloud mount whose listing has not caught up (rclone), or something
+    /// that appeared in it since. Listed again: what is there goes through the
+    /// judge like everything else, and a folder that lists empty is asked
+    /// again after a moment, a few times.
+    fn empty_again(&self, folder: &Path) -> std::io::Result<()> {
+        let mut last = std::io::Error::from(std::io::ErrorKind::DirectoryNotEmpty);
+        for round in 1..=4u64 {
+            let entries = crate::util::fs_retry::list_dir(folder, || Ok(()))?;
+            for path in entries {
+                let Ok(metadata) = fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                let relative = path.strip_prefix(self.root).unwrap_or(&path);
+                if metadata.file_type().is_dir() {
+                    // A folder that appeared: the next pass walks it.
+                    self.leave(&path, "appeared while its folder was removed", true);
+                    continue;
+                }
+                match self.judge.judge(&path, relative, &metadata) {
+                    Verdict::Take => self.remove(
+                        &path,
+                        if is_folder_link(&metadata) {
+                            Removed::FolderLink
+                        } else {
+                            Removed::Other
+                        },
+                    ),
+                    Verdict::Keep { why, on_purpose } => self.leave(&path, &why, on_purpose),
+                }
+            }
+            if self.is_holding(folder) {
+                return Err(last);
+            }
+            match crate::util::fs_retry::remove_dir(folder) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error)
+                    if crate::util::fs_retry::classify(&error)
+                        == crate::util::fs_retry::ErrorClass::NotEmpty =>
+                {
+                    last = error;
+                    std::thread::sleep(std::time::Duration::from_millis(300 * round));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last)
     }
 }
 

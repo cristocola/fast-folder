@@ -271,6 +271,7 @@ pub(crate) fn merge_remove(merge: &Merge) -> Removal {
     merge
         .ticker
         .phase(crate::core::assets::JobPhase::Checking, recorded);
+    merge.ticker.working_in(merge.moved);
     let moved = match Walk::of_with(merge.moved, "moved copy", merge.ticker.uncancellable()) {
         Ok(walk) => walk,
         Err(error) => {
@@ -303,6 +304,7 @@ pub(crate) fn merge_remove(merge: &Merge) -> Removal {
     merge
         .ticker
         .phase(crate::core::assets::JobPhase::Removing, recorded);
+    merge.ticker.working_in(merge.old);
     let removal = removal::remove_tree_judged(
         merge.old,
         &judge,

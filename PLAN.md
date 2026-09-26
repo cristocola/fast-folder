@@ -392,27 +392,40 @@ name (rclone re-creates directory markers) does not block the move.
 
 ## Phase 4 — only what fastf cannot fix stops a move
 
-- [ ] `fs_retry::with_retry` by class: Transient and Locked back off 0.2 s →
+- [x] `fs_retry::with_retry` by class: Transient and Locked back off 0.2 s →
   5 s, at most six tries; NotConnected waits for the mount (the probe, the pool
   paused); Denied gives the owner write once, then stops — before publishing
   the move fails naming the path, after it the entry is kept and needs you;
   Full, ReadOnly and NameRefused stop; ENOTEMPTY on an rmdir lists the folder
   again and sends what appeared through the merge. Wired into the copy, the
-  walk, the merge, the record's removal and the probe (defect 13).
-- [ ] `core::holders` (Linux): `/proc/*/{fd,fdinfo,cwd}`, fastf's own processes
+  walk, the merge, the record's removal and the probe (defect 13). *As
+  built:* each worker waits on its own, **until the same mount answers**
+  (`fs_kind::mount_identity`): an unmounted FUSE mount point is an empty
+  folder that answers "nothing there" for everything under it. That also
+  guards two things the plan did not name: a removal whose mount went away is
+  never `Removed`, and reconcile waits on a record whose source base is not on
+  the mount the index recorded (`records::source_mount`).
+- [x] `core::holders` (Linux): `/proc/*/{fd,fdinfo,cwd}`, fastf's own processes
   skipped by exe; a writer refuses the move before copying, named; a
   working-folder holder is a note in the result; an unsettled delta round
   names them. The worker, and the app before starting a job, step out of the
-  project.
-- [ ] Stalls: pool workers stamp each call; `Progress.stalled_ms`/`stalled_on`
+  project. *As built:* an unsettled round no longer fails the move (Phase 3),
+  so it names nobody; the step-out is in `jobs::start`, which both surfaces
+  call, and the worker works in its own job folder.
+- [x] Stalls: pool workers stamp each call; `Progress.stalled_ms`/`stalled_on`
   drive "no answer from <mount> for N s" in the dialog and on the command line.
-- [ ] Pause and resume: when the wait runs out before publishing, a `paused`
+  *As built:* no per-call stamps: a stall is the time since the job last moved
+  (`last_progress_at`), set by the worker as it writes the state, and
+  `Progress.working_in` names the mount (`Ticker::working_in`).
+- [x] Pause and resume: when the wait runs out before publishing, a `paused`
   marker and a clean exit (waiting); re-running the move or housekeeping
   adopts F — entries whose size and mtime match are kept, the rest replaced,
-  extras removed. Only a cancel rolls back.
-- [ ] Messages: one sentence, the category and the next step; errno lists go
-  to the report and the log.
-- [ ] Tests: the `classify` table; `with_retry` with scripted closures;
+  extras removed. Only a cancel rolls back. *As built:* `JobStatus::Paused`;
+  reconcile resumes a paused move whose paths answer.
+- [x] Messages: one sentence, the category and the next step; errno lists go
+  to the report and the log. *As built:* `fs_retry::explain`, first in a
+  job's failed item and in a removal's leftover, the error as it came after.
+- [x] Tests: the `classify` table; `with_retry` with scripted closures;
   `remove:unlink:enotconn-3` resumes; `copy:write:eio-1` recopies;
   `remove:unlink:eacces` names the path and keeps the record; a child holding
   a file open for writing refuses the move naming it, a child only sitting in
@@ -567,7 +580,26 @@ and Phase 2:
 An old copy's record and pointer on rclone wait out the ten-minute settle, as
 designed. The Phase 0 recordless copies on R2 were settled by reconcile: the
 empty directory marker removed, the two whose project no longer exists kept
-and named.
+and named. Into R2 and straight back out: nothing on the bucket twelve
+minutes later (3.13: a recordless `.fastf-moved-*` came back). The three drop
+scenarios (sshfs, the private S3, his R2 unit) kept the record, reported
+waiting while the mount was down, and finished on the next reconcile.
+
+**Phase 4 (2026-09-26).** As planned, with the deviations marked *as built*
+above. The lab, same scenarios as Phase 3:
+
+| scenario | Phase 3 | Phase 4 |
+|---|---|---|
+| sshfs frozen 30 s mid-removal | moved | moved; the job said "no answer from … for N s" meanwhile |
+| sshfs killed mid-removal, back 15 s later | leftover, finished by reconcile | moved, nothing left, 28 s |
+| the private S3 killed mid-removal | leftover, finished by reconcile | moved; only the settle's record |
+| his R2 unit restarted mid-removal | leftover, finished by reconcile | moved; only the settle's record |
+| a file held open and appended | moved (its later writes lost to the old copy) | refused before copying, in 1.6 s: "python3.14 (pid …) has index.html open for writing; close it, or quit python3.14, then move again" |
+| a shell sitting in the folder, a dev server running | moved | moved, with a note to restart it from the new place |
+
+The first sshfs drop run found one more thing: a folder whose listing broke
+part of the way was not asked again; listings are now whole or retried
+(`fs_retry::list_dir`).
 
 ## Parking lot
 

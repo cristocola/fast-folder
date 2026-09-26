@@ -421,7 +421,7 @@ fastf move my-crate /mnt/projects/archive
 fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 ```
 
-Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move copies every ordinary file—including legitimate `.tmp` and `.part` names—and every link into the new folder, checks relative paths, byte lengths and link targets, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then sets the original aside in one rename and removes it. Keep the project untouched while that copy is running. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
+Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move copies every ordinary file—including legitimate `.tmp` and `.part` names—and every link into the new folder, checks relative paths, byte lengths and link targets, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then sets the original aside in one step and removes what is left of it, entry by entry. Changes made to the project while it moves are kept. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
 
 **A move always says which kind it was**: `renamed on the same filesystem,
 nothing copied`, or `copied 412 files and 3 links, 199.5 GB, verified`. A same-filesystem
@@ -604,7 +604,7 @@ copy is authoritative.
 ## Jobs
 
 ```bash
-fastf jobs                  # every job, newest first: running, done, failed, stopped
+fastf jobs                  # every job, newest first: running, done, failed, paused, stopped
 fastf jobs watch            # follow the newest running job until it ends
 fastf jobs watch <id>
 fastf jobs cancel           # ask the newest running job to stop
@@ -622,6 +622,18 @@ A cancel undoes a move or a copy until it publishes its `PROJECT_INFO.md`;
 after that it is too late, and `fastf jobs cancel` says so. A reconcile stops
 between items. A job whose process was killed shows as `stopped`;
 `fastf reconcile` finishes what it left, whole.
+
+**A job waits out a filesystem that stops answering.** When nothing has moved
+for five seconds its line says so — `no answer from /mnt/cloud for 42 s; fastf
+waits for it` — and it goes on once the mount answers: an error a mount gives
+while it restarts is asked again, and a mount that drops is waited for, up to
+two minutes at a time. A move whose mount is still gone after that, before its
+copy is published, is `paused`: what it copied is kept, and it goes on from
+there when you move the project again, or with `fastf reconcile` once the mount
+is back. Only what fastf cannot fix stops a job — no permission, a program
+writing a file in the project, a full or read-only drive, a name the drive will
+not take — and then the first thing it says is what kind of problem it is and
+what to do.
 
 While a move copies it holds the library's lock, so a change made elsewhere
 meanwhile — a tag, a note — waits, and says which job it waits for. Removing

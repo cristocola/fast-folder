@@ -300,6 +300,10 @@ pub fn job_rows(jobs: &[crate::core::jobs::JobView]) -> (Vec<String>, Vec<String
                     "ended",
                     state.map(|s| s.summary.clone()).unwrap_or_default(),
                 ),
+                Some(JobStatus::Paused) => (
+                    "paused",
+                    state.map(|s| s.summary.clone()).unwrap_or_default(),
+                ),
             }
         };
         let started = state

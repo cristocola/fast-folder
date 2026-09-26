@@ -18,6 +18,8 @@ pub(crate) struct Printer {
     live: bool,
     printed: usize,
     drew: bool,
+    /// A stall has been said, on a line of its own, since the job last moved.
+    stall_said: bool,
     /// The item the finished steps counted belong to.
     item: (usize, String),
 }
@@ -28,6 +30,7 @@ impl Printer {
             live: std::io::stdout().is_terminal(),
             printed: 0,
             drew: false,
+            stall_said: false,
             item: (0, String::new()),
         }
     }
@@ -59,6 +62,16 @@ impl Printer {
         {
             draw(snapshot);
             self.drew = true;
+        } else if !self.live {
+            // No live line to put it on: a stall is a line of record, once.
+            match snapshot.stall_text() {
+                Some(stall) if !self.stall_said => {
+                    println!("  {stall}");
+                    self.stall_said = true;
+                }
+                None => self.stall_said = false,
+                Some(_) => {}
+            }
         }
     }
 
@@ -133,6 +146,9 @@ pub(crate) fn live_line(p: &Progress) -> String {
             crate::util::human_bytes::human_bytes(p.copied_bytes),
             crate::util::human_bytes::human_bytes(p.total_bytes)
         ));
+    }
+    if let Some(stall) = p.stall_text() {
+        line.push_str(&format!("  — {stall}"));
     }
     line
 }

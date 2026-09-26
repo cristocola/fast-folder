@@ -600,3 +600,38 @@ fn a_move_outlives_the_systemd_unit_that_started_it() {
     assert_eq!(status(&state), "done", "{state}");
     assert!(!original.exists());
 }
+
+/// **A job that waits on its filesystem says so**: when nothing has moved
+/// for five seconds, its state carries how long and where — what every
+/// surface following it shows as "no answer from … for N s" — and the job
+/// goes on once the filesystem answers.
+#[test]
+fn a_job_waiting_on_its_filesystem_says_how_long_and_where() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    // One slow write: the publish's.
+    project(&sb, &sb.base, 0);
+    let cli = start(
+        &sb,
+        &["move", "ID0001", &other.display().to_string(), "--yes"],
+        "pool:serial,move:force-staged,move:each-file:delay-6500",
+    );
+    let mut seen = None;
+    wait_until("a stall in the state", 20, || {
+        seen = newest(&sb)
+            .filter(|(_, state)| state["progress"]["stalled_ms"].as_u64().unwrap_or(0) >= 5_000);
+        seen.is_some()
+    });
+    let (_, state) = seen.unwrap();
+    let working_in = state["progress"]["working_in"].as_str().unwrap_or("");
+    assert!(!working_in.is_empty(), "{state}");
+    let out = cli.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (_, state) = newest(&sb).unwrap();
+    assert_eq!(status(&state), "done");
+    assert!(state["progress"]["stalled_ms"].as_u64().unwrap_or(0) == 0);
+}

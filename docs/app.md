@@ -343,7 +343,11 @@ answers a yes/no without Enter.
 a job of their own**, which the app follows but does not own. The dialog shows
 one row per step: the steps done ticked with what they counted, the current
 one with its count, its bar and the entry it is at, the rest dimmed; over
-several marked projects it names which of how many it is on. **Esc hides the
+several marked projects it names which of how many it is on. When the step
+has heard nothing from its filesystem for five seconds, the entry gives way to
+`no answer from <mount> for N s` — the job is waiting for a mount, not stuck —
+and a move whose mount stays gone pauses, keeping its copy, until it is moved
+again or reconciled. **Esc hides the
 dialog and the job goes on** — the header says what is running, with its step
 — and **quitting the app leaves it to finish**; start fastf again, or open it in
 another terminal, and the same job is there. Ctrl-C cancels until a move

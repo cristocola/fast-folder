@@ -462,6 +462,39 @@ permission back, never asks a folder that still holds something to go, and
 counts what is left only when something is (a walk; the common case needs
 none).
 
+**Only what fastf cannot fix stops anything; the rest is asked again by
+class** (`util::fs_retry::classify`, `with_retry`): Transient (EIO, ESTALE,
+EAGAIN…) and Locked back off 0.2 s → 5 s, six tries; NotConnected waits for the
+mount (`wait_for_mount`, up to `MOUNT_WAIT`, two minutes) — **until the same
+mount answers**, since an unmounted mount point is an empty folder on the mount
+above it and answers "nothing there" for everything under it
+(`fs_kind::mount_identity`); Denied, Full, ReadOnly and NameRefused are
+answered at once. The walk, each file's copy (`copy_file_again`: the partial
+file goes, the file is copied again whole), every unlink and rmdir, the
+record's removal and the probe go through it. A removal whose mount is not the
+one it started on is never `Removed`, and reconcile waits on a record whose
+source base is not on the mount the index recorded (`records::source_mount`,
+`records::source_unmounted`). `fs_retry::explain` is the one sentence a person
+reads first — what kind of problem, what to do — before the error as it came,
+for a job's failed item and a removal's leftover. **A move whose mount stays gone
+before its publish pauses** (`move_engine::Paused`, a `paused` marker in the
+record, `JobStatus::Paused`): the copy is kept, and moving the project again
+(`paused_move`) or reconcile (`reconcile_paused`) resumes it
+(`resume_in_parts`), adopting what arrived whole — a file of the same size and
+time, which only a finished copy has — and copying the rest
+(`transactions::adopt_staging`). Only a cancel rolls a copy back.
+
+**A program writing in the project stops the move before anything is copied**
+(`core::holders`, Linux: `/proc/*/fd` with `fdinfo` flags and `cwd`, this
+user's processes, fastf's own left out): its later writes would land in the
+old copy. A program only working in the folder is a note in the result
+(`MoveOutcome.notes`). A job's worker works in its own folder, and
+`jobs::start` steps out of any project the job is about, since a working
+folder holds a folder on Windows. **A stall is said, never a freeze**: a job's
+worker sets `Progress.stalled_ms` when nothing has moved for
+`STALL_AFTER_MS`, `Ticker::working_in` names the mount, and both surfaces print
+"no answer from … for N s".
+
 **Only "nothing there" is absence** (`util::paths::presence`: `Present`,
 `Absent` on ENOENT/ENOTDIR only, `Unknown` for any other error). 3.13 asked
 `symlink_metadata(p).is_ok()`, so an EIO or ENOTCONN from a mount that dropped

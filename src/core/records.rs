@@ -43,6 +43,28 @@ pub struct Entry {
     /// on a mount that can put it back.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gone_at: Option<i64>,
+    /// The mount the source base was on when the record was made
+    /// (`util::fs_kind::mount_identity`). An unmounted mount point is an
+    /// ordinary empty folder, and everything under it reads as gone: a pass
+    /// that finds the base on another mount now waits instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_mount: Option<String>,
+}
+
+/// Why the source base of the record `operation` cannot be looked at now —
+/// it is not on the mount it was on when the operation began, so nothing
+/// under it can be told gone — or `None` when it can, or the index does not
+/// know.
+pub fn source_unmounted(operation: &str) -> Option<String> {
+    let entry = get(operation)?;
+    let then = entry.source_mount?;
+    let now = crate::util::fs_kind::mount_identity(&entry.source_base)?;
+    (now != then).then(|| {
+        format!(
+            "{} is not on the mount it was on when this began ({then}; now {now})",
+            crate::util::paths::display_path(&entry.source_base)
+        )
+    })
 }
 
 impl Default for Entry {
@@ -58,6 +80,7 @@ impl Default for Entry {
             target_base: PathBuf::new(),
             target_folder: PathBuf::new(),
             gone_at: None,
+            source_mount: None,
         }
     }
 }

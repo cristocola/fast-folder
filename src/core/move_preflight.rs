@@ -133,7 +133,13 @@ fn run_probe(probe: &Path, renamed: &Path) -> std::result::Result<(), String> {
             crate::util::paths::display_path(base)
         )
     };
-    fs::create_dir(probe).map_err(cannot_write)?;
+    // A mount that restarts or stalls is waited for here too: a probe that
+    // gave up on the first EIO would refuse a move nothing stops.
+    crate::util::fs_retry::with_retry(base, || match fs::create_dir(probe) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        other => other,
+    })
+    .map_err(cannot_write)?;
     let seen = read_back_a_link(probe).map_err(cannot_write)?;
     if resolves_links(seen) {
         return Err(format!(
@@ -141,7 +147,7 @@ fn run_probe(probe: &Path, renamed: &Path) -> std::result::Result<(), String> {
             hidden_links_refusal(base)
         ));
     }
-    fs::rename(probe, renamed).map_err(cannot_write)?;
+    crate::util::fs_retry::with_retry(base, || fs::rename(probe, renamed)).map_err(cannot_write)?;
     Ok(())
 }
 

@@ -78,6 +78,7 @@ tell you.
   `Judge`), `merge.rs` (an old copy leaving entry by entry: the one `decide`
   table, what may be written into the moved copy, the recordless proof),
   `records.rs` (the data dir's index of every move record, and the settle),
+  `holders.rs` (which programs have something in a folder open),
   `operations.rs` (the shared mutation boundary), `project.rs` (plan / create /
   apply, and the preview *reports*), `plan.rs` (`ProjectPlan`),
   `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus

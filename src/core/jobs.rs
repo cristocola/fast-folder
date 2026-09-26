@@ -251,6 +251,17 @@ pub fn create(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
 /// where its log is.
 pub fn start(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
     prune();
+    // A process working in a folder holds it: Windows will not rename a
+    // folder any process works in, fastf's own included, and the worker
+    // starts where this one is. Step out of every project the job is about.
+    if let Ok(cwd) = std::env::current_dir() {
+        let inside = items
+            .iter()
+            .find(|item| !item.path.is_empty() && cwd.starts_with(Path::new(&item.path)));
+        if let Some(item) = inside {
+            let _ = std::env::set_current_dir(&item.base);
+        }
+    }
     let id = create(kind, items)?;
     spawn_worker(&id)?;
     let started = Instant::now();

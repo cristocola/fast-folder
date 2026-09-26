@@ -186,6 +186,21 @@ The app's `m` does the same, over every marked project when there are marks. The
   lose; anything else there refuses the move, and says when it is a folder
   fastf is still removing.
 
+**Only what fastf cannot fix stops a move**, and it says what and what to do:
+no permission where it has to write or remove, **a program writing a file in
+the project** (Linux names it — `python3 (pid 4242) has session.txt open for
+writing` — since after the move its writes would land in the old copy), a full
+drive, a read-only one, a name the drive will not take. Everything else is
+waited out: an input/output error or a lock a moment long is asked again with
+a growing pause, a mount that drops is waited for until the same mount is back
+— an unmounted mount point is an empty folder, and nothing under it is taken
+for gone — and a move whose mount stays gone for two minutes before its
+publish **pauses**, keeping what it copied; moving the project again, or `fastf
+reconcile` once the mount is back, takes the copy over and copies only what is
+missing. A program merely running in the folder — a dev server, a shell — does
+not stop the move; the result names it, and says to restart it from the new
+place.
+
 **Before a byte is copied**, a cross-filesystem move checks what would
 otherwise stop it at the end, and names every problem it finds at once:
 

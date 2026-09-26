@@ -295,7 +295,7 @@ impl App {
         let body = for_the_app(&body.join("\n\n"));
         match state.status {
             JobStatus::Done if body.is_empty() => self.good(summary),
-            JobStatus::Done | JobStatus::Cancelled | JobStatus::Unknown => {
+            JobStatus::Done | JobStatus::Cancelled | JobStatus::Paused | JobStatus::Unknown => {
                 if body.is_empty() {
                     self.warn(summary);
                 } else {

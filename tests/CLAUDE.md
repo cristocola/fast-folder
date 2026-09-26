@@ -152,6 +152,12 @@ the fix missed.
   process-global flag because a per-module mutex silently races. `faults` needs no
   lock — its arming is thread-local, and **a pool's workers inherit it**
   (`faults::current`/`with_arming`), counts of `-<n>` shared across them.
+- **Filesystem failures come from io failpoints, not real mounts**:
+  `remove:unlink`, `copy:write`, `walk:readdir`, `walk:lstat` and
+  `presence:lstat` take `eio`, `enotconn`, `eacces`… with an optional `-<n>`,
+  and the code under test retries them by class (`fs_retry::with_retry`). A
+  test that needs a mount to stay gone past the wait arms
+  `fs:short-mount-wait` (one second instead of two minutes).
 - **A job paced with `delay-<ms>` also arms `pool:serial`.** Walks, copies and
   removals run on `util::pool`, so without it a per-entry delay is paid by
   four to sixteen workers at once and a test that kills or cancels "mid-copy"

@@ -248,7 +248,12 @@ fn progress_lines<'a>(
                     progress.step_total as u64,
                 )));
             }
-            if !progress.current_file.is_empty() {
+            if let Some(stall) = progress.stall_text() {
+                lines.push(Line::from(Span::styled(
+                    format!("   {}", fit(&stall, width.saturating_sub(4), g.ellipsis)),
+                    theme.warn(),
+                )));
+            } else if !progress.current_file.is_empty() {
                 lines.push(Line::from(Span::styled(
                     format!(
                         "   {}",

@@ -273,6 +273,7 @@ fn delete_in_place(
         source_folder: folder.clone(),
         target_base: base.to_path_buf(),
         target_folder: folder,
+        source_mount: crate::util::fs_kind::mount_identity(base),
         ..Default::default()
     });
     let pinfo = project_info::pinfo_path(path);

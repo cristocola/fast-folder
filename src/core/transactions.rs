@@ -44,6 +44,8 @@ const PHASE_PREFIX: &str = "phase.";
 
 /// See [`MoveTransaction::mark_split`].
 const SPLIT_MARKER: &str = "split";
+/// A move that paused before its publish, its copy kept for a resume.
+const PAUSED_MARKER: &str = "paused";
 pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 pub const STAGING_DIR: &str = "staging";
 /// The destination as it was published: the walk of the verified staging tree,
@@ -1157,8 +1159,11 @@ impl Walker<'_> {
             self.problem(here, Problem::TooDeep);
             return Ok(());
         }
+        // Whole or not at all, asked again when a mount fails part of the
+        // way: a listing that stopped half-way cannot say what it did not
+        // list, so a folder that never lists whole is a problem.
         let listing =
-            crate::util::faults::check_io("walk:readdir").and_then(|()| fs::read_dir(dir));
+            crate::util::fs_retry::list_dir(dir, || crate::util::faults::check_io("walk:readdir"));
         let children = match listing {
             Ok(children) => children,
             Err(error) if depth == 0 => {
@@ -1169,30 +1174,8 @@ impl Walker<'_> {
                 return Ok(());
             }
         };
-        let mut batch = Vec::new();
-        for child in children {
-            // A listing that fails part of the way cannot say what it did not
-            // list, so the whole folder is a problem — after what it did list.
-            let child = match child {
-                Ok(child) => child,
-                Err(error) if depth == 0 => {
-                    return Err(error).with_context(|| format!("reading {}", dir.display()));
-                }
-                Err(error) => {
-                    if !batch.is_empty() {
-                        queue.push(Step::Examine(batch, depth));
-                    }
-                    self.problem(here, Problem::Unreadable(error.to_string()));
-                    return Ok(());
-                }
-            };
-            batch.push(child.path());
-            if batch.len() == EXAMINE_BATCH {
-                queue.push(Step::Examine(std::mem::take(&mut batch), depth));
-            }
-        }
-        if !batch.is_empty() {
-            queue.push(Step::Examine(batch, depth));
+        for batch in children.chunks(EXAMINE_BATCH) {
+            queue.push(Step::Examine(batch.to_vec(), depth));
         }
         Ok(())
     }
@@ -1217,8 +1200,10 @@ impl Walker<'_> {
                 problem(Problem::NotUnicode);
                 continue;
             }
-            let looked = crate::util::faults::check_io("walk:lstat")
-                .and_then(|()| fs::symlink_metadata(&path));
+            let looked = crate::util::fs_retry::with_retry(&path, || {
+                crate::util::faults::check_io("walk:lstat")?;
+                fs::symlink_metadata(&path)
+            });
             let metadata = match looked {
                 Ok(metadata) => metadata,
                 Err(error) => {
@@ -1519,6 +1504,7 @@ impl MoveTransaction {
                         source_folder: source_folder.to_path_buf(),
                         target_base: target_base.to_path_buf(),
                         target_folder: target_folder.to_path_buf(),
+                        source_mount: crate::util::fs_kind::mount_identity(source_base),
                         ..Default::default()
                     });
                     let result = (|| -> Result<Self> {
@@ -1751,6 +1737,29 @@ impl MoveTransaction {
         self.operation_dir.join(SPLIT_MARKER).is_file()
     }
 
+    /// Record that the move paused before its publish — a mount that did not
+    /// answer for [`crate::util::fs_retry::MOUNT_WAIT`] — keeping the copy
+    /// made so far, which a resume adopts ([`adopt_staging`]).
+    pub fn mark_paused(&self) -> Result<()> {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(self.operation_dir.join(PAUSED_MARKER))
+        {
+            Ok(file) => {
+                let _ = file.sync_all();
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(error).context("recording that the move paused"),
+        }
+    }
+
+    /// Whether the move paused before its publish ([`Self::mark_paused`]).
+    pub fn is_paused(&self) -> bool {
+        self.operation_dir.join(PAUSED_MARKER).is_file()
+    }
+
     pub fn claim_staging(&self) -> Result<PathBuf> {
         let staging = self.staging_path();
         fs::create_dir(&staging)
@@ -1973,7 +1982,10 @@ impl MoveTransaction {
         // says so with an I/O error that clears once they are up.
         let mut waited = 0;
         loop {
-            match crate::util::fs_retry::remove_dir_all(&self.operation_dir) {
+            let removed = crate::util::fs_retry::with_retry(&self.operation_dir, || {
+                crate::util::fs_retry::remove_dir_all(&self.operation_dir)
+            });
+            match removed {
                 Ok(()) => {
                     crate::core::records::remove(&self.journal.operation_id);
                     return Ok(());
@@ -2220,6 +2232,101 @@ pub fn copy_to_staging(
     }
     create_names(manifest, staging, cancel)?;
     copy_contents(manifest, source, staging, progress, cancel)
+}
+
+/// Take over the copy a paused move left at `staging`: every entry that is
+/// already what `body` records — a folder, a link to the same target, a file
+/// of the same size and time, which only a finished copy has, since each
+/// file's time is set last — is kept; anything else there is removed. Answers
+/// what was kept, as copied, so only the rest is copied again: a mount that
+/// dropped at 59 of 60 gigabytes costs one.
+pub fn adopt_staging(body: &MoveManifest, staging: &Path) -> Result<Vec<ManifestEntry>> {
+    crate::util::paths::require_real_directory(staging, "the paused copy")?;
+    let there = Walk::of(staging, "the paused copy")?;
+    let recorded: HashMap<&Path, &ManifestEntry> = body
+        .entries
+        .iter()
+        .map(|entry| (entry.path.as_path(), entry))
+        .collect();
+    let mut kept = Vec::new();
+    let mut stale: Vec<&ManifestEntry> = Vec::new();
+    for entry in &there.entries {
+        let keep = recorded.get(entry.path.as_path()).is_some_and(|wanted| {
+            wanted.kind == entry.kind
+                && match entry.kind {
+                    ManifestKind::Directory => true,
+                    ManifestKind::File => {
+                        wanted.bytes == entry.bytes
+                            && wanted.source_modified == entry.source_modified
+                    }
+                    _ => wanted.link_target == entry.link_target,
+                }
+        });
+        if keep {
+            kept.push(entry.clone());
+        } else {
+            stale.push(entry);
+        }
+    }
+    // Deepest first, so a folder is emptied before it goes.
+    stale.sort_by_key(|entry| std::cmp::Reverse(entry.path.components().count()));
+    for entry in stale {
+        // A folder kept by an ancestor that was not is already gone.
+        let path = staging.join(&entry.path);
+        let removed = if entry.kind == ManifestKind::Directory {
+            match crate::core::removal::remove_tree(
+                &path,
+                None,
+                crate::core::removal::Purpose::Delete,
+                Ticker::none(),
+            ) {
+                crate::core::removal::Removal::Removed => Ok(()),
+                crate::core::removal::Removal::Leftover { reason, .. } => {
+                    Err(anyhow::anyhow!("{reason}"))
+                }
+            }
+        } else {
+            match crate::util::fs_retry::remove_file(&path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+                _ => Ok(()),
+            }
+        };
+        removed
+            .with_context(|| format!("clearing {} from the paused copy", entry.path.display()))?;
+    }
+    // Anything the walk could not take is not part of a copy fastf made.
+    if let Some(problem) = there.problems.first() {
+        bail!(
+            "the paused copy at {} holds something fastf did not put there: {}: {}",
+            staging.display(),
+            problem.path.display(),
+            problem.problem
+        );
+    }
+    kept.retain(|entry| {
+        entry
+            .path
+            .ancestors()
+            .skip(1)
+            .all(|ancestor| ancestor.as_os_str().is_empty() || staging.join(ancestor).is_dir())
+    });
+    Ok(kept)
+}
+
+impl MoveManifest {
+    /// This record without the entries at `paths`: what is left to copy
+    /// once a paused copy's are adopted.
+    pub fn without_paths(&self, paths: &HashSet<PathBuf>) -> Self {
+        Self {
+            version: self.version,
+            entries: self
+                .entries
+                .iter()
+                .filter(|entry| !paths.contains(&entry.path))
+                .cloned()
+                .collect(),
+        }
+    }
 }
 
 /// How many times [`settle_copy`] catches the copy up with the original
@@ -2641,7 +2748,7 @@ fn copy_contents(
         if cancel.load(Ordering::Relaxed) {
             bail!("move cancelled");
         }
-        if let Some(as_copied) = copy_file(entry, source, staging, progress, cancel)? {
+        if let Some(as_copied) = copy_file_again(entry, source, staging, progress, cancel)? {
             copied
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
@@ -2749,8 +2856,8 @@ fn copy_file(
         if count == 0 {
             break;
         }
-        writer
-            .write_all(&buffer[..count])
+        crate::util::faults::check_io("copy:write")
+            .and_then(|()| writer.write_all(&buffer[..count]))
             .with_context(|| format!("writing {}", destination_path.display()))?;
         copied = copied.saturating_add(count as u64);
         if let Ok(mut state) = progress.lock() {
@@ -2779,6 +2886,59 @@ fn copy_file(
         state.touch();
     }
     Ok(Some(as_copied))
+}
+
+/// [`copy_file`], again from the start when it fails the way a mount does
+/// (`fs_retry::classify`): a transient error or a lock after a pause, a
+/// mount that dropped once it is back. What was written of it goes first —
+/// the file is written once, whole, or not at all.
+fn copy_file_again(
+    entry: &ManifestEntry,
+    source: &Path,
+    staging: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<Option<ManifestEntry>> {
+    use crate::util::fs_retry::ErrorClass;
+    const PAUSES_MS: [u64; 6] = [200, 400, 800, 1600, 3200, 5000];
+    let destination = staging.join(&entry.path);
+    let deadline = std::time::Instant::now() + crate::util::fs_retry::mount_wait();
+    let mounts = (
+        crate::util::fs_kind::mount_identity(source),
+        crate::util::fs_kind::mount_identity(staging),
+    );
+    let mut pauses = 0;
+    loop {
+        let error = match copy_file(entry, source, staging, progress, cancel) {
+            Ok(copied) => return Ok(copied),
+            Err(error) => error,
+        };
+        if cancel.load(Ordering::Relaxed) {
+            return Err(error);
+        }
+        match crate::util::fs_retry::class_of(&error) {
+            Some(ErrorClass::Transient | ErrorClass::Locked) if pauses < PAUSES_MS.len() => {
+                std::thread::sleep(std::time::Duration::from_millis(PAUSES_MS[pauses]));
+                pauses += 1;
+            }
+            Some(ErrorClass::NotConnected) if std::time::Instant::now() < deadline => {
+                crate::util::fs_retry::wait_for_mount(source, mounts.0.as_deref(), deadline);
+                crate::util::fs_retry::wait_for_mount(staging, mounts.1.as_deref(), deadline);
+            }
+            _ => return Err(error),
+        }
+        crate::util::log::info(format!(
+            "copying {} again after: {error:#}",
+            entry.path.display()
+        ));
+        match fs::symlink_metadata(&destination) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                crate::util::fs_retry::remove_file(&destination)
+                    .with_context(|| format!("removing a part-copied {}", destination.display()))?;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// An open of a source file that says it is not a file there any more:

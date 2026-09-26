@@ -215,6 +215,7 @@ pub(crate) fn set_aside(
     use SetAside::Settled;
     let source = cleanup.source;
     cleanup.ticker.phase(JobPhase::SettingAside, 0);
+    cleanup.ticker.working_in(source);
     let has_identity = crate::core::project_info::pinfo_path(source).is_file();
     if (has_identity || !cleanup.residue_allowed)
         && let Err(error) = confirm_identity(source, cleanup.project_id, "original")
@@ -489,6 +490,7 @@ impl Housekeeping {
             Self::DeletedInPlace(deleted) => {
                 let deleted = *deleted;
                 ticker.phase(JobPhase::Removing, deleted.record.entries.len());
+                ticker.working_in(&deleted.folder);
                 let listed = Listed(
                     deleted
                         .record
@@ -536,6 +538,7 @@ impl Housekeeping {
             }
             Self::Deleted(path) => {
                 ticker.phase(JobPhase::Removing, 0);
+                ticker.working_in(&path);
                 match remove_tree(&path, None, Purpose::Delete, ticker) {
                     Removal::Removed => SourceFate::Removed { record_kept: None },
                     Removal::Leftover {

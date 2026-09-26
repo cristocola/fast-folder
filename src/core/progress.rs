@@ -51,6 +51,16 @@ impl<'a> Ticker<'a> {
         }
     }
 
+    /// The progress this ticker writes to, when it writes to one.
+    pub fn progress(self) -> Option<&'a Mutex<Progress>> {
+        self.progress
+    }
+
+    /// The cancel flag this ticker honours, when it honours one.
+    pub fn cancel_flag(self) -> Option<&'a AtomicBool> {
+        self.cancel
+    }
+
     /// Whether a cancel has been asked for, and this ticker honours one.
     pub fn cancelled(self) -> bool {
         self.cancel.is_some_and(|flag| flag.load(Ordering::Relaxed))
@@ -154,6 +164,17 @@ impl<'a> Ticker<'a> {
             crate::util::log::trace(line);
         }
         !self.cancelled()
+    }
+
+    /// Say which folder the steps from here work in, so a stall can name it
+    /// ("no answer from /mnt/cloud"): the mount it is on, when the system
+    /// says, else the folder itself.
+    pub fn working_in(self, path: &Path) {
+        let place = crate::util::fs_kind::mount_identity(path)
+            .and_then(|identity| identity.split_once(' ').map(|(_, point)| point.to_string()))
+            .filter(|point| point != "/")
+            .unwrap_or_else(|| crate::util::paths::display_path(path));
+        self.update(|state| state.working_in = place);
     }
 
     /// Start the next of the job's items, about `label`. The total grows when

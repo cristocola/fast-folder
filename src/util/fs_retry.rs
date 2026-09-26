@@ -145,6 +145,165 @@ fn classify_code(_code: i32) -> Option<ErrorClass> {
     None
 }
 
+/// How long a filesystem that is not connected — a mount that dropped, an
+/// rclone that restarts — is waited for before a call gives up on it.
+pub const MOUNT_WAIT: Duration = Duration::from_secs(120);
+
+/// The schedule for an error worth asking again ([`ErrorClass::Transient`],
+/// [`ErrorClass::Locked`]): 0.2 s doubling to 5 s, six more tries, about
+/// eleven seconds in all.
+const CLASS_BACKOFF_MS: [u64; 6] = [200, 400, 800, 1600, 3200, 5000];
+
+/// Run `op`, about `path`, **by what its error means** ([`classify`]): an
+/// error worth asking again is asked again with backoff; a mount that is not
+/// connected is waited for, up to [`MOUNT_WAIT`], until the same mount
+/// answers again ([`wait_for_mount`]); anything else — a permission, no
+/// room, a name refused, "nothing there" — is answered at once, since asking
+/// again changes nothing. On every platform: EIO from a mount that restarts,
+/// ESTALE, and a lagging ENOTCONN are Linux's too, and 3.13 never retried
+/// anything on unix.
+pub fn with_retry<T>(path: &Path, op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    with_retry_for(path, mount_wait(), op)
+}
+
+/// [`MOUNT_WAIT`] — or a second, under the `fs:short-mount-wait` decision, so
+/// a test reaches what happens once the wait runs out.
+pub fn mount_wait() -> Duration {
+    if crate::util::faults::is_armed("fs:short-mount-wait") {
+        Duration::from_secs(1)
+    } else {
+        MOUNT_WAIT
+    }
+}
+
+/// [`with_retry`], waiting at most `mount_wait` for a mount.
+pub fn with_retry_for<T>(
+    path: &Path,
+    mount_wait: Duration,
+    mut op: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    let mut tries = 0;
+    let deadline = std::time::Instant::now() + mount_wait;
+    let mount = crate::util::fs_kind::mount_identity(path);
+    loop {
+        let error = match op() {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        match classify(&error) {
+            ErrorClass::Transient | ErrorClass::Locked if tries < CLASS_BACKOFF_MS.len() => {
+                crate::util::log::debug(format!(
+                    "{}: {error}; asking again",
+                    crate::util::paths::display_path(path)
+                ));
+                std::thread::sleep(Duration::from_millis(CLASS_BACKOFF_MS[tries]));
+                tries += 1;
+            }
+            ErrorClass::NotConnected if std::time::Instant::now() < deadline => {
+                crate::util::log::info(format!(
+                    "{}: {error}; waiting for its mount",
+                    crate::util::paths::display_path(path)
+                ));
+                wait_for_mount(path, mount.as_deref(), deadline);
+            }
+            _ => return Err(error),
+        }
+    }
+}
+
+/// **One sentence for a person**: what kind of problem stopped something,
+/// and what to do about it — when the error an `anyhow` chain holds is one of
+/// the few that stop a move (a permission, a lock, no room, a read-only drive,
+/// a name refused) or a mount that stopped answering. The errno and the
+/// chain are for the report and the log; this is what comes first.
+pub fn explain(error: &anyhow::Error) -> Option<&'static str> {
+    sentence(class_of(error)?)
+}
+
+/// [`explain`]'s sentence for an error of `class`, if it is one to say.
+pub fn sentence(class: ErrorClass) -> Option<&'static str> {
+    Some(match class {
+        ErrorClass::Denied => {
+            "fastf is not allowed to change something there (no permission): give your \
+             account write access to it, then try again"
+        }
+        ErrorClass::Locked => {
+            "a program has a file there open and locked: close it, then try again"
+        }
+        ErrorClass::Full => "the drive is full: free some space, then try again",
+        ErrorClass::ReadOnly => "the drive is read-only, so nothing there can be changed",
+        ErrorClass::NameRefused => {
+            "the drive will not take one of the names: rename it, then try again"
+        }
+        ErrorClass::NotConnected => {
+            "the drive stopped answering and did not come back while fastf waited: run it \
+             again once the mount is back"
+        }
+        ErrorClass::Transient => {
+            "the drive kept failing (input/output errors): check the mount, then try again"
+        }
+        ErrorClass::Gone | ErrorClass::NotEmpty | ErrorClass::Other => return None,
+    })
+}
+
+/// [`explain`]'s sentence, then the error as it came — or the error alone.
+pub fn explained(error: &anyhow::Error) -> String {
+    match explain(error) {
+        Some(sentence) => format!("{sentence}. ({error:#})"),
+        None => format!("{error:#}"),
+    }
+}
+
+/// The class ([`classify`]) of the filesystem error an `anyhow` chain holds,
+/// if it holds one.
+pub fn class_of(error: &anyhow::Error) -> Option<ErrorClass> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<io::Error>())
+        .map(classify)
+}
+
+/// A folder's whole listing, as paths, asked again as a whole — by what the
+/// error means ([`with_retry`]) — when the filesystem fails at the start or
+/// part of the way through: a listing that stopped half-way cannot say what
+/// it did not list, and an sshfs that drops mid-listing answers the next one
+/// whole. `before` runs ahead of each attempt (a failpoint).
+pub fn list_dir(
+    dir: &Path,
+    before: impl Fn() -> io::Result<()>,
+) -> io::Result<Vec<std::path::PathBuf>> {
+    with_retry(dir, || {
+        before()?;
+        let mut paths = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            paths.push(entry?.path());
+        }
+        Ok(paths)
+    })
+}
+
+/// Wait until `path` answers again — present or absent, anything but "not
+/// connected" — on the mount it was on (`mount`, `util::fs_kind::
+/// mount_identity`), or until `deadline`. An unmounted FUSE mount point is an
+/// empty folder that answers "nothing there" for everything under it: that
+/// is not the mount being back.
+pub fn wait_for_mount(path: &Path, mount: Option<&str>, deadline: std::time::Instant) {
+    while std::time::Instant::now() < deadline {
+        let answers = match crate::util::paths::presence(path) {
+            crate::util::paths::Presence::Unknown(error) => {
+                classify(&error) != ErrorClass::NotConnected
+            }
+            _ => true,
+        };
+        let same_mount =
+            mount.is_none() || crate::util::fs_kind::mount_identity(path).as_deref() == mount;
+        if answers && same_mount {
+            return;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
 /// Backoff schedule between attempts. Total worst-case wait ≈ 310 ms, which is
 /// well past a typical antivirus scan window while staying imperceptible.
 const BACKOFF_MS: [u64; 5] = [10, 20, 40, 80, 160];
@@ -398,6 +557,74 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A call that fails the way a mount does is asked again by what the
+    /// error means: transient and locked with backoff, and not again when
+    /// asking again changes nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_call_is_retried_by_what_its_error_means() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut left = 2;
+        let answer = with_retry(temp.path(), || {
+            if left > 0 {
+                left -= 1;
+                Err(io::Error::from_raw_os_error(libc::EIO))
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!(answer.unwrap(), 7, "EIO twice, then an answer");
+
+        let mut calls = 0;
+        let denied = with_retry(temp.path(), || {
+            calls += 1;
+            Err::<(), _>(io::Error::from_raw_os_error(libc::EACCES))
+        });
+        assert!(denied.is_err());
+        assert_eq!(calls, 1, "a permission is not asked again");
+
+        let mut calls = 0;
+        let gone = with_retry(temp.path(), || {
+            calls += 1;
+            Err::<(), _>(io::Error::from_raw_os_error(libc::ENOENT))
+        });
+        assert_eq!(classify(&gone.unwrap_err()), ErrorClass::Gone);
+        assert_eq!(calls, 1);
+    }
+
+    /// The errors that stop something get one sentence first, naming what
+    /// to do; the rest are said as they came.
+    #[cfg(unix)]
+    #[test]
+    fn a_stopping_error_is_explained_in_one_sentence() {
+        let denied =
+            anyhow::Error::new(io::Error::from_raw_os_error(libc::EACCES)).context("removing /a/b");
+        let said = explained(&denied);
+        assert!(said.starts_with("fastf is not allowed"), "{said}");
+        assert!(said.contains("removing /a/b"), "the details stay: {said}");
+        let other = anyhow::anyhow!("something else");
+        assert_eq!(explained(&other), "something else");
+    }
+
+    /// Not connected: waited for, and asked again once the path answers.
+    #[cfg(unix)]
+    #[test]
+    fn a_mount_that_drops_is_waited_for() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut left = 1;
+        let started = std::time::Instant::now();
+        let answer = with_retry_for(temp.path(), Duration::from_secs(5), || {
+            if left > 0 {
+                left -= 1;
+                Err(io::Error::from_raw_os_error(libc::ENOTCONN))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(answer.is_ok());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     /// The classes a move acts on, from the errors a mount really gives.
     #[cfg(unix)]

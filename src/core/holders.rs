@@ -664,8 +664,10 @@ mod tests {
 mod windows_tests {
     use super::*;
 
+    /// A minute at most: a cold PowerShell on a busy CI runner is slow to
+    /// open its file, and the wait costs nothing once it has.
     fn wait_until(mut found: impl FnMut() -> bool) {
-        for _ in 0..150 {
+        for _ in 0..600 {
             if found() {
                 return;
             }
@@ -718,28 +720,30 @@ mod windows_tests {
         );
     }
 
-    /// A console working in a subfolder keeps the project folder from being
-    /// renamed; the Restart Manager cannot see it, the folder's open can.
+    /// A folder something holds open without delete sharing — how a console
+    /// holds its working folder — keeps the project folder from being
+    /// renamed; the Restart Manager cannot see it, the folder's own open can.
+    /// Held here by the test itself: a real console has to start and settle
+    /// first, which a busy CI runner did not always do in time (the console
+    /// itself is the VM's scenario).
     #[test]
-    fn a_console_working_in_a_subfolder_is_found() {
+    fn a_folder_held_without_delete_sharing_is_found() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("project");
         let sub = root.join("src");
         std::fs::create_dir_all(&sub).unwrap();
-        let mut console = std::process::Command::new("cmd")
-            .args(["/d", "/k"])
-            .current_dir(&sub)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .spawn()
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&sub)
             .unwrap();
-        let mut found = Holders::default();
-        wait_until(|| {
-            found = in_tree(&root);
-            !found.busy_folders.is_empty()
-        });
-        let _ = console.kill();
-        let _ = console.wait();
+        let found = in_tree(&root);
+        drop(held);
         assert!(
             found
                 .busy_folders
@@ -748,5 +752,9 @@ mod windows_tests {
             "{found:?}"
         );
         assert!(found.refusal().unwrap().contains("working in src"));
+        assert!(
+            in_tree(&root).busy_folders.is_empty(),
+            "let go, nothing holds it"
+        );
     }
 }
